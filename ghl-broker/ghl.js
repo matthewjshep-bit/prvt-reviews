@@ -136,102 +136,43 @@ export async function getDashboard(client, locationId) {
     mapsUrl: reviewLink, // Fallback if no specific maps URL
   };
 
-  // 2. Fetch reviews
+  // 2. Fetch reviews (GHL Reputation reviews are not exposed via the public API
+  //    for Private Integration tokens — only e-commerce product reviews are.
+  //    A future enhancement could use the Google Places API directly.)
   try {
-    const allReviews = [];
-    const errs = [];
-
-    // 2a. PRIMARY: Search ALL conversations to discover how reviews are typed
-    try {
-      const convRes = await client.call(
-        `/conversations/search?locationId=${encodeURIComponent(locationId)}&limit=50`,
-        { version: V_CONVERSATIONS }
-      );
-      const conversations = convRes?.conversations || [];
-      
-      // Collect all unique lastMessageType values
-      const types = new Set();
-      const reviewLike = [];
-      for (const conv of conversations) {
-        types.add(conv.lastMessageType || "NONE");
-        // Check if any conversation looks like a review
-        const t = (conv.lastMessageType || "").toLowerCase();
-        if (t.includes("review") || t.includes("gmb") || t.includes("google") || t.includes("reputation")) {
-          reviewLike.push(conv);
-        }
-      }
-      
-      // If we found review-like conversations, extract them
-      if (reviewLike.length > 0) {
-        for (const conv of reviewLike) {
-          allReviews.push({
-            id: conv.id,
-            contactId: conv.contactId,
-            starRating: conv.starRating || conv.rating || 5,
-            body: conv.lastMessageBody || conv.snippet || "",
-            createdAt: conv.lastMessageDate || conv.dateAdded || conv.createdAt,
-            reviewerName: conv.contactName || conv.fullName || "Reviewer",
-          });
-        }
-      }
-      
-      errs.push(`conversations: ${conversations.length} total, types=[${[...types].join(",")}], reviewLike=${reviewLike.length}`);
-      
-      // Dump first 3 conversations for debugging
-      const sample = conversations.slice(0, 3).map(c => ({
-        type: c.lastMessageType,
-        body: (c.lastMessageBody || "").slice(0, 80),
-        name: c.contactName || c.fullName,
-        date: c.lastMessageDate,
-      }));
-      errs.push(`sample: ${JSON.stringify(sample)}`);
-    } catch (e) {
-      errs.push(`conversations: ` + e.message);
-    }
-
-    // 2b. SECONDARY: Try products/reviews (e-commerce reviews, not reputation)
+    let reviews = [];
+    
+    // Try products/reviews endpoint (e-commerce reviews only)
     try {
       const prodRes = await client.call(
         `/products/reviews?altId=${encodeURIComponent(locationId)}&altType=location&status=approved`
       );
       if (prodRes?.reviews?.length) {
-        allReviews.push(...prodRes.reviews);
+        reviews = prodRes.reviews;
       }
-    } catch (e) {
-      // silently skip — this is for e-commerce only
+    } catch {
+      // Expected to fail or return 0 — not an error
     }
 
-    const reviews = allReviews;
-    
-    // DEBUG: ALWAYS dump the first 1000 characters of the payload if we see 0 reviews
-    if (reviews.length === 0) {
-      dashboard._debugError = "API returned 200 OK, but we found 0 reviews. Errors: " + errs.join(" | ");
-    }
-    
     if (reviews.length > 0) {
       dashboard.reviewCount = reviews.length;
       let totalStars = 0;
       
       const now = new Date();
       const thirtyDaysAgo = new Date(now.setDate(now.getDate() - 30));
-      
       const countsByDate = {};
 
       for (const r of reviews) {
         totalStars += r.starRating || 0;
-        
         const rDate = new Date(r.createdAt || r.updatedAt || r.date);
         if (rDate >= thirtyDaysAgo) {
           dashboard.last30.newReviews += 1;
         }
-
         const dateStr = rDate.toISOString().split("T")[0];
         countsByDate[dateStr] = (countsByDate[dateStr] || 0) + 1;
       }
       
       dashboard.rating = totalStars / dashboard.reviewCount;
-
-      // Convert history to array and sort
       dashboard.history = Object.entries(countsByDate)
         .map(([date, count]) => ({ date, count }))
         .sort((a, b) => a.date.localeCompare(b.date));
