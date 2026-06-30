@@ -1,0 +1,15 @@
+{
+  "name": "prvt-ghl-broker",
+  "version": "1.0.0",
+  "description": "Backend broker between the PRVT MKT iframe pages and GoHighLevel (holds the GHL token, reads/writes custom values, sends test messages)",
+  "type": "module",
+  "main": "broker.js",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node broker.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^2.0.1"
+  }
+}
