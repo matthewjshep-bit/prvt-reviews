@@ -138,35 +138,35 @@ export async function getDashboard(client, locationId) {
 
   // 2. Fetch reviews
   try {
-    let reviewsData;
+    const allReviews = [];
+    const statusesToTry = ["published", "approved", "active", "pending"];
+    let successCount = 0;
     const errs = [];
-    try {
-      // Try standard v2 endpoint
-      reviewsData = await client.call(`/reviews?locationId=${encodeURIComponent(locationId)}`);
-    } catch (e1) {
-      errs.push(e1.message);
+
+    // We will try fetching reviews for all these statuses and combine them.
+    for (const status of statusesToTry) {
       try {
-        // Try products v3 endpoint with status=approved (required param)
-        reviewsData = await client.call(`/products/reviews?altId=${encodeURIComponent(locationId)}&altType=location&status=approved`);
-      } catch (e2) {
-        errs.push(e2.message);
-        try {
-          // If approved fails, try status=published just in case
-          reviewsData = await client.call(`/products/reviews?altId=${encodeURIComponent(locationId)}&altType=location&status=published`);
-        } catch (e3) {
-          errs.push(e3.message);
-          try {
-            // Try businesses endpoint
-            reviewsData = await client.call(`/businesses/reviews?locationId=${encodeURIComponent(locationId)}`);
-          } catch (e4) {
-            errs.push(e4.message);
-            throw new Error(errs.join(" | "));
-          }
+        const res = await client.call(`/products/reviews?altId=${encodeURIComponent(locationId)}&altType=location&status=${status}`);
+        if (res && res.reviews) {
+          allReviews.push(...res.reviews);
+          successCount++;
         }
+      } catch (e) {
+        errs.push(`status=${status}: ` + e.message);
       }
     }
 
-    const reviews = reviewsData.reviews || reviewsData.data || [];
+    if (successCount === 0 && errs.length > 0) {
+      // If ALL of them failed, fall back to the old v2 endpoint just in case
+      try {
+        const v2Res = await client.call(`/reviews?locationId=${encodeURIComponent(locationId)}`);
+        if (v2Res && v2Res.reviews) allReviews.push(...v2Res.reviews);
+      } catch (fallbackErr) {
+        // give up
+      }
+    }
+
+    const reviews = allReviews;
     
     // DEBUG: ALWAYS dump the first 1000 characters of the payload if we see 0 reviews
     if (reviews.length === 0) {
