@@ -146,16 +146,22 @@ export async function getDashboard(client, locationId) {
     } catch (e1) {
       errs.push(e1.message);
       try {
-        // Try products v3 endpoint
-        reviewsData = await client.call(`/products/reviews?altId=${encodeURIComponent(locationId)}&altType=location`);
+        // Try products v3 endpoint with status=approved (required param)
+        reviewsData = await client.call(`/products/reviews?altId=${encodeURIComponent(locationId)}&altType=location&status=approved`);
       } catch (e2) {
         errs.push(e2.message);
         try {
-          // Try businesses endpoint
-          reviewsData = await client.call(`/businesses/reviews?locationId=${encodeURIComponent(locationId)}`);
+          // If approved fails, try status=published just in case
+          reviewsData = await client.call(`/products/reviews?altId=${encodeURIComponent(locationId)}&altType=location&status=published`);
         } catch (e3) {
           errs.push(e3.message);
-          throw new Error(errs.join(" | "));
+          try {
+            // Try businesses endpoint
+            reviewsData = await client.call(`/businesses/reviews?locationId=${encodeURIComponent(locationId)}`);
+          } catch (e4) {
+            errs.push(e4.message);
+            throw new Error(errs.join(" | "));
+          }
         }
       }
     }
