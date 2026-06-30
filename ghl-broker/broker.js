@@ -21,6 +21,7 @@ import {
   saveConfig,
   findOrCreateContactByPhone,
   sendSms,
+  getDashboard,
 } from "./ghl.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -95,6 +96,17 @@ app.get("/api/config", async (req, res) => {
     const { locationId, client } = resolveLocation(req);
     const config = await getConfig(client, locationId);
     res.json(config);
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+/* ---------- GET dashboard ---------- */
+app.get("/api/dashboard", async (req, res) => {
+  try {
+    const { locationId, client } = resolveLocation(req);
+    const dashboard = await getDashboard(client, locationId);
+    res.json(dashboard);
   } catch (err) {
     fail(res, err);
   }

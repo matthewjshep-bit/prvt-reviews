@@ -111,4 +111,75 @@ export async function sendSms(client, { contactId, message, attachments }) {
   });
 }
 
+/* ---------- dashboard ---------- */
+
+export async function getDashboard(client, locationId) {
+  // 1. Fetch custom values for businessName and reviewLink
+  const config = await getConfig(client, locationId);
+  const businessName = config.businessName || "Your Business";
+  const reviewLink = config.reviewLink || "";
+  
+  // Initialize default shape
+  const dashboard = {
+    businessName,
+    rating: 0,
+    reviewCount: 0,
+    last30: { newReviews: 0, updatedReviews: 0, linkClicks: 0, requestsSent: 0, contactsAdded: 0 },
+    history: [],
+    reviewLink,
+    mapsUrl: reviewLink, // Fallback if no specific maps URL
+  };
+
+  // 2. Fetch reviews
+  try {
+    const reviewsData = await client.call(`/reviews?locationId=${encodeURIComponent(locationId)}`);
+    const reviews = reviewsData.reviews || [];
+    
+    if (reviews.length > 0) {
+      dashboard.reviewCount = reviews.length;
+      let totalStars = 0;
+      
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now.setDate(now.getDate() - 30));
+      
+      const countsByDate = {};
+
+      for (const r of reviews) {
+        totalStars += r.starRating || 0;
+        
+        const rDate = new Date(r.createdAt || r.updatedAt || r.date);
+        if (rDate >= thirtyDaysAgo) {
+          dashboard.last30.newReviews += 1;
+        }
+
+        const dateStr = rDate.toISOString().split("T")[0];
+        countsByDate[dateStr] = (countsByDate[dateStr] || 0) + 1;
+      }
+      
+      dashboard.rating = totalStars / dashboard.reviewCount;
+
+      // Convert history to array and sort
+      dashboard.history = Object.entries(countsByDate)
+        .map(([date, count]) => ({ date, count }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+    }
+  } catch (err) {
+    console.error("Failed to fetch reviews (might need scopes):", err.message);
+  }
+
+  // 3. (Optional) Fetch contacts added in last 30 days
+  try {
+    // A simplified approximation: fetch recent contacts
+    const contactsData = await client.call(`/contacts/?locationId=${encodeURIComponent(locationId)}&limit=100`);
+    const contacts = contactsData.contacts || [];
+    const thirtyDaysAgo = new Date(new Date().setDate(new Date().getDate() - 30));
+    
+    dashboard.last30.contactsAdded = contacts.filter(c => new Date(c.dateAdded || c.createdAt) >= thirtyDaysAgo).length;
+  } catch (err) {
+    console.error("Failed to fetch contacts for stats:", err.message);
+  }
+
+  return dashboard;
+}
+
 export { CV };
