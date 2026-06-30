@@ -12,7 +12,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 
-const API_BASE = ""; // same origin as the deployed iframe app
+const API_BASE = "https://prvt-reviews-1.onrender.com"; // same origin as the deployed iframe app
 const GREEN = "#16a34a";
 
 function getLocationId() {
