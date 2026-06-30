@@ -115,9 +115,15 @@ export async function sendSms(client, { contactId, message, attachments }) {
 
 export async function getDashboard(client, locationId) {
   // 1. Fetch custom values for businessName and reviewLink
-  const config = await getConfig(client, locationId);
-  const businessName = config.businessName || "Your Business";
-  const reviewLink = config.reviewLink || "";
+  let businessName = "Your Business";
+  let reviewLink = "";
+  try {
+    const config = await getConfig(client, locationId);
+    businessName = config.businessName || "Your Business";
+    reviewLink = config.reviewLink || "";
+  } catch (err) {
+    console.error("Failed to fetch config for dashboard:", err.message);
+  }
   
   // Initialize default shape
   const dashboard = {
