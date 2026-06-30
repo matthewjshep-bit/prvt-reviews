@@ -170,7 +170,7 @@ export async function getDashboard(client, locationId) {
     
     // DEBUG: ALWAYS dump the first 1000 characters of the payload if we see 0 reviews
     if (reviews.length === 0) {
-      dashboard._debugError = "API returned 200 OK, but we found 0 reviews. Raw payload keys: " + Object.keys(reviewsData).join(", ") + " | Raw payload: " + JSON.stringify(reviewsData).slice(0, 400);
+      dashboard._debugError = "API returned 200 OK, but we found 0 reviews. (Aggregated across all statuses)";
     }
     
     if (reviews.length > 0) {
