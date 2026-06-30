@@ -182,6 +182,21 @@ export async function getDashboard(client, locationId) {
       errs.push(`legacy: ` + fallbackErr.message);
     }
 
+    // 2d. Test undocumented endpoints
+    try {
+      const u1 = await client.call(`/locations/${encodeURIComponent(locationId)}/reviews`);
+      if (u1 && u1.reviews) allReviews.push(...u1.reviews);
+    } catch (e) {
+      errs.push(`loc_reviews: ` + e.message);
+    }
+
+    try {
+      const u2 = await client.call(`/products/reviews/count?altId=${encodeURIComponent(locationId)}&altType=location`);
+      errs.push(`products_count: ` + JSON.stringify(u2));
+    } catch (e) {
+      errs.push(`products_count_err: ` + e.message);
+    }
+
     const reviews = allReviews;
     
     // DEBUG: ALWAYS dump the first 1000 characters of the payload if we see 0 reviews
