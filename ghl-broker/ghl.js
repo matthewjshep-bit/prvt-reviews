@@ -141,16 +141,29 @@ export async function getDashboard(client, locationId) {
     const allReviews = [];
     const errs = [];
 
-    // 2a. PRIMARY: Reputation reviews live in conversations with TYPE_REVIEW
+    // 2a. PRIMARY: Search ALL conversations to discover how reviews are typed
     try {
       const convRes = await client.call(
-        `/conversations/search?locationId=${encodeURIComponent(locationId)}&lastMessageType=TYPE_REVIEW&limit=100`,
+        `/conversations/search?locationId=${encodeURIComponent(locationId)}&limit=50`,
         { version: V_CONVERSATIONS }
       );
       const conversations = convRes?.conversations || [];
-      if (conversations.length > 0) {
-        // Each conversation IS a review — extract what we can
-        for (const conv of conversations) {
+      
+      // Collect all unique lastMessageType values
+      const types = new Set();
+      const reviewLike = [];
+      for (const conv of conversations) {
+        types.add(conv.lastMessageType || "NONE");
+        // Check if any conversation looks like a review
+        const t = (conv.lastMessageType || "").toLowerCase();
+        if (t.includes("review") || t.includes("gmb") || t.includes("google") || t.includes("reputation")) {
+          reviewLike.push(conv);
+        }
+      }
+      
+      // If we found review-like conversations, extract them
+      if (reviewLike.length > 0) {
+        for (const conv of reviewLike) {
           allReviews.push({
             id: conv.id,
             contactId: conv.contactId,
@@ -161,7 +174,17 @@ export async function getDashboard(client, locationId) {
           });
         }
       }
-      errs.push(`conversations: found ${conversations.length} review conversations`);
+      
+      errs.push(`conversations: ${conversations.length} total, types=[${[...types].join(",")}], reviewLike=${reviewLike.length}`);
+      
+      // Dump first 3 conversations for debugging
+      const sample = conversations.slice(0, 3).map(c => ({
+        type: c.lastMessageType,
+        body: (c.lastMessageBody || "").slice(0, 80),
+        name: c.contactName || c.fullName,
+        date: c.lastMessageDate,
+      }));
+      errs.push(`sample: ${JSON.stringify(sample)}`);
     } catch (e) {
       errs.push(`conversations: ` + e.message);
     }
