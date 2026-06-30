@@ -138,7 +138,20 @@ export async function getDashboard(client, locationId) {
 
   // 2. Fetch reviews
   try {
-    const reviewsData = await client.call(`/reviews?locationId=${encodeURIComponent(locationId)}`);
+    let reviewsData;
+    try {
+      // Try standard v2 endpoint
+      reviewsData = await client.call(`/reviews?locationId=${encodeURIComponent(locationId)}`);
+    } catch (e1) {
+      try {
+        // Try products v3 endpoint
+        reviewsData = await client.call(`/products/reviews/?altId=${encodeURIComponent(locationId)}&altType=location`);
+      } catch (e2) {
+        // Try businesses endpoint
+        reviewsData = await client.call(`/businesses/reviews?locationId=${encodeURIComponent(locationId)}`);
+      }
+    }
+
     const reviews = reviewsData.reviews || [];
     
     if (reviews.length > 0) {
