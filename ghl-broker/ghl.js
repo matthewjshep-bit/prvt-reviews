@@ -139,38 +139,43 @@ export async function getDashboard(client, locationId) {
   // 2. Fetch reviews
   try {
     const allReviews = [];
-    const statusesToTry = ["published", "approved", "active", "pending"];
-    let successCount = 0;
+    const statusesToTry = ["published", "approved", "active", "pending", "replied", "unanswered", "all"];
     const errs = [];
 
-    // We will try fetching reviews for all these statuses and combine them.
+    // 2a. Fetch E-commerce product reviews
     for (const status of statusesToTry) {
       try {
         const res = await client.call(`/products/reviews?altId=${encodeURIComponent(locationId)}&altType=location&status=${status}`);
         if (res && res.reviews) {
           allReviews.push(...res.reviews);
-          successCount++;
         }
       } catch (e) {
-        errs.push(`status=${status}: ` + e.message);
+        errs.push(`products(${status}): ` + e.message);
       }
     }
 
-    if (successCount === 0 && errs.length > 0) {
-      // If ALL of them failed, fall back to the old v2 endpoint just in case
-      try {
-        const v2Res = await client.call(`/reviews?locationId=${encodeURIComponent(locationId)}`);
-        if (v2Res && v2Res.reviews) allReviews.push(...v2Res.reviews);
-      } catch (fallbackErr) {
-        // give up
-      }
+    // 2b. Fetch Reputation (GMB/Facebook) reviews
+    try {
+      const bizRes = await client.call(`/businesses/reviews?locationId=${encodeURIComponent(locationId)}`);
+      if (bizRes && bizRes.reviews) allReviews.push(...bizRes.reviews);
+      if (bizRes && bizRes.data) allReviews.push(...bizRes.data);
+    } catch (e) {
+      errs.push(`businesses: ` + e.message);
+    }
+
+    // 2c. Legacy fallback just in case
+    try {
+      const v2Res = await client.call(`/reviews?locationId=${encodeURIComponent(locationId)}`);
+      if (v2Res && v2Res.reviews) allReviews.push(...v2Res.reviews);
+    } catch (fallbackErr) {
+      errs.push(`legacy: ` + fallbackErr.message);
     }
 
     const reviews = allReviews;
     
     // DEBUG: ALWAYS dump the first 1000 characters of the payload if we see 0 reviews
     if (reviews.length === 0) {
-      dashboard._debugError = "API returned 200 OK, but we found 0 reviews. (Aggregated across all statuses)";
+      dashboard._debugError = "API returned 200 OK, but we found 0 reviews. Errors: " + errs.join(" | ");
     }
     
     if (reviews.length > 0) {
