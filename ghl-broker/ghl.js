@@ -30,7 +30,7 @@ export function makeClient(token) {
       data = { raw: text };
     }
     if (!res.ok) {
-      const err = new Error(`GHL ${method} ${path} -> ${res.status}`);
+      const err = new Error(`GHL ${method} ${path} -> ${res.status} ${text}`);
       err.status = res.status;
       err.data = data;
       throw err;
@@ -147,7 +147,7 @@ export async function getDashboard(client, locationId) {
       errs.push(e1.message);
       try {
         // Try products v3 endpoint
-        reviewsData = await client.call(`/products/reviews/?altId=${encodeURIComponent(locationId)}&altType=location`);
+        reviewsData = await client.call(`/products/reviews?altId=${encodeURIComponent(locationId)}&altType=location`);
       } catch (e2) {
         errs.push(e2.message);
         try {
