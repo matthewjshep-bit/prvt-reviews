@@ -139,62 +139,43 @@ export async function getDashboard(client, locationId) {
   // 2. Fetch reviews
   try {
     const allReviews = [];
-    const statusesToTry = ["published", "approved", "active", "pending", "replied", "unanswered", "all"];
     const errs = [];
 
-    // 2a. Fetch E-commerce product reviews
-    for (const status of statusesToTry) {
-      try {
-        const res = await client.call(`/products/reviews?altId=${encodeURIComponent(locationId)}&altType=location&status=${status}`);
-        if (res && res.reviews) {
-          allReviews.push(...res.reviews);
+    // 2a. PRIMARY: Reputation reviews live in conversations with TYPE_REVIEW
+    try {
+      const convRes = await client.call(
+        `/conversations/search?locationId=${encodeURIComponent(locationId)}&lastMessageType=TYPE_REVIEW&limit=100`,
+        { version: V_CONVERSATIONS }
+      );
+      const conversations = convRes?.conversations || [];
+      if (conversations.length > 0) {
+        // Each conversation IS a review — extract what we can
+        for (const conv of conversations) {
+          allReviews.push({
+            id: conv.id,
+            contactId: conv.contactId,
+            starRating: conv.starRating || conv.rating || 5,
+            body: conv.lastMessageBody || conv.snippet || "",
+            createdAt: conv.lastMessageDate || conv.dateAdded || conv.createdAt,
+            reviewerName: conv.contactName || conv.fullName || "Reviewer",
+          });
         }
-      } catch (e) {
-        errs.push(`products(${status}): ` + e.message);
       }
+      errs.push(`conversations: found ${conversations.length} review conversations`);
+    } catch (e) {
+      errs.push(`conversations: ` + e.message);
     }
 
-    // 2b. Fetch Reputation (GMB/Facebook) reviews by first getting the businessId
+    // 2b. SECONDARY: Try products/reviews (e-commerce reviews, not reputation)
     try {
-      // 1. Get the businessId using the businesses endpoint directly
-      const bizListRes = await client.call(`/businesses/?locationId=${encodeURIComponent(locationId)}`);
-      const businesses = bizListRes?.businesses || bizListRes?.business || [];
-      const businessList = Array.isArray(businesses) ? businesses : [businesses];
-      const businessId = businessList.length > 0 ? businessList[0].id || businessList[0]._id : null;
-      
-      if (businessId) {
-        // 2. Fetch the reviews using the businessId
-        const bizRes = await client.call(`/businesses/${businessId}/reviews`);
-        if (bizRes && bizRes.reviews) allReviews.push(...bizRes.reviews);
-        if (bizRes && bizRes.data) allReviews.push(...bizRes.data);
-      } else {
-        errs.push("businesses: location has no associated business");
+      const prodRes = await client.call(
+        `/products/reviews?altId=${encodeURIComponent(locationId)}&altType=location&status=approved`
+      );
+      if (prodRes?.reviews?.length) {
+        allReviews.push(...prodRes.reviews);
       }
     } catch (e) {
-      errs.push(`businesses: ` + e.message);
-    }
-
-    // 2c. Legacy fallback just in case
-    try {
-      const v2Res = await client.call(`/reviews?locationId=${encodeURIComponent(locationId)}`);
-      if (v2Res && v2Res.reviews) allReviews.push(...v2Res.reviews);
-    } catch (fallbackErr) {
-      errs.push(`legacy: ` + fallbackErr.message);
-    }
-
-    // 2d. Test undocumented endpoints
-    try {
-      const u1 = await client.call(`/locations/${encodeURIComponent(locationId)}/reviews`);
-      if (u1 && u1.reviews) allReviews.push(...u1.reviews);
-    } catch (e) {
-      errs.push(`loc_reviews: ` + e.message);
-    }
-
-    try {
-      const u2 = await client.call(`/products/reviews/count?altId=${encodeURIComponent(locationId)}&altType=location`);
-      errs.push(`products_count: ` + JSON.stringify(u2));
-    } catch (e) {
-      errs.push(`products_count_err: ` + e.message);
+      // silently skip — this is for e-commerce only
     }
 
     const reviews = allReviews;
