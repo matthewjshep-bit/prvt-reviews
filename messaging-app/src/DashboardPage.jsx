@@ -79,6 +79,7 @@ export default function DashboardPage() {
 
   const [projectionN, setProjectionN] = useState(0);
   const [chartPeriod, setChartPeriod] = useState("30d"); // 7d, 30d, all
+  const [debugErrors, setDebugErrors] = useState(null);
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
@@ -90,6 +91,9 @@ export default function DashboardPage() {
         const c = await r.json();
         if (!alive) return;
         if (c.businessName) setBusinessName(c.businessName);
+        if (c._debugError || c._debugContactsError) {
+          setDebugErrors([c._debugError, c._debugContactsError].filter(Boolean));
+        }
         setData({
           rating: c.rating || 0,
           reviewCount: c.reviewCount || 0,
@@ -174,6 +178,17 @@ export default function DashboardPage() {
             </div>
           </div>
         </header>
+
+        {debugErrors && debugErrors.length > 0 && (
+          <div className="mb-8 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            <strong>API Errors Detected:</strong>
+            <ul className="mt-2 list-disc pl-5">
+              {debugErrors.map((e, i) => (
+                <li key={i}>{e}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
           {/* Left Column */}

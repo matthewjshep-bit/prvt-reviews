@@ -184,6 +184,7 @@ export async function getDashboard(client, locationId) {
     }
   } catch (err) {
     console.error("Failed to fetch reviews (might need scopes):", err.message);
+    dashboard._debugError = err.message;
   }
 
   // 3. (Optional) Fetch contacts added in last 30 days
@@ -196,6 +197,7 @@ export async function getDashboard(client, locationId) {
     dashboard.last30.contactsAdded = contacts.filter(c => new Date(c.dateAdded || c.createdAt) >= thirtyDaysAgo).length;
   } catch (err) {
     console.error("Failed to fetch contacts for stats:", err.message);
+    dashboard._debugContactsError = err.message;
   }
 
   return dashboard;
