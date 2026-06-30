@@ -154,11 +154,20 @@ export async function getDashboard(client, locationId) {
       }
     }
 
-    // 2b. Fetch Reputation (GMB/Facebook) reviews
+    // 2b. Fetch Reputation (GMB/Facebook) reviews by first getting the businessId
     try {
-      const bizRes = await client.call(`/businesses/reviews?locationId=${encodeURIComponent(locationId)}`);
-      if (bizRes && bizRes.reviews) allReviews.push(...bizRes.reviews);
-      if (bizRes && bizRes.data) allReviews.push(...bizRes.data);
+      // 1. Get the businessId from the location
+      const locRes = await client.call(`/locations/${encodeURIComponent(locationId)}`);
+      const businessId = locRes?.location?.business?.id || locRes?.business?.id;
+      
+      if (businessId) {
+        // 2. Fetch the reviews using the businessId
+        const bizRes = await client.call(`/businesses/${businessId}/reviews`);
+        if (bizRes && bizRes.reviews) allReviews.push(...bizRes.reviews);
+        if (bizRes && bizRes.data) allReviews.push(...bizRes.data);
+      } else {
+        errs.push("businesses: location has no businessId");
+      }
     } catch (e) {
       errs.push(`businesses: ` + e.message);
     }
