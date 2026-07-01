@@ -6,9 +6,8 @@
 //   POST /api/send-test
 //   POST /api/upload-logo
 //
-// Single-tenant to start: one Private Integration token for one location, set
-// in env. The getTokenFor() seam is where you swap in a per-location OAuth
-// token store when you go multi-client.
+// Google Business Profile OAuth tokens are persisted in Supabase so they
+// survive Render redeploys and restarts.
 
 import express from "express";
 import multer from "multer";
@@ -23,6 +22,10 @@ import {
   sendSms,
   getDashboard,
 } from "./ghl.js";
+import {
+  saveGoogleConnection,
+  getValidGoogleAccessToken,
+} from "./supabase.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +36,12 @@ const CARD_SERVICE_URL = process.env.CARD_SERVICE_URL || ""; // e.g. https://car
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
 const APP_ORIGIN = process.env.APP_ORIGIN || ""; // iframe app origin, if cross-origin
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "uploads");
+
+// --- Google OAuth config ---
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
+const GOOGLE_REDIRECT_URI = `${PUBLIC_BASE_URL}/auth/google/callback`;
+const GOOGLE_SCOPES = "https://www.googleapis.com/auth/business.manage";
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -90,6 +99,105 @@ function fail(res, err) {
   res.status(code).json({ error: err.message, detail: err.data });
 }
 
+/* ========================================================================
+   Google Business Profile OAuth
+   ======================================================================== */
+
+/* ---------- GET /auth/google — redirect to Google consent screen ---------- */
+app.get("/auth/google", (req, res) => {
+  const locationId = req.query.location_id || "";
+  if (!locationId) return res.status(400).send("missing location_id");
+  if (ALLOWED_LOCATION && locationId !== ALLOWED_LOCATION) {
+    return res.status(403).send("location not permitted");
+  }
+  if (!GOOGLE_CLIENT_ID) return res.status(500).send("GOOGLE_CLIENT_ID not configured");
+
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: GOOGLE_REDIRECT_URI,
+    response_type: "code",
+    scope: GOOGLE_SCOPES,
+    access_type: "offline",    // ensures a refresh_token is returned
+    prompt: "consent",         // force consent to always get a refresh_token
+    state: locationId,         // pass location_id through the OAuth round-trip
+  });
+
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+
+/* ---------- GET /auth/google/callback — exchange code for tokens ---------- */
+app.get("/auth/google/callback", async (req, res) => {
+  const { code, state: locationId, error: oauthError } = req.query;
+
+  if (oauthError) {
+    console.error("Google OAuth error:", oauthError);
+    return res.status(400).send(`Google OAuth error: ${oauthError}`);
+  }
+  if (!code || !locationId) {
+    return res.status(400).send("missing code or state (location_id)");
+  }
+  if (ALLOWED_LOCATION && locationId !== ALLOWED_LOCATION) {
+    return res.status(403).send("location not permitted");
+  }
+
+  try {
+    // Exchange authorization code for tokens
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: GOOGLE_REDIRECT_URI,
+        grant_type: "authorization_code",
+      }),
+    });
+
+    const tokenData = await tokenRes.json();
+
+    if (!tokenRes.ok) {
+      console.error("Google token exchange failed:", tokenData.error, tokenData.error_description);
+      return res.status(502).send(`Token exchange failed: ${tokenData.error_description || tokenData.error}`);
+    }
+
+    if (!tokenData.refresh_token) {
+      console.warn("Google did not return a refresh_token — the user may have previously authorized without revoking. Using prompt=consent should prevent this.");
+    }
+
+    const expiry = Date.now() + (tokenData.expires_in || 3600) * 1000;
+
+    await saveGoogleConnection(locationId, {
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token || "",
+      expiry,
+      googleAccountId: null,   // populated later when user selects an account
+      googleLocationId: null,  // populated later when user selects a location
+    });
+
+    console.log(`Google connected for location ${locationId} (token persisted to Supabase)`);
+
+    // Redirect back to the dashboard
+    res.send(`
+      <!DOCTYPE html>
+      <html><head><title>Connected</title></head>
+      <body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+        <div style="text-align:center">
+          <h2 style="color:#16a34a">✓ Google Connected</h2>
+          <p>You can close this window and refresh the dashboard.</p>
+        </div>
+      </body></html>
+    `);
+  } catch (err) {
+    console.error("Google OAuth callback error:", err.message);
+    res.status(500).send("Internal error during Google OAuth");
+  }
+});
+
+/* ========================================================================
+   Existing API endpoints (unchanged)
+   ======================================================================== */
+
 /* ---------- GET config ---------- */
 app.get("/api/config", async (req, res) => {
   try {
@@ -106,6 +214,24 @@ app.get("/api/dashboard", async (req, res) => {
   try {
     const { locationId, client } = resolveLocation(req);
     const dashboard = await getDashboard(client, locationId);
+
+    // --- Google connection status ---
+    try {
+      const googleAccessToken = await getValidGoogleAccessToken(locationId);
+      if (googleAccessToken) {
+        dashboard.googleConnected = true;
+        // Future: fetch Google reviews here using the access token.
+        // For now, just signal the connected state.
+      } else {
+        dashboard.googleConnected = false;
+        dashboard.googleConnectUrl = `${PUBLIC_BASE_URL}/auth/google?location_id=${encodeURIComponent(locationId)}`;
+      }
+    } catch (err) {
+      console.error("Google connection check failed:", err.message);
+      dashboard.googleConnected = false;
+      dashboard.googleConnectUrl = `${PUBLIC_BASE_URL}/auth/google?location_id=${encodeURIComponent(locationId)}`;
+    }
+
     res.json(dashboard);
   } catch (err) {
     fail(res, err);
