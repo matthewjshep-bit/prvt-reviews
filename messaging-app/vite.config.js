@@ -14,6 +14,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         dashboard: resolve(__dirname, "dashboard.html"),
+        settings: resolve(__dirname, "settings.html"),
       },
     },
   },
