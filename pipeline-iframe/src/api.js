@@ -59,12 +59,12 @@ export async function getLinkedContacts(opportunityId) {
   return res.json();
 }
 
-export async function addLinkedContact(opportunityId, contact) {
+export async function addLinkedContact(opportunityId, contact, opportunityName) {
   if (!locationId) throw new Error("No locationId provided");
   const res = await fetch(`${API_BASE}/api/pipeline/opportunity/${encodeURIComponent(opportunityId)}/contacts?locationId=${encodeURIComponent(locationId)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ contact }),
+    body: JSON.stringify({ contact, opportunityName }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -187,6 +187,15 @@ export async function deleteTag(contactId, tags) {
 export async function fetchContactOpportunities(contactId) {
   if (!locationId) throw new Error("No locationId provided");
   const res = await fetch(`${API_BASE}/api/pipeline/contact/${encodeURIComponent(contactId)}/opportunities?locationId=${encodeURIComponent(locationId)}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+// ========== CONTACT MESSAGES ==========
+
+export async function fetchContactMessages(contactId) {
+  if (!locationId) throw new Error("No locationId provided");
+  const res = await fetch(`${API_BASE}/api/pipeline/contact/${encodeURIComponent(contactId)}/messages?locationId=${encodeURIComponent(locationId)}`);
   if (!res.ok) return [];
   return res.json();
 }

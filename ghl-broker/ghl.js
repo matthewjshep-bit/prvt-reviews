@@ -117,6 +117,22 @@ export async function sendSms(client, { contactId, message, attachments }) {
   });
 }
 
+export async function getConversationByContact(client, contactId) {
+  const data = await client.call(`/conversations/search?contactId=${encodeURIComponent(contactId)}`, {
+    version: V_CONVERSATIONS,
+  });
+  // Returns an array of conversations; typically one per contact
+  const convos = data.conversations || [];
+  return convos.length > 0 ? convos[0] : null;
+}
+
+export async function getMessages(client, conversationId) {
+  const data = await client.call(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
+    version: V_CONVERSATIONS,
+  });
+  return data.messages || [];
+}
+
 /* ---------- opportunities & pipelines ---------- */
 
 export async function listPipelines(client, locationId) {
