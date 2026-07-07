@@ -31,6 +31,9 @@ export default function Drawer({ open, onClose, card, stages, onSave }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
+  const locationId = new URLSearchParams(window.location.search).get("locationId");
+  const getContactUrl = (cid) => `https://app.gohighlevel.com/v2/location/${locationId}/contacts/detail/${cid}`;
+
   // Load linked contacts if in edit mode
   useEffect(() => {
     if (open && card && card.id) {
@@ -305,7 +308,14 @@ export default function Drawer({ open, onClose, card, stages, onSave }) {
                       <div className="absolute top-0 right-0 px-2 py-1 bg-blue-100 text-blue-700 text-[10px] font-bold uppercase rounded-bl-lg rounded-tr-xl">
                         Primary
                       </div>
-                      <div className="font-semibold text-gray-900">{primaryContactName || card?.contact?.name}</div>
+                      <a 
+                        href={getContactUrl(primaryContactId || card?.contact?.id)} 
+                        target="_blank" 
+                        rel="noreferrer"
+                        className="font-semibold text-gray-900 hover:text-blue-600 transition-colors cursor-pointer"
+                      >
+                        {primaryContactName || card?.contact?.name}
+                      </a>
                       
                       {((card?.contact?.phone) || (card?.contact?.email)) && (
                         <div className="mt-3 space-y-2">
@@ -332,7 +342,14 @@ export default function Drawer({ open, onClose, card, stages, onSave }) {
                       <div className="absolute top-0 right-0 px-2 py-1 bg-gray-100 text-gray-500 text-[10px] font-bold uppercase rounded-bl-lg rounded-tr-xl flex items-center gap-1">
                         <LinkIcon className="w-3 h-3" /> Linked
                       </div>
-                      <div className="font-semibold text-gray-900">{contact.contact_name}</div>
+                      <a 
+                        href={getContactUrl(contact.contact_id)} 
+                        target="_blank" 
+                        rel="noreferrer"
+                        className="font-semibold text-gray-900 hover:text-blue-600 transition-colors cursor-pointer"
+                      >
+                        {contact.contact_name}
+                      </a>
                       
                       {(contact.contact_phone || contact.contact_email) && (
                         <div className="mt-3 space-y-2">
