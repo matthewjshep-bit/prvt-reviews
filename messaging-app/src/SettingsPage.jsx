@@ -34,6 +34,7 @@ export default function SettingsPage() {
   const [fetchingLocations, setFetchingLocations] = useState(false);
   const [availableLocations, setAvailableLocations] = useState([]);
   const [savingLocation, setSavingLocation] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -117,6 +118,26 @@ export default function SettingsPage() {
     }
   };
 
+  const handleDisconnect = async () => {
+    if (!window.confirm("Are you sure you want to disconnect your Google account?")) return;
+    setDisconnecting(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/google/connection?location_id=${encodeURIComponent(
+          locationId
+        )}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error("Failed to disconnect");
+      setGoogleConnected(false);
+      setGoogleLocationId(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 px-6 py-8 text-gray-900">
       <div className="mx-auto max-w-4xl">
@@ -162,9 +183,18 @@ export default function SettingsPage() {
                   <div className="h-10 w-32 animate-pulse rounded-lg bg-gray-200"></div>
                 ) : googleConnected ? (
                   googleLocationId ? (
-                    <div className="flex items-center gap-2 rounded-full border border-green-200 bg-green-50 px-4 py-2 text-sm font-semibold text-green-700">
-                      <CheckCircle2 className="h-4 w-4" />
-                      Connected
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2 rounded-full border border-green-200 bg-green-50 px-4 py-2 text-sm font-semibold text-green-700">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Connected
+                      </div>
+                      <button
+                        onClick={handleDisconnect}
+                        disabled={disconnecting}
+                        className="text-sm font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
+                      >
+                        {disconnecting ? "Disconnecting..." : "Disconnect"}
+                      </button>
                     </div>
                   ) : (
                     <div className="flex flex-col gap-2 items-end">
@@ -205,6 +235,13 @@ export default function SettingsPage() {
                           No Google locations found for this account.
                         </div>
                       )}
+                      <button
+                        onClick={handleDisconnect}
+                        disabled={disconnecting}
+                        className="mt-2 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
+                      >
+                        {disconnecting ? "Disconnecting..." : "Disconnect Account"}
+                      </button>
                     </div>
                   )
                 ) : (
