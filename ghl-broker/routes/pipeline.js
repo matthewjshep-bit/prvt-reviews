@@ -1,5 +1,5 @@
 import express from "express";
-import { makeClient, listPipelines, searchOpportunities, updateOpportunity, createOpportunity, searchContacts, getContact, getContactNotes, createContactNote, getContactTasks, createContactTask, updateContactTask, addContactTags, removeContactTag, getOpportunity } from "../ghl.js";
+import { makeClient, listPipelines, searchOpportunities, updateOpportunity, createOpportunity, searchContacts, getContact, getContactNotes, createContactNote, getContactTasks, createContactTask, updateContactTask, addContactTags, removeContactTag, getOpportunity, getConversationByContact, getMessages } from "../ghl.js";
 import { listCustomValues } from "../ghl.js"; // Need this to find the dbr_notes custom field
 import { getLinkedContacts, addLinkedContact, removeLinkedContact } from "../supabase.js";
 
@@ -193,9 +193,20 @@ export default function createPipelineRouter(getTokenFor) {
   // POST /api/pipeline/opportunity/:id/contacts
   router.post("/opportunity/:id/contacts", async (req, res) => {
     try {
-      const { contact } = req.body;
+      const { contact, opportunityName } = req.body;
       if (!contact || !contact.id) throw new Error("Missing contact object");
       await addLinkedContact(req.params.id, contact);
+      
+      // Auto-create a note on the secondary contact so the opp shows in their GHL timeline
+      try {
+        const client = getClient(req);
+        await createContactNote(client, contact.id, {
+          body: `Linked to Opportunity: ${opportunityName || req.params.id}\n(This contact is a secondary stakeholder on this opportunity)`
+        });
+      } catch (noteErr) {
+        console.warn("Failed to auto-create note on linked contact:", noteErr.message);
+      }
+      
       res.json({ success: true });
     } catch (err) {
       console.error("POST link contact error", err);
@@ -442,6 +453,29 @@ export default function createPipelineRouter(getTokenFor) {
       res.json(opps);
     } catch (err) {
       console.error("GET contact opps error", err);
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  // ========== CONVERSATION MESSAGES ==========
+  
+  router.get("/contact/:contactId/messages", async (req, res) => {
+    try {
+      const client = getClient(req);
+      const convo = await getConversationByContact(client, req.params.contactId);
+      if (!convo) return res.json([]);
+      const messages = await getMessages(client, convo.id);
+      // Map to a clean format
+      res.json(messages.map(m => ({
+        id: m.id,
+        body: m.body || m.message || '',
+        direction: m.direction, // 'inbound' or 'outbound'
+        type: m.messageType || m.type || 'SMS',
+        dateAdded: m.dateAdded || m.createdAt,
+        attachments: m.attachments || []
+      })).slice(0, 50)); // Limit to last 50 messages
+    } catch (err) {
+      console.error("GET messages error", err);
       res.status(err.http || 500).json({ error: err.message });
     }
   });
