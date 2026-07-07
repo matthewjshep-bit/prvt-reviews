@@ -117,8 +117,8 @@ export async function sendSms(client, { contactId, message, attachments }) {
   });
 }
 
-export async function getConversationByContact(client, contactId) {
-  const data = await client.call(`/conversations/search?contactId=${encodeURIComponent(contactId)}`, {
+export async function getConversationByContact(client, contactId, locationId) {
+  const data = await client.call(`/conversations/search?contactId=${encodeURIComponent(contactId)}&locationId=${encodeURIComponent(locationId)}`, {
     version: V_CONVERSATIONS,
   });
   // Returns an array of conversations; typically one per contact

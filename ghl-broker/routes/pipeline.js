@@ -1,11 +1,40 @@
 import express from "express";
-import { makeClient, listPipelines, searchOpportunities, updateOpportunity, createOpportunity, searchContacts, getContact, getContactNotes, createContactNote, getContactTasks, createContactTask, updateContactTask, addContactTags, removeContactTag, getOpportunity, getConversationByContact, getMessages } from "../ghl.js";
+import { makeClient, listPipelines, searchOpportunities, updateOpportunity, createOpportunity, searchContacts, getContact, getContactNotes, createContactNote, getContactTasks, createContactTask, updateContactTask, addContactTags, removeContactTag, getOpportunity, getConversationByContact, getMessages, getUsers } from "../ghl.js";
 import { listCustomValues } from "../ghl.js"; // Need this to find the dbr_notes custom field
 import { getLinkedContacts, addLinkedContact, removeLinkedContact } from "../supabase.js";
 
 // Simple in-memory cache for pipeline resolution (v1)
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 mins
+
+// Cache for user ID resolution
+const userIdsCache = {}; // { locationId: userId }
+
+async function resolveUserId(client, locationId, contactId) {
+  try {
+    if (contactId) {
+      const contact = await getContact(client, contactId);
+      if (contact && contact.assignedTo) return contact.assignedTo;
+    }
+  } catch (err) {
+    console.warn("Failed to get contact for userId resolution", err.message);
+  }
+
+  if (userIdsCache[locationId]) return userIdsCache[locationId];
+
+  try {
+    const data = await client.call(`/users/search?locationId=${encodeURIComponent(locationId)}`);
+    const users = data.users || [];
+    if (users.length > 0) {
+      userIdsCache[locationId] = users[0].id;
+      return users[0].id;
+    }
+  } catch (err) {
+    console.warn("Failed to fetch users for location", err.message);
+  }
+  
+  throw new Error("Could not resolve a valid userId for note creation");
+}
 
 export default function createPipelineRouter(getTokenFor) {
   const router = express.Router();
@@ -200,8 +229,11 @@ export default function createPipelineRouter(getTokenFor) {
       // Auto-create a note on the secondary contact so the opp shows in their GHL timeline
       try {
         const client = getClient(req);
+        const locationId = req.query.locationId;
+        const userId = await resolveUserId(client, locationId, contact.id);
         await createContactNote(client, contact.id, {
-          body: `Linked to Opportunity: ${opportunityName || req.params.id}\n(This contact is a secondary stakeholder on this opportunity)`
+          body: `📌 Linked to Opportunity: ${opportunityName || req.params.id}\n\nThis contact is a secondary stakeholder on this opportunity.`,
+          userId
         });
       } catch (noteErr) {
         console.warn("Failed to auto-create note on linked contact:", noteErr.message);
@@ -346,7 +378,12 @@ export default function createPipelineRouter(getTokenFor) {
   router.post("/contact/:contactId/notes", async (req, res) => {
     try {
       const client = getClient(req);
-      const note = await createContactNote(client, req.params.contactId, req.body);
+      const locationId = req.query.locationId;
+      const payload = { ...req.body };
+      if (!payload.userId) {
+        payload.userId = await resolveUserId(client, locationId, req.params.contactId);
+      }
+      const note = await createContactNote(client, req.params.contactId, payload);
       res.json(note);
     } catch (err) {
       console.error("POST note error", err);
@@ -462,7 +499,8 @@ export default function createPipelineRouter(getTokenFor) {
   router.get("/contact/:contactId/messages", async (req, res) => {
     try {
       const client = getClient(req);
-      const convo = await getConversationByContact(client, req.params.contactId);
+      const locationId = req.query.locationId;
+      const convo = await getConversationByContact(client, req.params.contactId, locationId);
       if (!convo) return res.json([]);
       const messages = await getMessages(client, convo.id);
       // Map to a clean format
