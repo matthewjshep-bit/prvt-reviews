@@ -196,6 +196,9 @@ export async function fetchContactOpportunities(contactId) {
 export async function fetchContactMessages(contactId) {
   if (!locationId) throw new Error("No locationId provided");
   const res = await fetch(`${API_BASE}/api/pipeline/contact/${encodeURIComponent(contactId)}/messages?locationId=${encodeURIComponent(locationId)}`);
-  if (!res.ok) return [];
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to fetch messages");
+  }
   return res.json();
 }

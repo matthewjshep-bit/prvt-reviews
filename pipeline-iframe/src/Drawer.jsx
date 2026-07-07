@@ -47,6 +47,7 @@ export default function Drawer({ open, onClose, card, stages, onSave }) {
   
   const [relatedOpps, setRelatedOpps] = useState([]);
   const [messages, setMessages] = useState([]);
+  const [messageError, setMessageError] = useState(null);
   
   // Tabs for center column
   const [activeTab, setActiveTab] = useState('messages');
@@ -66,7 +67,9 @@ export default function Drawer({ open, onClose, card, stages, onSave }) {
       fetchContactTasks(cid).then(setContactTasks).catch(console.error);
       fetchContactTags(cid).then(setTags).catch(console.error);
       fetchContactOpportunities(cid).then(opps => setRelatedOpps(opps.filter(o => o.id !== card.id))).catch(console.error);
-      fetchContactMessages(cid).then(msgs => { setMessages(msgs); setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100); }).catch(console.error);
+      fetchContactMessages(cid)
+        .then(msgs => { setMessages(msgs); setMessageError(null); setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100); })
+        .catch(err => { console.error(err); setMessageError(err.message); });
     }
   }, [open, card]);
 
@@ -282,7 +285,8 @@ export default function Drawer({ open, onClose, card, stages, onSave }) {
                 {/* Messages Tab */}
                 {activeTab === 'messages' && (
                   <div className="space-y-3">
-                    {messages.length === 0 && <p className="text-sm text-gray-400 text-center py-8">No messages found for this contact.</p>}
+                    {messageError && <div className="p-3 text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg">Error loading messages: {messageError}</div>}
+                    {!messageError && messages.length === 0 && <p className="text-sm text-gray-400 text-center py-8">No messages found for this contact.</p>}
                     {messages.map((msg, i) => (
                       <div key={msg.id || i} className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}>
                         <div className={`max-w-[70%] rounded-2xl px-4 py-2.5 ${
