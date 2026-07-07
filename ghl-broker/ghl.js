@@ -156,6 +156,79 @@ export async function createOpportunity(client, payload) {
   return data.opportunity || data;
 }
 
+/* ---------- contacts (detail) ---------- */
+
+export async function getContact(client, contactId) {
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}`);
+  return data.contact || data;
+}
+
+/* ---------- contact notes ---------- */
+
+export async function getContactNotes(client, contactId) {
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}/notes`);
+  return data.notes || [];
+}
+
+export async function createContactNote(client, contactId, body) {
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}/notes`, {
+    method: "POST",
+    body,
+  });
+  return data.note || data;
+}
+
+/* ---------- contact tasks ---------- */
+
+export async function getContactTasks(client, contactId) {
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}/tasks`);
+  return data.tasks || [];
+}
+
+export async function createContactTask(client, contactId, body) {
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}/tasks`, {
+    method: "POST",
+    body,
+  });
+  return data.task || data;
+}
+
+export async function updateContactTask(client, contactId, taskId, body) {
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PUT",
+    body,
+  });
+  return data.task || data;
+}
+
+/* ---------- contact tags ---------- */
+
+export async function addContactTags(client, contactId, tags) {
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}/tags`, {
+    method: "POST",
+    body: { tags },
+  });
+  return data.tags || data;
+}
+
+export async function removeContactTag(client, contactId, tags) {
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}/tags`, {
+    method: "DELETE",
+    body: { tags },
+  });
+  return data;
+}
+
+/* ---------- contact opportunities ---------- */
+
+export async function getContactOpportunities(client, contactId) {
+  // GHL doesn't have a direct "opps by contact" endpoint, so we search by contact
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}`);
+  const contact = data.contact || data;
+  // Contact object has an `opportunities` array with opportunity IDs
+  return contact.opportunities || [];
+}
+
 /* ---------- dashboard ---------- */
 
 export async function getDashboard(client, locationId) {

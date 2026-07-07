@@ -1,5 +1,5 @@
 import express from "express";
-import { makeClient, listPipelines, searchOpportunities, updateOpportunity, createOpportunity, searchContacts } from "../ghl.js";
+import { makeClient, listPipelines, searchOpportunities, updateOpportunity, createOpportunity, searchContacts, getContact, getContactNotes, createContactNote, getContactTasks, createContactTask, updateContactTask, addContactTags, removeContactTag, getOpportunity } from "../ghl.js";
 import { listCustomValues } from "../ghl.js"; // Need this to find the dbr_notes custom field
 import { getLinkedContacts, addLinkedContact, removeLinkedContact } from "../supabase.js";
 
@@ -318,6 +318,133 @@ export default function createPipelineRouter(getTokenFor) {
       updatedAt: opp.updatedAt || opp.createdAt
     };
   }
+
+  // ========== CONTACT NOTES ==========
+  
+  router.get("/contact/:contactId/notes", async (req, res) => {
+    try {
+      const client = getClient(req);
+      const notes = await getContactNotes(client, req.params.contactId);
+      res.json(notes);
+    } catch (err) {
+      console.error("GET notes error", err);
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  router.post("/contact/:contactId/notes", async (req, res) => {
+    try {
+      const client = getClient(req);
+      const note = await createContactNote(client, req.params.contactId, req.body);
+      res.json(note);
+    } catch (err) {
+      console.error("POST note error", err);
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  // ========== CONTACT TASKS ==========
+  
+  router.get("/contact/:contactId/tasks", async (req, res) => {
+    try {
+      const client = getClient(req);
+      const tasks = await getContactTasks(client, req.params.contactId);
+      res.json(tasks);
+    } catch (err) {
+      console.error("GET tasks error", err);
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  router.post("/contact/:contactId/tasks", async (req, res) => {
+    try {
+      const client = getClient(req);
+      const task = await createContactTask(client, req.params.contactId, req.body);
+      res.json(task);
+    } catch (err) {
+      console.error("POST task error", err);
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  router.put("/contact/:contactId/tasks/:taskId", async (req, res) => {
+    try {
+      const client = getClient(req);
+      const task = await updateContactTask(client, req.params.contactId, req.params.taskId, req.body);
+      res.json(task);
+    } catch (err) {
+      console.error("PUT task error", err);
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  // ========== CONTACT TAGS ==========
+  
+  router.get("/contact/:contactId/tags", async (req, res) => {
+    try {
+      const client = getClient(req);
+      const contact = await getContact(client, req.params.contactId);
+      res.json(contact.tags || []);
+    } catch (err) {
+      console.error("GET tags error", err);
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  router.post("/contact/:contactId/tags", async (req, res) => {
+    try {
+      const client = getClient(req);
+      const result = await addContactTags(client, req.params.contactId, req.body.tags);
+      res.json(result);
+    } catch (err) {
+      console.error("POST tags error", err);
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  router.delete("/contact/:contactId/tags", async (req, res) => {
+    try {
+      const client = getClient(req);
+      const result = await removeContactTag(client, req.params.contactId, req.body.tags);
+      res.json(result);
+    } catch (err) {
+      console.error("DELETE tags error", err);
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  // ========== CONTACT OPPORTUNITIES (Related Opps) ==========
+  
+  router.get("/contact/:contactId/opportunities", async (req, res) => {
+    try {
+      const client = getClient(req);
+      const contact = await getContact(client, req.params.contactId);
+      // contact.opportunities is an array of opp IDs (or objects).
+      // We need to fetch each one to get the details.
+      const oppRefs = contact.opportunities || [];
+      const opps = [];
+      for (const ref of oppRefs) {
+        try {
+          const oppId = typeof ref === 'string' ? ref : ref.id;
+          if (!oppId) continue;
+          const opp = await getOpportunity(client, oppId);
+          opps.push({
+            id: opp.id,
+            name: opp.name,
+            stageName: opp.pipelineStageId,
+            monetaryValue: opp.monetaryValue || 0,
+            status: opp.status || 'open'
+          });
+        } catch (e) {
+          // Skip opps that fail to load
+        }
+      }
+      res.json(opps);
+    } catch (err) {
+      console.error("GET contact opps error", err);
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
 
   return router;
 }
