@@ -1,5 +1,5 @@
 import express from "express";
-import { makeClient, listPipelines, searchOpportunities, updateOpportunity } from "../ghl.js";
+import { makeClient, listPipelines, searchOpportunities, updateOpportunity, createOpportunity, searchContacts } from "../ghl.js";
 import { listCustomValues } from "../ghl.js"; // Need this to find the dbr_notes custom field
 
 // Simple in-memory cache for pipeline resolution (v1)
@@ -174,6 +174,55 @@ export default function createPipelineRouter(getTokenFor) {
         cards: (searchRes.opportunities || []).map(mapOpportunity)
       });
     } catch (err) {
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/pipeline/opportunity
+  router.post("/opportunity", async (req, res) => {
+    try {
+      const locationId = req.query.locationId;
+      const client = getClient(req);
+      const { pipelineId, stageId, monetaryValue, notes, contactId, name } = req.body;
+      
+      const payload = {
+        locationId,
+        pipelineId,
+        pipelineStageId: stageId,
+        contactId,
+        name: name || "New Opportunity",
+        monetaryValue: typeof monetaryValue === "number" ? monetaryValue : 0,
+      };
+
+      if (notes !== undefined) {
+        const notesFieldId = await resolveDbrNotesFieldId(client, locationId);
+        if (notesFieldId) {
+          payload.customFields = [{ id: notesFieldId, field_value: notes }];
+        }
+      }
+
+      const created = await createOpportunity(client, payload);
+      res.json(mapOpportunity(created));
+    } catch (err) {
+      console.error("POST opportunity error", err);
+      res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/pipeline/contacts/search
+  router.get("/contacts/search", async (req, res) => {
+    try {
+      const { locationId, query } = req.query;
+      const client = getClient(req);
+      const contacts = await searchContacts(client, locationId, query);
+      res.json(contacts.map(c => ({
+        id: c.id,
+        name: c.name || c.contactName || c.firstName + " " + c.lastName || "Unknown",
+        email: c.email || "",
+        phone: c.phone || c.phone_number || ""
+      })));
+    } catch (err) {
+      console.error("GET contacts search error", err);
       res.status(err.http || 500).json({ error: err.message });
     }
   });

@@ -96,6 +96,14 @@ export async function findOrCreateContactByPhone(client, locationId, phone, firs
   return created?.contact?.id || created?.id;
 }
 
+export async function searchContacts(client, locationId, query) {
+  const data = await client.call(`/contacts/search/duplicate?locationId=${encodeURIComponent(locationId)}&query=${encodeURIComponent(query)}`);
+  // The API might return it under contacts or contact array, we need to handle standard GHL search
+  // Actually, standard contact search by query: GET /contacts/?locationId=...&query=...
+  const data2 = await client.call(`/contacts/?locationId=${encodeURIComponent(locationId)}&query=${encodeURIComponent(query)}&limit=20`);
+  return data2.contacts || [];
+}
+
 /* ---------- messaging ---------- */
 
 export async function sendSms(client, { contactId, message, attachments }) {
@@ -137,6 +145,14 @@ export async function getOpportunity(client, opportunityId) {
 export async function updateOpportunity(client, opportunityId, payload) {
   const data = await client.call(`/opportunities/${encodeURIComponent(opportunityId)}`, {
     method: "PUT",
+    body: payload,
+  });
+  return data.opportunity || data;
+}
+
+export async function createOpportunity(client, payload) {
+  const data = await client.call(`/opportunities/`, {
+    method: "POST",
     body: payload,
   });
   return data.opportunity || data;

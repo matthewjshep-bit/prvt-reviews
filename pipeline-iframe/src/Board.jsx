@@ -14,7 +14,7 @@ import Column from './Column';
 import Drawer from './Drawer';
 import { updateOpportunity } from './api';
 
-export default function Board({ columns, setColumns, refreshBoard }) {
+export default function Board({ columns, setColumns, refreshBoard, createIntent, clearCreateIntent }) {
   const [activeCard, setActiveCard] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   
@@ -22,6 +22,14 @@ export default function Board({ columns, setColumns, refreshBoard }) {
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
+
+  React.useEffect(() => {
+    if (createIntent) {
+      setActiveCard({ stageId: columns[0]?.stageId || '' });
+      setDrawerOpen(true);
+      clearCreateIntent();
+    }
+  }, [createIntent, columns, clearCreateIntent]);
 
   const handleDragEnd = async (event) => {
     const { active, over } = event;

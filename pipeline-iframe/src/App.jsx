@@ -6,6 +6,7 @@ export default function App() {
   const [boardData, setBoardData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [createIntent, setCreateIntent] = useState(false);
   const pollingRef = useRef(null);
 
   const loadBoard = async () => {
@@ -94,10 +95,18 @@ export default function App() {
             <span>{summary.bookedCount} booked</span>
           </div>
         </div>
-        <div className="text-right">
-          <div className="text-sm font-medium text-emerald-700 uppercase tracking-wide">Revenue Recovered</div>
-          <div className="text-3xl font-bold text-emerald-600">
-            ${summary.recoveredTotal.toLocaleString()}
+        <div className="flex items-center gap-6">
+          <button
+            onClick={() => setCreateIntent(true)}
+            className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 shadow-sm transition-colors"
+          >
+            Create Opportunity
+          </button>
+          <div className="text-right">
+            <div className="text-sm font-medium text-emerald-700 uppercase tracking-wide">Revenue Recovered</div>
+            <div className="text-3xl font-bold text-emerald-600">
+              ${summary.recoveredTotal.toLocaleString()}
+            </div>
           </div>
         </div>
       </div>
@@ -107,7 +116,9 @@ export default function App() {
         <Board 
           columns={columns} 
           setColumns={(newCols) => setBoardData({ ...boardData, columns: newCols })} 
-          refreshBoard={loadBoard} 
+          refreshBoard={loadBoard}
+          createIntent={createIntent}
+          clearCreateIntent={() => setCreateIntent(false)}
         />
       </div>
     </div>
