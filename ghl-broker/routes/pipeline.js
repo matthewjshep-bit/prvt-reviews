@@ -219,7 +219,9 @@ export default function createPipelineRouter(getTokenFor) {
     try {
       const locationId = req.query.locationId;
       const client = getClient(req);
-      const { pipelineId, stageId, monetaryValue, notes, contactId, name } = req.body;
+      const { stageId, monetaryValue, notes, contactId, name } = req.body;
+      
+      const { pipelineId } = await resolvePipeline(client, locationId);
       
       const payload = {
         locationId,
