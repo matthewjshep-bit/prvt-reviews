@@ -97,11 +97,9 @@ export async function findOrCreateContactByPhone(client, locationId, phone, firs
 }
 
 export async function searchContacts(client, locationId, query) {
-  const data = await client.call(`/contacts/search/duplicate?locationId=${encodeURIComponent(locationId)}&query=${encodeURIComponent(query)}`);
-  // The API might return it under contacts or contact array, we need to handle standard GHL search
-  // Actually, standard contact search by query: GET /contacts/?locationId=...&query=...
-  const data2 = await client.call(`/contacts/?locationId=${encodeURIComponent(locationId)}&query=${encodeURIComponent(query)}&limit=20`);
-  return data2.contacts || [];
+  // Use the standard GHL v2 contact search endpoint
+  const data = await client.call(`/contacts/?locationId=${encodeURIComponent(locationId)}&query=${encodeURIComponent(query)}&limit=20`);
+  return data.contacts || [];
 }
 
 /* ---------- messaging ---------- */
