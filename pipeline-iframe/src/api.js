@@ -27,3 +27,27 @@ export async function updateOpportunity(oppId, payload) {
   }
   return res.json();
 }
+
+export async function createOpportunity(payload) {
+  if (!locationId) throw new Error("No locationId provided");
+  const res = await fetch(`${API_BASE}/api/pipeline/opportunity?locationId=${encodeURIComponent(locationId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to create opportunity");
+  }
+  return res.json();
+}
+
+export async function searchContacts(query) {
+  if (!locationId) throw new Error("No locationId provided");
+  const res = await fetch(`${API_BASE}/api/pipeline/contacts/search?locationId=${encodeURIComponent(locationId)}&query=${encodeURIComponent(query)}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to search contacts");
+  }
+  return res.json();
+}
