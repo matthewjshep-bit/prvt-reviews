@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Settings, ExternalLink, CheckCircle2 } from "lucide-react";
+import { Settings, ExternalLink, CheckCircle2, AlertCircle } from "lucide-react";
 
 // For local dev, this defaults to the broker's port. In production on Render,
 // they are deployed together or you can inject it via env.
@@ -28,7 +28,12 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [googleConnected, setGoogleConnected] = useState(false);
   const [googleConnectUrl, setGoogleConnectUrl] = useState("");
+  const [googleLocationId, setGoogleLocationId] = useState(null);
   const [error, setError] = useState(null);
+
+  const [fetchingLocations, setFetchingLocations] = useState(false);
+  const [availableLocations, setAvailableLocations] = useState([]);
+  const [savingLocation, setSavingLocation] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -49,6 +54,7 @@ export default function SettingsPage() {
         if (!alive) return;
 
         setGoogleConnected(data.googleConnected || false);
+        setGoogleLocationId(data.googleLocationId || null);
         setGoogleConnectUrl(data.googleConnectUrl || "");
         setLoading(false);
       } catch (err) {
@@ -62,6 +68,54 @@ export default function SettingsPage() {
       alive = false;
     };
   }, [locationId]);
+
+  useEffect(() => {
+    if (googleConnected && !googleLocationId && !loading) {
+      setFetchingLocations(true);
+      fetch(
+        `${API_BASE}/api/google/locations?location_id=${encodeURIComponent(
+          locationId
+        )}`
+      )
+        .then((res) => res.json())
+        .then((data) => {
+          if (Array.isArray(data)) setAvailableLocations(data);
+          else setError(data.error || "Failed to fetch locations");
+        })
+        .catch((err) => setError(err.message))
+        .finally(() => setFetchingLocations(false));
+    }
+  }, [googleConnected, googleLocationId, loading, locationId]);
+
+  const handleSaveLocation = async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const val = formData.get("locationStr");
+    if (!val) return;
+    const [accountId, googleLocIdStr] = val.split("|");
+    setSavingLocation(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/google/location?location_id=${encodeURIComponent(
+          locationId
+        )}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accountId, googleLocationId: googleLocIdStr }),
+        }
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || "Failed to save location");
+      }
+      setGoogleLocationId(googleLocIdStr);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingLocation(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 px-6 py-8 text-gray-900">
@@ -82,7 +136,7 @@ export default function SettingsPage() {
         <div className="space-y-6">
           <Card className="p-6">
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-              <div>
+              <div className="flex-1">
                 <h2 className="text-lg font-bold flex items-center gap-2">
                   <svg
                     className="h-5 w-5 text-gray-700"
@@ -103,17 +157,61 @@ export default function SettingsPage() {
                 </p>
               </div>
 
-              <div className="shrink-0">
+              <div className="shrink-0 flex items-center h-full mt-2 sm:mt-0">
                 {loading ? (
                   <div className="h-10 w-32 animate-pulse rounded-lg bg-gray-200"></div>
                 ) : googleConnected ? (
-                  <div className="flex items-center gap-2 rounded-full border border-green-200 bg-green-50 px-4 py-2 text-sm font-semibold text-green-700">
-                    <CheckCircle2 className="h-4 w-4" />
-                    Connected
-                  </div>
+                  googleLocationId ? (
+                    <div className="flex items-center gap-2 rounded-full border border-green-200 bg-green-50 px-4 py-2 text-sm font-semibold text-green-700">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Connected
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2 items-end">
+                      <div className="flex items-center gap-1 text-sm font-semibold text-amber-600">
+                        <AlertCircle className="h-4 w-4" />
+                        Select Business Profile
+                      </div>
+                      {fetchingLocations ? (
+                        <div className="text-sm text-gray-500">
+                          Fetching your locations...
+                        </div>
+                      ) : availableLocations.length > 0 ? (
+                        <form onSubmit={handleSaveLocation} className="flex gap-2">
+                          <select
+                            name="locationStr"
+                            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            required
+                          >
+                            <option value="">-- Choose Profile --</option>
+                            {availableLocations.map((loc) => (
+                              <option
+                                key={loc.locationId}
+                                value={`${loc.accountId}|${loc.locationId}`}
+                              >
+                                {loc.title}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            disabled={savingLocation}
+                            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                          >
+                            {savingLocation ? "Saving..." : "Save"}
+                          </button>
+                        </form>
+                      ) : (
+                        <div className="text-sm text-red-600">
+                          No Google locations found for this account.
+                        </div>
+                      )}
+                    </div>
+                  )
                 ) : (
                   <a
                     href={googleConnectUrl || "#"}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="inline-flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 shadow-sm"
                     style={{ backgroundColor: GREEN }}
                   >

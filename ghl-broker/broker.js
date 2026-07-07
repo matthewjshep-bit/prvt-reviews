@@ -25,7 +25,14 @@ import {
 import {
   saveGoogleConnection,
   getValidGoogleAccessToken,
+  getGoogleConnection,
+  setGoogleLocation,
 } from "./supabase.js";
+import {
+  getGoogleAccounts,
+  getGoogleLocations,
+  getGoogleReviews,
+} from "./google.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -220,8 +227,36 @@ app.get("/api/dashboard", async (req, res) => {
       const googleAccessToken = await getValidGoogleAccessToken(locationId);
       if (googleAccessToken) {
         dashboard.googleConnected = true;
-        // Future: fetch Google reviews here using the access token.
-        // For now, just signal the connected state.
+        const conn = await getGoogleConnection(locationId);
+        
+        if (conn && conn.google_account_id && conn.google_location_id) {
+          dashboard.googleLocationId = conn.google_location_id;
+          
+          // Fetch live Google Reviews!
+          try {
+            const googleData = await getGoogleReviews(
+              googleAccessToken,
+              conn.google_account_id,
+              conn.google_location_id
+            );
+            
+            // Map Google reviews to the dashboard format
+            dashboard.averageRating = googleData.averageRating || 0;
+            dashboard.totalReviews = googleData.totalReviewCount || 0;
+            dashboard.recentReviews = googleData.reviews.slice(0, 5).map((r) => ({
+              id: r.reviewId,
+              author: r.reviewer?.displayName || "Google User",
+              rating: r.starRating === "FIVE" ? 5 : r.starRating === "FOUR" ? 4 : r.starRating === "THREE" ? 3 : r.starRating === "TWO" ? 2 : 1,
+              content: r.comment || "",
+              createdAt: r.createTime,
+              reply: r.reviewReply?.comment || null,
+            }));
+          } catch (e) {
+            console.error("Failed to fetch live Google reviews:", e);
+            // Fall back to empty if we fail
+            dashboard.recentReviews = [];
+          }
+        }
       } else {
         dashboard.googleConnected = false;
         dashboard.googleConnectUrl = `${PUBLIC_BASE_URL}/auth/google?location_id=${encodeURIComponent(locationId)}`;
@@ -233,6 +268,51 @@ app.get("/api/dashboard", async (req, res) => {
     }
 
     res.json(dashboard);
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+/* ---------- GET /api/google/locations ---------- */
+app.get("/api/google/locations", async (req, res) => {
+  try {
+    const { locationId } = resolveLocation(req);
+    const accessToken = await getValidGoogleAccessToken(locationId);
+    if (!accessToken) return res.status(401).json({ error: "Google not connected" });
+
+    // Fetch accounts, then for each account fetch locations
+    const accounts = await getGoogleAccounts(accessToken);
+    const allLocations = [];
+
+    for (const acc of accounts) {
+      // acc.name is like "accounts/12345"
+      const locs = await getGoogleLocations(accessToken, acc.name);
+      for (const loc of locs) {
+        allLocations.push({
+          accountId: acc.name.split("/")[1],
+          locationId: loc.name.split("/")[3],
+          title: loc.title,
+        });
+      }
+    }
+
+    res.json(allLocations);
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+/* ---------- POST /api/google/location ---------- */
+app.post("/api/google/location", async (req, res) => {
+  try {
+    const { locationId } = resolveLocation(req);
+    const { accountId, googleLocationId } = req.body || {};
+    if (!accountId || !googleLocationId) {
+      return res.status(400).json({ error: "Missing accountId or googleLocationId" });
+    }
+
+    await setGoogleLocation(locationId, accountId, googleLocationId);
+    res.json({ ok: true });
   } catch (err) {
     fail(res, err);
   }

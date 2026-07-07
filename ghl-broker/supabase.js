@@ -141,3 +141,24 @@ export async function getValidGoogleAccessToken(locationId) {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// setGoogleLocation — updates the googleAccountId and googleLocationId
+// ---------------------------------------------------------------------------
+export async function setGoogleLocation(locationId, googleAccountId, googleLocationId) {
+  if (!supabase) throw new Error("Supabase not configured");
+  
+  const { error } = await supabase
+    .from("google_connections")
+    .update({
+      google_account_id: googleAccountId,
+      google_location_id: googleLocationId,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("location_id", locationId);
+
+  if (error) {
+    console.error("setGoogleLocation failed:", error.message);
+    throw error;
+  }
+}
