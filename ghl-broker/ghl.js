@@ -130,7 +130,10 @@ export async function getMessages(client, conversationId) {
   const data = await client.call(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     version: V_CONVERSATIONS,
   });
-  return data.messages || [];
+  if (data.messages && Array.isArray(data.messages.messages)) {
+    return data.messages.messages;
+  }
+  return Array.isArray(data.messages) ? data.messages : [];
 }
 
 /* ---------- opportunities & pipelines ---------- */
