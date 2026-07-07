@@ -34,6 +34,7 @@ import {
   getGoogleLocations,
   getGoogleReviews,
 } from "./google.js";
+import createPipelineRouter from "./routes/pipeline.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -43,6 +44,7 @@ const ALLOWED_LOCATION = process.env.GHL_LOCATION_ID || ""; // single-tenant gua
 const CARD_SERVICE_URL = process.env.CARD_SERVICE_URL || ""; // e.g. https://cards.prvtmkt.com
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
 const APP_ORIGIN = process.env.APP_ORIGIN || ""; // iframe app origin, if cross-origin
+const APP_ORIGIN_PIPELINE = process.env.APP_ORIGIN_PIPELINE || ""; // pipeline iframe origin
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "uploads");
 
 // --- Google OAuth config ---
@@ -64,10 +66,11 @@ app.use(express.json({ limit: "1mb" }));
 
 // CORS — only needed if the page is served from a different origin than this API.
 app.use((req, res, next) => {
-  if (APP_ORIGIN) {
-    res.header("Access-Control-Allow-Origin", APP_ORIGIN);
+  const origin = req.headers.origin;
+  if (origin && (origin === APP_ORIGIN || origin === APP_ORIGIN_PIPELINE)) {
+    res.header("Access-Control-Allow-Origin", origin);
     res.header("Access-Control-Allow-Headers", "Content-Type");
-    res.header("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
+    res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     if (req.method === "OPTIONS") return res.sendStatus(204);
   }
   next();
@@ -216,6 +219,10 @@ app.get("/api/config", async (req, res) => {
     fail(res, err);
   }
 });
+
+/* ---------- Mount Pipeline Router ---------- */
+// Pass the getTokenFor dependency so the router can authenticate GHL calls
+app.use("/api/pipeline", createPipelineRouter(getTokenFor));
 
 /* ---------- GET dashboard ---------- */
 app.get("/api/dashboard", async (req, res) => {

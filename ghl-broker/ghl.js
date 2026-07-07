@@ -111,6 +111,37 @@ export async function sendSms(client, { contactId, message, attachments }) {
   });
 }
 
+/* ---------- opportunities & pipelines ---------- */
+
+export async function listPipelines(client, locationId) {
+  const data = await client.call(`/opportunities/pipelines?locationId=${encodeURIComponent(locationId)}`);
+  return data.pipelines || [];
+}
+
+export async function searchOpportunities(client, { locationId, pipelineId, pipelineStageId, limit = 20, page = 1 }) {
+  // GHL search uses location_id and pipeline_id (snake_case)
+  let url = `/opportunities/search?location_id=${encodeURIComponent(locationId)}&pipeline_id=${encodeURIComponent(pipelineId)}`;
+  if (pipelineStageId) url += `&pipeline_stage_id=${encodeURIComponent(pipelineStageId)}`;
+  url += `&limit=${limit}`;
+  if (page) url += `&page=${page}`;
+  
+  const data = await client.call(url);
+  return data;
+}
+
+export async function getOpportunity(client, opportunityId) {
+  const data = await client.call(`/opportunities/${encodeURIComponent(opportunityId)}`);
+  return data.opportunity || data;
+}
+
+export async function updateOpportunity(client, opportunityId, payload) {
+  const data = await client.call(`/opportunities/${encodeURIComponent(opportunityId)}`, {
+    method: "PUT",
+    body: payload,
+  });
+  return data.opportunity || data;
+}
+
 /* ---------- dashboard ---------- */
 
 export async function getDashboard(client, locationId) {
