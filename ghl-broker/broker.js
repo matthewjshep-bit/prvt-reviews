@@ -27,6 +27,7 @@ import {
   getValidGoogleAccessToken,
   getGoogleConnection,
   setGoogleLocation,
+  deleteGoogleConnection,
 } from "./supabase.js";
 import {
   getGoogleAccounts,
@@ -312,6 +313,17 @@ app.post("/api/google/location", async (req, res) => {
     }
 
     await setGoogleLocation(locationId, accountId, googleLocationId);
+    res.json({ ok: true });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+/* ---------- DELETE /api/google/connection ---------- */
+app.delete("/api/google/connection", async (req, res) => {
+  try {
+    const { locationId } = resolveLocation(req);
+    await deleteGoogleConnection(locationId);
     res.json({ ok: true });
   } catch (err) {
     fail(res, err);

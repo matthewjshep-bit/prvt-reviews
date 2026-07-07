@@ -162,3 +162,20 @@ export async function setGoogleLocation(locationId, googleAccountId, googleLocat
     throw error;
   }
 }
+
+// ---------------------------------------------------------------------------
+// deleteGoogleConnection — removes the token entirely
+// ---------------------------------------------------------------------------
+export async function deleteGoogleConnection(locationId) {
+  if (!supabase) throw new Error("Supabase not configured");
+  
+  const { error } = await supabase
+    .from("google_connections")
+    .delete()
+    .eq("location_id", locationId);
+
+  if (error) {
+    console.error("deleteGoogleConnection failed:", error.message);
+    throw error;
+  }
+}
