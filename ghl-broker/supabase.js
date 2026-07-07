@@ -179,3 +179,53 @@ export async function deleteGoogleConnection(locationId) {
     throw error;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Opportunity Contacts Linking
+// ---------------------------------------------------------------------------
+
+export async function getLinkedContacts(opportunityId) {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("opportunity_contacts")
+    .select("contact_id, contact_name, contact_email, contact_phone")
+    .eq("opportunity_id", opportunityId);
+    
+  if (error) {
+    console.error("getLinkedContacts failed:", error.message);
+    return [];
+  }
+  return data;
+}
+
+export async function addLinkedContact(opportunityId, contact) {
+  if (!supabase) throw new Error("Supabase not configured");
+  const { error } = await supabase
+    .from("opportunity_contacts")
+    .upsert({
+      opportunity_id: opportunityId,
+      contact_id: contact.id,
+      contact_name: contact.name,
+      contact_email: contact.email,
+      contact_phone: contact.phone
+    }, { onConflict: "opportunity_id, contact_id" });
+
+  if (error) {
+    console.error("addLinkedContact failed:", error.message);
+    throw error;
+  }
+}
+
+export async function removeLinkedContact(opportunityId, contactId) {
+  if (!supabase) throw new Error("Supabase not configured");
+  const { error } = await supabase
+    .from("opportunity_contacts")
+    .delete()
+    .eq("opportunity_id", opportunityId)
+    .eq("contact_id", contactId);
+
+  if (error) {
+    console.error("removeLinkedContact failed:", error.message);
+    throw error;
+  }
+}

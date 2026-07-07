@@ -1,6 +1,7 @@
 import express from "express";
 import { makeClient, listPipelines, searchOpportunities, updateOpportunity, createOpportunity, searchContacts } from "../ghl.js";
 import { listCustomValues } from "../ghl.js"; // Need this to find the dbr_notes custom field
+import { getLinkedContacts, addLinkedContact, removeLinkedContact } from "../supabase.js";
 
 // Simple in-memory cache for pipeline resolution (v1)
 const cache = new Map();
@@ -175,6 +176,41 @@ export default function createPipelineRouter(getTokenFor) {
       });
     } catch (err) {
       res.status(err.http || 500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/pipeline/opportunity/:id/contacts
+  router.get("/opportunity/:id/contacts", async (req, res) => {
+    try {
+      const contacts = await getLinkedContacts(req.params.id);
+      res.json(contacts);
+    } catch (err) {
+      console.error("GET linked contacts error", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/pipeline/opportunity/:id/contacts
+  router.post("/opportunity/:id/contacts", async (req, res) => {
+    try {
+      const { contact } = req.body;
+      if (!contact || !contact.id) throw new Error("Missing contact object");
+      await addLinkedContact(req.params.id, contact);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("POST link contact error", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // DELETE /api/pipeline/opportunity/:id/contacts/:contactId
+  router.delete("/opportunity/:id/contacts/:contactId", async (req, res) => {
+    try {
+      await removeLinkedContact(req.params.id, req.params.contactId);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("DELETE link contact error", err);
+      res.status(500).json({ error: err.message });
     }
   });
 

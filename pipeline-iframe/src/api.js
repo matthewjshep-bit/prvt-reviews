@@ -51,3 +51,36 @@ export async function searchContacts(query) {
   }
   return res.json();
 }
+
+export async function getLinkedContacts(opportunityId) {
+  if (!locationId) throw new Error("No locationId provided");
+  const res = await fetch(`${API_BASE}/api/pipeline/opportunity/${encodeURIComponent(opportunityId)}/contacts?locationId=${encodeURIComponent(locationId)}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function addLinkedContact(opportunityId, contact) {
+  if (!locationId) throw new Error("No locationId provided");
+  const res = await fetch(`${API_BASE}/api/pipeline/opportunity/${encodeURIComponent(opportunityId)}/contacts?locationId=${encodeURIComponent(locationId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ contact }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to link contact");
+  }
+  return res.json();
+}
+
+export async function removeLinkedContact(opportunityId, contactId) {
+  if (!locationId) throw new Error("No locationId provided");
+  const res = await fetch(`${API_BASE}/api/pipeline/opportunity/${encodeURIComponent(opportunityId)}/contacts/${encodeURIComponent(contactId)}?locationId=${encodeURIComponent(locationId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to unlink contact");
+  }
+  return res.json();
+}
