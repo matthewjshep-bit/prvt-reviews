@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
+const API_BASE = "https://prvt-reviews-1.onrender.com";
 
 // Extract locationId from URL query string
 const params = new URLSearchParams(window.location.search);

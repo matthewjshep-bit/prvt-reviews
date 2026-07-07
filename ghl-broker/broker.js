@@ -43,8 +43,8 @@ const GHL_TOKEN = process.env.GHL_TOKEN || "";
 const ALLOWED_LOCATION = process.env.GHL_LOCATION_ID || ""; // single-tenant guard
 const CARD_SERVICE_URL = process.env.CARD_SERVICE_URL || ""; // e.g. https://cards.prvtmkt.com
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
-const APP_ORIGIN = process.env.APP_ORIGIN || ""; // iframe app origin, if cross-origin
-const APP_ORIGIN_PIPELINE = process.env.APP_ORIGIN_PIPELINE || ""; // pipeline iframe origin
+const APP_ORIGIN = (process.env.APP_ORIGIN || "").replace(/\/$/, ""); // iframe app origin, if cross-origin
+const APP_ORIGIN_PIPELINE = (process.env.APP_ORIGIN_PIPELINE || "").replace(/\/$/, ""); // pipeline iframe origin
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "uploads");
 
 // --- Google OAuth config ---
