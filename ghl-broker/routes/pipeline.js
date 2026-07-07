@@ -1,5 +1,5 @@
 import express from "express";
-import { makeClient, listPipelines, searchOpportunities, updateOpportunity, createOpportunity, searchContacts, getContact, getContactNotes, createContactNote, getContactTasks, createContactTask, updateContactTask, addContactTags, removeContactTag, getOpportunity, getConversationByContact, getMessages, getUsers } from "../ghl.js";
+import { makeClient, listPipelines, searchOpportunities, updateOpportunity, createOpportunity, searchContacts, getContact, getContactNotes, createContactNote, getContactTasks, createContactTask, updateContactTask, addContactTags, removeContactTag, getOpportunity, getConversationByContact, getMessages } from "../ghl.js";
 import { listCustomValues } from "../ghl.js"; // Need this to find the dbr_notes custom field
 import { getLinkedContacts, addLinkedContact, removeLinkedContact } from "../supabase.js";
 
