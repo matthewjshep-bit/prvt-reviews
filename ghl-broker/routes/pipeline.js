@@ -23,7 +23,7 @@ async function resolveUserId(client, locationId, contactId) {
   if (userIdsCache[locationId]) return userIdsCache[locationId];
 
   try {
-    const data = await client.call(`/users/search?locationId=${encodeURIComponent(locationId)}`);
+    const data = await client.call(`/users/?locationId=${encodeURIComponent(locationId)}`);
     const users = data.users || [];
     if (users.length > 0) {
       userIdsCache[locationId] = users[0].id;
