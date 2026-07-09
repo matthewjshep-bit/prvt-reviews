@@ -170,6 +170,7 @@ export default function MessagingPage() {
   const [customTemplate, setCustomTemplate] = useState(
     "Hey {{first_name}}, we hope you enjoyed your experience with {{business_name}}! Would you mind taking a moment to leave a review? Here's the link: [Review Link]"
   );
+  const [reviewLink, setReviewLink] = useState("");
 
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -195,6 +196,7 @@ export default function MessagingPage() {
         if (c.followUps != null) setFollowUps(!!c.followUps);
         if (c.mode) setTab(c.mode);
         if (c.customTemplate) setCustomTemplate(c.customTemplate);
+        if (c.reviewLink != null) setReviewLink(c.reviewLink);
       } catch {
         /* standalone preview — keep defaults */
       }
@@ -233,6 +235,7 @@ export default function MessagingPage() {
           followUps,
           mode: tab,
           customTemplate,
+          reviewLink,
         }),
       });
       if (!r.ok) throw new Error();
@@ -264,6 +267,7 @@ export default function MessagingPage() {
           customTemplate,
           logoUrl,
           personalizedImage,
+          reviewLink: reviewLink.trim() || "[Review Link]",
         }),
       });
       if (!r.ok) throw new Error();
@@ -298,15 +302,17 @@ export default function MessagingPage() {
   }
 
   const smsText = useMemo(() => {
+    const link = reviewLink.trim() || "[Review Link]";
     if (tab === "custom") {
       return customTemplate
         .replace(/\{\{\s*first_name\s*\}\}/g, previewName)
-        .replace(/\{\{\s*business_name\s*\}\}/g, businessName || "your business");
+        .replace(/\{\{\s*business_name\s*\}\}/g, businessName || "your business")
+        .replace(/\[Review Link\]/g, link);
     }
     return `Hey ${previewName}, we hope you enjoyed your experience with ${
       businessName || "us"
-    }! Would you mind taking a moment to leave a review? Here's the link: [Review Link]`;
-  }, [tab, customTemplate, businessName, previewName]);
+    }! Would you mind taking a moment to leave a review? Here's the link: ${link}`;
+  }, [tab, customTemplate, businessName, previewName, reviewLink]);
 
   return (
     <div className="min-h-screen bg-gray-50 px-6 py-8 text-gray-900">
@@ -479,6 +485,12 @@ export default function MessagingPage() {
                 value={businessName}
                 onChange={edit(setBusinessName)}
                 placeholder="PRVT MKT"
+              />
+              <Field
+                label="Review link"
+                value={reviewLink}
+                onChange={edit(setReviewLink)}
+                placeholder="https://g.page/r/your-review-link"
               />
               <button
                 type="button"
