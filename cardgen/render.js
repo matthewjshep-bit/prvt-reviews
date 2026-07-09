@@ -100,7 +100,7 @@ async function fetchImage(rawUrl) {
 
 // ---------- overlay ----------
 
-function buildOverlaySvg({ w, h, name, brand }) {
+function buildOverlaySvg({ w, h, name, brand, demo }) {
   const padX = Math.round(w * 0.05);
   const maxPill = Math.round(w * 0.86);
   let font = Math.round(h * 0.085);
@@ -124,6 +124,26 @@ function buildOverlaySvg({ w, h, name, brand }) {
       )}</text>`
     : "";
 
+  // Demo mode: a dashed placeholder box in the logo area with muted
+  // "YOUR LOGO HERE" text. Marketing "try it out" funnel only.
+  let demoSvg = "";
+  if (demo) {
+    const boxW = Math.round(w * 0.6);
+    const boxH = Math.round(h * 0.18);
+    const boxX = Math.round((w - boxW) / 2);
+    const boxY = Math.round(h * 0.2);
+    const boxRx = Math.round(Math.min(boxW, boxH) * 0.12);
+    const dash = Math.round(w * 0.018);
+    const demoFont = Math.round(h * 0.05);
+    const demoTextY = Math.round(boxY + boxH / 2);
+    demoSvg =
+      `<rect x="${boxX}" y="${boxY}" width="${boxW}" height="${boxH}" rx="${boxRx}" ry="${boxRx}" ` +
+      `fill="none" stroke="#9aa0a6" stroke-width="4" stroke-dasharray="${dash} ${dash}"/>` +
+      `<text x="${cx}" y="${demoTextY}" text-anchor="middle" dominant-baseline="central" ` +
+      `font-family="${FONT_STACK}" font-weight="bold" font-size="${demoFont}" ` +
+      `fill="#c4c7cc" letter-spacing="4">YOUR LOGO HERE</text>`;
+  }
+
   return Buffer.from(
     `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -136,6 +156,7 @@ function buildOverlaySvg({ w, h, name, brand }) {
       h * 0.58
     )}" fill="url(#scrim)"/>
   ${brandSvg}
+  ${demoSvg}
   <rect x="${pillX}" y="${pillY}" width="${pillW}" height="${pillH}" rx="${rx}" ry="${rx}" fill="#ffffff"/>
   <text x="${cx}" y="${textY}" text-anchor="middle" dominant-baseline="central" font-family="${FONT_STACK}" font-weight="bold" font-size="${font}" fill="#0b0b0c">${xmlEscape(
       name
@@ -154,13 +175,14 @@ export async function renderCard({
   h = 1080,
   format = "jpeg",
   excite = true,
+  demo = false,
 } = {}) {
   w = Math.min(2000, Math.max(300, parseInt(w, 10) || 1080));
   h = Math.min(2000, Math.max(300, parseInt(h, 10) || 1080));
   const safeName = sanitizeName(name, { excite });
 
   let base;
-  if (bg) {
+  if (bg && !demo) {
     const buf = await fetchImage(bg);
     base = sharp(buf).resize(w, h, { fit: "cover", position: "centre" });
   } else {
@@ -169,7 +191,7 @@ export async function renderCard({
     });
   }
 
-  const overlay = buildOverlaySvg({ w, h, name: safeName, brand });
+  const overlay = buildOverlaySvg({ w, h, name: safeName, brand, demo });
   let pipe = base.composite([{ input: overlay, top: 0, left: 0 }]);
 
   if (format === "png") {

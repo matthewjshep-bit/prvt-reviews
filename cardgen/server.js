@@ -27,8 +27,9 @@ function cacheSet(k, v) {
 app.get("/", (_req, res) => res.type("text/plain").send("ok"));
 
 app.get("/card", async (req, res) => {
-  const { name, bg, brand, w, h, format, excite } = req.query;
-  const key = JSON.stringify({ name, bg, brand, w, h, format, excite });
+  const { name, bg, brand, w, h, format, excite, demo } = req.query;
+  const demoOn = demo === "1" || demo === "true";
+  const key = JSON.stringify({ name, bg, brand, w, h, format, excite, demo: demoOn });
 
   try {
     let hit = cacheGet(key);
@@ -41,6 +42,7 @@ app.get("/card", async (req, res) => {
         h,
         format,
         excite: excite !== "0" && excite !== "false",
+        demo: demoOn,
       });
       cacheSet(key, hit);
     }
