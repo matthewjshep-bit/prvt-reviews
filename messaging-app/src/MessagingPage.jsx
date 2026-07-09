@@ -35,6 +35,47 @@ import {
 
 const API_BASE = "https://prvt-reviews-1.onrender.com"; // same origin as the deployed iframe app
 const CARD_BASE = "https://prvt-reviews.onrender.com"; // the card image microservice
+
+/* Built-in card templates — each is a preset of the existing image controls.
+   Applying one pre-fills the controls; the user can still tweak afterward. */
+const TEMPLATES = [
+  {
+    id: "classic",
+    name: "Classic",
+    headline: "",
+    bgColor: "#0b0b0c",
+    accent: "#ffffff",
+    fit: "cover",
+    nameY: 0.63,
+  },
+  {
+    id: "review",
+    name: "Review request",
+    headline: "Loved your visit? Leave us a review!",
+    bgColor: "#0b1f3a",
+    accent: "#ffd24d",
+    fit: "contain",
+    nameY: 0.9,
+  },
+  {
+    id: "thankyou",
+    name: "Thank you",
+    headline: "Thank you!",
+    bgColor: "#14331f",
+    accent: "#a7f3d0",
+    fit: "contain",
+    nameY: 0.86,
+  },
+  {
+    id: "offer",
+    name: "Special offer",
+    headline: "A little something for you",
+    bgColor: "#3a0b1f",
+    accent: "#ffd24d",
+    fit: "contain",
+    nameY: 0.88,
+  },
+];
 const BLUE = "#4c6ef5"; // outgoing SMS bubble
 const GREEN = "#16a34a";
 
@@ -166,6 +207,7 @@ export default function MessagingPage() {
   const [cardAccent, setCardAccent] = useState("");
   const [cardNameX, setCardNameX] = useState(0.5); // 0..1 pill center, horizontal
   const [cardNameY, setCardNameY] = useState(0.7); // 0..1 pill center, vertical
+  const [templateId, setTemplateId] = useState("");
 
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -218,6 +260,17 @@ export default function MessagingPage() {
       setter(v);
       setDirty(true);
     };
+  }
+
+  function applyTemplate(t) {
+    setTemplateId(t.id);
+    setCardHeadline(t.headline);
+    setCardBgColor(t.bgColor);
+    setCardAccent(t.accent);
+    setCardFit(t.fit);
+    setCardNameY(t.nameY);
+    setDirty(true);
+    showToast(`Applied “${t.name}” template`);
   }
 
   async function saveConfig() {
@@ -535,6 +588,39 @@ export default function MessagingPage() {
               >
                 {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
               </button>
+            </Card>
+
+            {/* template gallery */}
+            <Card className="p-4">
+              <div className="mb-1 flex items-center gap-2">
+                <ImageIcon className="h-5 w-5 text-gray-700" />
+                <h3 className="text-base font-bold">Templates</h3>
+              </div>
+              <p className="mb-3 text-sm text-gray-500">
+                Start from a style, then fine-tune it below. Your logo and name stay in place.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {TEMPLATES.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => applyTemplate(t)}
+                    className={`rounded-lg border p-2 text-left transition-colors ${
+                      templateId === t.id
+                        ? "border-green-500 ring-2 ring-green-100"
+                        : "border-gray-200 hover:border-gray-300"
+                    }`}
+                  >
+                    <div
+                      className="mb-1.5 flex h-12 items-center justify-center rounded-md text-[11px] font-bold"
+                      style={{ backgroundColor: t.bgColor, color: t.accent }}
+                    >
+                      {t.headline ? t.headline.slice(0, 18) : "Aa"}
+                    </div>
+                    <span className="text-xs font-semibold text-gray-800">{t.name}</span>
+                  </button>
+                ))}
+              </div>
             </Card>
 
             {/* personalized image */}
