@@ -1,0 +1,7 @@
+# Netlify build config for the messaging-app frontend.
+# This is a monorepo — the React app lives in messaging-app/, not the repo root.
+# `publish` is relative to `base`, so it resolves to messaging-app/dist.
+[build]
+  base = "messaging-app"
+  command = "npm run build"
+  publish = "dist"
