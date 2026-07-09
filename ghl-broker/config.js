@@ -13,6 +13,10 @@ export const CV = {
   mode: "rh_message_mode", // "smart" | "custom"
   customTemplate: "rh_custom_template",
   reviewLink: "rh_review_link",
+  cardFit: "rh_card_fit", // "cover" | "contain"
+  cardBgColor: "rh_card_bg_color",
+  cardHeadline: "rh_card_headline",
+  cardAccent: "rh_card_accent",
 };
 
 const BOOL_FIELDS = new Set(["personalizedImage", "smartEnabled", "followUps"]);

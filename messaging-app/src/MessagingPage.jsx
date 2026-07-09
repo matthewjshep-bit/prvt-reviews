@@ -34,6 +34,7 @@ import {
 */
 
 const API_BASE = "https://prvt-reviews-1.onrender.com"; // same origin as the deployed iframe app
+const CARD_BASE = "https://prvt-reviews.onrender.com"; // the card image microservice
 const BLUE = "#4c6ef5"; // outgoing SMS bubble
 const GREEN = "#16a34a";
 
@@ -81,29 +82,17 @@ function Phone({ children }) {
   );
 }
 
-/* The personalized card — visually mirrors what the card microservice renders
-   server-side (dark brand background + white name pill). In production you can
-   either keep this HTML mock for the preview, or point an <img> at the card
-   service: `${CARD_SVC}/card?name=${name}&bg=${logoUrl}`. */
-function PersonalizedCard({ businessName, name, logoUrl }) {
+/* The personalized card — a TRUE preview: an <img> pointing at the live card
+   microservice, so what you see is exactly what gets sent (same renderer). */
+function PersonalizedCard({ src }) {
   return (
     <div
-      className="relative mb-2 flex h-36 flex-col items-center justify-center gap-3 overflow-hidden rounded-xl"
+      className="relative mb-2 aspect-square w-full overflow-hidden rounded-xl"
       style={{ backgroundColor: "#0b0b0c" }}
     >
-      {logoUrl ? (
-        <img
-          src={logoUrl}
-          alt=""
-          className="absolute inset-0 h-full w-full object-cover opacity-90"
-        />
+      {src ? (
+        <img src={src} alt="Card preview" className="h-full w-full object-cover" />
       ) : null}
-      <div className="relative z-10 px-2 text-center text-sm font-extrabold uppercase tracking-widest text-white">
-        {businessName || "Your Business"}
-      </div>
-      <div className="relative z-10 rounded-full bg-white px-4 py-1 text-base font-extrabold text-gray-900">
-        {name}!
-      </div>
     </div>
   );
 }
@@ -171,6 +160,10 @@ export default function MessagingPage() {
     "Hey {{first_name}}, we hope you enjoyed your experience with {{business_name}}! Would you mind taking a moment to leave a review? Here's the link: [Review Link]"
   );
   const [reviewLink, setReviewLink] = useState("");
+  const [cardFit, setCardFit] = useState("cover"); // "cover" | "contain"
+  const [cardBgColor, setCardBgColor] = useState("");
+  const [cardHeadline, setCardHeadline] = useState("");
+  const [cardAccent, setCardAccent] = useState("");
 
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -197,6 +190,10 @@ export default function MessagingPage() {
         if (c.mode) setTab(c.mode);
         if (c.customTemplate) setCustomTemplate(c.customTemplate);
         if (c.reviewLink != null) setReviewLink(c.reviewLink);
+        if (c.cardFit) setCardFit(c.cardFit);
+        if (c.cardBgColor != null) setCardBgColor(c.cardBgColor);
+        if (c.cardHeadline != null) setCardHeadline(c.cardHeadline);
+        if (c.cardAccent != null) setCardAccent(c.cardAccent);
       } catch {
         /* standalone preview — keep defaults */
       }
@@ -236,6 +233,10 @@ export default function MessagingPage() {
           mode: tab,
           customTemplate,
           reviewLink,
+          cardFit,
+          cardBgColor,
+          cardHeadline,
+          cardAccent,
         }),
       });
       if (!r.ok) throw new Error();
@@ -268,6 +269,10 @@ export default function MessagingPage() {
           logoUrl,
           personalizedImage,
           reviewLink: reviewLink.trim() || "[Review Link]",
+          cardFit,
+          cardBgColor,
+          cardHeadline,
+          cardAccent,
         }),
       });
       if (!r.ok) throw new Error();
@@ -301,6 +306,27 @@ export default function MessagingPage() {
     }
   }
 
+  // Build the real card-service URL for the live preview. Only pass bg when
+  // it's a hosted http(s) URL (a freshly-picked local blob can't be fetched
+  // by the card service).
+  const cardUrl = useMemo(() => {
+    const p = new URLSearchParams({ name: previewName.trim() || "Jessica" });
+    if (logoUrl && /^https?:/i.test(logoUrl)) p.set("bg", logoUrl);
+    if (cardFit) p.set("fit", cardFit);
+    if (cardBgColor) p.set("bgColor", cardBgColor);
+    if (cardHeadline.trim()) p.set("headline", cardHeadline.trim());
+    if (cardAccent) p.set("accent", cardAccent);
+    return `${CARD_BASE}/card?${p.toString()}`;
+  }, [previewName, logoUrl, cardFit, cardBgColor, cardHeadline, cardAccent]);
+
+  // Debounce so typing a headline / dragging a color picker doesn't hammer the
+  // card service on every keystroke.
+  const [previewSrc, setPreviewSrc] = useState(cardUrl);
+  useEffect(() => {
+    const t = setTimeout(() => setPreviewSrc(cardUrl), 400);
+    return () => clearTimeout(t);
+  }, [cardUrl]);
+
   const smsText = useMemo(() => {
     const link = reviewLink.trim() || "[Review Link]";
     if (tab === "custom") {
@@ -329,9 +355,7 @@ export default function MessagingPage() {
           {/* left: live preview */}
           <div>
             <Phone>
-              {personalizedImage && (
-                <PersonalizedCard businessName={businessName} name={previewName} logoUrl={logoUrl} />
-              )}
+              {personalizedImage && <PersonalizedCard src={previewSrc} />}
               <Bubble side="out" time="9:41 AM">
                 {smsText}
               </Bubble>
@@ -543,6 +567,75 @@ export default function MessagingPage() {
                     <p className="mt-1.5 text-[11px] text-gray-400">PNG or JPG. This becomes the card background.</p>
                     <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickImage} />
                   </div>
+                </div>
+              )}
+
+              {personalizedImage && (
+                <div className="mt-4 space-y-3 border-t border-gray-100 pt-4">
+                  {/* logo fit */}
+                  <div>
+                    <span className="mb-1 block text-sm font-semibold text-gray-900">Logo fit</span>
+                    <div className="grid grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-gray-100 p-1">
+                      {[
+                        { id: "cover", label: "Fill card" },
+                        { id: "contain", label: "Show whole logo" },
+                      ].map((o) => (
+                        <button
+                          key={o.id}
+                          type="button"
+                          onClick={() => edit(setCardFit)(o.id)}
+                          className={`rounded-md py-1.5 text-xs font-semibold transition-colors ${
+                            cardFit === o.id ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                          }`}
+                        >
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-[11px] text-gray-400">
+                      “Fill” crops to fill the card; “Show whole logo” fits it uncropped on the background color.
+                    </p>
+                  </div>
+
+                  {/* colors */}
+                  <div className="flex gap-3">
+                    <label className="flex-1">
+                      <span className="mb-1 block text-sm font-semibold text-gray-900">Background</span>
+                      <input
+                        type="color"
+                        value={cardBgColor || "#0b0b0c"}
+                        onChange={(e) => edit(setCardBgColor)(e.target.value)}
+                        className="h-9 w-full cursor-pointer rounded-lg border border-gray-300"
+                      />
+                    </label>
+                    <label className="flex-1">
+                      <span className="mb-1 block text-sm font-semibold text-gray-900">Text color</span>
+                      <input
+                        type="color"
+                        value={cardAccent || "#ffffff"}
+                        onChange={(e) => edit(setCardAccent)(e.target.value)}
+                        className="h-9 w-full cursor-pointer rounded-lg border border-gray-300"
+                      />
+                    </label>
+                  </div>
+
+                  {/* headline */}
+                  <Field
+                    label="Headline (optional)"
+                    value={cardHeadline}
+                    onChange={edit(setCardHeadline)}
+                    placeholder="Thanks for visiting!"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={saveConfig}
+                    disabled={!dirty || saving}
+                    className="w-full rounded-lg py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                    style={dirty && !saving ? { backgroundColor: GREEN, color: "white" } : {}}
+                  >
+                    {saving ? "Saving…" : dirty ? "Save image settings" : "Saved"}
+                  </button>
                 </div>
               )}
             </Card>

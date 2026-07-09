@@ -40,6 +40,27 @@ function xmlEscape(s) {
     .replace(/'/g, "&#39;");
 }
 
+// Generic short-text hygiene (headline/tagline). Unlike sanitizeName it may
+// return "" — an empty headline should render nothing, not a fallback.
+function sanitizeText(raw, max = 60) {
+  let s = String(raw ?? "")
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (s.length > max) s = s.slice(0, max).trim();
+  return s;
+}
+
+// Only accept #RGB / #RRGGBB. Anything else falls back — this both keeps the
+// value safe to inline into SVG/sharp and guards against junk input.
+function safeColor(raw, fallback) {
+  if (raw == null) return fallback;
+  let s = String(raw).trim();
+  if (!s) return fallback;
+  if (s[0] !== "#") s = "#" + s;
+  return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(s) ? s.toLowerCase() : fallback;
+}
+
 // ---------- SSRF guard ----------
 
 function isPrivateIp(ip) {
@@ -100,7 +121,7 @@ async function fetchImage(rawUrl) {
 
 // ---------- overlay ----------
 
-function buildOverlaySvg({ w, h, name, brand, demo }) {
+function buildOverlaySvg({ w, h, name, brand, demo, headline, accent = "#ffffff" }) {
   const padX = Math.round(w * 0.05);
   const maxPill = Math.round(w * 0.86);
   let font = Math.round(h * 0.085);
@@ -119,9 +140,16 @@ function buildOverlaySvg({ w, h, name, brand, demo }) {
   const brandSvg = brand
     ? `<text x="${cx}" y="${Math.round(h * 0.17)}" text-anchor="middle" ` +
       `dominant-baseline="central" font-family="${FONT_STACK}" font-weight="bold" ` +
-      `font-size="${Math.round(h * 0.075)}" fill="#ffffff" letter-spacing="3">${xmlEscape(
+      `font-size="${Math.round(h * 0.075)}" fill="${accent}" letter-spacing="3">${xmlEscape(
         brand
       )}</text>`
+    : "";
+
+  // Optional tagline/headline under the brand line.
+  const headlineSvg = headline
+    ? `<text x="${cx}" y="${Math.round(h * 0.28)}" text-anchor="middle" ` +
+      `dominant-baseline="central" font-family="${FONT_STACK}" font-weight="600" ` +
+      `font-size="${Math.round(h * 0.045)}" fill="${accent}">${xmlEscape(headline)}</text>`
     : "";
 
   // Demo mode: a dashed placeholder box in the logo area with muted
@@ -156,6 +184,7 @@ function buildOverlaySvg({ w, h, name, brand, demo }) {
       h * 0.58
     )}" fill="url(#scrim)"/>
   ${brandSvg}
+  ${headlineSvg}
   ${demoSvg}
   <rect x="${pillX}" y="${pillY}" width="${pillW}" height="${pillH}" rx="${rx}" ry="${rx}" fill="#ffffff"/>
   <text x="${cx}" y="${textY}" text-anchor="middle" dominant-baseline="central" font-family="${FONT_STACK}" font-weight="bold" font-size="${font}" fill="#0b0b0c">${xmlEscape(
@@ -176,22 +205,46 @@ export async function renderCard({
   format = "jpeg",
   excite = true,
   demo = false,
+  fit = "cover",
+  bgColor,
+  headline,
+  accent,
 } = {}) {
   w = Math.min(2000, Math.max(300, parseInt(w, 10) || 1080));
   h = Math.min(2000, Math.max(300, parseInt(h, 10) || 1080));
   const safeName = sanitizeName(name, { excite });
+  const bgHex = safeColor(bgColor, "#0b0b0c");
+  const accentHex = safeColor(accent, "#ffffff");
+  const safeHeadline = sanitizeText(headline);
+  const containFit = fit === "contain";
 
   let base;
   if (bg && !demo) {
     const buf = await fetchImage(bg);
-    base = sharp(buf).resize(w, h, { fit: "cover", position: "centre" });
+    if (containFit) {
+      // Show the whole logo, letterboxed on the solid color; flatten so the
+      // logo's transparent areas take the background color, not black.
+      base = sharp(buf)
+        .resize(w, h, { fit: "contain", position: "centre", background: bgHex })
+        .flatten({ background: bgHex });
+    } else {
+      base = sharp(buf).resize(w, h, { fit: "cover", position: "centre" });
+    }
   } else {
     base = sharp({
-      create: { width: w, height: h, channels: 3, background: "#0b0b0c" },
+      create: { width: w, height: h, channels: 3, background: bgHex },
     });
   }
 
-  const overlay = buildOverlaySvg({ w, h, name: safeName, brand, demo });
+  const overlay = buildOverlaySvg({
+    w,
+    h,
+    name: safeName,
+    brand,
+    demo,
+    headline: safeHeadline,
+    accent: accentHex,
+  });
   let pipe = base.composite([{ input: overlay, top: 0, left: 0 }]);
 
   if (format === "png") {

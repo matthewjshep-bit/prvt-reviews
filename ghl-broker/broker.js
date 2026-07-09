@@ -362,6 +362,10 @@ app.post("/api/send-test", async (req, res) => {
       logoUrl = "",
       personalizedImage = true,
       reviewLink = "[Review Link]",
+      cardFit = "",
+      cardBgColor = "",
+      cardHeadline = "",
+      cardAccent = "",
     } = req.body || {};
 
     if (!testPhone) {
@@ -383,9 +387,12 @@ app.post("/api/send-test", async (req, res) => {
     // Attach the personalized card (MMS) when enabled.
     const attachments = [];
     if (personalizedImage && logoUrl && CARD_SERVICE_URL) {
-      attachments.push(
-        `${CARD_SERVICE_URL}/card?name=${encodeURIComponent(sampleName)}&bg=${encodeURIComponent(logoUrl)}`
-      );
+      const p = new URLSearchParams({ name: sampleName, bg: logoUrl });
+      if (cardFit) p.set("fit", cardFit);
+      if (cardBgColor) p.set("bgColor", cardBgColor);
+      if (cardHeadline) p.set("headline", cardHeadline);
+      if (cardAccent) p.set("accent", cardAccent);
+      attachments.push(`${CARD_SERVICE_URL}/card?${p.toString()}`);
     }
 
     const contactId = await findOrCreateContactByPhone(client, locationId, testPhone, sampleName);
