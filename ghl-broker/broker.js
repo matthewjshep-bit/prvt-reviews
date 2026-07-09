@@ -366,6 +366,8 @@ app.post("/api/send-test", async (req, res) => {
       cardBgColor = "",
       cardHeadline = "",
       cardAccent = "",
+      cardNameX = "",
+      cardNameY = "",
     } = req.body || {};
 
     if (!testPhone) {
@@ -392,6 +394,8 @@ app.post("/api/send-test", async (req, res) => {
       if (cardBgColor) p.set("bgColor", cardBgColor);
       if (cardHeadline) p.set("headline", cardHeadline);
       if (cardAccent) p.set("accent", cardAccent);
+      if (cardNameX !== "") p.set("nameX", cardNameX);
+      if (cardNameY !== "") p.set("nameY", cardNameY);
       attachments.push(`${CARD_SERVICE_URL}/card?${p.toString()}`);
     }
 

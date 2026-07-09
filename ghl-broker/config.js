@@ -17,6 +17,8 @@ export const CV = {
   cardBgColor: "rh_card_bg_color",
   cardHeadline: "rh_card_headline",
   cardAccent: "rh_card_accent",
+  cardNameX: "rh_card_name_x", // 0..1 pill center, horizontal
+  cardNameY: "rh_card_name_y", // 0..1 pill center, vertical
 };
 
 const BOOL_FIELDS = new Set(["personalizedImage", "smartEnabled", "followUps"]);

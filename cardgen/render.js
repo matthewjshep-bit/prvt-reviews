@@ -121,7 +121,7 @@ async function fetchImage(rawUrl) {
 
 // ---------- overlay ----------
 
-function buildOverlaySvg({ w, h, name, brand, demo, headline, accent = "#ffffff" }) {
+function buildOverlaySvg({ w, h, name, brand, demo, headline, accent = "#ffffff", nameX, nameY }) {
   const padX = Math.round(w * 0.05);
   const maxPill = Math.round(w * 0.86);
   let font = Math.round(h * 0.085);
@@ -131,11 +131,26 @@ function buildOverlaySvg({ w, h, name, brand, demo, headline, accent = "#ffffff"
   }
   const pillW = Math.min(maxPill, Math.round(estWidth(font) + padX * 2));
   const pillH = Math.round(font * 1.75);
-  const pillX = Math.round((w - pillW) / 2);
-  const pillY = Math.round(h * 0.63);
-  const cx = Math.round(w / 2);
-  const textY = Math.round(pillY + pillH / 2);
+  const cx = Math.round(w / 2); // brand/headline stay centered
   const rx = Math.round(pillH / 2);
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  // Name pill position. nameX/nameY are 0..1 fractions for the pill's CENTER.
+  // When unset, fall back to the original fixed placement (byte-identical).
+  let pillX, pillY, pillCx;
+  if (nameX != null) {
+    const c = clamp(nameX * w, pillW / 2, w - pillW / 2);
+    pillX = Math.round(c - pillW / 2);
+    pillCx = Math.round(pillX + pillW / 2);
+  } else {
+    pillX = Math.round((w - pillW) / 2);
+    pillCx = cx;
+  }
+  pillY =
+    nameY != null
+      ? Math.round(clamp(nameY * h, pillH / 2, h - pillH / 2) - pillH / 2)
+      : Math.round(h * 0.63);
+  const textY = Math.round(pillY + pillH / 2);
 
   const brandSvg = brand
     ? `<text x="${cx}" y="${Math.round(h * 0.17)}" text-anchor="middle" ` +
@@ -187,7 +202,7 @@ function buildOverlaySvg({ w, h, name, brand, demo, headline, accent = "#ffffff"
   ${headlineSvg}
   ${demoSvg}
   <rect x="${pillX}" y="${pillY}" width="${pillW}" height="${pillH}" rx="${rx}" ry="${rx}" fill="#ffffff"/>
-  <text x="${cx}" y="${textY}" text-anchor="middle" dominant-baseline="central" font-family="${FONT_STACK}" font-weight="bold" font-size="${font}" fill="#0b0b0c">${xmlEscape(
+  <text x="${pillCx}" y="${textY}" text-anchor="middle" dominant-baseline="central" font-family="${FONT_STACK}" font-weight="bold" font-size="${font}" fill="#0b0b0c">${xmlEscape(
       name
     )}</text>
 </svg>`
@@ -209,6 +224,8 @@ export async function renderCard({
   bgColor,
   headline,
   accent,
+  nameX,
+  nameY,
 } = {}) {
   w = Math.min(2000, Math.max(300, parseInt(w, 10) || 1080));
   h = Math.min(2000, Math.max(300, parseInt(h, 10) || 1080));
@@ -217,6 +234,13 @@ export async function renderCard({
   const accentHex = safeColor(accent, "#ffffff");
   const safeHeadline = sanitizeText(headline);
   const containFit = fit === "contain";
+  const frac = (v) => {
+    if (v == null || v === "") return undefined;
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : undefined;
+  };
+  const nx = frac(nameX);
+  const ny = frac(nameY);
 
   let base;
   if (bg && !demo) {
@@ -244,6 +268,8 @@ export async function renderCard({
     demo,
     headline: safeHeadline,
     accent: accentHex,
+    nameX: nx,
+    nameY: ny,
   });
   let pipe = base.composite([{ input: overlay, top: 0, left: 0 }]);
 

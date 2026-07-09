@@ -164,6 +164,8 @@ export default function MessagingPage() {
   const [cardBgColor, setCardBgColor] = useState("");
   const [cardHeadline, setCardHeadline] = useState("");
   const [cardAccent, setCardAccent] = useState("");
+  const [cardNameX, setCardNameX] = useState(0.5); // 0..1 pill center, horizontal
+  const [cardNameY, setCardNameY] = useState(0.7); // 0..1 pill center, vertical
 
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -194,6 +196,8 @@ export default function MessagingPage() {
         if (c.cardBgColor != null) setCardBgColor(c.cardBgColor);
         if (c.cardHeadline != null) setCardHeadline(c.cardHeadline);
         if (c.cardAccent != null) setCardAccent(c.cardAccent);
+        if (c.cardNameX != null && c.cardNameX !== "") setCardNameX(parseFloat(c.cardNameX));
+        if (c.cardNameY != null && c.cardNameY !== "") setCardNameY(parseFloat(c.cardNameY));
       } catch {
         /* standalone preview — keep defaults */
       }
@@ -237,6 +241,8 @@ export default function MessagingPage() {
           cardBgColor,
           cardHeadline,
           cardAccent,
+          cardNameX,
+          cardNameY,
         }),
       });
       if (!r.ok) throw new Error();
@@ -273,6 +279,8 @@ export default function MessagingPage() {
           cardBgColor,
           cardHeadline,
           cardAccent,
+          cardNameX,
+          cardNameY,
         }),
       });
       if (!r.ok) throw new Error();
@@ -316,8 +324,10 @@ export default function MessagingPage() {
     if (cardBgColor) p.set("bgColor", cardBgColor);
     if (cardHeadline.trim()) p.set("headline", cardHeadline.trim());
     if (cardAccent) p.set("accent", cardAccent);
+    p.set("nameX", cardNameX);
+    p.set("nameY", cardNameY);
     return `${CARD_BASE}/card?${p.toString()}`;
-  }, [previewName, logoUrl, cardFit, cardBgColor, cardHeadline, cardAccent]);
+  }, [previewName, logoUrl, cardFit, cardBgColor, cardHeadline, cardAccent, cardNameX, cardNameY]);
 
   // Debounce so typing a headline / dragging a color picker doesn't hammer the
   // card service on every keystroke.
@@ -626,6 +636,47 @@ export default function MessagingPage() {
                     onChange={edit(setCardHeadline)}
                     placeholder="Thanks for visiting!"
                   />
+
+                  {/* name pill position */}
+                  <div>
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="text-sm font-semibold text-gray-900">Name box position</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          edit(setCardNameX)(0.5);
+                          setCardNameY(0.7);
+                        }}
+                        className="text-[11px] font-medium text-gray-500 underline hover:text-gray-700"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                    <label className="flex items-center gap-2">
+                      <span className="w-16 text-xs text-gray-500">Left–Right</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={cardNameX}
+                        onChange={(e) => edit(setCardNameX)(parseFloat(e.target.value))}
+                        className="flex-1 accent-green-600"
+                      />
+                    </label>
+                    <label className="mt-1 flex items-center gap-2">
+                      <span className="w-16 text-xs text-gray-500">Up–Down</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={cardNameY}
+                        onChange={(e) => edit(setCardNameY)(parseFloat(e.target.value))}
+                        className="flex-1 accent-green-600"
+                      />
+                    </label>
+                  </div>
 
                   <button
                     type="button"

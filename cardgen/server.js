@@ -27,11 +27,11 @@ function cacheSet(k, v) {
 app.get("/", (_req, res) => res.type("text/plain").send("ok"));
 
 app.get("/card", async (req, res) => {
-  const { name, bg, brand, w, h, format, excite, demo, fit, bgColor, headline, accent } =
+  const { name, bg, brand, w, h, format, excite, demo, fit, bgColor, headline, accent, nameX, nameY } =
     req.query;
   const demoOn = demo === "1" || demo === "true";
   const key = JSON.stringify({
-    name, bg, brand, w, h, format, excite, demo: demoOn, fit, bgColor, headline, accent,
+    name, bg, brand, w, h, format, excite, demo: demoOn, fit, bgColor, headline, accent, nameX, nameY,
   });
 
   try {
@@ -50,6 +50,8 @@ app.get("/card", async (req, res) => {
         bgColor,
         headline,
         accent,
+        nameX,
+        nameY,
       });
       cacheSet(key, hit);
     }
