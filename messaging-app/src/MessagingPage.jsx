@@ -510,10 +510,10 @@ export default function MessagingPage() {
           </p>
         </header>
 
-        {/* top section: preview + config */}
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-          {/* left: live preview */}
-          <div>
+        {/* left: sticky preview  |  right: all controls */}
+        <div className="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_2fr]">
+          {/* left: live preview (sticky) */}
+          <div className="lg:sticky lg:top-6 lg:self-start">
             <Phone>
               {personalizedImage && <PersonalizedCard src={previewSrc} />}
               <Bubble side="out" time="9:41 AM">
@@ -873,89 +873,18 @@ export default function MessagingPage() {
                 </div>
               )}
             </Card>
-          </div>
-        </div>
 
-        {/* divider */}
-        <div className="my-10 border-t border-gray-200" />
-
-        {/* follow-up section */}
-        <section>
-          <h2 className="text-xl font-bold">Follow-up messages</h2>
-          <p className="mt-1 text-sm text-gray-500">Lift your review rate with automated reminders</p>
-
-          <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-2">
-            <Phone>
-              <Bubble side="out" time="2:30 PM">
-                Hey {previewName}, just following up — we’d really appreciate your feedback! [Review Link]
-              </Bubble>
-              <Bubble side="in" time="2:45 PM">
-                Just left a review! Thanks for your help!
-              </Bubble>
-            </Phone>
-
-            <div className="space-y-4">
-              <Card className="p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-start gap-3">
-                    <div className="mt-0.5 rounded-lg bg-green-50 p-1.5">
-                      <TrendingUp className="h-5 w-5" style={{ color: GREEN }} />
-                    </div>
-                    <div>
-                      <div className="text-sm font-bold">Enable follow-ups</div>
-                      <p className="text-xs text-gray-500">Automatically remind customers who haven’t left a review</p>
-                    </div>
-                  </div>
-                  <Toggle checked={followUps} onChange={edit(setFollowUps)} label="Enable follow-ups" />
-                </div>
-                {followUps && (
-                  <div className="mt-3 flex gap-2 rounded-lg bg-green-50 p-3">
-                    <CheckCircle2 className="h-5 w-5 shrink-0" style={{ color: GREEN }} />
-                    <p className="text-xs text-gray-700">
-                      <span className="font-semibold">A big share of reviews come from follow-ups.</span> Gentle reminders
-                      go only to customers who haven’t reviewed yet.
-                    </p>
-                  </div>
-                )}
-              </Card>
-
-              <Card className="p-4">
-                <h3 className="mb-3 text-sm font-bold">How follow-ups work</h3>
-                <ul className="space-y-3">
-                  {[
-                    { Icon: Clock, t: "Automatic timing", d: "First reminder goes out 3 days after the initial message" },
-                    { Icon: Bell, t: "Up to 3 reminders", d: "Spaced out over time for the best response" },
-                    { Icon: CheckCircle2, t: "Smart stop", d: "Stops the moment a customer clicks or replies" },
-                    { Icon: CalendarDays, t: "Business hours only", d: "Sent at appropriate times for your customers" },
-                  ].map(({ Icon, t, d }) => (
-                    <li key={t} className="flex gap-3">
-                      <div className="mt-0.5 rounded-lg bg-gray-100 p-1.5">
-                        <Icon className="h-4 w-4 text-gray-600" />
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold">{t}</div>
-                        <div className="text-xs text-gray-500">{d}</div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </Card>
-            </div>
-          </div>
-        </section>
-
-        {/* divider */}
-        <div className="my-10 border-t border-gray-200" />
-
-        {/* send section */}
-        <section>
-          <h2 className="text-xl font-bold">Send a card</h2>
-          <p className="mt-1 text-sm text-gray-500">
-            Send the personalized card you designed above to one contact or a tagged audience.
-          </p>
-
-          <div className="mt-6 max-w-xl space-y-3">
+            {/* send a card */}
             <Card className="space-y-4 p-4">
+              <div>
+                <div className="mb-1 flex items-center gap-2">
+                  <MessageSquare className="h-5 w-5 text-gray-700" />
+                  <h3 className="text-base font-bold">Send a card</h3>
+                </div>
+                <p className="text-sm text-gray-500">
+                  Send the card you designed to one contact or a tagged audience.
+                </p>
+              </div>
               {/* audience mode */}
               <div className="grid grid-cols-2 gap-1 rounded-xl border border-gray-200 bg-gray-100 p-1">
                 {[
@@ -1084,7 +1013,7 @@ export default function MessagingPage() {
               automatically. You’re responsible for having consent to message these contacts.
             </p>
           </div>
-        </section>
+        </div>
       </div>
 
       {/* toast */}
