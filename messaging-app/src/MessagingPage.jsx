@@ -177,7 +177,7 @@ export default function MessagingPage() {
   const [testPhone, setTestPhone] = useState("");
   const [toast, setToast] = useState(null);
 
-  const previewName = "Jessica";
+  const [previewName, setPreviewName] = useState("Jessica");
 
   useEffect(() => {
     let alive = true;
@@ -258,7 +258,7 @@ export default function MessagingPage() {
         body: JSON.stringify({
           location_id: locationId,
           testPhone: testPhone.trim(),
-          sampleName: previewName,
+          sampleName: previewName.trim() || "Jessica",
           businessName,
           mode: tab,
           customTemplate,
@@ -306,7 +306,7 @@ export default function MessagingPage() {
     return `Hey ${previewName}, we hope you enjoyed your experience with ${
       businessName || "us"
     }! Would you mind taking a moment to leave a review? Here's the link: [Review Link]`;
-  }, [tab, customTemplate, businessName]);
+  }, [tab, customTemplate, businessName, previewName]);
 
   return (
     <div className="min-h-screen bg-gray-50 px-6 py-8 text-gray-900">
@@ -331,6 +331,14 @@ export default function MessagingPage() {
               </Bubble>
             </Phone>
             <div className="mt-5 flex flex-col items-center gap-2">
+              <input
+                type="text"
+                value={previewName}
+                onChange={(e) => setPreviewName(e.target.value)}
+                placeholder="Test name (e.g. Jessica)"
+                aria-label="Test name"
+                className="w-56 rounded-lg border border-gray-300 px-3 py-2 text-center text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
+              />
               <input
                 type="tel"
                 value={testPhone}
