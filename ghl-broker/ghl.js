@@ -102,6 +102,27 @@ export async function searchContacts(client, locationId, query) {
   return data.contacts || [];
 }
 
+// Tags available in the location (for the audience picker).
+export async function listTags(client, locationId) {
+  const data = await client.call(`/locations/${encodeURIComponent(locationId)}/tags`);
+  return data.tags || [];
+}
+
+// Contacts carrying a given tag, via the v2 advanced search endpoint.
+// Returns { contacts, total } — `total` powers the dry-run recipient count.
+export async function searchContactsByTag(client, locationId, tag, { pageLimit = 100 } = {}) {
+  const data = await client.call(`/contacts/search`, {
+    method: "POST",
+    body: {
+      locationId,
+      pageLimit,
+      filters: [{ field: "tags", operator: "contains", value: tag }],
+    },
+  });
+  const contacts = data.contacts || [];
+  return { contacts, total: data.total ?? contacts.length };
+}
+
 /* ---------- messaging ---------- */
 
 export async function sendSms(client, { contactId, message, attachments }) {

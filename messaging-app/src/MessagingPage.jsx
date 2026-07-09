@@ -209,6 +209,15 @@ export default function MessagingPage() {
   const [cardNameY, setCardNameY] = useState(0.7); // 0..1 pill center, vertical
   const [templateId, setTemplateId] = useState("");
 
+  // Send engine (Phase 1)
+  const [audienceMode, setAudienceMode] = useState("contact"); // "contact" | "tag"
+  const [sendPhone, setSendPhone] = useState("");
+  const [sendTag, setSendTag] = useState("");
+  const [tagList, setTagList] = useState([]);
+  const [audiencePreview, setAudiencePreview] = useState(null);
+  const [sendResult, setSendResult] = useState(null);
+  const [sendBusy, setSendBusy] = useState(false);
+
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
@@ -343,6 +352,94 @@ export default function MessagingPage() {
     } finally {
       setSendingTest(false);
     }
+  }
+
+  // Load available tags for the audience picker.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/tags?location_id=${encodeURIComponent(locationId)}`);
+        if (!r.ok) return;
+        const { tags } = await r.json();
+        if (alive && Array.isArray(tags)) setTagList(tags.map((t) => t.name || t).filter(Boolean));
+      } catch {
+        /* no tags available */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [locationId]);
+
+  // The message template (with tokens) sent to the broker, which personalizes
+  // it per contact. Card image settings are bundled as `card`.
+  function sendBody(dryRun) {
+    const messageTemplate =
+      tab === "custom"
+        ? customTemplate
+        : "Hey {{first_name}}, we hope you enjoyed your experience with {{business_name}}! " +
+          "Would you mind taking a moment to leave a review? Here's the link: [Review Link]";
+    return {
+      location_id: locationId,
+      dryRun,
+      message: messageTemplate,
+      businessName,
+      reviewLink: reviewLink.trim(),
+      card: {
+        logoUrl: personalizedImage && /^https?:/i.test(logoUrl || "") ? logoUrl : "",
+        cardFit,
+        cardBgColor,
+        cardHeadline: cardHeadline.trim(),
+        cardAccent,
+        cardNameX,
+        cardNameY,
+      },
+    };
+  }
+
+  function sendEndpoint() {
+    return audienceMode === "tag" ? "/api/campaigns" : "/api/send-card";
+  }
+
+  function audienceField(dryRun) {
+    return audienceMode === "tag"
+      ? { tag: sendTag, dryRun }
+      : { phone: sendPhone.trim(), dryRun };
+  }
+
+  async function runSend(dryRun) {
+    if (audienceMode === "tag" && !sendTag) return showToast("Pick a tag first");
+    if (audienceMode === "contact" && !sendPhone.trim()) return showToast("Enter a phone number");
+    setSendBusy(true);
+    if (dryRun) setSendResult(null);
+    try {
+      const r = await fetch(`${API_BASE}${sendEndpoint()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...sendBody(dryRun), ...audienceField(dryRun) }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "failed");
+      if (dryRun) {
+        setAudiencePreview(data);
+      } else {
+        setSendResult(data);
+        showToast(data.sent != null ? `Sent to ${data.sent}` : "Sent");
+      }
+    } catch (e) {
+      showToast(`Couldn’t ${dryRun ? "preview" : "send"} — ${e.message}`);
+    } finally {
+      setSendBusy(false);
+    }
+  }
+
+  async function confirmAndSend() {
+    const isTag = audienceMode === "tag";
+    const n = isTag ? audiencePreview?.willSend : 1;
+    const who = isTag ? `${n} contact${n === 1 ? "" : "s"}` : "this contact";
+    if (!window.confirm(`Send the card to ${who}? This texts real people and can’t be undone.`)) return;
+    await runSend(false);
   }
 
   async function onPickImage(e) {
@@ -844,6 +941,148 @@ export default function MessagingPage() {
                 </ul>
               </Card>
             </div>
+          </div>
+        </section>
+
+        {/* divider */}
+        <div className="my-10 border-t border-gray-200" />
+
+        {/* send section */}
+        <section>
+          <h2 className="text-xl font-bold">Send a card</h2>
+          <p className="mt-1 text-sm text-gray-500">
+            Send the personalized card you designed above to one contact or a tagged audience.
+          </p>
+
+          <div className="mt-6 max-w-xl space-y-3">
+            <Card className="space-y-4 p-4">
+              {/* audience mode */}
+              <div className="grid grid-cols-2 gap-1 rounded-xl border border-gray-200 bg-gray-100 p-1">
+                {[
+                  { id: "contact", label: "One contact" },
+                  { id: "tag", label: "By tag" },
+                ].map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => {
+                      setAudienceMode(o.id);
+                      setAudiencePreview(null);
+                      setSendResult(null);
+                    }}
+                    className={`rounded-lg py-2 text-sm font-semibold transition-colors ${
+                      audienceMode === o.id ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+
+              {audienceMode === "contact" ? (
+                <input
+                  type="tel"
+                  value={sendPhone}
+                  onChange={(e) => {
+                    setSendPhone(e.target.value);
+                    setAudiencePreview(null);
+                  }}
+                  placeholder="+1 555 123 4567"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
+                />
+              ) : (
+                <select
+                  value={sendTag}
+                  onChange={(e) => {
+                    setSendTag(e.target.value);
+                    setAudiencePreview(null);
+                  }}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
+                >
+                  <option value="">{tagList.length ? "Choose a tag…" : "No tags found"}</option>
+                  {tagList.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <button
+                type="button"
+                onClick={() => runSend(true)}
+                disabled={sendBusy}
+                className="w-full rounded-lg border border-gray-300 bg-white py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+              >
+                {sendBusy ? "Checking…" : "Preview audience (no send)"}
+              </button>
+
+              {audiencePreview && (
+                <div className="rounded-lg bg-gray-50 p-3 text-xs text-gray-700">
+                  {audienceMode === "tag" ? (
+                    <>
+                      <div>
+                        <span className="font-semibold">{audiencePreview.willSend}</span> will receive it
+                        {audiencePreview.skippedDnd
+                          ? ` · ${audiencePreview.skippedDnd} skipped (opted out)`
+                          : ""}
+                        .
+                      </div>
+                      {audiencePreview.willSend >= audiencePreview.cap && (
+                        <div className="text-amber-600">Capped at {audiencePreview.cap} per run.</div>
+                      )}
+                      {audiencePreview.sample?.length ? (
+                        <div className="mt-1 text-gray-500">
+                          e.g. {audiencePreview.sample.map((s) => s.firstName || "—").join(", ")}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div>
+                      Will send to{" "}
+                      <span className="font-semibold">{audiencePreview.wouldSendTo?.firstName || "contact"}</span>.
+                    </div>
+                  )}
+                  {audiencePreview.sendsEnabled === false && (
+                    <div className="mt-2 rounded bg-amber-50 p-2 text-amber-700">
+                      Live sending is OFF. Set <code>CARD_SENDS_ENABLED=true</code> on the broker to enable real sends.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={confirmAndSend}
+                disabled={sendBusy || !audiencePreview || audiencePreview.sendsEnabled === false}
+                className="w-full rounded-lg py-2.5 text-sm font-semibold text-white transition-opacity disabled:opacity-50"
+                style={{ backgroundColor: GREEN }}
+              >
+                {sendBusy ? "Sending…" : "Send for real"}
+              </button>
+
+              {sendResult && (
+                <div className="rounded-lg bg-green-50 p-3 text-xs text-green-800">
+                  {audienceMode === "tag" ? (
+                    <>
+                      Sent {sendResult.sent}.{" "}
+                      {sendResult.failed ? `${sendResult.failed} failed. ` : ""}
+                      {sendResult.skippedDnd ? `${sendResult.skippedDnd} skipped.` : ""}
+                    </>
+                  ) : sendResult.sent ? (
+                    "Sent!"
+                  ) : sendResult.skipped === "dnd" ? (
+                    "Skipped — contact opted out."
+                  ) : (
+                    "Done."
+                  )}
+                </div>
+              )}
+            </Card>
+            <p className="text-[11px] text-gray-400">
+              Sends the card + message exactly as previewed above. Contacts who opted out (DND) are skipped
+              automatically. You’re responsible for having consent to message these contacts.
+            </p>
           </div>
         </section>
       </div>

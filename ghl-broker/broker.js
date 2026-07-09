@@ -21,6 +21,9 @@ import {
   findOrCreateContactByPhone,
   sendSms,
   getDashboard,
+  getContact,
+  listTags,
+  searchContactsByTag,
 } from "./ghl.js";
 import {
   saveGoogleConnection,
@@ -41,7 +44,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4000;
 const GHL_TOKEN = process.env.GHL_TOKEN || "";
 const ALLOWED_LOCATION = process.env.GHL_LOCATION_ID || ""; // single-tenant guard
-const CARD_SERVICE_URL = process.env.CARD_SERVICE_URL || ""; // e.g. https://cards.prvtmkt.com
+const CARD_SERVICE_URL = process.env.CARD_SERVICE_URL || ""; // e.g. https://prvt-reviews.onrender.com
+// Safety gate: real (non-dry-run) card sends only fire when this is "true".
+// Leave unset while testing so every send is forced to a dry run.
+const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
+const CAMPAIGN_CAP = parseInt(process.env.CAMPAIGN_CAP || "200", 10); // max recipients per run
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
 const APP_ORIGIN = (process.env.APP_ORIGIN || "").replace(/\/$/, ""); // iframe app origin, if cross-origin
 const APP_ORIGIN_PIPELINE = (process.env.APP_ORIGIN_PIPELINE || "").replace(/\/$/, ""); // pipeline iframe origin
@@ -402,6 +409,140 @@ app.post("/api/send-test", async (req, res) => {
     const contactId = await findOrCreateContactByPhone(client, locationId, testPhone, sampleName);
     const result = await sendSms(client, { contactId, message: body, attachments });
     res.json({ ok: true, contactId, result });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+/* ---------- personalized-card send engine (Phase 1) ---------- */
+
+// Build a personalized card URL from the saved image settings + a name.
+function buildCardUrl(name, card = {}) {
+  const p = new URLSearchParams({ name: name || "there" });
+  if (card.logoUrl) p.set("bg", card.logoUrl);
+  if (card.cardFit) p.set("fit", card.cardFit);
+  if (card.cardBgColor) p.set("bgColor", card.cardBgColor);
+  if (card.cardHeadline) p.set("headline", card.cardHeadline);
+  if (card.cardAccent) p.set("accent", card.cardAccent);
+  if (card.cardNameX != null && card.cardNameX !== "") p.set("nameX", card.cardNameX);
+  if (card.cardNameY != null && card.cardNameY !== "") p.set("nameY", card.cardNameY);
+  return `${CARD_SERVICE_URL}/card?${p.toString()}`;
+}
+
+const firstNameOf = (c) => c?.firstName || c?.contact?.firstName || "";
+const isDnd = (c) => Boolean(c?.dnd || c?.contact?.dnd);
+const idOf = (c) => c?.id || c?.contact?.id;
+
+// Personalize a message template per contact (same tokens as send-test).
+function personalizeMessage(tmpl, name, businessName, reviewLink) {
+  return (tmpl || "")
+    .replace(/\{\{\s*first_name\s*\}\}/g, name || "there")
+    .replace(/\{\{\s*business_name\s*\}\}/g, businessName || "us")
+    .replace(/\[Review Link\]/g, reviewLink || "");
+}
+
+// GET /api/tags — audience picker options.
+app.get("/api/tags", async (req, res) => {
+  try {
+    const { locationId, client } = resolveLocation(req);
+    const tags = await listTags(client, locationId);
+    res.json({ tags });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// POST /api/send-card — send the personalized card to ONE contact.
+// dryRun (default true) resolves the contact and returns the card URL without
+// sending. A real send also requires CARD_SENDS_ENABLED=true on the server.
+app.post("/api/send-card", async (req, res) => {
+  try {
+    const { locationId, client } = resolveLocation(req);
+    const {
+      contactId, phone, message = "", businessName = "", reviewLink = "", card = {}, dryRun = true,
+    } = req.body || {};
+
+    let contact;
+    if (contactId) contact = await getContact(client, contactId);
+    else if (phone) {
+      const cid = await findOrCreateContactByPhone(client, locationId, phone, card.name || "");
+      contact = await getContact(client, cid);
+    } else {
+      return res.status(400).json({ error: "contactId or phone required" });
+    }
+
+    const cid = idOf(contact) || contactId;
+    const name = firstNameOf(contact) || card.name || "there";
+    const url = buildCardUrl(name, card);
+    const text = personalizeMessage(message, name, businessName, reviewLink);
+
+    if (isDnd(contact)) return res.json({ ok: true, skipped: "dnd", contactId: cid });
+
+    const live = dryRun === false && CARD_SENDS_ENABLED;
+    if (!live) {
+      return res.json({
+        ok: true,
+        dryRun: true,
+        sendsEnabled: CARD_SENDS_ENABLED,
+        wouldSendTo: { id: cid, firstName: name },
+        message: text,
+        cardUrl: url,
+      });
+    }
+
+    const result = await sendSms(client, { contactId: cid, message: text, attachments: [url] });
+    res.json({ ok: true, sent: true, contactId: cid, result });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// POST /api/campaigns — send to everyone carrying a tag. Throttled + capped.
+// dryRun (default true) returns the audience breakdown without sending.
+app.post("/api/campaigns", async (req, res) => {
+  try {
+    const { locationId, client } = resolveLocation(req);
+    const {
+      tag, message = "", businessName = "", reviewLink = "", card = {}, dryRun = true,
+    } = req.body || {};
+    if (!tag) return res.status(400).json({ error: "tag required" });
+
+    const { contacts, total } = await searchContactsByTag(client, locationId, tag);
+    const eligible = contacts.filter((c) => !isDnd(c) && idOf(c));
+    const skippedDnd = contacts.length - eligible.length;
+    const capped = eligible.slice(0, CAMPAIGN_CAP);
+
+    const live = dryRun === false && CARD_SENDS_ENABLED;
+    if (!live) {
+      return res.json({
+        ok: true,
+        dryRun: true,
+        sendsEnabled: CARD_SENDS_ENABLED,
+        total,
+        matched: contacts.length,
+        eligible: eligible.length,
+        skippedDnd,
+        willSend: capped.length,
+        cap: CAMPAIGN_CAP,
+        sample: capped.slice(0, 5).map((c) => ({ id: idOf(c), firstName: firstNameOf(c) })),
+      });
+    }
+
+    let sent = 0;
+    let failed = 0;
+    for (const c of capped) {
+      const name = firstNameOf(c) || "there";
+      const url = buildCardUrl(name, card);
+      const text = personalizeMessage(message, name, businessName, reviewLink);
+      try {
+        await sendSms(client, { contactId: idOf(c), message: text, attachments: [url] });
+        sent++;
+      } catch {
+        failed++;
+      }
+      await new Promise((r) => setTimeout(r, 150)); // ~6-7/sec, under GHL's 100/10s
+    }
+    res.json({ ok: true, sent, failed, skippedDnd, willSend: capped.length, cap: CAMPAIGN_CAP });
   } catch (err) {
     fail(res, err);
   }
