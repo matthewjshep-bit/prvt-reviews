@@ -485,7 +485,7 @@ export default function MessagingPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 px-6 py-8 text-gray-900">
-      <div className="mx-auto max-w-6xl">
+      <div className="mx-auto max-w-none 2xl:max-w-[1800px]">
         <header className="mb-8">
           <h1 className="text-2xl font-bold">Messaging</h1>
           <p className="mt-1 text-sm text-gray-500">
@@ -900,21 +900,25 @@ export default function MessagingPage() {
               {/* tag audience */}
               <div>
                 <label className="mb-1 block text-sm font-semibold text-gray-900">Or include a whole tag</label>
-                <select
+                <input
+                  type="text"
+                  list="tag-suggestions"
                   value={sendTag}
                   onChange={(e) => {
                     setSendTag(e.target.value);
                     setAudiencePreview(null);
                   }}
+                  placeholder="Type a tag name…"
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
-                >
-                  <option value="">{tagList.length ? "No tag" : "No tags found"}</option>
+                />
+                <datalist id="tag-suggestions">
                   {tagList.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
+                    <option key={t} value={t} />
                   ))}
-                </select>
+                </datalist>
+                <p className="mt-1 text-[11px] text-gray-400">
+                  Sends to everyone with this tag. Hit “Preview audience” to see the count first.
+                </p>
               </div>
 
               {/* selected recipients */}

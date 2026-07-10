@@ -108,19 +108,57 @@ export async function listTags(client, locationId) {
   return data.tags || [];
 }
 
-// Contacts carrying a given tag, via the v2 advanced search endpoint.
-// Returns { contacts, total } — `total` powers the dry-run recipient count.
-export async function searchContactsByTag(client, locationId, tag, { pageLimit = 100 } = {}) {
-  const data = await client.call(`/contacts/search`, {
-    method: "POST",
-    body: {
-      locationId,
-      pageLimit,
-      filters: [{ field: "tags", operator: "contains", value: tag }],
-    },
-  });
-  const contacts = data.contacts || [];
-  return { contacts, total: data.total ?? contacts.length };
+// All contacts carrying a given tag. Prefers the v2 advanced-search endpoint
+// (paginated); if that returns nothing / errors (schema drift), falls back to
+// paging the plain contacts list and filtering by tag client-side.
+export async function searchContactsByTag(client, locationId, tag, { max = 500 } = {}) {
+  const wanted = String(tag).trim().toLowerCase();
+
+  // Preferred: advanced search with a tags filter, paged.
+  try {
+    const out = [];
+    for (let page = 1; out.length < max && page <= 20; page++) {
+      const data = await client.call(`/contacts/search`, {
+        method: "POST",
+        body: {
+          locationId,
+          page,
+          pageLimit: 100,
+          filters: [{ field: "tags", operator: "contains", value: tag }],
+        },
+      });
+      const batch = data.contacts || [];
+      out.push(...batch);
+      const total = data.total ?? out.length;
+      if (batch.length === 0 || out.length >= total) break;
+    }
+    if (out.length) return { contacts: out.slice(0, max), total: out.length };
+  } catch {
+    /* fall through to the list-scan fallback */
+  }
+
+  // Fallback: page the contacts list and filter by tag ourselves.
+  const out = [];
+  let startAfter;
+  let startAfterId;
+  for (let i = 0; i < 30 && out.length < max; i++) {
+    let path = `/contacts/?locationId=${encodeURIComponent(locationId)}&limit=100`;
+    if (startAfter && startAfterId) {
+      path += `&startAfter=${encodeURIComponent(startAfter)}&startAfterId=${encodeURIComponent(startAfterId)}`;
+    }
+    const data = await client.call(path);
+    const batch = data.contacts || [];
+    for (const c of batch) {
+      const tags = (c.tags || []).map((t) => String(t).toLowerCase());
+      if (tags.includes(wanted)) out.push(c);
+    }
+    if (batch.length < 100) break;
+    const meta = data.meta || {};
+    startAfter = meta.startAfter;
+    startAfterId = meta.startAfterId;
+    if (!startAfterId) break;
+  }
+  return { contacts: out.slice(0, max), total: out.length };
 }
 
 /* ---------- messaging ---------- */
