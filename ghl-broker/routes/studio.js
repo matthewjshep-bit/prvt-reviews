@@ -10,7 +10,7 @@ import { listCustomFields, getContact } from "../ghl.js";
 import { store } from "../store.js";
 import { uploadAsset } from "../r2.js";
 import { resolveConnectionsFor, resolveConnectionById } from "../connections.js";
-import { flatToContext, resolveBindings } from "../../shared/bindings.js";
+import { flatToContext, resolveBindings } from "../shared/bindings.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
 

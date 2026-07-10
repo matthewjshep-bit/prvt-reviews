@@ -7,8 +7,8 @@
 // caller resolves data.* / dynamic-image bitmaps and passes them in.
 
 import sharp from "sharp";
-import { parseTemplate } from "../shared/template-schema.js";
-import { resolveBindings } from "../shared/bindings.js";
+import { parseTemplate } from "./shared/template-schema.js";
+import { resolveBindings } from "./shared/bindings.js";
 import { safeFetch } from "./net.js";
 import { prepareBitmap } from "./bitmap.js";
 import { textLayerSvg, nameBoxLayerSvg, badgeLayerSvg, shapeLayerSvg } from "./svg.js";

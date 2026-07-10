@@ -13,8 +13,8 @@
 import express from "express";
 import { store } from "../store.js";
 import { getConfig } from "../ghl.js";
-import { TemplateInputSchema } from "../../shared/template-schema.js";
-import { reviewRequestStarter } from "../../shared/starters.js";
+import { TemplateInputSchema } from "../shared/template-schema.js";
+import { reviewRequestStarter } from "../shared/starters.js";
 
 export default function createTemplatesRouter({ resolveLocation }) {
   const router = express.Router();

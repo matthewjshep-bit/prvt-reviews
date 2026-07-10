@@ -9,7 +9,7 @@
 
 import { z } from "zod";
 import { safeFetch } from "../net.js";
-import { resolveBindings } from "../../shared/bindings.js";
+import { resolveBindings } from "../shared/bindings.js";
 import { headersFrom } from "./_connection.js";
 
 const optionsSchema = z

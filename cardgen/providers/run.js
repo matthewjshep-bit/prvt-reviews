@@ -6,7 +6,7 @@
 // and a per-location rate limit.
 
 import { getProvider } from "./index.js";
-import { resolveBindings } from "../../shared/bindings.js";
+import { resolveBindings } from "../shared/bindings.js";
 import { canonicalize, sha256, getJson, putJson, getObject, putObject } from "../storage.js";
 
 const PROVIDER_TIMEOUT_MS = 10_000;

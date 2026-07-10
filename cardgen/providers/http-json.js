@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { JSONPath } from "jsonpath-plus";
 import { safeFetch } from "../net.js";
-import { resolveBindings } from "../../shared/bindings.js";
+import { resolveBindings } from "../shared/bindings.js";
 import { headersFrom, jsonEscape } from "./_connection.js";
 
 const optionsSchema = z
