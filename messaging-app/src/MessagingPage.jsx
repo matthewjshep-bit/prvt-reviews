@@ -996,7 +996,13 @@ export default function MessagingPage() {
                 className="w-full rounded-lg py-2.5 text-sm font-semibold text-white transition-opacity disabled:opacity-50"
                 style={{ backgroundColor: GREEN }}
               >
-                {sendBusy ? "Sending…" : "Send for real"}
+                {sendBusy
+                  ? "Sending…"
+                  : !audiencePreview
+                  ? "Preview audience first"
+                  : audiencePreview.sendsEnabled === false
+                  ? "Live sending is off"
+                  : "Send for real"}
               </button>
 
               {sendResult && (
