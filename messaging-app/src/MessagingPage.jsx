@@ -35,47 +35,6 @@ import {
 
 const API_BASE = "https://prvt-reviews-1.onrender.com"; // same origin as the deployed iframe app
 const CARD_BASE = "https://prvt-reviews.onrender.com"; // the card image microservice
-
-/* Built-in card templates — each is a preset of the existing image controls.
-   Applying one pre-fills the controls; the user can still tweak afterward. */
-const TEMPLATES = [
-  {
-    id: "classic",
-    name: "Classic",
-    headline: "",
-    bgColor: "#0b0b0c",
-    accent: "#ffffff",
-    fit: "cover",
-    nameY: 0.63,
-  },
-  {
-    id: "review",
-    name: "Review request",
-    headline: "Loved your visit? Leave us a review!",
-    bgColor: "#0b1f3a",
-    accent: "#ffd24d",
-    fit: "contain",
-    nameY: 0.9,
-  },
-  {
-    id: "thankyou",
-    name: "Thank you",
-    headline: "Thank you!",
-    bgColor: "#14331f",
-    accent: "#a7f3d0",
-    fit: "contain",
-    nameY: 0.86,
-  },
-  {
-    id: "offer",
-    name: "Special offer",
-    headline: "A little something for you",
-    bgColor: "#3a0b1f",
-    accent: "#ffd24d",
-    fit: "contain",
-    nameY: 0.88,
-  },
-];
 const BLUE = "#4c6ef5"; // outgoing SMS bubble
 const GREEN = "#16a34a";
 
@@ -207,11 +166,13 @@ export default function MessagingPage() {
   const [cardAccent, setCardAccent] = useState("");
   const [cardNameX, setCardNameX] = useState(0.5); // 0..1 pill center, horizontal
   const [cardNameY, setCardNameY] = useState(0.7); // 0..1 pill center, vertical
-  const [templateId, setTemplateId] = useState("");
 
-  // Send engine (Phase 1)
-  const [audienceMode, setAudienceMode] = useState("contact"); // "contact" | "tag"
-  const [sendPhone, setSendPhone] = useState("");
+  // Send engine — multi-recipient
+  const [recipients, setRecipients] = useState([]); // [{ id?, phone?, firstName? }]
+  const [contactQuery, setContactQuery] = useState("");
+  const [contactResults, setContactResults] = useState([]);
+  const [contactSearching, setContactSearching] = useState(false);
+  const [manualPhone, setManualPhone] = useState("");
   const [sendTag, setSendTag] = useState("");
   const [tagList, setTagList] = useState([]);
   const [audiencePreview, setAudiencePreview] = useState(null);
@@ -269,17 +230,6 @@ export default function MessagingPage() {
       setter(v);
       setDirty(true);
     };
-  }
-
-  function applyTemplate(t) {
-    setTemplateId(t.id);
-    setCardHeadline(t.headline);
-    setCardBgColor(t.bgColor);
-    setCardAccent(t.accent);
-    setCardFit(t.fit);
-    setCardNameY(t.nameY);
-    setDirty(true);
-    showToast(`Applied “${t.name}” template`);
   }
 
   async function saveConfig() {
@@ -372,9 +322,51 @@ export default function MessagingPage() {
     };
   }, [locationId]);
 
-  // The message template (with tokens) sent to the broker, which personalizes
-  // it per contact. Card image settings are bundled as `card`.
-  function sendBody(dryRun) {
+  // Debounced contact typeahead for the recipient picker.
+  useEffect(() => {
+    if (!contactQuery.trim()) {
+      setContactResults([]);
+      return;
+    }
+    setContactSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(
+          `${API_BASE}/api/contacts?location_id=${encodeURIComponent(locationId)}&query=${encodeURIComponent(
+            contactQuery.trim()
+          )}`
+        );
+        const data = await r.json();
+        setContactResults(Array.isArray(data.contacts) ? data.contacts : []);
+      } catch {
+        setContactResults([]);
+      } finally {
+        setContactSearching(false);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [contactQuery, locationId]);
+
+  const keyOf = (r) => r.id || r.phone;
+
+  function addRecipient(r) {
+    setAudiencePreview(null);
+    setRecipients((prev) => (prev.some((p) => keyOf(p) === keyOf(r)) ? prev : [...prev, r]));
+  }
+  function removeRecipient(key) {
+    setAudiencePreview(null);
+    setRecipients((prev) => prev.filter((p) => keyOf(p) !== key));
+  }
+  function addManualPhone() {
+    const p = manualPhone.trim();
+    if (!p) return;
+    addRecipient({ phone: p });
+    setManualPhone("");
+  }
+
+  // Payload for /api/send-batch. Message is a token template; the broker
+  // personalizes it per contact. Card image settings ride along as `card`.
+  function sendBatchBody(dryRun) {
     const messageTemplate =
       tab === "custom"
         ? customTemplate
@@ -383,6 +375,9 @@ export default function MessagingPage() {
     return {
       location_id: locationId,
       dryRun,
+      contacts: recipients.filter((r) => r.id).map((r) => ({ id: r.id, firstName: r.firstName })),
+      phones: recipients.filter((r) => !r.id && r.phone).map((r) => r.phone),
+      tag: sendTag || "",
       message: messageTemplate,
       businessName,
       reviewLink: reviewLink.trim(),
@@ -398,26 +393,15 @@ export default function MessagingPage() {
     };
   }
 
-  function sendEndpoint() {
-    return audienceMode === "tag" ? "/api/campaigns" : "/api/send-card";
-  }
-
-  function audienceField(dryRun) {
-    return audienceMode === "tag"
-      ? { tag: sendTag, dryRun }
-      : { phone: sendPhone.trim(), dryRun };
-  }
-
   async function runSend(dryRun) {
-    if (audienceMode === "tag" && !sendTag) return showToast("Pick a tag first");
-    if (audienceMode === "contact" && !sendPhone.trim()) return showToast("Enter a phone number");
+    if (recipients.length === 0 && !sendTag) return showToast("Add at least one recipient or a tag");
     setSendBusy(true);
     if (dryRun) setSendResult(null);
     try {
-      const r = await fetch(`${API_BASE}${sendEndpoint()}`, {
+      const r = await fetch(`${API_BASE}/api/send-batch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...sendBody(dryRun), ...audienceField(dryRun) }),
+        body: JSON.stringify(sendBatchBody(dryRun)),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data?.error || "failed");
@@ -435,10 +419,9 @@ export default function MessagingPage() {
   }
 
   async function confirmAndSend() {
-    const isTag = audienceMode === "tag";
-    const n = isTag ? audiencePreview?.willSend : 1;
-    const who = isTag ? `${n} contact${n === 1 ? "" : "s"}` : "this contact";
-    if (!window.confirm(`Send the card to ${who}? This texts real people and can’t be undone.`)) return;
+    const n = audiencePreview?.willSend ?? recipients.length;
+    if (!window.confirm(`Send the card to ${n} recipient${n === 1 ? "" : "s"}? This texts real people and can’t be undone.`))
+      return;
     await runSend(false);
   }
 
@@ -687,39 +670,6 @@ export default function MessagingPage() {
               </button>
             </Card>
 
-            {/* template gallery */}
-            <Card className="p-4">
-              <div className="mb-1 flex items-center gap-2">
-                <ImageIcon className="h-5 w-5 text-gray-700" />
-                <h3 className="text-base font-bold">Templates</h3>
-              </div>
-              <p className="mb-3 text-sm text-gray-500">
-                Start from a style, then fine-tune it below. Your logo and name stay in place.
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                {TEMPLATES.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => applyTemplate(t)}
-                    className={`rounded-lg border p-2 text-left transition-colors ${
-                      templateId === t.id
-                        ? "border-green-500 ring-2 ring-green-100"
-                        : "border-gray-200 hover:border-gray-300"
-                    }`}
-                  >
-                    <div
-                      className="mb-1.5 flex h-12 items-center justify-center rounded-md text-[11px] font-bold"
-                      style={{ backgroundColor: t.bgColor, color: t.accent }}
-                    >
-                      {t.headline ? t.headline.slice(0, 18) : "Aa"}
-                    </div>
-                    <span className="text-xs font-semibold text-gray-800">{t.name}</span>
-                  </button>
-                ))}
-              </div>
-            </Card>
-
             {/* personalized image */}
             <Card className="p-4">
               <div className="flex items-center justify-between">
@@ -882,44 +832,74 @@ export default function MessagingPage() {
                   <h3 className="text-base font-bold">Send a card</h3>
                 </div>
                 <p className="text-sm text-gray-500">
-                  Send the card you designed to one contact or a tagged audience.
+                  Send the card you designed to specific people, a whole tag, or both.
                 </p>
               </div>
-              {/* audience mode */}
-              <div className="grid grid-cols-2 gap-1 rounded-xl border border-gray-200 bg-gray-100 p-1">
-                {[
-                  { id: "contact", label: "One contact" },
-                  { id: "tag", label: "By tag" },
-                ].map((o) => (
-                  <button
-                    key={o.id}
-                    type="button"
-                    onClick={() => {
-                      setAudienceMode(o.id);
-                      setAudiencePreview(null);
-                      setSendResult(null);
-                    }}
-                    className={`rounded-lg py-2 text-sm font-semibold transition-colors ${
-                      audienceMode === o.id ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                    }`}
-                  >
-                    {o.label}
-                  </button>
-                ))}
-              </div>
-
-              {audienceMode === "contact" ? (
+              {/* recipient search */}
+              <div>
+                <label className="mb-1 block text-sm font-semibold text-gray-900">Add people</label>
                 <input
-                  type="tel"
-                  value={sendPhone}
-                  onChange={(e) => {
-                    setSendPhone(e.target.value);
-                    setAudiencePreview(null);
-                  }}
-                  placeholder="+1 555 123 4567"
+                  type="text"
+                  value={contactQuery}
+                  onChange={(e) => setContactQuery(e.target.value)}
+                  placeholder="Search contacts by name or phone…"
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
                 />
-              ) : (
+                {(contactSearching || contactResults.length > 0 || contactQuery.trim()) && (
+                  <div className="mt-1 max-h-44 overflow-auto rounded-lg border border-gray-200">
+                    {contactSearching && <div className="px-3 py-2 text-xs text-gray-400">Searching…</div>}
+                    {contactResults.map((c) => {
+                      const name = [c.firstName, c.lastName].filter(Boolean).join(" ") || c.phone || "Unnamed";
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            addRecipient({ id: c.id, firstName: c.firstName, phone: c.phone });
+                            setContactQuery("");
+                            setContactResults([]);
+                          }}
+                          className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-gray-50"
+                        >
+                          <span className="font-medium text-gray-800">{name}</span>
+                          <span className="text-xs text-gray-400">{c.phone}</span>
+                        </button>
+                      );
+                    })}
+                    {!contactSearching && contactResults.length === 0 && contactQuery.trim() && (
+                      <div className="px-3 py-2 text-xs text-gray-400">No matches</div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* manual phone */}
+              <div className="flex gap-2">
+                <input
+                  type="tel"
+                  value={manualPhone}
+                  onChange={(e) => setManualPhone(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addManualPhone();
+                    }
+                  }}
+                  placeholder="Or add a phone number…"
+                  className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
+                />
+                <button
+                  type="button"
+                  onClick={addManualPhone}
+                  className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Add
+                </button>
+              </div>
+
+              {/* tag audience */}
+              <div>
+                <label className="mb-1 block text-sm font-semibold text-gray-900">Or include a whole tag</label>
                 <select
                   value={sendTag}
                   onChange={(e) => {
@@ -928,13 +908,53 @@ export default function MessagingPage() {
                   }}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
                 >
-                  <option value="">{tagList.length ? "Choose a tag…" : "No tags found"}</option>
+                  <option value="">{tagList.length ? "No tag" : "No tags found"}</option>
                   {tagList.map((t) => (
                     <option key={t} value={t}>
                       {t}
                     </option>
                   ))}
                 </select>
+              </div>
+
+              {/* selected recipients */}
+              {(recipients.length > 0 || sendTag) && (
+                <div className="rounded-lg border border-gray-200 p-2">
+                  <div className="mb-1.5 text-xs font-semibold text-gray-500">
+                    Recipients
+                    {recipients.length ? ` · ${recipients.length} selected` : ""}
+                    {sendTag ? ` · tag "${sendTag}"` : ""}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {sendTag && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-xs font-medium text-green-700">
+                        tag: {sendTag}
+                        <button
+                          type="button"
+                          onClick={() => setSendTag("")}
+                          className="text-green-500 hover:text-green-700"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    )}
+                    {recipients.map((r) => (
+                      <span
+                        key={keyOf(r)}
+                        className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700"
+                      >
+                        {r.firstName || r.phone}
+                        <button
+                          type="button"
+                          onClick={() => removeRecipient(keyOf(r))}
+                          className="text-gray-400 hover:text-gray-700"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
               )}
 
               <button
@@ -948,30 +968,16 @@ export default function MessagingPage() {
 
               {audiencePreview && (
                 <div className="rounded-lg bg-gray-50 p-3 text-xs text-gray-700">
-                  {audienceMode === "tag" ? (
-                    <>
-                      <div>
-                        <span className="font-semibold">{audiencePreview.willSend}</span> will receive it
-                        {audiencePreview.skippedDnd
-                          ? ` · ${audiencePreview.skippedDnd} skipped (opted out)`
-                          : ""}
-                        .
-                      </div>
-                      {audiencePreview.willSend >= audiencePreview.cap && (
-                        <div className="text-amber-600">Capped at {audiencePreview.cap} per run.</div>
-                      )}
-                      {audiencePreview.sample?.length ? (
-                        <div className="mt-1 text-gray-500">
-                          e.g. {audiencePreview.sample.map((s) => s.firstName || "—").join(", ")}
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <div>
-                      Will send to{" "}
-                      <span className="font-semibold">{audiencePreview.wouldSendTo?.firstName || "contact"}</span>.
-                    </div>
+                  <div>
+                    <span className="font-semibold">{audiencePreview.willSend}</span> will receive it
+                    {audiencePreview.skippedDnd ? ` · ${audiencePreview.skippedDnd} skipped (opted out)` : ""}.
+                  </div>
+                  {audiencePreview.willSend >= audiencePreview.cap && (
+                    <div className="text-amber-600">Capped at {audiencePreview.cap} per run.</div>
                   )}
+                  {audiencePreview.sample?.length ? (
+                    <div className="mt-1 text-gray-500">e.g. {audiencePreview.sample.join(", ")}</div>
+                  ) : null}
                   {audiencePreview.sendsEnabled === false && (
                     <div className="mt-2 rounded bg-amber-50 p-2 text-amber-700">
                       Live sending is OFF. Set <code>CARD_SENDS_ENABLED=true</code> on the broker to enable real sends.
@@ -992,19 +998,9 @@ export default function MessagingPage() {
 
               {sendResult && (
                 <div className="rounded-lg bg-green-50 p-3 text-xs text-green-800">
-                  {audienceMode === "tag" ? (
-                    <>
-                      Sent {sendResult.sent}.{" "}
-                      {sendResult.failed ? `${sendResult.failed} failed. ` : ""}
-                      {sendResult.skippedDnd ? `${sendResult.skippedDnd} skipped.` : ""}
-                    </>
-                  ) : sendResult.sent ? (
-                    "Sent!"
-                  ) : sendResult.skipped === "dnd" ? (
-                    "Skipped — contact opted out."
-                  ) : (
-                    "Done."
-                  )}
+                  Sent {sendResult.sent}.{" "}
+                  {sendResult.failed ? `${sendResult.failed} failed. ` : ""}
+                  {sendResult.skippedDnd ? `${sendResult.skippedDnd} skipped.` : ""}
                 </div>
               )}
             </Card>

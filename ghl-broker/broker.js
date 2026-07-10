@@ -23,6 +23,7 @@ import {
   getDashboard,
   getContact,
   listTags,
+  searchContacts,
   searchContactsByTag,
 } from "./ghl.js";
 import {
@@ -543,6 +544,119 @@ app.post("/api/campaigns", async (req, res) => {
       await new Promise((r) => setTimeout(r, 150)); // ~6-7/sec, under GHL's 100/10s
     }
     res.json({ ok: true, sent, failed, skippedDnd, willSend: capped.length, cap: CAMPAIGN_CAP });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// GET /api/contacts?query= — typeahead search for the recipient picker.
+app.get("/api/contacts", async (req, res) => {
+  try {
+    const { locationId, client } = resolveLocation(req);
+    const q = (req.query.query || "").toString().trim();
+    if (!q) return res.json({ contacts: [] });
+    const results = await searchContacts(client, locationId, q);
+    const contacts = (results || []).slice(0, 20).map((c) => ({
+      id: c.id,
+      firstName: c.firstName || c.contactName || "",
+      lastName: c.lastName || "",
+      phone: c.phone || "",
+      email: c.email || "",
+      dnd: Boolean(c.dnd),
+    }));
+    res.json({ contacts });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// POST /api/send-batch — send the card to any mix of selected contacts,
+// manual phone numbers, and (optionally) everyone with a tag. Deduped,
+// DND-skipped, throttled, capped. dryRun (default true) returns a breakdown.
+app.post("/api/send-batch", async (req, res) => {
+  try {
+    const { locationId, client } = resolveLocation(req);
+    const {
+      contacts = [],
+      phones = [],
+      tag = "",
+      message = "",
+      businessName = "",
+      reviewLink = "",
+      card = {},
+      dryRun = true,
+    } = req.body || {};
+
+    // Collect target contacts (dedupe by id): tag audience + explicit picks.
+    const byId = new Map();
+    if (tag) {
+      const { contacts: tagContacts } = await searchContactsByTag(client, locationId, tag);
+      for (const c of tagContacts) if (idOf(c)) byId.set(idOf(c), c);
+    }
+    for (const c of contacts) if (c?.id) byId.set(c.id, { id: c.id, firstName: c.firstName, dnd: c.dnd });
+
+    const withId = [...byId.values()];
+    const eligible = withId.filter((c) => !isDnd(c));
+    const skippedDnd = withId.length - eligible.length;
+    const cleanPhones = [...new Set((phones || []).map((p) => String(p).trim()).filter(Boolean))];
+
+    const matched = eligible.length + cleanPhones.length;
+    const willSend = Math.min(matched, CAMPAIGN_CAP);
+
+    const live = dryRun === false && CARD_SENDS_ENABLED;
+    if (!live) {
+      return res.json({
+        ok: true,
+        dryRun: true,
+        sendsEnabled: CARD_SENDS_ENABLED,
+        contacts: eligible.length,
+        phones: cleanPhones.length,
+        skippedDnd,
+        matched,
+        willSend,
+        cap: CAMPAIGN_CAP,
+        sample: eligible.slice(0, 5).map((c) => firstNameOf(c) || "—"),
+      });
+    }
+
+    let sent = 0;
+    let failed = 0;
+    let remaining = CAMPAIGN_CAP;
+    const sendOne = async (contactId, name) => {
+      const url = buildCardUrl(name || "there", card);
+      const text = personalizeMessage(message, name, businessName, reviewLink);
+      await sendSms(client, { contactId, message: text, attachments: [url] });
+    };
+
+    for (const c of eligible) {
+      if (remaining <= 0) break;
+      try {
+        await sendOne(idOf(c), firstNameOf(c));
+        sent++;
+      } catch {
+        failed++;
+      }
+      remaining--;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    for (const phone of cleanPhones) {
+      if (remaining <= 0) break;
+      try {
+        const cid = await findOrCreateContactByPhone(client, locationId, phone, "");
+        const contact = await getContact(client, cid);
+        if (isDnd(contact)) {
+          remaining--;
+          continue;
+        }
+        await sendOne(cid, firstNameOf(contact));
+        sent++;
+      } catch {
+        failed++;
+      }
+      remaining--;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    res.json({ ok: true, sent, failed, skippedDnd, willSend, cap: CAMPAIGN_CAP });
   } catch (err) {
     fail(res, err);
   }
