@@ -38,7 +38,9 @@ export default function CardStudio({ onTemplateChange }) {
   const showToast = (m) => { setToast(m); clearTimeout(showToast._t); showToast._t = setTimeout(() => setToast(null), 2400); };
 
   useEffect(() => { api.getCustomFields().then(setCustomFields); }, []);
-  useEffect(() => { onTemplateChange?.({ id: currentId, name: template.name }); }, [currentId, template.name]);
+  // Emit the FULL live template (with the saved id) so the page's phone preview
+  // mirrors every edit in real time; id drives send routing.
+  useEffect(() => { onTemplateChange?.({ ...template, id: currentId }); }, [template, currentId]);
 
   // Initial template list.
   useEffect(() => {

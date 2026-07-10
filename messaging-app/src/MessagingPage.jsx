@@ -10,6 +10,7 @@ import {
   CalendarDays,
 } from "lucide-react";
 import CardStudio from "./studio/CardStudio.jsx";
+import TemplatePreview from "./studio/TemplatePreview.jsx";
 
 /*
   Messaging page — renders INSIDE the GHL iframe (the GHL sidebar is the shell
@@ -520,7 +521,15 @@ export default function MessagingPage() {
           {/* left: live preview (sticky) */}
           <div className="lg:sticky lg:top-6 lg:self-start">
             <Phone>
-              {personalizedImage && <PersonalizedCard src={previewSrc} />}
+              {personalizedImage &&
+                (studioTemplate?.layers?.length ? (
+                  // Live mirror of the Card Studio template — updates on every edit.
+                  <div className="mb-2 overflow-hidden rounded-xl">
+                    <TemplatePreview template={studioTemplate} />
+                  </div>
+                ) : (
+                  <PersonalizedCard src={previewSrc} />
+                ))}
               <Bubble side="out" time="9:41 AM">
                 {smsText}
               </Bubble>

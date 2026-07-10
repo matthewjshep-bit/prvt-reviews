@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { resolveBindings, flatToContext } from "@shared/bindings.js";
+import { LayerBody } from "./TemplatePreview.jsx";
 
 /*
   ClientCanvas — the editable preview. Renders the template as absolute-
@@ -10,12 +11,6 @@ import { resolveBindings, flatToContext } from "@shared/bindings.js";
 */
 
 const SNAP = 1; // percent snap threshold
-const CSS_FONT = {
-  Inter: "'Inter',system-ui,-apple-system,sans-serif",
-  "Source Serif": "'Source Serif 4',Georgia,serif",
-  "Archivo Black": "'Archivo Black','Arial Black',system-ui,sans-serif",
-};
-const ICON_CHAR = { star: "★", phone: "☎", pin: "📍", check: "✓", dollar: "$" };
 const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
 export default function ClientCanvas({ template, selectedId, onSelect, onChange, onDuplicate, onDelete }) {
@@ -185,84 +180,6 @@ export default function ClientCanvas({ template, selectedId, onSelect, onChange,
       {guides.h.map((h, i) => (
         <div key={"h" + i} className="pointer-events-none absolute left-0 right-0 z-20 h-px bg-fuchsia-500" style={{ top: `${h}%` }} />
       ))}
-    </div>
-  );
-}
-
-function LayerBody({ layer, resolved, fpx }) {
-  if (layer.type === "image") {
-    return layer.src ? (
-      <img src={layer.src} alt="" draggable={false} className="pointer-events-none h-full w-full"
-        style={{ objectFit: layer.fit === "contain" ? "contain" : "cover", borderRadius: fpx(layer.cornerRadius || 0) }} />
-    ) : (
-      <Placeholder label="🖼 image — pick a file" />
-    );
-  }
-  if (layer.type === "dynamic-image") {
-    return layer.thumbnailUrl ? (
-      <img src={layer.thumbnailUrl} alt="" draggable={false} className="pointer-events-none h-full w-full"
-        style={{ objectFit: layer.fit === "contain" ? "contain" : "cover" }} />
-    ) : (
-      <Placeholder label={`🛰 ${layer.sourceId || "data source"}`} />
-    );
-  }
-  if (layer.type === "shape") {
-    if (layer.shape === "ellipse") return <div className="pointer-events-none h-full w-full" style={{ background: layer.fill, borderRadius: "50%" }} />;
-    if (layer.shape === "line") return <div className="pointer-events-none absolute left-0 right-0 top-1/2" style={{ height: fpx(layer.strokeWidth || 4), background: layer.stroke || layer.fill, transform: "translateY(-50%)" }} />;
-    return <div className="pointer-events-none h-full w-full" style={{ background: layer.fill, borderRadius: fpx(layer.cornerRadius || 0) }} />;
-  }
-  if (layer.type === "text") {
-    const val = resolved(layer.content);
-    return (
-      <div className="pointer-events-none flex h-full w-full items-center"
-        style={{ justifyContent: layer.align === "center" ? "center" : layer.align === "right" ? "flex-end" : "flex-start" }}>
-        <div style={{
-          fontFamily: CSS_FONT[layer.fontFamily] || CSS_FONT.Inter,
-          fontWeight: layer.fontWeight === "bold" ? 700 : 400,
-          fontSize: fpx(layer.fontSize), color: layer.color, textAlign: layer.align, lineHeight: layer.lineHeight,
-          width: "100%", overflow: "hidden",
-        }}>
-          {val || <span style={{ opacity: 0.4 }}>{layer.content}</span>}
-        </div>
-      </div>
-    );
-  }
-  if (layer.type === "name-box") {
-    const val = resolved(layer.content) || layer.content;
-    return (
-      <div className="pointer-events-none flex h-full w-full items-center justify-center">
-        <div style={{
-          background: layer.bgColor, color: layer.textColor,
-          fontFamily: CSS_FONT[layer.fontFamily] || CSS_FONT.Inter, fontWeight: 700, fontSize: fpx(layer.fontSize),
-          padding: `${fpx((layer.paddingY || 0) + layer.fontSize * 0.2)}px ${fpx(layer.paddingX || 40)}px`,
-          borderRadius: layer.cornerRadius >= 999 ? 9999 : fpx(layer.cornerRadius || 0), whiteSpace: "nowrap",
-        }}>{val}</div>
-      </div>
-    );
-  }
-  if (layer.type === "badge") {
-    const val = resolved(layer.text);
-    return (
-      <div className="pointer-events-none flex h-full w-full items-center justify-center">
-        <div style={{
-          background: layer.bgColor, color: layer.textColor, display: "inline-flex", alignItems: "center", gap: fpx(layer.fontSize * 0.3),
-          fontFamily: CSS_FONT[layer.fontFamily] || CSS_FONT.Inter, fontWeight: 700, fontSize: fpx(layer.fontSize),
-          padding: `${fpx(layer.fontSize * 0.35)}px ${fpx(layer.fontSize * 0.6)}px`,
-          borderRadius: (layer.cornerRadius ?? 999) >= 999 ? 9999 : fpx(layer.cornerRadius || 0), whiteSpace: "nowrap",
-        }}>
-          {layer.icon ? <span>{ICON_CHAR[layer.icon] || ""}</span> : null}
-          {val ? <span>{val}</span> : null}
-        </div>
-      </div>
-    );
-  }
-  return null;
-}
-
-function Placeholder({ label }) {
-  return (
-    <div className="pointer-events-none flex h-full w-full items-center justify-center bg-white/5 text-center text-[11px] font-medium text-white/60">
-      {label}
     </div>
   );
 }
