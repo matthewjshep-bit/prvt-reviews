@@ -4,3 +4,7 @@ dist/
 uploads/
 *.log
 .DS_Store
+
+# Card Studio local dev fallbacks (Postgres/R2 not configured)
+ghl-broker/data/
+cardgen/files/

@@ -1,0 +1,14 @@
+{
+  "name": "@prvt/shared",
+  "version": "1.0.0",
+  "description": "Shared template + data-source schema (zod) imported by messaging-app, ghl-broker, and cardgen",
+  "type": "module",
+  "main": "template-schema.js",
+  "exports": {
+    "./template-schema": "./template-schema.js",
+    "./bindings": "./bindings.js"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  }
+}

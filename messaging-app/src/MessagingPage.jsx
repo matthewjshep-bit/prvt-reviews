@@ -9,6 +9,7 @@ import {
   Bell,
   CalendarDays,
 } from "lucide-react";
+import CardStudio from "./studio/CardStudio.jsx";
 
 /*
   Messaging page — renders INSIDE the GHL iframe (the GHL sidebar is the shell
@@ -33,8 +34,8 @@ import {
   its own), it keeps sensible defaults so the UI still renders.
 */
 
-const API_BASE = "https://prvt-reviews-1.onrender.com"; // same origin as the deployed iframe app
-const CARD_BASE = "https://prvt-reviews.onrender.com"; // the card image microservice
+const API_BASE = import.meta.env.VITE_API_BASE || "https://prvt-reviews-1.onrender.com"; // broker
+const CARD_BASE = import.meta.env.VITE_CARD_BASE || "https://prvt-reviews.onrender.com"; // the card image microservice
 const BLUE = "#4c6ef5"; // outgoing SMS bubble
 const GREEN = "#16a34a";
 
@@ -186,6 +187,8 @@ export default function MessagingPage() {
   const [toast, setToast] = useState(null);
 
   const [previewName, setPreviewName] = useState("Jessica");
+  // The template currently selected in the Card Studio → used to route sends.
+  const [studioTemplate, setStudioTemplate] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -274,6 +277,24 @@ export default function MessagingPage() {
     }
     setSendingTest(true);
     try {
+      // Route through the Card Studio pipeline when a saved template is
+      // selected; otherwise fall back to the legacy card sender.
+      if (personalizedImage && studioTemplate?.id) {
+        const r = await fetch(`${API_BASE}/api/render/test-send`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location_id: locationId,
+            templateId: studioTemplate.id,
+            testPhone: testPhone.trim(),
+            sampleName: previewName.trim() || "Jessica",
+            message: smsText,
+          }),
+        });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "failed");
+        showToast("Test message sent");
+        return;
+      }
       const r = await fetch(`${API_BASE}/api/send-test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -297,8 +318,8 @@ export default function MessagingPage() {
       });
       if (!r.ok) throw new Error();
       showToast("Test message sent");
-    } catch {
-      showToast("Couldn’t send the test message");
+    } catch (e) {
+      showToast("Couldn’t send the test message" + (e.message ? ` — ${e.message}` : ""));
     } finally {
       setSendingTest(false);
     }
@@ -381,6 +402,7 @@ export default function MessagingPage() {
       message: messageTemplate,
       businessName,
       reviewLink: reviewLink.trim(),
+      templateId: personalizedImage && studioTemplate?.id ? studioTemplate.id : "",
       card: {
         logoUrl: personalizedImage && /^https?:/i.test(logoUrl || "") ? logoUrl : "",
         cardFit,
@@ -670,158 +692,21 @@ export default function MessagingPage() {
               </button>
             </Card>
 
-            {/* personalized image */}
+            {/* personalized image — Dynamic Card Studio */}
             <Card className="p-4">
-              <div className="flex items-center justify-between">
+              <div className="mb-3 flex items-center justify-between">
                 <div className="flex items-start gap-3">
                   <div className="mt-0.5 rounded-lg bg-gray-100 p-1.5">
                     <ImageIcon className="h-5 w-5 text-gray-700" />
                   </div>
                   <div>
-                    <div className="text-sm font-bold">Personalized image</div>
-                    <p className="text-xs text-gray-500">Adds a custom image with each customer’s name</p>
+                    <div className="text-sm font-bold">Card studio</div>
+                    <p className="text-xs text-gray-500">Design the personalized image sent with each message</p>
                   </div>
                 </div>
                 <Toggle checked={personalizedImage} onChange={edit(setPersonalizedImage)} label="Personalized image" />
               </div>
-
-              {personalizedImage && (
-                <div className="mt-4 flex items-center gap-4">
-                  <div
-                    className="flex h-20 w-32 shrink-0 items-center justify-center overflow-hidden rounded-lg"
-                    style={{ backgroundColor: "#0b0b0c" }}
-                  >
-                    {logoUrl ? (
-                      <img src={logoUrl} alt="Brand" className="h-full w-full object-cover" />
-                    ) : (
-                      <span className="px-2 text-center text-[11px] font-extrabold uppercase tracking-widest text-white">
-                        {businessName || "Your Business"}
-                      </span>
-                    )}
-                  </div>
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => fileRef.current?.click()}
-                      className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                    >
-                      <ImageIcon className="h-4 w-4" /> Change image
-                    </button>
-                    <p className="mt-1.5 text-[11px] text-gray-400">PNG or JPG. This becomes the card background.</p>
-                    <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickImage} />
-                  </div>
-                </div>
-              )}
-
-              {personalizedImage && (
-                <div className="mt-4 space-y-3 border-t border-gray-100 pt-4">
-                  {/* logo fit */}
-                  <div>
-                    <span className="mb-1 block text-sm font-semibold text-gray-900">Logo fit</span>
-                    <div className="grid grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-gray-100 p-1">
-                      {[
-                        { id: "cover", label: "Fill card" },
-                        { id: "contain", label: "Show whole logo" },
-                      ].map((o) => (
-                        <button
-                          key={o.id}
-                          type="button"
-                          onClick={() => edit(setCardFit)(o.id)}
-                          className={`rounded-md py-1.5 text-xs font-semibold transition-colors ${
-                            cardFit === o.id ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                          }`}
-                        >
-                          {o.label}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="mt-1 text-[11px] text-gray-400">
-                      “Fill” crops to fill the card; “Show whole logo” fits it uncropped on the background color.
-                    </p>
-                  </div>
-
-                  {/* colors */}
-                  <div className="flex gap-3">
-                    <label className="flex-1">
-                      <span className="mb-1 block text-sm font-semibold text-gray-900">Background</span>
-                      <input
-                        type="color"
-                        value={cardBgColor || "#0b0b0c"}
-                        onChange={(e) => edit(setCardBgColor)(e.target.value)}
-                        className="h-9 w-full cursor-pointer rounded-lg border border-gray-300"
-                      />
-                    </label>
-                    <label className="flex-1">
-                      <span className="mb-1 block text-sm font-semibold text-gray-900">Text color</span>
-                      <input
-                        type="color"
-                        value={cardAccent || "#ffffff"}
-                        onChange={(e) => edit(setCardAccent)(e.target.value)}
-                        className="h-9 w-full cursor-pointer rounded-lg border border-gray-300"
-                      />
-                    </label>
-                  </div>
-
-                  {/* headline */}
-                  <Field
-                    label="Headline (optional)"
-                    value={cardHeadline}
-                    onChange={edit(setCardHeadline)}
-                    placeholder="Thanks for visiting!"
-                  />
-
-                  {/* name pill position */}
-                  <div>
-                    <div className="mb-1 flex items-center justify-between">
-                      <span className="text-sm font-semibold text-gray-900">Name box position</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          edit(setCardNameX)(0.5);
-                          setCardNameY(0.7);
-                        }}
-                        className="text-[11px] font-medium text-gray-500 underline hover:text-gray-700"
-                      >
-                        Reset
-                      </button>
-                    </div>
-                    <label className="flex items-center gap-2">
-                      <span className="w-16 text-xs text-gray-500">Left–Right</span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={cardNameX}
-                        onChange={(e) => edit(setCardNameX)(parseFloat(e.target.value))}
-                        className="flex-1 accent-green-600"
-                      />
-                    </label>
-                    <label className="mt-1 flex items-center gap-2">
-                      <span className="w-16 text-xs text-gray-500">Up–Down</span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={cardNameY}
-                        onChange={(e) => edit(setCardNameY)(parseFloat(e.target.value))}
-                        className="flex-1 accent-green-600"
-                      />
-                    </label>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={saveConfig}
-                    disabled={!dirty || saving}
-                    className="w-full rounded-lg py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
-                    style={dirty && !saving ? { backgroundColor: GREEN, color: "white" } : {}}
-                  >
-                    {saving ? "Saving…" : dirty ? "Save image settings" : "Saved"}
-                  </button>
-                </div>
-              )}
+              {personalizedImage && <CardStudio onTemplateChange={setStudioTemplate} />}
             </Card>
 
             {/* send a card */}

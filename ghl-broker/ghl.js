@@ -76,6 +76,45 @@ export async function saveConfig(client, locationId, config) {
   return getConfig(client, locationId);
 }
 
+/* ---------- custom fields (definitions) ---------- */
+
+// Location custom-field definitions, used by the editor's merge-tag picker.
+// Returns [{ id, name, fieldKey, dataType }]. fieldKey looks like
+// "contact.property_address" — the studio maps it to contact.custom.<key>.
+export async function listCustomFields(client, locationId) {
+  const data = await client.call(`/locations/${encodeURIComponent(locationId)}/customFields`);
+  const fields = data.customFields || data.customField || [];
+  return fields.map((f) => ({
+    id: f.id,
+    name: f.name,
+    fieldKey: f.fieldKey || f.key || "",
+    dataType: f.dataType || f.type || "TEXT",
+  }));
+}
+
+// Find a custom field by its logical key (e.g. "card_image_url"), creating it
+// if absent. Returns the field id. Used by the render webhook writeback (§8).
+export async function findOrCreateCustomFieldByKey(client, locationId, key, name) {
+  const fields = await listCustomFields(client, locationId);
+  const match = fields.find(
+    (f) => String(f.fieldKey || "").replace(/^contact\./, "") === key || f.name === (name || key)
+  );
+  if (match) return match.id;
+  const created = await client.call(`/locations/${encodeURIComponent(locationId)}/customFields`, {
+    method: "POST",
+    body: { name: name || "Card Image URL", dataType: "TEXT", model: "contact" },
+  });
+  return created?.customField?.id || created?.id;
+}
+
+// Write a value into a contact's custom field.
+export async function updateContactCustomField(client, contactId, fieldId, value) {
+  return client.call(`/contacts/${encodeURIComponent(contactId)}`, {
+    method: "PUT",
+    body: { customFields: [{ id: fieldId, value }] },
+  });
+}
+
 /* ---------- contacts ---------- */
 
 export async function findOrCreateContactByPhone(client, locationId, phone, firstName) {

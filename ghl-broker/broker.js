@@ -39,6 +39,12 @@ import {
   getGoogleReviews,
 } from "./google.js";
 import createPipelineRouter from "./routes/pipeline.js";
+import createTemplatesRouter from "./routes/templates.js";
+import createStudioRouter from "./routes/studio.js";
+import createRenderRouter from "./routes/render.js";
+import createConnectionsRouter from "./routes/connections.js";
+import { resolveConnectionsFor } from "./connections.js";
+import { store } from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -231,6 +237,19 @@ app.get("/api/config", async (req, res) => {
 /* ---------- Mount Pipeline Router ---------- */
 // Pass the getTokenFor dependency so the router can authenticate GHL calls
 app.use("/api/pipeline", createPipelineRouter(getTokenFor));
+
+/* ---------- Mount Card Studio template CRUD ---------- */
+app.use("/api/templates", createTemplatesRouter({ resolveLocation }));
+
+/* ---------- Mount Card Studio editor-support endpoints ---------- */
+app.use("/api", createStudioRouter({ resolveLocation, uploadDir: UPLOAD_DIR, publicBaseUrl: PUBLIC_BASE_URL }));
+
+/* ---------- Mount Card Studio render/generate/test-send ---------- */
+const renderRouter = createRenderRouter({ resolveLocation, resolveConnectionsFor });
+app.use("/api/render", renderRouter);
+
+/* ---------- Mount connections (encrypted credentials) ---------- */
+app.use("/api/connections", createConnectionsRouter({ resolveLocation }));
 
 /* ---------- GET dashboard ---------- */
 app.get("/api/dashboard", async (req, res) => {
@@ -584,6 +603,7 @@ app.post("/api/send-batch", async (req, res) => {
       businessName = "",
       reviewLink = "",
       card = {},
+      templateId = "",
       dryRun = true,
     } = req.body || {};
 
@@ -622,8 +642,16 @@ app.post("/api/send-batch", async (req, res) => {
     let sent = 0;
     let failed = 0;
     let remaining = CAMPAIGN_CAP;
+    // When a templateId is given, render each contact's card through the Card
+    // Studio pipeline (per-contact bindings); otherwise use the legacy card URL.
     const sendOne = async (contactId, name) => {
-      const url = buildCardUrl(name || "there", card);
+      let url;
+      if (templateId) {
+        const g = await renderRouter.generate({ client, locationId, templateId, contactId, force: false });
+        url = g.url;
+      } else {
+        url = buildCardUrl(name || "there", card);
+      }
       const text = personalizeMessage(message, name, businessName, reviewLink);
       await sendSms(client, { contactId, message: text, attachments: [url] });
     };
@@ -687,5 +715,7 @@ app.post("/api/upload-logo", upload.single("file"), (req, res) => {
     fail(res, err);
   }
 });
+
+store.init().catch((e) => console.error("store init failed:", e.message));
 
 app.listen(PORT, () => console.log(`broker on :${PORT}`));

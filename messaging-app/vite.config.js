@@ -8,7 +8,15 @@ import { resolve } from "path";
 export default defineConfig({
   plugins: [react()],
   base: "./",
-  build: { 
+  // The studio imports the shared binding resolver from ../shared. Alias it and
+  // let Vite's dev server read the repo root.
+  resolve: {
+    alias: { "@shared": resolve(__dirname, "../shared") },
+  },
+  server: {
+    fs: { allow: [resolve(__dirname, ".."), __dirname] },
+  },
+  build: {
     outDir: "dist",
     rollupOptions: {
       input: {
