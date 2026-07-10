@@ -102,10 +102,36 @@ export async function searchContacts(client, locationId, query) {
   return data.contacts || [];
 }
 
-// Tags available in the location (for the audience picker).
+// Tags available in the location (for the audience picker). Tries the location
+// tags endpoint; if it's empty/unavailable, derives the unique set of tags
+// actually in use from the contacts list.
 export async function listTags(client, locationId) {
-  const data = await client.call(`/locations/${encodeURIComponent(locationId)}/tags`);
-  return data.tags || [];
+  try {
+    const data = await client.call(`/locations/${encodeURIComponent(locationId)}/tags`);
+    const tags = data.tags || [];
+    if (tags.length) return tags;
+  } catch {
+    /* fall through to deriving from contacts */
+  }
+
+  const seen = new Set();
+  let startAfter;
+  let startAfterId;
+  for (let i = 0; i < 10; i++) {
+    let path = `/contacts/?locationId=${encodeURIComponent(locationId)}&limit=100`;
+    if (startAfter && startAfterId) {
+      path += `&startAfter=${encodeURIComponent(startAfter)}&startAfterId=${encodeURIComponent(startAfterId)}`;
+    }
+    const data = await client.call(path);
+    const batch = data.contacts || [];
+    for (const c of batch) for (const t of c.tags || []) if (t) seen.add(String(t).trim());
+    if (batch.length < 100) break;
+    const meta = data.meta || {};
+    startAfter = meta.startAfter;
+    startAfterId = meta.startAfterId;
+    if (!startAfterId) break;
+  }
+  return [...seen].filter(Boolean).sort().map((name) => ({ name }));
 }
 
 // All contacts carrying a given tag. Prefers the v2 advanced-search endpoint
