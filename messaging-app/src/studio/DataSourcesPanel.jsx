@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import FieldWithTags from "./MergeTagField.jsx";
+import { newLayer } from "./model.js";
 import * as api from "./api.js";
 
 /*
@@ -27,6 +28,15 @@ export default function DataSourcesPanel({ template, patchTemplate, groups, show
     for (const f of provider.options || []) if (f.default !== undefined) options[f.key] = f.default;
     setSources([...sources, { id, provider: provider.id, inputs: {}, options, connectionId: "", discoveredKeys: [], thumbnailUrl: "" }]);
     setAdding(false);
+  }
+
+  // Insert a full-canvas dynamic-image layer bound to this source, at the bottom
+  // (so it's the card background). Carries the source's tested thumbnail so the
+  // client preview shows the image immediately.
+  function useAsBackground(ds) {
+    const layer = newLayer("dynamic-image", { sourceId: ds.id, thumbnailUrl: ds.thumbnailUrl || "" });
+    patchTemplate({ layers: [layer, ...template.layers] });
+    showToast("Added as background image");
   }
 
   async function runTest(ds) {
@@ -79,6 +89,8 @@ export default function DataSourcesPanel({ template, patchTemplate, groups, show
       <div className="space-y-3">
         {sources.map((ds) => {
           const provider = catalog.find((p) => p.id === ds.provider);
+          const producesImage = provider?.kind === "image" || provider?.kind === "both";
+          const bound = template.layers.some((l) => l.type === "dynamic-image" && l.sourceId === ds.id);
           return (
             <div key={ds.id} className="rounded-lg border border-gray-200 p-2">
               <div className="mb-2 flex items-center gap-2">
@@ -87,6 +99,11 @@ export default function DataSourcesPanel({ template, patchTemplate, groups, show
                   className="w-24 rounded border border-gray-300 px-1.5 py-0.5 text-xs font-mono" />
                 <span className="text-xs text-gray-400">{provider?.name || ds.provider}</span>
                 <div className="ml-auto flex gap-1">
+                  {producesImage && (bound ? (
+                    <span className="rounded border border-green-200 bg-green-50 px-2 py-1 text-[11px] font-semibold text-green-700">✓ on card</span>
+                  ) : (
+                    <button type="button" onClick={() => useAsBackground(ds)} className="rounded border border-gray-300 px-2 py-1 text-[11px] font-semibold text-gray-700 hover:bg-gray-50">Use as background</button>
+                  ))}
                   <button type="button" onClick={() => runTest(ds)} disabled={testing === ds.id} className="rounded bg-gray-900 px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50">
                     {testing === ds.id ? "Testing…" : "Test"}
                   </button>
