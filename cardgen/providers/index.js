@@ -12,6 +12,7 @@ const MODULE_PATHS = [
   "./make-webhook.js",
   "./mapbox-pin.js",
   "./mapbox-parcel.js",
+  "./google-streetview.js",
 ];
 
 const REGISTRY = new Map();
