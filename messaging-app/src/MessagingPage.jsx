@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { MessageSquare, Image as ImageIcon } from "lucide-react";
 import CardStudio from "./studio/CardStudio.jsx";
 import TemplatePreview from "./studio/TemplatePreview.jsx";
+import { starterList } from "@shared/starters.js";
 
 /*
   Messaging page — renders INSIDE the GHL iframe (the GHL sidebar is the shell
@@ -181,6 +182,10 @@ export default function MessagingPage() {
   const [previewName, setPreviewName] = useState("Jessica");
   // The template currently selected in the Card Studio → used to route sends.
   const [studioTemplate, setStudioTemplate] = useState(null);
+  // Imperative controller + list from the studio, for the left-column picker.
+  const studioRef = useRef({});
+  const [studioTemplates, setStudioTemplates] = useState([]);
+  const [studioCurrentId, setStudioCurrentId] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -543,6 +548,44 @@ export default function MessagingPage() {
                 {sendingTest ? "Sending…" : "Send test message"}
               </button>
             </div>
+
+            {/* templates: presets + saved (quick switch) */}
+            <Card className="mt-5 p-4">
+              <div className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-400">Start from a preset</div>
+              <div className="grid gap-1">
+                {starterList().map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => studioRef.current?.newFromStarter?.(s.build)}
+                    className="rounded-md border border-gray-200 bg-white px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    ＋ {s.name}
+                  </button>
+                ))}
+              </div>
+              {studioTemplates.length > 0 && (
+                <>
+                  <div className="mb-2 mt-4 text-xs font-bold uppercase tracking-wide text-gray-400">Your templates</div>
+                  <div className="grid gap-1">
+                    {studioTemplates.map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => studioRef.current?.loadTemplate?.(t.id)}
+                        className={`truncate rounded-md border px-3 py-2 text-left text-sm font-medium ${
+                          t.id === studioCurrentId
+                            ? "border-green-300 bg-green-50 text-green-800"
+                            : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                        }`}
+                      >
+                        {t.name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </Card>
           </div>
 
           {/* middle: card studio + message */}
@@ -561,7 +604,16 @@ export default function MessagingPage() {
                 </div>
                 <Toggle checked={personalizedImage} onChange={edit(setPersonalizedImage)} label="Personalized image" />
               </div>
-              {personalizedImage && <CardStudio onTemplateChange={setStudioTemplate} />}
+              {personalizedImage && (
+                <CardStudio
+                  onTemplateChange={setStudioTemplate}
+                  controller={studioRef}
+                  onStudioState={({ templates, currentId }) => {
+                    setStudioTemplates(templates);
+                    setStudioCurrentId(currentId);
+                  }}
+                />
+              )}
             </Card>
 
             {/* message */}

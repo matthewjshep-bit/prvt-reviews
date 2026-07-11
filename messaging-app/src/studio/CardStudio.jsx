@@ -14,7 +14,7 @@ import { reviewRequestStarter, starterList } from "@shared/starters.js";
   data + server preview below the canvas. Exposes the selected template id via
   onTemplateChange so the page's Send-a-card block can target it.
 */
-export default function CardStudio({ onTemplateChange }) {
+export default function CardStudio({ onTemplateChange, controller, onStudioState }) {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const locationId = api.getLocationId();
   const [templates, setTemplates] = useState([]);
@@ -41,6 +41,11 @@ export default function CardStudio({ onTemplateChange }) {
   // Emit the FULL live template (with the saved id) so the page's phone preview
   // mirrors every edit in real time; id drives send routing.
   useEffect(() => { onTemplateChange?.({ ...template, id: currentId }); }, [template, currentId]);
+
+  // Expose an imperative controller + template list so a template picker can
+  // live outside the studio (e.g. the page's left column).
+  if (controller) controller.current = { loadTemplate, newFromStarter };
+  useEffect(() => { onStudioState?.({ templates, currentId }); }, [templates, currentId]);
 
   // Initial template list.
   useEffect(() => {
