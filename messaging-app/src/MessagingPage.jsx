@@ -497,15 +497,8 @@ export default function MessagingPage() {
   }, [tab, customTemplate, businessName, previewName, reviewLink]);
 
   return (
-    <div className="min-h-screen bg-gray-50 px-6 py-8 text-gray-900">
+    <div className="min-h-screen bg-gray-50 px-6 py-4 text-gray-900">
       <div className="mx-auto max-w-none 2xl:max-w-[1800px]">
-        <header className="mb-8">
-          <h1 className="text-2xl font-bold">Messaging</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Configure how review requests are sent to your customers
-          </p>
-        </header>
-
         {/* trifold: preview | card studio + message | send */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,300px)_minmax(0,1fr)_minmax(0,340px)]">
           {/* left: live preview (sticky) */}
