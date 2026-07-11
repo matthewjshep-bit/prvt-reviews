@@ -1,14 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import {
-  Sparkles,
-  MessageSquare,
-  TrendingUp,
-  CheckCircle2,
-  Image as ImageIcon,
-  Clock,
-  Bell,
-  CalendarDays,
-} from "lucide-react";
+import { MessageSquare, Image as ImageIcon } from "lucide-react";
 import CardStudio from "./studio/CardStudio.jsx";
 import TemplatePreview from "./studio/TemplatePreview.jsx";
 
@@ -151,7 +142,7 @@ export default function MessagingPage() {
   const locationId = useMemo(getLocationId, []);
   const fileRef = useRef(null);
 
-  const [tab, setTab] = useState("smart"); // "smart" | "custom"
+  const [tab] = useState("custom"); // single message mode (Smart/Custom tabs removed)
   const [ownerName, setOwnerName] = useState("Matt");
   const [businessName, setBusinessName] = useState("PRVT MKT");
   const [logoUrl, setLogoUrl] = useState(null);
@@ -205,7 +196,6 @@ export default function MessagingPage() {
         if (c.personalizedImage != null) setPersonalizedImage(!!c.personalizedImage);
         if (c.smartEnabled != null) setSmartEnabled(!!c.smartEnabled);
         if (c.followUps != null) setFollowUps(!!c.followUps);
-        if (c.mode) setTab(c.mode);
         if (c.customTemplate) setCustomTemplate(c.customTemplate);
         if (c.reviewLink != null) setReviewLink(c.reviewLink);
         if (c.cardFit) setCardFit(c.cardFit);
@@ -564,140 +554,38 @@ export default function MessagingPage() {
 
           {/* right: config */}
           <div className="space-y-4">
-            {/* sending mode banner */}
-            <div className="rounded-xl border border-green-200 bg-green-50 p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex gap-3">
-                  <div className="mt-0.5 rounded-lg bg-white p-1.5">
-                    <Sparkles className="h-5 w-5" style={{ color: GREEN }} />
-                  </div>
-                  <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                      Current sending mode
-                    </div>
-                    <div className="text-sm font-bold">
-                      {smartEnabled ? "Smart messaging is on" : "Custom message is on"}
-                    </div>
-                    <p className="mt-0.5 text-xs text-gray-600">
-                      {smartEnabled
-                        ? "Review requests use optimized, continuously tested message templates."
-                        : "Review requests use your custom message exactly as written."}
-                    </p>
-                  </div>
-                </div>
-                <span
-                  className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold text-white"
-                  style={{ backgroundColor: GREEN }}
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" /> On
-                </span>
+            {/* message */}
+            <Card className="p-4">
+              <h3 className="mb-1 text-base font-bold">Message</h3>
+              <p className="mb-3 text-sm text-gray-500">
+                The text that sends with the card. Tags are filled in per customer when the text sends.
+              </p>
+              <textarea
+                value={customTemplate}
+                onChange={(e) => edit(setCustomTemplate)(e.target.value)}
+                rows={5}
+                className="w-full rounded-lg border border-gray-300 p-3 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
+              />
+              <div className="mt-2 flex flex-wrap gap-2">
+                {["{{first_name}}", "{{business_name}}"].map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => edit(setCustomTemplate)(customTemplate + " " + tag)}
+                    className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                  >
+                    {tag}
+                  </button>
+                ))}
               </div>
-            </div>
-
-            {/* tabs */}
-            <div className="grid grid-cols-2 gap-1 rounded-xl border border-gray-200 bg-gray-100 p-1">
-              {[
-                { id: "smart", label: "Smart message", Icon: Sparkles },
-                { id: "custom", label: "Custom message", Icon: MessageSquare },
-              ].map(({ id, label, Icon }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => {
-                    setTab(id);
-                    setSmartEnabled(id === "smart");
-                    setDirty(true);
-                  }}
-                  className={`flex items-center justify-center gap-2 rounded-lg py-2 text-sm font-semibold transition-colors ${
-                    tab === id ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" /> {label}
-                </button>
-              ))}
-            </div>
-
-            {/* smart vs custom body */}
-            {tab === "smart" ? (
-              <Card className="p-4">
-                <div className="mb-1 flex items-center gap-2">
-                  <Sparkles className="h-5 w-5" style={{ color: GREEN }} />
-                  <h3 className="text-base font-bold">Smart messaging</h3>
-                </div>
-                <p className="mb-3 text-sm text-gray-500">
-                  Messages that get tested and tuned to lift your response rate over time.
-                </p>
-                <div className="rounded-lg border border-gray-100 bg-gradient-to-b from-green-50 to-white p-3">
-                  <div className="mb-1 flex items-center gap-2">
-                    <TrendingUp className="h-4 w-4" style={{ color: GREEN }} />
-                    <span className="text-sm font-bold">Highest-converting messages</span>
-                  </div>
-                  <p className="mb-2 text-xs text-gray-600">
-                    Variations are tested across thousands of requests to find what lands best.
-                  </p>
-                  <ul className="space-y-1.5">
-                    {[
-                      "Multiple message styles tested automatically",
-                      "Learns which tone resonates with your customers",
-                      "Continuously tuned for higher click rates",
-                    ].map((t) => (
-                      <li key={t} className="flex items-center gap-2 text-xs text-gray-700">
-                        <CheckCircle2 className="h-4 w-4 shrink-0" style={{ color: GREEN }} /> {t}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </Card>
-            ) : (
-              <Card className="p-4">
-                <h3 className="mb-1 text-base font-bold">Custom message</h3>
-                <p className="mb-3 text-sm text-gray-500">
-                  Write your own. Use the tags below — they’re filled in per customer when the text sends.
-                </p>
-                <textarea
-                  value={customTemplate}
-                  onChange={(e) => edit(setCustomTemplate)(e.target.value)}
-                  rows={5}
-                  className="w-full rounded-lg border border-gray-300 p-3 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
-                />
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {["{{first_name}}", "{{business_name}}", "[Review Link]"].map((tag) => (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={() => edit(setCustomTemplate)(customTemplate + " " + tag)}
-                      className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100"
-                    >
-                      {tag}
-                    </button>
-                  ))}
-                </div>
-              </Card>
-            )}
-
-            {/* identity fields */}
-            <Card className="space-y-4 p-4">
-              <Field label="Owner first name" value={ownerName} onChange={edit(setOwnerName)} placeholder="Matt" />
-              <Field
-                label="Business name"
-                value={businessName}
-                onChange={edit(setBusinessName)}
-                placeholder="PRVT MKT"
-              />
-              <Field
-                label="Review link"
-                value={reviewLink}
-                onChange={edit(setReviewLink)}
-                placeholder="https://g.page/r/your-review-link"
-              />
               <button
                 type="button"
                 onClick={saveConfig}
                 disabled={!dirty || saving}
-                className="w-full rounded-lg py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                className="mt-3 w-full rounded-lg py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
                 style={dirty && !saving ? { backgroundColor: GREEN, color: "white" } : {}}
               >
-                {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
+                {saving ? "Saving…" : dirty ? "Save message" : "Saved"}
               </button>
             </Card>
 
