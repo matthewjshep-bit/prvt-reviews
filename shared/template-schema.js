@@ -84,6 +84,10 @@ const dynamicImageLayer = z
     sourceId: z.string().min(1), // references dataSources[].id (kind image|both)
     fit: fit.default("cover"),
     cornerRadius: z.number().min(0).max(500).default(0).optional(),
+    // Editor-only cached preview of the bound source's last test image. Ignored
+    // by the renderer (it re-runs the provider); persisted so the canvas/phone
+    // preview show the image on reload.
+    thumbnailUrl: z.string().optional(),
   })
   .strict();
 

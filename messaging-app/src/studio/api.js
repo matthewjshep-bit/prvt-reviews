@@ -15,13 +15,14 @@ const loc = () => encodeURIComponent(getLocationId());
 
 async function j(res) {
   if (!res.ok) {
-    let detail;
+    let msg = `HTTP ${res.status}`;
     try {
-      detail = (await res.json()).error;
+      const b = await res.json();
+      msg = [b.error, Array.isArray(b.detail) ? b.detail.join("; ") : b.detail].filter(Boolean).join(" — ") || msg;
     } catch {
       /* ignore */
     }
-    throw new Error(detail || `HTTP ${res.status}`);
+    throw new Error(msg);
   }
   return res.json();
 }
