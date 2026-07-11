@@ -44,6 +44,7 @@ import createStudioRouter from "./routes/studio.js";
 import createRenderRouter from "./routes/render.js";
 import createConnectionsRouter from "./routes/connections.js";
 import { resolveConnectionsFor } from "./connections.js";
+import { resolveBindings } from "./shared/bindings.js";
 import { store } from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -453,12 +454,15 @@ const firstNameOf = (c) => c?.firstName || c?.contact?.firstName || "";
 const isDnd = (c) => Boolean(c?.dnd || c?.contact?.dnd);
 const idOf = (c) => c?.id || c?.contact?.id;
 
-// Personalize a message template per contact (same tokens as send-test).
-function personalizeMessage(tmpl, name, businessName, reviewLink) {
-  return (tmpl || "")
+// Personalize a message per contact: legacy short forms first, then full
+// bindings ({{contact.custom.x}}, {{loc.*}}) resolved against the render context.
+function personalizeMessage(tmpl, name, businessName, reviewLink, ctx) {
+  let out = (tmpl || "")
     .replace(/\{\{\s*first_name\s*\}\}/g, name || "there")
     .replace(/\{\{\s*business_name\s*\}\}/g, businessName || "us")
     .replace(/\[Review Link\]/g, reviewLink || "");
+  if (ctx) out = resolveBindings(out, ctx).value;
+  return out;
 }
 
 // GET /api/tags — audience picker options.
@@ -646,14 +650,15 @@ app.post("/api/send-batch", async (req, res) => {
     // When a templateId is given, render each contact's card through the Card
     // Studio pipeline (per-contact bindings); otherwise use the legacy card URL.
     const sendOne = async (contactId, name) => {
-      let url;
+      let url, ctx;
       if (templateId) {
         const g = await renderRouter.generate({ client, locationId, templateId, contactId, force: false });
         url = g.url;
+        ctx = g.context;
       } else {
         url = buildCardUrl(name || "there", card);
       }
-      const text = personalizeMessage(message, name, businessName, reviewLink);
+      const text = personalizeMessage(message, name, businessName, reviewLink, ctx);
       await sendSms(client, { contactId, message: text, attachments: [url] });
     };
     const noteError = (who, e) => {

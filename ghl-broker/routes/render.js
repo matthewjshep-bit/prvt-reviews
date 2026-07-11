@@ -104,7 +104,7 @@ export default function createRenderRouter({ resolveLocation, resolveConnections
       status: providerFailures.length ? "fallback" : "ok", cached: out.cached, durationMs: out.durationMs,
       missingBindings: out.missingBindings, providerResults: out.providerResults, resolvedSnapshot: context,
     }).catch(() => {});
-    return { url: out.url, cached: out.cached, missingBindings: out.missingBindings || [], providerFailures };
+    return { url: out.url, cached: out.cached, missingBindings: out.missingBindings || [], providerFailures, context };
   }
 
   /* ---------- POST /api/render/generate ---------- */

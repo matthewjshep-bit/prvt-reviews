@@ -3,6 +3,7 @@ import { MessageSquare, Image as ImageIcon } from "lucide-react";
 import CardStudio from "./studio/CardStudio.jsx";
 import TemplatePreview from "./studio/TemplatePreview.jsx";
 import { starterList } from "@shared/starters.js";
+import { resolveBindings, flatToContext } from "@shared/bindings.js";
 
 /*
   Messaging page — renders INSIDE the GHL iframe (the GHL sidebar is the shell
@@ -212,6 +213,41 @@ export default function MessagingPage() {
     }, 300);
     return () => clearTimeout(t);
   }, [previewQuery, locationId]);
+
+  // When a contact is selected, render the card server-side FOR THAT CONTACT so
+  // the phone shows the real result — actual map/street-view + all source data —
+  // not the client approximation. Debounced; provider results are cached so
+  // re-renders after edits are fast.
+  const [contactRender, setContactRender] = useState(null);
+  const [renderingContact, setRenderingContact] = useState(false);
+  const contactRenderUrl = useRef(null);
+  useEffect(() => {
+    if (!(personalizedImage && previewContact && studioTemplate?.layers?.length)) {
+      setContactRender(null);
+      return;
+    }
+    setRenderingContact(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/render/preview`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ location_id: locationId, template: studioTemplate, sampleData: studioTemplate.sampleData }),
+        });
+        if (!r.ok) throw new Error();
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        if (contactRenderUrl.current) URL.revokeObjectURL(contactRenderUrl.current);
+        contactRenderUrl.current = url;
+        setContactRender({ url });
+      } catch {
+        /* keep the last successful render */
+      } finally {
+        setRenderingContact(false);
+      }
+    }, 700);
+    return () => clearTimeout(t);
+  }, [previewContact, studioTemplate, personalizedImage, locationId]);
 
   // Pick a contact → pull their real fields for the preview + make them the test target.
   async function selectPreviewContact(c) {
@@ -516,14 +552,19 @@ export default function MessagingPage() {
     return () => clearTimeout(t);
   }, [cardUrl]);
 
-  // SMS bubble preview — resolves tokens with the selected contact's values.
+  // SMS bubble preview — resolves BOTH full bindings ({{contact.custom.x}},
+  // {{loc.business_name}}) against the selected contact AND the legacy short
+  // forms ({{first_name}}, {{business_name}}, [Review Link]).
   const smsText = useMemo(() => {
     const link = reviewLink.trim() || "[Review Link]";
     const biz = previewContact?.fields?.["loc.business_name"] || businessName || "your business";
-    return customTemplate
+    const ctx = flatToContext(previewContact?.fields || {});
+    let out = customTemplate
       .replace(/\{\{\s*first_name\s*\}\}/g, previewFirst)
       .replace(/\{\{\s*business_name\s*\}\}/g, biz)
       .replace(/\[Review Link\]/g, link);
+    // Resolve full-path bindings ({{contact.custom.x}}) against the contact.
+    return resolveBindings(out, ctx).value;
   }, [customTemplate, businessName, previewFirst, reviewLink, previewContact]);
 
   return (
@@ -535,8 +576,22 @@ export default function MessagingPage() {
           <div className="lg:sticky lg:top-6 lg:self-start">
             <Phone>
               {personalizedImage &&
-                (studioTemplate?.layers?.length ? (
-                  // Live mirror of the Card Studio template — updates on every edit.
+                (previewContact && studioTemplate?.layers?.length ? (
+                  // Real per-contact render (actual map/street-view + source data).
+                  <div className="relative mb-2 overflow-hidden rounded-xl bg-black">
+                    {contactRender?.url ? (
+                      <img src={contactRender.url} alt="Card preview" className="w-full" />
+                    ) : (
+                      <TemplatePreview template={studioTemplate} />
+                    )}
+                    {renderingContact && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-xs font-medium text-white">
+                        Rendering {previewContact.firstName || "contact"}…
+                      </div>
+                    )}
+                  </div>
+                ) : studioTemplate?.layers?.length ? (
+                  // Live client mirror (no contact selected) — updates on every edit.
                   <div className="mb-2 overflow-hidden rounded-xl">
                     <TemplatePreview template={studioTemplate} />
                   </div>
