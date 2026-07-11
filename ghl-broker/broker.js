@@ -642,6 +642,7 @@ app.post("/api/send-batch", async (req, res) => {
     let sent = 0;
     let failed = 0;
     let remaining = CAMPAIGN_CAP;
+    const errors = []; // per-recipient failure reasons (surfaced + logged)
     // When a templateId is given, render each contact's card through the Card
     // Studio pipeline (per-contact bindings); otherwise use the legacy card URL.
     const sendOne = async (contactId, name) => {
@@ -655,14 +656,20 @@ app.post("/api/send-batch", async (req, res) => {
       const text = personalizeMessage(message, name, businessName, reviewLink);
       await sendSms(client, { contactId, message: text, attachments: [url] });
     };
+    const noteError = (who, e) => {
+      const msg = e?.data ? `${e.message} :: ${JSON.stringify(e.data).slice(0, 200)}` : e?.message || "error";
+      console.error("send-batch fail:", who, msg);
+      if (errors.length < 5) errors.push({ who, error: msg });
+      failed++;
+    };
 
     for (const c of eligible) {
       if (remaining <= 0) break;
       try {
         await sendOne(idOf(c), firstNameOf(c));
         sent++;
-      } catch {
-        failed++;
+      } catch (e) {
+        noteError(firstNameOf(c) || idOf(c), e);
       }
       remaining--;
       await new Promise((r) => setTimeout(r, 150));
@@ -678,13 +685,13 @@ app.post("/api/send-batch", async (req, res) => {
         }
         await sendOne(cid, firstNameOf(contact));
         sent++;
-      } catch {
-        failed++;
+      } catch (e) {
+        noteError(phone, e);
       }
       remaining--;
       await new Promise((r) => setTimeout(r, 150));
     }
-    res.json({ ok: true, sent, failed, skippedDnd, willSend, cap: CAMPAIGN_CAP });
+    res.json({ ok: true, sent, failed, skippedDnd, willSend, cap: CAMPAIGN_CAP, errors });
   } catch (err) {
     fail(res, err);
   }

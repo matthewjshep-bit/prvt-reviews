@@ -785,10 +785,17 @@ export default function MessagingPage() {
               </button>
 
               {sendResult && (
-                <div className="rounded-lg bg-green-50 p-3 text-xs text-green-800">
+                <div className={`rounded-lg p-3 text-xs ${sendResult.failed ? "bg-amber-50 text-amber-800" : "bg-green-50 text-green-800"}`}>
                   Sent {sendResult.sent}.{" "}
                   {sendResult.failed ? `${sendResult.failed} failed. ` : ""}
                   {sendResult.skippedDnd ? `${sendResult.skippedDnd} skipped.` : ""}
+                  {sendResult.errors?.length > 0 && (
+                    <ul className="mt-1 list-disc pl-4">
+                      {sendResult.errors.map((e, i) => (
+                        <li key={i}><span className="font-medium">{e.who}:</span> {e.error}</li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               )}
             </Card>
