@@ -15,7 +15,7 @@ const optionsSchema = z
   .object({
     fov: z.number().min(10).max(120).default(80).describe("Field of view (zoom): lower = tighter"),
     pitch: z.number().min(-90).max(90).default(0).describe("Up/down angle"),
-    heading: z.number().min(0).max(360).default(0).describe("Compass direction the camera faces (0=N)"),
+    heading: z.number().min(0).max(360).optional().describe("Compass direction (leave blank to auto-face the address)"),
     fallbackToSatellite: z.boolean().default(true).describe("If no Street View here, use a Mapbox satellite map"),
   })
   .strip();
@@ -68,10 +68,16 @@ export default {
 
     // 3. Fetch the Street View photo. return_error_code makes Google 404 rather
     //    than serve the gray placeholder if imagery vanished between calls.
+    // Omit heading unless the user set one, so Google auto-points the camera AT
+    // the queried address (a fixed heading like 0 faces North — often across the
+    // street). source=outdoor prefers street panoramas over indoor ones.
+    const hv = options.heading;
+    const hasHeading = hv != null && hv !== "" && Number.isFinite(Number(hv));
+    const headingParam = hasHeading ? `&heading=${Number(hv)}` : "";
     const { w, h } = dims(targetPx);
     const url =
       `${GOOGLE}?size=${w}x${h}&location=${encodeURIComponent(address)}` +
-      `&fov=${options.fov}&pitch=${options.pitch}&heading=${options.heading}` +
+      `&fov=${options.fov}&pitch=${options.pitch}${headingParam}&source=outdoor` +
       `&return_error_code=true&key=${key}`;
     const { buffer } = await safeFetch(url, { contentTypePrefix: "image/", maxBytes: 8_000_000 });
 
