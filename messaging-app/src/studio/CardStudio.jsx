@@ -148,7 +148,19 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
     setSaving(true);
     try {
       const body = forSave(template);
-      const saved = currentId ? await api.updateTemplate(currentId, body) : await api.createTemplate(body);
+      let saved;
+      if (currentId) {
+        try {
+          saved = await api.updateTemplate(currentId, body);
+        } catch (e) {
+          // Stale/missing id (store reset, or editing a preset) → save as a NEW
+          // template instead of failing.
+          if (/not found/i.test(e.message || "")) saved = await api.createTemplate(body);
+          else throw e;
+        }
+      } else {
+        saved = await api.createTemplate(body);
+      }
       setTemplate(saved);
       setCurrentId(saved.id);
       setDirty(false);
