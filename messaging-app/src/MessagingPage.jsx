@@ -220,34 +220,46 @@ export default function MessagingPage() {
   // re-renders after edits are fast.
   const [contactRender, setContactRender] = useState(null);
   const [renderingContact, setRenderingContact] = useState(false);
+  const [renderErr, setRenderErr] = useState(null);
   const contactRenderUrl = useRef(null);
   useEffect(() => {
     if (!(personalizedImage && previewContact && studioTemplate?.layers?.length)) {
       setContactRender(null);
+      setRenderErr(null);
       return;
     }
+    let cancelled = false;
     setRenderingContact(true);
-    const t = setTimeout(async () => {
+    setRenderErr(null);
+    (async () => {
       try {
+        // Merge the contact's real fields over the template's sample data here,
+        // so the server render doesn't depend on the studio's merge timing.
+        const merged = { ...studioTemplate, sampleData: { ...studioTemplate.sampleData, ...(previewContact.fields || {}) } };
         const r = await fetch(`${API_BASE}/api/render/preview`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ location_id: locationId, template: studioTemplate, sampleData: studioTemplate.sampleData }),
+          body: JSON.stringify({ location_id: locationId, template: merged, sampleData: merged.sampleData }),
         });
-        if (!r.ok) throw new Error();
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          throw new Error(e.error || `render failed (${r.status})`);
+        }
         const blob = await r.blob();
+        if (cancelled) return;
         const url = URL.createObjectURL(blob);
         if (contactRenderUrl.current) URL.revokeObjectURL(contactRenderUrl.current);
         contactRenderUrl.current = url;
         setContactRender({ url });
-      } catch {
-        /* keep the last successful render */
+      } catch (e) {
+        if (!cancelled) setRenderErr(e.message || "render failed");
       } finally {
-        setRenderingContact(false);
+        if (!cancelled) setRenderingContact(false);
       }
-    }, 700);
-    return () => clearTimeout(t);
-  }, [previewContact, studioTemplate, personalizedImage, locationId]);
+    })();
+    return () => { cancelled = true; };
+    // Re-render on contact change, template switch, or save (not every keystroke).
+  }, [previewContact, studioTemplate?.id, studioTemplate?.version, personalizedImage, locationId]);
 
   // Pick a contact → pull their real fields for the preview + make them the test target.
   async function selectPreviewContact(c) {
@@ -587,6 +599,11 @@ export default function MessagingPage() {
                     {renderingContact && (
                       <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-xs font-medium text-white">
                         Rendering {previewContact.firstName || "contact"}…
+                      </div>
+                    )}
+                    {renderErr && !renderingContact && (
+                      <div className="absolute inset-x-0 bottom-0 bg-red-600/90 px-2 py-1 text-center text-[11px] font-medium text-white">
+                        Couldn’t render: {renderErr}
                       </div>
                     )}
                   </div>
