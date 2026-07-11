@@ -149,11 +149,26 @@ export default function createRenderRouter({ resolveLocation, resolveConnections
   router.post("/webhook", async (req, res) => {
     try {
       needCardgen();
-      // GHL workflows may send locationId (camelCase); normalise for resolveLocation.
-      if (req.body?.locationId && !req.body.location_id) req.body.location_id = req.body.locationId;
+      const b = req.body || {};
+      // Accept GHL's native webhook payload as well as our clean format.
+      const locId = b.locationId || b.location_id || b.location?.id || b.locationID;
+      if (locId) req.body.location_id = locId;
       const { locationId, client } = resolveLocation(req);
-      const { contactId, templateId, fieldKey = DEFAULT_FIELD_KEY } = req.body || {};
-      if (!contactId || !templateId) return res.status(400).json({ error: "contactId and templateId required" });
+
+      const contactId = b.contactId || b.contact_id || b.contact?.id || b.contactID;
+      const fieldKey = b.fieldKey || b.field_key || DEFAULT_FIELD_KEY;
+
+      // Reference the template by id, or by name (case-insensitive) for this location.
+      let templateId = b.templateId || b.template_id;
+      const templateName = b.templateName || b.template_name || b.template;
+      if (!templateId && templateName) {
+        const list = await store.listTemplates(locationId);
+        const match = list.find((t) => (t.name || "").toLowerCase() === String(templateName).toLowerCase());
+        if (match) templateId = match.id;
+      }
+
+      if (!contactId) return res.status(400).json({ error: "contactId required (send contact_id or {{contact.id}})" });
+      if (!templateId) return res.status(400).json({ error: "templateId or templateName required" });
 
       const work = (async () => {
         const { url } = await generate({ client, locationId, templateId, contactId, force: false });

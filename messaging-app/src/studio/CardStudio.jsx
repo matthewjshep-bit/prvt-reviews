@@ -3,6 +3,7 @@ import ClientCanvas from "./ClientCanvas.jsx";
 import Inspector from "./Inspector.jsx";
 import DataSourcesPanel from "./DataSourcesPanel.jsx";
 import ConnectionsModal from "./ConnectionsModal.jsx";
+import WorkflowModal from "./WorkflowModal.jsx";
 import * as api from "./api.js";
 import { newLayer, mergeTagGroups, CANVAS_PRESETS } from "./model.js";
 import { reviewRequestStarter, starterList } from "@shared/starters.js";
@@ -15,6 +16,7 @@ import { reviewRequestStarter, starterList } from "@shared/starters.js";
 */
 export default function CardStudio({ onTemplateChange, controller, onStudioState, previewOverride, contactPreviewUrl, contactPreviewLoading }) {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [workflowOpen, setWorkflowOpen] = useState(false);
   const locationId = api.getLocationId();
   const [templates, setTemplates] = useState([]);
   const [currentId, setCurrentId] = useState(null);
@@ -213,6 +215,7 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
         <button type="button" onClick={duplicate} disabled={!currentId} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">Duplicate</button>
         <button type="button" onClick={remove} disabled={!currentId} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">Delete</button>
         <button type="button" onClick={() => setConnectionsOpen(true)} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Connections</button>
+        <button type="button" onClick={() => setWorkflowOpen(true)} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Use in workflow</button>
         <div className="ml-auto flex items-center gap-2">
           <select onChange={(e) => { const p = CANVAS_PRESETS.find((x) => x.id === e.target.value); if (p) preset(p); }}
             value={CANVAS_PRESETS.find((p) => p.width === template.canvas.width && p.height === template.canvas.height)?.id || ""}
@@ -278,6 +281,7 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
       </div>
 
       {connectionsOpen && <ConnectionsModal onClose={() => setConnectionsOpen(false)} providers={[]} />}
+      {workflowOpen && <WorkflowModal onClose={() => setWorkflowOpen(false)} templateName={template.name} templateId={currentId} saved={Boolean(currentId)} />}
       {toast && <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white shadow-lg">{toast}</div>}
     </div>
   );
