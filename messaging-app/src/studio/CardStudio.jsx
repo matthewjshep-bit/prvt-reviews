@@ -5,7 +5,6 @@ import DataSourcesPanel from "./DataSourcesPanel.jsx";
 import ConnectionsModal from "./ConnectionsModal.jsx";
 import * as api from "./api.js";
 import { newLayer, mergeTagGroups, CANVAS_PRESETS } from "./model.js";
-import { extractTemplateBindings } from "@shared/bindings.js";
 import { reviewRequestStarter, starterList } from "@shared/starters.js";
 
 /*
@@ -14,7 +13,7 @@ import { reviewRequestStarter, starterList } from "@shared/starters.js";
   data + server preview below the canvas. Exposes the selected template id via
   onTemplateChange so the page's Send-a-card block can target it.
 */
-export default function CardStudio({ onTemplateChange, controller, onStudioState }) {
+export default function CardStudio({ onTemplateChange, controller, onStudioState, previewOverride }) {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const locationId = api.getLocationId();
   const [templates, setTemplates] = useState([]);
@@ -27,12 +26,21 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
   const [serverPreview, setServerPreview] = useState(null);
   const [previewing, setPreviewing] = useState(false);
   const [toast, setToast] = useState(null);
-  const [contactQuery, setContactQuery] = useState("");
-  const [contactResults, setContactResults] = useState([]);
 
   const groups = useMemo(
     () => mergeTagGroups({ customFields, dataSources: template.dataSources }),
     [customFields, template.dataSources]
+  );
+
+  // Effective template for PREVIEW ONLY: the selected contact's real fields
+  // (previewOverride) layered over the template's baked-in sample data. Editing
+  // and saving always use `template` (the override is never persisted).
+  const effTemplate = useMemo(
+    () =>
+      previewOverride && Object.keys(previewOverride).length
+        ? { ...template, sampleData: { ...template.sampleData, ...previewOverride } }
+        : template,
+    [template, previewOverride]
   );
 
   const showToast = (m) => { setToast(m); clearTimeout(showToast._t); showToast._t = setTimeout(() => setToast(null), 2400); };
@@ -40,7 +48,7 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
   useEffect(() => { api.getCustomFields().then(setCustomFields); }, []);
   // Emit the FULL live template (with the saved id) so the page's phone preview
   // mirrors every edit in real time; id drives send routing.
-  useEffect(() => { onTemplateChange?.({ ...template, id: currentId }); }, [template, currentId]);
+  useEffect(() => { onTemplateChange?.({ ...effTemplate, id: currentId }); }, [effTemplate, currentId]);
 
   // Expose an imperative controller + template list so a template picker can
   // live outside the studio (e.g. the page's left column).
@@ -122,31 +130,6 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
     }
   }
 
-  /* ---------- sample data ---------- */
-  const setSample = (key, value) => patchTemplate({ sampleData: { ...template.sampleData, [key]: value } });
-  const addReferencedFields = () => {
-    const refs = extractTemplateBindings(template);
-    const next = { ...template.sampleData };
-    for (const r of refs) if (!(r in next)) next[r] = "";
-    patchTemplate({ sampleData: next });
-    showToast("Added referenced fields");
-  };
-  useEffect(() => {
-    if (!contactQuery.trim()) { setContactResults([]); return; }
-    const t = setTimeout(() => api.searchContacts(contactQuery.trim()).then(setContactResults), 350);
-    return () => clearTimeout(t);
-  }, [contactQuery]);
-  function fillFromContact(c) {
-    const sd = { ...template.sampleData };
-    if (c.firstName) sd["contact.first_name"] = c.firstName;
-    if (c.lastName) sd["contact.last_name"] = c.lastName;
-    if (c.phone) sd["contact.phone"] = c.phone;
-    if (c.email) sd["contact.email"] = c.email;
-    patchTemplate({ sampleData: sd });
-    setContactQuery(""); setContactResults([]);
-    showToast(`Loaded ${c.firstName || "contact"}`);
-  }
-
   /* ---------- template ops ---------- */
   // Strip transient editor-only fields (underscore-prefixed) before persisting,
   // so they never trip the broker's strict schema validation.
@@ -200,7 +183,7 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
   async function runServerPreview() {
     setPreviewing(true);
     try {
-      const r = await api.renderPreview(template, template.sampleData);
+      const r = await api.renderPreview(effTemplate, effTemplate.sampleData);
       setServerPreview(r);
     } catch {
       showToast("Server preview failed");
@@ -247,46 +230,16 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-        {/* canvas + sample data + server preview */}
+        {/* canvas + data sources + server preview */}
         <div>
           <div className="mx-auto max-w-[520px]">
-            <ClientCanvas template={template} selectedId={selectedId} onSelect={setSelectedId}
+            <ClientCanvas template={effTemplate} selectedId={selectedId} onSelect={setSelectedId}
               onChange={changeLayer} onDuplicate={duplicateLayer} onDelete={deleteLayer} />
             <p className="mt-1 text-center text-[11px] text-gray-400">Drag layers · ⌘D duplicate · Delete removes · arrows nudge (⇧ = larger)</p>
           </div>
 
           <div className="mt-4">
             <DataSourcesPanel template={template} patchTemplate={patchTemplate} groups={groups} showToast={showToast} currentId={currentId} />
-          </div>
-
-          {/* sample data */}
-          <div className="mt-4 rounded-lg border border-gray-200 p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wide text-gray-400">Sample data (preview values)</span>
-              <button type="button" onClick={addReferencedFields} className="text-[11px] font-medium text-green-700 underline">Add referenced fields</button>
-            </div>
-            <div className="mb-2">
-              <input value={contactQuery} onChange={(e) => setContactQuery(e.target.value)} placeholder="Preview with a real contact — search…"
-                className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm" />
-              {contactResults.length > 0 && (
-                <div className="mt-1 max-h-36 overflow-auto rounded-lg border border-gray-200">
-                  {contactResults.map((c) => (
-                    <button key={c.id} type="button" onClick={() => fillFromContact(c)} className="flex w-full items-center justify-between px-2 py-1.5 text-left text-sm hover:bg-gray-50">
-                      <span>{[c.firstName, c.lastName].filter(Boolean).join(" ") || c.phone}</span>
-                      <span className="text-xs text-gray-400">{c.phone}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {Object.entries(template.sampleData || {}).map(([k, v]) => (
-                <label key={k} className="block text-[11px] font-medium text-gray-600">
-                  <span className="font-mono text-[10px] text-gray-400">{k}</span>
-                  <input value={v} onChange={(e) => setSample(k, e.target.value)} className="mt-0.5 w-full rounded-md border border-gray-300 px-2 py-1 text-sm" />
-                </label>
-              ))}
-            </div>
           </div>
 
           {serverPreview && (

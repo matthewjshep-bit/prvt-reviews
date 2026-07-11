@@ -126,11 +126,12 @@ export default function createRenderRouter({ resolveLocation, resolveConnections
     try {
       needCardgen();
       const { locationId, client } = resolveLocation(req);
-      const { templateId, testPhone, sampleName = "there", message = "" } = req.body || {};
+      const { templateId, testPhone, sampleName = "there", message = "", contactId: bodyContactId } = req.body || {};
       if (!templateId) return res.status(400).json({ error: "templateId required" });
-      if (!testPhone) return res.status(400).json({ error: "testPhone required" });
+      if (!bodyContactId && !testPhone) return res.status(400).json({ error: "contactId or testPhone required" });
 
-      const contactId = await findOrCreateContactByPhone(client, locationId, testPhone, sampleName);
+      // Prefer an explicit contact (real fields, no duplicate); else find/create by phone.
+      const contactId = bodyContactId || (await findOrCreateContactByPhone(client, locationId, testPhone, sampleName));
       const { url, missingBindings, providerFailures } = await generate({ client, locationId, templateId, contactId, force: false });
 
       const text = message || `Hi ${sampleName}! Here's your card.`;

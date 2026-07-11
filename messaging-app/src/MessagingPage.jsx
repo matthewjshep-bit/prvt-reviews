@@ -179,7 +179,13 @@ export default function MessagingPage() {
   const [testPhone, setTestPhone] = useState("");
   const [toast, setToast] = useState(null);
 
-  const [previewName, setPreviewName] = useState("Jessica");
+  // Preview & test as a real contact: one selection drives the preview AND is
+  // the test recipient. previewContact.fields overrides the template's sample
+  // data for the live preview.
+  const [previewContact, setPreviewContact] = useState(null);
+  const [previewQuery, setPreviewQuery] = useState("");
+  const [previewResults, setPreviewResults] = useState([]);
+  const previewFirst = previewContact?.fields?.["contact.first_name"] || previewContact?.firstName || "Jessica";
   // The template currently selected in the Card Studio → used to route sends.
   const [studioTemplate, setStudioTemplate] = useState(null);
   // Imperative controller + list from the studio, for the left-column picker.
@@ -191,6 +197,35 @@ export default function MessagingPage() {
     for (const s of starterList()) (groups[s.category] = groups[s.category] || []).push(s);
     return groups;
   }, []);
+
+  // Debounced contact search for the preview/test picker.
+  useEffect(() => {
+    if (!previewQuery.trim()) { setPreviewResults([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/contacts?location_id=${encodeURIComponent(locationId)}&query=${encodeURIComponent(previewQuery.trim())}`);
+        const data = await r.json();
+        setPreviewResults(Array.isArray(data.contacts) ? data.contacts : []);
+      } catch {
+        setPreviewResults([]);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [previewQuery, locationId]);
+
+  // Pick a contact → pull their real fields for the preview + make them the test target.
+  async function selectPreviewContact(c) {
+    setPreviewQuery("");
+    setPreviewResults([]);
+    const fallbackName = [c.firstName, c.lastName].filter(Boolean).join(" ") || c.phone || "Contact";
+    try {
+      const r = await fetch(`${API_BASE}/api/contacts/${c.id}/preview?location_id=${encodeURIComponent(locationId)}`);
+      const data = await r.json();
+      setPreviewContact({ id: c.id, name: data.name || fallbackName, firstName: data.firstName || c.firstName || "", phone: data.phone || c.phone || "", fields: data.fields || {} });
+    } catch {
+      setPreviewContact({ id: c.id, name: fallbackName, firstName: c.firstName || "", phone: c.phone || "", fields: c.firstName ? { "contact.first_name": c.firstName } : {} });
+    }
+  }
 
   useEffect(() => {
     let alive = true;
@@ -272,55 +307,49 @@ export default function MessagingPage() {
   }
 
   async function sendTest() {
-    if (!testPhone.trim()) {
-      showToast("Enter a phone number to send the test to");
+    // Target: the selected contact, else a typed phone number.
+    if (!previewContact && !testPhone.trim()) {
+      showToast("Pick a contact or enter a phone number");
+      return;
+    }
+    if (personalizedImage && !studioTemplate?.id) {
+      showToast("Save the template first to send a test");
       return;
     }
     setSendingTest(true);
     try {
-      // Route through the Card Studio pipeline when a saved template is
-      // selected; otherwise fall back to the legacy card sender.
       if (personalizedImage && studioTemplate?.id) {
+        // Card pipeline: render for the real contact (or phone) and send.
+        const body = { location_id: locationId, templateId: studioTemplate.id, message: smsText };
+        if (previewContact) body.contactId = previewContact.id;
+        else { body.testPhone = testPhone.trim(); body.sampleName = previewFirst; }
         const r = await fetch(`${API_BASE}/api/render/test-send`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "failed");
+      } else {
+        // Message-only test (personalized image off).
+        const r = await fetch(`${API_BASE}/api/send-test`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             location_id: locationId,
-            templateId: studioTemplate.id,
-            testPhone: testPhone.trim(),
-            sampleName: previewName.trim() || "Jessica",
-            message: smsText,
+            testPhone: previewContact?.phone || testPhone.trim(),
+            sampleName: previewFirst,
+            businessName,
+            mode: "custom",
+            customTemplate,
+            personalizedImage: false,
+            reviewLink: reviewLink.trim() || "[Review Link]",
           }),
         });
-        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "failed");
-        showToast("Test message sent");
-        return;
+        if (!r.ok) throw new Error();
       }
-      const r = await fetch(`${API_BASE}/api/send-test`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          location_id: locationId,
-          testPhone: testPhone.trim(),
-          sampleName: previewName.trim() || "Jessica",
-          businessName,
-          mode: tab,
-          customTemplate,
-          logoUrl,
-          personalizedImage,
-          reviewLink: reviewLink.trim() || "[Review Link]",
-          cardFit,
-          cardBgColor,
-          cardHeadline,
-          cardAccent,
-          cardNameX,
-          cardNameY,
-        }),
-      });
-      if (!r.ok) throw new Error();
-      showToast("Test message sent");
+      showToast(previewContact ? `Test sent to ${previewContact.firstName || previewContact.name}` : "Test message sent");
     } catch (e) {
-      showToast("Couldn’t send the test message" + (e.message ? ` — ${e.message}` : ""));
+      showToast("Couldn’t send the test" + (e.message ? ` — ${e.message}` : ""));
     } finally {
       setSendingTest(false);
     }
@@ -473,38 +502,29 @@ export default function MessagingPage() {
   // Build the real card-service URL for the live preview. Only pass bg when
   // it's a hosted http(s) URL (a freshly-picked local blob can't be fetched
   // by the card service).
+  // Legacy card-service URL — only used as a fallback when no studio template
+  // is active. Uses the selected contact's first name (or default) for preview.
   const cardUrl = useMemo(() => {
-    const p = new URLSearchParams({ name: previewName.trim() || "Jessica" });
+    const p = new URLSearchParams({ name: previewFirst || "Jessica" });
     if (logoUrl && /^https?:/i.test(logoUrl)) p.set("bg", logoUrl);
-    if (cardFit) p.set("fit", cardFit);
-    if (cardBgColor) p.set("bgColor", cardBgColor);
-    if (cardHeadline.trim()) p.set("headline", cardHeadline.trim());
-    if (cardAccent) p.set("accent", cardAccent);
-    p.set("nameX", cardNameX);
-    p.set("nameY", cardNameY);
     return `${CARD_BASE}/card?${p.toString()}`;
-  }, [previewName, logoUrl, cardFit, cardBgColor, cardHeadline, cardAccent, cardNameX, cardNameY]);
+  }, [previewFirst, logoUrl]);
 
-  // Debounce so typing a headline / dragging a color picker doesn't hammer the
-  // card service on every keystroke.
   const [previewSrc, setPreviewSrc] = useState(cardUrl);
   useEffect(() => {
     const t = setTimeout(() => setPreviewSrc(cardUrl), 400);
     return () => clearTimeout(t);
   }, [cardUrl]);
 
+  // SMS bubble preview — resolves tokens with the selected contact's values.
   const smsText = useMemo(() => {
     const link = reviewLink.trim() || "[Review Link]";
-    if (tab === "custom") {
-      return customTemplate
-        .replace(/\{\{\s*first_name\s*\}\}/g, previewName)
-        .replace(/\{\{\s*business_name\s*\}\}/g, businessName || "your business")
-        .replace(/\[Review Link\]/g, link);
-    }
-    return `Hey ${previewName}, we hope you enjoyed your experience with ${
-      businessName || "us"
-    }! Would you mind taking a moment to leave a review? Here's the link: ${link}`;
-  }, [tab, customTemplate, businessName, previewName, reviewLink]);
+    const biz = previewContact?.fields?.["loc.business_name"] || businessName || "your business";
+    return customTemplate
+      .replace(/\{\{\s*first_name\s*\}\}/g, previewFirst)
+      .replace(/\{\{\s*business_name\s*\}\}/g, biz)
+      .replace(/\[Review Link\]/g, link);
+  }, [customTemplate, businessName, previewFirst, reviewLink, previewContact]);
 
   return (
     <div className="min-h-screen bg-gray-50 px-6 py-4 text-gray-900">
@@ -527,31 +547,75 @@ export default function MessagingPage() {
                 {smsText}
               </Bubble>
             </Phone>
-            <div className="mt-5 flex flex-col items-center gap-2">
-              <input
-                type="text"
-                value={previewName}
-                onChange={(e) => setPreviewName(e.target.value)}
-                placeholder="Test name (e.g. Jessica)"
-                aria-label="Test name"
-                className="w-56 rounded-lg border border-gray-300 px-3 py-2 text-center text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
-              />
-              <input
-                type="tel"
-                value={testPhone}
-                onChange={(e) => setTestPhone(e.target.value)}
-                placeholder="+1 555 123 4567"
-                className="w-56 rounded-lg border border-gray-300 px-3 py-2 text-center text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
-              />
-              <button
-                type="button"
-                onClick={sendTest}
-                disabled={sendingTest}
-                className="rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
-                style={{ backgroundColor: GREEN }}
-              >
-                {sendingTest ? "Sending…" : "Send test message"}
-              </button>
+            {/* preview & test as a real contact */}
+            <div className="mt-5">
+              <div className="mb-1 text-xs font-semibold text-gray-700">Preview &amp; test with a contact</div>
+              {previewContact ? (
+                <div className="flex items-center justify-between rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm">
+                  <span className="truncate text-green-800">
+                    Previewing as <span className="font-semibold">{previewContact.name}</span>
+                  </span>
+                  <button type="button" onClick={() => setPreviewContact(null)} className="ml-2 shrink-0 text-green-600 hover:text-green-800">✕</button>
+                </div>
+              ) : (
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={previewQuery}
+                    onChange={(e) => setPreviewQuery(e.target.value)}
+                    placeholder="Search a contact…"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
+                  />
+                  {previewResults.length > 0 && (
+                    <div className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+                      {previewResults.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => selectPreviewContact(c)}
+                          className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-gray-50"
+                        >
+                          <span className="font-medium text-gray-800">{[c.firstName, c.lastName].filter(Boolean).join(" ") || c.phone || "Unnamed"}</span>
+                          <span className="text-xs text-gray-400">{c.phone}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-2">
+                {previewContact ? (
+                  <button
+                    type="button"
+                    onClick={sendTest}
+                    disabled={sendingTest}
+                    className="w-full rounded-lg py-2.5 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
+                    style={{ backgroundColor: GREEN }}
+                  >
+                    {sendingTest ? "Sending…" : `Send test to ${previewContact.firstName || previewContact.name}`}
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      type="tel"
+                      value={testPhone}
+                      onChange={(e) => setTestPhone(e.target.value)}
+                      placeholder="Or a phone number…"
+                      className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={sendTest}
+                      disabled={sendingTest}
+                      className="shrink-0 rounded-lg px-4 py-2 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
+                      style={{ backgroundColor: GREEN }}
+                    >
+                      {sendingTest ? "…" : "Test"}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* templates: presets + saved (quick switch) */}
@@ -624,6 +688,7 @@ export default function MessagingPage() {
                 <CardStudio
                   onTemplateChange={setStudioTemplate}
                   controller={studioRef}
+                  previewOverride={previewContact?.fields}
                   onStudioState={({ templates, currentId }) => {
                     setStudioTemplates(templates);
                     setStudioCurrentId(currentId);

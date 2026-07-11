@@ -10,7 +10,19 @@ import { listCustomFields, getContact } from "../ghl.js";
 import { store } from "../store.js";
 import { uploadAsset } from "../r2.js";
 import { resolveConnectionsFor, resolveConnectionById } from "../connections.js";
+import { buildContactContext } from "./render.js";
 import { flatToContext, resolveBindings } from "../shared/bindings.js";
+
+// Flatten { contact:{…,custom:{…}}, loc:{…} } into dotted sampleData keys.
+function flattenContext(ctx) {
+  const out = {};
+  for (const [k, v] of Object.entries(ctx.contact || {})) {
+    if (k === "custom") for (const [ck, cv] of Object.entries(v || {})) out[`contact.custom.${ck}`] = String(cv ?? "");
+    else out[`contact.${k}`] = String(v ?? "");
+  }
+  for (const [k, v] of Object.entries(ctx.loc || {})) out[`loc.${k}`] = String(v ?? "");
+  return out;
+}
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
 
@@ -40,6 +52,24 @@ export default function createStudioRouter({ resolveLocation, uploadDir, publicB
       const fields = await listCustomFields(client, locationId);
       cfCache.set(locationId, { ts: Date.now(), data: fields });
       res.json({ customFields: fields });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /* ---------- GET /api/contacts/:id/preview ---------- */
+  // A contact's real fields as flat sampleData, for "preview & test as contact".
+  router.get("/contacts/:id/preview", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contact = await getContact(client, req.params.id);
+      const ctx = await buildContactContext(client, locationId, contact);
+      res.json({
+        fields: flattenContext(ctx),
+        name: [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.phone || "Contact",
+        firstName: contact.firstName || "",
+        phone: contact.phone || "",
+      });
     } catch (err) {
       fail(res, err);
     }
