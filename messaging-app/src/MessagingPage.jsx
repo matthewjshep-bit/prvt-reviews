@@ -186,6 +186,11 @@ export default function MessagingPage() {
   const studioRef = useRef({});
   const [studioTemplates, setStudioTemplates] = useState([]);
   const [studioCurrentId, setStudioCurrentId] = useState(null);
+  const presetGroups = useMemo(() => {
+    const groups = {};
+    for (const s of starterList()) (groups[s.category] = groups[s.category] || []).push(s);
+    return groups;
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -552,18 +557,29 @@ export default function MessagingPage() {
             {/* templates: presets + saved (quick switch) */}
             <Card className="mt-5 p-4">
               <div className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-400">Start from a preset</div>
-              <div className="grid gap-1">
-                {starterList().map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => studioRef.current?.newFromStarter?.(s.build)}
-                    className="rounded-md border border-gray-200 bg-white px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-50"
-                  >
-                    ＋ {s.name}
-                  </button>
-                ))}
-              </div>
+              {Object.entries(presetGroups).map(([cat, items]) => (
+                <div key={cat} className="mb-3 last:mb-0">
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">{cat}</div>
+                  <div className="grid gap-1">
+                    {items.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => {
+                          studioRef.current?.newFromStarter?.(s.build);
+                          if (s.message) {
+                            setCustomTemplate(s.message);
+                            setDirty(true);
+                          }
+                        }}
+                        className="rounded-md border border-gray-200 bg-white px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        ＋ {s.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
               {studioTemplates.length > 0 && (
                 <>
                   <div className="mb-2 mt-4 text-xs font-bold uppercase tracking-wide text-gray-400">Your templates</div>
