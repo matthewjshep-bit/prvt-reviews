@@ -506,8 +506,8 @@ export default function MessagingPage() {
           </p>
         </header>
 
-        {/* left: sticky preview  |  right: all controls */}
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_2fr]">
+        {/* trifold: preview | card studio + message | send */}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,300px)_minmax(0,1fr)_minmax(0,340px)]">
           {/* left: live preview (sticky) */}
           <div className="lg:sticky lg:top-6 lg:self-start">
             <Phone>
@@ -552,8 +552,25 @@ export default function MessagingPage() {
             </div>
           </div>
 
-          {/* right: config */}
-          <div className="space-y-4">
+          {/* middle: card studio + message */}
+          <div className="min-w-0 space-y-4">
+            {/* personalized image — Dynamic Card Studio */}
+            <Card className="p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 rounded-lg bg-gray-100 p-1.5">
+                    <ImageIcon className="h-5 w-5 text-gray-700" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold">Card studio</div>
+                    <p className="text-xs text-gray-500">Design the personalized image sent with each message</p>
+                  </div>
+                </div>
+                <Toggle checked={personalizedImage} onChange={edit(setPersonalizedImage)} label="Personalized image" />
+              </div>
+              {personalizedImage && <CardStudio onTemplateChange={setStudioTemplate} />}
+            </Card>
+
             {/* message */}
             <Card className="p-4">
               <h3 className="mb-1 text-base font-bold">Message</h3>
@@ -588,23 +605,10 @@ export default function MessagingPage() {
                 {saving ? "Saving…" : dirty ? "Save message" : "Saved"}
               </button>
             </Card>
+          </div>
 
-            {/* personalized image — Dynamic Card Studio */}
-            <Card className="p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <div className="flex items-start gap-3">
-                  <div className="mt-0.5 rounded-lg bg-gray-100 p-1.5">
-                    <ImageIcon className="h-5 w-5 text-gray-700" />
-                  </div>
-                  <div>
-                    <div className="text-sm font-bold">Card studio</div>
-                    <p className="text-xs text-gray-500">Design the personalized image sent with each message</p>
-                  </div>
-                </div>
-                <Toggle checked={personalizedImage} onChange={edit(setPersonalizedImage)} label="Personalized image" />
-              </div>
-              {personalizedImage && <CardStudio onTemplateChange={setStudioTemplate} />}
-            </Card>
+          {/* right: send a card */}
+          <div className="space-y-4">
 
             {/* send a card */}
             <Card className="space-y-4 p-4">
