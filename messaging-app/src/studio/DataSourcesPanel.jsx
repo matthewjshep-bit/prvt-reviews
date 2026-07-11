@@ -48,15 +48,18 @@ export default function DataSourcesPanel({ template, patchTemplate, groups, show
         connectionId: ds.connectionId || undefined, sourceId: ds.id, templateId: currentId || undefined,
       });
       if (!out.ok) { showToast(`Test failed: ${out.error}`); return; }
-      // Persist discovered keys + thumbnail so the picker + canvas update.
-      updateSource(ds.id, { discoveredKeys: out.keys || [], thumbnailUrl: out.imageUrl || "" , _lastData: out.data });
-      // Push thumbnail onto any dynamic-image layer bound to this source.
-      if (out.imageUrl) {
-        patchTemplate({
-          dataSources: sources.map((s) => (s.id === ds.id ? { ...s, discoveredKeys: out.keys || [], thumbnailUrl: out.imageUrl, _lastData: out.data } : s)),
-          layers: template.layers.map((l) => (l.type === "dynamic-image" && l.sourceId === ds.id ? { ...l, thumbnailUrl: out.imageUrl } : l)),
-        });
-      }
+      // Persist discovered keys + thumbnail on the source, and push the thumbnail
+      // onto any dynamic-image layer bound to this source (for the live preview).
+      patchTemplate({
+        dataSources: sources.map((s) =>
+          s.id === ds.id ? { ...s, discoveredKeys: out.keys || [], thumbnailUrl: out.imageUrl || s.thumbnailUrl || "" } : s
+        ),
+        layers: out.imageUrl
+          ? template.layers.map((l) =>
+              l.type === "dynamic-image" && l.sourceId === ds.id ? { ...l, thumbnailUrl: out.imageUrl } : l
+            )
+          : template.layers,
+      });
       showToast(`Test OK — ${(out.keys || []).length} field(s)`);
     } catch (e) {
       showToast("Test error: " + e.message);

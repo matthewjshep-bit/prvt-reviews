@@ -143,10 +143,22 @@ export default function CardStudio({ onTemplateChange }) {
   }
 
   /* ---------- template ops ---------- */
+  // Strip transient editor-only fields (underscore-prefixed) before persisting,
+  // so they never trip the broker's strict schema validation.
+  function forSave(t) {
+    const clean = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => !k.startsWith("_")));
+    return {
+      ...clean(t),
+      dataSources: (t.dataSources || []).map(clean),
+      layers: (t.layers || []).map(clean),
+    };
+  }
+
   async function save() {
     setSaving(true);
     try {
-      const saved = currentId ? await api.updateTemplate(currentId, template) : await api.createTemplate(template);
+      const body = forSave(template);
+      const saved = currentId ? await api.updateTemplate(currentId, body) : await api.createTemplate(body);
       setTemplate(saved);
       setCurrentId(saved.id);
       setDirty(false);
@@ -165,7 +177,7 @@ export default function CardStudio({ onTemplateChange }) {
   }
   async function duplicate() {
     const { id, version, createdAt, updatedAt, ...rest } = template;
-    const copy = await api.createTemplate({ ...rest, name: rest.name + " copy" });
+    const copy = await api.createTemplate(forSave({ ...rest, name: rest.name + " copy" }));
     setTemplates(await api.listTemplates());
     await loadTemplate(copy.id);
     showToast("Duplicated");
