@@ -761,6 +761,8 @@ export default function MessagingPage() {
                   onTemplateChange={setStudioTemplate}
                   controller={studioRef}
                   previewOverride={previewContact?.fields}
+                  contactPreviewUrl={previewContact ? contactRender?.url : null}
+                  contactPreviewLoading={Boolean(previewContact) && renderingContact}
                   onStudioState={({ templates, currentId }) => {
                     setStudioTemplates(templates);
                     setStudioCurrentId(currentId);

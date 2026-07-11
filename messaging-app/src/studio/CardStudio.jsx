@@ -13,7 +13,7 @@ import { reviewRequestStarter, starterList } from "@shared/starters.js";
   data + server preview below the canvas. Exposes the selected template id via
   onTemplateChange so the page's Send-a-card block can target it.
 */
-export default function CardStudio({ onTemplateChange, controller, onStudioState, previewOverride }) {
+export default function CardStudio({ onTemplateChange, controller, onStudioState, previewOverride, contactPreviewUrl, contactPreviewLoading }) {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const locationId = api.getLocationId();
   const [templates, setTemplates] = useState([]);
@@ -233,9 +233,27 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
         {/* canvas + data sources + server preview */}
         <div>
           <div className="mx-auto max-w-[520px]">
-            <ClientCanvas template={effTemplate} selectedId={selectedId} onSelect={setSelectedId}
-              onChange={changeLayer} onDuplicate={duplicateLayer} onDelete={deleteLayer} />
-            <p className="mt-1 text-center text-[11px] text-gray-400">Drag layers · ⌘D duplicate · Delete removes · arrows nudge (⇧ = larger)</p>
+            {contactPreviewUrl || contactPreviewLoading ? (
+              // Real per-contact render (accurate). Clear the contact to edit.
+              <div className="relative overflow-hidden rounded-xl bg-black">
+                {contactPreviewUrl ? (
+                  <img src={contactPreviewUrl} alt="Contact preview" className="w-full" />
+                ) : (
+                  <div style={{ aspectRatio: `${effTemplate.canvas.width} / ${effTemplate.canvas.height}` }} />
+                )}
+                <div className="absolute left-2 top-2 rounded bg-black/60 px-2 py-1 text-[11px] font-medium text-white">
+                  {contactPreviewLoading ? "Rendering contact…" : "Previewing a contact — clear to edit"}
+                </div>
+              </div>
+            ) : (
+              <ClientCanvas template={effTemplate} selectedId={selectedId} onSelect={setSelectedId}
+                onChange={changeLayer} onDuplicate={duplicateLayer} onDelete={deleteLayer} />
+            )}
+            <p className="mt-1 text-center text-[11px] text-gray-400">
+              {contactPreviewUrl || contactPreviewLoading
+                ? "Real render for the selected contact · clear the contact to edit"
+                : "Drag layers · ⌘D duplicate · Delete removes · arrows nudge (⇧ = larger)"}
+            </p>
           </div>
 
           <div className="mt-4">
