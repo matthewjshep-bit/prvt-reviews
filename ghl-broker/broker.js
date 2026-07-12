@@ -542,7 +542,7 @@ app.post("/api/campaigns", async (req, res) => {
     } = req.body || {};
     if (!tag) return res.status(400).json({ error: "tag required" });
 
-    const { contacts, total } = await searchContactsByTag(client, locationId, tag);
+    const { contacts, total } = await searchContactsByTag(client, locationId, tag, { max: CAMPAIGN_CAP });
     const eligible = contacts.filter((c) => !isDnd(c) && idOf(c));
     const skippedDnd = contacts.length - eligible.length;
     const capped = eligible.slice(0, CAMPAIGN_CAP);
@@ -625,7 +625,7 @@ app.post("/api/send-batch", async (req, res) => {
     // Collect target contacts (dedupe by id): tag audience + explicit picks.
     const byId = new Map();
     if (tag) {
-      const { contacts: tagContacts } = await searchContactsByTag(client, locationId, tag);
+      const { contacts: tagContacts } = await searchContactsByTag(client, locationId, tag, { max: CAMPAIGN_CAP });
       for (const c of tagContacts) if (idOf(c)) byId.set(idOf(c), c);
     }
     for (const c of contacts) if (c?.id) byId.set(c.id, { id: c.id, firstName: c.firstName, dnd: c.dnd });
