@@ -465,12 +465,23 @@ function personalizeMessage(tmpl, name, businessName, reviewLink, ctx) {
   return out;
 }
 
-// GET /api/tags — audience picker options.
+// GET /api/tags — audience picker options. ?debug=1 reports whether GHL's tag
+// library endpoint is allowed (scope check) vs. falling back to contact scan.
 app.get("/api/tags", async (req, res) => {
   try {
     const { locationId, client } = resolveLocation(req);
+    let _debug;
+    if (req.query.debug) {
+      _debug = { library: null };
+      try {
+        const d = await client.call(`/locations/${encodeURIComponent(locationId)}/tags`);
+        _debug.library = { ok: true, count: (d.tags || []).length, sample: (d.tags || []).slice(0, 8).map((t) => t.name || t) };
+      } catch (e) {
+        _debug.library = { ok: false, error: e.message };
+      }
+    }
     const tags = await listTags(client, locationId);
-    res.json({ tags });
+    res.json({ tags, ...(_debug ? { _debug } : {}) });
   } catch (err) {
     fail(res, err);
   }

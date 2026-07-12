@@ -406,13 +406,15 @@ export default function MessagingPage() {
   // Load available tags for the audience picker. Re-runnable so the dropdown can
   // refresh live (a tag added in GHL after page load, etc.).
   const [tagsLoading, setTagsLoading] = useState(false);
+  const [tagDebug, setTagDebug] = useState(null);
   const loadTags = React.useCallback(async () => {
     setTagsLoading(true);
     try {
-      const r = await fetch(`${API_BASE}/api/tags?location_id=${encodeURIComponent(locationId)}`);
+      const r = await fetch(`${API_BASE}/api/tags?location_id=${encodeURIComponent(locationId)}&debug=1`);
       if (!r.ok) return;
-      const { tags } = await r.json();
-      if (Array.isArray(tags)) setTagList(tags.map((t) => t.name || t).filter(Boolean));
+      const data = await r.json();
+      if (Array.isArray(data.tags)) setTagList(data.tags.map((t) => t.name || t).filter(Boolean));
+      setTagDebug(data._debug || null);
     } catch {
       /* no tags available */
     } finally {
@@ -892,6 +894,14 @@ export default function MessagingPage() {
                     </option>
                   ))}
                 </select>
+                {tagDebug && (
+                  <p className="mt-1 text-[10px] text-gray-400">
+                    {tagList.length} tags loaded · library:{" "}
+                    {tagDebug.library?.ok
+                      ? `OK (${tagDebug.library.count})`
+                      : `blocked — ${tagDebug.library?.error || "n/a"}`}
+                  </p>
+                )}
                 <p className="mt-1 text-[11px] text-gray-400">
                   Sends to everyone with this tag. Hit “Preview audience” to see the count first.
                 </p>
