@@ -403,23 +403,23 @@ export default function MessagingPage() {
     }
   }
 
-  // Load available tags for the audience picker.
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const r = await fetch(`${API_BASE}/api/tags?location_id=${encodeURIComponent(locationId)}`);
-        if (!r.ok) return;
-        const { tags } = await r.json();
-        if (alive && Array.isArray(tags)) setTagList(tags.map((t) => t.name || t).filter(Boolean));
-      } catch {
-        /* no tags available */
-      }
-    })();
-    return () => {
-      alive = false;
-    };
+  // Load available tags for the audience picker. Re-runnable so the dropdown can
+  // refresh live (a tag added in GHL after page load, etc.).
+  const [tagsLoading, setTagsLoading] = useState(false);
+  const loadTags = React.useCallback(async () => {
+    setTagsLoading(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/tags?location_id=${encodeURIComponent(locationId)}`);
+      if (!r.ok) return;
+      const { tags } = await r.json();
+      if (Array.isArray(tags)) setTagList(tags.map((t) => t.name || t).filter(Boolean));
+    } catch {
+      /* no tags available */
+    } finally {
+      setTagsLoading(false);
+    }
   }, [locationId]);
+  useEffect(() => { loadTags(); }, [loadTags]);
 
   // Debounced contact typeahead for the recipient picker.
   useEffect(() => {
@@ -870,9 +870,15 @@ export default function MessagingPage() {
 
               {/* tag audience */}
               <div>
-                <label className="mb-1 block text-sm font-semibold text-gray-900">Or include a whole tag</label>
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="block text-sm font-semibold text-gray-900">Or include a whole tag</label>
+                  <button type="button" onClick={loadTags} className="text-[11px] font-medium text-green-700 underline hover:text-green-800">
+                    {tagsLoading ? "Refreshing…" : "Refresh tags"}
+                  </button>
+                </div>
                 <select
                   value={sendTag}
+                  onFocus={loadTags}
                   onChange={(e) => {
                     setSendTag(e.target.value);
                     setAudiencePreview(null);

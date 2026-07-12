@@ -141,36 +141,48 @@ export async function searchContacts(client, locationId, query) {
   return data.contacts || [];
 }
 
-// Tags available in the location (for the audience picker). Tries the location
-// tags endpoint; if it's empty/unavailable, derives the unique set of tags
-// actually in use from the contacts list.
+// Tags for the audience picker — the UNION of the location's tag library (all
+// tags, even ones not yet applied to a contact) and tags actually in use on
+// contacts. This way a newly-created tag shows up whether or not it's on anyone.
 export async function listTags(client, locationId) {
+  const byName = new Map(); // lowercased -> { name }
+  const add = (raw) => {
+    const name = String(raw?.name ?? raw ?? "").trim();
+    if (name) byName.set(name.toLowerCase(), { name });
+  };
+
+  // 1. Location tag library (authoritative list of all tags).
   try {
     const data = await client.call(`/locations/${encodeURIComponent(locationId)}/tags`);
-    const tags = data.tags || [];
-    if (tags.length) return tags;
+    for (const t of data.tags || []) add(t);
   } catch {
-    /* fall through to deriving from contacts */
+    /* endpoint may need a scope the token lacks — the contact scan covers it */
   }
 
-  const seen = new Set();
-  let startAfter;
-  let startAfterId;
-  for (let i = 0; i < 10; i++) {
-    let path = `/contacts/?locationId=${encodeURIComponent(locationId)}&limit=100`;
-    if (startAfter && startAfterId) {
-      path += `&startAfter=${encodeURIComponent(startAfter)}&startAfterId=${encodeURIComponent(startAfterId)}`;
+  // 2. Tags in use on contacts (covers a missing scope or brand-new merges).
+  //    Skip the deep scan if the library already returned tags.
+  const maxPages = byName.size > 0 ? 3 : 10;
+  let startAfter, startAfterId;
+  try {
+    for (let i = 0; i < maxPages; i++) {
+      let path = `/contacts/?locationId=${encodeURIComponent(locationId)}&limit=100`;
+      if (startAfter && startAfterId) {
+        path += `&startAfter=${encodeURIComponent(startAfter)}&startAfterId=${encodeURIComponent(startAfterId)}`;
+      }
+      const data = await client.call(path);
+      const batch = data.contacts || [];
+      for (const c of batch) for (const t of c.tags || []) add(t);
+      if (batch.length < 100) break;
+      const meta = data.meta || {};
+      startAfter = meta.startAfter;
+      startAfterId = meta.startAfterId;
+      if (!startAfterId) break;
     }
-    const data = await client.call(path);
-    const batch = data.contacts || [];
-    for (const c of batch) for (const t of c.tags || []) if (t) seen.add(String(t).trim());
-    if (batch.length < 100) break;
-    const meta = data.meta || {};
-    startAfter = meta.startAfter;
-    startAfterId = meta.startAfterId;
-    if (!startAfterId) break;
+  } catch {
+    /* ignore — return whatever we have */
   }
-  return [...seen].filter(Boolean).sort().map((name) => ({ name }));
+
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // All contacts carrying a given tag. Prefers the v2 advanced-search endpoint
