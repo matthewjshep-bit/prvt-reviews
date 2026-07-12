@@ -286,7 +286,7 @@ export default function MessagingPage() {
         if (c.ownerName != null) setOwnerName(c.ownerName);
         if (c.businessName != null) setBusinessName(c.businessName);
         if (c.logoUrl != null) setLogoUrl(c.logoUrl);
-        if (c.personalizedImage != null) setPersonalizedImage(!!c.personalizedImage);
+        // personalizedImage is always on now (the toggle was removed).
         if (c.smartEnabled != null) setSmartEnabled(!!c.smartEnabled);
         if (c.followUps != null) setFollowUps(!!c.followUps);
         if (c.customTemplate) setCustomTemplate(c.customTemplate);
@@ -582,8 +582,8 @@ export default function MessagingPage() {
   return (
     <div className="min-h-screen bg-gray-50 px-6 py-4 text-gray-900">
       <div className="mx-auto max-w-none 2xl:max-w-[1800px]">
-        {/* trifold: preview | card studio + message | send */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,300px)_minmax(0,1fr)_minmax(0,340px)]">
+        {/* bifold: preview + controls | card editor (largest) */}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
           {/* left: live preview (sticky) */}
           <div className="lg:sticky lg:top-6 lg:self-start">
             <Phone>
@@ -740,37 +740,26 @@ export default function MessagingPage() {
             </Card>
           </div>
 
-          {/* middle: card studio + message */}
-          <div className="min-w-0 space-y-4">
-            {/* personalized image — Dynamic Card Studio */}
-            <Card className="p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <div className="flex items-start gap-3">
-                  <div className="mt-0.5 rounded-lg bg-gray-100 p-1.5">
-                    <ImageIcon className="h-5 w-5 text-gray-700" />
-                  </div>
-                  <div>
-                    <div className="text-sm font-bold">Card studio</div>
-                    <p className="text-xs text-gray-500">Design the personalized image sent with each message</p>
-                  </div>
-                </div>
-                <Toggle checked={personalizedImage} onChange={edit(setPersonalizedImage)} label="Personalized image" />
-              </div>
-              {personalizedImage && (
-                <CardStudio
-                  onTemplateChange={setStudioTemplate}
-                  controller={studioRef}
-                  previewOverride={previewContact?.fields}
-                  contactPreviewUrl={previewContact ? contactRender?.url : null}
-                  contactPreviewLoading={Boolean(previewContact) && renderingContact}
-                  onStudioState={({ templates, currentId }) => {
-                    setStudioTemplates(templates);
-                    setStudioCurrentId(currentId);
-                  }}
-                />
-              )}
-            </Card>
+          {/* right: card editor (largest) */}
+          <div className="min-w-0">
+            <CardStudio
+              onTemplateChange={setStudioTemplate}
+              controller={studioRef}
+              previewOverride={previewContact?.fields}
+              contactPreviewUrl={previewContact ? contactRender?.url : null}
+              contactPreviewLoading={Boolean(previewContact) && renderingContact}
+              onStudioState={({ templates, currentId }) => {
+                setStudioTemplates(templates);
+                setStudioCurrentId(currentId);
+              }}
+            />
+          </div>
+        </div>
 
+        {/* SEND — compose the message and choose who receives it */}
+        <div className="mt-8 border-t border-gray-200 pt-6">
+          <h2 className="mb-4 text-lg font-bold">Send</h2>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* message */}
             <Card className="p-4">
               <h3 className="mb-1 text-base font-bold">Message</h3>
@@ -805,10 +794,6 @@ export default function MessagingPage() {
                 {saving ? "Saving…" : dirty ? "Save message" : "Saved"}
               </button>
             </Card>
-          </div>
-
-          {/* right: send a card */}
-          <div className="space-y-4">
 
             {/* send a card */}
             <Card className="space-y-4 p-4">
