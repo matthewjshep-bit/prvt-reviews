@@ -157,13 +157,26 @@ export const SECTIONS = {
 
 export const SECTION_KEYS = Object.keys(SECTIONS);
 
+// Which starter builds each section's preset card (used by the one-click
+// "create from preset" flow). Names must match exports in shared/starters.js.
+export const SECTION_STARTERS = {
+  quotes: "quoteFollowUpStarter",
+  reviews: "reviewRequestStarter",
+  winback: "propertyCardStarter",
+  offers: "offerTermsStarter",
+};
+
 /* ------------------------------------------------------------------ *
  * Custom Value override names (optional per-location config in GHL)
  * ------------------------------------------------------------------ */
 // Read from the location's Custom Values; when present they override the code
 // defaults above. Everything is optional — the defaults are a working baseline.
 export const CV_OVERRIDES = {
-  // Template name per section: rh_home_<section>_template
+  // Explicit template ASSIGNMENT per section (set from the UI — the primary
+  // binding): rh_home_<section>_template_id
+  templateId: (section) => `rh_home_${section}_template_id`,
+  // Legacy template-name override (fallback when no id assigned):
+  // rh_home_<section>_template
   templateName: (section) => `rh_home_${section}_template`,
   // Outgoing message per section: rh_home_<section>_message
   message: (section) => `rh_home_${section}_message`,

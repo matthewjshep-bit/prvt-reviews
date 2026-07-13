@@ -76,8 +76,6 @@ export default function HomePage() {
   }, []);
   function go(v) { setView(v); writeView(v); window.scrollTo({ top: 0 }); }
 
-  const onEdit = () => go("studio");
-
   // The editor is a full page of its own — render it bare (its own shell).
   if (view === "studio") {
     return (
@@ -95,12 +93,12 @@ export default function HomePage() {
       <TopNav view={view} onSelect={go} />
       <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
         {single ? (
-          <SectionRenderer view={view} eager onEdit={onEdit} />
+          <SectionRenderer view={view} eager />
         ) : (
           <div className="space-y-6">
             {SECTION_ORDER.map((v, i) => (
               <LazyMount key={v} eager={i === 0}>
-                {(active) => <SectionRenderer view={v} active={active} onEdit={onEdit} />}
+                {(active) => <SectionRenderer view={v} active={active} />}
               </LazyMount>
             ))}
           </div>
@@ -110,10 +108,10 @@ export default function HomePage() {
   );
 }
 
-function SectionRenderer({ view, active, eager, onEdit }) {
+function SectionRenderer({ view, active, eager }) {
   const Comp = SECTION_COMP[view];
   if (!Comp) return null;
-  return <Comp active={eager ? true : active} onEdit={onEdit} />;
+  return <Comp active={eager ? true : active} />;
 }
 
 function TopNav({ view, onSelect }) {

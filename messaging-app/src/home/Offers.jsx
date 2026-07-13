@@ -9,13 +9,12 @@ import { Pill } from "./ui.jsx";
 
 const TIER_VARIANT = { proven: "proven", repeat: "repeat", new: "new" };
 
-export default function Offers({ active, onEdit }) {
+export default function Offers({ active }) {
   return (
     <SectionBody
       section="offers"
       id="offers"
       active={active}
-      onEdit={onEdit}
       title="Offers"
       subtitle="Existing customers, segmented by track record"
       renderRowRight={(row) =>

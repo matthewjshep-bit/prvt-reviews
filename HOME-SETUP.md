@@ -79,18 +79,29 @@ case-insensitively.
 
 ---
 
-## 3. Card Studio templates
+## 3. Card templates — assigned per section in the UI
 
-Create in the Card Studio editor (the `Card Studio` tab / `?view=studio`). Each
-section resolves its template **by name** (case-insensitive). Start from the
-matching starter and bind the fields shown.
+Each section's card is **explicitly assigned** from the Home page: open a
+section's **Card & message** panel (the chip in its header, or the footer's
+"Edit message" button) and pick a template — or click **Use the preset** on an
+unassigned section to create + assign its starter in one click. From the other
+direction, Card Studio's **Used for…** control assigns the open template to a
+section. Assignments are stored per location (`rh_home_<section>_template_id`
+custom values) and survive renames.
 
-| Section | Template name | Base starter | Key bindings |
-|---|---|---|---|
-| Quotes | `Quote Follow-Up` | Property Card | `{{contact.custom.property_address}}`, `${{contact.custom.quote_amount}}` |
-| Reviews | `Review Request` | Review Request | `{{contact.first_name}}`, star badge |
-| Win-Back | `Property Card` | Property Card | `{{contact.custom.property_address}}` (parcel aerial) |
-| Offers | `Offer Terms` | *(new dark card)* | `{{data.tier.rate}}`, `{{data.tier.down}}`, `{{data.tier.proof}}` |
+Legacy fallback: with no assignment set, a template whose NAME matches the
+section default below still resolves (back-compat for existing setups).
+
+| Section | Preset (one-click) | Key bindings |
+|---|---|---|
+| Quotes | Quote Follow-Up | `{{contact.custom.property_address}}`, `${{contact.custom.quote_amount}}` |
+| Reviews | Review Request | `{{contact.first_name}}`, star badge |
+| Win-Back | Property Card | `{{contact.custom.property_address}}` (parcel aerial) |
+| Offers | Offer Terms | `{{data.tier.rate}}`, `{{data.tier.down}}`, `{{data.tier.proof}}` |
+
+The **outgoing message** is edited in the same panel (stored as
+`rh_home_<section>_message`). `scripts/seed-home-templates.mjs` still works for
+bulk-seeding a new location, but the in-UI preset flow replaces it day-to-day.
 
 **Offer Terms** is a dark 1080×1080 card: headline → two big numbers
 (`{{data.tier.rate}}`, `{{data.tier.down}}`) → proof line (`{{data.tier.proof}}`).
@@ -130,11 +141,9 @@ working baseline. Existing messaging config (`rh_business_name`,
 
 | Custom Value | Purpose | Default |
 |---|---|---|
-| `rh_home_quotes_template` | Quote template name override | `Quote Follow-Up` |
-| `rh_home_reviews_template` | Review template name override | `Review Request` |
-| `rh_home_winback_template` | Win-back template name override | `Property Card` |
-| `rh_home_offers_template` | Offer template name override | `Offer Terms` |
-| `rh_home_quotes_message` … `_offers_message` | Outgoing message override per section | code default |
+| `rh_home_<section>_template_id` | **Card assignment** (written by the UI — don't hand-edit) | unset |
+| `rh_home_<section>_template` | Legacy template-NAME override (fallback when no id) | preset name |
+| `rh_home_quotes_message` … `_offers_message` | Outgoing message per section (written by the Card & message panel) | code default |
 | `rh_home_offer_tiers` | Tier rules + terms, JSON (see below) | Proven/Repeat/New |
 | `rh_home_batch_cap` | Hard batch cap override | `CAMPAIGN_CAP` env (200) |
 | `rh_review_link` | Fills `[Review Link]` in review copy | empty |

@@ -1,21 +1,25 @@
 // home/SectionBody.jsx — the ONE section layout. Every section renders exactly
 // this anatomy so the page reads as a single system:
 //
-//   header   title + subtitle | uniform stat pill (summary.headline)
-//   banner   setup / config error (when applicable)
+//   header   title + subtitle | card chip (opens Card & message) + stat pill
+//   banner   setup CTA (no card assigned) or config error (missing tag)
 //   body     list (left) | card preview (right)
 //   footer   Edit message + Send to <name>; batch sections add the same
 //            Preview audience + Send batch row beneath a divider
 //
-// Sections customize DATA only: the row badge (renderRowRight), the preview
-// note line, and an optional batch metric. Layout and controls are fixed here.
+// The card template + outgoing message are DEFINED per section in the
+// SectionSettings panel — explicit assignment, no name matching.
 
 import React, { useEffect, useState } from "react";
+import { Settings2 } from "lucide-react";
 import { useSection, usePreview, useSend } from "./hooks.js";
+import * as api from "./api.js";
 import {
   SectionCard, HeadStat, RowList, PreviewPane, Skeleton, EmptyState, ErrorBanner, ConfigError,
+  SendButton, SecondaryButton,
 } from "./ui.jsx";
 import { SingleSendFooter, BatchFooter } from "./footers.jsx";
+import SectionSettings from "./SectionSettings.jsx";
 
 export default function SectionBody({
   section,
@@ -23,7 +27,6 @@ export default function SectionBody({
   id,
   title,
   subtitle,
-  onEdit,
   renderRowRight, // (row) => node — the row's right-side pill
   previewNote,    // string | (selectedRow) => string
   batchMetric,    // (summary) => node — extra stat in the batch row (optional)
@@ -31,6 +34,9 @@ export default function SectionBody({
   const { data, loading, error, reload } = useSection(section, active);
   const send = useSend(section);
   const [selectedId, setSelectedId] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [previewVersion, setPreviewVersion] = useState(0);
+  const [presetBusy, setPresetBusy] = useState(false);
 
   const rows = data?.rows || [];
   // Auto-select the first row once the queue loads.
@@ -40,15 +46,49 @@ export default function SectionBody({
   }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selected = rows.find((r) => r.id === selectedId) || null;
-  const preview = usePreview(section, selectedId);
+  const preview = usePreview(section, selectedId, previewVersion);
   const note = typeof previewNote === "function" ? previewNote(selected) : previewNote;
+
+  const unassigned = Boolean(data) && !data.templateId;
+
+  function onSettingsSaved() {
+    reload();
+    setPreviewVersion((v) => v + 1);
+  }
+
+  async function usePresetQuick() {
+    setPresetBusy(true);
+    try {
+      await api.createFromPreset(section);
+      onSettingsSaved();
+    } catch (e) {
+      window.alert(`Couldn’t set up the preset — ${e.message}`);
+    } finally {
+      setPresetBusy(false);
+    }
+  }
 
   return (
     <SectionCard
       id={id}
       title={data?.label || title}
       subtitle={data?.subtitle || subtitle}
-      right={<HeadStat>{data?.summary?.headline}</HeadStat>}
+      right={
+        data ? (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              title="Card & message settings"
+              className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              <Settings2 className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+              <span className="truncate">{data.templateId ? data.templateName : "Set up card"}</span>
+            </button>
+            <HeadStat>{data.summary?.headline}</HeadStat>
+          </div>
+        ) : null
+      }
     >
       {loading && !data ? (
         <Skeleton />
@@ -56,9 +96,23 @@ export default function SectionBody({
         <ErrorBanner onRetry={reload}>{error}</ErrorBanner>
       ) : (
         <>
-          {data?.configError ? (
+          {unassigned ? (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50/60 p-4">
+              <div className="text-sm text-gray-700">
+                <span className="font-semibold">No card assigned.</span> Pick the template this section sends — takes one click with the preset.
+              </div>
+              <div className="flex gap-2">
+                <div className="w-44">
+                  <SecondaryButton onClick={() => setSettingsOpen(true)}>Choose template</SecondaryButton>
+                </div>
+                <div className="w-44">
+                  <SendButton onClick={usePresetQuick} busy={presetBusy}>Use the preset</SendButton>
+                </div>
+              </div>
+            </div>
+          ) : data?.configError ? (
             <div className="mb-4">
-              <ConfigError>{data.configError}. Previews and sends are disabled until it exists.</ConfigError>
+              <ConfigError>{data.configError}.</ConfigError>
             </div>
           ) : null}
 
@@ -77,7 +131,13 @@ export default function SectionBody({
                 loading={preview.loading}
                 error={preview.error}
                 note={note}
-                placeholder={selected ? "Rendering card…" : "Select a contact to preview their card"}
+                placeholder={
+                  unassigned
+                    ? "Assign a card template to preview"
+                    : selected
+                    ? "Rendering card…"
+                    : "Select a contact to preview their card"
+                }
                 footer={
                   <>
                     <SingleSendFooter
@@ -85,7 +145,7 @@ export default function SectionBody({
                       preview={preview.preview}
                       send={send}
                       sendsEnabled={data?.sendsEnabled}
-                      onEdit={onEdit}
+                      onEdit={() => setSettingsOpen(true)}
                     />
                     {data?.batch ? <BatchFooter data={data} send={send} metric={batchMetric} /> : null}
                   </>
@@ -116,6 +176,13 @@ export default function SectionBody({
           ) : null}
         </>
       )}
+
+      <SectionSettings
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        data={data}
+        onSaved={onSettingsSaved}
+      />
     </SectionCard>
   );
 }

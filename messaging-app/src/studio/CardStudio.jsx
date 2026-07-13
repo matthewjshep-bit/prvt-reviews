@@ -5,8 +5,12 @@ import DataSourcesPanel from "./DataSourcesPanel.jsx";
 import ConnectionsModal from "./ConnectionsModal.jsx";
 import WorkflowModal from "./WorkflowModal.jsx";
 import * as api from "./api.js";
+import { getHomeConfig, saveSectionConfig } from "../home/api.js";
 import { newLayer, mergeTagGroups, CANVAS_PRESETS } from "./model.js";
 import { reviewRequestStarter, starterList } from "@shared/starters.js";
+
+// Home sections a template can be assigned to (mirrors the broker's SECTIONS).
+const HOME_SECTIONS = { quotes: "Quotes", reviews: "Reviews", winback: "Win-back", offers: "Offers" };
 
 /*
   CardStudio — the Dynamic Card Studio. Replaces the old "Personalized image"
@@ -57,13 +61,35 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
   if (controller) controller.current = { loadTemplate, newFromStarter };
   useEffect(() => { onStudioState?.({ templates, currentId }); }, [templates, currentId]);
 
-  // Initial template list.
+  // Which Home sections use which template (drives the "Used for…" ✓ marks).
+  const [assignments, setAssignments] = useState({});
+  useEffect(() => {
+    getHomeConfig().then((c) => setAssignments(c.assignments || {})).catch(() => {});
+  }, []);
+
+  // Initial template list. A ?template=<id> deep link (from a Home section's
+  // "Edit design" button) opens that template instead of the most recent one.
   useEffect(() => {
     api.listTemplates().then(async (list) => {
       setTemplates(list || []);
-      if (list && list.length) await loadTemplate(list[0].id, list);
+      let wanted = null;
+      try { wanted = new URLSearchParams(window.location.search).get("template"); } catch { /* ignore */ }
+      const hit = wanted && (list || []).find((t) => t.id === wanted);
+      if (hit) await loadTemplate(hit.id, list);
+      else if (list && list.length) await loadTemplate(list[0].id, list);
     }).catch(() => {});
   }, []);
+
+  async function assignToSection(sectionKey) {
+    if (!currentId) return;
+    try {
+      await saveSectionConfig(sectionKey, { templateId: currentId });
+      setAssignments((a) => ({ ...a, [sectionKey]: currentId }));
+      showToast(`This card now sends for ${HOME_SECTIONS[sectionKey]}`);
+    } catch (e) {
+      showToast("Couldn’t assign: " + e.message);
+    }
+  }
 
   async function loadTemplate(id, list = templates) {
     try {
@@ -227,6 +253,20 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
         <button type="button" onClick={duplicate} disabled={!currentId} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">Duplicate</button>
         <button type="button" onClick={remove} disabled={!currentId} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">Delete</button>
         <button type="button" onClick={() => setConnectionsOpen(true)} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Connections</button>
+        <select
+          value=""
+          disabled={!currentId}
+          title={currentId ? "Send this card from a Home section" : "Save the template first"}
+          onChange={(e) => { const s = e.target.value; e.target.value = ""; if (s) assignToSection(s); }}
+          className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm disabled:opacity-40"
+        >
+          <option value="">Used for…</option>
+          {Object.entries(HOME_SECTIONS).map(([k, label]) => (
+            <option key={k} value={k}>
+              {assignments[k] === currentId ? `✓ ${label}` : label}
+            </option>
+          ))}
+        </select>
         <button type="button" onClick={() => setWorkflowOpen(true)} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Use in workflow</button>
         <div className="ml-auto flex items-center gap-2">
           <select onChange={(e) => { const p = CANVAS_PRESETS.find((x) => x.id === e.target.value); if (p) preset(p); }}

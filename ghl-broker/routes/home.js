@@ -16,12 +16,14 @@ import express from "express";
 import { store } from "../store.js";
 import {
   listCustomValues, searchContactsByTag, getContact, listTags,
-  customFieldIdKeyMap, contactCustomRecord,
+  customFieldIdKeyMap, contactCustomRecord, setCustomValue,
   addContactTags, findOrCreateCustomFieldByKey, updateContactCustomField, sendSms,
 } from "../ghl.js";
 import { resolveBindings } from "../shared/bindings.js";
+import { TemplateInputSchema } from "../shared/template-schema.js";
+import * as starters from "../shared/starters.js";
 import {
-  SECTIONS, SECTION_KEYS, FIELD_KEYS, TAGS, CV_OVERRIDES,
+  SECTIONS, SECTION_KEYS, FIELD_KEYS, TAGS, CV_OVERRIDES, SECTION_STARTERS,
   effectiveSection, effectiveTiers, resolveTier,
 } from "../home-config.js";
 
@@ -93,12 +95,39 @@ const tagLibrary = (client, locationId) =>
     }
   });
 
-// Resolve a section's template NAME to a stored template id (case-insensitive).
-async function resolveTemplateId(locationId, templateName) {
-  const list = await cached(`tpl:${locationId}`, 60_000, () => store.listTemplates(locationId));
-  const want = String(templateName || "").trim().toLowerCase();
-  const hit = (list || []).find((t) => (t.name || "").toLowerCase() === want);
-  return hit?.id || null;
+const templateList = (locationId) =>
+  cached(`tpl:${locationId}`, 60_000, () => store.listTemplates(locationId));
+
+// Picker options for the UIs (Home section settings + Card Studio "Used for").
+async function templateOptions(locationId) {
+  const list = await templateList(locationId);
+  return (list || []).map((t) => ({ id: t.id, name: t.name, updatedAt: t.updatedAt }));
+}
+
+// Resolve a section's card template. Order:
+//   1. explicit assignment (rh_home_<section>_template_id custom value)
+//   2. legacy name match against cfg.templateName (back-compat)
+//   3. unassigned → null (UI shows the setup CTA)
+// Returns { templateId, templateName, templateSource } where templateSource is
+// "assigned" | "name" | null.
+async function resolveTemplate(locationId, section, cfg, cvByName) {
+  const list = (await templateList(locationId)) || [];
+  const assignedId = String(cvByName[CV_OVERRIDES.templateId(section)] || "").trim();
+  if (assignedId) {
+    const hit = list.find((t) => t.id === assignedId);
+    // A stale id (template deleted) falls through to the name match.
+    if (hit) return { templateId: hit.id, templateName: hit.name, templateSource: "assigned" };
+  }
+  const want = String(cfg.templateName || "").trim().toLowerCase();
+  const byName = list.find((t) => (t.name || "").toLowerCase() === want);
+  if (byName) return { templateId: byName.id, templateName: byName.name, templateSource: "name" };
+  return { templateId: null, templateName: cfg.templateName, templateSource: null };
+}
+
+// Bust the per-location caches after a config write so the next read is fresh.
+function bustCaches(locationId) {
+  cache.delete(`cv:${locationId}`);
+  cache.delete(`tpl:${locationId}`);
 }
 
 // Hydrate contacts so each carries a customFields array. Advanced search usually
@@ -262,21 +291,25 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
       try { existing = new Set((await listTags(client, locationId)).map((t) => t.name.toLowerCase())); } catch { /* non-fatal */ }
 
       const sections = {};
+      const assignments = {};
       for (const key of SECTION_KEYS) {
         const cfg = effectiveSection(key, cvByName);
-        const templateId = await resolveTemplateId(locationId, cfg.templateName);
+        const resolved = await resolveTemplate(locationId, key, cfg, cvByName);
+        if (resolved.templateId) assignments[key] = resolved.templateId;
         const errors = [];
         if (!existing.size) errors.push("could not read tag library");
         else if (!existing.has(cfg.tags.queue.toLowerCase())) errors.push(`queue tag "${cfg.tags.queue}" not found`);
-        if (!templateId) errors.push(`template "${cfg.templateName}" not found — create it in Card Studio`);
+        if (!resolved.templateId) errors.push(`no card assigned — pick a template or use the preset`);
         sections[key] = {
           view: cfg.view, label: cfg.label, subtitle: cfg.subtitle, batch: cfg.batch,
-          templateName: cfg.templateName, templateId, message: cfg.message,
+          templateName: resolved.templateName, templateId: resolved.templateId,
+          templateSource: resolved.templateSource, message: cfg.message,
           tags: cfg.tags, fields: cfg.fields, errors,
         };
       }
       res.json({
-        ok: true, sections, tiers, sendsEnabled: CARD_SENDS_ENABLED, cap: batchCap(cvByName),
+        ok: true, sections, assignments, templates: await templateOptions(locationId),
+        tiers, sendsEnabled: CARD_SENDS_ENABLED, cap: batchCap(cvByName),
         views: SECTION_KEYS,
       });
     } catch (err) { fail(res, err); }
@@ -293,18 +326,24 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
       const tiers = effectiveTiers(cvByName);
       const cap = batchCap(cvByName);
 
-      const templateId = await resolveTemplateId(locationId, cfg.templateName);
+      const resolved = await resolveTemplate(locationId, section, cfg, cvByName);
+      const templates = await templateOptions(locationId);
+      const common = {
+        ok: true, section, view: cfg.view, label: cfg.label, subtitle: cfg.subtitle,
+        batch: cfg.batch, templateId: resolved.templateId, templateName: resolved.templateName,
+        templateSource: resolved.templateSource, assignedTemplateId: resolved.templateSource === "assigned" ? resolved.templateId : null,
+        templates, message: cfg.message,
+        queueTag: cfg.tags.queue, trigger: cfg.tags.trigger,
+        sendsEnabled: CARD_SENDS_ENABLED, cap,
+      };
 
       // If the queue tag doesn't exist in the tag library yet, this is a setup
       // problem — say so and skip the contact query entirely.
       const library = await tagLibrary(client, locationId);
       if (library && !library.has(cfg.tags.queue.toLowerCase())) {
         return res.json({
-          ok: true, section, view: cfg.view, label: cfg.label, subtitle: cfg.subtitle,
-          batch: cfg.batch, templateId, templateName: cfg.templateName,
-          queueTag: cfg.tags.queue, trigger: cfg.tags.trigger,
+          ...common,
           rows: [], summary: summarize(section, [], cap),
-          sendsEnabled: CARD_SENDS_ENABLED, cap,
           configError: `queue tag "${cfg.tags.queue}" doesn't exist yet — create it in GHL (Settings → Tags) and add it to contacts`,
         });
       }
@@ -337,12 +376,10 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
       // Section-level summary for the header + batch strip.
       const summary = summarize(section, rows, cap);
       res.json({
-        ok: true, section, view: cfg.view, label: cfg.label, subtitle: cfg.subtitle,
-        batch: cfg.batch, templateId, templateName: cfg.templateName,
-        queueTag: cfg.tags.queue, trigger: cfg.tags.trigger,
+        ...common,
         ...(section === "offers" ? { tiers } : {}),
-        rows, summary, sendsEnabled: CARD_SENDS_ENABLED, cap,
-        configError: !templateId ? `template "${cfg.templateName}" not found` : null,
+        rows, summary,
+        configError: !resolved.templateId ? "no card assigned to this section yet" : null,
       });
     } catch (err) { fail(res, err); }
   });
@@ -356,13 +393,84 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
       const { locationId, client } = resolveLocation(req);
       const cvByName = await cvMap(client, locationId);
       const cfg = effectiveSection(section, cvByName);
-      const templateId = await resolveTemplateId(locationId, cfg.templateName);
-      if (!templateId) return res.status(422).json({ error: `template "${cfg.templateName}" not configured` });
+      const { templateId } = await resolveTemplate(locationId, section, cfg, cvByName);
+      if (!templateId) return res.status(422).json({ error: "no card assigned to this section — pick a template or use the preset" });
 
       const dataOverrides = await offersOverrides(section, client, locationId, contactId, cvByName);
       const gen = await renderRouter.generate({ client, locationId, templateId, contactId, force: false, dataOverrides });
       const message = renderMessage(section, cfg, gen.context, cvByName);
       res.json({ ok: true, url: gen.url, message, missingBindings: gen.missingBindings, cached: gen.cached });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- POST /api/home/section-config ---------- */
+  // Set a section's card template and/or outgoing message. Writes GHL custom
+  // values (rh_home_<section>_template_id / rh_home_<section>_message) so the
+  // binding is explicit, per-location, and survives template renames.
+  router.post("/section-config", async (req, res) => {
+    try {
+      const { section, templateId, message } = req.body || {};
+      if (!SECTIONS[section]) return res.status(400).json({ error: "unknown section" });
+      if (templateId === undefined && message === undefined) {
+        return res.status(400).json({ error: "templateId or message required" });
+      }
+      const { locationId, client } = resolveLocation(req);
+
+      if (templateId !== undefined) {
+        if (templateId) {
+          // Assign — the template must exist and belong to this location.
+          const t = await store.getTemplate(templateId);
+          if (!t || t.locationId !== locationId) return res.status(404).json({ error: "template not found" });
+          await setCustomValue(client, locationId, CV_OVERRIDES.templateId(section), templateId);
+        } else {
+          // Unassign (empty string clears the custom value).
+          await setCustomValue(client, locationId, CV_OVERRIDES.templateId(section), "");
+        }
+      }
+      if (message !== undefined) {
+        await setCustomValue(client, locationId, CV_OVERRIDES.message(section), String(message));
+      }
+
+      bustCaches(locationId);
+      const cvByName = await cvMap(client, locationId);
+      const cfg = effectiveSection(section, cvByName);
+      const resolved = await resolveTemplate(locationId, section, cfg, cvByName);
+      res.json({ ok: true, section, ...resolved, message: cfg.message });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- POST /api/home/create-from-preset ---------- */
+  // One-click setup: create the section's preset template (or adopt an existing
+  // template already carrying the preset's name) and assign it to the section.
+  router.post("/create-from-preset", async (req, res) => {
+    try {
+      const { section } = req.body || {};
+      if (!SECTIONS[section]) return res.status(400).json({ error: "unknown section" });
+      const { locationId, client } = resolveLocation(req);
+
+      const build = starters[SECTION_STARTERS[section]];
+      if (typeof build !== "function") return res.status(500).json({ error: "no preset available for this section" });
+      const doc = build({ locationId });
+
+      // Adopt an existing template with the preset's name instead of duplicating.
+      const list = (await templateList(locationId)) || [];
+      let template = list.find((t) => (t.name || "").toLowerCase() === String(doc.name).toLowerCase());
+      let created = false;
+      if (!template) {
+        const parsed = TemplateInputSchema.safeParse(doc);
+        if (!parsed.success) {
+          return res.status(500).json({
+            error: "preset failed validation",
+            detail: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`),
+          });
+        }
+        template = await store.createTemplate(parsed.data);
+        created = true;
+      }
+
+      await setCustomValue(client, locationId, CV_OVERRIDES.templateId(section), template.id);
+      bustCaches(locationId);
+      res.json({ ok: true, template: { id: template.id, name: template.name }, created, assigned: true });
     } catch (err) { fail(res, err); }
   });
 
@@ -482,8 +590,8 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
   }
 
   async function safePreview(section, client, locationId, contactId, cfg, cvByName) {
-    const templateId = await resolveTemplateId(locationId, cfg.templateName);
-    if (!templateId) return { cardUrl: null, message: null, configError: `template "${cfg.templateName}" not configured` };
+    const { templateId } = await resolveTemplate(locationId, section, cfg, cvByName);
+    if (!templateId) return { cardUrl: null, message: null, configError: "no card assigned to this section" };
     try {
       const dataOverrides = await offersOverrides(section, client, locationId, contactId, cvByName);
       const gen = await renderRouter.generate({ client, locationId, templateId, contactId, force: false, dataOverrides });
@@ -498,8 +606,8 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
   // sends the MMS + follow-ups (STOP handling rides along). Mode "direct":
   // broker sends the MMS itself (useful before workflows exist / for testing).
   async function deliver({ section, client, locationId, contactId, cfg, cvByName, mode, contact, idKeyMap, tiers }) {
-    const templateId = await resolveTemplateId(locationId, cfg.templateName);
-    if (!templateId) throw Object.assign(new Error(`template "${cfg.templateName}" not configured`), { http: 422 });
+    const { templateId } = await resolveTemplate(locationId, section, cfg, cvByName);
+    if (!templateId) throw Object.assign(new Error("no card assigned to this section"), { http: 422 });
     const dataOverrides = await offersOverrides(section, client, locationId, contactId, cvByName, contact, idKeyMap);
     const gen = await renderRouter.generate({ client, locationId, templateId, contactId, force: false, dataOverrides });
     const message = renderMessage(section, cfg, gen.context, cvByName);

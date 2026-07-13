@@ -6,13 +6,12 @@ import React from "react";
 import SectionBody from "./SectionBody.jsx";
 import { Pill } from "./ui.jsx";
 
-export default function WinBack({ active, onEdit }) {
+export default function WinBack({ active }) {
   return (
     <SectionBody
       section="winback"
       id="winback"
       active={active}
-      onEdit={onEdit}
       title="Win-back"
       subtitle="Past customers going quiet — sorted by lifetime value"
       renderRowRight={(row) =>

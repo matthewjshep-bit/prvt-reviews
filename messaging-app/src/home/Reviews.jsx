@@ -5,13 +5,12 @@ import React from "react";
 import SectionBody from "./SectionBody.jsx";
 import { StatusPill } from "./ui.jsx";
 
-export default function Reviews({ active, onEdit }) {
+export default function Reviews({ active }) {
   return (
     <SectionBody
       section="reviews"
       id="reviews"
       active={active}
-      onEdit={onEdit}
       title="Reviews"
       subtitle="Ask while the job is still fresh"
       renderRowRight={(row) => <StatusPill status={row.status} />}

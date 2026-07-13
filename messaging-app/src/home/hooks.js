@@ -38,8 +38,9 @@ export function useSection(section, active) {
 }
 
 // Render a per-contact card + message when a row is selected. Debounced-safe:
-// stale responses for a previously-selected contact are discarded.
-export function usePreview(section, contactId) {
+// stale responses for a previously-selected contact are discarded. `version`
+// forces a re-fetch after the section's card/message settings change.
+export function usePreview(section, contactId, version = 0) {
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -54,7 +55,7 @@ export function usePreview(section, contactId) {
       .catch((e) => { if (!cancelled) setError(e.message || "Couldn’t render"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [section, contactId]);
+  }, [section, contactId, version]);
 
   return { preview, loading, error };
 }

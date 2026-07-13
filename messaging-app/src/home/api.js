@@ -43,6 +43,11 @@ const post = (path, body) =>
 export const getHomeConfig = () => fetch(`${API_BASE}/api/home/config?location_id=${loc()}`).then(j);
 export const getSection = (section) => fetch(`${API_BASE}/api/home/${section}?location_id=${loc()}`).then(j);
 
+/* ---------- section settings (card + message association) ---------- */
+export const saveSectionConfig = (section, { templateId, message } = {}) =>
+  post(`/api/home/section-config`, { section, templateId, message });
+export const createFromPreset = (section) => post(`/api/home/create-from-preset`, { section });
+
 /* ---------- preview + send ---------- */
 export const previewRow = (section, contactId) => post(`/api/home/preview`, { section, contactId });
 export const sendOne = (section, contactId, { dryRun = false, mode = "tag" } = {}) =>

@@ -5,13 +5,12 @@ import React from "react";
 import SectionBody from "./SectionBody.jsx";
 import { StatusPill } from "./ui.jsx";
 
-export default function QuoteFollowUp({ active, onEdit }) {
+export default function QuoteFollowUp({ active }) {
   return (
     <SectionBody
       section="quotes"
       id="quotes"
       active={active}
-      onEdit={onEdit}
       title="Quote follow-up"
       subtitle="Open quotes, sorted by expiry"
       renderRowRight={(row) => <StatusPill status={row.status} />}

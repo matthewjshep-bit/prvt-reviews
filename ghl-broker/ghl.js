@@ -54,6 +54,25 @@ export async function getConfig(client, locationId) {
   return deserializeConfig(byName);
 }
 
+// Upsert ONE custom value by name. Used by the Home page's section-config
+// writes (template assignment + message), where updating the whole config
+// blob would be wasteful.
+export async function setCustomValue(client, locationId, name, value) {
+  const cvs = await listCustomValues(client, locationId);
+  const match = cvs.find((c) => c.name === name);
+  if (match) {
+    await client.call(`/locations/${locationId}/customValues/${match.id}`, {
+      method: "PUT",
+      body: { name, value: String(value ?? "") },
+    });
+  } else {
+    await client.call(`/locations/${locationId}/customValues`, {
+      method: "POST",
+      body: { name, value: String(value ?? "") },
+    });
+  }
+}
+
 export async function saveConfig(client, locationId, config) {
   const cvs = await listCustomValues(client, locationId);
   const byName = new Map(cvs.map((c) => [c.name, c]));
