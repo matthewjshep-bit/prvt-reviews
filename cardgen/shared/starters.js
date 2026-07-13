@@ -191,10 +191,85 @@ export function welcomeStarter({ locationId } = {}) {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Home-page starters — the templates the consolidated Home screen
+ * resolves by name (see ghl-broker/home-config.js SECTIONS).
+ * ------------------------------------------------------------------ */
+
+// Quote Follow-Up — parcel aerial + the quote figures. The Home Quotes queue
+// binds quote_amount / quote_expiry / property_address contact fields.
+export function quoteFollowUpStarter({ locationId } = {}) {
+  return {
+    locationId,
+    name: "Quote Follow-Up",
+    canvas: { width: 1080, height: 1080 },
+    background: { color: "#0b0b0c" },
+    dataSources: [
+      {
+        id: "parcel",
+        provider: "mapbox-parcel",
+        inputs: { address: "{{contact.custom.property_address}}" },
+        options: { county: "king-wa", mapStyle: "satellite-v9", parcelColor: "#d4af37", showBuilding: false, padding: 40 },
+        connectionId: "",
+        discoveredKeys: ["apn", "lot_sqft", "address"],
+        thumbnailUrl: "",
+      },
+    ],
+    layers: [
+      { id: uid("dimg"), type: "dynamic-image", sourceId: "parcel", x: 0, y: 0, width: 100, height: 100, fit: "cover", visible: true },
+      { id: uid("scrim"), type: "shape", shape: "rect", x: 0, y: 58, width: 100, height: 42, fill: "rgba(0,0,0,0.6)", cornerRadius: 0, visible: true },
+      { id: uid("addr"), type: "text", x: 6, y: 62, width: 88, height: 8, content: "{{contact.custom.property_address}}", fontFamily: "Inter", fontWeight: "bold", fontSize: 42, color: "#ffffff", align: "center", lineHeight: 1.1, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("quote"), type: "text", x: 6, y: 72, width: 88, height: 10, content: "{{contact.first_name}} — your quote: ${{contact.custom.quote_amount}}", fontFamily: "Inter", fontWeight: "bold", fontSize: 52, color: "#d4af37", align: "center", lineHeight: 1.1, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("badge"), type: "badge", x: 25, y: 86, width: 50, height: 7, icon: "check", text: "Good through {{contact.custom.quote_expiry}}", bgColor: "#ffffff", textColor: "#0b0b0c", fontFamily: "Inter", fontSize: 30, cornerRadius: 999, visible: true },
+    ],
+    sampleData: {
+      "contact.first_name": "Dana",
+      "contact.custom.property_address": "2847 41st Ave SW, Seattle, WA",
+      "contact.custom.quote_amount": "14,200",
+      "contact.custom.quote_expiry": "Jul 15",
+    },
+  };
+}
+
+// Offer Terms — the dark per-tier terms card: headline → two big earned numbers
+// → proof line → expiry. data.tier.* is injected by the broker per contact
+// (or by an http-json data source with id "tier" for external terms).
+export function offerTermsStarter({ locationId } = {}) {
+  return {
+    locationId,
+    name: "Offer Terms",
+    canvas: { width: 1080, height: 1080 },
+    background: { color: "#0f172a" },
+    dataSources: [],
+    layers: [
+      { id: uid("h"), type: "text", x: 8, y: 10, width: 84, height: 12, content: "{{contact.first_name}}, you earned better terms", fontFamily: "Inter", fontWeight: "bold", fontSize: 60, color: "#ffffff", align: "left", lineHeight: 1.1, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("l1"), type: "text", x: 8, y: 30, width: 38, height: 5, content: "YOUR RATE", fontFamily: "Inter", fontWeight: "regular", fontSize: 30, color: "#94a3b8", align: "left", visible: true },
+      { id: uid("l2"), type: "text", x: 54, y: 30, width: 38, height: 5, content: "DOWN", fontFamily: "Inter", fontWeight: "regular", fontSize: 30, color: "#94a3b8", align: "left", visible: true },
+      { id: uid("b1"), type: "text", x: 8, y: 36, width: 42, height: 15, content: "{{data.tier.rate}}", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 140, color: "#d4af37", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("b2"), type: "text", x: 54, y: 36, width: 38, height: 15, content: "{{data.tier.down}}", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 140, color: "#ffffff", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("rule"), type: "shape", shape: "rect", x: 8, y: 57, width: 84, height: 0.4, fill: "rgba(148,163,184,0.35)", cornerRadius: 0, visible: true },
+      { id: uid("proof"), type: "text", x: 8, y: 61, width: 84, height: 6, content: "Based on {{data.tier.proof}}", fontFamily: "Inter", fontWeight: "regular", fontSize: 36, color: "#cbd5e1", align: "left", autoFit: true, maxLines: 2, visible: true },
+      { id: uid("lock"), type: "text", x: 8, y: 68, width: 84, height: 5, content: "Locked for 90 days", fontFamily: "Inter", fontWeight: "regular", fontSize: 30, color: "#64748b", align: "left", visible: true },
+      { id: uid("badge"), type: "badge", x: 8, y: 82, width: 52, height: 8, icon: "star", text: "{{data.tier.label}} client pricing", bgColor: "#d4af37", textColor: "#0f172a", fontFamily: "Inter", fontSize: 32, cornerRadius: 999, visible: true },
+    ],
+    sampleData: {
+      "contact.first_name": "Matt",
+      "data.tier.rate": "9.0%",
+      "data.tier.down": "10%",
+      "data.tier.label": "Proven",
+      "data.tier.proof": "4 deals · $1.2M · 0 late payments",
+    },
+  };
+}
+
 // Registry of starters the editor can offer. `category` groups them in the
 // picker; `message` is the matching SMS copy applied when the preset is chosen.
 export function starterList() {
   return [
+    { id: "quote-follow-up", name: "Quote Follow-Up", category: "Home page", build: quoteFollowUpStarter,
+      message: "Hi {{first_name}}, your quote for {{contact.custom.property_address}} is good through {{contact.custom.quote_expiry}}. Want me to hold your spot on next week's schedule?" },
+    { id: "offer-terms", name: "Offer Terms", category: "Home page", build: offerTermsStarter,
+      message: "{{first_name}} — your pricing just changed. Reply if you've got anything in the works." },
     { id: "review-request", name: "Review Request", category: "Reviews", build: reviewRequestStarter,
       message: "Hey {{first_name}}, we hope you enjoyed your experience with {{business_name}}! Would you mind taking a moment to leave a review? Here's the link: [Review Link]" },
     { id: "thank-you", name: "Thank You", category: "Reviews", build: thankYouStarter,
