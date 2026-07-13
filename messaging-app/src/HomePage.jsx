@@ -15,6 +15,7 @@ import QuoteFollowUp from "./home/QuoteFollowUp.jsx";
 import Reviews from "./home/Reviews.jsx";
 import WinBack from "./home/WinBack.jsx";
 import Offers from "./home/Offers.jsx";
+import Contacts from "./home/Contacts.jsx";
 import MessagingPage from "./MessagingPage.jsx";
 
 const SECTION_ORDER = ["quotes", "reviews", "winback", "offers"];
@@ -25,6 +26,7 @@ const NAV = [
   { view: "reviews", label: "Reviews" },
   { view: "winback", label: "Win-back" },
   { view: "offers", label: "Offers" },
+  { view: "contacts", label: "Contacts" },
   { view: "studio", label: "Card Studio" },
 ];
 
@@ -92,7 +94,9 @@ export default function HomePage() {
     <div className="min-h-screen bg-gray-50 text-gray-900">
       <TopNav view={view} onSelect={go} />
       <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
-        {single ? (
+        {view === "contacts" ? (
+          <Contacts />
+        ) : single ? (
           <SectionRenderer view={view} eager />
         ) : (
           <div className="space-y-6">

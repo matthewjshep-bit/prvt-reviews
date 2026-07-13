@@ -43,6 +43,23 @@ const post = (path, body) =>
 export const getHomeConfig = () => fetch(`${API_BASE}/api/home/config?location_id=${loc()}`).then(j);
 export const getSection = (section) => fetch(`${API_BASE}/api/home/${section}?location_id=${loc()}`).then(j);
 
+/* ---------- contacts (app-specific list + detail + manage) ---------- */
+export const listContacts = ({ query = "", filter = "", startAfter = "", startAfterId = "" } = {}) => {
+  const p = new URLSearchParams({ location_id: getLocationId() });
+  if (query) p.set("query", query);
+  if (filter) p.set("filter", filter);
+  if (startAfter && startAfterId) { p.set("startAfter", startAfter); p.set("startAfterId", startAfterId); }
+  return fetch(`${API_BASE}/api/home/contacts?${p}`).then(j);
+};
+export const getContactDetail = (id) =>
+  fetch(`${API_BASE}/api/home/contacts/${encodeURIComponent(id)}?location_id=${loc()}`).then(j);
+export const patchContact = (id, body) =>
+  fetch(`${API_BASE}/api/home/contacts/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ location_id: getLocationId(), ...body }),
+  }).then(j);
+
 /* ---------- section settings (card + message association) ---------- */
 export const saveSectionConfig = (section, { templateId, message } = {}) =>
   post(`/api/home/section-config`, { section, templateId, message });

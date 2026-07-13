@@ -8,6 +8,30 @@ import { ChevronRight, Star } from "lucide-react";
 export const BLUE = "#4c6ef5";   // outgoing SMS bubble (matches MessagingPage)
 export const SEND_BLUE = "#1d4ed8"; // primary send button (matches mockups)
 
+// Section display names — one place, used by Contacts + drawers.
+export const SECTION_LABELS = { quotes: "Quotes", reviews: "Reviews", winback: "Win-back", offers: "Offers" };
+
+// Small switch (used by the contact drawer's queue toggles).
+export function Toggle({ checked, onChange, label, disabled }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-40"
+      style={{ backgroundColor: checked ? SEND_BLUE : "#d1d5db" }}
+    >
+      <span
+        className="inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform"
+        style={{ transform: checked ? "translateX(22px)" : "translateX(2px)" }}
+      />
+    </button>
+  );
+}
+
 /* ---------- containers ---------- */
 
 export function Card({ children, className = "" }) {

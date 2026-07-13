@@ -15,9 +15,10 @@
 import express from "express";
 import { store } from "../store.js";
 import {
-  listCustomValues, searchContactsByTag, getContact, listTags,
+  listCustomValues, searchContactsByTag, searchContacts, getContact, updateContact, listTags,
   customFieldIdKeyMap, contactCustomRecord, setCustomValue,
-  addContactTags, findOrCreateCustomFieldByKey, updateContactCustomField, sendSms,
+  addContactTags, removeContactTag, findOrCreateCustomFieldByKey, updateContactCustomField, sendSms,
+  getConversationByContact, getMessages,
 } from "../ghl.js";
 import { resolveBindings } from "../shared/bindings.js";
 import { TemplateInputSchema } from "../shared/template-schema.js";
@@ -312,6 +313,168 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
         tiers, sendsEnabled: CARD_SENDS_ENABLED, cap: batchCap(cvByName),
         views: SECTION_KEYS,
       });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ==================================================================
+     Contacts — the app-specific contact list + detail + manage surface.
+     Registered BEFORE /:section so "contacts" isn't read as a section.
+     ================================================================== */
+
+  // Map a raw GHL contact to a list row (queues derived from queue tags).
+  const queueTagBySection = Object.fromEntries(SECTION_KEYS.map((k) => [k, TAGS[k].queue.toLowerCase()]));
+  function contactRow(c) {
+    const tags = lowerTags(c);
+    return {
+      id: idOf(c),
+      firstName: c.firstName || "",
+      name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.contactName || c.phone || "Contact",
+      phone: c.phone || "",
+      email: c.email || "",
+      dnd: isDnd(c),
+      addedAt: c.dateAdded || c.createdAt || null,
+      queues: SECTION_KEYS.filter((k) => tags.includes(queueTagBySection[k])),
+    };
+  }
+
+  // Full drawer payload for one contact.
+  async function contactDetail(client, locationId, contactId) {
+    const contact = await getContact(client, contactId);
+    const idKeyMap = await cfKeyMap(client, locationId);
+    const rec = contactCustomRecord(contact, idKeyMap);
+
+    // Our fields, grouped per section, with definition presence flagged.
+    const definedKeys = new Set([...idKeyMap.values()]);
+    const fields = {};
+    for (const section of SECTION_KEYS) {
+      fields[section] = Object.entries(FIELD_KEYS[section]).map(([key, def]) => ({
+        key,
+        label: def.label,
+        type: def.type,
+        required: Boolean(def.required),
+        value: rec[key] ?? "",
+        defined: definedKeys.has(key), // false = field doesn't exist in GHL yet
+      }));
+    }
+
+    let sends = [];
+    try { sends = await store.homeSendsForContact(locationId, contactId, 20); } catch { /* ignore */ }
+
+    let messages = [];
+    try {
+      const convo = await getConversationByContact(client, contactId, locationId);
+      if (convo?.id) {
+        const raw = await getMessages(client, convo.id);
+        messages = (raw || []).slice(0, 20).map((m) => ({
+          id: m.id,
+          body: m.body || "",
+          direction: m.direction || (m.type === "outbound" ? "outbound" : "inbound"),
+          dateAdded: m.dateAdded || m.dateUpdated || null,
+          attachments: m.attachments || [],
+        }));
+      }
+    } catch { /* messages are best-effort */ }
+
+    return {
+      ok: true,
+      contact: contactRow(contact),
+      tags: contact.tags || [],
+      fields,
+      sends,
+      messages,
+      sendsEnabled: CARD_SENDS_ENABLED,
+    };
+  }
+
+  /* ---------- GET /api/home/contacts ---------- */
+  // ?query= text search · ?filter= quotes|reviews|winback|offers|dnd ·
+  // ?startAfter/&startAfterId= cursor for the plain paged list.
+  router.get("/contacts", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const query = String(req.query.query || "").trim();
+      const filter = String(req.query.filter || "").trim();
+
+      if (query) {
+        const results = await searchContacts(client, locationId, query);
+        return res.json({ ok: true, contacts: (results || []).slice(0, 50).map(contactRow), cursor: null, mode: "search" });
+      }
+
+      if (SECTIONS[filter]) {
+        const { contacts } = await searchContactsByTag(client, locationId, TAGS[filter].queue, { max: 200 });
+        return res.json({ ok: true, contacts: contacts.map(contactRow), cursor: null, mode: "filter" });
+      }
+
+      // Default: cursor-paged full list (GHL meta.startAfter/startAfterId).
+      let path = `/contacts/?locationId=${encodeURIComponent(locationId)}&limit=50`;
+      const { startAfter, startAfterId } = req.query;
+      if (startAfter && startAfterId) {
+        path += `&startAfter=${encodeURIComponent(startAfter)}&startAfterId=${encodeURIComponent(startAfterId)}`;
+      }
+      const data = await client.call(path);
+      const batch = data.contacts || [];
+      const meta = data.meta || {};
+      const cursor = batch.length === 50 && meta.startAfterId
+        ? { startAfter: meta.startAfter, startAfterId: meta.startAfterId }
+        : null;
+      let rows = batch.map(contactRow);
+      if (filter === "dnd") rows = rows.filter((r) => r.dnd);
+      res.json({ ok: true, contacts: rows, cursor, total: meta.total });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- GET /api/home/contacts/:id ---------- */
+  router.get("/contacts/:id", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      res.json(await contactDetail(client, locationId, req.params.id));
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- PATCH /api/home/contacts/:id ---------- */
+  // body: { fields?: {key: value}, queues?: {section: bool}, dnd?: bool }
+  // Applies our custom-field edits, queue-tag membership, and DND, then
+  // returns the refreshed detail payload.
+  router.patch("/contacts/:id", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = req.params.id;
+      const { fields, queues, dnd } = req.body || {};
+
+      if (fields && typeof fields === "object" && Object.keys(fields).length) {
+        const idKeyMap = await cfKeyMap(client, locationId);
+        const keyToId = new Map([...idKeyMap].map(([id, key]) => [key, id]));
+        const customFields = [];
+        const missing = [];
+        for (const [key, value] of Object.entries(fields)) {
+          const fid = keyToId.get(key);
+          if (fid) customFields.push({ id: fid, value: String(value ?? "") });
+          else missing.push(key);
+        }
+        if (missing.length) {
+          return res.status(422).json({
+            error: `no custom-field definition for: ${missing.join(", ")} — create them in GHL (Settings → Custom Fields) first`,
+          });
+        }
+        if (customFields.length) await updateContact(client, contactId, { customFields });
+      }
+
+      if (queues && typeof queues === "object") {
+        const add = [];
+        const remove = [];
+        for (const [section, on] of Object.entries(queues)) {
+          if (!SECTIONS[section]) return res.status(400).json({ error: `unknown section "${section}"` });
+          (on ? add : remove).push(TAGS[section].queue);
+        }
+        if (add.length) await addContactTags(client, contactId, add);
+        if (remove.length) await removeContactTag(client, contactId, remove);
+      }
+
+      if (dnd !== undefined) {
+        await updateContact(client, contactId, { dnd: Boolean(dnd) });
+      }
+
+      res.json(await contactDetail(client, locationId, contactId));
     } catch (err) { fail(res, err); }
   });
 

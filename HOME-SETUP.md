@@ -188,7 +188,23 @@ focused links later with **zero code changes**:
 | Reviews only | `home.html?view=reviews&location_id={{location.id}}` |
 | Win-back only | `home.html?view=winback&location_id={{location.id}}` |
 | Offers only | `home.html?view=offers&location_id={{location.id}}` |
+| Contacts | `home.html?view=contacts&location_id={{location.id}}` |
 | Card Studio | `home.html?view=studio&location_id={{location.id}}` |
+
+## 7b. Contacts view
+
+`?view=contacts` (also in the Home nav) is the app-specific contact surface:
+every contact in the location, searchable, with filter chips for the four
+queues and DND, cursor-paged. Clicking a contact opens the pop-out drawer:
+
+- **Do Not Contact** toggle — writes GHL's `dnd` flag (the same flag every
+  send path checks server-side).
+- **Queues** — toggle the four queue tags on/off (writes the real GHL tags),
+  plus a per-queue "send card" action (confirm-gated, same dedupe/DND rules).
+- **Fields** — this app's custom fields (§1), editable inline; a field whose
+  GHL definition doesn't exist yet shows "not set up" and stays read-only.
+- **Timeline** — Card sends (from the `home_sends` log, with links to the
+  rendered cards) and the SMS message thread.
 
 ---
 

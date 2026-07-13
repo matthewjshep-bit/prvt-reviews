@@ -123,6 +123,18 @@ const pgStore = {
     );
     return new Set(rows.map((r) => r.contact_id));
   },
+  // One contact's send history (drives the Contacts drawer timeline).
+  async homeSendsForContact(locationId, contactId, limit = 20) {
+    const { rows } = await query(
+      `select section, trigger_tag as "triggerTag", card_url as "cardUrl",
+              batch_id as "batchId", created_at as "createdAt"
+       from home_sends
+       where location_id = $1 and contact_id = $2
+       order by created_at desc limit $3`,
+      [locationId, contactId, limit]
+    );
+    return rows;
+  },
 
   /* ---- assets ---- */
   async createAsset(row) {
@@ -319,6 +331,14 @@ const fileStore = (() => {
         }
       }
       return ids;
+    },
+    async homeSendsForContact(locationId, contactId, limit = 20) {
+      ensure();
+      return (data.homeSends || [])
+        .filter((r) => r.locationId === locationId && r.contactId === contactId)
+        .slice(-limit)
+        .reverse()
+        .map(({ section, triggerTag, cardUrl, batchId, createdAt }) => ({ section, triggerTag, cardUrl, batchId, createdAt }));
     },
 
     async createAsset(row) {

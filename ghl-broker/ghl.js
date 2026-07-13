@@ -360,6 +360,16 @@ export async function getContact(client, contactId) {
   return data.contact || data;
 }
 
+// Update a contact's standard fields (dnd, firstName, …) and/or customFields.
+// Same PUT the custom-field writeback uses, generalized.
+export async function updateContact(client, contactId, body) {
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}`, {
+    method: "PUT",
+    body,
+  });
+  return data.contact || data;
+}
+
 /* ---------- contact notes ---------- */
 
 export async function getContactNotes(client, contactId) {
