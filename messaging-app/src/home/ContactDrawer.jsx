@@ -184,7 +184,32 @@ export default function ContactDrawer({ contactId, onClose, onChanged }) {
               </div>
 
               {/* our fields */}
-              <div className="mb-1 text-xs font-bold uppercase tracking-wide text-gray-400">Fields</div>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wide text-gray-400">Fields</span>
+                {Object.values(detail.fields || {}).some((defs) => defs.some((f) => !f.defined)) ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      setNotice(null);
+                      try {
+                        const r = await api.setupFields();
+                        setNotice({ kind: "ok", text: `Created ${r.created.length} field${r.created.length === 1 ? "" : "s"} in GHL — they're editable now.` });
+                        const d = await api.getContactDetail(contactId);
+                        setDetail(d);
+                      } catch (e) {
+                        setNotice({ kind: "err", text: e.message || "Couldn’t create the fields" });
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                    className="text-xs font-semibold text-blue-600 underline hover:text-blue-800 disabled:opacity-50"
+                  >
+                    Set up missing fields
+                  </button>
+                ) : null}
+              </div>
               <div className="mb-2 overflow-hidden rounded-xl border border-gray-200">
                 {Object.entries(detail.fields || {}).map(([section, defs]) => (
                   <div key={section} className="border-t border-gray-100 first:border-t-0">

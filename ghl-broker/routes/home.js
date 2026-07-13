@@ -316,6 +316,34 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
     } catch (err) { fail(res, err); }
   });
 
+  /* ---------- POST /api/home/setup-fields ---------- */
+  // One-click: create every missing custom-field DEFINITION this app uses
+  // (FIELD_KEYS). Field names are derived from keys ("quote_amount" → "Quote
+  // Amount") so GHL's name→fieldKey derivation lands back on the exact key.
+  const GHL_TYPE = { number: "NUMERICAL", date: "DATE", text: "TEXT" };
+  router.post("/setup-fields", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const idKeyMap = await cfKeyMap(client, locationId);
+      const defined = new Set([...idKeyMap.values()]);
+
+      const created = [];
+      const existing = [];
+      for (const section of SECTION_KEYS) {
+        for (const [key, def] of Object.entries(FIELD_KEYS[section])) {
+          if (defined.has(key)) { existing.push(key); continue; }
+          const name = key.split("_").map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+          await findOrCreateCustomFieldByKey(client, locationId, key, name, GHL_TYPE[def.type] || "TEXT");
+          defined.add(key); // keys shared across sections only create once
+          created.push(key);
+          await new Promise((r) => setTimeout(r, 120)); // stay under the burst limit
+        }
+      }
+      cache.delete(`cf:${locationId}`); // next detail read sees the new defs
+      res.json({ ok: true, created, existing });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ==================================================================
      Contacts — the app-specific contact list + detail + manage surface.
      Registered BEFORE /:section so "contacts" isn't read as a section.

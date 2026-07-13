@@ -43,6 +43,9 @@ const post = (path, body) =>
 export const getHomeConfig = () => fetch(`${API_BASE}/api/home/config?location_id=${loc()}`).then(j);
 export const getSection = (section) => fetch(`${API_BASE}/api/home/${section}?location_id=${loc()}`).then(j);
 
+/* ---------- one-click GHL custom-field setup ---------- */
+export const setupFields = () => post(`/api/home/setup-fields`, {});
+
 /* ---------- contacts (app-specific list + detail + manage) ---------- */
 export const listContacts = ({ query = "", filter = "", startAfter = "", startAfterId = "" } = {}) => {
   const p = new URLSearchParams({ location_id: getLocationId() });

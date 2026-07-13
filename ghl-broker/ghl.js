@@ -112,8 +112,9 @@ export async function listCustomFields(client, locationId) {
 }
 
 // Find a custom field by its logical key (e.g. "card_image_url"), creating it
-// if absent. Returns the field id. Used by the render webhook writeback (§8).
-export async function findOrCreateCustomFieldByKey(client, locationId, key, name) {
+// if absent. Returns the field id. Used by the render webhook writeback (§8)
+// and the Home page's one-click field setup. dataType: TEXT | NUMERICAL | DATE.
+export async function findOrCreateCustomFieldByKey(client, locationId, key, name, dataType = "TEXT") {
   const fields = await listCustomFields(client, locationId);
   const match = fields.find(
     (f) => String(f.fieldKey || "").replace(/^contact\./, "") === key || f.name === (name || key)
@@ -121,7 +122,7 @@ export async function findOrCreateCustomFieldByKey(client, locationId, key, name
   if (match) return match.id;
   const created = await client.call(`/locations/${encodeURIComponent(locationId)}/customFields`, {
     method: "POST",
-    body: { name: name || "Card Image URL", dataType: "TEXT", model: "contact" },
+    body: { name: name || "Card Image URL", dataType, model: "contact" },
   });
   return created?.customField?.id || created?.id;
 }
