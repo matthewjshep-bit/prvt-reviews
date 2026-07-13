@@ -113,6 +113,11 @@ data source with id `tier` instead — the same `{{data.tier.*}}` bindings resol
 
 ## 4. Workflows
 
+**Send mode:** the broker currently defaults to **direct** — it sends the MMS
+itself, no workflow needed. To switch a location to the workflow flow (adds
+follow-up sequences), build the workflows below and set the Custom Value
+`rh_home_send_mode` = `tag`.
+
 One workflow per trigger tag. Trigger: **Contact Tag added** → *(tag)*. Steps:
 
 1. **Send MMS** — message body (see §5 defaults) + image `{{contact.card_image_url}}`.
@@ -145,6 +150,7 @@ working baseline. Existing messaging config (`rh_business_name`,
 | `rh_home_<section>_template` | Legacy template-NAME override (fallback when no id) | preset name |
 | `rh_home_quotes_message` … `_offers_message` | Outgoing message per section (written by the Card & message panel) | code default |
 | `rh_home_offer_tiers` | Tier rules + terms, JSON (see below) | Proven/Repeat/New |
+| `rh_home_send_mode` | `direct` (broker sends MMS) or `tag` (workflow sends) | `direct` |
 | `rh_home_batch_cap` | Hard batch cap override | `CAMPAIGN_CAP` env (200) |
 | `rh_review_link` | Fills `[Review Link]` in review copy | empty |
 

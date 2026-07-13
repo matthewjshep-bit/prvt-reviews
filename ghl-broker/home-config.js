@@ -182,6 +182,10 @@ export const CV_OVERRIDES = {
   message: (section) => `rh_home_${section}_message`,
   // Tier definitions as JSON: rh_home_offer_tiers
   tiers: "rh_home_offer_tiers",
+  // Send mechanism: "direct" (broker sends the MMS itself) or "tag" (apply the
+  // trigger tag and let the GHL workflow send + run follow-ups). Default is
+  // direct until the location's workflows are built.
+  sendMode: "rh_home_send_mode",
   // Hard batch cap override (else CAMPAIGN_CAP env): rh_home_batch_cap
   batchCap: "rh_home_batch_cap",
 };

@@ -640,12 +640,15 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
   /* ---------- POST /api/home/send ---------- */
   router.post("/send", async (req, res) => {
     try {
-      const { section, contactId, dryRun = true, mode = "tag" } = req.body || {};
+      const { section, contactId, dryRun = true, mode: reqMode } = req.body || {};
       if (!SECTIONS[section]) return res.status(400).json({ error: "unknown section" });
       if (!contactId) return res.status(400).json({ error: "contactId required" });
       const { locationId, client } = resolveLocation(req);
       const cvByName = await cvMap(client, locationId);
       const cfg = effectiveSection(section, cvByName);
+      // "direct" = broker sends the MMS itself; "tag" = fire the GHL workflow.
+      // Default direct until the location's workflows exist (rh_home_send_mode).
+      const mode = reqMode || cvByName[CV_OVERRIDES.sendMode] || "direct";
 
       const contact = await getContact(client, contactId);
       if (isDnd(contact)) return res.json({ ok: true, skipped: "dnd", contactId });
@@ -672,11 +675,12 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
   /* ---------- POST /api/home/send-batch ---------- */
   router.post("/send-batch", async (req, res) => {
     try {
-      const { section, contactIds = null, dryRun = true, mode = "tag" } = req.body || {};
+      const { section, contactIds = null, dryRun = true, mode: reqMode } = req.body || {};
       if (!SECTIONS[section]) return res.status(400).json({ error: "unknown section" });
       const { locationId, client } = resolveLocation(req);
       const cvByName = await cvMap(client, locationId);
       const cfg = effectiveSection(section, cvByName);
+      const mode = reqMode || cvByName[CV_OVERRIDES.sendMode] || "direct";
       const tiers = effectiveTiers(cvByName);
       const cap = batchCap(cvByName);
 
