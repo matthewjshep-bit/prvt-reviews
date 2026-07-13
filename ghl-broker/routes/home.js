@@ -83,6 +83,15 @@ const cvMap = (client, locationId) =>
   });
 const cfKeyMap = (client, locationId) =>
   cached(`cf:${locationId}`, 60_000, () => customFieldIdKeyMap(client, locationId));
+const tagLibrary = (client, locationId) =>
+  cached(`tags:${locationId}`, 60_000, async () => {
+    try {
+      const tags = await listTags(client, locationId);
+      return new Set(tags.map((t) => t.name.toLowerCase()));
+    } catch {
+      return null; // couldn't read the library — don't block queries on it
+    }
+  });
 
 // Resolve a section's template NAME to a stored template id (case-insensitive).
 async function resolveTemplateId(locationId, templateName) {
@@ -285,6 +294,21 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
       const cap = batchCap(cvByName);
 
       const templateId = await resolveTemplateId(locationId, cfg.templateName);
+
+      // If the queue tag doesn't exist in the tag library yet, this is a setup
+      // problem — say so and skip the contact query entirely.
+      const library = await tagLibrary(client, locationId);
+      if (library && !library.has(cfg.tags.queue.toLowerCase())) {
+        return res.json({
+          ok: true, section, view: cfg.view, label: cfg.label, subtitle: cfg.subtitle,
+          batch: cfg.batch, templateId, templateName: cfg.templateName,
+          queueTag: cfg.tags.queue, trigger: cfg.tags.trigger,
+          rows: [], summary: summarize(section, [], cap),
+          sendsEnabled: CARD_SENDS_ENABLED, cap,
+          configError: `queue tag "${cfg.tags.queue}" doesn't exist yet — create it in GHL (Settings → Tags) and add it to contacts`,
+        });
+      }
+
       const { contacts } = await searchContactsByTag(client, locationId, cfg.tags.queue, { max: cap });
       const idKeyMap = await cfKeyMap(client, locationId);
       const hydrated = await hydrate(client, contacts, cap);

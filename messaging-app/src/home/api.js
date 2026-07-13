@@ -18,7 +18,12 @@ async function j(res) {
     let msg = `HTTP ${res.status}`;
     try {
       const b = await res.json();
-      msg = [b.error, Array.isArray(b.detail) ? b.detail.join("; ") : b.detail].filter(Boolean).join(" — ") || msg;
+      const detail = Array.isArray(b.detail)
+        ? b.detail.join("; ")
+        : b.detail && typeof b.detail === "object"
+        ? JSON.stringify(b.detail).slice(0, 200)
+        : b.detail;
+      msg = [b.error, detail].filter(Boolean).join(" — ") || msg;
     } catch { /* ignore */ }
     const err = new Error(msg);
     err.status = res.status;

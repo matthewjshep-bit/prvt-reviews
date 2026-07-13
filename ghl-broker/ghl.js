@@ -207,8 +207,10 @@ export async function listTags(client, locationId) {
 }
 
 // All contacts carrying a given tag. Prefers the v2 advanced-search endpoint
-// (paginated); if that returns nothing / errors (schema drift), falls back to
-// paging the plain contacts list and filtering by tag client-side.
+// (paginated); if that ERRORS (schema drift), falls back to paging the plain
+// contacts list and filtering by tag client-side. An empty advanced-search
+// result is trusted as-is — falling through on "zero matches" caused a full
+// contact-list scan per request (rate-limit storms when a tag has no members).
 export async function searchContactsByTag(client, locationId, tag, { max = 500 } = {}) {
   const wanted = String(tag).trim().toLowerCase();
 
@@ -230,7 +232,7 @@ export async function searchContactsByTag(client, locationId, tag, { max = 500 }
       const total = data.total ?? out.length;
       if (batch.length === 0 || out.length >= total) break;
     }
-    if (out.length) return { contacts: out.slice(0, max), total: out.length };
+    return { contacts: out.slice(0, max), total: out.length };
   } catch {
     /* fall through to the list-scan fallback */
   }
