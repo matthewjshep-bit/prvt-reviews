@@ -72,6 +72,22 @@ create table if not exists connections (
 );
 create index if not exists connections_location_idx on connections (location_id);
 
+-- Home-page send log + dedupe ledger. One row per contact per queue per send
+-- attempt (dry runs are NOT logged). The per-queue 24h dedupe reads the most
+-- recent row for (location, contact, section).
+create table if not exists home_sends (
+  id           bigserial primary key,
+  location_id  text not null,
+  section      text not null,          -- 'quotes' | 'reviews' | 'winback' | 'offers'
+  contact_id   text not null,
+  trigger_tag  text,                   -- tag applied to fire the workflow
+  card_url     text,                   -- rendered card written for the workflow (if any)
+  batch_id     text,                   -- groups a batch send
+  created_at   timestamptz not null default now()
+);
+create index if not exists home_sends_dedupe_idx on home_sends (location_id, contact_id, section, created_at desc);
+create index if not exists home_sends_batch_idx on home_sends (batch_id);
+
 -- Last Test result per data source (discovered keys + thumbnail), so the editor
 -- is useful on reload.
 create table if not exists data_source_tests (

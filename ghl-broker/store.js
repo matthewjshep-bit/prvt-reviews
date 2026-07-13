@@ -103,6 +103,27 @@ const pgStore = {
     return id;
   },
 
+  /* ---- home sends (log + 24h dedupe) ---- */
+  async logHomeSend(row) {
+    await query(
+      `insert into home_sends (location_id, section, contact_id, trigger_tag, card_url, batch_id)
+       values ($1,$2,$3,$4,$5,$6)`,
+      [row.locationId, row.section, row.contactId, row.triggerTag || null, row.cardUrl || null, row.batchId || null]
+    );
+    return true;
+  },
+  // Contact ids for this (location, section) sent within `sinceMs` ago. Used to
+  // skip re-sends inside the dedupe window.
+  async recentHomeSendIds(locationId, section, sinceMs) {
+    const cutoff = new Date(Date.now() - sinceMs).toISOString();
+    const { rows } = await query(
+      `select distinct contact_id from home_sends
+       where location_id = $1 and section = $2 and created_at >= $3`,
+      [locationId, section, cutoff]
+    );
+    return new Set(rows.map((r) => r.contact_id));
+  },
+
   /* ---- assets ---- */
   async createAsset(row) {
     const id = uuid();
@@ -193,7 +214,7 @@ function loadFile() {
   try {
     return JSON.parse(fs.readFileSync(STORE_FILE, "utf8"));
   } catch {
-    return { templates: {}, versions: {}, renders: [], assets: [], connections: {}, tests: [] };
+    return { templates: {}, versions: {}, renders: [], assets: [], connections: {}, tests: [], homeSends: [] };
   }
 }
 
@@ -278,6 +299,26 @@ const fileStore = (() => {
       data.renders = data.renders.slice(-500);
       persist();
       return id;
+    },
+
+    async logHomeSend(row) {
+      ensure();
+      data.homeSends = data.homeSends || [];
+      data.homeSends.push({ ...row, createdAt: nowIso() });
+      data.homeSends = data.homeSends.slice(-2000);
+      persist();
+      return true;
+    },
+    async recentHomeSendIds(locationId, section, sinceMs) {
+      ensure();
+      const cutoff = Date.now() - sinceMs;
+      const ids = new Set();
+      for (const r of data.homeSends || []) {
+        if (r.locationId === locationId && r.section === section && new Date(r.createdAt).getTime() >= cutoff) {
+          ids.add(r.contactId);
+        }
+      }
+      return ids;
     },
 
     async createAsset(row) {

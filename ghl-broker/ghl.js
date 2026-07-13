@@ -107,6 +107,27 @@ export async function findOrCreateCustomFieldByKey(client, locationId, key, name
   return created?.customField?.id || created?.id;
 }
 
+// Map of custom-field id -> logical key ("fieldKey" minus the "contact." prefix),
+// e.g. { "abc123": "quote_amount" }. Used to read a contact's fields by key.
+export async function customFieldIdKeyMap(client, locationId) {
+  const defs = await listCustomFields(client, locationId);
+  const map = new Map();
+  for (const d of defs) map.set(d.id, String(d.fieldKey || d.key || "").replace(/^contact\./, ""));
+  return map;
+}
+
+// Flatten a contact's customFields array into a { logicalKey: value } record,
+// using the id→key map from customFieldIdKeyMap. Tolerates both GHL shapes
+// (customFields / customField, value / fieldValue).
+export function contactCustomRecord(contact, idKeyMap) {
+  const out = {};
+  for (const cf of contact?.customFields || contact?.customField || []) {
+    const key = idKeyMap.get(cf.id);
+    if (key) out[key] = cf.value ?? cf.fieldValue ?? "";
+  }
+  return out;
+}
+
 // Write a value into a contact's custom field.
 export async function updateContactCustomField(client, contactId, fieldId, value) {
   return client.call(`/contacts/${encodeURIComponent(contactId)}`, {

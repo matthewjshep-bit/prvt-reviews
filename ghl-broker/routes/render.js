@@ -89,11 +89,16 @@ export default function createRenderRouter({ resolveLocation, resolveConnections
   };
 
   // Core: resolve a template + contact → generate → log → return.
-  async function generate({ client, locationId, templateId, contactId, force }) {
+  // `dataOverrides` (optional) is merged into context.data before render, so
+  // callers can inject computed scopes like data.tier.* (Home Offers terms).
+  async function generate({ client, locationId, templateId, contactId, force, dataOverrides }) {
     const template = await store.getTemplate(templateId);
     if (!template || template.locationId !== locationId) throw Object.assign(new Error("template not found"), { http: 404 });
     const contact = await getContact(client, contactId);
     const context = await buildContactContext(client, locationId, contact);
+    if (dataOverrides && typeof dataOverrides === "object") {
+      context.data = { ...(context.data || {}), ...dataOverrides };
+    }
     const connections = resolveConnectionsFor ? await resolveConnectionsFor(template, locationId) : {};
 
     const out = await cardgenGenerate({ template, context, connections, force });
