@@ -10,10 +10,11 @@ import { starterList, blankStarter } from "@shared/starters.js";
 import TemplatePreview from "./TemplatePreview.jsx";
 
 const PURPOSES = [
-  { key: "quotes", label: "Quote follow-up" },
-  { key: "reviews", label: "Reviews" },
-  { key: "winback", label: "Win-back" },
-  { key: "offers", label: "Offers" },
+  { key: "quotes", label: "Quote follow-up", section: true },
+  { key: "reviews", label: "Reviews", section: true },
+  { key: "winback", label: "Win-back", section: true },
+  { key: "offers", label: "Offers", section: true },
+  { key: "imagery", label: "Property imagery", hint: "live per-contact imagery — parcel outline, satellite, street view" },
   { key: "general", label: "More" },
 ];
 const INDUSTRY_LABELS = {
@@ -132,7 +133,7 @@ export default function ChooseStep({ templates, assignments, onEdit, onNewFromPr
         </div>
 
         <div className="space-y-6">
-          {PURPOSES.map(({ key, label }) => {
+          {PURPOSES.map(({ key, label, section, hint }) => {
             const items = filtered.filter((s) => (s.purpose || "general") === key);
             if (!items.length) return null;
             const assigned = assignments?.[key];
@@ -140,10 +141,12 @@ export default function ChooseStep({ templates, assignments, onEdit, onNewFromPr
               <div key={key}>
                 <div className="mb-2 flex items-baseline gap-2">
                   <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">{label}</h3>
-                  {key !== "general" ? (
+                  {section ? (
                     <span className="text-[11px] text-gray-400">
                       {assigned ? "picking one replaces the current card on save" : "picking one assigns it on save"}
                     </span>
+                  ) : hint ? (
+                    <span className="text-[11px] text-gray-400">{hint}</span>
                   ) : null}
                 </div>
                 <Row>
@@ -152,7 +155,7 @@ export default function ChooseStep({ templates, assignments, onEdit, onNewFromPr
                       key={s.id}
                       title={s.name}
                       subtitle={INDUSTRY_LABELS[s.industry] || "General"}
-                      onClick={() => (key === "general" ? onNewFromStarter(s) : onNewFromPreset(key, s))}
+                      onClick={() => (section ? onNewFromPreset(key, s) : onNewFromStarter(s))}
                     >
                       {galleryDocs.get(s.id) ? (
                         <TemplatePreview template={galleryDocs.get(s.id)} />

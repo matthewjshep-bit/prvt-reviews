@@ -117,6 +117,11 @@ const SQUARE = { width: 1080, height: 1080 };
 const IMG = {
   house: "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1080&h=1080&q=80",
   service: "https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=1080&h=1080&q=80",
+  // Editor/gallery thumbnails for dynamic-image layers (the REAL imagery is
+  // fetched per contact at render time; these just make previews representative).
+  thumbAerial: "https://images.unsplash.com/photo-1449844908441-8829872d2607?auto=format&fit=crop&w=640&h=640&q=70",
+  thumbSatellite: "https://images.unsplash.com/photo-1446776877081-d282a0f896e2?auto=format&fit=crop&w=640&h=640&q=70",
+  thumbStreet: "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=640&h=640&q=70",
 };
 
 // Real estate — Just Listed (photo + details).
@@ -384,6 +389,72 @@ export function comebackCreditStarter({ locationId } = {}) {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Property-imagery bases — one per imagery data source, so users can
+ * see exactly what each provider produces and build on top of it.
+ * The real image is fetched PER CONTACT at render time.
+ * ------------------------------------------------------------------ */
+
+// mapbox-parcel: satellite aerial with the contact's parcel outlined in gold.
+export function parcelAerialBaseStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Parcel Aerial Base", canvas: SQUARE, background: { color: "#0b0b0c" },
+    dataSources: [
+      { id: "parcel", provider: "mapbox-parcel",
+        inputs: { address: "{{contact.custom.property_address}}" },
+        options: { county: "king-wa", mapStyle: "satellite-v9", parcelColor: "#d4af37", showBuilding: false, padding: 40 },
+        connectionId: "", discoveredKeys: ["apn", "lot_sqft", "address"], thumbnailUrl: IMG.thumbAerial },
+    ],
+    layers: [
+      { id: uid("dimg"), type: "dynamic-image", sourceId: "parcel", x: 0, y: 0, width: 100, height: 100, fit: "cover", thumbnailUrl: IMG.thumbAerial, visible: true },
+      { id: uid("scrim"), type: "shape", shape: "rect", x: 0, y: 66, width: 100, height: 34, fill: "rgba(0,0,0,0.55)", cornerRadius: 0, visible: true },
+      { id: uid("addr"), type: "text", x: 6, y: 70, width: 88, height: 8, content: "{{contact.custom.property_address}}", fontFamily: "Inter", fontWeight: "bold", fontSize: 42, color: "#ffffff", align: "center", lineHeight: 1.1, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("badge"), type: "badge", x: 27, y: 84, width: 46, height: 7, icon: "pin", text: "{{data.parcel.lot_sqft}} sq ft lot", bgColor: "#d4af37", textColor: "#0b0b0c", fontFamily: "Inter", fontSize: 32, cornerRadius: 999, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Jessica", "contact.custom.property_address": "2847 41st Ave SW, Seattle, WA", "data.parcel.lot_sqft": "7200" },
+  };
+}
+
+// mapbox-pin: satellite top view centred on the address with a marker.
+export function satelliteViewBaseStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Satellite View Base", canvas: SQUARE, background: { color: "#0b0b0c" },
+    dataSources: [
+      { id: "map", provider: "mapbox-pin",
+        inputs: { address: "{{contact.custom.property_address}}" },
+        options: { mapStyle: "satellite-streets-v12", zoom: 17, marker: true },
+        connectionId: "", discoveredKeys: ["lat", "lng", "formatted_address"], thumbnailUrl: IMG.thumbSatellite },
+    ],
+    layers: [
+      { id: uid("dimg"), type: "dynamic-image", sourceId: "map", x: 0, y: 0, width: 100, height: 100, fit: "cover", thumbnailUrl: IMG.thumbSatellite, visible: true },
+      { id: uid("scrim"), type: "shape", shape: "rect", x: 0, y: 0, width: 100, height: 22, fill: "rgba(0,0,0,0.45)", cornerRadius: 0, visible: true },
+      { id: uid("h"), type: "text", x: 6, y: 5, width: 88, height: 10, content: "{{contact.first_name}}, your neighborhood", fontFamily: "Inter", fontWeight: "bold", fontSize: 50, color: "#ffffff", align: "center", lineHeight: 1.1, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("badge"), type: "badge", x: 22, y: 88, width: 56, height: 7, icon: "pin", text: "{{contact.custom.property_address}}", bgColor: "#ffffff", textColor: "#0b0b0c", fontFamily: "Inter", fontSize: 28, cornerRadius: 999, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Jessica", "contact.custom.property_address": "2847 41st Ave SW, Seattle, WA" },
+  };
+}
+
+// google-streetview: street-level photo of the address (satellite fallback).
+export function streetViewBaseStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Street View Base", canvas: SQUARE, background: { color: "#0b0b0c" },
+    dataSources: [
+      { id: "street", provider: "google-streetview",
+        inputs: { address: "{{contact.custom.property_address}}" },
+        options: { fov: 80, pitch: 0, fallbackToSatellite: true },
+        connectionId: "", discoveredKeys: ["lat", "lng", "pano_date"], thumbnailUrl: IMG.thumbStreet },
+    ],
+    layers: [
+      { id: uid("dimg"), type: "dynamic-image", sourceId: "street", x: 0, y: 0, width: 100, height: 100, fit: "cover", thumbnailUrl: IMG.thumbStreet, visible: true },
+      { id: uid("scrim"), type: "shape", shape: "rect", x: 0, y: 62, width: 100, height: 38, fill: "rgba(0,0,0,0.55)", cornerRadius: 0, visible: true },
+      { id: uid("h"), type: "text", x: 6, y: 66, width: 88, height: 10, content: "Looking good, {{contact.first_name}}!", fontFamily: "Inter", fontWeight: "bold", fontSize: 52, color: "#ffffff", align: "center", lineHeight: 1.1, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("addr"), type: "text", x: 8, y: 79, width: 84, height: 7, content: "{{contact.custom.property_address}}", fontFamily: "Inter", fontWeight: "regular", fontSize: 34, color: "#d1d5db", align: "center", autoFit: true, maxLines: 1, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Jessica", "contact.custom.property_address": "2847 41st Ave SW, Seattle, WA" },
+  };
+}
+
 // Registry of starters the editor can offer. `category` groups them in the
 // picker; `message` is the matching SMS copy applied when the preset is chosen.
 // `purpose` maps a starter to a Home section (quotes|reviews|winback|offers)
@@ -421,6 +492,13 @@ export function starterList() {
       message: "{{first_name}} — {{contact.custom.deal_count}} jobs with us earns you member pricing on the next one. Want a quote?" },
     { id: "comeback-credit", name: "Comeback Credit", category: "General", purpose: "offers", industry: "general", build: comebackCreditStarter,
       message: "{{first_name}}, we've put a $100 credit on your account toward your next project with {{business_name}} — this month only. Reply to claim it." },
+    /* ---- property imagery bases (one per data source) ---- */
+    { id: "parcel-aerial-base", name: "Parcel Aerial", category: "Real estate", purpose: "imagery", industry: "general", build: parcelAerialBaseStarter,
+      message: "Hi {{first_name}}, here's a look at your property at {{contact.custom.property_address}} — reply if you'd like to talk!" },
+    { id: "satellite-view-base", name: "Satellite View", category: "Real estate", purpose: "imagery", industry: "general", build: satelliteViewBaseStarter,
+      message: "Hi {{first_name}}, spotted your place at {{contact.custom.property_address}} — reply if you'd like to talk!" },
+    { id: "street-view-base", name: "Street View", category: "Real estate", purpose: "imagery", industry: "general", build: streetViewBaseStarter,
+      message: "Hi {{first_name}}, your place at {{contact.custom.property_address}} is looking great — reply if you'd like to talk!" },
     /* ---- general ---- */
     { id: "just-listed", name: "Just Listed", category: "Real estate", purpose: "general", industry: "real-estate", build: justListedStarter,
       message: "Hi {{first_name}}! 🏡 A new listing just hit the market at {{contact.custom.property_address}}. Want the details or a private tour? Just reply here." },
