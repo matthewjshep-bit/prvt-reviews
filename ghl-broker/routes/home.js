@@ -521,19 +521,22 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
 /* ------------------------------------------------------------------ *
  * section summary (header stat + batch strip)
  * ------------------------------------------------------------------ */
+// One headline shape for every section — "N in queue · <metric>" — so the
+// header pills read uniformly across the page.
 function summarize(section, rows, cap) {
+  const base = `${rows.length} in queue`;
   if (section === "quotes") {
     const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
-    return { count: rows.length, headline: `${rows.length} open · ${money(total)}`, totalAmount: total };
+    return { count: rows.length, headline: `${base} · ${money(total)}`, totalAmount: total };
   }
   if (section === "reviews") {
     const due = rows.filter((r) => r.status?.kind === "due").length;
-    return { count: rows.length, due, headline: `${due} ask${due === 1 ? "" : "s"} due` };
+    return { count: rows.length, due, headline: `${base} · ${due} due` };
   }
   if (section === "winback") {
     const ltv = rows.reduce((s, r) => s + (r.ltv || 0), 0);
-    return { count: rows.length, headline: `${rows.length} in queue`, totalLtv: ltv, totalLtvLabel: money(ltv) };
+    return { count: rows.length, headline: `${base} · ${money(ltv)} LTV`, totalLtv: ltv, totalLtvLabel: money(ltv) };
   }
   // offers
-  return { count: rows.length, headline: `${rows.length} contact${rows.length === 1 ? "" : "s"}` };
+  return { count: rows.length, headline: base };
 }

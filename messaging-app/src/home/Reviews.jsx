@@ -1,10 +1,9 @@
 // home/Reviews.jsx — recently completed jobs awaiting a review ask
-// (tag: review-due), freshest first. Single-send → review-request workflow.
+// (tag: review-due), freshest first. Standard section layout; single-send.
 
 import React from "react";
 import SectionBody from "./SectionBody.jsx";
-import { HeadStat, StatusPill } from "./ui.jsx";
-import { SingleSendFooter } from "./footers.jsx";
+import { StatusPill } from "./ui.jsx";
 
 export default function Reviews({ active, onEdit }) {
   return (
@@ -12,22 +11,11 @@ export default function Reviews({ active, onEdit }) {
       section="reviews"
       id="reviews"
       active={active}
+      onEdit={onEdit}
       title="Reviews"
       subtitle="Ask while the job is still fresh"
-      headerRight={(data) => <HeadStat tone="amber">{data.summary?.headline}</HeadStat>}
       renderRowRight={(row) => <StatusPill status={row.status} />}
       previewNote="Sends 24h after the job is marked complete"
-      footer={({ selected, preview, send, data }) => (
-        <SingleSendFooter
-          section="reviews"
-          selected={selected}
-          preview={preview}
-          send={send}
-          sendsEnabled={data?.sendsEnabled}
-          onEdit={onEdit}
-          label={(name) => `Send to ${name}`}
-        />
-      )}
     />
   );
 }

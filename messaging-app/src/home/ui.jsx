@@ -33,13 +33,14 @@ export function SectionCard({ title, subtitle, right, children, id }) {
 }
 
 // The right-aligned header stat (e.g. "5 open · $61,400" / "12 in queue").
-export function HeadStat({ children, tone = "muted" }) {
-  const tones = {
-    muted: "text-gray-500",
-    blue: "bg-blue-50 text-blue-700 rounded-full px-3 py-1 text-sm font-medium",
-    amber: "bg-amber-50 text-amber-700 rounded-full px-3 py-1 text-sm font-medium",
-  };
-  return <div className={`text-sm ${tones[tone] || tones.muted}`}>{children}</div>;
+// One style everywhere — sections must not diverge visually.
+export function HeadStat({ children }) {
+  if (!children) return null;
+  return (
+    <span className="inline-flex items-center whitespace-nowrap rounded-full bg-gray-100 px-3 py-1 text-sm font-medium text-gray-600">
+      {children}
+    </span>
+  );
 }
 
 /* ---------- list ---------- */
