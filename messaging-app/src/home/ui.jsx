@@ -69,7 +69,7 @@ export function HeadStat({ children }) {
 
 /* ---------- list ---------- */
 
-export function RowList({ rows, selectedId, onSelect, renderRight }) {
+export function RowList({ rows, selectedId, onSelect, renderRight, onOpenContact }) {
   return (
     <div className="overflow-hidden rounded-xl border border-gray-200">
       {rows.map((r, i) => {
@@ -85,7 +85,20 @@ export function RowList({ rows, selectedId, onSelect, renderRight }) {
           >
             <div className="min-w-0 flex-1">
               <div className={`truncate text-sm font-semibold ${active ? "text-blue-700" : "text-gray-900"}`}>
-                {r.name}
+                {onOpenContact ? (
+                  <span
+                    role="link"
+                    tabIndex={0}
+                    title="Open contact"
+                    onClick={(e) => { e.stopPropagation(); onOpenContact(r); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onOpenContact(r); } }}
+                    className="cursor-pointer hover:underline"
+                  >
+                    {r.name}
+                  </span>
+                ) : (
+                  r.name
+                )}
               </div>
               <div className={`truncate text-xs ${active ? "text-blue-600" : "text-gray-500"}`}>{r.subtitle}</div>
               {r.warnings?.length ? (

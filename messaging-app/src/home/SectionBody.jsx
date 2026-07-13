@@ -20,6 +20,7 @@ import {
 } from "./ui.jsx";
 import { SingleSendFooter, BatchFooter } from "./footers.jsx";
 import SectionSettings from "./SectionSettings.jsx";
+import ContactDrawer from "./ContactDrawer.jsx";
 
 export default function SectionBody({
   section,
@@ -37,6 +38,7 @@ export default function SectionBody({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [previewVersion, setPreviewVersion] = useState(0);
   const [presetBusy, setPresetBusy] = useState(false);
+  const [drawerContactId, setDrawerContactId] = useState(null);
 
   const rows = data?.rows || [];
   // Auto-select the first row once the queue loads.
@@ -125,6 +127,7 @@ export default function SectionBody({
                 selectedId={selectedId}
                 onSelect={(r) => setSelectedId(r.id)}
                 renderRight={renderRowRight}
+                onOpenContact={(r) => { setSelectedId(r.id); setDrawerContactId(r.id); }}
               />
               <PreviewPane
                 preview={preview.preview}
@@ -182,6 +185,15 @@ export default function SectionBody({
         onClose={() => setSettingsOpen(false)}
         data={data}
         onSaved={onSettingsSaved}
+      />
+
+      {/* contact pop-out — opened by clicking a contact's name in the list.
+          Drawer edits (fields/queues/DND) can change this queue, so reload
+          the section and re-render the preview on change. */}
+      <ContactDrawer
+        contactId={drawerContactId}
+        onClose={() => setDrawerContactId(null)}
+        onChanged={onSettingsSaved}
       />
     </SectionCard>
   );
