@@ -103,6 +103,14 @@ The **outgoing message** is edited in the same panel (stored as
 `rh_home_<section>_message`). `scripts/seed-home-templates.mjs` still works for
 bulk-seeding a new location, but the in-UI preset flow replaces it day-to-day.
 
+**Card fields panel (in the editor):** below the canvas, every field the open
+card references is listed with a live status — ✓ real GHL field / ⚠ not in GHL
+(one-click **Create**, typed Text/Number/Date) / app-provided (`data.tier.*`,
+available on EVERY section's render) / data-source. You can also add any
+existing custom field to the card or create a brand-new one from there. On the
+Home page, a card that would render with blanks for the selected contact shows
+a "Blank on this card" warning under the preview.
+
 **Offer Terms** is a dark 1080×1080 card: headline → two big numbers
 (`{{data.tier.rate}}`, `{{data.tier.down}}`) → proof line (`{{data.tier.proof}}`).
 `data.tier.*` is injected by the broker per contact from their resolved tier (§5).

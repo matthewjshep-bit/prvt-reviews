@@ -6,7 +6,7 @@ import express from "express";
 import multer from "multer";
 import sharp from "sharp";
 import path from "node:path";
-import { listCustomFields, getContact } from "../ghl.js";
+import { listCustomFields, getContact, findOrCreateCustomFieldByKey } from "../ghl.js";
 import { store } from "../store.js";
 import { uploadAsset } from "../r2.js";
 import { resolveConnectionsFor, resolveConnectionById } from "../connections.js";
@@ -52,6 +52,28 @@ export default function createStudioRouter({ resolveLocation, uploadDir, publicB
       const fields = await listCustomFields(client, locationId);
       cfCache.set(locationId, { ts: Date.now(), data: fields });
       res.json({ customFields: fields });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /* ---------- POST /api/custom-fields ---------- */
+  // Create a contact custom-field DEFINITION from the editor's Card Fields
+  // panel. The key is derived from the name the same way GHL derives fieldKey
+  // ("Quote Amount" → quote_amount), so bindings round-trip.
+  router.post("/custom-fields", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const name = String(req.body?.name || "").trim();
+      const dataType = ["TEXT", "NUMERICAL", "DATE"].includes(req.body?.dataType) ? req.body.dataType : "TEXT";
+      if (!name) return res.status(400).json({ error: "name required" });
+
+      const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      if (!key) return res.status(400).json({ error: "name must contain letters or digits" });
+
+      const id = await findOrCreateCustomFieldByKey(client, locationId, key, name, dataType);
+      cfCache.delete(locationId); // editor picker sees the new field immediately
+      res.json({ ok: true, id, fieldKey: `contact.${key}`, key, name, dataType });
     } catch (err) {
       fail(res, err);
     }

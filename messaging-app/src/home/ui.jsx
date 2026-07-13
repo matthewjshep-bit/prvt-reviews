@@ -152,9 +152,16 @@ export function StatusPill({ status }) {
 
 /* ---------- preview pane ---------- */
 
+// "contact.custom.quote_amount" → "Quote Amount"; "data.tier.rate" → "Tier Rate".
+function bindingLabel(b) {
+  const tail = String(b).replace(/^contact\.custom\./, "").replace(/^contact\./, "").replace(/^loc\./, "").replace(/^data\./, "").replace(/\./g, "_");
+  return tail.split("_").filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+}
+
 // The dark card preview + outgoing message bubble + a note line. `footer` is
 // the send controls (varies per section: single vs batch).
 export function PreviewPane({ preview, loading, error, placeholder, note, footer }) {
+  const missing = preview?.missingBindings || [];
   return (
     <div className="flex flex-col">
       <div className="overflow-hidden rounded-2xl bg-[#26292f] p-2 shadow-sm">
@@ -172,6 +179,15 @@ export function PreviewPane({ preview, loading, error, placeholder, note, footer
             </div>
           ) : null}
         </div>
+
+        {/* honesty strip: fields that resolved EMPTY for this contact render
+            blank on the card — say so instead of letting it ship silently. */}
+        {preview?.url && missing.length > 0 ? (
+          <div className="mx-0.5 mt-1.5 rounded-lg bg-amber-500/15 px-2.5 py-1.5 text-[11px] leading-snug text-amber-300">
+            <span className="font-semibold">Blank on this card</span> (no value for this contact):{" "}
+            {[...new Set(missing.map(bindingLabel))].join(", ")}
+          </div>
+        ) : null}
 
         {preview?.message ? (
           <div className="px-1.5 pb-1 pt-2.5">

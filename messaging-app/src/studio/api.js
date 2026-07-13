@@ -61,6 +61,12 @@ export async function renderPreview(template, sampleData) {
 /* ---------- custom fields / providers / connections ---------- */
 export const getCustomFields = () =>
   fetch(`${API_BASE}/api/locations/${loc()}/custom-fields`).then(j).then((r) => r.customFields).catch(() => []);
+export const createCustomField = ({ name, dataType = "TEXT" }) =>
+  fetch(`${API_BASE}/api/custom-fields`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ location_id: getLocationId(), name, dataType }),
+  }).then(j);
 export const getProviders = () => fetch(`${API_BASE}/api/providers`).then(j).then((r) => r.providers).catch(() => []);
 export const testProvider = (id, body) =>
   fetch(`${API_BASE}/api/providers/${id}/test`, {

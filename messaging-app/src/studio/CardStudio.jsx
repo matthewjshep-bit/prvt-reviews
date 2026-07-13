@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import ClientCanvas from "./ClientCanvas.jsx";
 import Inspector from "./Inspector.jsx";
 import DataSourcesPanel from "./DataSourcesPanel.jsx";
+import CardFieldsPanel from "./CardFieldsPanel.jsx";
 import ConnectionsModal from "./ConnectionsModal.jsx";
 import WorkflowModal from "./WorkflowModal.jsx";
 import * as api from "./api.js";
@@ -309,6 +310,20 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
                 ? "Real render for the selected contact · clear the contact to edit"
                 : "Drag layers · ⌘D duplicate · Delete removes · arrows nudge (⇧ = larger)"}
             </p>
+          </div>
+
+          <div className="mt-4">
+            <CardFieldsPanel
+              template={template}
+              customFields={customFields}
+              patchTemplate={patchTemplate}
+              showToast={showToast}
+              onCreateField={async (name, dataType) => {
+                const r = await api.createCustomField({ name, dataType });
+                setCustomFields(await api.getCustomFields());
+                return r;
+              }}
+            />
           </div>
 
           <div className="mt-4">

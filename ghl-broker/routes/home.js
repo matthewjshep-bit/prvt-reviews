@@ -776,9 +776,10 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
    * send internals
    * ------------------------------------------------------------------ */
 
-  // Compute data.tier overrides for the Offers section (empty for others).
+  // Compute the contact's data.tier scope. Injected into EVERY section's
+  // render (not just Offers) so any template can bind {{data.tier.*}} without
+  // silently rendering blank when used cross-section.
   async function offersOverrides(section, client, locationId, contactId, cvByName, preContact, idKeyMap) {
-    if (section !== "offers") return undefined;
     const tiers = effectiveTiers(cvByName);
     let rec;
     if (preContact && idKeyMap) rec = contactCustomRecord(preContact, idKeyMap);
