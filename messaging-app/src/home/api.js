@@ -70,8 +70,8 @@ export const createFromPreset = (section) => post(`/api/home/create-from-preset`
 
 /* ---------- preview + send ---------- */
 export const previewRow = (section, contactId) => post(`/api/home/preview`, { section, contactId });
-export const sendOne = (section, contactId, { dryRun = false, mode = "tag" } = {}) =>
-  post(`/api/home/send`, { section, contactId, dryRun, mode });
+export const sendOne = (section, contactId, { dryRun = false, mode, force = false } = {}) =>
+  post(`/api/home/send`, { section, contactId, dryRun, ...(mode ? { mode } : {}), ...(force ? { force: true } : {}) });
 export const sendBatch = (section, { contactIds = null, dryRun = false, mode = "tag" } = {}) =>
   post(`/api/home/send-batch`, { section, contactIds, dryRun, mode });
 

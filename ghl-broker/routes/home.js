@@ -679,9 +679,14 @@ export default function createHomeRouter({ resolveLocation, renderRouter }) {
       const mode = reqMode || cvByName[CV_OVERRIDES.sendMode] || "direct";
 
       const contact = await getContact(client, contactId);
-      if (isDnd(contact)) return res.json({ ok: true, skipped: "dnd", contactId });
-      const recent = await store.recentHomeSendIds(locationId, section, DEDUPE_MS);
-      if (recent.has(contactId)) return res.json({ ok: true, skipped: "recent", contactId });
+      if (isDnd(contact)) return res.json({ ok: true, skipped: "dnd", contactId }); // never overridable
+      // 24h per-queue dedupe. `force` (explicit, single-send only) overrides it —
+      // batches always dedupe.
+      const force = req.body?.force === true;
+      if (!force) {
+        const recent = await store.recentHomeSendIds(locationId, section, DEDUPE_MS);
+        if (recent.has(contactId)) return res.json({ ok: true, skipped: "recent", contactId, canForce: true });
+      }
 
       const live = dryRun === false && CARD_SENDS_ENABLED;
       if (!live) {

@@ -23,7 +23,13 @@ export function SingleSendFooter({ selected, preview, send, sendsEnabled, onEdit
       return;
     }
     if (!confirmSend(`Send this card to ${name}?`)) return;
-    await send.sendOne(selected.id, { dryRun: false });
+    const r = await send.sendOne(selected.id, { dryRun: false });
+    // 24h dedupe hit — offer a deliberate override (DND is never overridable).
+    if (r?.skipped === "recent") {
+      if (window.confirm(`${name} already got this queue's send in the last 24h.\n\nSend again anyway?`)) {
+        await send.sendOne(selected.id, { dryRun: false, force: true });
+      }
+    }
   }
 
   return (

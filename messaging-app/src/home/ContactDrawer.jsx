@@ -80,10 +80,13 @@ export default function ContactDrawer({ contactId, onClose, onChanged }) {
     setBusy(true);
     setNotice(null);
     try {
-      const r = await api.sendOne(section, contactId, { dryRun: false });
+      let r = await api.sendOne(section, contactId, { dryRun: false });
+      if (r.skipped === "recent" && window.confirm(`${name} already got this queue's send in the last 24h.\n\nSend again anyway?`)) {
+        r = await api.sendOne(section, contactId, { dryRun: false, force: true });
+      }
       if (r.skipped === "dnd") setNotice({ kind: "err", text: "Refused — contact is opted out (DND)." });
       else if (r.skipped === "recent") setNotice({ kind: "err", text: "Skipped — already sent within 24h." });
-      else setNotice({ kind: "ok", text: `Sent — the ${SECTION_LABELS[section]} workflow is running.` });
+      else setNotice({ kind: "ok", text: `Sent the ${SECTION_LABELS[section]} card.` });
       // Refresh the timeline.
       api.getContactDetail(contactId).then(setDetail).catch(() => {});
     } catch (e) {
