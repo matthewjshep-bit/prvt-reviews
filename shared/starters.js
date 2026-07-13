@@ -259,29 +259,178 @@ export function offerTermsStarter({ locationId } = {}) {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Gallery starters — additional premade designs per purpose/industry.
+ * ------------------------------------------------------------------ */
+
+// Blank canvas — the "start from scratch" tile.
+export function blankStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Untitled card", canvas: SQUARE, background: { color: "#0b0b0c" },
+    dataSources: [], layers: [],
+    sampleData: { "contact.first_name": "Jessica", "loc.business_name": "Your Business" },
+  };
+}
+
+// Quotes — deadline-driven typographic card (any industry).
+export function quoteExpiringStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Quote Expiring", canvas: SQUARE, background: { color: "#7c2d12" }, dataSources: [],
+    layers: [
+      { id: uid("k"), type: "text", x: 8, y: 14, width: 84, height: 6, content: "DON'T LOSE YOUR PRICE", fontFamily: "Inter", fontWeight: "bold", fontSize: 34, color: "#fdba74", align: "left", visible: true },
+      { id: uid("big"), type: "text", x: 8, y: 22, width: 84, height: 26, content: "${{contact.custom.quote_amount}}", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 210, color: "#ffffff", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("sub"), type: "text", x: 8, y: 52, width: 84, height: 12, content: "{{contact.first_name}}, your quote is locked in until {{contact.custom.quote_expiry}}.", fontFamily: "Inter", fontWeight: "regular", fontSize: 44, color: "#fed7aa", align: "left", lineHeight: 1.2, autoFit: true, maxLines: 3, visible: true },
+      { id: uid("badge"), type: "badge", x: 8, y: 76, width: 58, height: 8, icon: "check", text: "Reply YES to lock your spot", bgColor: "#ffffff", textColor: "#7c2d12", fontFamily: "Inter", fontSize: 32, cornerRadius: 999, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Dana", "contact.custom.quote_amount": "14,200", "contact.custom.quote_expiry": "Jul 15" },
+  };
+}
+
+// Quotes — roofing-themed quote card.
+export function roofQuoteStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Roof Quote", canvas: SQUARE, background: { color: "#1e293b" }, dataSources: [],
+    layers: [
+      { id: uid("bar"), type: "shape", shape: "rect", x: 8, y: 16, width: 14, height: 1.2, fill: "#d4af37", visible: true },
+      { id: uid("h"), type: "text", x: 8, y: 21, width: 84, height: 20, content: "Your new roof, {{contact.first_name}}", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 92, color: "#ffffff", align: "left", lineHeight: 1.05, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("amt"), type: "text", x: 8, y: 46, width: 84, height: 16, content: "${{contact.custom.quote_amount}}", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 150, color: "#d4af37", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("addr"), type: "text", x: 8, y: 66, width: 84, height: 7, content: "{{contact.custom.property_address}}", fontFamily: "Inter", fontWeight: "regular", fontSize: 36, color: "#94a3b8", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("badge"), type: "badge", x: 8, y: 78, width: 62, height: 8, icon: "check", text: "Good through {{contact.custom.quote_expiry}}", bgColor: "#d4af37", textColor: "#1e293b", fontFamily: "Inter", fontSize: 32, cornerRadius: 999, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Dana", "contact.custom.quote_amount": "14,200", "contact.custom.property_address": "2847 41st Ave SW", "contact.custom.quote_expiry": "Jul 15" },
+  };
+}
+
+// Reviews — big five-star ask (any industry).
+export function fiveStarAskStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Five-Star Ask", canvas: SQUARE, background: { color: "#111827" }, dataSources: [],
+    layers: [
+      { id: uid("stars"), type: "text", x: 8, y: 22, width: 84, height: 12, content: "★ ★ ★ ★ ★", fontFamily: "Inter", fontWeight: "bold", fontSize: 110, color: "#f59e0b", align: "center", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("h"), type: "text", x: 8, y: 40, width: 84, height: 20, content: "How did we do, {{contact.first_name}}?", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 96, color: "#ffffff", align: "center", lineHeight: 1.05, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("sub"), type: "text", x: 12, y: 64, width: 76, height: 8, content: "A quick review helps {{loc.business_name}} a ton.", fontFamily: "Inter", fontWeight: "regular", fontSize: 38, color: "#9ca3af", align: "center", autoFit: true, maxLines: 2, visible: true },
+      { id: uid("badge"), type: "badge", x: 27, y: 80, width: 46, height: 8, icon: "star", text: "Tap the link to review", bgColor: "#f59e0b", textColor: "#111827", fontFamily: "Inter", fontSize: 32, cornerRadius: 999, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Luis", "loc.business_name": "Rainier Roofing" },
+  };
+}
+
+// Reviews — job-complete photo card for home services.
+export function jobDoneReviewStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Job Done — Review", canvas: SQUARE, background: { color: "#0b0b0c" }, dataSources: [],
+    layers: [
+      { id: uid("photo"), type: "image", x: 0, y: 0, width: 100, height: 100, src: IMG.service, fit: "cover", visible: true },
+      { id: uid("scrim"), type: "shape", shape: "rect", x: 0, y: 52, width: 100, height: 48, fill: "rgba(0,0,0,0.62)", visible: true },
+      { id: uid("h"), type: "text", x: 6, y: 57, width: 88, height: 12, content: "{{contact.first_name}}, your {{contact.custom.job_type}} is done!", fontFamily: "Inter", fontWeight: "bold", fontSize: 54, color: "#ffffff", align: "center", lineHeight: 1.1, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("stars"), type: "text", x: 8, y: 72, width: 84, height: 8, content: "★ ★ ★ ★ ★  How did the crew do?", fontFamily: "Inter", fontWeight: "bold", fontSize: 40, color: "#f59e0b", align: "center", autoFit: true, maxLines: 1, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Luis", "contact.custom.job_type": "gutter replacement" },
+  };
+}
+
+// Win-back — "time for another" typographic (services).
+export function timeForAnotherStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Time For Another", canvas: SQUARE, background: { color: "#134e4a" }, dataSources: [],
+    layers: [
+      { id: uid("k"), type: "text", x: 8, y: 16, width: 84, height: 6, content: "IT'S BEEN A WHILE", fontFamily: "Inter", fontWeight: "bold", fontSize: 34, color: "#5eead4", align: "left", visible: true },
+      { id: uid("h"), type: "text", x: 8, y: 24, width: 84, height: 26, content: "Time for another {{contact.custom.last_service_type}}, {{contact.first_name}}?", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 92, color: "#ffffff", align: "left", lineHeight: 1.05, autoFit: true, maxLines: 3, visible: true },
+      { id: uid("sub"), type: "text", x: 8, y: 58, width: 84, height: 10, content: "We'll pencil you in at your returning-customer rate.", fontFamily: "Inter", fontWeight: "regular", fontSize: 40, color: "#99f6e4", align: "left", lineHeight: 1.2, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("badge"), type: "badge", x: 8, y: 78, width: 52, height: 8, icon: "phone", text: "Reply to book this month", bgColor: "#5eead4", textColor: "#134e4a", fontFamily: "Inter", fontSize: 32, cornerRadius: 999, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Priya", "contact.custom.last_service_type": "roof cleaning" },
+  };
+}
+
+// Win-back — seasonal hook (roofing / exterior services).
+export function seasonDueStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Season Due", canvas: SQUARE, background: { color: "#14532d" }, dataSources: [],
+    layers: [
+      { id: uid("h"), type: "text", x: 8, y: 20, width: 84, height: 24, content: "Moss season is back, {{contact.first_name}}", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 100, color: "#ffffff", align: "left", lineHeight: 1.05, autoFit: true, maxLines: 3, visible: true },
+      { id: uid("sub"), type: "text", x: 8, y: 52, width: 84, height: 12, content: "Your roof was last treated {{contact.custom.last_service_date}} — it's about due again.", fontFamily: "Inter", fontWeight: "regular", fontSize: 40, color: "#bbf7d0", align: "left", lineHeight: 1.2, autoFit: true, maxLines: 3, visible: true },
+      { id: uid("badge"), type: "badge", x: 8, y: 78, width: 58, height: 8, icon: "check", text: "Returning-customer rate inside", bgColor: "#ffffff", textColor: "#14532d", fontFamily: "Inter", fontSize: 30, cornerRadius: 999, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Priya", "contact.custom.last_service_date": "April 2025" },
+  };
+}
+
+// Offers — loyalty percentage reward (services).
+export function loyaltyOfferStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Loyalty Offer", canvas: SQUARE, background: { color: "#312e81" }, dataSources: [],
+    layers: [
+      { id: uid("k"), type: "text", x: 8, y: 14, width: 84, height: 6, content: "FOR OUR BEST CUSTOMERS", fontFamily: "Inter", fontWeight: "bold", fontSize: 32, color: "#a5b4fc", align: "left", visible: true },
+      { id: uid("big"), type: "text", x: 6, y: 22, width: 88, height: 28, content: "15% OFF", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 230, color: "#ffffff", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("sub"), type: "text", x: 8, y: 54, width: 84, height: 12, content: "{{contact.first_name}} — {{contact.custom.deal_count}} jobs with us earns you member pricing on the next one.", fontFamily: "Inter", fontWeight: "regular", fontSize: 40, color: "#c7d2fe", align: "left", lineHeight: 1.2, autoFit: true, maxLines: 3, visible: true },
+      { id: uid("badge"), type: "badge", x: 8, y: 78, width: 52, height: 8, icon: "star", text: "{{data.tier.label}} member", bgColor: "#a5b4fc", textColor: "#312e81", fontFamily: "Inter", fontSize: 32, cornerRadius: 999, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Matt", "contact.custom.deal_count": "4", "data.tier.label": "Proven" },
+  };
+}
+
+// Offers — bold comeback credit (any industry).
+export function comebackCreditStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Comeback Credit", canvas: SQUARE, background: { color: "#0b0b0c" }, dataSources: [],
+    layers: [
+      { id: uid("big"), type: "text", x: 6, y: 20, width: 88, height: 30, content: "$100", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 300, color: "#d4af37", align: "center", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("h"), type: "text", x: 8, y: 52, width: 84, height: 10, content: "on us, {{contact.first_name}}", fontFamily: "Inter", fontWeight: "bold", fontSize: 56, color: "#ffffff", align: "center", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("sub"), type: "text", x: 12, y: 64, width: 76, height: 10, content: "Credit toward your next project with {{loc.business_name}}. This month only.", fontFamily: "Inter", fontWeight: "regular", fontSize: 36, color: "#9ca3af", align: "center", lineHeight: 1.2, autoFit: true, maxLines: 3, visible: true },
+      { id: uid("badge"), type: "badge", x: 30, y: 80, width: 40, height: 8, icon: "dollar", text: "Reply to claim", bgColor: "#d4af37", textColor: "#0b0b0c", fontFamily: "Inter", fontSize: 32, cornerRadius: 999, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Matt", "loc.business_name": "Goldstar Plumbing" },
+  };
+}
+
 // Registry of starters the editor can offer. `category` groups them in the
 // picker; `message` is the matching SMS copy applied when the preset is chosen.
+// `purpose` maps a starter to a Home section (quotes|reviews|winback|offers)
+// or "general"; `industry` powers the gallery filter (home-services, roofing,
+// real-estate, lending, general).
 export function starterList() {
   return [
-    { id: "quote-follow-up", name: "Quote Follow-Up", category: "Home page", build: quoteFollowUpStarter,
+    /* ---- quotes ---- */
+    { id: "quote-follow-up", name: "Quote Follow-Up", category: "Home page", purpose: "quotes", industry: "home-services", build: quoteFollowUpStarter,
       message: "Hi {{first_name}}, your quote for {{contact.custom.property_address}} is good through {{contact.custom.quote_expiry}}. Want me to hold your spot on next week's schedule?" },
-    { id: "offer-terms", name: "Offer Terms", category: "Home page", build: offerTermsStarter,
-      message: "{{first_name}} — your pricing just changed. Reply if you've got anything in the works." },
-    { id: "review-request", name: "Review Request", category: "Reviews", build: reviewRequestStarter,
+    { id: "quote-expiring", name: "Quote Expiring", category: "Home page", purpose: "quotes", industry: "general", build: quoteExpiringStarter,
+      message: "{{first_name}}, your quote of ${{contact.custom.quote_amount}} is locked until {{contact.custom.quote_expiry}} — reply YES and I'll hold your spot." },
+    { id: "roof-quote", name: "Roof Quote", category: "Home page", purpose: "quotes", industry: "roofing", build: roofQuoteStarter,
+      message: "Hi {{first_name}}, your roof quote for {{contact.custom.property_address}} is ${{contact.custom.quote_amount}}, good through {{contact.custom.quote_expiry}}. Questions? Just reply." },
+    /* ---- reviews ---- */
+    { id: "review-request", name: "Review Request", category: "Reviews", purpose: "reviews", industry: "general", build: reviewRequestStarter,
       message: "Hey {{first_name}}, we hope you enjoyed your experience with {{business_name}}! Would you mind taking a moment to leave a review? Here's the link: [Review Link]" },
-    { id: "thank-you", name: "Thank You", category: "Reviews", build: thankYouStarter,
+    { id: "five-star-ask", name: "Five-Star Ask", category: "Reviews", purpose: "reviews", industry: "general", build: fiveStarAskStarter,
+      message: "{{first_name}}, how did we do? A quick review helps {{business_name}} a ton: [Review Link]" },
+    { id: "job-done-review", name: "Job Done — Review", category: "Reviews", purpose: "reviews", industry: "home-services", build: jobDoneReviewStarter,
+      message: "{{first_name}}, thanks for trusting {{business_name}} with your {{contact.custom.job_type}}! If the crew earned it, a quick review helps us a ton: [Review Link]" },
+    { id: "thank-you", name: "Thank You", category: "Reviews", purpose: "reviews", industry: "general", build: thankYouStarter,
       message: "Thanks so much, {{first_name}}! It was a pleasure working with you. If you have a second, we'd love a quick review: [Review Link]" },
-    { id: "property-card", name: "Property Card", category: "Real estate", build: propertyCardStarter,
+    /* ---- winback ---- */
+    { id: "property-card", name: "Property Card", category: "Real estate", purpose: "winback", industry: "home-services", build: propertyCardStarter,
       message: "Hi {{first_name}}, here's a look at the property at {{contact.custom.property_address}}. Reply if you'd like the full details!" },
-    { id: "just-listed", name: "Just Listed", category: "Real estate", build: justListedStarter,
+    { id: "time-for-another", name: "Time For Another", category: "Services", purpose: "winback", industry: "home-services", build: timeForAnotherStarter,
+      message: "Hi {{first_name}}, it's been a while since your {{contact.custom.last_service_type}} — want me to pencil you in this month at your returning-customer rate?" },
+    { id: "season-due", name: "Season Due", category: "Services", purpose: "winback", industry: "roofing", build: seasonDueStarter,
+      message: "Hi {{first_name}}, moss season is back and your roof was last treated {{contact.custom.last_service_date}}. Want me to get you on this month's schedule?" },
+    /* ---- offers ---- */
+    { id: "offer-terms", name: "Offer Terms", category: "Home page", purpose: "offers", industry: "lending", build: offerTermsStarter,
+      message: "{{first_name}} — your pricing just changed. Reply if you've got anything in the works." },
+    { id: "loyalty-offer", name: "Loyalty Offer", category: "Services", purpose: "offers", industry: "home-services", build: loyaltyOfferStarter,
+      message: "{{first_name}} — {{contact.custom.deal_count}} jobs with us earns you member pricing on the next one. Want a quote?" },
+    { id: "comeback-credit", name: "Comeback Credit", category: "General", purpose: "offers", industry: "general", build: comebackCreditStarter,
+      message: "{{first_name}}, we've put a $100 credit on your account toward your next project with {{business_name}} — this month only. Reply to claim it." },
+    /* ---- general ---- */
+    { id: "just-listed", name: "Just Listed", category: "Real estate", purpose: "general", industry: "real-estate", build: justListedStarter,
       message: "Hi {{first_name}}! 🏡 A new listing just hit the market at {{contact.custom.property_address}}. Want the details or a private tour? Just reply here." },
-    { id: "home-value", name: "Home Value", category: "Real estate", build: homeValueStarter,
+    { id: "home-value", name: "Home Value", category: "Real estate", purpose: "general", industry: "real-estate", build: homeValueStarter,
       message: "Hi {{first_name}}, curious what your home at {{contact.custom.property_address}} could sell for in today's market? Reply and I'll send a free, no-obligation valuation." },
-    { id: "service-special", name: "Service Special", category: "Services", build: serviceSpecialStarter,
+    { id: "service-special", name: "Service Special", category: "Services", purpose: "general", industry: "home-services", build: serviceSpecialStarter,
       message: "Hey {{first_name}}! For a limited time, get 20% off with {{business_name}}. Book by Friday to lock it in — just reply to claim it." },
-    { id: "appointment-reminder", name: "Appointment Reminder", category: "Services", build: appointmentReminderStarter,
+    { id: "appointment-reminder", name: "Appointment Reminder", category: "Services", purpose: "general", industry: "home-services", build: appointmentReminderStarter,
       message: "Hi {{first_name}}, you're all set with {{business_name}}! Reply here anytime if you have questions before your appointment." },
-    { id: "welcome", name: "Welcome", category: "General", build: welcomeStarter,
+    { id: "welcome", name: "Welcome", category: "General", purpose: "general", industry: "general", build: welcomeStarter,
       message: "Welcome, {{first_name}}! 🎉 Thanks for choosing {{business_name}} — we're thrilled to have you. Reply anytime if you need anything." },
   ];
 }

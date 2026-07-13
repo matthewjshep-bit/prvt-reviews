@@ -1,30 +1,44 @@
-// ChooseStep.jsx — step 1 of the Card Studio flow: pick what you're working
-// on. Cards are organized by what they SEND FOR (the four Home sections),
-// unassigned cards live in Drafts, and each section offers its matching
-// preset as a one-click starting point. No toolbars, no dropdowns.
+// ChooseStep.jsx — step 1 of the Card Studio flow.
+//
+//   YOUR CARDS  — everything you've made, first. Assigned cards carry their
+//                 section badge; unassigned ones are drafts. Plus start-blank.
+//   GALLERY     — premade templates grouped by what they send for (Quotes /
+//                 Reviews / Win-back / Offers / More), filterable by industry.
 
-import React from "react";
-import { starterList } from "@shared/starters.js";
+import React, { useMemo, useState } from "react";
+import { starterList, blankStarter } from "@shared/starters.js";
 import TemplatePreview from "./TemplatePreview.jsx";
 
-const SECTION_META = [
-  { key: "quotes", label: "Quote follow-up", starterId: "quote-follow-up", blurb: "Parcel aerial + quote amount" },
-  { key: "reviews", label: "Reviews", starterId: "review-request", blurb: "Review ask with your branding" },
-  { key: "winback", label: "Win-back", starterId: "property-card", blurb: "Property aerial for past customers" },
-  { key: "offers", label: "Offers", starterId: "offer-terms", blurb: "Dark terms card with earned pricing" },
+const PURPOSES = [
+  { key: "quotes", label: "Quote follow-up" },
+  { key: "reviews", label: "Reviews" },
+  { key: "winback", label: "Win-back" },
+  { key: "offers", label: "Offers" },
+  { key: "general", label: "More" },
 ];
-const MORE_CATEGORIES = ["Real estate", "Services", "General", "Reviews"];
+const INDUSTRY_LABELS = {
+  "home-services": "Home services",
+  roofing: "Roofing",
+  "real-estate": "Real estate",
+  lending: "Lending",
+  general: "General",
+};
 
-function Tile({ children, onClick, title, subtitle, accent }) {
+function Tile({ children, onClick, title, subtitle, badge, dashed }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`group w-44 shrink-0 overflow-hidden rounded-xl border text-left transition-shadow hover:shadow-md ${
-        accent ? "border-dashed border-gray-300 bg-gray-50 hover:border-blue-300" : "border-gray-200 bg-white"
+      className={`group relative w-44 shrink-0 overflow-hidden rounded-xl border text-left transition-shadow hover:shadow-md ${
+        dashed ? "border-dashed border-gray-300 bg-gray-50 hover:border-blue-300" : "border-gray-200 bg-white"
       }`}
     >
       <div className="aspect-square w-full overflow-hidden bg-[#0b0b0c]">{children}</div>
+      {badge ? (
+        <span className="absolute left-2 top-2 rounded-full bg-gray-900/80 px-2 py-0.5 text-[10px] font-semibold text-white">
+          {badge}
+        </span>
+      ) : null}
       <div className="px-3 py-2">
         <div className="truncate text-sm font-semibold text-gray-900">{title}</div>
         {subtitle ? <div className="truncate text-[11px] text-gray-400">{subtitle}</div> : null}
@@ -33,83 +47,126 @@ function Tile({ children, onClick, title, subtitle, accent }) {
   );
 }
 
+const Row = ({ children }) => <div className="flex gap-3 overflow-x-auto pb-1">{children}</div>;
+
 export default function ChooseStep({ templates, assignments, onEdit, onNewFromPreset, onNewFromStarter }) {
-  const byId = new Map((templates || []).map((t) => [t.id, t]));
-  const assignedIds = new Set(Object.values(assignments || {}));
-  const drafts = (templates || []).filter((t) => !assignedIds.has(t.id));
-  const starters = starterList();
+  const [industry, setIndustry] = useState("");
+  const starters = useMemo(() => starterList(), []);
+  const sectionByTemplateId = useMemo(() => {
+    const m = new Map();
+    for (const [section, id] of Object.entries(assignments || {})) m.set(id, section);
+    return m;
+  }, [assignments]);
+  const sectionLabel = (key) => PURPOSES.find((p) => p.key === key)?.label || key;
+
+  const industries = useMemo(
+    () => [...new Set(starters.map((s) => s.industry).filter(Boolean))],
+    [starters]
+  );
+  const filtered = industry ? starters.filter((s) => s.industry === industry || s.industry === "general") : starters;
+
+  // Gallery previews: build each starter's doc once (pure data, cheap).
+  const galleryDocs = useMemo(() => {
+    const m = new Map();
+    for (const s of starters) {
+      try { m.set(s.id, s.build({ locationId: "preview" })); } catch { /* skip broken */ }
+    }
+    return m;
+  }, [starters]);
 
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="text-xl font-bold text-gray-900">Your cards</h2>
-        <p className="mt-0.5 text-sm text-gray-500">
-          Each section sends one card. Edit the one it uses, or start fresh from its preset.
-        </p>
-      </div>
-
-      {SECTION_META.map(({ key, label, starterId, blurb }) => {
-        const assigned = byId.get(assignments?.[key]);
-        const starter = starters.find((s) => s.id === starterId);
-        return (
-          <section key={key}>
-            <div className="mb-2 flex items-baseline gap-2">
-              <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">{label}</h3>
-              {assigned ? <span className="text-[11px] text-green-600">sends “{assigned.name}”</span> : <span className="text-[11px] text-amber-500">no card assigned yet</span>}
-            </div>
-            <div className="flex gap-3 overflow-x-auto pb-1">
-              {assigned ? (
-                <Tile title={assigned.name} subtitle="Currently sending · Edit" onClick={() => onEdit(assigned.id)}>
-                  <TemplatePreview template={assigned} />
-                </Tile>
-              ) : null}
-              {starter ? (
-                <Tile accent title={`＋ New from preset`} subtitle={blurb} onClick={() => onNewFromPreset(key, starter)}>
-                  <div className="flex h-full w-full items-center justify-center bg-gray-100 text-3xl text-gray-300 transition-colors group-hover:text-blue-400">＋</div>
-                </Tile>
-              ) : null}
-            </div>
-          </section>
-        );
-      })}
-
+      {/* YOUR CARDS — first thing you see */}
       <section>
         <div className="mb-2 flex items-baseline gap-2">
-          <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Drafts</h3>
-          <span className="text-[11px] text-gray-400">saved cards not assigned to a section</span>
+          <h2 className="text-xl font-bold text-gray-900">Your cards</h2>
+          <span className="text-sm text-gray-400">edit one, or start fresh below</span>
         </div>
-        {drafts.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-400">
-            No drafts — every saved card is assigned.
-          </div>
-        ) : (
-          <div className="flex gap-3 overflow-x-auto pb-1">
-            {drafts.map((t) => (
-              <Tile key={t.id} title={t.name} subtitle={`v${t.version} · Edit`} onClick={() => onEdit(t.id)}>
+        <Row>
+          <Tile dashed title="＋ Blank card" subtitle="Start from scratch" onClick={() => onNewFromStarter({ build: blankStarter })}>
+            <div className="flex h-full w-full items-center justify-center bg-gray-100 text-4xl text-gray-300 group-hover:text-blue-400">＋</div>
+          </Tile>
+          {(templates || []).map((t) => {
+            const section = sectionByTemplateId.get(t.id);
+            return (
+              <Tile
+                key={t.id}
+                title={t.name}
+                subtitle={section ? "Currently sending · Edit" : "Draft · Edit"}
+                badge={section ? sectionLabel(section) : "Draft"}
+                onClick={() => onEdit(t.id)}
+              >
                 <TemplatePreview template={t} />
               </Tile>
-            ))}
-          </div>
-        )}
+            );
+          })}
+        </Row>
       </section>
 
-      <details className="rounded-xl border border-gray-200 p-4">
-        <summary className="cursor-pointer text-sm font-semibold text-gray-600">More presets (real estate, services, general…)</summary>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {starters
-            .filter((s) => MORE_CATEGORIES.includes(s.category) && !SECTION_META.some((m) => m.starterId === s.id))
-            .map((s) => (
+      {/* GALLERY */}
+      <section>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">Template gallery</h2>
+            <p className="mt-0.5 text-sm text-gray-500">Premade designs — pick one and make it yours.</p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => setIndustry("")}
+              className={`rounded-full px-3 py-1.5 text-sm font-medium ${!industry ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+            >
+              All industries
+            </button>
+            {industries.filter((i) => i !== "general").map((i) => (
               <button
-                key={s.id}
+                key={i}
                 type="button"
-                onClick={() => onNewFromStarter(s)}
-                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                onClick={() => setIndustry(industry === i ? "" : i)}
+                className={`rounded-full px-3 py-1.5 text-sm font-medium ${industry === i ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
               >
-                ＋ {s.name}
+                {INDUSTRY_LABELS[i] || i}
               </button>
             ))}
+          </div>
         </div>
-      </details>
+
+        <div className="space-y-6">
+          {PURPOSES.map(({ key, label }) => {
+            const items = filtered.filter((s) => (s.purpose || "general") === key);
+            if (!items.length) return null;
+            const assigned = assignments?.[key];
+            return (
+              <div key={key}>
+                <div className="mb-2 flex items-baseline gap-2">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">{label}</h3>
+                  {key !== "general" ? (
+                    <span className="text-[11px] text-gray-400">
+                      {assigned ? "picking one replaces the current card on save" : "picking one assigns it on save"}
+                    </span>
+                  ) : null}
+                </div>
+                <Row>
+                  {items.map((s) => (
+                    <Tile
+                      key={s.id}
+                      title={s.name}
+                      subtitle={INDUSTRY_LABELS[s.industry] || "General"}
+                      onClick={() => (key === "general" ? onNewFromStarter(s) : onNewFromPreset(key, s))}
+                    >
+                      {galleryDocs.get(s.id) ? (
+                        <TemplatePreview template={galleryDocs.get(s.id)} />
+                      ) : (
+                        <div className="h-full w-full bg-gray-100" />
+                      )}
+                    </Tile>
+                  ))}
+                </Row>
+              </div>
+            );
+          })}
+        </div>
+      </section>
     </div>
   );
 }
