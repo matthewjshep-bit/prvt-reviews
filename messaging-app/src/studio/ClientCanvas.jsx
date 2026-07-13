@@ -13,7 +13,7 @@ import { LayerBody } from "./TemplatePreview.jsx";
 const SNAP = 1; // percent snap threshold
 const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
-export default function ClientCanvas({ template, selectedId, onSelect, onChange, onDuplicate, onDelete }) {
+export default function ClientCanvas({ template, selectedId, onSelect, onChange, onDuplicate, onDelete, onDropToken }) {
   const canvasRef = useRef(null);
   const [cw, setCw] = useState(1);
   const [guides, setGuides] = useState({ v: [], h: [] });
@@ -131,6 +131,22 @@ export default function ClientCanvas({ template, selectedId, onSelect, onChange,
       tabIndex={0}
       onKeyDown={onKeyDown}
       onPointerDown={() => onSelect(null)}
+      onDragOver={onDropToken ? (e) => e.preventDefault() : undefined}
+      onDrop={
+        onDropToken
+          ? (e) => {
+              // A field chip dropped onto the card → tell the parent where
+              // (percent coords) so it can add a bound text layer there.
+              e.preventDefault();
+              const token = e.dataTransfer.getData("text/x-binding");
+              if (!token) return;
+              const rect = canvasRef.current.getBoundingClientRect();
+              const x = ((e.clientX - rect.left) / rect.width) * 100;
+              const y = ((e.clientY - rect.top) / rect.height) * 100;
+              onDropToken(token, x, y);
+            }
+          : undefined
+      }
       className="relative w-full select-none overflow-hidden rounded-xl outline-none"
       style={{
         aspectRatio: `${template.canvas.width} / ${template.canvas.height}`,

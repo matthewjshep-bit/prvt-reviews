@@ -16,7 +16,7 @@ import Reviews from "./home/Reviews.jsx";
 import WinBack from "./home/WinBack.jsx";
 import Offers from "./home/Offers.jsx";
 import Contacts from "./home/Contacts.jsx";
-import MessagingPage from "./MessagingPage.jsx";
+import StudioFlow from "./studio/StudioFlow.jsx";
 
 const SECTION_ORDER = ["quotes", "reviews", "winback", "offers"];
 const SECTION_COMP = { quotes: QuoteFollowUp, reviews: Reviews, winback: WinBack, offers: Offers };
@@ -78,12 +78,14 @@ export default function HomePage() {
   }, []);
   function go(v) { setView(v); writeView(v); window.scrollTo({ top: 0 }); }
 
-  // The editor is a full page of its own — render it bare (its own shell).
+  // Card Studio — the 3-step flow (Choose → Design → Send).
   if (view === "studio") {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-gray-50 text-gray-900">
         <TopNav view={view} onSelect={go} />
-        <MessagingPage />
+        <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+          <StudioFlow />
+        </div>
       </div>
     );
   }

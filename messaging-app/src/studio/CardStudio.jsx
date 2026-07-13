@@ -19,7 +19,7 @@ const HOME_SECTIONS = { quotes: "Quotes", reviews: "Reviews", winback: "Win-back
   data + server preview below the canvas. Exposes the selected template id via
   onTemplateChange so the page's Send-a-card block can target it.
 */
-export default function CardStudio({ onTemplateChange, controller, onStudioState, previewOverride, contactPreviewUrl, contactPreviewLoading }) {
+export default function CardStudio({ onTemplateChange, controller, onStudioState, previewOverride, contactPreviewUrl, contactPreviewLoading, flowMode = false, onSaved }) {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [workflowOpen, setWorkflowOpen] = useState(false);
   const locationId = api.getLocationId();
@@ -59,8 +59,8 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
 
   // Expose an imperative controller + template list so a template picker can
   // live outside the studio (e.g. the page's left column).
-  if (controller) controller.current = { loadTemplate, newFromStarter };
-  useEffect(() => { onStudioState?.({ templates, currentId }); }, [templates, currentId]);
+  if (controller) controller.current = { loadTemplate, newFromStarter, save };
+  useEffect(() => { onStudioState?.({ templates, currentId, dirty }); }, [templates, currentId, dirty]);
 
   // Which Home sections use which template (drives the "Used for…" ✓ marks).
   const [assignments, setAssignments] = useState({});
@@ -113,12 +113,24 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
     setDirty(true);
   }, []);
 
-  const addLayer = useCallback((type) => {
-    const l = newLayer(type);
+  const addLayer = useCallback((type, extra) => {
+    const l = newLayer(type, extra);
     setTemplate((t) => ({ ...t, layers: [...t.layers, l] }));
     setSelectedId(l.id);
     setDirty(true);
   }, []);
+
+  // A field chip dropped on the canvas at (x%, y%) → positioned bound text layer.
+  const clampPct = (v, max = 90) => Math.max(0, Math.min(max, Math.round(v * 10) / 10));
+  const dropToken = useCallback((token, x, y) => {
+    addLayer("text", {
+      x: clampPct(x - 15, 70),
+      y: clampPct(y - 4, 92),
+      width: 40,
+      content: `{{${token}}}`,
+      color: "#ffffff",
+    });
+  }, [addLayer]);
 
   const deleteLayer = useCallback((id) => {
     setTemplate((t) => ({ ...t, layers: t.layers.filter((l) => l.id !== id) }));
@@ -193,6 +205,7 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
       setDirty(false);
       setTemplates(await api.listTemplates());
       showToast(`Saved · v${saved.version}`);
+      onSaved?.(saved);
     } catch (e) {
       showToast("Save failed: " + e.message);
     } finally {
@@ -237,20 +250,25 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-4">
-      {/* toolbar */}
+      {/* toolbar — in flowMode the Choose step owns template/preset picking,
+          so the duplicative selects are hidden and the name stands alone. */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <select value={currentId || ""} onChange={(e) => (e.target.value ? loadTemplate(e.target.value) : newFromStarter())}
-          className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
-          <option value="">＋ New (Review Request)</option>
-          {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
+        {!flowMode && (
+          <select value={currentId || ""} onChange={(e) => (e.target.value ? loadTemplate(e.target.value) : newFromStarter())}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
+            <option value="">＋ New (Review Request)</option>
+            {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        )}
         <input value={template.name} onChange={(e) => patchTemplate({ name: e.target.value })}
-          className="w-44 rounded-lg border border-gray-300 px-2 py-1.5 text-sm font-medium" />
-        <select value="" onChange={(e) => { const s = starterList().find((x) => x.id === e.target.value); if (s) newFromStarter(s.build); e.target.value = ""; }}
-          className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
-          <option value="">New from starter…</option>
-          {starterList().map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
+          className={`rounded-lg border border-gray-300 px-2 py-1.5 text-sm font-medium ${flowMode ? "w-56" : "w-44"}`} />
+        {!flowMode && (
+          <select value="" onChange={(e) => { const s = starterList().find((x) => x.id === e.target.value); if (s) newFromStarter(s.build); e.target.value = ""; }}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
+            <option value="">New from starter…</option>
+            {starterList().map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        )}
         <button type="button" onClick={duplicate} disabled={!currentId} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">Duplicate</button>
         <button type="button" onClick={remove} disabled={!currentId} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">Delete</button>
         <button type="button" onClick={() => setConnectionsOpen(true)} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Connections</button>
@@ -303,7 +321,7 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
               </div>
             ) : (
               <ClientCanvas template={effTemplate} selectedId={selectedId} onSelect={setSelectedId}
-                onChange={changeLayer} onDuplicate={duplicateLayer} onDelete={deleteLayer} />
+                onChange={changeLayer} onDuplicate={duplicateLayer} onDelete={deleteLayer} onDropToken={dropToken} />
             )}
             <p className="mt-1 text-center text-[11px] text-gray-400">
               {contactPreviewUrl || contactPreviewLoading

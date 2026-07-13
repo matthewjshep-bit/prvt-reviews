@@ -106,10 +106,21 @@ bulk-seeding a new location, but the in-UI preset flow replaces it day-to-day.
 **Card fields panel (in the editor):** below the canvas, every field the open
 card references is listed with a live status — ✓ real GHL field / ⚠ not in GHL
 (one-click **Create**, typed Text/Number/Date) / app-provided (`data.tier.*`,
-available on EVERY section's render) / data-source. You can also add any
-existing custom field to the card or create a brand-new one from there. On the
-Home page, a card that would render with blanks for the selected contact shows
-a "Blank on this card" warning under the preview.
+available on EVERY section's render) / data-source. Fields are chips you can
+**drag onto the canvas** (or click) to add them to the card, or create a
+brand-new field right there. On the Home page, a card that would render with
+blanks for the selected contact shows a "Blank on this card" warning under
+the preview.
+
+**Card Studio flow (`?view=studio`):** a 3-step flow —
+1. **Choose** — cards organized by the section they send for (with that
+   section's preset one click away); unassigned cards live under **Drafts**.
+   Starting from a section's preset auto-assigns the card on save.
+2. **Design** — the editor (slim toolbar; drag fields onto the canvas).
+3. **Send** — the ad-hoc sender (specific people, a phone number, or a whole
+   tag) with the message editor beside a live phone preview. Queue-based
+   sends stay on the Home sections.
+The legacy single-page editor still exists at the old `index.html` entry.
 
 **Offer Terms** is a dark 1080×1080 card: headline → two big numbers
 (`{{data.tier.rate}}`, `{{data.tier.down}}`) → proof line (`{{data.tier.proof}}`).

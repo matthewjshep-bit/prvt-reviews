@@ -50,7 +50,6 @@ const PILL_TONE = {
 export default function CardFieldsPanel({ template, customFields, onCreateField, patchTemplate, showToast }) {
   const [busyKey, setBusyKey] = useState(null);
   const [createType, setCreateType] = useState({}); // binding -> dataType
-  const [addSel, setAddSel] = useState("");
   const [newName, setNewName] = useState("");
   const [newType, setNewType] = useState("TEXT");
   const [newBusy, setNewBusy] = useState(false);
@@ -140,29 +139,46 @@ export default function CardFieldsPanel({ template, customFields, onCreateField,
         </div>
       )}
 
-      {/* add an existing field / create new */}
+      {/* add an existing field: DRAG a chip onto the card (or click to add) */}
       <div className="mt-3 border-t border-gray-100 pt-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={addSel}
-            onChange={(e) => setAddSel(e.target.value)}
-            className="min-w-0 flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
-          >
-            <option value="">Add a field to the card…</option>
-            {(customFields || []).map((f) => {
-              const key = String(f.fieldKey || "").replace(/^contact\./, "");
-              if (!key) return null;
-              return <option key={f.id || key} value={`contact.custom.${key}`}>{f.name || key}</option>;
-            })}
-          </select>
-          <button
-            type="button"
-            disabled={!addSel}
-            onClick={() => { addFieldLayer(addSel); setAddSel(""); }}
-            className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-          >
-            Add
-          </button>
+        <div className="mb-1.5 text-[11px] text-gray-400">
+          Drag a field onto the card (or click to add):
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {(customFields || []).map((f) => {
+            const key = String(f.fieldKey || "").replace(/^contact\./, "");
+            if (!key) return null;
+            const token = `contact.custom.${key}`;
+            return (
+              <button
+                key={f.id || key}
+                type="button"
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData("text/x-binding", token)}
+                onClick={() => addFieldLayer(token)}
+                title={`{{${token}}}`}
+                className="cursor-grab rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-700 hover:border-blue-300 hover:bg-blue-50 active:cursor-grabbing"
+              >
+                {f.name || key}
+              </button>
+            );
+          })}
+          {["rate", "down", "proof", "label"].map((k) => {
+            const token = `data.tier.${k}`;
+            return (
+              <button
+                key={token}
+                type="button"
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData("text/x-binding", token)}
+                onClick={() => addFieldLayer(token)}
+                title={`{{${token}}} — filled per contact from their earned tier`}
+                className="cursor-grab rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:border-indigo-300 active:cursor-grabbing"
+              >
+                Tier {k}
+              </button>
+            );
+          })}
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <input
