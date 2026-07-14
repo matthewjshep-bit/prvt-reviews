@@ -59,17 +59,6 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
 
   // Expose an imperative controller + template list so a template picker can
   // live outside the studio (e.g. the page's left column).
-  if (controller) {
-    controller.current = {
-      loadTemplate,
-      newFromStarter,
-      save,
-      patchTemplate,
-      // Add a bound text layer at a sensible default spot (panel click-to-add).
-      addField: (token) => addLayer("text", { x: 20, y: 42, width: 60, content: `{{${token}}}`, color: "#ffffff" }),
-      refreshCustomFields: () => api.getCustomFields().then(setCustomFields),
-    };
-  }
   useEffect(() => { onStudioState?.({ templates, currentId, dirty }); }, [templates, currentId, dirty]);
 
   // Which Home sections use which template (drives the "Used for…" ✓ marks).
@@ -141,6 +130,20 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
       color: "#ffffff",
     });
   }, [addLayer]);
+
+  // Imperative surface for the flow shell / preview rail. Assigned AFTER the
+  // callbacks above are initialized (referencing them earlier is a TDZ crash).
+  if (controller) {
+    controller.current = {
+      loadTemplate,
+      newFromStarter,
+      save,
+      patchTemplate,
+      // Add a bound text layer at a sensible default spot (panel click-to-add).
+      addField: (token) => addLayer("text", { x: 20, y: 42, width: 60, content: `{{${token}}}`, color: "#ffffff" }),
+      refreshCustomFields: () => api.getCustomFields().then(setCustomFields),
+    };
+  }
 
   const deleteLayer = useCallback((id) => {
     setTemplate((t) => ({ ...t, layers: t.layers.filter((l) => l.id !== id) }));
