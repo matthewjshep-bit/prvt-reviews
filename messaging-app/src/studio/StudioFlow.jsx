@@ -12,7 +12,7 @@ import CardStudio from "./CardStudio.jsx";
 import ChooseStep from "./ChooseStep.jsx";
 import SendStep from "./SendStep.jsx";
 import PreviewContactPanel from "./PreviewContactPanel.jsx";
-import { API_BASE, getLocationId } from "./api.js";
+import { API_BASE, getLocationId, testProvider } from "./api.js";
 import { getHomeConfig, saveSectionConfig } from "../home/api.js";
 import { extractTemplateBindings } from "@shared/bindings.js";
 
@@ -79,6 +79,38 @@ export default function StudioFlow() {
     () => new Set(liveTemplate ? extractTemplateBindings(liveTemplate) : []),
     [liveTemplate]
   );
+
+  // Live imagery on the EDITABLE canvas: whenever a card with data sources is
+  // opened or the preview contact changes, run each provider's test with the
+  // current (sample or contact) inputs and swap the bound layers' preview
+  // image for the real one — so the satellite/parcel/street image on the
+  // canvas is the actual map, not a stock thumbnail.
+  useEffect(() => {
+    const tpl = liveTemplate;
+    if (!tpl?.dataSources?.length) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const sampleData = { ...(tpl.sampleData || {}), ...(previewContact?.fields || {}) };
+      for (const ds of tpl.dataSources) {
+        try {
+          const r = await testProvider(ds.provider, {
+            inputs: ds.inputs,
+            options: ds.options,
+            connectionId: ds.connectionId || undefined,
+            sampleData,
+            targetPx: { width: 800, height: 800 },
+            templateId: studioState.currentId || undefined,
+            sourceId: ds.id,
+          });
+          if (!cancelled && r?.ok && r.imageUrl) {
+            controller.current?.applySourceThumbnail?.(ds.id, r.imageUrl);
+          }
+        } catch { /* empty address / provider miss → keep the current preview */ }
+      }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // Re-run when a different card opens or the preview contact changes.
+  }, [studioState.currentId, previewContact]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const showToast = (m) => {
     setToast(m);

@@ -131,6 +131,19 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
     });
   }, [addLayer]);
 
+  // Update the cached preview image for a data source (and its bound layers)
+  // WITHOUT marking the template dirty — it's a preview cache, not an edit.
+  // Functional update so an in-flight fetch can't clobber concurrent edits.
+  const applySourceThumbnail = useCallback((sourceId, url) => {
+    setTemplate((t) => ({
+      ...t,
+      dataSources: (t.dataSources || []).map((d) => (d.id === sourceId ? { ...d, thumbnailUrl: url } : d)),
+      layers: (t.layers || []).map((l) =>
+        l.type === "dynamic-image" && l.sourceId === sourceId ? { ...l, thumbnailUrl: url } : l
+      ),
+    }));
+  }, []);
+
   // Imperative surface for the flow shell / preview rail. Assigned AFTER the
   // callbacks above are initialized (referencing them earlier is a TDZ crash).
   if (controller) {
@@ -139,6 +152,7 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
       newFromStarter,
       save,
       patchTemplate,
+      applySourceThumbnail,
       // Add a bound text layer at a sensible default spot (panel click-to-add).
       addField: (token) => addLayer("text", { x: 20, y: 42, width: 60, content: `{{${token}}}`, color: "#ffffff" }),
       refreshCustomFields: () => api.getCustomFields().then(setCustomFields),
