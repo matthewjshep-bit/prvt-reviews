@@ -3,10 +3,13 @@
 // uses (explicit assignment, survives renames) and the outgoing message text.
 // Opens from the header chip or the footer's "Edit message" button.
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import * as api from "./api.js";
 import { SendButton, SecondaryButton } from "./ui.jsx";
+import FieldWithTags from "../studio/MergeTagField.jsx";
+import { mergeTagGroups } from "../studio/model.js";
+import { getCustomFields } from "../studio/api.js";
 
 // Jump to the Card Studio view with a specific template open. Sets the URL and
 // pings HomePage's popstate listener so the view switches without a reload.
@@ -35,6 +38,18 @@ export default function SectionSettings({ open, onClose, data, onSaved }) {
     setMessage(data.message || "");
     setError(null);
   }, [open, data]);
+
+  // Full merge-tag picker for the message (all custom fields + tier data,
+  // which the broker injects on every section's send).
+  const [customFields, setCustomFields] = useState([]);
+  useEffect(() => { if (open) getCustomFields().then(setCustomFields); }, [open]);
+  const tagGroups = useMemo(
+    () => [
+      ...mergeTagGroups({ customFields }),
+      { group: "Offer tiers", tags: ["rate", "down", "proof", "label"].map((k) => ({ token: `data.tier.${k}`, label: `tier ${k}` })) },
+    ],
+    [customFields]
+  );
 
   if (!open || !data) return null;
 
@@ -119,19 +134,20 @@ export default function SectionSettings({ open, onClose, data, onSaved }) {
             : "Pick a template to enable previews and sends."}
         </div>
 
-        {/* message */}
-        <label className="mb-1 mt-4 block text-sm font-semibold text-gray-900">Outgoing message</label>
-        <textarea
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          rows={4}
-          className="w-full rounded-lg border border-gray-300 p-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-        />
+        {/* message — "{ } Insert field" opens the full merge-tag picker */}
+        <div className="mt-4">
+          <FieldWithTags
+            label="Outgoing message"
+            multiline
+            rows={4}
+            value={message}
+            onChange={setMessage}
+            groups={tagGroups}
+          />
+        </div>
         <p className="mt-1 text-xs text-gray-400">
-          Filled in per customer at send time. Tags: <code>{"{{contact.first_name}}"}</code>,{" "}
-          <code>{"{{contact.custom.<field>}}"}</code>, <code>{"{{loc.business_name}}"}</code>
-          {section === "offers" ? <>, <code>{"{{data.tier.rate}}"}</code></> : null}
-          {section === "reviews" ? <>, <code>[Review Link]</code></> : null}.
+          Filled in per customer at send time — any field from the picker works
+          {section === "reviews" ? <>, plus <code>[Review Link]</code></> : null}.
         </p>
 
         {error ? <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}

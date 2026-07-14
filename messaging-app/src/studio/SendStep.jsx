@@ -5,8 +5,10 @@
 // card" block; posts the same /api/send-batch payload.
 
 import React, { useEffect, useMemo, useState } from "react";
-import { API_BASE, getLocationId } from "./api.js";
+import { API_BASE, getLocationId, getCustomFields } from "./api.js";
 import TemplatePreview from "./TemplatePreview.jsx";
+import FieldWithTags from "./MergeTagField.jsx";
+import { mergeTagGroups } from "./model.js";
 import { resolveBindings, flatToContext } from "@shared/bindings.js";
 
 const BLUE = "#4c6ef5";
@@ -26,6 +28,16 @@ export default function SendStep({ template, templateId, dirty, onRequestSave, m
   const [audiencePreview, setAudiencePreview] = useState(null);
   const [sendResult, setSendResult] = useState(null);
   const [sendBusy, setSendBusy] = useState(false);
+
+  // Merge-tag picker groups for the Message editor: standard contact fields,
+  // ALL live GHL custom fields, business settings, and this card's data-source
+  // keys — same picker the design editor uses.
+  const [customFields, setCustomFields] = useState([]);
+  useEffect(() => { getCustomFields().then(setCustomFields); }, []);
+  const tagGroups = useMemo(
+    () => mergeTagGroups({ customFields, dataSources: template?.dataSources }),
+    [customFields, template?.dataSources]
+  );
 
   // tags for the audience picker
   useEffect(() => {
@@ -152,21 +164,20 @@ export default function SendStep({ template, templateId, dirty, onRequestSave, m
       {/* right: message + audience */}
       <div className="space-y-4">
         <div className="rounded-xl border border-gray-200 bg-white p-4">
-          <label className="mb-1 block text-sm font-semibold text-gray-900">Message</label>
-          <textarea
-            value={message}
-            onChange={(e) => onMessageChange(e.target.value)}
+          {/* "{ } Insert field" opens the full merge-tag picker (every custom
+              field + contact/business/data-source fields) at the cursor. */}
+          <FieldWithTags
+            label="Message"
+            multiline
             rows={4}
-            className="w-full rounded-lg border border-gray-300 p-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            value={message}
+            onChange={onMessageChange}
+            groups={tagGroups}
+            placeholder="Hey {{contact.first_name}}, …"
           />
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {["{{contact.first_name}}", "{{loc.business_name}}"].map((tag) => (
-              <button key={tag} type="button" onClick={() => onMessageChange(message + " " + tag)}
-                className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100">
-                {tag}
-              </button>
-            ))}
-          </div>
+          <p className="mt-1.5 text-[11px] text-gray-400">
+            Fields fill in per contact when the text sends — anything from the picker works, including your custom fields.
+          </p>
         </div>
 
         <div className="rounded-xl border border-gray-200 bg-white p-4">
