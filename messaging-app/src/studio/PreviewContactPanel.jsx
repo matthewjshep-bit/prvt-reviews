@@ -29,6 +29,26 @@ const TIER_FIELDS = [
 ];
 const TYPE_OPTIONS = [["TEXT", "Text"], ["NUMERICAL", "Number"], ["DATE", "Date"]];
 
+const pretty = (key) =>
+  String(key).split("_").filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+
+// Status of a binding that's ON the card (ported from CardFieldsPanel):
+// ok / info, or warn (+creatable) when the GHL definition / data source is missing.
+function classifyToken(token, { definedKeys, dataSourceIds }) {
+  if (token.startsWith("contact.custom.")) {
+    const key = token.slice("contact.custom.".length);
+    return definedKeys.has(key)
+      ? { tone: "ok" }
+      : { tone: "warn", label: "not in GHL", creatable: true, key };
+  }
+  if (token.startsWith("data.tier.")) return { tone: "info", label: "tiers" };
+  if (token.startsWith("data.")) {
+    const id = token.split(".")[1];
+    return dataSourceIds.has(id) ? { tone: "ok" } : { tone: "warn", label: `no source “${id}”` };
+  }
+  return { tone: "ok" };
+}
+
 function Group({ title, children }) {
   return (
     <div className="mb-3">
@@ -38,12 +58,12 @@ function Group({ title, children }) {
   );
 }
 
-function FieldRow({ token, label, value, editable, onEditValue, onAdd, onCard }) {
+function FieldRow({ token, label, value, editable, onEditValue, onAdd, onCard, dim }) {
   return (
     <div
       draggable
       onDragStart={(e) => e.dataTransfer.setData("text/x-binding", token)}
-      className="group flex cursor-grab items-center gap-2 border-t border-gray-50 bg-white px-2 py-1.5 first:border-t-0 hover:bg-blue-50/50 active:cursor-grabbing"
+      className={`group flex cursor-grab items-center gap-2 border-t border-gray-50 bg-white px-2 py-1.5 first:border-t-0 hover:bg-blue-50/50 active:cursor-grabbing ${dim ? "opacity-45" : ""}`}
       title={`{{${token}}} — drag onto the card`}
     >
       <div className="min-w-0 flex-1">
@@ -129,6 +149,15 @@ export default function PreviewContactPanel({
   const valueOf = (token) =>
     previewContact ? previewContact.fields?.[token] ?? "" : template?.sampleData?.[token] ?? "";
 
+  const definedKeys = useMemo(
+    () => new Set((customFields || []).map((f) => String(f.fieldKey || "").replace(/^contact\./, "")).filter(Boolean)),
+    [customFields]
+  );
+  const dataSourceIds = useMemo(
+    () => new Set((template?.dataSources || []).map((d) => d.id)),
+    [template?.dataSources]
+  );
+
   const groups = useMemo(() => {
     const custom = (customFields || [])
       .map((f) => {
@@ -148,12 +177,26 @@ export default function PreviewContactPanel({
     ];
   }, [customFields, template?.dataSources]);
 
+  // Friendly names for tokens (from the group definitions; fallback: prettify).
+  const labelMap = useMemo(() => {
+    const m = new Map();
+    for (const [, fields] of groups) for (const [token, label] of fields) m.set(token, label);
+    return m;
+  }, [groups]);
+  const labelFor = (token) => labelMap.get(token) || pretty(String(token).split(".").pop());
+  const onCardTokens = useMemo(() => [...(referenced || [])], [referenced]);
+
+  const refreshDefs = () =>
+    fetch(`${API_BASE}/api/locations/${encodeURIComponent(locationId)}/custom-fields`)
+      .then((x) => x.json())
+      .then((d) => setCustomFields(d.customFields || []));
+
   async function createField() {
     if (!newName.trim()) return;
     setCreating(true);
     try {
       const r = await createCustomField({ name: newName.trim(), dataType: newType });
-      setCustomFields(await fetch(`${API_BASE}/api/locations/${encodeURIComponent(locationId)}/custom-fields`).then((x) => x.json()).then((d) => d.customFields || []));
+      await refreshDefs();
       onCreatedField?.();
       if (r?.key) onAddField(`contact.custom.${r.key}`);
       showToast?.(`Created "${newName.trim()}"`);
@@ -162,6 +205,23 @@ export default function PreviewContactPanel({
       showToast?.("Couldn’t create: " + (e.message || "error"));
     } finally {
       setCreating(false);
+    }
+  }
+
+  // Inline create for a MISSING field that's already referenced on the card.
+  const [rowType, setRowType] = useState({});   // token -> dataType
+  const [rowBusy, setRowBusy] = useState(null); // token in-flight
+  async function createMissing(token, key) {
+    setRowBusy(token);
+    try {
+      await createCustomField({ name: pretty(key), dataType: rowType[token] || "TEXT" });
+      await refreshDefs();
+      onCreatedField?.();
+      showToast?.(`Created "${pretty(key)}" in GHL`);
+    } catch (e) {
+      showToast?.("Couldn’t create: " + (e.message || "error"));
+    } finally {
+      setRowBusy(null);
     }
   }
 
@@ -231,6 +291,55 @@ export default function PreviewContactPanel({
         </div>
       )}
 
+      {/* what's ON the card right now, with health status */}
+      <div className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wide text-gray-400">On this card</div>
+      {onCardTokens.length === 0 ? (
+        <div className="mb-3 rounded-lg border border-dashed border-gray-200 px-2 py-3 text-center text-[11px] text-gray-400">
+          Nothing yet — drag a field up from below.
+        </div>
+      ) : (
+        <div className="mb-3 overflow-hidden rounded-lg border border-gray-100">
+          {onCardTokens.map((token) => {
+            const st = classifyToken(token, { definedKeys, dataSourceIds });
+            return (
+              <div key={token} className={`border-t border-gray-50 px-2 py-1.5 first:border-t-0 ${st.tone === "warn" ? "bg-amber-50/60" : "bg-white"}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-[11px] font-medium text-gray-600">{labelFor(token)}</div>
+                    <div className="truncate text-xs text-gray-800">{valueOf(token) || <span className="text-gray-300">—</span>}</div>
+                  </div>
+                  {st.tone === "warn" ? (
+                    st.creatable ? (
+                      <div className="flex shrink-0 items-center gap-1">
+                        <select
+                          value={rowType[token] || "TEXT"}
+                          onChange={(e) => setRowType((p) => ({ ...p, [token]: e.target.value }))}
+                          className="rounded border border-amber-200 bg-white px-1 py-0.5 text-[10px] text-gray-600"
+                        >
+                          {TYPE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                        </select>
+                        <button
+                          type="button"
+                          disabled={rowBusy === token}
+                          onClick={() => createMissing(token, st.key)}
+                          className="rounded-md bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+                        >
+                          {rowBusy === token ? "…" : "Create"}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">{st.label}</span>
+                    )
+                  ) : st.label ? (
+                    <span className="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">{st.label}</span>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* the sample/real contact's fields */}
       <div className="mb-1 flex items-baseline justify-between px-1">
         <span className="text-[10px] font-bold uppercase tracking-wide text-gray-400">
@@ -238,7 +347,7 @@ export default function PreviewContactPanel({
         </span>
         <span className="text-[10px] text-gray-300">drag onto card</span>
       </div>
-      <div className="max-h-[46vh] overflow-y-auto pr-0.5">
+      <div className="max-h-[42vh] overflow-y-auto pr-0.5">
         {groups.map(([title, fields]) =>
           fields.length ? (
             <Group key={title} title={title}>
@@ -252,6 +361,7 @@ export default function PreviewContactPanel({
                   onEditValue={(v) => onEditSample(token, v)}
                   onAdd={() => onAddField(token)}
                   onCard={referenced?.has(token)}
+                  dim={referenced?.has(token)}
                 />
               ))}
             </Group>

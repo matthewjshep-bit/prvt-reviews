@@ -13,6 +13,50 @@ import { reviewRequestStarter, starterList } from "@shared/starters.js";
 // Home sections a template can be assigned to (mirrors the broker's SECTIONS).
 const HOME_SECTIONS = { quotes: "Quotes", reviews: "Reviews", winback: "Win-back", offers: "Offers" };
 
+// "⋯" more-options dropdown for the flow toolbar. items: {label, onClick,
+// disabled?, danger?} | {header} | {divider}.
+function MoreMenu({ items }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        title="More options"
+        className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-bold text-gray-600 hover:bg-gray-50"
+      >
+        ⋯
+      </button>
+      {open ? (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-40 mt-1 w-56 overflow-hidden rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
+            {items.map((it, i) =>
+              it.divider ? (
+                <div key={i} className="my-1 border-t border-gray-100" />
+              ) : it.header ? (
+                <div key={i} className="px-3 pb-0.5 pt-1.5 text-[10px] font-bold uppercase tracking-wide text-gray-400">{it.header}</div>
+              ) : (
+                <button
+                  key={i}
+                  type="button"
+                  disabled={it.disabled}
+                  onClick={() => { setOpen(false); it.onClick(); }}
+                  className={`block w-full px-3 py-1.5 text-left text-sm disabled:opacity-40 ${
+                    it.danger ? "text-red-600 hover:bg-red-50" : "text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  {it.label}
+                </button>
+              )
+            )}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 /*
   CardStudio — the Dynamic Card Studio. Replaces the old "Personalized image"
   section. Left = editable canvas; right = inspector. Toolbar on top; sample
@@ -277,10 +321,33 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-4">
-      {/* toolbar — in flowMode the Choose step owns template/preset picking,
-          so the duplicative selects are hidden and the name stands alone. */}
+      {/* toolbar — flowMode keeps it minimal: hot-swap switcher + name + ⋯ menu.
+          The legacy (non-flow) editor keeps all controls inline. */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        {!flowMode && (
+        {flowMode ? (
+          // Live hot-swap between saved cards (with a discard guard when dirty).
+          <select
+            value={currentId || ""}
+            onChange={(e) => {
+              const id = e.target.value;
+              if (!id || id === currentId) return;
+              if (dirty && !window.confirm("Discard unsaved changes?")) return;
+              loadTemplate(id);
+            }}
+            className="max-w-[240px] rounded-lg border border-gray-300 px-2 py-1.5 text-sm font-medium"
+            title="Switch card"
+          >
+            {!currentId ? <option value="">Unsaved draft</option> : null}
+            {templates.map((t) => {
+              const sec = Object.keys(HOME_SECTIONS).find((k) => assignments[k] === t.id);
+              return (
+                <option key={t.id} value={t.id}>
+                  {t.name}{sec ? ` · ${HOME_SECTIONS[sec]}` : ""}
+                </option>
+              );
+            })}
+          </select>
+        ) : (
           <select value={currentId || ""} onChange={(e) => (e.target.value ? loadTemplate(e.target.value) : newFromStarter())}
             className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
             <option value="">＋ New (Review Request)</option>
@@ -288,7 +355,7 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
           </select>
         )}
         <input value={template.name} onChange={(e) => patchTemplate({ name: e.target.value })}
-          className={`rounded-lg border border-gray-300 px-2 py-1.5 text-sm font-medium ${flowMode ? "w-56" : "w-44"}`} />
+          className={`rounded-lg border border-gray-300 px-2 py-1.5 text-sm font-medium ${flowMode ? "w-48" : "w-44"}`} />
         {!flowMode && (
           <select value="" onChange={(e) => { const s = starterList().find((x) => x.id === e.target.value); if (s) newFromStarter(s.build); e.target.value = ""; }}
             className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
@@ -296,24 +363,44 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
             {starterList().map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         )}
-        <button type="button" onClick={duplicate} disabled={!currentId} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">Duplicate</button>
-        <button type="button" onClick={remove} disabled={!currentId} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">Delete</button>
-        <button type="button" onClick={() => setConnectionsOpen(true)} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Connections</button>
-        <select
-          value=""
-          disabled={!currentId}
-          title={currentId ? "Send this card from a Home section" : "Save the template first"}
-          onChange={(e) => { const s = e.target.value; e.target.value = ""; if (s) assignToSection(s); }}
-          className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm disabled:opacity-40"
-        >
-          <option value="">Used for…</option>
-          {Object.entries(HOME_SECTIONS).map(([k, label]) => (
-            <option key={k} value={k}>
-              {assignments[k] === currentId ? `✓ ${label}` : label}
-            </option>
-          ))}
-        </select>
-        <button type="button" onClick={() => setWorkflowOpen(true)} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Use in workflow</button>
+        {flowMode ? (
+          <MoreMenu
+            items={[
+              { label: "Duplicate", onClick: duplicate, disabled: !currentId },
+              { label: "Connections", onClick: () => setConnectionsOpen(true) },
+              { label: "Use in workflow", onClick: () => setWorkflowOpen(true) },
+              { header: "Used for" },
+              ...Object.entries(HOME_SECTIONS).map(([k, label]) => ({
+                label: assignments[k] === currentId ? `✓ ${label}` : label,
+                onClick: () => assignToSection(k),
+                disabled: !currentId,
+              })),
+              { divider: true },
+              { label: "Delete card…", onClick: remove, disabled: !currentId, danger: true },
+            ]}
+          />
+        ) : (
+          <>
+            <button type="button" onClick={duplicate} disabled={!currentId} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">Duplicate</button>
+            <button type="button" onClick={remove} disabled={!currentId} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">Delete</button>
+            <button type="button" onClick={() => setConnectionsOpen(true)} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Connections</button>
+            <select
+              value=""
+              disabled={!currentId}
+              title={currentId ? "Send this card from a Home section" : "Save the template first"}
+              onChange={(e) => { const s = e.target.value; e.target.value = ""; if (s) assignToSection(s); }}
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm disabled:opacity-40"
+            >
+              <option value="">Used for…</option>
+              {Object.entries(HOME_SECTIONS).map(([k, label]) => (
+                <option key={k} value={k}>
+                  {assignments[k] === currentId ? `✓ ${label}` : label}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={() => setWorkflowOpen(true)} className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Use in workflow</button>
+          </>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <select onChange={(e) => { const p = CANVAS_PRESETS.find((x) => x.id === e.target.value); if (p) preset(p); }}
             value={CANVAS_PRESETS.find((p) => p.width === template.canvas.width && p.height === template.canvas.height)?.id || ""}
@@ -357,19 +444,23 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
             </p>
           </div>
 
-          <div className="mt-4">
-            <CardFieldsPanel
-              template={template}
-              customFields={customFields}
-              patchTemplate={patchTemplate}
-              showToast={showToast}
-              onCreateField={async (name, dataType) => {
-                const r = await api.createCustomField({ name, dataType });
-                setCustomFields(await api.getCustomFields());
-                return r;
-              }}
-            />
-          </div>
+          {/* In the flow, field status lives in the left rail's "On this card"
+              group — the standalone panel is legacy-editor only. */}
+          {!flowMode && (
+            <div className="mt-4">
+              <CardFieldsPanel
+                template={template}
+                customFields={customFields}
+                patchTemplate={patchTemplate}
+                showToast={showToast}
+                onCreateField={async (name, dataType) => {
+                  const r = await api.createCustomField({ name, dataType });
+                  setCustomFields(await api.getCustomFields());
+                  return r;
+                }}
+              />
+            </div>
+          )}
 
           <div className="mt-4">
             <DataSourcesPanel template={template} patchTemplate={patchTemplate} groups={groups} showToast={showToast} currentId={currentId} />
