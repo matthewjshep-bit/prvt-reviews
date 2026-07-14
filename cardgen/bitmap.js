@@ -44,6 +44,8 @@ export async function prepareBitmap(buffer, layer, box) {
   }
 
   let buf = await pipe.png().toBuffer();
+  let outW = bw;
+  let outH = bh;
 
   if (layer.opacity != null && layer.opacity < 1) {
     buf = await applyOpacity(buf, Math.max(0, layer.opacity));
@@ -58,8 +60,13 @@ export async function prepareBitmap(buffer, layer, box) {
     const meta = await sharp(out).metadata();
     top = Math.round(box.cy - meta.height / 2);
     left = Math.round(box.cx - meta.width / 2);
+    outW = meta.width;
+    outH = meta.height;
     buf = out;
   }
 
-  return { input: buf, top, left };
+  // width/height ride along so the compositor's bounds clamp knows the REAL
+  // bitmap size — without them it assumed full-canvas and slammed every
+  // positioned image to the top-left corner.
+  return { input: buf, top, left, width: outW, height: outH };
 }
