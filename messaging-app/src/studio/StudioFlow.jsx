@@ -7,12 +7,14 @@
 // CardStudio stays mounted across steps so editor state survives navigation.
 // Saving a card started from a section's preset auto-assigns it there.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import CardStudio from "./CardStudio.jsx";
 import ChooseStep from "./ChooseStep.jsx";
 import SendStep from "./SendStep.jsx";
+import PreviewContactPanel from "./PreviewContactPanel.jsx";
 import { API_BASE, getLocationId } from "./api.js";
 import { getHomeConfig, saveSectionConfig } from "../home/api.js";
+import { extractTemplateBindings } from "@shared/bindings.js";
 
 const SECTION_LABELS = { quotes: "Quote follow-up", reviews: "Reviews", winback: "Win-back", offers: "Offers" };
 const DEFAULT_MESSAGE =
@@ -32,6 +34,49 @@ export default function StudioFlow() {
   const [pendingAssign, setPendingAssign] = useState(null);
   const [message, setMessage] = useState(DEFAULT_MESSAGE);
   const [toast, setToast] = useState(null);
+
+  // "Preview as" — a real contact whose fields drive the canvas AND a real
+  // server render (actual imagery + values) replacing the editable canvas.
+  const [previewContact, setPreviewContact] = useState(null);
+  const [contactRenderUrl, setContactRenderUrl] = useState(null);
+  const [contactRendering, setContactRendering] = useState(false);
+  const renderUrlRef = useRef(null);
+  useEffect(() => {
+    if (!(previewContact && liveTemplate?.layers?.length)) {
+      setContactRenderUrl(null);
+      return;
+    }
+    let cancelled = false;
+    setContactRendering(true);
+    (async () => {
+      try {
+        const merged = { ...liveTemplate, sampleData: { ...liveTemplate.sampleData, ...(previewContact.fields || {}) } };
+        const r = await fetch(`${API_BASE}/api/render/preview`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ location_id: locationId, template: merged, sampleData: merged.sampleData }),
+        });
+        if (!r.ok) throw new Error("render failed");
+        const blob = await r.blob();
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        if (renderUrlRef.current) URL.revokeObjectURL(renderUrlRef.current);
+        renderUrlRef.current = url;
+        setContactRenderUrl(url);
+      } catch {
+        if (!cancelled) { setContactRenderUrl(null); showToast("Couldn’t render for that contact"); }
+      } finally {
+        if (!cancelled) setContactRendering(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // Re-render on contact change or template save/switch (not every keystroke).
+  }, [previewContact, liveTemplate?.id, liveTemplate?.version]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const referenced = useMemo(
+    () => new Set(liveTemplate ? extractTemplateBindings(liveTemplate) : []),
+    [liveTemplate]
+  );
 
   const showToast = (m) => {
     setToast(m);
@@ -138,23 +183,45 @@ export default function StudioFlow() {
             Designing the <span className="font-semibold">{SECTION_LABELS[pendingAssign]}</span> card — it's assigned automatically when you save.
           </div>
         ) : null}
-        <CardStudio
-          flowMode
-          controller={controller}
-          onTemplateChange={setLiveTemplate}
-          onStudioState={setStudioState}
-          onSaved={onSaved}
-        />
-        <div className="mt-4 flex justify-end">
-          <button
-            type="button"
-            disabled={!studioState.currentId}
-            onClick={() => setStep("send")}
-            className="rounded-lg bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
-            title={studioState.currentId ? "" : "Save the card first"}
-          >
-            Next: Send →
-          </button>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[290px_minmax(0,1fr)]">
+          <div className="lg:sticky lg:top-24 lg:self-start">
+            <PreviewContactPanel
+              template={liveTemplate}
+              referenced={referenced}
+              previewContact={previewContact}
+              onSelectContact={setPreviewContact}
+              previewLoading={contactRendering}
+              onAddField={(token) => controller.current?.addField?.(token)}
+              onEditSample={(token, v) =>
+                controller.current?.patchTemplate?.({ sampleData: { ...(liveTemplate?.sampleData || {}), [token]: v } })
+              }
+              onCreatedField={() => controller.current?.refreshCustomFields?.()}
+              showToast={showToast}
+            />
+          </div>
+          <div className="min-w-0">
+            <CardStudio
+              flowMode
+              controller={controller}
+              onTemplateChange={setLiveTemplate}
+              onStudioState={setStudioState}
+              onSaved={onSaved}
+              previewOverride={previewContact?.fields}
+              contactPreviewUrl={previewContact ? contactRenderUrl : null}
+              contactPreviewLoading={Boolean(previewContact) && contactRendering}
+            />
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                disabled={!studioState.currentId}
+                onClick={() => setStep("send")}
+                className="rounded-lg bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+                title={studioState.currentId ? "" : "Save the card first"}
+              >
+                Next: Send →
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 

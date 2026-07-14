@@ -6,7 +6,6 @@
 
 import React, { useMemo, useState } from "react";
 import { extractTemplateBindings } from "@shared/bindings.js";
-import { newLayer } from "./model.js";
 
 const STD_CONTACT = new Set(["first_name", "last_name", "phone", "email", "address1", "city", "state", "address_full"]);
 const TYPE_OPTIONS = [["TEXT", "Text"], ["NUMERICAL", "Number"], ["DATE", "Date"]];
@@ -50,20 +49,10 @@ const PILL_TONE = {
 export default function CardFieldsPanel({ template, customFields, onCreateField, patchTemplate, showToast }) {
   const [busyKey, setBusyKey] = useState(null);
   const [createType, setCreateType] = useState({}); // binding -> dataType
-  const [newName, setNewName] = useState("");
-  const [newType, setNewType] = useState("TEXT");
-  const [newBusy, setNewBusy] = useState(false);
 
   const defined = useMemo(() => ghlKeys(customFields), [customFields]);
   const dataSourceIds = useMemo(() => new Set((template.dataSources || []).map((d) => d.id)), [template.dataSources]);
   const bindings = useMemo(() => extractTemplateBindings(template), [template]);
-
-  // Add a text layer bound to a field.
-  function addFieldLayer(token) {
-    const layer = { ...newLayer("text"), content: `{{${token}}}` };
-    patchTemplate({ layers: [...(template.layers || []), layer] });
-    showToast(`Added {{${token}}} to the card`);
-  }
 
   async function createFor(binding, key) {
     setBusyKey(binding);
@@ -74,21 +63,6 @@ export default function CardFieldsPanel({ template, customFields, onCreateField,
       showToast("Couldn’t create: " + (e.message || "error"));
     } finally {
       setBusyKey(null);
-    }
-  }
-
-  async function createNew() {
-    if (!newName.trim()) return;
-    setNewBusy(true);
-    try {
-      const r = await onCreateField(newName.trim(), newType);
-      showToast(`Created "${newName.trim()}" in GHL`);
-      if (r?.key) addFieldLayer(`contact.custom.${r.key}`);
-      setNewName("");
-    } catch (e) {
-      showToast("Couldn’t create: " + (e.message || "error"));
-    } finally {
-      setNewBusy(false);
     }
   }
 
@@ -139,71 +113,6 @@ export default function CardFieldsPanel({ template, customFields, onCreateField,
         </div>
       )}
 
-      {/* add an existing field: DRAG a chip onto the card (or click to add) */}
-      <div className="mt-3 border-t border-gray-100 pt-3">
-        <div className="mb-1.5 text-[11px] text-gray-400">
-          Drag a field onto the card (or click to add):
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {(customFields || []).map((f) => {
-            const key = String(f.fieldKey || "").replace(/^contact\./, "");
-            if (!key) return null;
-            const token = `contact.custom.${key}`;
-            return (
-              <button
-                key={f.id || key}
-                type="button"
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData("text/x-binding", token)}
-                onClick={() => addFieldLayer(token)}
-                title={`{{${token}}}`}
-                className="cursor-grab rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-700 hover:border-blue-300 hover:bg-blue-50 active:cursor-grabbing"
-              >
-                {f.name || key}
-              </button>
-            );
-          })}
-          {["rate", "down", "proof", "label"].map((k) => {
-            const token = `data.tier.${k}`;
-            return (
-              <button
-                key={token}
-                type="button"
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData("text/x-binding", token)}
-                onClick={() => addFieldLayer(token)}
-                title={`{{${token}}} — filled per contact from their earned tier`}
-                className="cursor-grab rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:border-indigo-300 active:cursor-grabbing"
-              >
-                Tier {k}
-              </button>
-            );
-          })}
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <input
-            type="text"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="＋ New field name (e.g. Warranty Expiry)…"
-            className="min-w-0 flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
-          />
-          <select value={newType} onChange={(e) => setNewType(e.target.value)} className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
-            {TYPE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-          <button
-            type="button"
-            disabled={!newName.trim() || newBusy}
-            onClick={createNew}
-            className="rounded-lg bg-gray-900 px-2.5 py-1.5 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-40"
-          >
-            {newBusy ? "Creating…" : "Create & add"}
-          </button>
-        </div>
-        <p className="mt-1.5 text-[11px] text-gray-400">
-          Creates a real GHL custom field — it becomes editable on contacts and available to every card.
-        </p>
-      </div>
     </div>
   );
 }

@@ -59,7 +59,17 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
 
   // Expose an imperative controller + template list so a template picker can
   // live outside the studio (e.g. the page's left column).
-  if (controller) controller.current = { loadTemplate, newFromStarter, save };
+  if (controller) {
+    controller.current = {
+      loadTemplate,
+      newFromStarter,
+      save,
+      patchTemplate,
+      // Add a bound text layer at a sensible default spot (panel click-to-add).
+      addField: (token) => addLayer("text", { x: 20, y: 42, width: 60, content: `{{${token}}}`, color: "#ffffff" }),
+      refreshCustomFields: () => api.getCustomFields().then(setCustomFields),
+    };
+  }
   useEffect(() => { onStudioState?.({ templates, currentId, dirty }); }, [templates, currentId, dirty]);
 
   // Which Home sections use which template (drives the "Used for…" ✓ marks).
