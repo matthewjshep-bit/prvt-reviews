@@ -80,7 +80,9 @@ export default function PreviewContactPanel({
   referenced,          // Set of binding tokens on the card
   previewContact,      // { id, name, fields } | null
   onSelectContact,     // (contact|null) => void
-  previewLoading,      // server render in-flight
+  renderUrl,           // the contact's true server render (mini preview)
+  renderLoading,       // server render in-flight
+  onRefreshRender,     // re-render the mini preview with current edits
   onAddField,          // (token) => void
   onEditSample,        // (token, value) => void
   onCreatedField,      // () => void  (refresh customFields upstream)
@@ -168,12 +170,41 @@ export default function PreviewContactPanel({
       {/* preview-as */}
       <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-gray-400">Preview as</div>
       {previewContact ? (
-        <div className="mb-3 flex items-center justify-between rounded-lg border border-green-200 bg-green-50 px-2.5 py-2 text-sm">
-          <span className="truncate font-medium text-green-800">
-            {previewLoading ? "Rendering… " : ""}{previewContact.name}
-          </span>
-          <button type="button" onClick={() => onSelectContact(null)} className="ml-2 shrink-0 text-xs font-semibold text-green-700 underline hover:text-green-900">
-            back to editing
+        <div className="mb-3">
+          <div className="flex items-center justify-between rounded-lg border border-green-200 bg-green-50 px-2.5 py-2 text-sm">
+            <span className="truncate font-medium text-green-800">{previewContact.name}</span>
+            <button type="button" onClick={() => onSelectContact(null)} className="ml-2 shrink-0 text-xs font-semibold text-green-700 underline hover:text-green-900">
+              ✕ clear
+            </button>
+          </div>
+          <p className="mt-1 text-[10px] text-gray-400">
+            The canvas shows their values and stays editable. This is their real render:
+          </p>
+          {/* the contact's TRUE server render — real imagery + values */}
+          <div className="relative mt-1 overflow-hidden rounded-lg bg-[#0b0b0c]">
+            {renderUrl ? (
+              <img src={renderUrl} alt={`Render for ${previewContact.name}`} className="w-full" />
+            ) : (
+              <div
+                className="flex w-full items-center justify-center text-[11px] text-gray-500"
+                style={{ aspectRatio: `${template?.canvas?.width || 1} / ${template?.canvas?.height || 1}` }}
+              >
+                {renderLoading ? "Rendering…" : "No render yet"}
+              </div>
+            )}
+            {renderLoading && renderUrl ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-[11px] font-medium text-white">
+                Rendering…
+              </div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={onRefreshRender}
+            disabled={renderLoading}
+            className="mt-1 w-full rounded-lg border border-gray-200 bg-white py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {renderLoading ? "Rendering…" : "↻ Refresh with my edits"}
           </button>
         </div>
       ) : (

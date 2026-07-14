@@ -40,6 +40,7 @@ export default function StudioFlow() {
   const [previewContact, setPreviewContact] = useState(null);
   const [contactRenderUrl, setContactRenderUrl] = useState(null);
   const [contactRendering, setContactRendering] = useState(false);
+  const [renderTick, setRenderTick] = useState(0); // manual "refresh render"
   const renderUrlRef = useRef(null);
   useEffect(() => {
     if (!(previewContact && liveTemplate?.layers?.length)) {
@@ -70,8 +71,9 @@ export default function StudioFlow() {
       }
     })();
     return () => { cancelled = true; };
-    // Re-render on contact change or template save/switch (not every keystroke).
-  }, [previewContact, liveTemplate?.id, liveTemplate?.version]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Re-render on contact change, template save/switch, or manual refresh
+    // (not every keystroke — the editable canvas covers live edits).
+  }, [previewContact, liveTemplate?.id, liveTemplate?.version, renderTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const referenced = useMemo(
     () => new Set(liveTemplate ? extractTemplateBindings(liveTemplate) : []),
@@ -190,7 +192,9 @@ export default function StudioFlow() {
               referenced={referenced}
               previewContact={previewContact}
               onSelectContact={setPreviewContact}
-              previewLoading={contactRendering}
+              renderUrl={previewContact ? contactRenderUrl : null}
+              renderLoading={contactRendering}
+              onRefreshRender={() => setRenderTick((t) => t + 1)}
               onAddField={(token) => controller.current?.addField?.(token)}
               onEditSample={(token, v) =>
                 controller.current?.patchTemplate?.({ sampleData: { ...(liveTemplate?.sampleData || {}), [token]: v } })
@@ -200,6 +204,8 @@ export default function StudioFlow() {
             />
           </div>
           <div className="min-w-0">
+            {/* Canvas stays EDITABLE with the contact's real values merged in
+                (previewOverride); the true server render lives in the rail. */}
             <CardStudio
               flowMode
               controller={controller}
@@ -207,8 +213,6 @@ export default function StudioFlow() {
               onStudioState={setStudioState}
               onSaved={onSaved}
               previewOverride={previewContact?.fields}
-              contactPreviewUrl={previewContact ? contactRenderUrl : null}
-              contactPreviewLoading={Boolean(previewContact) && contactRendering}
             />
             <div className="mt-4 flex justify-end">
               <button
