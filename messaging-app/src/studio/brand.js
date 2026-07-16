@@ -75,3 +75,11 @@ export function hasBrand(brand = {}) {
 }
 
 export { FONTS as BRAND_FONTS };
+
+// Industries the gallery/starters are tagged with (starterList's `industry`).
+export const INDUSTRY_LABELS = {
+  "home-services": "Home services",
+  roofing: "Roofing",
+  "real-estate": "Real estate",
+  lending: "Lending",
+};

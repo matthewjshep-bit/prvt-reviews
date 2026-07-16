@@ -24,6 +24,7 @@ export const CV = {
   brandAccent: "rh_brand_accent", // accent (golds/saturated colors remap here)
   brandText: "rh_brand_text",     // text (whites/light tones remap here)
   brandFont: "rh_brand_font",     // "Inter" | "Source Serif" | "Archivo Black"
+  brandIndustry: "rh_brand_industry", // gallery default filter (e.g. "roofing")
 };
 
 const BOOL_FIELDS = new Set(["personalizedImage", "smartEnabled", "followUps"]);

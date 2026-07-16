@@ -41,8 +41,12 @@ export default function StudioFlow() {
   const [brandOpen, setBrandOpen] = useState(false);
   const [brandSaving, setBrandSaving] = useState(false);
   const brand = useMemo(
-    () => ({ background: config.brandBg || "", accent: config.brandAccent || "", text: config.brandText || "", font: config.brandFont || "" }),
-    [config.brandBg, config.brandAccent, config.brandText, config.brandFont]
+    () => ({
+      background: config.brandBg || "", accent: config.brandAccent || "",
+      text: config.brandText || "", font: config.brandFont || "",
+      industry: config.brandIndustry || "",
+    }),
+    [config.brandBg, config.brandAccent, config.brandText, config.brandFont, config.brandIndustry]
   );
   async function saveBrand(next) {
     setBrandSaving(true);
@@ -52,11 +56,15 @@ export default function StudioFlow() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           location_id: locationId,
-          brandBg: next.background, brandAccent: next.accent, brandText: next.text, brandFont: next.font,
+          brandBg: next.background, brandAccent: next.accent, brandText: next.text,
+          brandFont: next.font, brandIndustry: next.industry || "",
         }),
       });
       if (!r.ok) throw new Error("save failed");
-      setConfig((c) => ({ ...c, brandBg: next.background, brandAccent: next.accent, brandText: next.text, brandFont: next.font }));
+      setConfig((c) => ({
+        ...c, brandBg: next.background, brandAccent: next.accent, brandText: next.text,
+        brandFont: next.font, brandIndustry: next.industry || "",
+      }));
       setBrandOpen(false);
       showToast("Brand saved — gallery and new cards use it now");
     } catch (e) {

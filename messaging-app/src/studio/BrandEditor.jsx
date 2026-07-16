@@ -6,7 +6,7 @@
 import React, { useMemo, useState } from "react";
 import { X } from "lucide-react";
 import TemplatePreview from "./TemplatePreview.jsx";
-import { applyBrand, BRAND_FONTS } from "./brand.js";
+import { applyBrand, BRAND_FONTS, INDUSTRY_LABELS } from "./brand.js";
 import { quoteFollowUpStarter, offerTermsStarter } from "@shared/starters.js";
 
 function ColorField({ label, value, onChange, placeholder }) {
@@ -43,6 +43,7 @@ export default function BrandEditor({ open, onClose, brand, onSave, saving }) {
   const [accent, setAccent] = useState(brand?.accent || "");
   const [text, setText] = useState(brand?.text || "");
   const [font, setFont] = useState(brand?.font || "");
+  const [industry, setIndustry] = useState(brand?.industry || "");
 
   // Re-seed when reopened with fresh saved values.
   React.useEffect(() => {
@@ -51,6 +52,7 @@ export default function BrandEditor({ open, onClose, brand, onSave, saving }) {
     setAccent(brand?.accent || "");
     setText(brand?.text || "");
     setFont(brand?.font || "");
+    setIndustry(brand?.industry || "");
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const draft = { background: bg, accent, text, font };
@@ -93,6 +95,18 @@ export default function BrandEditor({ open, onClose, brand, onSave, saving }) {
                 {BRAND_FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
               </select>
             </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-gray-700">Your industry</label>
+              <select
+                value={industry}
+                onChange={(e) => setIndustry(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-2 py-2 text-sm"
+              >
+                <option value="">Show every industry</option>
+                {Object.entries(INDUSTRY_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+              <p className="mt-1 text-[11px] text-gray-400">The gallery opens showing your industry's templates (plus general ones).</p>
+            </div>
             <p className="text-[11px] leading-relaxed text-gray-400">
               How it maps: dark colors in a template become your background, golds and other
               saturated colors become your accent, whites become your text color. Leave a
@@ -120,7 +134,7 @@ export default function BrandEditor({ open, onClose, brand, onSave, saving }) {
           <button
             type="button"
             disabled={saving}
-            onClick={() => onSave({ background: bg.trim(), accent: accent.trim(), text: text.trim(), font })}
+            onClick={() => onSave({ background: bg.trim(), accent: accent.trim(), text: text.trim(), font, industry })}
             className="rounded-lg py-2.5 text-sm font-semibold text-white disabled:opacity-50"
             style={{ backgroundColor: "#1d4ed8" }}
           >

@@ -1,49 +1,41 @@
-// ChooseStep.jsx — step 1 of the Card Studio flow.
+// ChooseStep.jsx — step 1 of the Card Studio flow. Kept deliberately calm:
 //
-//   YOUR CARDS  — everything you've made, first. Assigned cards carry their
-//                 section badge; unassigned ones are drafts. Plus start-blank.
-//   GALLERY     — premade templates grouped by what they send for (Quotes /
-//                 Reviews / Win-back / Offers / More), filterable by industry.
+//   YOUR CARDS  — capped row (expand for the rest) + start-blank.
+//   GALLERY     — the four section groups only, pre-filtered to the brand's
+//                 industry (set in the Brand kit). Imagery bases + extras live
+//                 in a collapsed "More templates" drawer.
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { starterList, blankStarter } from "@shared/starters.js";
 import TemplatePreview from "./TemplatePreview.jsx";
-import { applyBrand, hasBrand } from "./brand.js";
+import { applyBrand, hasBrand, INDUSTRY_LABELS } from "./brand.js";
 
 const PURPOSES = [
-  { key: "quotes", label: "Quote follow-up", section: true },
-  { key: "reviews", label: "Reviews", section: true },
-  { key: "winback", label: "Win-back", section: true },
-  { key: "offers", label: "Offers", section: true },
-  { key: "imagery", label: "Property imagery", hint: "live per-contact imagery — parcel outline, satellite, street view" },
-  { key: "general", label: "More" },
+  { key: "quotes", label: "Quote follow-up" },
+  { key: "reviews", label: "Reviews" },
+  { key: "winback", label: "Win-back" },
+  { key: "offers", label: "Offers" },
 ];
-const INDUSTRY_LABELS = {
-  "home-services": "Home services",
-  roofing: "Roofing",
-  "real-estate": "Real estate",
-  lending: "Lending",
-  general: "General",
-};
+const CARDS_VISIBLE = 5;
 
 function Tile({ children, onClick, title, subtitle, badge, dashed }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`group relative w-44 shrink-0 overflow-hidden rounded-xl border text-left transition-shadow hover:shadow-md ${
+      className={`group relative w-36 shrink-0 overflow-hidden rounded-xl border text-left transition-shadow hover:shadow-md ${
         dashed ? "border-dashed border-gray-300 bg-gray-50 hover:border-blue-300" : "border-gray-200 bg-white"
       }`}
     >
       <div className="aspect-square w-full overflow-hidden bg-[#0b0b0c]">{children}</div>
       {badge ? (
-        <span className="absolute left-2 top-2 rounded-full bg-gray-900/80 px-2 py-0.5 text-[10px] font-semibold text-white">
+        <span className="absolute left-1.5 top-1.5 rounded-full bg-gray-900/80 px-2 py-0.5 text-[10px] font-semibold text-white">
           {badge}
         </span>
       ) : null}
-      <div className="px-3 py-2">
-        <div className="truncate text-sm font-semibold text-gray-900">{title}</div>
-        {subtitle ? <div className="truncate text-[11px] text-gray-400">{subtitle}</div> : null}
+      <div className="px-2.5 py-1.5">
+        <div className="truncate text-[13px] font-semibold text-gray-900">{title}</div>
+        {subtitle ? <div className="truncate text-[10px] text-gray-400">{subtitle}</div> : null}
       </div>
     </button>
   );
@@ -52,7 +44,11 @@ function Tile({ children, onClick, title, subtitle, badge, dashed }) {
 const Row = ({ children }) => <div className="flex gap-3 overflow-x-auto pb-1">{children}</div>;
 
 export default function ChooseStep({ templates, assignments, brand, onOpenBrand, onEdit, onNewFromPreset, onNewFromStarter }) {
-  const [industry, setIndustry] = useState("");
+  // Gallery filter defaults to the brand's industry; chips override per visit.
+  const [industry, setIndustry] = useState(brand?.industry || "");
+  useEffect(() => { setIndustry(brand?.industry || ""); }, [brand?.industry]);
+  const [showAllCards, setShowAllCards] = useState(false);
+
   const starters = useMemo(() => starterList(), []);
   const sectionByTemplateId = useMemo(() => {
     const m = new Map();
@@ -62,13 +58,12 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
   const sectionLabel = (key) => PURPOSES.find((p) => p.key === key)?.label || key;
 
   const industries = useMemo(
-    () => [...new Set(starters.map((s) => s.industry).filter(Boolean))],
+    () => [...new Set(starters.map((s) => s.industry).filter((i) => i && i !== "general"))],
     [starters]
   );
   const filtered = industry ? starters.filter((s) => s.industry === industry || s.industry === "general") : starters;
 
-  // Gallery previews: build each starter's doc once, themed to the brand kit
-  // so tiles show what you'd actually get.
+  // Gallery previews: build once per starter, themed to the brand kit.
   const galleryDocs = useMemo(() => {
     const m = new Map();
     for (const s of starters) {
@@ -77,9 +72,15 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
     return m;
   }, [starters, brand]);
 
+  const cards = templates || [];
+  const visibleCards = showAllCards ? cards : cards.slice(0, CARDS_VISIBLE);
+  const hiddenCount = cards.length - visibleCards.length;
+
+  const extras = filtered.filter((s) => !PURPOSES.some((p) => p.key === s.purpose));
+
   return (
     <div className="space-y-8">
-      {/* YOUR CARDS — first thing you see */}
+      {/* YOUR CARDS */}
       <section>
         <div className="mb-2 flex items-baseline gap-2">
           <h2 className="text-xl font-bold text-gray-900">Your cards</h2>
@@ -89,20 +90,29 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
           <Tile dashed title="＋ Blank card" subtitle="Start from scratch" onClick={() => onNewFromStarter({ build: blankStarter })}>
             <div className="flex h-full w-full items-center justify-center bg-gray-100 text-4xl text-gray-300 group-hover:text-blue-400">＋</div>
           </Tile>
-          {(templates || []).map((t) => {
+          {visibleCards.map((t) => {
             const section = sectionByTemplateId.get(t.id);
             return (
               <Tile
                 key={t.id}
                 title={t.name}
-                subtitle={section ? "Currently sending · Edit" : "Draft · Edit"}
-                badge={section ? sectionLabel(section) : "Draft"}
+                subtitle={section ? "Currently sending" : "Draft"}
+                badge={section ? sectionLabel(section) : null}
                 onClick={() => onEdit(t.id)}
               >
                 <TemplatePreview template={t} />
               </Tile>
             );
           })}
+          {hiddenCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowAllCards(true)}
+              className="w-24 shrink-0 rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-500 hover:bg-gray-50"
+            >
+              +{hiddenCount} more
+            </button>
+          ) : null}
         </Row>
       </section>
 
@@ -111,13 +121,15 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-xl font-bold text-gray-900">Template gallery</h2>
-            <p className="mt-0.5 text-sm text-gray-500">Premade designs — pick one and make it yours.</p>
+            <p className="mt-0.5 text-sm text-gray-500">
+              {industry ? `${INDUSTRY_LABELS[industry] || industry} designs — pick one and make it yours.` : "Pick one and make it yours."}
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               onClick={onOpenBrand}
-              title="Set your colors + font once — every gallery template and new card starts themed"
+              title="Colors, font, and industry — themes the whole gallery and every new card"
               className="mr-1 inline-flex items-center gap-1.5 rounded-full border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
               {hasBrand(brand || {}) ? (
@@ -136,9 +148,9 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
               onClick={() => setIndustry("")}
               className={`rounded-full px-3 py-1.5 text-sm font-medium ${!industry ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
             >
-              All industries
+              All
             </button>
-            {industries.filter((i) => i !== "general").map((i) => (
+            {industries.map((i) => (
               <button
                 key={i}
                 type="button"
@@ -152,29 +164,19 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
         </div>
 
         <div className="space-y-6">
-          {PURPOSES.map(({ key, label, section, hint }) => {
-            const items = filtered.filter((s) => (s.purpose || "general") === key);
+          {PURPOSES.map(({ key, label }) => {
+            const items = filtered.filter((s) => s.purpose === key);
             if (!items.length) return null;
-            const assigned = assignments?.[key];
             return (
               <div key={key}>
-                <div className="mb-2 flex items-baseline gap-2">
-                  <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">{label}</h3>
-                  {section ? (
-                    <span className="text-[11px] text-gray-400">
-                      {assigned ? "picking one replaces the current card on save" : "picking one assigns it on save"}
-                    </span>
-                  ) : hint ? (
-                    <span className="text-[11px] text-gray-400">{hint}</span>
-                  ) : null}
-                </div>
+                <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-gray-500">{label}</h3>
                 <Row>
                   {items.map((s) => (
                     <Tile
                       key={s.id}
                       title={s.name}
                       subtitle={INDUSTRY_LABELS[s.industry] || "General"}
-                      onClick={() => (section ? onNewFromPreset(key, s) : onNewFromStarter(s))}
+                      onClick={() => onNewFromPreset(key, s)}
                     >
                       {galleryDocs.get(s.id) ? (
                         <TemplatePreview template={galleryDocs.get(s.id)} />
@@ -187,6 +189,33 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
               </div>
             );
           })}
+
+          {/* everything else stays out of the way */}
+          {extras.length ? (
+            <details className="rounded-xl border border-gray-200 p-4">
+              <summary className="cursor-pointer text-sm font-semibold text-gray-600">
+                More templates — live property imagery bases &amp; extras ({extras.length})
+              </summary>
+              <div className="mt-3">
+                <Row>
+                  {extras.map((s) => (
+                    <Tile
+                      key={s.id}
+                      title={s.name}
+                      subtitle={s.purpose === "imagery" ? "Live per-contact imagery" : INDUSTRY_LABELS[s.industry] || "General"}
+                      onClick={() => onNewFromStarter(s)}
+                    >
+                      {galleryDocs.get(s.id) ? (
+                        <TemplatePreview template={galleryDocs.get(s.id)} />
+                      ) : (
+                        <div className="h-full w-full bg-gray-100" />
+                      )}
+                    </Tile>
+                  ))}
+                </Row>
+              </div>
+            </details>
+          ) : null}
         </div>
       </section>
     </div>
