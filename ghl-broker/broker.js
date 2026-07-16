@@ -44,6 +44,7 @@ import createStudioRouter from "./routes/studio.js";
 import createRenderRouter from "./routes/render.js";
 import createConnectionsRouter from "./routes/connections.js";
 import createHomeRouter from "./routes/home.js";
+import createJourneysRouter from "./routes/journeys.js";
 import { resolveConnectionsFor } from "./connections.js";
 import { resolveBindings } from "./shared/bindings.js";
 import { store } from "./store.js";
@@ -255,6 +256,9 @@ app.use("/api/connections", createConnectionsRouter({ resolveLocation }));
 
 /* ---------- Mount Home page (quotes / reviews / winback / offers) ---------- */
 app.use("/api/home", createHomeRouter({ resolveLocation, renderRouter }));
+
+/* ---------- Mount Journeys (mapped card+text lifecycles) ---------- */
+app.use("/api/journeys", createJourneysRouter({ resolveLocation, renderRouter }));
 
 /* ---------- GET dashboard ---------- */
 app.get("/api/dashboard", async (req, res) => {

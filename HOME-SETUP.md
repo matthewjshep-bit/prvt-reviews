@@ -242,3 +242,14 @@ queues and DND, cursor-paged. Clicking a contact opens the pop-out drawer:
 - [ ] A DND contact is refused server-side (skipped, reported).
 - [ ] A win-back batch **Preview audience** matches the real send audience exactly.
 - [ ] Offers **Send to all** produces a per-contact card with the correct tier's terms.
+
+## 9. Journeys (v1 — mapped lifecycles, manual firing)
+
+`?view=journeys` (Home nav): string cards + texts into a lifecycle — e.g.
+offer → one-pager → quote follow-up → review ask. v1 is a **mapping tool**:
+the "wait N days" connectors are planning labels and **nothing sends on a
+timer** — you fire each step with "Send to N at this step", which renders each
+enrollee's card (tier data included), sends the MMS directly, logs to
+`home_sends` as `journey:<id>`, and advances them to the next step. DND
+contacts are skipped at send time; STOP → GHL DND → skipped everywhere.
+Enroll manually (search) or by tag; remove anyone anytime.

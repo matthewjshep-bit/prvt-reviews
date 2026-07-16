@@ -16,6 +16,7 @@ import Reviews from "./home/Reviews.jsx";
 import WinBack from "./home/WinBack.jsx";
 import Offers from "./home/Offers.jsx";
 import Contacts from "./home/Contacts.jsx";
+import Journeys from "./journeys/Journeys.jsx";
 import StudioFlow from "./studio/StudioFlow.jsx";
 
 const SECTION_ORDER = ["quotes", "reviews", "winback", "offers"];
@@ -27,6 +28,7 @@ const NAV = [
   { view: "winback", label: "Win-back" },
   { view: "offers", label: "Offers" },
   { view: "contacts", label: "Contacts" },
+  { view: "journeys", label: "Journeys" },
   { view: "studio", label: "Card Studio" },
 ];
 
@@ -98,6 +100,8 @@ export default function HomePage() {
       <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
         {view === "contacts" ? (
           <Contacts />
+        ) : view === "journeys" ? (
+          <Journeys />
         ) : single ? (
           <SectionRenderer view={view} eager />
         ) : (

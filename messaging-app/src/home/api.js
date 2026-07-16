@@ -56,6 +56,24 @@ const post = (path, body) =>
 export const getHomeConfig = () => fetch(`${API_BASE}/api/home/config?location_id=${loc()}`).then(j);
 export const getSection = (section) => fetch(`${API_BASE}/api/home/${section}?location_id=${loc()}`).then(j);
 
+/* ---------- journeys (mapped card+text lifecycles) ---------- */
+export const listJourneys = () => fetch(`${API_BASE}/api/journeys?location_id=${loc()}`).then(j).then((r) => r.journeys);
+export const getJourney = (id) => fetch(`${API_BASE}/api/journeys/${id}?location_id=${loc()}`).then(j);
+export const createJourney = (doc) => post(`/api/journeys`, doc).then((r) => r.journey);
+export const updateJourney = (id, doc) =>
+  fetch(`${API_BASE}/api/journeys/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ location_id: getLocationId(), ...doc }),
+  }).then(j).then((r) => r.journey);
+export const deleteJourney = (id) =>
+  fetch(`${API_BASE}/api/journeys/${id}?location_id=${loc()}`, { method: "DELETE" }).then(j);
+export const enrollInJourney = (id, { contactIds, tag } = {}) => post(`/api/journeys/${id}/enroll`, { contactIds, tag });
+export const removeFromJourney = (id, contactId) =>
+  fetch(`${API_BASE}/api/journeys/${id}/enrollments/${encodeURIComponent(contactId)}?location_id=${loc()}`, { method: "DELETE" }).then(j);
+export const sendJourneyStep = (id, stepIndex, { dryRun = true } = {}) =>
+  post(`/api/journeys/${id}/steps/${stepIndex}/send`, { dryRun });
+
 /* ---------- one-click GHL custom-field setup ---------- */
 export const setupFields = () => post(`/api/home/setup-fields`, {});
 

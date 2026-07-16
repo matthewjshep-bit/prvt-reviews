@@ -103,6 +103,102 @@ const pgStore = {
     return id;
   },
 
+  /* ---- journeys ---- */
+  async listJourneys(locationId) {
+    const { rows } = await query(`select doc from journeys where location_id = $1 order by updated_at desc`, [locationId]);
+    return rows.map((r) => r.doc);
+  },
+  async getJourney(id) {
+    const { rows } = await query(`select doc from journeys where id = $1`, [id]);
+    return rows[0]?.doc || null;
+  },
+  async createJourney(doc) {
+    const id = uuid();
+    const ts = nowIso();
+    const full = { ...doc, id, createdAt: ts, updatedAt: ts };
+    await query(
+      `insert into journeys (id, location_id, name, doc, created_at, updated_at) values ($1,$2,$3,$4,$5,$6)`,
+      [id, full.locationId, full.name, full, ts, ts]
+    );
+    return full;
+  },
+  async updateJourney(id, doc) {
+    const { rows } = await query(`select doc from journeys where id = $1`, [id]);
+    const prev = rows[0]?.doc;
+    if (!prev) return null;
+    const ts = nowIso();
+    const full = { ...doc, id, locationId: prev.locationId, createdAt: prev.createdAt || ts, updatedAt: ts };
+    await query(`update journeys set name=$2, doc=$3, updated_at=$4 where id=$1`, [id, full.name, full, ts]);
+    return full;
+  },
+  async deleteJourney(id) {
+    const { rowCount } = await query(`delete from journeys where id = $1`, [id]);
+    return rowCount > 0;
+  },
+
+  /* ---- journey enrollments ---- */
+  // Enroll contacts (skip ones already active). Returns count enrolled.
+  async enrollContacts(journeyId, locationId, contactIds) {
+    let enrolled = 0;
+    for (const cid of contactIds) {
+      const { rows } = await query(
+        `select id from journey_enrollments where journey_id=$1 and contact_id=$2 and status='active'`,
+        [journeyId, cid]
+      );
+      if (rows.length) continue;
+      await query(
+        `insert into journey_enrollments (journey_id, location_id, contact_id) values ($1,$2,$3)`,
+        [journeyId, locationId, cid]
+      );
+      enrolled++;
+    }
+    return enrolled;
+  },
+  async listEnrollments(journeyId) {
+    const { rows } = await query(
+      `select contact_id as "contactId", step_index as "stepIndex", status,
+              enrolled_at as "enrolledAt", advanced_at as "advancedAt"
+       from journey_enrollments where journey_id=$1 and status <> 'removed'
+       order by step_index, enrolled_at`,
+      [journeyId]
+    );
+    return rows;
+  },
+  async activeJourneyCounts(locationId) {
+    const { rows } = await query(
+      `select journey_id as "journeyId", count(*)::int as n
+       from journey_enrollments where location_id=$1 and status='active' group by journey_id`,
+      [locationId]
+    );
+    return Object.fromEntries(rows.map((r) => [r.journeyId, r.n]));
+  },
+  async removeEnrollment(journeyId, contactId) {
+    const { rowCount } = await query(
+      `update journey_enrollments set status='removed' where journey_id=$1 and contact_id=$2 and status='active'`,
+      [journeyId, contactId]
+    );
+    return rowCount > 0;
+  },
+  // Advance the given contacts from a step (to step+1, or completed on last).
+  async advanceEnrollments(journeyId, fromStep, contactIds, isLastStep) {
+    if (!contactIds.length) return 0;
+    const ts = nowIso();
+    if (isLastStep) {
+      const { rowCount } = await query(
+        `update journey_enrollments set status='completed', advanced_at=$3
+         where journey_id=$1 and status='active' and step_index=$2 and contact_id = any($4)`,
+        [journeyId, fromStep, ts, contactIds]
+      );
+      return rowCount;
+    }
+    const { rowCount } = await query(
+      `update journey_enrollments set step_index=step_index+1, advanced_at=$3
+       where journey_id=$1 and status='active' and step_index=$2 and contact_id = any($4)`,
+      [journeyId, fromStep, ts, contactIds]
+    );
+    return rowCount;
+  },
+
   /* ---- home sends (log + 24h dedupe) ---- */
   async logHomeSend(row) {
     await query(
@@ -226,7 +322,7 @@ function loadFile() {
   try {
     return JSON.parse(fs.readFileSync(STORE_FILE, "utf8"));
   } catch {
-    return { templates: {}, versions: {}, renders: [], assets: [], connections: {}, tests: [], homeSends: [] };
+    return { templates: {}, versions: {}, renders: [], assets: [], connections: {}, tests: [], homeSends: [], journeys: {}, enrollments: [] };
   }
 }
 
@@ -311,6 +407,97 @@ const fileStore = (() => {
       data.renders = data.renders.slice(-500);
       persist();
       return id;
+    },
+
+    async listJourneys(locationId) {
+      ensure();
+      return Object.values(data.journeys || {})
+        .filter((j) => j.locationId === locationId)
+        .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+    },
+    async getJourney(id) {
+      ensure();
+      return (data.journeys || {})[id] || null;
+    },
+    async createJourney(doc) {
+      ensure();
+      data.journeys = data.journeys || {};
+      const id = uuid();
+      const ts = nowIso();
+      const full = { ...doc, id, createdAt: ts, updatedAt: ts };
+      data.journeys[id] = full;
+      persist();
+      return full;
+    },
+    async updateJourney(id, doc) {
+      ensure();
+      const prev = (data.journeys || {})[id];
+      if (!prev) return null;
+      const ts = nowIso();
+      const full = { ...doc, id, locationId: prev.locationId, createdAt: prev.createdAt || ts, updatedAt: ts };
+      data.journeys[id] = full;
+      persist();
+      return full;
+    },
+    async deleteJourney(id) {
+      ensure();
+      if (!(data.journeys || {})[id]) return false;
+      delete data.journeys[id];
+      data.enrollments = (data.enrollments || []).filter((e) => e.journeyId !== id);
+      persist();
+      return true;
+    },
+
+    async enrollContacts(journeyId, locationId, contactIds) {
+      ensure();
+      data.enrollments = data.enrollments || [];
+      let enrolled = 0;
+      for (const cid of contactIds) {
+        if (data.enrollments.some((e) => e.journeyId === journeyId && e.contactId === cid && e.status === "active")) continue;
+        data.enrollments.push({ journeyId, locationId, contactId: cid, stepIndex: 0, status: "active", enrolledAt: nowIso(), advancedAt: null });
+        enrolled++;
+      }
+      persist();
+      return enrolled;
+    },
+    async listEnrollments(journeyId) {
+      ensure();
+      return (data.enrollments || [])
+        .filter((e) => e.journeyId === journeyId && e.status !== "removed")
+        .map(({ contactId, stepIndex, status, enrolledAt, advancedAt }) => ({ contactId, stepIndex, status, enrolledAt, advancedAt }))
+        .sort((a, b) => a.stepIndex - b.stepIndex || (a.enrolledAt || "").localeCompare(b.enrolledAt || ""));
+    },
+    async activeJourneyCounts(locationId) {
+      ensure();
+      const out = {};
+      for (const e of data.enrollments || []) {
+        if (e.locationId === locationId && e.status === "active") out[e.journeyId] = (out[e.journeyId] || 0) + 1;
+      }
+      return out;
+    },
+    async removeEnrollment(journeyId, contactId) {
+      ensure();
+      let hit = false;
+      for (const e of data.enrollments || []) {
+        if (e.journeyId === journeyId && e.contactId === contactId && e.status === "active") { e.status = "removed"; hit = true; }
+      }
+      persist();
+      return hit;
+    },
+    async advanceEnrollments(journeyId, fromStep, contactIds, isLastStep) {
+      ensure();
+      const want = new Set(contactIds);
+      let n = 0;
+      for (const e of data.enrollments || []) {
+        if (e.journeyId === journeyId && e.status === "active" && e.stepIndex === fromStep && want.has(e.contactId)) {
+          if (isLastStep) e.status = "completed";
+          else e.stepIndex += 1;
+          e.advancedAt = nowIso();
+          n++;
+        }
+      }
+      persist();
+      return n;
     },
 
     async logHomeSend(row) {

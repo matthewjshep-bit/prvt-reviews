@@ -88,6 +88,32 @@ create table if not exists home_sends (
 create index if not exists home_sends_dedupe_idx on home_sends (location_id, contact_id, section, created_at desc);
 create index if not exists home_sends_batch_idx on home_sends (batch_id);
 
+-- Journeys: multi-step card+text lifecycles. v1 has NO scheduler — steps are
+-- fired manually from the UI; waits are planning labels. Timestamps exist so
+-- automation can be added later without remodeling.
+create table if not exists journeys (
+  id           uuid primary key,
+  location_id  text not null,
+  name         text not null,
+  doc          jsonb not null,          -- { name, active, steps: [{templateId, message, waitDays}] }
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+create index if not exists journeys_location_idx on journeys (location_id);
+
+create table if not exists journey_enrollments (
+  id           bigserial primary key,
+  journey_id   uuid not null references journeys (id) on delete cascade,
+  location_id  text not null,
+  contact_id   text not null,
+  step_index   integer not null default 0,
+  status       text not null default 'active',  -- 'active' | 'completed' | 'removed'
+  enrolled_at  timestamptz not null default now(),
+  advanced_at  timestamptz
+);
+create index if not exists je_journey_idx on journey_enrollments (journey_id, status, step_index);
+create index if not exists je_contact_idx on journey_enrollments (location_id, contact_id);
+
 -- Last Test result per data source (discovered keys + thumbnail), so the editor
 -- is useful on reload.
 create table if not exists data_source_tests (
