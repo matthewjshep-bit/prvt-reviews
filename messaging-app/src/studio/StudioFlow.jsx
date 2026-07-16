@@ -34,7 +34,6 @@ export default function StudioFlow() {
   const [homeConfig, setHomeConfig] = useState(null); // { assignments, sections }
   const [config, setConfig] = useState({});           // businessName, reviewLink
   const [pendingAssign, setPendingAssign] = useState(null);
-  const [message, setMessage] = useState(DEFAULT_MESSAGE);
   const [toast, setToast] = useState(null);
 
   // Brand kit — themes gallery previews + new cards. Stored in config CVs.
@@ -73,8 +72,12 @@ export default function StudioFlow() {
       setBrandSaving(false);
     }
   }
-  // New cards come out already themed.
-  const brandedBuild = (build) => (args) => applyBrand(build(args), brand);
+  // New cards come out already themed, with the starter's message baked into
+  // the doc (message is part of the template now).
+  const brandedBuild = (starter) => (args) => ({
+    ...applyBrand(starter.build(args), brand),
+    message: starter.message || DEFAULT_MESSAGE,
+  });
 
   // "Preview as" — a real contact whose fields drive the canvas AND a real
   // server render (actual imagery + values) replacing the editable canvas.
@@ -168,34 +171,46 @@ export default function StudioFlow() {
       .catch(() => {});
   }, [locationId]);
 
-  // Prefill the send message: the assigned section's message when this card is
-  // assigned; otherwise keep whatever's there.
   const assignments = homeConfig?.assignments || {};
   const assignedSection = Object.keys(assignments).find((k) => assignments[k] === studioState.currentId);
-  useEffect(() => {
-    if (assignedSection && homeConfig?.sections?.[assignedSection]?.message) {
-      setMessage(homeConfig.sections[assignedSection].message);
-    }
-  }, [assignedSection, studioState.currentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-assign after saving a card started from a section preset.
+  // The message LIVES ON THE TEMPLATE (saved with the design). Fallbacks cover
+  // older cards saved before the field existed.
+  const message =
+    liveTemplate?.message ||
+    (assignedSection ? homeConfig?.sections?.[assignedSection]?.message : "") ||
+    DEFAULT_MESSAGE;
+
+  // After saving: auto-assign a preset-started card, and keep the assigned
+  // section's outgoing message in lockstep with the card's saved message.
   async function onSaved(tpl) {
-    if (!pendingAssign) return;
-    const existing = assignments[pendingAssign];
-    if (existing && existing !== tpl.id) {
-      if (!window.confirm(`${SECTION_LABELS[pendingAssign]} already sends another card. Replace it with "${tpl.name}"?`)) {
-        setPendingAssign(null);
-        return;
+    let section = pendingAssign;
+    if (pendingAssign) {
+      const existing = assignments[pendingAssign];
+      if (existing && existing !== tpl.id) {
+        if (!window.confirm(`${SECTION_LABELS[pendingAssign]} already sends another card. Replace it with "${tpl.name}"?`)) {
+          setPendingAssign(null);
+          section = null;
+        }
       }
+      if (section) {
+        try {
+          await saveSectionConfig(section, { templateId: tpl.id });
+          showToast(`"${tpl.name}" now sends for ${SECTION_LABELS[section]}`);
+        } catch (e) {
+          showToast("Couldn’t assign: " + (e.message || "error"));
+          section = null;
+        }
+        setPendingAssign(null);
+      }
+    } else if (assignedSection) {
+      section = assignedSection;
     }
-    try {
-      await saveSectionConfig(pendingAssign, { templateId: tpl.id });
-      showToast(`"${tpl.name}" now sends for ${SECTION_LABELS[pendingAssign]}`);
-      refreshHomeConfig();
-    } catch (e) {
-      showToast("Couldn’t assign: " + (e.message || "error"));
+    // Sync the card's message to its section so Home sends match.
+    if (section && tpl.message && tpl.message !== homeConfig?.sections?.[section]?.message) {
+      try { await saveSectionConfig(section, { message: tpl.message }); } catch { /* non-fatal */ }
     }
-    setPendingAssign(null);
+    if (section) refreshHomeConfig();
   }
 
   function goChoose() { refreshHomeConfig(); setStep("choose"); }
@@ -239,14 +254,12 @@ export default function StudioFlow() {
           onOpenBrand={() => setBrandOpen(true)}
           onEdit={(id) => { controller.current?.loadTemplate?.(id); setStep("design"); }}
           onNewFromPreset={(sectionKey, starter) => {
-            controller.current?.newFromStarter?.(brandedBuild(starter.build));
-            if (starter.message) setMessage(starter.message);
+            controller.current?.newFromStarter?.(brandedBuild(starter));
             setPendingAssign(sectionKey);
             setStep("design");
           }}
           onNewFromStarter={(starter) => {
-            controller.current?.newFromStarter?.(brandedBuild(starter.build));
-            if (starter.message) setMessage(starter.message);
+            controller.current?.newFromStarter?.(brandedBuild(starter));
             setPendingAssign(null);
             setStep("design");
           }}
@@ -314,21 +327,9 @@ export default function StudioFlow() {
           dirty={studioState.dirty}
           onRequestSave={() => controller.current?.save?.()}
           message={message}
-          onMessageChange={setMessage}
+          onEditDesign={() => setStep("design")}
           businessName={config.businessName}
           reviewLink={config.reviewLink}
-          assignedSection={assignedSection}
-          assignedSectionLabel={assignedSection ? SECTION_LABELS[assignedSection] : ""}
-          savedSectionMessage={assignedSection ? homeConfig?.sections?.[assignedSection]?.message : undefined}
-          onSaveSectionMessage={async (msg) => {
-            try {
-              await saveSectionConfig(assignedSection, { message: msg });
-              showToast(`Saved — ${SECTION_LABELS[assignedSection]} now sends this message`);
-              refreshHomeConfig();
-            } catch (e) {
-              showToast("Couldn’t save the message: " + (e.message || "error"));
-            }
-          }}
         />
       ) : null}
 

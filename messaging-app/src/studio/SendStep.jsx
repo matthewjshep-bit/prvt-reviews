@@ -5,16 +5,14 @@
 // card" block; posts the same /api/send-batch payload.
 
 import React, { useEffect, useMemo, useState } from "react";
-import { API_BASE, getLocationId, getCustomFields } from "./api.js";
+import { API_BASE, getLocationId } from "./api.js";
 import TemplatePreview from "./TemplatePreview.jsx";
-import FieldWithTags from "./MergeTagField.jsx";
-import { mergeTagGroups } from "./model.js";
 import { resolveBindings, flatToContext } from "@shared/bindings.js";
 
 const BLUE = "#4c6ef5";
 const SEND_BLUE = "#1d4ed8";
 
-export default function SendStep({ template, templateId, dirty, onRequestSave, message, onMessageChange, businessName, reviewLink, assignedSection, assignedSectionLabel, savedSectionMessage, onSaveSectionMessage }) {
+export default function SendStep({ template, templateId, dirty, onRequestSave, message, onEditDesign, businessName, reviewLink }) {
   const locationId = getLocationId();
 
   // audience state (self-owned)
@@ -28,16 +26,6 @@ export default function SendStep({ template, templateId, dirty, onRequestSave, m
   const [audiencePreview, setAudiencePreview] = useState(null);
   const [sendResult, setSendResult] = useState(null);
   const [sendBusy, setSendBusy] = useState(false);
-
-  // Merge-tag picker groups for the Message editor: standard contact fields,
-  // ALL live GHL custom fields, business settings, and this card's data-source
-  // keys — same picker the design editor uses.
-  const [customFields, setCustomFields] = useState([]);
-  useEffect(() => { getCustomFields().then(setCustomFields); }, []);
-  const tagGroups = useMemo(
-    () => mergeTagGroups({ customFields, dataSources: template?.dataSources }),
-    [customFields, template?.dataSources]
-  );
 
   // tags for the audience picker
   useEffect(() => {
@@ -158,43 +146,16 @@ export default function SendStep({ template, templateId, dirty, onRequestSave, m
             </div>
           </div>
         </div>
-        <p className="mt-2 text-center text-[11px] text-gray-400">Exactly what recipients get — card + message, filled in per contact.</p>
+        <p className="mt-2 text-center text-[11px] text-gray-400">
+          Exactly what recipients get — card + message, filled in per contact.{" "}
+          <button type="button" onClick={onEditDesign} className="font-semibold text-blue-600 underline hover:text-blue-800">
+            Edit on the Design step
+          </button>
+        </p>
       </div>
 
-      {/* right: message + audience */}
+      {/* right: audience only — the message is part of the card design */}
       <div className="space-y-4">
-        <div className="rounded-xl border border-gray-200 bg-white p-4">
-          {/* "{ } Insert field" opens the full merge-tag picker (every custom
-              field + contact/business/data-source fields) at the cursor. */}
-          <FieldWithTags
-            label="Message"
-            multiline
-            rows={4}
-            value={message}
-            onChange={onMessageChange}
-            groups={tagGroups}
-            placeholder="Hey {{contact.first_name}}, …"
-          />
-          <p className="mt-1.5 text-[11px] text-gray-400">
-            Fields fill in per contact when the text sends — anything from the picker works, including your custom fields.
-          </p>
-          {assignedSection ? (
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-blue-50/60 px-3 py-2">
-              <span className="text-xs text-blue-800">
-                This card sends for <span className="font-semibold">{assignedSectionLabel}</span> on the Home page.
-              </span>
-              <button
-                type="button"
-                disabled={message === savedSectionMessage}
-                onClick={() => onSaveSectionMessage?.(message)}
-                className="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
-              >
-                {message === savedSectionMessage ? `Saved as ${assignedSectionLabel}’s message` : `Save as ${assignedSectionLabel}’s message`}
-              </button>
-            </div>
-          ) : null}
-        </div>
-
         <div className="rounded-xl border border-gray-200 bg-white p-4">
           <label className="mb-1 block text-sm font-semibold text-gray-900">Who gets it</label>
           <input

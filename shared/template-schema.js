@@ -213,6 +213,9 @@ export const TemplateSchema = z
     dataSources: z.array(DataSourceSchema).default([]),
     layers: z.array(LayerSchema).default([]),
     sampleData: z.record(z.string(), z.string()).default({}),
+    // The outgoing SMS copy that ships WITH this card — card + message are one
+    // saved unit. May contain {{scope.path}} bindings and [Review Link].
+    message: z.string().max(1000).default(""),
     createdAt: z.string().optional(),
     updatedAt: z.string().optional(),
   })

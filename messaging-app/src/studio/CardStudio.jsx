@@ -6,6 +6,7 @@ import CardFieldsPanel from "./CardFieldsPanel.jsx";
 import ConnectionsModal from "./ConnectionsModal.jsx";
 import WorkflowModal from "./WorkflowModal.jsx";
 import * as api from "./api.js";
+import FieldWithTags from "./MergeTagField.jsx";
 import { getHomeConfig, saveSectionConfig } from "../home/api.js";
 import { newLayer, mergeTagGroups, CANVAS_PRESETS } from "./model.js";
 import { reviewRequestStarter, starterList } from "@shared/starters.js";
@@ -443,6 +444,24 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
                 : "Drag layers · ⌘D duplicate · Delete removes · arrows nudge (⇧ = larger)"}
             </p>
           </div>
+
+          {/* The message ships WITH the card — edited here, saved by Save. */}
+          {flowMode ? (
+            <div className="mt-4 rounded-lg border border-gray-200 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wide text-gray-400">Message</span>
+                <span className="text-[11px] text-gray-400">saved with this card · sends alongside it</span>
+              </div>
+              <FieldWithTags
+                multiline
+                rows={3}
+                value={template.message || ""}
+                onChange={(v) => patchTemplate({ message: v })}
+                groups={groups}
+                placeholder="Hey {{contact.first_name}}, …"
+              />
+            </div>
+          ) : null}
 
           {/* In the flow, field status lives in the left rail's "On this card"
               group — the standalone panel is legacy-editor only. */}
