@@ -458,6 +458,27 @@ export function streetViewBaseStarter({ locationId } = {}) {
   };
 }
 
+// website-shot: a screenshot of the contact's own website — the "we looked at
+// your site" opener for agencies/service businesses.
+export function websiteShotBaseStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Website Screenshot Base", canvas: SQUARE, background: { color: "#0b0b0c" },
+    dataSources: [
+      { id: "site", provider: "website-shot",
+        inputs: { url: "{{contact.website}}" },
+        options: { width: 1200 },
+        connectionId: "", discoveredKeys: ["url"], thumbnailUrl: IMG.thumbStreet },
+    ],
+    layers: [
+      { id: uid("dimg"), type: "dynamic-image", sourceId: "site", x: 0, y: 0, width: 100, height: 72, fit: "cover", thumbnailUrl: IMG.thumbStreet, visible: true },
+      { id: uid("scrim"), type: "shape", shape: "rect", x: 0, y: 62, width: 100, height: 38, fill: "rgba(0,0,0,0.75)", cornerRadius: 0, visible: true },
+      { id: uid("h"), type: "text", x: 6, y: 74, width: 88, height: 10, content: "{{contact.first_name}}, we took a look at your site", fontFamily: "Inter", fontWeight: "bold", fontSize: 50, color: "#ffffff", align: "center", lineHeight: 1.1, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("badge"), type: "badge", x: 22, y: 88, width: 56, height: 7, icon: "check", text: "{{contact.website}}", bgColor: "#d4af37", textColor: "#0b0b0c", fontFamily: "Inter", fontSize: 28, cornerRadius: 999, visible: true },
+    ],
+    sampleData: { "contact.first_name": "Jessica", "contact.website": "example.com" },
+  };
+}
+
 // Registry of starters the editor can offer. `category` groups them in the
 // picker; `message` is the matching SMS copy applied when the preset is chosen.
 // `purpose` maps a starter to a Home section (quotes|reviews|winback|offers)
@@ -502,6 +523,8 @@ export function starterList() {
       message: "Hi {{first_name}}, spotted your place at {{contact.custom.property_address}} — reply if you'd like to talk!" },
     { id: "street-view-base", name: "Street View", category: "Real estate", purpose: "imagery", industry: "general", build: streetViewBaseStarter,
       message: "Hi {{first_name}}, your place at {{contact.custom.property_address}} is looking great — reply if you'd like to talk!" },
+    { id: "website-shot-base", name: "Website Screenshot", category: "General", purpose: "imagery", industry: "general", build: websiteShotBaseStarter,
+      message: "Hi {{first_name}}, we took a look at {{contact.website}} — got a couple of ideas that could bring you more customers. Want me to send them over?" },
     /* ---- general ---- */
     { id: "just-listed", name: "Just Listed", category: "Real estate", purpose: "general", industry: "real-estate", build: justListedStarter,
       message: "Hi {{first_name}}! 🏡 A new listing just hit the market at {{contact.custom.property_address}}. Want the details or a private tour? Just reply here." },

@@ -49,6 +49,7 @@ export async function buildContactContext(client, locationId, contact) {
     last_name: contact.lastName || "",
     phone: contact.phone || "",
     email: contact.email || "",
+    website: contact.website || "",
     address1: contact.address1 || contact.address || "",
     city: contact.city || "",
     state: contact.state || "",

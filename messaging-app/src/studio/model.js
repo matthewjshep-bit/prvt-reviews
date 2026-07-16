@@ -50,7 +50,7 @@ export function newLayer(type, extra = {}) {
 // Build the merge-tag groups shown in the picker.
 export function mergeTagGroups({ customFields = [], dataSources = [] }) {
   const standard = [
-    "first_name", "last_name", "phone", "email", "address1", "city", "state", "address_full",
+    "first_name", "last_name", "phone", "email", "website", "address1", "city", "state", "address_full",
   ].map((k) => ({ token: `contact.${k}`, label: k }));
 
   const custom = (customFields || []).map((f) => {

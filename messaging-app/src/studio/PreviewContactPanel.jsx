@@ -15,6 +15,7 @@ const STD_FIELDS = [
   ["contact.last_name", "Last name"],
   ["contact.phone", "Phone"],
   ["contact.email", "Email"],
+  ["contact.website", "Website"],
   ["contact.address_full", "Full address"],
 ];
 const LOC_FIELDS = [

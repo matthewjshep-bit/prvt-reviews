@@ -7,7 +7,7 @@
 import React, { useMemo, useState } from "react";
 import { extractTemplateBindings } from "@shared/bindings.js";
 
-const STD_CONTACT = new Set(["first_name", "last_name", "phone", "email", "address1", "city", "state", "address_full"]);
+const STD_CONTACT = new Set(["first_name", "last_name", "phone", "email", "website", "address1", "city", "state", "address_full"]);
 const TYPE_OPTIONS = [["TEXT", "Text"], ["NUMERICAL", "Number"], ["DATE", "Date"]];
 
 const pretty = (key) => key.split("_").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");

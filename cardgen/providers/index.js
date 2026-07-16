@@ -13,6 +13,7 @@ const MODULE_PATHS = [
   "./mapbox-pin.js",
   "./mapbox-parcel.js",
   "./google-streetview.js",
+  "./website-shot.js",
 ];
 
 const REGISTRY = new Map();
