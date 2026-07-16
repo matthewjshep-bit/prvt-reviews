@@ -24,18 +24,37 @@ function computeBox(layer, W, H) {
   return { bx, by, bw, bh, cx: bx + bw / 2, cy: by + bh / 2 };
 }
 
-// Keep a bitmap composite within canvas bounds (guards sharp against
-// out-of-range top/left from off-canvas boxes or rotation).
-function clampSpec(spec, W, H) {
+// Keep a bitmap composite within canvas bounds. Layer boxes may legitimately
+// overhang the canvas (the schema allows overshoot; the editor shows it
+// cropped) — so CROP the bitmap to the visible region instead of just nudging
+// top/left, otherwise sharp throws "Image to composite must have same
+// dimensions or smaller". Returns null when the layer is entirely off-canvas.
+async function clampSpec(spec, W, H) {
   const w = spec.width ?? W;
   const h = spec.height ?? H;
-  let { top, left } = spec;
-  let clamped = false;
-  if (left < 0) { left = 0; clamped = true; }
-  if (top < 0) { top = 0; clamped = true; }
-  if (left + w > W) { left = Math.max(0, W - w); clamped = true; }
-  if (top + h > H) { top = Math.max(0, H - h); clamped = true; }
-  return { input: spec.input, top: Math.round(top), left: Math.round(left), clamped };
+  const { top, left } = spec;
+
+  // Entirely outside the canvas → nothing to draw.
+  if (left >= W || top >= H || left + w <= 0 || top + h <= 0) return null;
+
+  const cropLeft = Math.max(0, -left);
+  const cropTop = Math.max(0, -top);
+  const visW = Math.min(w - cropLeft, W - Math.max(0, left));
+  const visH = Math.min(h - cropTop, H - Math.max(0, top));
+
+  let input = spec.input;
+  if (cropLeft > 0 || cropTop > 0 || visW < w || visH < h) {
+    input = await sharp(input)
+      .extract({
+        left: Math.round(cropLeft),
+        top: Math.round(cropTop),
+        width: Math.max(1, Math.round(visW)),
+        height: Math.max(1, Math.round(visH)),
+      })
+      .png()
+      .toBuffer();
+  }
+  return { input, top: Math.round(Math.max(0, top)), left: Math.round(Math.max(0, left)) };
 }
 
 // rawTemplate: template document. context: { contact, loc, data }.
@@ -66,14 +85,14 @@ export async function renderTemplate(rawTemplate, { context = {}, images = {}, f
       if (layer.type === "image") {
         if (!layer.src) continue;
         const { buffer } = await safeFetch(layer.src, { contentTypePrefix: "image/", maxBytes: 10_000_000 });
-        composites.push(clampSpec(await prepareBitmap(buffer, layer, box), W, H));
+        { const spec = await clampSpec(await prepareBitmap(buffer, layer, box), W, H); if (spec) composites.push(spec); }
       } else if (layer.type === "dynamic-image") {
         const buf = images[layer.sourceId];
         if (!buf) {
           warnings.push({ layer: layer.id, error: "no_provider_image", sourceId: layer.sourceId });
           continue;
         }
-        composites.push(clampSpec(await prepareBitmap(buf, layer, box), W, H));
+        { const spec = await clampSpec(await prepareBitmap(buf, layer, box), W, H); if (spec) composites.push(spec); }
       } else if (layer.type === "text") {
         const value = resolve(layer.content);
         if (!value.trim()) continue; // empty-binding-skips-layer
