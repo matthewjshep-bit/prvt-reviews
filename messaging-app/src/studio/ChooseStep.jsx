@@ -8,6 +8,7 @@
 import React, { useMemo, useState } from "react";
 import { starterList, blankStarter } from "@shared/starters.js";
 import TemplatePreview from "./TemplatePreview.jsx";
+import { applyBrand, hasBrand } from "./brand.js";
 
 const PURPOSES = [
   { key: "quotes", label: "Quote follow-up", section: true },
@@ -50,7 +51,7 @@ function Tile({ children, onClick, title, subtitle, badge, dashed }) {
 
 const Row = ({ children }) => <div className="flex gap-3 overflow-x-auto pb-1">{children}</div>;
 
-export default function ChooseStep({ templates, assignments, onEdit, onNewFromPreset, onNewFromStarter }) {
+export default function ChooseStep({ templates, assignments, brand, onOpenBrand, onEdit, onNewFromPreset, onNewFromStarter }) {
   const [industry, setIndustry] = useState("");
   const starters = useMemo(() => starterList(), []);
   const sectionByTemplateId = useMemo(() => {
@@ -66,14 +67,15 @@ export default function ChooseStep({ templates, assignments, onEdit, onNewFromPr
   );
   const filtered = industry ? starters.filter((s) => s.industry === industry || s.industry === "general") : starters;
 
-  // Gallery previews: build each starter's doc once (pure data, cheap).
+  // Gallery previews: build each starter's doc once, themed to the brand kit
+  // so tiles show what you'd actually get.
   const galleryDocs = useMemo(() => {
     const m = new Map();
     for (const s of starters) {
-      try { m.set(s.id, s.build({ locationId: "preview" })); } catch { /* skip broken */ }
+      try { m.set(s.id, applyBrand(s.build({ locationId: "preview" }), brand || {})); } catch { /* skip broken */ }
     }
     return m;
-  }, [starters]);
+  }, [starters, brand]);
 
   return (
     <div className="space-y-8">
@@ -111,7 +113,24 @@ export default function ChooseStep({ templates, assignments, onEdit, onNewFromPr
             <h2 className="text-xl font-bold text-gray-900">Template gallery</h2>
             <p className="mt-0.5 text-sm text-gray-500">Premade designs — pick one and make it yours.</p>
           </div>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onOpenBrand}
+              title="Set your colors + font once — every gallery template and new card starts themed"
+              className="mr-1 inline-flex items-center gap-1.5 rounded-full border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              {hasBrand(brand || {}) ? (
+                <span className="flex items-center gap-0.5">
+                  {[brand.background, brand.accent, brand.text].filter(Boolean).map((c, i) => (
+                    <span key={i} className="h-3 w-3 rounded-full border border-gray-200" style={{ backgroundColor: c }} />
+                  ))}
+                </span>
+              ) : (
+                <span>🎨</span>
+              )}
+              Brand kit
+            </button>
             <button
               type="button"
               onClick={() => setIndustry("")}

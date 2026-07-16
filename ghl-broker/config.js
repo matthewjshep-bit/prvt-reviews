@@ -19,6 +19,11 @@ export const CV = {
   cardAccent: "rh_card_accent",
   cardNameX: "rh_card_name_x", // 0..1 pill center, horizontal
   cardNameY: "rh_card_name_y", // 0..1 pill center, vertical
+  // Brand kit — themes gallery templates + new cards in the Card Studio.
+  brandBg: "rh_brand_bg",         // card background (dark neutrals remap here)
+  brandAccent: "rh_brand_accent", // accent (golds/saturated colors remap here)
+  brandText: "rh_brand_text",     // text (whites/light tones remap here)
+  brandFont: "rh_brand_font",     // "Inter" | "Source Serif" | "Archivo Black"
 };
 
 const BOOL_FIELDS = new Set(["personalizedImage", "smartEnabled", "followUps"]);

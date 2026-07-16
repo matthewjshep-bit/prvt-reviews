@@ -12,6 +12,8 @@ import CardStudio from "./CardStudio.jsx";
 import ChooseStep from "./ChooseStep.jsx";
 import SendStep from "./SendStep.jsx";
 import PreviewContactPanel from "./PreviewContactPanel.jsx";
+import BrandEditor from "./BrandEditor.jsx";
+import { applyBrand } from "./brand.js";
 import { API_BASE, getLocationId, testProvider } from "./api.js";
 import { getHomeConfig, saveSectionConfig } from "../home/api.js";
 import { extractTemplateBindings } from "@shared/bindings.js";
@@ -34,6 +36,37 @@ export default function StudioFlow() {
   const [pendingAssign, setPendingAssign] = useState(null);
   const [message, setMessage] = useState(DEFAULT_MESSAGE);
   const [toast, setToast] = useState(null);
+
+  // Brand kit — themes gallery previews + new cards. Stored in config CVs.
+  const [brandOpen, setBrandOpen] = useState(false);
+  const [brandSaving, setBrandSaving] = useState(false);
+  const brand = useMemo(
+    () => ({ background: config.brandBg || "", accent: config.brandAccent || "", text: config.brandText || "", font: config.brandFont || "" }),
+    [config.brandBg, config.brandAccent, config.brandText, config.brandFont]
+  );
+  async function saveBrand(next) {
+    setBrandSaving(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          location_id: locationId,
+          brandBg: next.background, brandAccent: next.accent, brandText: next.text, brandFont: next.font,
+        }),
+      });
+      if (!r.ok) throw new Error("save failed");
+      setConfig((c) => ({ ...c, brandBg: next.background, brandAccent: next.accent, brandText: next.text, brandFont: next.font }));
+      setBrandOpen(false);
+      showToast("Brand saved — gallery and new cards use it now");
+    } catch (e) {
+      showToast("Couldn’t save the brand: " + (e.message || "error"));
+    } finally {
+      setBrandSaving(false);
+    }
+  }
+  // New cards come out already themed.
+  const brandedBuild = (build) => (args) => applyBrand(build(args), brand);
 
   // "Preview as" — a real contact whose fields drive the canvas AND a real
   // server render (actual imagery + values) replacing the editable canvas.
@@ -194,21 +227,25 @@ export default function StudioFlow() {
         <ChooseStep
           templates={studioState.templates}
           assignments={assignments}
+          brand={brand}
+          onOpenBrand={() => setBrandOpen(true)}
           onEdit={(id) => { controller.current?.loadTemplate?.(id); setStep("design"); }}
           onNewFromPreset={(sectionKey, starter) => {
-            controller.current?.newFromStarter?.(starter.build);
+            controller.current?.newFromStarter?.(brandedBuild(starter.build));
             if (starter.message) setMessage(starter.message);
             setPendingAssign(sectionKey);
             setStep("design");
           }}
           onNewFromStarter={(starter) => {
-            controller.current?.newFromStarter?.(starter.build);
+            controller.current?.newFromStarter?.(brandedBuild(starter.build));
             if (starter.message) setMessage(starter.message);
             setPendingAssign(null);
             setStep("design");
           }}
         />
       ) : null}
+
+      <BrandEditor open={brandOpen} onClose={() => setBrandOpen(false)} brand={brand} onSave={saveBrand} saving={brandSaving} />
 
       {/* step 2 — CardStudio stays mounted so editor state survives */}
       <div className={step === "design" ? "" : "hidden"}>
