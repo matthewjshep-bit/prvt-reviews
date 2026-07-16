@@ -14,6 +14,24 @@ import { reviewRequestStarter, starterList } from "@shared/starters.js";
 // Home sections a template can be assigned to (mirrors the broker's SECTIONS).
 const HOME_SECTIONS = { quotes: "Quotes", reviews: "Reviews", winback: "Win-back", offers: "Offers" };
 
+// Draft message templates — starting points for the card's outgoing text.
+const MESSAGE_IDEAS = [
+  { label: "Quote follow-up",
+    text: "Hi {{contact.first_name}}, {{loc.owner_first_name}} here from {{loc.business_name}} — your quote is attached, good through {{contact.custom.quote_expiry}}. Want me to hold your spot on the schedule?" },
+  { label: "Quote expiring soon",
+    text: "{{contact.first_name}}, quick heads up — your {{loc.business_name}} quote expires soon. Reply YES and I'll lock in your price and get you on the calendar." },
+  { label: "Review ask",
+    text: "{{contact.first_name}}, thanks for trusting {{loc.business_name}}! If the crew earned it, a quick Google review helps us a ton: [Review Link]" },
+  { label: "Win-back / check-in",
+    text: "Hi {{contact.first_name}}, {{loc.owner_first_name}} from {{loc.business_name}} — it's been a while since your last service and it's about due again. Want me to pencil you in at your returning-customer rate?" },
+  { label: "Offer / better terms",
+    text: "{{contact.first_name}} — your pricing just changed: {{data.tier.rate}} and {{data.tier.down}} down, locked for 90 days. Got anything in the works?" },
+  { label: "We looked at your website",
+    text: "Hi {{contact.first_name}}, we took a look at {{contact.website}} — got a couple of ideas that could bring you more customers. Want me to send them over?" },
+  { label: "Simple intro",
+    text: "Hi {{contact.first_name}}, {{loc.owner_first_name}} from {{loc.business_name}} here — sending this over so you have us in your texts. Reply anytime, a real person answers." },
+];
+
 // "⋯" more-options dropdown for the flow toolbar. items: {label, onClick,
 // disabled?, danger?} | {header} | {divider}.
 function MoreMenu({ items }) {
@@ -139,6 +157,7 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
   async function loadTemplate(id, list = templates) {
     try {
       const t = await api.getTemplate(id);
+      resetHistory();
       setTemplate(t);
       setCurrentId(id);
       setSelectedId(null);
@@ -149,20 +168,80 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
     }
   }
 
-  /* ---------- edit ops ---------- */
-  const patchTemplate = useCallback((patch) => { setTemplate((t) => ({ ...t, ...patch })); setDirty(true); }, []);
-
-  const changeLayer = useCallback((id, patch) => {
-    setTemplate((t) => ({ ...t, layers: t.layers.map((l) => (l.id === id ? { ...l, ...patch } : l)) }));
+  /* ---------- undo / redo ---------- */
+  // Snapshot the doc before every recorded mutation. Rapid edits (typing,
+  // drags) within 800ms coalesce into one step. All mutations are immutable
+  // spreads, so storing references is safe.
+  const historyRef = useRef({ past: [], future: [], lastPush: 0 });
+  const [historyTick, setHistoryTick] = useState(0); // re-render for button states
+  const resetHistory = () => { historyRef.current = { past: [], future: [], lastPush: 0 }; setHistoryTick((n) => n + 1); };
+  const record = useCallback((updater) => {
+    setTemplate((t) => {
+      const h = historyRef.current;
+      const now = Date.now();
+      if (now - h.lastPush > 800) {
+        h.past.push(t);
+        if (h.past.length > 50) h.past.shift();
+        h.future = [];
+        h.lastPush = now;
+        setHistoryTick((n) => n + 1);
+      }
+      return typeof updater === "function" ? updater(t) : updater;
+    });
     setDirty(true);
   }, []);
+  const undo = useCallback(() => {
+    const h = historyRef.current;
+    if (!h.past.length) return;
+    setTemplate((t) => {
+      const prev = h.past.pop();
+      h.future.push(t);
+      h.lastPush = 0; // next edit starts a fresh step
+      setHistoryTick((n) => n + 1);
+      return prev;
+    });
+    setDirty(true);
+    setSelectedId(null);
+  }, []);
+  const redo = useCallback(() => {
+    const h = historyRef.current;
+    if (!h.future.length) return;
+    setTemplate((t) => {
+      const next = h.future.pop();
+      h.past.push(t);
+      h.lastPush = 0;
+      setHistoryTick((n) => n + 1);
+      return next;
+    });
+    setDirty(true);
+    setSelectedId(null);
+  }, []);
+  // ⌘Z / ⌘⇧Z anywhere in the editor, except while typing in a field.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
+      const el = e.target;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo]);
+
+  /* ---------- edit ops (all history-recorded) ---------- */
+  const patchTemplate = useCallback((patch) => { record((t) => ({ ...t, ...patch })); }, [record]);
+
+  const changeLayer = useCallback((id, patch) => {
+    record((t) => ({ ...t, layers: t.layers.map((l) => (l.id === id ? { ...l, ...patch } : l)) }));
+  }, [record]);
 
   const addLayer = useCallback((type, extra) => {
     const l = newLayer(type, extra);
-    setTemplate((t) => ({ ...t, layers: [...t.layers, l] }));
+    record((t) => ({ ...t, layers: [...t.layers, l] }));
     setSelectedId(l.id);
-    setDirty(true);
-  }, []);
+  }, [record]);
 
   // A field chip dropped on the canvas at (x%, y%) → positioned bound text layer.
   const clampPct = (v, max = 90) => Math.max(0, Math.min(max, Math.round(v * 10) / 10));
@@ -205,23 +284,21 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
   }
 
   const deleteLayer = useCallback((id) => {
-    setTemplate((t) => ({ ...t, layers: t.layers.filter((l) => l.id !== id) }));
+    record((t) => ({ ...t, layers: t.layers.filter((l) => l.id !== id) }));
     setSelectedId((s) => (s === id ? null : s));
-    setDirty(true);
-  }, []);
+  }, [record]);
 
   const duplicateLayer = useCallback((id) => {
-    setTemplate((t) => {
+    record((t) => {
       const src = t.layers.find((l) => l.id === id);
       if (!src) return t;
       const copy = { ...src, id: "id" + Math.random().toString(36).slice(2), x: src.x + 3, y: src.y + 3 };
       return { ...t, layers: [...t.layers, copy] };
     });
-    setDirty(true);
-  }, []);
+  }, [record]);
 
   const reorder = useCallback((id, dir) => {
-    setTemplate((t) => {
+    record((t) => {
       const i = t.layers.findIndex((l) => l.id === id);
       const j = dir === "up" ? i + 1 : i - 1;
       if (i < 0 || j < 0 || j >= t.layers.length) return t;
@@ -229,8 +306,7 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
       [layers[i], layers[j]] = [layers[j], layers[i]];
       return { ...t, layers };
     });
-    setDirty(true);
-  }, []);
+  }, [record]);
 
   async function uploadImage(id, file) {
     try {
@@ -286,6 +362,7 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
   }
   function newFromStarter(build = reviewRequestStarter) {
     if (dirty && !window.confirm("Discard unsaved changes?")) return;
+    resetHistory();
     setTemplate(build({ locationId }));
     setCurrentId(null); setSelectedId(null); setDirty(true); setServerPreview(null);
   }
@@ -403,6 +480,26 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
           </>
         )}
         <div className="ml-auto flex items-center gap-2">
+          <div className="flex overflow-hidden rounded-lg border border-gray-300">
+            <button
+              type="button"
+              onClick={undo}
+              disabled={!historyRef.current.past.length}
+              title="Undo (⌘Z)"
+              className="px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-30"
+            >
+              ↺
+            </button>
+            <button
+              type="button"
+              onClick={redo}
+              disabled={!historyRef.current.future.length}
+              title="Redo (⌘⇧Z)"
+              className="border-l border-gray-300 px-2.5 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-30"
+            >
+              ↻
+            </button>
+          </div>
           <select onChange={(e) => { const p = CANVAS_PRESETS.find((x) => x.id === e.target.value); if (p) preset(p); }}
             value={CANVAS_PRESETS.find((p) => p.width === template.canvas.width && p.height === template.canvas.height)?.id || ""}
             className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
@@ -448,9 +545,25 @@ export default function CardStudio({ onTemplateChange, controller, onStudioState
           {/* The message ships WITH the card — edited here, saved by Save. */}
           {flowMode ? (
             <div className="mt-4 rounded-lg border border-gray-200 p-3">
-              <div className="mb-2 flex items-center justify-between">
+              <div className="mb-2 flex items-center justify-between gap-2">
                 <span className="text-xs font-bold uppercase tracking-wide text-gray-400">Message</span>
-                <span className="text-[11px] text-gray-400">saved with this card · sends alongside it</span>
+                <div className="flex items-center gap-2">
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const idea = MESSAGE_IDEAS.find((m) => m.label === e.target.value);
+                      e.target.value = "";
+                      if (!idea) return;
+                      if (template.message?.trim() && !window.confirm("Replace the current message with this draft?")) return;
+                      patchTemplate({ message: idea.text });
+                    }}
+                    className="rounded-md border border-gray-200 px-1.5 py-1 text-[11px] text-gray-600"
+                  >
+                    <option value="">💡 Start from a draft…</option>
+                    {MESSAGE_IDEAS.map((m) => <option key={m.label} value={m.label}>{m.label}</option>)}
+                  </select>
+                  <span className="text-[11px] text-gray-400">saved with this card</span>
+                </div>
               </div>
               <FieldWithTags
                 multiline
