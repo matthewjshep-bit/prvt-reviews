@@ -40,7 +40,7 @@ export function SingleSendFooter({ selected, preview, send, sendsEnabled, onEdit
         </div>
       ) : null}
       <div className="grid grid-cols-2 gap-2">
-        <SecondaryButton onClick={() => onEdit?.()}>Edit message</SecondaryButton>
+        <SecondaryButton onClick={() => onEdit?.()}>Edit card</SecondaryButton>
         <SendButton onClick={onSend} busy={send.busy} disabled={!canSend}>
           {sendsEnabled === false ? "Preview send" : `Send to ${name}`}
         </SendButton>

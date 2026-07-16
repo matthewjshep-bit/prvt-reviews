@@ -317,6 +317,18 @@ export default function StudioFlow() {
           onMessageChange={setMessage}
           businessName={config.businessName}
           reviewLink={config.reviewLink}
+          assignedSection={assignedSection}
+          assignedSectionLabel={assignedSection ? SECTION_LABELS[assignedSection] : ""}
+          savedSectionMessage={assignedSection ? homeConfig?.sections?.[assignedSection]?.message : undefined}
+          onSaveSectionMessage={async (msg) => {
+            try {
+              await saveSectionConfig(assignedSection, { message: msg });
+              showToast(`Saved — ${SECTION_LABELS[assignedSection]} now sends this message`);
+              refreshHomeConfig();
+            } catch (e) {
+              showToast("Couldn’t save the message: " + (e.message || "error"));
+            }
+          }}
         />
       ) : null}
 

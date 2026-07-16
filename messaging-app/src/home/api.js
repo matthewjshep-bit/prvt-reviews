@@ -32,6 +32,19 @@ async function j(res) {
   return res.json();
 }
 
+// Jump to the Card Studio view, optionally with a template open. Sets the URL
+// and pings HomePage's popstate listener so the view switches in place.
+export function gotoStudio(templateId) {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    p.set("view", "studio");
+    if (templateId) p.set("template", templateId);
+    else p.delete("template");
+    window.history.pushState(null, "", `${window.location.pathname}?${p}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* ignore */ }
+}
+
 const post = (path, body) =>
   fetch(`${API_BASE}${path}`, {
     method: "POST",

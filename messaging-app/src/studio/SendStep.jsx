@@ -14,7 +14,7 @@ import { resolveBindings, flatToContext } from "@shared/bindings.js";
 const BLUE = "#4c6ef5";
 const SEND_BLUE = "#1d4ed8";
 
-export default function SendStep({ template, templateId, dirty, onRequestSave, message, onMessageChange, businessName, reviewLink }) {
+export default function SendStep({ template, templateId, dirty, onRequestSave, message, onMessageChange, businessName, reviewLink, assignedSection, assignedSectionLabel, savedSectionMessage, onSaveSectionMessage }) {
   const locationId = getLocationId();
 
   // audience state (self-owned)
@@ -178,6 +178,21 @@ export default function SendStep({ template, templateId, dirty, onRequestSave, m
           <p className="mt-1.5 text-[11px] text-gray-400">
             Fields fill in per contact when the text sends — anything from the picker works, including your custom fields.
           </p>
+          {assignedSection ? (
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-blue-50/60 px-3 py-2">
+              <span className="text-xs text-blue-800">
+                This card sends for <span className="font-semibold">{assignedSectionLabel}</span> on the Home page.
+              </span>
+              <button
+                type="button"
+                disabled={message === savedSectionMessage}
+                onClick={() => onSaveSectionMessage?.(message)}
+                className="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
+              >
+                {message === savedSectionMessage ? `Saved as ${assignedSectionLabel}’s message` : `Save as ${assignedSectionLabel}’s message`}
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div className="rounded-xl border border-gray-200 bg-white p-4">
