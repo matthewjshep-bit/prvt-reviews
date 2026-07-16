@@ -479,6 +479,120 @@ export function websiteShotBaseStarter({ locationId } = {}) {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * One-pagers — letter-ratio (1224×1584) document cards: a whitepaper's
+ * worth of info in a single MMS image. Paragraph text uses real newlines.
+ * ------------------------------------------------------------------ */
+
+const LETTER = { width: 1224, height: 1584 };
+
+// Quote One-Pager — a mini proposal: header band, parcel aerial, scope
+// bullets, big price, expiry, contact footer.
+export function quoteOnePagerStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Quote One-Pager", canvas: LETTER, background: { color: "#f8fafc" },
+    dataSources: [
+      { id: "parcel", provider: "mapbox-parcel",
+        inputs: { address: "{{contact.custom.property_address}}" },
+        options: { county: "king-wa", mapStyle: "satellite-v9", parcelColor: "#d4af37", showBuilding: false, padding: 40 },
+        connectionId: "", discoveredKeys: ["apn", "lot_sqft", "address"], thumbnailUrl: IMG.thumbAerial },
+    ],
+    layers: [
+      // header band
+      { id: uid("band"), type: "shape", shape: "rect", x: 0, y: 0, width: 100, height: 12, fill: "#0f172a", visible: true },
+      { id: uid("biz"), type: "text", x: 5, y: 2, width: 60, height: 4, content: "{{loc.business_name}}", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 40, color: "#ffffff", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("prep"), type: "text", x: 5, y: 6.5, width: 90, height: 3.5, content: "Quote prepared for {{contact.first_name}} {{contact.last_name}} · {{contact.custom.property_address}}", fontFamily: "Inter", fontWeight: "regular", fontSize: 26, color: "#cbd5e1", align: "left", autoFit: true, maxLines: 1, visible: true },
+      // property aerial
+      { id: uid("dimg"), type: "dynamic-image", sourceId: "parcel", x: 5, y: 14.5, width: 90, height: 26, fit: "cover", cornerRadius: 16, thumbnailUrl: IMG.thumbAerial, visible: true },
+      // scope
+      { id: uid("scopeh"), type: "text", x: 5, y: 43, width: 90, height: 3.5, content: "WHAT'S INCLUDED", fontFamily: "Inter", fontWeight: "bold", fontSize: 26, color: "#64748b", align: "left", visible: true },
+      { id: uid("scope"), type: "text", x: 5, y: 47, width: 90, height: 22,
+        content: "• Full tear-off and haul-away of the existing roof\n• Architectural shingles with transferable manufacturer warranty\n• New underlayment, flashing, and ridge venting\n• Complete site cleanup with magnetic nail sweep\n• Final walkthrough and photo documentation",
+        fontFamily: "Inter", fontWeight: "regular", fontSize: 32, color: "#0f172a", align: "left", lineHeight: 1.5, maxLines: 12, visible: true },
+      // price block
+      { id: uid("bar"), type: "shape", shape: "rect", x: 5, y: 71, width: 90, height: 0.25, fill: "#cbd5e1", visible: true },
+      { id: uid("pl"), type: "text", x: 5, y: 73, width: 45, height: 3.5, content: "YOUR ALL-IN PRICE", fontFamily: "Inter", fontWeight: "bold", fontSize: 26, color: "#64748b", align: "left", visible: true },
+      { id: uid("price"), type: "text", x: 5, y: 76.5, width: 55, height: 9, content: "${{contact.custom.quote_amount}}", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 110, color: "#0f172a", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("badge"), type: "badge", x: 62, y: 78, width: 33, height: 4.5, icon: "check", text: "Good through {{contact.custom.quote_expiry}}", bgColor: "#d4af37", textColor: "#0f172a", fontFamily: "Inter", fontSize: 28, cornerRadius: 999, visible: true },
+      // footer
+      { id: uid("fband"), type: "shape", shape: "rect", x: 0, y: 90, width: 100, height: 10, fill: "#0f172a", visible: true },
+      { id: uid("foot"), type: "text", x: 5, y: 92.5, width: 90, height: 5, content: "Questions? Just reply to this text — {{loc.owner_first_name}} at {{loc.business_name}} reads every message.", fontFamily: "Inter", fontWeight: "regular", fontSize: 28, color: "#ffffff", align: "left", autoFit: true, maxLines: 2, visible: true },
+    ],
+    sampleData: {
+      "contact.first_name": "Dana", "contact.last_name": "Whitfield",
+      "contact.custom.property_address": "2847 41st Ave SW, Seattle, WA",
+      "contact.custom.quote_amount": "14,200", "contact.custom.quote_expiry": "Jul 15",
+      "loc.business_name": "Rainier Roofing", "loc.owner_first_name": "Jake",
+    },
+  };
+}
+
+// Offer Terms One-Pager — earned pricing explained like a term sheet.
+export function offerOnePagerStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Offer Terms One-Pager", canvas: LETTER, background: { color: "#0f172a" },
+    dataSources: [],
+    layers: [
+      { id: uid("h"), type: "text", x: 6, y: 4, width: 88, height: 8, content: "{{contact.first_name}}, you earned better terms", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 64, color: "#ffffff", align: "left", lineHeight: 1.05, autoFit: true, maxLines: 2, visible: true },
+      { id: uid("intro"), type: "text", x: 6, y: 13.5, width: 88, height: 8,
+        content: "Your track record with us just moved you into a better pricing tier. These terms are locked for the next 90 days — no application, no re-qualification, no fine-print games.",
+        fontFamily: "Inter", fontWeight: "regular", fontSize: 30, color: "#cbd5e1", align: "left", lineHeight: 1.45, maxLines: 6, visible: true },
+      // stat row
+      { id: uid("l1"), type: "text", x: 6, y: 25, width: 40, height: 3, content: "YOUR RATE", fontFamily: "Inter", fontWeight: "regular", fontSize: 26, color: "#94a3b8", align: "left", visible: true },
+      { id: uid("l2"), type: "text", x: 54, y: 25, width: 40, height: 3, content: "DOWN PAYMENT", fontFamily: "Inter", fontWeight: "regular", fontSize: 26, color: "#94a3b8", align: "left", visible: true },
+      { id: uid("b1"), type: "text", x: 6, y: 28.5, width: 42, height: 10, content: "{{data.tier.rate}}", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 130, color: "#d4af37", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("b2"), type: "text", x: 54, y: 28.5, width: 40, height: 10, content: "{{data.tier.down}}", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 130, color: "#ffffff", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("proof"), type: "text", x: 6, y: 40, width: 88, height: 3.5, content: "Based on {{data.tier.proof}}", fontFamily: "Inter", fontWeight: "regular", fontSize: 28, color: "#94a3b8", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("rule"), type: "shape", shape: "rect", x: 6, y: 46, width: 88, height: 0.25, fill: "rgba(148,163,184,0.35)", visible: true },
+      // how it works
+      { id: uid("hwh"), type: "text", x: 6, y: 48.5, width: 88, height: 3.5, content: "HOW IT WORKS", fontFamily: "Inter", fontWeight: "bold", fontSize: 26, color: "#94a3b8", align: "left", visible: true },
+      { id: uid("hw"), type: "text", x: 6, y: 52.5, width: 88, height: 24,
+        content: "1. Reply to this text with the property you're working on.\n\n2. We confirm your locked terms in writing the same day.\n\n3. Close on your timeline — the rate holds for 90 days from today.\n\n4. Every on-time deal keeps improving your tier.",
+        fontFamily: "Inter", fontWeight: "regular", fontSize: 32, color: "#e2e8f0", align: "left", lineHeight: 1.5, maxLines: 14, visible: true },
+      { id: uid("badge"), type: "badge", x: 6, y: 80, width: 45, height: 4.5, icon: "star", text: "{{data.tier.label}} client pricing", bgColor: "#d4af37", textColor: "#0f172a", fontFamily: "Inter", fontSize: 30, cornerRadius: 999, visible: true },
+      { id: uid("fine"), type: "text", x: 6, y: 88, width: 88, height: 8,
+        content: "Terms shown are per your {{data.tier.label}} tier standing with {{loc.business_name}} and subject to standard underwriting on the subject property. Locked pricing valid 90 days from the date of this message.",
+        fontFamily: "Inter", fontWeight: "regular", fontSize: 22, color: "#64748b", align: "left", lineHeight: 1.4, maxLines: 6, visible: true },
+    ],
+    sampleData: {
+      "contact.first_name": "Matt",
+      "data.tier.rate": "9.0%", "data.tier.down": "10%", "data.tier.label": "Proven",
+      "data.tier.proof": "4 deals · $1.2M · 0 late payments",
+      "loc.business_name": "Goldstar Capital",
+    },
+  };
+}
+
+// Why-Us One-Pager — the leave-behind: intro, benefits, social proof, contact.
+export function whyUsOnePagerStarter({ locationId } = {}) {
+  return {
+    locationId, name: "Why-Us One-Pager", canvas: LETTER, background: { color: "#f8fafc" },
+    dataSources: [],
+    layers: [
+      { id: uid("band"), type: "shape", shape: "rect", x: 0, y: 0, width: 100, height: 16, fill: "#0f172a", visible: true },
+      { id: uid("h"), type: "text", x: 5, y: 3, width: 90, height: 7, content: "Why {{loc.business_name}}?", fontFamily: "Archivo Black", fontWeight: "bold", fontSize: 64, color: "#ffffff", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("sub"), type: "text", x: 5, y: 10.5, width: 90, height: 4, content: "The short version, {{contact.first_name}} — one page, no sales pitch.", fontFamily: "Inter", fontWeight: "regular", fontSize: 28, color: "#cbd5e1", align: "left", autoFit: true, maxLines: 1, visible: true },
+      { id: uid("intro"), type: "text", x: 5, y: 19, width: 90, height: 9,
+        content: "We're local, licensed, and we answer our phones. Most of our work comes from neighbors referring neighbors — so every job gets treated like the next referral depends on it, because it does.",
+        fontFamily: "Inter", fontWeight: "regular", fontSize: 32, color: "#0f172a", align: "left", lineHeight: 1.45, maxLines: 6, visible: true },
+      { id: uid("bh"), type: "text", x: 5, y: 30.5, width: 90, height: 3.5, content: "WHAT YOU GET", fontFamily: "Inter", fontWeight: "bold", fontSize: 26, color: "#64748b", align: "left", visible: true },
+      { id: uid("bullets"), type: "text", x: 5, y: 34.5, width: 90, height: 30,
+        content: "• Straight quotes — the number we text you is the number you pay\n\n• Crews that show up when we say they will (we text if anything shifts)\n\n• Photos of the finished work before we ask for a dime\n\n• A workmanship warranty we actually honor — in writing\n\n• One text thread for everything: quote, schedule, questions, receipts",
+        fontFamily: "Inter", fontWeight: "regular", fontSize: 32, color: "#0f172a", align: "left", lineHeight: 1.5, maxLines: 18, visible: true },
+      { id: uid("badge"), type: "badge", x: 5, y: 68, width: 50, height: 4.5, icon: "star", text: "Rated 5 stars by your neighbors", bgColor: "#d4af37", textColor: "#0f172a", fontFamily: "Inter", fontSize: 30, cornerRadius: 999, visible: true },
+      { id: uid("quote"), type: "text", x: 5, y: 75, width: 90, height: 8,
+        content: "“Showed up on time, price didn't move, roof looks incredible. Easiest contractor experience we've ever had.” — recent customer",
+        fontFamily: "Source Serif", fontWeight: "regular", fontSize: 30, color: "#334155", align: "left", lineHeight: 1.45, maxLines: 4, visible: true },
+      { id: uid("fband"), type: "shape", shape: "rect", x: 0, y: 88, width: 100, height: 12, fill: "#0f172a", visible: true },
+      { id: uid("foot"), type: "text", x: 5, y: 91, width: 90, height: 6, content: "Ready when you are — just reply to this text and {{loc.owner_first_name}} will take it from there.", fontFamily: "Inter", fontWeight: "bold", fontSize: 32, color: "#ffffff", align: "left", autoFit: true, maxLines: 2, visible: true },
+    ],
+    sampleData: {
+      "contact.first_name": "Jessica",
+      "loc.business_name": "Rainier Roofing", "loc.owner_first_name": "Jake",
+    },
+  };
+}
+
 // Registry of starters the editor can offer. `category` groups them in the
 // picker; `message` is the matching SMS copy applied when the preset is chosen.
 // `purpose` maps a starter to a Home section (quotes|reviews|winback|offers)
@@ -525,6 +639,13 @@ export function starterList() {
       message: "Hi {{first_name}}, your place at {{contact.custom.property_address}} is looking great — reply if you'd like to talk!" },
     { id: "website-shot-base", name: "Website Screenshot", category: "General", purpose: "imagery", industry: "general", build: websiteShotBaseStarter,
       message: "Hi {{first_name}}, we took a look at {{contact.website}} — got a couple of ideas that could bring you more customers. Want me to send them over?" },
+    /* ---- one-pagers (letter-ratio document cards) ---- */
+    { id: "quote-one-pager", name: "Quote One-Pager", category: "Services", purpose: "onepager", industry: "home-services", build: quoteOnePagerStarter,
+      message: "Hi {{first_name}}, here's your full quote on one page — scope, price, and the date it's good through. Want me to hold your spot on the schedule?" },
+    { id: "offer-one-pager", name: "Offer Terms One-Pager", category: "General", purpose: "onepager", industry: "lending", build: offerOnePagerStarter,
+      message: "{{first_name}} — your updated terms, all on one page. Locked for 90 days. Got anything in the works?" },
+    { id: "why-us-one-pager", name: "Why-Us One-Pager", category: "General", purpose: "onepager", industry: "general", build: whyUsOnePagerStarter,
+      message: "Hi {{first_name}}, one page on who we are and how we work — no pitch, just the facts. Reply here if you'd like a quote." },
     /* ---- general ---- */
     { id: "just-listed", name: "Just Listed", category: "Real estate", purpose: "general", industry: "real-estate", build: justListedStarter,
       message: "Hi {{first_name}}! 🏡 A new listing just hit the market at {{contact.custom.property_address}}. Want the details or a private tour? Just reply here." },

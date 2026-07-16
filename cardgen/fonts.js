@@ -108,11 +108,38 @@ export function measureLine(text, { family = "Inter", weight = "regular", fontSi
   return weight === "bold" && (FAMILIES[family]?.variable ?? true) ? w * 1.06 : w;
 }
 
-// Word-wrap `text` to fit `maxWidth`, up to `maxLines`.
+// Word-wrap `text` to fit `maxWidth`, up to `maxLines`, honouring newlines as
+// paragraph breaks (a blank source line becomes an empty output line — the
+// paragraph gap one-pager/document cards rely on).
 // Returns { lines: string[], truncated: boolean }. `truncated` is true when
 // content had to be dropped (and the last line ellipsized) to honour maxLines —
 // autofit uses this to decide it must shrink further.
-export function wrapText(text, { family, weight, fontSize, maxWidth, maxLines = 3 }) {
+export function wrapText(text, opts) {
+  const { maxLines = 3 } = opts;
+  const paragraphs = String(text).replace(/\r\n?/g, "\n").split("\n");
+  if (paragraphs.length === 1) return wrapSegment(text, opts);
+
+  const lines = [];
+  let truncated = false;
+  for (let i = 0; i < paragraphs.length; i++) {
+    const para = paragraphs[i];
+    const remaining = maxLines - lines.length;
+    if (remaining <= 0) { truncated = true; break; }
+    if (!para.trim()) {
+      // Blank line = paragraph gap (skip leading/trailing gaps).
+      if (lines.length && i < paragraphs.length - 1) lines.push("");
+      continue;
+    }
+    const r = wrapSegment(para, { ...opts, maxLines: remaining });
+    lines.push(...r.lines);
+    if (r.truncated) { truncated = true; break; }
+  }
+  while (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return { lines, truncated };
+}
+
+// Single-paragraph word-wrap (the original wrapText).
+function wrapSegment(text, { family, weight, fontSize, maxWidth, maxLines = 3 }) {
   const words = String(text).split(/\s+/).filter(Boolean);
   const width = (s) => measureLine(s, { family, weight, fontSize });
   const lines = [];

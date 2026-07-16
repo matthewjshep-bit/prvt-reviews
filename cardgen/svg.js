@@ -90,9 +90,12 @@ export function textLayerSvg(layer, resolved, box, { W, H }) {
 
   const { defs, attr } = shadowDefs(`sh_${layer.id}`, layer.textShadow);
   const tspans = lines
-    .map((ln, i) => `<text x="${Math.round(tx)}" y="${Math.round(baseline + i * fontSize * lh)}" ` +
-      `text-anchor="${anchor}" font-family="${cssFamily(family)}" font-weight="${svgWeight(weight)}" ` +
-      `font-size="${Math.round(fontSize)}" fill="${color}"${attr}>${xmlEscape(ln)}</text>`)
+    .map((ln, i) =>
+      ln === ""
+        ? "" // paragraph gap — advances the baseline, draws nothing
+        : `<text x="${Math.round(tx)}" y="${Math.round(baseline + i * fontSize * lh)}" ` +
+          `text-anchor="${anchor}" font-family="${cssFamily(family)}" font-weight="${svgWeight(weight)}" ` +
+          `font-size="${Math.round(fontSize)}" fill="${color}"${attr}>${xmlEscape(ln)}</text>`)
     .join("");
 
   return wrap(tspans, { W, H, opacity: layer.opacity, rotation: layer.rotation, cx: box.cx, cy: box.cy, defs });

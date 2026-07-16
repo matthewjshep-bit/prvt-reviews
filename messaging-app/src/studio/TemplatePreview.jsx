@@ -99,6 +99,7 @@ export function LayerBody({ layer, resolved, fpx }) {
           fontWeight: layer.fontWeight === "bold" ? 700 : 400,
           fontSize: fpx(layer.fontSize), color: layer.color, textAlign: layer.align, lineHeight: layer.lineHeight,
           width: "100%", overflow: "hidden",
+          whiteSpace: "pre-wrap",
         }}>
           {val || <span style={{ opacity: 0.4 }}>{layer.content}</span>}
         </div>

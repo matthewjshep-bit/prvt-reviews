@@ -106,7 +106,7 @@ const textLayer = z
     align: align.default("left"),
     lineHeight: z.number().min(0.5).max(3).default(1.2),
     autoFit: z.boolean().default(false),
-    maxLines: z.number().int().min(1).max(12).default(3).optional(),
+    maxLines: z.number().int().min(1).max(40).default(3).optional(), // 40 = one-pager body copy
     textShadow: textShadow.optional(),
   })
   .strict();
@@ -193,6 +193,7 @@ export const CANVAS_PRESETS = {
   square: { width: 1080, height: 1080, label: "Square (MMS)" },
   landscape: { width: 1200, height: 628, label: "Landscape / social" },
   story: { width: 1080, height: 1920, label: "Story" },
+  letter: { width: 1224, height: 1584, label: "One-pager (letter)" },
 };
 
 const canvas = z

@@ -126,13 +126,17 @@ async function encode(pipe, format, W) {
   if (format === "jpeg") {
     return { buffer: await pipe.jpeg({ quality: 85, mozjpeg: true }).toBuffer(), contentType: "image/jpeg" };
   }
-  // auto
+  // auto — prefer dropping JPEG quality over resolution: document/one-pager
+  // cards carry dense text that goes illegible when downscaled.
   const png = await pipe.png({ compressionLevel: 9 }).toBuffer();
   if (png.length <= JPEG_THRESHOLD) return { buffer: png, contentType: "image/png" };
 
   let jpeg = await sharp(png).jpeg({ quality: 85, mozjpeg: true }).toBuffer();
-  if (jpeg.length > JPEG_TARGET && W > 800) {
-    jpeg = await sharp(png).resize(800).jpeg({ quality: 82, mozjpeg: true }).toBuffer();
+  if (jpeg.length > JPEG_TARGET) {
+    jpeg = await sharp(png).jpeg({ quality: 78, mozjpeg: true }).toBuffer();
+  }
+  if (jpeg.length > JPEG_TARGET && W > 1000) {
+    jpeg = await sharp(png).resize(1000).jpeg({ quality: 80, mozjpeg: true }).toBuffer();
   }
   return { buffer: jpeg, contentType: "image/jpeg" };
 }

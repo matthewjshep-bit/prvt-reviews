@@ -10,6 +10,7 @@ export const CANVAS_PRESETS = [
   { id: "square", label: "Square 1080", width: 1080, height: 1080 },
   { id: "landscape", label: "Landscape 1200×628", width: 1200, height: 628 },
   { id: "story", label: "Story 1080×1920", width: 1080, height: 1920 },
+  { id: "letter", label: "One-pager 1224×1584", width: 1224, height: 1584 },
 ];
 
 export const LAYER_META = {

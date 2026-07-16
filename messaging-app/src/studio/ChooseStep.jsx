@@ -11,12 +11,27 @@ import TemplatePreview from "./TemplatePreview.jsx";
 import { applyBrand, hasBrand, INDUSTRY_LABELS } from "./brand.js";
 
 const PURPOSES = [
-  { key: "quotes", label: "Quote follow-up" },
-  { key: "reviews", label: "Reviews" },
-  { key: "winback", label: "Win-back" },
-  { key: "offers", label: "Offers" },
+  { key: "quotes", label: "Quote follow-up", section: true },
+  { key: "reviews", label: "Reviews", section: true },
+  { key: "winback", label: "Win-back", section: true },
+  { key: "offers", label: "Offers", section: true },
+  { key: "onepager", label: "One-pagers", section: false, hint: "a whole page of info in one image" },
 ];
 const CARDS_VISIBLE = 7; // + blank tile = two full rows of 4
+
+// Letterbox non-square templates (one-pagers) inside the square tile preview.
+function PreviewFit({ template }) {
+  const w = template?.canvas?.width || 1;
+  const h = template?.canvas?.height || 1;
+  if (h <= w) return <TemplatePreview template={template} />;
+  return (
+    <div className="flex h-full w-full items-center justify-center">
+      <div style={{ width: `${(w / h) * 100}%` }}>
+        <TemplatePreview template={template} />
+      </div>
+    </div>
+  );
+}
 
 // size: "lg" fills its grid cell (Your cards); default is the compact gallery tile.
 function Tile({ children, onClick, title, subtitle, badge, dashed, size }) {
@@ -103,7 +118,7 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
                 badge={section ? sectionLabel(section) : null}
                 onClick={() => onEdit(t.id)}
               >
-                <TemplatePreview template={t} />
+                <PreviewFit template={t} />
               </Tile>
             );
           })}
@@ -168,22 +183,25 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
         </div>
 
         <div className="space-y-6">
-          {PURPOSES.map(({ key, label }) => {
+          {PURPOSES.map(({ key, label, section, hint }) => {
             const items = filtered.filter((s) => s.purpose === key);
             if (!items.length) return null;
             return (
               <div key={key}>
-                <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-gray-500">{label}</h3>
+                <div className="mb-2 flex items-baseline gap-2">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">{label}</h3>
+                  {hint ? <span className="text-[11px] text-gray-400">{hint}</span> : null}
+                </div>
                 <Row>
                   {items.map((s) => (
                     <Tile
                       key={s.id}
                       title={s.name}
                       subtitle={INDUSTRY_LABELS[s.industry] || "General"}
-                      onClick={() => onNewFromPreset(key, s)}
+                      onClick={() => (section ? onNewFromPreset(key, s) : onNewFromStarter(s))}
                     >
                       {galleryDocs.get(s.id) ? (
-                        <TemplatePreview template={galleryDocs.get(s.id)} />
+                        <PreviewFit template={galleryDocs.get(s.id)} />
                       ) : (
                         <div className="h-full w-full bg-gray-100" />
                       )}
@@ -210,7 +228,7 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
                       onClick={() => onNewFromStarter(s)}
                     >
                       {galleryDocs.get(s.id) ? (
-                        <TemplatePreview template={galleryDocs.get(s.id)} />
+                        <PreviewFit template={galleryDocs.get(s.id)} />
                       ) : (
                         <div className="h-full w-full bg-gray-100" />
                       )}

@@ -109,7 +109,7 @@ function PropsForLayer({ layer, onChange, template, groups, onUploadImage }) {
     case "text":
       return (
         <div className="space-y-2">
-          <FieldWithTags label="Content" value={layer.content} onChange={(v) => onChange({ content: v })} groups={groups} multiline rows={2} />
+          <FieldWithTags label="Content" value={layer.content} onChange={(v) => onChange({ content: v })} groups={groups} multiline rows={4} />
           <div className="grid grid-cols-2 gap-2">
             <SelectF label="Font" value={layer.fontFamily} options={FONT_FAMILIES} onChange={(v) => onChange({ fontFamily: v })} />
             <Seg label="Weight" value={layer.fontWeight} options={[["regular", "Reg"], ["bold", "Bold"]]} onChange={(v) => onChange({ fontWeight: v })} />
