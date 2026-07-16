@@ -16,26 +16,28 @@ const PURPOSES = [
   { key: "winback", label: "Win-back" },
   { key: "offers", label: "Offers" },
 ];
-const CARDS_VISIBLE = 5;
+const CARDS_VISIBLE = 7; // + blank tile = two full rows of 4
 
-function Tile({ children, onClick, title, subtitle, badge, dashed }) {
+// size: "lg" fills its grid cell (Your cards); default is the compact gallery tile.
+function Tile({ children, onClick, title, subtitle, badge, dashed, size }) {
+  const lg = size === "lg";
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`group relative w-36 shrink-0 overflow-hidden rounded-xl border text-left transition-shadow hover:shadow-md ${
-        dashed ? "border-dashed border-gray-300 bg-gray-50 hover:border-blue-300" : "border-gray-200 bg-white"
-      }`}
+      className={`group relative overflow-hidden rounded-xl border text-left transition-shadow hover:shadow-md ${
+        lg ? "w-full" : "w-36 shrink-0"
+      } ${dashed ? "border-dashed border-gray-300 bg-gray-50 hover:border-blue-300" : "border-gray-200 bg-white"}`}
     >
       <div className="aspect-square w-full overflow-hidden bg-[#0b0b0c]">{children}</div>
       {badge ? (
-        <span className="absolute left-1.5 top-1.5 rounded-full bg-gray-900/80 px-2 py-0.5 text-[10px] font-semibold text-white">
+        <span className={`absolute rounded-full bg-gray-900/80 font-semibold text-white ${lg ? "left-2.5 top-2.5 px-2.5 py-1 text-[11px]" : "left-1.5 top-1.5 px-2 py-0.5 text-[10px]"}`}>
           {badge}
         </span>
       ) : null}
-      <div className="px-2.5 py-1.5">
-        <div className="truncate text-[13px] font-semibold text-gray-900">{title}</div>
-        {subtitle ? <div className="truncate text-[10px] text-gray-400">{subtitle}</div> : null}
+      <div className={lg ? "px-3.5 py-2.5" : "px-2.5 py-1.5"}>
+        <div className={`truncate font-semibold text-gray-900 ${lg ? "text-[15px]" : "text-[13px]"}`}>{title}</div>
+        {subtitle ? <div className={`truncate text-gray-400 ${lg ? "text-xs" : "text-[10px]"}`}>{subtitle}</div> : null}
       </div>
     </button>
   );
@@ -86,14 +88,15 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
           <h2 className="text-xl font-bold text-gray-900">Your cards</h2>
           <span className="text-sm text-gray-400">edit one, or start fresh below</span>
         </div>
-        <Row>
-          <Tile dashed title="＋ Blank card" subtitle="Start from scratch" onClick={() => onNewFromStarter({ build: blankStarter })}>
-            <div className="flex h-full w-full items-center justify-center bg-gray-100 text-4xl text-gray-300 group-hover:text-blue-400">＋</div>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
+          <Tile size="lg" dashed title="＋ Blank card" subtitle="Start from scratch" onClick={() => onNewFromStarter({ build: blankStarter })}>
+            <div className="flex h-full w-full items-center justify-center bg-gray-100 text-5xl text-gray-300 group-hover:text-blue-400">＋</div>
           </Tile>
           {visibleCards.map((t) => {
             const section = sectionByTemplateId.get(t.id);
             return (
               <Tile
+                size="lg"
                 key={t.id}
                 title={t.name}
                 subtitle={section ? "Currently sending" : "Draft"}
@@ -108,12 +111,13 @@ export default function ChooseStep({ templates, assignments, brand, onOpenBrand,
             <button
               type="button"
               onClick={() => setShowAllCards(true)}
-              className="w-24 shrink-0 rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-500 hover:bg-gray-50"
+              className="flex w-full items-center justify-center rounded-xl border border-gray-200 bg-white text-base font-semibold text-gray-500 hover:bg-gray-50"
+              style={{ minHeight: "120px" }}
             >
               +{hiddenCount} more
             </button>
           ) : null}
-        </Row>
+        </div>
       </section>
 
       {/* GALLERY */}
