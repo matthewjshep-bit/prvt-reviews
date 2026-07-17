@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import ClientCanvas from "./ClientCanvas.jsx";
 import Inspector from "./Inspector.jsx";
 import DataSourcesPanel from "./DataSourcesPanel.jsx";
