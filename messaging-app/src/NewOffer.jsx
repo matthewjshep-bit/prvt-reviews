@@ -148,7 +148,7 @@ function OfferCards({ calc }) {
       <OptionCard
         tag="Option A" title="All cash" amount={fmtMoney(cash.amount)} accent
         lines={[
-          `${cash.pctOfArv}% of ARV minus repairs`,
+          `~${cash.pctOfArv}% of ARV − ${fmtMoney(cash.repairAdjustment)} repair adj. − ${fmtMoney(cash.wholesaleFee)} fee`,
           `≈ ${cash.pctOfAsking}% of asking`,
           `As-is · close in ~${cash.closeDays} days`,
         ]}

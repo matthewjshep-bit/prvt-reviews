@@ -36,8 +36,16 @@ note with the full terms + document link, and an `offer-created` tag).
 
 ## Offer math (defaults, all editable in Settings)
 
-- **Cash** — ARV × 70% − repairs − wholesale fee (the classic MAO rule).
-- **Seller finance** — 100% of asking, 10% down, 3%/30yr amortized, optional balloon.
+Reverse engineered from lowballoffer.ai's shipped bundle (see the header of
+`shared/offer-calc.js` for the decoded source):
+
+- **Cash** — ~90% of ARV − repair adjustment − $30k assignment-fee spread.
+  The repair adjustment is piecewise: repairs + $30k when under $30k,
+  2× repairs in the normal band, and 2×(10% ARV) + 1.5×(excess) when repairs
+  exceed 10% of ARV. Deterministic "precision jitter" reproduces their
+  non-round anchor numbers (same inputs → same offer).
+- **Seller finance** — 110% of asking, 5% down, 0% interest over 360 months,
+  optional balloon.
 - **Lease option** — 103% of asking, 2% option fee, market rent with a 25% rent
   credit (only offered when a rent estimate is entered).
 

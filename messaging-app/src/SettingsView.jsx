@@ -67,12 +67,25 @@ export default function SettingsView({ settings, onSaved }) {
     <div className="max-w-2xl space-y-5">
       <section className="rounded-xl border border-gray-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Cash offer</h2>
+        <p className="mb-3 text-xs text-gray-500">
+          offer = %ARV − repair adjustment − fee. Repairs under the buffer cost repairs+buffer;
+          normal repairs are multiplied; the portion above the heavy threshold uses the heavy multiplier.
+        </p>
         <div className="grid grid-cols-2 gap-3">
           <Num label="Percent of ARV" suffix="%" value={form.cashPctOfArv} onChange={set("cashPctOfArv")} />
-          <Num label="Wholesale / assignment fee" suffix="$" value={form.wholesaleFee} onChange={set("wholesaleFee")} />
+          <Num label="Assignment fee / spread" suffix="$" value={form.wholesaleFee} onChange={set("wholesaleFee")} />
+          <Num label="Small-repair buffer" suffix="$" value={form.repairBuffer} onChange={set("repairBuffer")} />
+          <Num label="Repair multiplier" suffix="×" value={form.repairBaseMult} onChange={set("repairBaseMult")} />
+          <Num label="Heavy-repair threshold" suffix="% of ARV" value={form.repairHeavyPctOfArv} onChange={set("repairHeavyPctOfArv")} />
+          <Num label="Heavy-repair multiplier" suffix="×" value={form.repairHeavyMult} onChange={set("repairHeavyMult")} />
           <Num label="Advertised close" suffix="days" value={form.closeDays} onChange={set("closeDays")} />
           <Num label="Offer valid for" suffix="days" value={form.validityDays} onChange={set("validityDays")} />
         </div>
+        <label className="mt-3 flex items-center gap-2 text-sm text-gray-700">
+          <input type="checkbox" checked={Boolean(form.precisionJitter)}
+            onChange={(e) => { setSaved(false); setForm((f) => ({ ...f, precisionJitter: e.target.checked })); }} />
+          Precision jitter — non-round offer amounts (e.g. $161,847.23) for lowball anchoring
+        </label>
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-4">

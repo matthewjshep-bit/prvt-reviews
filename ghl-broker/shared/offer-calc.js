@@ -5,34 +5,53 @@
 // generation + persistence) and the frontend (live preview as the user types).
 // Pure functions, no I/O, no deps.
 //
-// Three offers are produced from one set of property inputs, mirroring the
-// "cash / creative / clever" structure of tools like lowballoffer.ai:
-//   • cash          — MAO-style: ARV × discount − repairs − wholesale fee
-//   • sellerFinance — near-asking price, low down, amortized monthly, optional balloon
-//   • leaseOption   — only when a monthly rent estimate is provided
+// The cash and seller-finance models are reverse engineered from
+// lowballoffer.ai's shipped bundle (app/page-*.js, decoded 2026-07-26):
 //
-// All percentage settings are whole numbers (70 = 70%). All money outputs are
-// rounded to `roundTo` dollars.
+//   Cash ("fix & flip"):
+//     base    = ~90% of ARV  (they randomize among 90.0147/90.2987/89.661/89.479)
+//     minus   repairs adjustment (piecewise, continuous):
+//               repairs < $30k          → repairs + $30,000
+//               $30k…10% of ARV         → 2 × repairs
+//               above 10% of ARV        → 2×(10% ARV) + 1.5×(excess)
+//     minus   flat $30,000 assignment-fee spread
+//     (plus random cents for fake precision; their "MAO" readout is offer+$20k)
+//
+//   Creative (seller finance):
+//     price   = 110% of as-is/asking value
+//     down    = 5% of price
+//     monthly = (price − down) / 360   (0% interest, 360 months)
+//
+// We keep the same math but make the "authentic-looking" randomness
+// DETERMINISTIC: a hash of the inputs picks the ARV multiplier wobble and the
+// cents, so the same property always yields the same offer.
+//
+// All percentage settings are whole numbers (90 = 90%). Money in dollars.
 
 export const DEFAULT_OFFER_SETTINGS = {
-  // Cash offer
-  cashPctOfArv: 70,        // % of ARV before deductions (the "70% rule")
-  wholesaleFee: 0,         // flat assignment/wholesale fee deducted from the cash offer
-  // Seller finance
-  sfPricePctOfAsking: 100, // purchase price as % of asking
-  sfDownPct: 10,           // down payment as % of price
-  sfAnnualRatePct: 3,      // annual interest rate (0 = principal-only payments)
-  sfTermYears: 30,         // amortization term
-  sfBalloonYears: 0,       // 0 = fully amortized, no balloon
+  // Cash offer (lowballoffer.ai fix & flip model)
+  cashPctOfArv: 90,          // base % of ARV before deductions
+  repairBuffer: 30000,       // small-repair floor: repairs < buffer → repairs + buffer
+  repairHeavyPctOfArv: 10,   // repairs above this % of ARV are "heavy"
+  repairBaseMult: 2,         // multiplier on repairs in the normal band
+  repairHeavyMult: 1.5,      // multiplier on the portion above the heavy threshold
+  wholesaleFee: 30000,       // flat assignment-fee spread subtracted at the end
+  precisionJitter: true,     // deterministic ±0.5pp ARV wobble + cents (lowball anchoring)
+  // Seller finance (lowballoffer.ai "creative" model)
+  sfPricePctOfAsking: 110,   // purchase price as % of asking/as-is value
+  sfDownPct: 5,              // down payment as % of price
+  sfAnnualRatePct: 0,        // annual interest rate (0 = principal-only payments)
+  sfTermYears: 30,           // amortization term (360 months)
+  sfBalloonYears: 0,         // 0 = fully amortized, no balloon
   // Lease option
-  loPricePctOfAsking: 103, // strike price as % of asking
-  loOptionFeePct: 2,       // non-refundable option fee as % of strike price
+  loPricePctOfAsking: 103,   // strike price as % of asking
+  loOptionFeePct: 2,         // non-refundable option fee as % of strike price
   loTermMonths: 36,
-  loRentCreditPct: 25,     // % of each rent payment credited toward purchase
+  loRentCreditPct: 25,       // % of each rent payment credited toward purchase
   // Presentation
-  closeDays: 14,           // advertised days-to-close on the cash offer
-  validityDays: 7,         // offer expiry window printed on the document
-  roundTo: 100,            // round all offer amounts to the nearest N dollars
+  closeDays: 14,             // advertised days-to-close on the cash offer
+  validityDays: 7,           // offer expiry window printed on the document
+  roundTo: 100,              // rounding for seller-finance / lease-option figures
   // Printed on the offer document
   company: { name: "", signer: "", phone: "", email: "" },
 };
@@ -44,8 +63,24 @@ const num = (v, fallback = 0) => {
 
 const roundTo = (v, step) => (step > 0 ? Math.round(v / step) * step : Math.round(v));
 
-export const fmtMoney = (v) =>
-  "$" + Math.round(num(v)).toLocaleString("en-US");
+export const fmtMoney = (v) => {
+  const n = num(v);
+  const hasCents = Math.abs(n - Math.round(n)) > 0.004;
+  return (
+    "$" +
+    n.toLocaleString("en-US", hasCents ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : {})
+  );
+};
+
+// FNV-1a — deterministic stand-in for lowballoffer.ai's Math.random() theater.
+function hash32(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
 
 // Monthly payment for principal P at annual rate (whole %) over n months.
 // Zero-interest amortizes principal evenly.
@@ -61,6 +96,14 @@ export function remainingBalance(principal, annualRatePct, payment, k) {
   const r = num(annualRatePct) / 100 / 12;
   if (r === 0) return Math.max(0, principal - payment * k);
   return principal * Math.pow(1 + r, k) - payment * ((Math.pow(1 + r, k) - 1) / r);
+}
+
+// The lowballoffer.ai repairs adjustment (piecewise, continuous at both knees).
+export function repairsAdjustment(repairs, arv, s) {
+  const heavy = (s.repairHeavyPctOfArv / 100) * arv;
+  if (repairs < s.repairBuffer) return repairs + s.repairBuffer;
+  if (repairs > heavy) return s.repairBaseMult * heavy + s.repairHeavyMult * (repairs - heavy);
+  return s.repairBaseMult * repairs;
 }
 
 // Merge partial settings over the defaults (one level deep + company).
@@ -88,20 +131,30 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
     askingPrice, arv, repairs, monthlyRent,
   };
 
-  /* ---- Option A: cash ---- */
-  const cashRaw = arv * (s.cashPctOfArv / 100) - repairs - num(s.wholesaleFee);
+  /* ---- Option A: cash (lowballoffer.ai fix & flip) ---- */
+  // Deterministic jitter: theirs picks the multiplier at random from a table
+  // spanning 89.479–90.2987 (i.e. base −0.52…+0.30) and appends random cents.
+  const seed = hash32(`${inputs.address}|${askingPrice}|${arv}|${repairs}`);
+  const pctWobble = s.precisionJitter ? (seed % 83) / 100 - 0.52 : 0;
+  const cents = s.precisionJitter ? ((seed >>> 8) % 100) / 100 : 0;
+  const pctUsed = s.cashPctOfArv + pctWobble;
+  const repairAdj = repairsAdjustment(repairs, arv, s);
+  const cashRaw = (pctUsed / 100) * arv - repairAdj - num(s.wholesaleFee);
+  const cashAmount = cashRaw > 0 ? Math.floor(cashRaw) + cents : 0;
   const cash = {
     key: "cash",
     label: "Cash",
-    amount: Math.max(0, roundTo(cashRaw, s.roundTo)),
+    amount: cashAmount,
     pctOfArv: s.cashPctOfArv,
+    pctUsed: Math.round(pctUsed * 100) / 100,
     repairs,
+    repairAdjustment: Math.round(repairAdj),
     wholesaleFee: num(s.wholesaleFee),
     closeDays: s.closeDays,
     pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : 0,
   };
 
-  /* ---- Option B: seller finance ---- */
+  /* ---- Option B: seller finance (lowballoffer.ai creative) ---- */
   const sfPrice = roundTo(askingPrice * (s.sfPricePctOfAsking / 100), s.roundTo);
   const sfDown = roundTo(sfPrice * (s.sfDownPct / 100), s.roundTo);
   const sfPrincipal = sfPrice - sfDown;
