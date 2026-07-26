@@ -52,6 +52,10 @@ const pgStore = {
     const { rows } = await query(`select doc from offers where id = $1`, [id]);
     return rows[0]?.doc || null;
   },
+  async updateOffer(id, doc) {
+    const { rowCount } = await query(`update offers set doc = $2 where id = $1`, [id, doc]);
+    return rowCount > 0;
+  },
   async deleteOffer(id) {
     const { rowCount } = await query(`delete from offers where id = $1`, [id]);
     return rowCount > 0;
@@ -134,6 +138,13 @@ const fileStore = (() => {
     async getOffer(id) {
       ensure();
       return data.offers[id] || null;
+    },
+    async updateOffer(id, doc) {
+      ensure();
+      if (!data.offers[id]) return false;
+      data.offers[id] = doc;
+      persist();
+      return true;
     },
     async deleteOffer(id) {
       ensure();

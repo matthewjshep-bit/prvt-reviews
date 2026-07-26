@@ -35,6 +35,7 @@ const OFFER_FIELDS = [
   { key: "last_offer_amount", name: "Last Offer Amount", dataType: "NUMERICAL" },
   { key: "last_offer_date", name: "Last Offer Date", dataType: "TEXT" },
   { key: "last_offer_doc_url", name: "Last Offer Document URL", dataType: "TEXT" },
+  { key: "last_offer_image_url", name: "Last Offer Image URL", dataType: "TEXT" },
 ];
 
 const dateLabel = (d = new Date()) =>
@@ -83,7 +84,8 @@ function offerNoteBody(offer) {
     );
   }
   lines.push(`Inputs: asking ${fmtMoney(inputs.askingPrice)} · ARV ${fmtMoney(inputs.arv)} · repairs ${fmtMoney(inputs.repairs)}`);
-  if (offer.pdfUrl) lines.push(`Document: ${offer.pdfUrl}`);
+  if (offer.pdfUrl) lines.push(`Document (PDF): ${offer.pdfUrl}`);
+  if (offer.imageUrl) lines.push(`Document (image): ${offer.imageUrl}`);
   return lines.join("\n");
 }
 
@@ -94,9 +96,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     if (code >= 500) console.error("offers error:", code, err.message, err.detail || "");
     res.status(code).json({ error: err.message, detail: err.detail });
   };
+  // Keys already carry the offers/ prefix; store relative to the upload root.
   const localOpts = {
-    localDir: path.join(uploadDir, "offers"),
-    localBaseUrl: `${publicBaseUrl}/uploads/offers`,
+    localDir: uploadDir,
+    localBaseUrl: `${publicBaseUrl}/uploads`,
   };
 
   /* ---------- settings ---------- */
@@ -210,33 +213,44 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       });
 
       // 5. Associate with the GHL contact record. Each write is independent;
-      //    failures are reported, not fatal (the offer itself is saved).
+      //    failures are reported + logged, not fatal (the offer itself is saved).
       const ghl = { fields: false, note: false, tag: false };
       const warnings = [];
+      const noteFailure = (step, e) => {
+        const detail = e?.data ? `${e.message} :: ${JSON.stringify(e.data).slice(0, 200)}` : e?.message;
+        console.error(`offers: GHL attach failed [${step}] contact=${contactId}:`, detail);
+        warnings.push(`${step}: ${e.message}`);
+      };
       try {
+        const fieldValues = {
+          last_offer_amount: calc.offers.cash.amount,
+          last_offer_date: created.toISOString().slice(0, 10),
+          last_offer_doc_url: pdfUrl,
+          last_offer_image_url: imageUrl,
+        };
         const fieldWrites = [];
         for (const f of OFFER_FIELDS) {
           const id = await findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType);
-          if (!id) continue;
-          const value =
-            f.key === "last_offer_amount" ? calc.offers.cash.amount :
-            f.key === "last_offer_date" ? created.toISOString().slice(0, 10) :
-            pdfUrl;
-          fieldWrites.push({ id, value });
+          if (id) fieldWrites.push({ id, value: fieldValues[f.key] });
         }
         if (fieldWrites.length) {
           await updateContact(client, contactId, { customFields: fieldWrites });
           ghl.fields = true;
         }
-      } catch (e) { warnings.push(`custom fields: ${e.message}`); }
+      } catch (e) { noteFailure("custom fields", e); }
       try {
         await createContactNote(client, contactId, { body: offerNoteBody(offer) });
         ghl.note = true;
-      } catch (e) { warnings.push(`note: ${e.message}`); }
+      } catch (e) { noteFailure("note", e); }
       try {
         await addContactTags(client, contactId, [OFFER_TAG]);
         ghl.tag = true;
-      } catch (e) { warnings.push(`tag: ${e.message}`); }
+      } catch (e) { noteFailure("tag", e); }
+
+      // Persist the attach outcome on the offer so History can show it.
+      offer.ghl = ghl;
+      offer.warnings = warnings;
+      await store.updateOffer(offer.id, offer).catch(() => {});
 
       res.json({ ok: true, offer, ghl, warnings });
     } catch (err) { fail(res, err); }

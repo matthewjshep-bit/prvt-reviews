@@ -45,6 +45,7 @@ export default function OffersHistory() {
             <th className="px-4 py-2.5">Property</th>
             <th className="px-4 py-2.5 text-right">Cash offer</th>
             <th className="px-4 py-2.5">Document</th>
+            <th className="px-4 py-2.5">Attached</th>
             <th className="px-4 py-2.5" />
           </tr>
         </thead>
@@ -72,6 +73,19 @@ export default function OffersHistory() {
                     </a>
                   )}
                 </span>
+              </td>
+              <td className="whitespace-nowrap px-4 py-2.5 text-xs">
+                {o.ghl ? (
+                  o.ghl.fields && o.ghl.note && o.ghl.tag ? (
+                    <span className="font-medium text-emerald-700">✓ contact</span>
+                  ) : (
+                    <span className="font-medium text-amber-700" title={(o.warnings || []).join("\n")}>
+                      ⚠ partial
+                    </span>
+                  )
+                ) : (
+                  <span className="text-gray-400">—</span>
+                )}
               </td>
               <td className="px-4 py-2.5 text-right">
                 <button type="button" onClick={() => remove(o.id)}
