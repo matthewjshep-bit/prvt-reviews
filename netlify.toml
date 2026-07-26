@@ -5,3 +5,11 @@
   base = "messaging-app"
   command = "npm run build"
   publish = "dist"
+
+# The pre-overhaul entry points (home.html/dashboard.html/settings.html) no
+# longer exist — send anything that isn't a real file to the app. Query strings
+# (?location_id=...) are preserved, so old GHL menu links keep working.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
