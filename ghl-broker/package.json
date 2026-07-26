@@ -1,7 +1,7 @@
 {
-  "name": "prvt-ghl-broker",
-  "version": "1.0.0",
-  "description": "Backend broker between the PRVT MKT iframe pages and GoHighLevel (holds the GHL token, reads/writes custom values, sends test messages)",
+  "name": "prvt-offer-broker",
+  "version": "2.0.0",
+  "description": "Backend for the real-estate offer generator: calculates cash/creative offers, renders the offer document via cardgen, and attaches offers to GoHighLevel contact records",
   "type": "module",
   "main": "broker.js",
   "engines": { "node": ">=18" },
@@ -10,12 +10,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.717.0",
-    "@supabase/supabase-js": "^2.49.0",
     "express": "^4.21.2",
-    "jsonpath-plus": "^10.2.0",
-    "multer": "^2.0.1",
-    "pg": "^8.13.1",
-    "sharp": "^0.33.5",
-    "zod": "^3.24.1"
+    "pg": "^8.13.1"
   }
 }

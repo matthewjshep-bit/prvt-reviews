@@ -8,7 +8,7 @@ import { resolve } from "path";
 export default defineConfig({
   plugins: [react()],
   base: "./",
-  // The studio imports the shared binding resolver from ../shared. Alias it and
+  // The app imports the shared offer calculator from ../shared. Alias it and
   // let Vite's dev server read the repo root.
   resolve: {
     alias: { "@shared": resolve(__dirname, "../shared") },
@@ -18,13 +18,5 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
-    rollupOptions: {
-      input: {
-        main: resolve(__dirname, "index.html"),
-        home: resolve(__dirname, "home.html"),
-        dashboard: resolve(__dirname, "dashboard.html"),
-        settings: resolve(__dirname, "settings.html"),
-      },
-    },
   },
 });

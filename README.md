@@ -1,47 +1,59 @@
-# PRVT MKT — Reviews (Messaging side)
+# Offer Generator
 
-Three small services that, together with a GoHighLevel sub-account, run the
-review-request product. None of them is a big app — GHL does the heavy lifting
-(contacts, SMS, A2P, billing); these add the custom layer.
+A real-estate offer generator for GoHighLevel (in the spirit of lowballoffer.ai):
+enter a property's numbers, get three ready-to-present offers (cash, seller
+finance, lease option), generate a professional one-page offer document
+(image + PDF), and attach the whole thing to the seller's GHL contact record.
 
 ```
-cardgen/        Personalized review-card image service. Renders a customer's
-                name onto your brand background. Public, stateless. GHL fetches
-                it at send time.  → deploy on Render (Docker)
+ghl-broker/     The backend. Holds the GHL token (never the browser), runs the
+                offer API (/api/offers): calculate → render document → store →
+                write custom fields + note + tag on the contact.
+                → deploy on Render (Node)   [live: prvt-reviews-1.onrender.com]
 
-ghl-broker/     Backend that holds the GHL token and exposes 4 endpoints the
-                Messaging page calls (config read/write, send-test, logo upload).
-                → deploy on Render (Node)
+cardgen/        Stateless render service (sharp/SVG). The broker posts it the
+                offer-document template; it returns the letter-size JPEG that
+                the broker also wraps into a PDF. Stores to R2 when configured.
+                → deploy on Render (Docker) [live: prvt-reviews.onrender.com]
 
-messaging-app/  The iframe page that loads inside GHL's sidebar. Configures the
-                owner/business name, logo, message mode, and follow-ups.
-                → build with Vite, host the dist on Netlify (or serve from broker)
+messaging-app/  The React iframe app (New Offer / History / Settings). Loads
+                inside a GHL Custom Menu Link with ?location_id=.
+                → build with Vite, hosted on Netlify (netlify.toml at repo root)
+
+shared/         Source of truth for shared modules. offer-calc.js (the offer
+                math, used by broker + frontend), template-schema.js and
+                bindings.js (used by cardgen). Vendored copies are synced with
+                `node scripts/sync-shared.mjs`.
 ```
 
-## Deploy order
+## The flow, in one sentence
 
-Follow **RUNBOOK.md** — it goes in dependency order and passes a value from each
-step to the next:
+The app sends property inputs to `POST /api/offers` → the broker calculates the
+three offers, has cardgen draw the one-page offer letter, wraps it into a PDF,
+stores both in R2, saves the offer, and writes it back onto the GHL contact
+(`last_offer_amount`, `last_offer_date`, `last_offer_doc_url` custom fields, a
+note with the full terms + document link, and an `offer-created` tag).
 
-1. Deploy `cardgen` → get its URL.
-2. Deploy `ghl-broker` with your GHL Private Integration token + the card URL →
-   get its URL. Then add the broker's host to the card service's
-   `ALLOWED_BG_HOSTS`.
-3. Build + host `messaging-app` pointed at the broker.
-4. Wire a GHL Custom Menu Link (agency level) to the page URL.
-5. Test end-to-end from the sub-account.
+## Offer math (defaults, all editable in Settings)
 
-## The chain, in one sentence
+- **Cash** — ARV × 70% − repairs − wholesale fee (the classic MAO rule).
+- **Seller finance** — 100% of asking, 10% down, 3%/30yr amortized, optional balloon.
+- **Lease option** — 103% of asking, 2% option fee, market rent with a 25% rent
+  credit (only offered when a rent estimate is entered).
 
-The page saves a logo URL into GHL custom values → the workflow's MMS step builds
-`cardgen/card?name={{contact.first_name}}&bg={{custom_values.rh_logo_url}}` → the
-card service renders the personalized image → GHL sends it. The broker is what
-lets the page read and write those custom values securely.
+## Dev quickstart
 
-## Prerequisites that aren't code
+```bash
+# 1. render service
+cd cardgen && npm i && node server.js                      # :8080
 
-- A2P 10DLC registration approved (or SMS silently won't deliver).
-- Google Business Profile connected in the sub-account (for the real review link).
-- GHL Agency / SaaS tier (for white-label + Custom Menu Links).
+# 2. broker (JSON-file store when DATABASE_URL is unset)
+cd ghl-broker && npm i
+GHL_TOKEN=pit-... GHL_LOCATION_ID=... CARD_SERVICE_URL=http://localhost:8080 node broker.js   # :4000
 
-Each folder has its own README with detail.
+# 3. app
+cd messaging-app && npm i
+VITE_API_BASE=http://localhost:4000 npm run dev            # open /?location_id=<id>
+```
+
+See **RUNBOOK.md** for production deploy + GHL wiring.

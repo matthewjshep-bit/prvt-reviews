@@ -6,7 +6,8 @@
   "main": "template-schema.js",
   "exports": {
     "./template-schema": "./template-schema.js",
-    "./bindings": "./bindings.js"
+    "./bindings": "./bindings.js",
+    "./offer-calc": "./offer-calc.js"
   },
   "dependencies": {
     "zod": "^3.24.1"
