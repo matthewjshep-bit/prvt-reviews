@@ -302,16 +302,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       const j = await r.json();
       const subjInfo = j.subject?.propertyInfo || {};
+      const num = (v) => (v == null || v === "" ? null : Number(v) || null);
       const data = {
         enabled: true,
         subject: {
-          lat: subjInfo.latitude || null,
-          lng: subjInfo.longitude || null,
-          beds: subjInfo.bedrooms || null,
-          baths: subjInfo.bathrooms || null,
-          sqft: subjInfo.livingSquareFeet || null,
-          yearBuilt: subjInfo.yearBuilt || null,
-          lastSalePrice: j.subject?.lastSalePrice || null,
+          lat: num(subjInfo.latitude),
+          lng: num(subjInfo.longitude),
+          beds: num(subjInfo.bedrooms),
+          baths: num(subjInfo.bathrooms),
+          sqft: num(subjInfo.livingSquareFeet),
+          yearBuilt: num(subjInfo.yearBuilt),
+          lastSalePrice: num(j.subject?.lastSalePrice),
           lastSaleDate: j.subject?.lastSaleDate || null,
         },
         estimate: j.reapiAvm
@@ -323,10 +324,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             const saleDate = c.mlsLastSaleDate || c.lastSaleDate || "";
             return {
               id: String(c.id || `${c.latitude},${c.longitude}`),
-              address: [c.address?.address, c.address?.city].filter(Boolean).join(", "),
+              address: c.address?.address || [c.address?.city, c.address?.state].filter(Boolean).join(", "),
               price: Math.round(price),
               saleDate: String(saleDate).slice(0, 10),
-              sqft: c.squareFeet || 0,
+              sqft: Number(c.squareFeet) || 0,
               beds: c.bedrooms ?? null,
               baths: c.bathrooms ?? null,
               distance: c.distance != null ? Math.round(c.distance * 100) / 100 : null,
@@ -336,6 +337,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           })
           .filter((c) => c.lat && c.lng && c.price > 0),
       };
+      // Enforce "similar sqft" even when the caller didn't pass sqft (the
+      // provider's own record supplies it): keep comps within ±20%.
+      const effSqft = sqft > 0 ? sqft : data.subject.sqft || 0;
+      if (effSqft > 0) {
+        data.comps = data.comps.filter((c) => !c.sqft || (c.sqft >= effSqft * 0.8 && c.sqft <= effSqft * 1.2));
+      }
       if (compsCache.size > 100) compsCache.clear();
       compsCache.set(cacheKey, { ts: Date.now(), data });
       res.json(data);
