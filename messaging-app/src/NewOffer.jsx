@@ -229,20 +229,22 @@ function OfferCards({ calc }) {
 /* ---------------- main view ---------------- */
 
 export default function NewOffer({ settings, initialContactId, restore }) {
-  // `restore` reopens a saved draft (full form state) or an existing offer
-  // (inputs + scope become a fresh working copy).
-  const fromDraft = restore?.status === "draft" ? restore.draft : null;
+  // `restore` reopens a saved draft or an existing offer. Both carry a full
+  // form snapshot (drafts in .draft, created offers in .snapshot) so the
+  // comps workspace and rehab scope come back exactly as they were; very old
+  // offers without a snapshot fall back to deriving inputs from the calc.
+  const snap = restore?.status === "draft" ? restore.draft : restore?.snapshot || null;
   const fromOffer = restore && restore.status !== "draft" ? restore : null;
   const fmtN = (n) => (Number(n) ? Number(n).toLocaleString("en-US") : "");
 
-  const [mode, setMode] = useState(fromDraft?.mode || "existing");
+  const [mode, setMode] = useState(snap?.mode || "existing");
   const [contact, setContact] = useState(
-    fromDraft?.contact ||
+    snap?.contact ||
     (fromOffer?.contactId ? { id: fromOffer.contactId, name: fromOffer.contactName || "", phone: "", email: "" } : null)
   );
-  const [newContact, setNewContact] = useState(fromDraft?.newContact || { name: "", phone: "" });
+  const [newContact, setNewContact] = useState(snap?.newContact || { name: "", phone: "" });
   const [inputs, setInputs] = useState(
-    fromDraft?.inputs ||
+    snap?.inputs ||
     (fromOffer?.calc
       ? {
           address: fromOffer.calc.inputs.address || "",
@@ -252,18 +254,20 @@ export default function NewOffer({ settings, initialContactId, restore }) {
         }
       : { address: "", askingPrice: "", arv: "", repairs: "" })
   );
-  const [subjectSqft, setSubjectSqft] = useState(fromDraft?.subjectSqft || ""); // shared: comps $/sqft + rehab per-sqft items
-  const [subjectInfo, setSubjectInfo] = useState(fromDraft?.subjectInfo || null); // beds/baths from the comps subject record
-  const [scope, setScope] = useState(fromDraft?.scope || fromOffer?.scope || []); // applied rehab line items
-  const [draftId, setDraftId] = useState(fromDraft ? restore.id : null);
+  const [subjectSqft, setSubjectSqft] = useState(snap?.subjectSqft || ""); // shared: comps $/sqft + rehab per-sqft items
+  const [subjectInfo, setSubjectInfo] = useState(snap?.subjectInfo || null); // beds/baths from the comps subject record
+  const [scope, setScope] = useState(snap?.scope || fromOffer?.scope || []); // applied rehab line items
+  const [draftId, setDraftId] = useState(restore?.status === "draft" ? restore.id : null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftSaved, setDraftSaved] = useState(false);
-  const rehabStateRef = useRef(fromDraft?.rehab || null);
+  const rehabStateRef = useRef(snap?.rehab || null);
+  const compsStateRef = useRef(snap?.comps || null);
   const rehabInit =
-    fromDraft?.rehab ||
+    snap?.rehab ||
     (fromOffer?.scope?.length
       ? { custom: fromOffer.scope.map((s, i) => ({ id: `c-${i}`, label: s.label, cost: s.cost })) }
       : undefined);
+  const compsInit = snap?.comps || undefined;
   const [preview, setPreview] = useState(null);   // data-url image
   const [previewing, setPreviewing] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -333,6 +337,12 @@ export default function NewOffer({ settings, initialContactId, restore }) {
         settings: settings || {},
         scope,
         draftId,
+        // Full form snapshot so History → Edit restores comps + rehab intact.
+        snapshot: {
+          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope,
+          rehab: rehabStateRef.current,
+          comps: compsStateRef.current,
+        },
       });
       setResult(r);
       setPreview(null);
@@ -347,6 +357,7 @@ export default function NewOffer({ settings, initialContactId, restore }) {
       const r = await saveDraft(draftId, {
         mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope,
         rehab: rehabStateRef.current,
+        comps: compsStateRef.current,
         cashPreview: calc?.offers?.cash?.amount ?? null,
       });
       setDraftId(r.offer.id);
@@ -480,6 +491,8 @@ export default function NewOffer({ settings, initialContactId, restore }) {
         sqft={subjectSqft}
         setSqft={setSubjectSqft}
         onSubjectInfo={setSubjectInfo}
+        initialState={compsInit}
+        onStateChange={(s) => { compsStateRef.current = s; }}
         onUseArv={(arv) => setInputs((s) => ({ ...s, arv: Number(arv).toLocaleString("en-US") }))}
       />
 

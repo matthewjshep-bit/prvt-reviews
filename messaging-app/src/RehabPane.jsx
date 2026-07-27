@@ -82,7 +82,7 @@ export default function RehabPane({ sqft, beds, baths, address, onApply, initial
   const [applied, setApplied] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState("");
-  const [aiResult, setAiResult] = useState(null);
+  const [aiResult, setAiResult] = useState(initialState?.aiResult || null);
 
   // AI scan: MLS photos (or user-uploaded photos) → suggested scope, applied
   // onto the checklist for review.
@@ -146,11 +146,11 @@ export default function RehabPane({ sqft, beds, baths, address, onApply, initial
     setScanning(false);
   }
 
-  // Report state upward so drafts can snapshot the whole scope.
+  // Report state upward so drafts/offers can snapshot the whole scope.
   useEffect(() => {
-    onStateChange?.({ rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency });
+    onStateChange?.({ rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency, aiResult });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency]);
+  }, [rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency, aiResult]);
 
   const sqftNum = parse(sqft);
 

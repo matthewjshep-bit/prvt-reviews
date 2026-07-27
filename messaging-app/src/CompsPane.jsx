@@ -21,14 +21,20 @@ const median = (xs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqft: setSubjectSqft, onSubjectInfo }) {
-  const [state, setState] = useState(null); // { subject:{lat,lng}, info, comps, estimate, enabled }
+export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqft: setSubjectSqft, onSubjectInfo, initialState, onStateChange }) {
+  const [state, setState] = useState(initialState?.result || null); // { subject:{lat,lng}, info, comps, estimate, enabled }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState(new Set());
-  const [manual, setManual] = useState([]);
+  const [selected, setSelected] = useState(() => new Set(initialState?.selected || []));
+  const [manual, setManual] = useState(initialState?.manual || []);
   const [draft, setDraft] = useState({ label: "", price: "", sqft: "" });
-    const [months, setMonths] = useState(12);
+  const [months, setMonths] = useState(initialState?.months || 12);
+
+  // Report state upward so drafts/offers can snapshot the comps workspace.
+  useEffect(() => {
+    onStateChange?.({ result: state, selected: [...selected], manual, months });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, selected, manual, months]);
 
   const parse = (v) => Number(String(v).replace(/[^\d.]/g, "")) || 0;
 

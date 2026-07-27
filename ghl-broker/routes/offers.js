@@ -590,6 +590,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             .slice(0, 60)
             .map((s) => ({ label: String(s.label).slice(0, 120), cost: Math.round(Number(s.cost)) }))
         : [];
+      // Full form snapshot (comps workspace + rehab state) so editing the
+      // offer later restores everything. Size-capped defensively.
+      let snapshot = null;
+      if (req.body?.snapshot && typeof req.body.snapshot === "object") {
+        try {
+          if (JSON.stringify(req.body.snapshot).length <= 400_000) snapshot = req.body.snapshot;
+        } catch { /* unserializable — drop */ }
+      }
 
       // 1. Resolve the contact (existing id, or find/create by phone).
       let contactId = bodyContactId || "";
@@ -644,6 +652,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         dateLabel: meta.dateLabel,
         validLabel: meta.validLabel,
         scope,
+        snapshot,
         calc,
       });
 
