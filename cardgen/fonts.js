@@ -138,9 +138,11 @@ export function wrapText(text, opts) {
   return { lines, truncated };
 }
 
-// Single-paragraph word-wrap (the original wrapText).
+// Single-paragraph word-wrap (the original wrapText). Non-breaking spaces
+// ( ) are glue, not split points — templates use them for letter-spaced
+// headings, so they must survive wrapping.
 function wrapSegment(text, { family, weight, fontSize, maxWidth, maxLines = 3 }) {
-  const words = String(text).split(/\s+/).filter(Boolean);
+  const words = String(text).split(/[^\S\u00A0]+/).filter(Boolean);
   const width = (s) => measureLine(s, { family, weight, fontSize });
   const lines = [];
   let line = "";

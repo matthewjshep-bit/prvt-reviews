@@ -30,8 +30,9 @@ export const DEFAULT_OFFER_SETTINGS = {
   // Presentation
   closeDays: 14,             // advertised days-to-close
   validityDays: 7,           // offer expiry window printed on the document
-  // Printed on the offer document
-  company: { name: "", signer: "", phone: "", email: "" },
+  earnestMoney: 2500,        // earnest-money deposit named in the letter
+  // Printed on the offer document letterhead
+  company: { name: "", tagline: "", signer: "", phone: "", email: "" },
 };
 
 const num = (v, fallback = 0) => {

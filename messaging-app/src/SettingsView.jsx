@@ -88,6 +88,7 @@ export default function SettingsView({ settings, onSaved }) {
           <Num label="Heavy-repair multiplier" suffix="×" value={form.repairHeavyMult} onChange={set("repairHeavyMult")} />
           <Num label="Advertised close" suffix="days" value={form.closeDays} onChange={set("closeDays")} />
           <Num label="Offer valid for" suffix="days" value={form.validityDays} onChange={set("validityDays")} />
+          <Num label="Earnest money" suffix="$" money value={form.earnestMoney} onChange={set("earnestMoney")} />
         </div>
         <label className="mt-3 flex items-center gap-2 text-sm text-gray-700">
           <input type="checkbox" checked={Boolean(form.precisionJitter)}
@@ -99,10 +100,11 @@ export default function SettingsView({ settings, onSaved }) {
       <section className="rounded-xl border border-gray-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Company (printed on the document)</h2>
         <div className="grid grid-cols-2 gap-3">
-          <Txt label="Company name" value={form.company.name} onChange={setCo("name")} placeholder="Goldstar Capital" />
+          <Txt label="Company name" value={form.company.name} onChange={setCo("name")} placeholder="PRVT MKT" />
+          <Txt label="Tagline" value={form.company.tagline} onChange={setCo("tagline")} placeholder="Private Market Home Buyers" />
           <Txt label="Signer" value={form.company.signer} onChange={setCo("signer")} placeholder="Matt Shepherd" />
           <Txt label="Phone" value={form.company.phone} onChange={setCo("phone")} placeholder="(206) 555-0142" />
-          <Txt label="Email" value={form.company.email} onChange={setCo("email")} placeholder="offers@example.com" />
+          <Txt label="Email" value={form.company.email} onChange={setCo("email")} placeholder="matt@prvtmkt.com" />
         </div>
       </section>
 
