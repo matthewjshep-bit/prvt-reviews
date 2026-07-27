@@ -414,6 +414,12 @@ export default function NewOffer({ settings, initialContactId, restore }) {
                 <FileText size={16} /> Open Rehab Scope of Work (PDF)
               </a>
             )}
+            {offer.compsPdfUrl && (
+              <a href={offer.compsPdfUrl} target="_blank" rel="noreferrer"
+                className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+                <FileText size={16} /> Open Comps / ARV Analysis (PDF)
+              </a>
+            )}
             <a href={offer.imageUrl} target="_blank" rel="noreferrer"
               className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
               <FileText size={16} /> Open image version

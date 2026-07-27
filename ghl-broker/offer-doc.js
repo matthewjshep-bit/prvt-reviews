@@ -147,6 +147,133 @@ export function buildScopeDocument({ scope = [], total = 0, address = "", meta =
   };
 }
 
+// Comparable Sales Analysis — the companion document listing the closed sales
+// (and manual comps) selected in the comps workspace to back the ARV used in
+// the offer. comps: [{address, price, sqft, beds, baths, saleDate, distance,
+// manual}]. subject: provider record for the subject. All inputs originate
+// from the client snapshot, so counts and string lengths are capped here.
+export function buildCompsDocument({ comps = [], subject = null, estimate = null, arv = 0, subjectSqft = 0, months = 0, address = "", meta = {}, company = {}, locationId = "" }) {
+  const items = comps.slice(0, 20).map((c) => ({
+    address: String(c.address || "Comp").slice(0, 90),
+    price: Math.round(Number(c.price) || 0),
+    sqft: Math.round(Number(c.sqft) || 0),
+    beds: c.beds != null && c.beds !== "" ? Number(c.beds) : null,
+    baths: c.baths != null && c.baths !== "" ? Number(c.baths) : null,
+    saleDate: String(c.saleDate || "").slice(0, 10),
+    distance: c.distance != null ? Number(c.distance) : null,
+    manual: Boolean(c.manual),
+  })).filter((c) => c.price > 0);
+  if (!items.length) return null;
+
+  const layers = [];
+
+  /* ---- letterhead ---- */
+  layers.push({ id: uid("bar"), type: "shape", shape: "rect", x: 0, y: 0, width: 100, height: 0.55, fill: GOLD, visible: true });
+  if (company.name) {
+    layers.push(text(8, 3.6, 56, 3.6, sp(company.name), { font: "Source Serif", weight: "bold", size: 40, color: DARK, autoFit: true, maxLines: 1 }));
+  }
+  if (company.tagline) {
+    layers.push(text(8, 7.3, 56, 2.2, sp(company.tagline), { size: 17, color: GOLD, weight: "bold", autoFit: true, maxLines: 1 }));
+  }
+  if (meta.dateLabel) {
+    layers.push(text(56, 3.6, 36, 3, meta.dateLabel, { size: 20, color: MUTED, align: "right" }));
+  }
+  layers.push(rule(11));
+
+  /* ---- title + property ---- */
+  layers.push(text(8, 13.6, 84, 3, sp("Comparable Sales Analysis"), { font: "Source Serif", weight: "bold", size: 34, color: DARK, align: "center", autoFit: true, maxLines: 1 }));
+  layers.push(text(8, 17.2, 84, 2.6, address || "Subject property", { size: 26, weight: "bold", color: INK, align: "center", autoFit: true, maxLines: 1 }));
+  const subjBits = [
+    subject?.beds != null ? `${subject.beds} bd` : "",
+    subject?.baths != null ? `${subject.baths} ba` : "",
+    subject?.sqft ? `${Number(subject.sqft).toLocaleString()} sqft` : "",
+    subject?.yearBuilt ? `built ${subject.yearBuilt}` : "",
+  ].filter(Boolean).join(" · ");
+  layers.push(text(8, 20, 84, 2,
+    sp(subjBits ? `Subject: ${subjBits}` : months ? `Closed sales · last ${months} months` : "Closed sales"),
+    { size: 15, color: MUTED, align: "center", autoFit: true, maxLines: 1 }));
+
+  /* ---- table header ---- */
+  const col = {
+    addr: { x: 8, w: 31 }, bdba: { x: 40, w: 6 }, sqft: { x: 46.5, w: 7 },
+    sold: { x: 54.5, w: 9 }, dist: { x: 64.5, w: 5.5 }, ppsf: { x: 71, w: 8.5 }, price: { x: 80.5, w: 11.5 },
+  };
+  const headY = 24;
+  const head = (c, label, align = "right") =>
+    layers.push(text(col[c].x, headY, col[c].w, 1.8, label.toUpperCase(), { size: 13, color: FAINT, weight: "bold", align }));
+  head("addr", "Address", "left"); head("bdba", "Bd/Ba"); head("sqft", "Sqft");
+  head("sold", "Sold"); head("dist", "Mi"); head("ppsf", "$/Sqft"); head("price", "Price");
+  layers.push({ id: uid("hr"), type: "shape", shape: "rect", x: 8, y: headY + 1.9, width: 84, height: 0.14, fill: RULE, visible: true });
+
+  /* ---- rows ---- */
+  const rowH = 2.5;
+  let y = headY + 2.6;
+  for (const c of items) {
+    const cell = (k, v, o = {}) => v && layers.push(text(col[k].x, y, col[k].w, 2, v, { size: 19, color: INK, align: "right", autoFit: true, maxLines: 1, ...o }));
+    cell("addr", c.address + (c.manual ? " *" : ""), { align: "left" });
+    cell("bdba", c.beds != null ? `${c.beds}/${c.baths ?? "?"}` : "");
+    cell("sqft", c.sqft ? c.sqft.toLocaleString() : "");
+    cell("sold", c.saleDate ? c.saleDate.slice(0, 7) : c.manual ? "manual" : "", { color: MUTED });
+    cell("dist", c.distance != null ? String(Math.round(c.distance * 100) / 100) : "", { color: MUTED });
+    cell("ppsf", c.sqft > 0 ? fmtMoney(Math.round(c.price / c.sqft)) : "", { color: MUTED });
+    cell("price", fmtMoney(c.price), { weight: "bold", color: DARK });
+    layers.push({ id: uid("r"), type: "shape", shape: "rect", x: 8, y: y + 2.05, width: 84, height: 0.08, fill: "rgba(100,116,139,0.18)", visible: true });
+    y += rowH;
+  }
+  if (items.some((c) => c.manual)) {
+    layers.push(text(8, y + 0.2, 84, 1.6, "* added manually", { size: 13, color: FAINT }));
+    y += 1.8;
+  }
+
+  /* ---- summary ---- */
+  const withSqft = items.filter((c) => c.sqft > 0);
+  const avgPpsf = withSqft.length
+    ? Math.round(withSqft.reduce((t, c) => t + c.price / c.sqft, 0) / withSqft.length)
+    : 0;
+  const prices = items.map((c) => c.price).sort((a, b) => a - b);
+  const mid = Math.floor(prices.length / 2);
+  const medianPrice = prices.length % 2 ? prices[mid] : Math.round((prices[mid - 1] + prices[mid]) / 2);
+  y = Math.min(y + 1.5, 82);
+  layers.push(text(8, y, 72, 2.2, `Median sale price (${items.length} comps)`, { size: 21, color: MUTED, align: "right" }));
+  layers.push(text(80, y, 12, 2.2, fmtMoney(medianPrice), { size: 21, color: INK, align: "right", autoFit: true, maxLines: 1 }));
+  if (avgPpsf > 0) {
+    y += 2.6;
+    layers.push(text(8, y, 72, 2.2, `Average $/sqft (${withSqft.length} comps)`, { size: 21, color: MUTED, align: "right" }));
+    layers.push(text(80, y, 12, 2.2, `${fmtMoney(avgPpsf)}`, { size: 21, color: INK, align: "right", autoFit: true, maxLines: 1 }));
+  }
+  if (estimate?.price) {
+    y += 2.6;
+    layers.push(text(8, y, 72, 2.2, "Automated valuation (AVM)", { size: 21, color: MUTED, align: "right" }));
+    layers.push(text(72, y, 20, 2.2, fmtMoney(estimate.price), { size: 21, color: INK, align: "right", autoFit: true, maxLines: 1 }));
+  }
+
+  /* ---- ARV ---- */
+  y += 3;
+  layers.push({ id: uid("tbar"), type: "shape", shape: "rect", x: 8, y, width: 84, height: 0.18, fill: RULE, visible: true });
+  y += 1.2;
+  const sqftNum = Math.round(Number(subjectSqft) || 0) || (subject?.sqft ? Math.round(Number(subject.sqft)) : 0);
+  const basis = avgPpsf > 0 && sqftNum > 0 ? `${fmtMoney(avgPpsf)}/sqft × ${sqftNum.toLocaleString()} sqft` : `${items.length} comparable sales`;
+  layers.push(text(8, y, 58, 3.4, sp("After-Repair Value (ARV)"), { size: 20, color: GOLD, weight: "bold", autoFit: true, maxLines: 1 }));
+  layers.push(text(8, y + 3, 58, 2, basis, { size: 17, color: MUTED }));
+  layers.push(text(48, y - 0.8, 44, 4.4, fmtMoney(arv), { font: "Source Serif", weight: "bold", size: 54, color: DARK, align: "right", autoFit: true, maxLines: 1 }));
+
+  /* ---- fine print ---- */
+  layers.push(rule(95.4));
+  layers.push(text(8, 96.4, 84, 3.4,
+    "Comparable sales sourced from county deed records and MLS data for planning and underwriting purposes only — " +
+    "not an appraisal. Selection and valuation subject to interior inspection and market conditions at time of sale.",
+    { size: 14, color: FAINT, lineHeight: 1.4, maxLines: 3 }));
+
+  return {
+    locationId,
+    name: `Comps — ${address || "property"}`.slice(0, 120),
+    canvas: LETTER,
+    background: { color: PAPER },
+    dataSources: [],
+    layers,
+  };
+}
+
 // calc: output of calculateOffers(). meta: { contactName, dateLabel, validLabel }.
 export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
   const { inputs, settings } = calc;

@@ -18,7 +18,7 @@ import express from "express";
 import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
-import { buildOfferDocument, buildScopeDocument } from "../offer-doc.js";
+import { buildOfferDocument, buildScopeDocument, buildCompsDocument } from "../offer-doc.js";
 import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "../rehab-scan.js";
 import { jpegToPdf } from "../pdf.js";
 import { uploadAsset, r2Enabled } from "../r2.js";
@@ -118,6 +118,7 @@ function offerNoteBody(offer) {
   }
   if (offer.pdfUrl) lines.push(`Offer letter (PDF): ${offer.pdfUrl}`);
   if (offer.scopePdfUrl) lines.push(`Rehab scope of work (PDF): ${offer.scopePdfUrl}`);
+  if (offer.compsPdfUrl) lines.push(`Comparable sales analysis (PDF): ${offer.compsPdfUrl}`);
   if (offer.imageUrl) lines.push(`Offer letter (image): ${offer.imageUrl}`);
   const zUrl = zillowUrl(inputs.address);
   if (zUrl) lines.push(`Zillow: ${zUrl}`);
@@ -167,25 +168,37 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   router.get("/:id/doc.pdf", serveDoc("pdf"));
   router.get("/:id/doc.jpg", serveDoc("image"));
   router.get("/:id/scope.pdf", serveDoc("scopepdf"));
+  router.get("/:id/comps.pdf", serveDoc("compspdf"));
 
-  // Render the Rehab Scope of Work companion PDF. Best-effort: a failure
-  // never blocks the offer itself.
-  async function storeScopeDocument({ offerId, locationId, scope, total, address, meta, company }) {
-    const template = buildScopeDocument({ scope, total, address, meta, company, locationId });
+  // Render a companion PDF (Rehab SOW, Comps Analysis) through cardgen and
+  // store it next to the offer documents. Best-effort at every call site: a
+  // failure never blocks the offer itself.
+  async function storeCompanionPdf({ offerId, locationId, template, kind, slug, docKind }) {
     const r = await fetch(`${CARD_SERVICE_URL}/render`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ template, context: {}, store: false, format: "jpeg" }),
     });
-    if (!r.ok) throw new Error(`scope render ${r.status}`);
+    if (!r.ok) throw new Error(`${kind} render ${r.status}`);
     const jpeg = Buffer.from(await r.arrayBuffer());
     const pdf = jpegToPdf(jpeg, template.canvas.width, template.canvas.height);
     if (r2Enabled) {
       const localOpts = { localDir: uploadDir, localBaseUrl: `${publicBaseUrl}/uploads` };
-      return uploadAsset(`offers/${locationId}/${offerId}-scope.pdf`, pdf, "application/pdf", localOpts);
+      return uploadAsset(`offers/${locationId}/${offerId}-${slug}.pdf`, pdf, "application/pdf", localOpts);
     }
-    await store.saveOfferDoc(offerId, "scopepdf", pdf, "application/pdf");
-    return `${publicBaseUrl}/api/offers/${offerId}/scope.pdf`;
+    await store.saveOfferDoc(offerId, docKind, pdf, "application/pdf");
+    return `${publicBaseUrl}/api/offers/${offerId}/${slug}.pdf`;
+  }
+
+  async function storeScopeDocument({ offerId, locationId, scope, total, address, meta, company }) {
+    const template = buildScopeDocument({ scope, total, address, meta, company, locationId });
+    return storeCompanionPdf({ offerId, locationId, template, kind: "scope", slug: "scope", docKind: "scopepdf" });
+  }
+
+  async function storeCompsDocument({ offerId, locationId, meta, company, ...doc }) {
+    const template = buildCompsDocument({ ...doc, meta, company, locationId });
+    if (!template) return null; // no priced comps selected — nothing to render
+    return storeCompanionPdf({ offerId, locationId, template, kind: "comps", slug: "comps", docKind: "compspdf" });
   }
 
   /* ---------- settings ---------- */
@@ -638,6 +651,31 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         } catch (e) { scopeWarning = `rehab SOW: ${e.message}`; }
       }
 
+      // Companion document: Comparable Sales Analysis (when comps back the ARV).
+      let compsPdfUrl = null;
+      let compsWarning = null;
+      try {
+        const cs = snapshot?.comps;
+        const sel = new Set(Array.isArray(cs?.selected) ? cs.selected : []);
+        const picked = [
+          ...(cs?.result?.comps || []).filter((c) => sel.has(c.id)),
+          ...(Array.isArray(cs?.manual) ? cs.manual : []),
+        ];
+        if (picked.length) {
+          compsPdfUrl = await storeCompsDocument({
+            offerId, locationId,
+            comps: picked,
+            subject: cs?.result?.info || null,
+            estimate: cs?.result?.estimate || null,
+            months: Number(cs?.months) || 0,
+            subjectSqft: Number(String(snapshot?.subjectSqft ?? "").replace(/[^\d.]/g, "")) || 0,
+            arv: calc.inputs.arv,
+            address: calc.inputs.address,
+            meta, company: calc.settings.company || {},
+          });
+        }
+      } catch (e) { compsWarning = `comps PDF: ${e.message}`; }
+
       // 4. Persist the offer.
       const offer = await store.createOffer({
         id: offerId,
@@ -649,6 +687,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         imageUrl,
         pdfUrl,
         scopePdfUrl,
+        compsPdfUrl,
         dateLabel: meta.dateLabel,
         validLabel: meta.validLabel,
         scope,
@@ -661,6 +700,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const ghl = { fields: false, note: false, tag: false };
       const warnings = [];
       if (scopeWarning) warnings.push(scopeWarning);
+      if (compsWarning) warnings.push(compsWarning);
       const noteFailure = (step, e) => {
         const detail = e?.data ? `${e.message} :: ${JSON.stringify(e.data).slice(0, 200)}` : e?.message;
         console.error(`offers: GHL attach failed [${step}] contact=${contactId}:`, detail);

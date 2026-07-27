@@ -111,6 +111,12 @@ function OfferDetail({ offer, onClose }) {
                   <FileText size={15} /> Rehab SOW
                 </a>
               )}
+              {offer.compsPdfUrl && (
+                <a href={offer.compsPdfUrl} target="_blank" rel="noreferrer"
+                  className="flex items-center gap-2 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50">
+                  <FileText size={15} /> Comps PDF
+                </a>
+              )}
               <a href={offer.imageUrl} target="_blank" rel="noreferrer"
                 className="flex items-center gap-2 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50">
                 <FileText size={15} /> Image
@@ -203,6 +209,12 @@ export default function OffersHistory({ onEdit }) {
                       <a href={o.scopePdfUrl} target="_blank" rel="noreferrer"
                         className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
                         <FileText size={14} /> SOW
+                      </a>
+                    )}
+                    {o.compsPdfUrl && (
+                      <a href={o.compsPdfUrl} target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
+                        <FileText size={14} /> Comps
                       </a>
                     )}
                     {o.imageUrl && (
