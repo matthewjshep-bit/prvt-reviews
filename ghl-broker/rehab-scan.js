@@ -7,7 +7,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ALL_REHAB_ITEMS, BATH_TIERS, BED_TIERS } from "./shared/rehab-catalog.js";
 
-const MAX_PHOTOS = 16;
+const MAX_PHOTOS = 40;
 
 // Fetch listing photos (midRes ≈ 900px — plenty for condition assessment).
 export async function fetchListingPhotos(address, compsApiKey) {

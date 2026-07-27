@@ -92,7 +92,7 @@ export default function RehabPane({ sqft, beds, baths, address, onApply, initial
     try {
       let images;
       if (files?.length) {
-        images = await Promise.all([...files].slice(0, 16).map((f) => fileToDataUrl(f)));
+        images = await Promise.all([...files].slice(0, 40).map((f) => fileToDataUrl(f)));
       }
       const r = await scanRehab(address.trim(), {
         beds: bedCount || undefined, baths: bathCount || undefined, sqft: parse(sqft) || undefined,

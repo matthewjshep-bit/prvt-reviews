@@ -502,8 +502,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       let listing = null;
       let facts = null;
       const uploaded = Array.isArray(req.body?.images)
-        ? req.body.images.filter((i) => typeof i === "string" && i.startsWith("data:image/")).slice(0, 16)
-        : [];
+        ? req.body.images.filter((i) => typeof i === "string" && i.startsWith("data:image/")).slice(0, 40)        : [];
       if (uploaded.length) {
         photos = uploaded;
         photosCount = uploaded.length;
