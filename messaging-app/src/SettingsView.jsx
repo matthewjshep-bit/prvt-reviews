@@ -98,12 +98,12 @@ export default function SettingsView({ settings, onSaved }) {
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-bold">Comps map (RentCast)</h2>
+        <h2 className="mb-3 text-sm font-bold">Comps map (RealEstateAPI.com)</h2>
         <p className="mb-3 text-xs text-gray-500">
-          Powers the automatic comps on the New Offer map. Free key at rentcast.io → API Dashboard
-          (50 lookups/month on the free tier). Leave blank to use manual comps only.
+          Powers the sold-comps map on the New Offer page (closed sales, same beds/baths/county, similar
+          sqft). Sign up at realestateapi.com for a trial key. Leave blank to use manual comps only.
         </p>
-        <Txt label="RentCast API key" value={form.rentcastApiKey || ""} onChange={set("rentcastApiKey")} placeholder="rc_..." />
+        <Txt label="RealEstateAPI key" value={form.compsApiKey || ""} onChange={set("compsApiKey")} placeholder="APIKEY-..." />
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-4">

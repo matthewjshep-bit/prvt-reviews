@@ -22,13 +22,14 @@ const median = (xs) => {
 };
 
 export default function CompsPane({ address, onUseArv }) {
-  const [state, setState] = useState(null); // { subject, comps, estimate, enabled }
+  const [state, setState] = useState(null); // { subject:{lat,lng}, info, comps, estimate, enabled }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(new Set());
   const [manual, setManual] = useState([]);
   const [draft, setDraft] = useState({ label: "", price: "", sqft: "" });
   const [subjectSqft, setSubjectSqft] = useState("");
+  const [months, setMonths] = useState(12);
 
   const parse = (v) => Number(String(v).replace(/[^\d.]/g, "")) || 0;
 
@@ -37,15 +38,23 @@ export default function CompsPane({ address, onUseArv }) {
     setLoading(true); setError("");
     try {
       const [geo, comps] = await Promise.all([
-        geocode(address.trim()),
-        getComps(address.trim(), parse(subjectSqft) || undefined),
+        geocode(address.trim()).catch(() => null),
+        getComps(address.trim(), { sqft: parse(subjectSqft) || undefined, months }),
       ]);
-      if (!geo) throw new Error("couldn't locate that address on the map");
-      setState({ subject: geo, ...comps });
-      // Preselect the strongest comps (top correlation, max 6).
+      // Prefer the data provider's subject coordinates; fall back to geocode.
+      const center = comps.subject?.lat
+        ? { lat: comps.subject.lat, lng: comps.subject.lng }
+        : geo;
+      if (!center) throw new Error("couldn't locate that address on the map");
+      setState({ subject: center, info: comps.subject || null, ...comps });
+      // The subject's recorded sqft powers the $/sqft math if none was typed.
+      if (!parse(subjectSqft) && comps.subject?.sqft) {
+        setSubjectSqft(String(comps.subject.sqft));
+      }
+      // Preselect the closest comps (max 6).
       const pre = (comps.comps || [])
         .slice()
-        .sort((a, b) => (b.correlation || 0) - (a.correlation || 0))
+        .sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))
         .slice(0, 6)
         .map((c) => c.id);
       setSelected(new Set(pre));
@@ -88,8 +97,14 @@ export default function CompsPane({ address, onUseArv }) {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-bold">Comps &amp; ARV</h2>
         <div className="flex items-center gap-2">
+          <select value={months} onChange={(e) => setMonths(Number(e.target.value))}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none">
+            <option value={6}>Sold ≤ 6 mo</option>
+            <option value={9}>Sold ≤ 9 mo</option>
+            <option value={12}>Sold ≤ 12 mo</option>
+          </select>
           <input
-            className="w-36 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+            className="w-32 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
             inputMode="numeric" placeholder="Subject sqft"
             value={subjectSqft}
             onChange={(e) => setSubjectSqft(e.target.value.replace(/[^\d,]/g, ""))}
@@ -100,6 +115,18 @@ export default function CompsPane({ address, onUseArv }) {
           </button>
         </div>
       </div>
+      {state?.info && (
+        <div className="mb-2 text-xs text-gray-500">
+          Subject record: {[
+            state.info.beds != null ? `${state.info.beds} bd` : "",
+            state.info.baths != null ? `${state.info.baths} ba` : "",
+            state.info.sqft ? `${state.info.sqft.toLocaleString()} sqft` : "",
+            state.info.yearBuilt ? `built ${state.info.yearBuilt}` : "",
+            state.info.lastSalePrice ? `last sold ${fmtMoney(state.info.lastSalePrice)} (${(state.info.lastSaleDate || "").slice(0, 7)})` : "",
+          ].filter(Boolean).join(" · ")}
+          {" — comps: same beds/baths/county, arms-length, ±20% sqft"}
+        </div>
+      )}
 
       {error && <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
 
@@ -128,7 +155,7 @@ export default function CompsPane({ address, onUseArv }) {
                     weight: 2,
                   }}>
                   <Tooltip direction="top" offset={[0, -8]}>
-                    {fmtMoney(c.price)}{c.sqft ? ` · ${c.sqft.toLocaleString()} sqft` : ""} — click to {selected.has(c.id) ? "remove" : "include"}
+                    {fmtMoney(c.price)}{c.saleDate ? ` sold ${c.saleDate.slice(0, 7)}` : ""}{c.sqft ? ` · ${c.sqft.toLocaleString()} sqft` : ""} — click to {selected.has(c.id) ? "remove" : "include"}
                   </Tooltip>
                 </CircleMarker>
               ))}
@@ -138,12 +165,12 @@ export default function CompsPane({ address, onUseArv }) {
           <div className="flex flex-col">
             {!state.enabled && (
               <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Automatic comps are off — add your RentCast API key in Settings. You can still add comps manually below.
+                Automatic sold comps are off — add your RealEstateAPI key in Settings. You can still add comps manually below.
               </div>
             )}
             {state.estimate && (
               <div className="mb-2 rounded-lg bg-gray-100 px-3 py-2 text-xs text-gray-700">
-                RentCast estimate: <b>{fmtMoney(state.estimate.price)}</b>
+                AVM estimate: <b>{fmtMoney(state.estimate.price)}</b>
                 {state.estimate.low ? <> (range {fmtMoney(state.estimate.low)} – {fmtMoney(state.estimate.high)})</> : null}
               </div>
             )}
@@ -153,7 +180,12 @@ export default function CompsPane({ address, onUseArv }) {
                   <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
                   <span className="min-w-0 flex-1 truncate">{c.address}</span>
                   <span className="whitespace-nowrap text-xs text-gray-500">
-                    {c.sqft ? `${c.sqft.toLocaleString()} sf · ` : ""}{c.distance != null ? `${c.distance} mi · ` : ""}
+                    {[
+                      c.beds != null ? `${c.beds}/${c.baths ?? "?"}` : "",
+                      c.sqft ? `${c.sqft.toLocaleString()} sf` : "",
+                      c.saleDate ? c.saleDate.slice(0, 7) : "",
+                      c.distance != null ? `${c.distance} mi` : "",
+                    ].filter(Boolean).join(" · ")}
                   </span>
                   <span className="whitespace-nowrap font-semibold tabular-nums">{fmtMoney(c.price)}</span>
                 </label>
@@ -202,8 +234,9 @@ export default function CompsPane({ address, onUseArv }) {
 
       {!state && !error && (
         <p className="text-xs text-gray-400">
-          Enter the property address above, then load comps to see nearby sales on a map and derive the ARV.
-          Automatic comps use RentCast (free API key — add it in Settings); manual comps always work.
+          Enter the property address above, then load comps to see closed sales around the subject on a map
+          (same beds/baths/county, similar sqft) and derive the ARV. Automatic comps use RealEstateAPI.com
+          (key in Settings); manual comps always work.
         </p>
       )}
     </div>

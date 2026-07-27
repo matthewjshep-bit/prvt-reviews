@@ -34,7 +34,7 @@ export const DEFAULT_OFFER_SETTINGS = {
   closeDays: 14,             // advertised days-to-close
   validityDays: 7,           // offer expiry window printed on the document
   earnestMoney: 2500,        // earnest-money deposit named in the letter
-  rentcastApiKey: "",        // enables the comps map (rentcast.io API key)
+  compsApiKey: "",           // enables the comps map (realestateapi.com API key)
   // Printed on the offer document letterhead
   company: { name: "", tagline: "", signer: "", phone: "", email: "" },
 };

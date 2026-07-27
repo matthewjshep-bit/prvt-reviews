@@ -256,54 +256,85 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     }
   });
 
-  /* ---------- comps (RentCast AVM, key configured in Settings) ---------- */
-  // Cached per address for 24h — the RentCast free tier is 50 requests/month.
+  /* ---------- comps (RealEstateAPI.com v3, key configured in Settings) ---------- */
+  // TRUE closed sales: arms-length transactions within N months, same beds +
+  // baths + county, sqft within ±20% of the subject. Cached 24h per query to
+  // conserve API credits.
   const compsCache = new Map();
   router.get("/comps", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
       const address = String(req.query.address || "").trim();
       if (!address) return res.status(400).json({ error: "address required" });
+      const monthsBack = Math.min(24, Math.max(1, parseInt(req.query.months, 10) || 12));
+      const sqft = parseInt(req.query.sqft, 10) || 0;
 
       const saved = await store.getOfferSettings(locationId);
-      const apiKey = String(saved?.rentcastApiKey || "").trim();
-      if (!apiKey) return res.json({ enabled: false, comps: [], estimate: null });
+      const apiKey = String(saved?.compsApiKey || saved?.rentcastApiKey || "").trim();
+      if (!apiKey) return res.json({ enabled: false, comps: [], estimate: null, subject: null });
 
-      const cacheKey = address.toLowerCase();
+      const cacheKey = `${address.toLowerCase()}|${monthsBack}|${sqft}`;
       const hit = compsCache.get(cacheKey);
       if (hit && Date.now() - hit.ts < 24 * 3600 * 1000) return res.json(hit.data);
 
-      const p = new URLSearchParams({ address, compCount: "15" });
-      const sqft = parseInt(req.query.sqft, 10);
-      if (sqft > 0) p.set("squareFootage", String(sqft));
-      const r = await fetch(`https://api.rentcast.io/v1/avm/value?${p}`, {
-        headers: { "X-Api-Key": apiKey, Accept: "application/json" },
-        signal: AbortSignal.timeout(10000),
+      const body = {
+        address,
+        max_days_back: monthsBack * 30,
+        max_radius_miles: 2,
+        max_results: 15,
+        same_beds: true,
+        same_baths: true,
+        same_county: true,
+        arms_length: true,
+        ...(sqft > 0
+          ? { living_square_feet_min: Math.round(sqft * 0.8), living_square_feet_max: Math.round(sqft * 1.2) }
+          : {}),
+      };
+      const r = await fetch("https://api.realestateapi.com/v3/PropertyComps", {
+        method: "POST",
+        headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15000),
       });
       if (!r.ok) {
-        const detail = (await r.text()).slice(0, 200);
-        return res.status(502).json({ error: `RentCast ${r.status}`, detail });
+        const detail = (await r.text()).slice(0, 300);
+        return res.status(502).json({ error: `RealEstateAPI ${r.status}`, detail });
       }
       const j = await r.json();
+      const subjInfo = j.subject?.propertyInfo || {};
       const data = {
         enabled: true,
-        estimate: j.price
-          ? { price: Math.round(j.price), low: Math.round(j.priceRangeLow || 0), high: Math.round(j.priceRangeHigh || 0) }
+        subject: {
+          lat: subjInfo.latitude || null,
+          lng: subjInfo.longitude || null,
+          beds: subjInfo.bedrooms || null,
+          baths: subjInfo.bathrooms || null,
+          sqft: subjInfo.livingSquareFeet || null,
+          yearBuilt: subjInfo.yearBuilt || null,
+          lastSalePrice: j.subject?.lastSalePrice || null,
+          lastSaleDate: j.subject?.lastSaleDate || null,
+        },
+        estimate: j.reapiAvm
+          ? { price: Math.round(Number(j.reapiAvm)), low: Math.round(Number(j.reapiAvmLow || 0)), high: Math.round(Number(j.reapiAvmHigh || 0)) }
           : null,
-        comps: (j.comparables || [])
-          .filter((c) => c.latitude && c.longitude && c.price)
-          .map((c) => ({
-            id: c.id || c.formattedAddress,
-            address: c.formattedAddress || "",
-            price: Math.round(c.price),
-            sqft: c.squareFootage || 0,
-            beds: c.bedrooms || null,
-            baths: c.bathrooms || null,
-            distance: c.distance != null ? Math.round(c.distance * 100) / 100 : null,
-            correlation: c.correlation != null ? Math.round(c.correlation * 100) : null,
-            lat: c.latitude,
-            lng: c.longitude,
-          })),
+        comps: (j.comps || [])
+          .map((c) => {
+            const price = c.mlsSoldPrice || c.lastSaleAmount || 0;
+            const saleDate = c.mlsLastSaleDate || c.lastSaleDate || "";
+            return {
+              id: String(c.id || `${c.latitude},${c.longitude}`),
+              address: [c.address?.address, c.address?.city].filter(Boolean).join(", "),
+              price: Math.round(price),
+              saleDate: String(saleDate).slice(0, 10),
+              sqft: c.squareFeet || 0,
+              beds: c.bedrooms ?? null,
+              baths: c.bathrooms ?? null,
+              distance: c.distance != null ? Math.round(c.distance * 100) / 100 : null,
+              lat: c.latitude,
+              lng: c.longitude,
+            };
+          })
+          .filter((c) => c.lat && c.lng && c.price > 0),
       };
       if (compsCache.size > 100) compsCache.clear();
       compsCache.set(cacheKey, { ts: Date.now(), data });
