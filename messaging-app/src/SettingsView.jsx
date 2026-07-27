@@ -9,14 +9,21 @@ import { saveSettings } from "./api.js";
 const INPUT_CLS =
   "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
 
-function Num({ label, value, onChange, suffix }) {
+// Thousands separators as you type (dollar fields only — save() strips them).
+const fmtTyped = (v) => {
+  const d = String(v).replace(/[^\d]/g, "");
+  return d ? Number(d).toLocaleString("en-US") : "";
+};
+
+function Num({ label, value, onChange, suffix, money }) {
   return (
     <label className="block">
       <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">
         {label}{suffix ? ` (${suffix})` : ""}
       </span>
-      <input className={INPUT_CLS} inputMode="decimal" value={value}
-        onChange={(e) => onChange(e.target.value)} />
+      <input className={INPUT_CLS} inputMode={money ? "numeric" : "decimal"}
+        value={money ? fmtTyped(value) : value}
+        onChange={(e) => onChange(money ? fmtTyped(e.target.value) : e.target.value)} />
     </label>
   );
 }
@@ -47,11 +54,12 @@ export default function SettingsView({ settings, onSaved }) {
   async function save() {
     setSaving(true); setError("");
     try {
-      // Coerce numerics; anything unparseable falls back to the default.
+      // Coerce numerics (stripping comma formatting); anything unparseable
+      // falls back to the default.
       const clean = { ...form };
       for (const k of Object.keys(DEFAULT_OFFER_SETTINGS)) {
         if (typeof DEFAULT_OFFER_SETTINGS[k] === "number") {
-          const n = Number(clean[k]);
+          const n = Number(String(clean[k]).replace(/[$,\s]/g, ""));
           clean[k] = Number.isFinite(n) ? n : DEFAULT_OFFER_SETTINGS[k];
         }
       }
@@ -73,8 +81,8 @@ export default function SettingsView({ settings, onSaved }) {
         </p>
         <div className="grid grid-cols-2 gap-3">
           <Num label="Percent of ARV" suffix="%" value={form.cashPctOfArv} onChange={set("cashPctOfArv")} />
-          <Num label="Assignment fee / spread" suffix="$" value={form.wholesaleFee} onChange={set("wholesaleFee")} />
-          <Num label="Small-repair buffer" suffix="$" value={form.repairBuffer} onChange={set("repairBuffer")} />
+          <Num label="Assignment fee / spread" suffix="$" money value={form.wholesaleFee} onChange={set("wholesaleFee")} />
+          <Num label="Small-repair buffer" suffix="$" money value={form.repairBuffer} onChange={set("repairBuffer")} />
           <Num label="Repair multiplier" suffix="×" value={form.repairBaseMult} onChange={set("repairBaseMult")} />
           <Num label="Heavy-repair threshold" suffix="% of ARV" value={form.repairHeavyPctOfArv} onChange={set("repairHeavyPctOfArv")} />
           <Num label="Heavy-repair multiplier" suffix="×" value={form.repairHeavyMult} onChange={set("repairHeavyMult")} />
@@ -86,27 +94,6 @@ export default function SettingsView({ settings, onSaved }) {
             onChange={(e) => { setSaved(false); setForm((f) => ({ ...f, precisionJitter: e.target.checked })); }} />
           Precision jitter — non-round offer amounts (e.g. $161,847.23) for lowball anchoring
         </label>
-      </section>
-
-      <section className="rounded-xl border border-gray-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-bold">Seller financing</h2>
-        <div className="grid grid-cols-2 gap-3">
-          <Num label="Price" suffix="% of asking" value={form.sfPricePctOfAsking} onChange={set("sfPricePctOfAsking")} />
-          <Num label="Down payment" suffix="%" value={form.sfDownPct} onChange={set("sfDownPct")} />
-          <Num label="Interest rate" suffix="%/yr" value={form.sfAnnualRatePct} onChange={set("sfAnnualRatePct")} />
-          <Num label="Term" suffix="years" value={form.sfTermYears} onChange={set("sfTermYears")} />
-          <Num label="Balloon at" suffix="years, 0 = none" value={form.sfBalloonYears} onChange={set("sfBalloonYears")} />
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-gray-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-bold">Lease option</h2>
-        <div className="grid grid-cols-2 gap-3">
-          <Num label="Strike price" suffix="% of asking" value={form.loPricePctOfAsking} onChange={set("loPricePctOfAsking")} />
-          <Num label="Option fee" suffix="% of price" value={form.loOptionFeePct} onChange={set("loOptionFeePct")} />
-          <Num label="Term" suffix="months" value={form.loTermMonths} onChange={set("loTermMonths")} />
-          <Num label="Rent credit" suffix="%" value={form.loRentCreditPct} onChange={set("loRentCreditPct")} />
-        </div>
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-4">

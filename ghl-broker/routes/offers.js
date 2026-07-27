@@ -70,21 +70,10 @@ async function renderDocument(calc, meta, locationId) {
 function offerNoteBody(offer) {
   const { inputs, offers } = offer.calc;
   const lines = [
-    `OFFER — ${inputs.address || "subject property"} (${offer.dateLabel})`,
-    `Option A · Cash: ${fmtMoney(offers.cash.amount)} (as-is, ~${offers.cash.closeDays}-day close)`,
-    `Option B · Seller finance: ${fmtMoney(offers.sellerFinance.price)} — ${fmtMoney(offers.sellerFinance.down)} down, ` +
-      `${fmtMoney(offers.sellerFinance.monthly)}/mo` +
-      (offers.sellerFinance.balloon > 0
-        ? `, balloon ${fmtMoney(offers.sellerFinance.balloon)} at year ${offers.sellerFinance.balloonYears}`
-        : ` for ${offers.sellerFinance.termYears} yrs`),
+    `CASH OFFER — ${inputs.address || "subject property"} (${offer.dateLabel})`,
+    `Offer: ${fmtMoney(offers.cash.amount)} (as-is, ~${offers.cash.closeDays}-day close, valid through ${offer.validLabel})`,
+    `Inputs: asking ${fmtMoney(inputs.askingPrice)} · ARV ${fmtMoney(inputs.arv)} · repairs ${fmtMoney(inputs.repairs)}`,
   ];
-  if (offers.leaseOption) {
-    lines.push(
-      `Option C · Lease option: ${fmtMoney(offers.leaseOption.price)} — ${fmtMoney(offers.leaseOption.optionFee)} option fee, ` +
-      `${fmtMoney(offers.leaseOption.monthly)}/mo for ${offers.leaseOption.termMonths} months`
-    );
-  }
-  lines.push(`Inputs: asking ${fmtMoney(inputs.askingPrice)} · ARV ${fmtMoney(inputs.arv)} · repairs ${fmtMoney(inputs.repairs)}`);
   if (offer.pdfUrl) lines.push(`Document (PDF): ${offer.pdfUrl}`);
   if (offer.imageUrl) lines.push(`Document (image): ${offer.imageUrl}`);
   return lines.join("\n");
@@ -377,8 +366,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { message = "", dryRun = true } = req.body || {};
       const firstName = (offer.contactName || "").split(" ")[0] || "there";
       const text = message ||
-        `Hi ${firstName}, here's our written offer on ${offer.address || "your property"} — ` +
-        `${fmtMoney(offer.cashAmount)} cash, plus two other ways we can structure it (attached). ` +
+        `Hi ${firstName}, here's our written cash offer on ${offer.address || "your property"} — ` +
+        `${fmtMoney(offer.cashAmount)}, as-is, close on your timeline (attached). ` +
         `Reply with any questions or a counter.`;
 
       const live = dryRun === false && CARD_SENDS_ENABLED;

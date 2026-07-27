@@ -1,7 +1,7 @@
-// offer-doc.js — builds the letter-size offer document rendered by cardgen.
-// The template is constructed per offer with all values already resolved, so
-// no binding context is needed at render time. Layout follows the cardgen
-// template schema (percent coordinates, letter canvas 1224×1584).
+// offer-doc.js — builds the letter-size cash-offer document rendered by
+// cardgen. The template is constructed per offer with all values already
+// resolved, so no binding context is needed at render time. Layout follows the
+// cardgen template schema (percent coordinates, letter canvas 1224×1584).
 
 import { fmtMoney } from "./shared/offer-calc.js";
 
@@ -34,69 +34,51 @@ const label = (x, y, content, w = 60) =>
 
 // calc: output of calculateOffers(). meta: { contactName, dateLabel, validLabel }.
 export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
-  const { inputs, settings, offers } = calc;
-  const { cash, sellerFinance: sf, leaseOption: lo } = offers;
+  const { inputs, settings } = calc;
+  const { cash } = calc.offers;
   const company = settings.company || {};
   const layers = [];
 
   /* ---- header ---- */
-  if (company.name) layers.push(text(6, 3, 88, 3.2, company.name.toUpperCase(), { size: 26, color: GOLD, weight: "bold" }));
-  layers.push(text(6, 6.2, 88, 6, "Purchase Offer", { font: "Archivo Black", weight: "bold", size: 74, autoFit: true, maxLines: 1 }));
-  layers.push(text(6, 12.6, 88, 2.8,
+  if (company.name) layers.push(text(6, 3.5, 88, 3.2, company.name.toUpperCase(), { size: 26, color: GOLD, weight: "bold" }));
+  layers.push(text(6, 7, 88, 6, "Cash Offer", { font: "Archivo Black", weight: "bold", size: 78, autoFit: true, maxLines: 1 }));
+  layers.push(text(6, 13.8, 88, 2.8,
     [meta.dateLabel ? `Presented ${meta.dateLabel}` : "", meta.validLabel ? `valid through ${meta.validLabel}` : ""].filter(Boolean).join(" · "),
     { size: 26, color: SOFT }));
-  layers.push(text(6, 16, 88, 2.8, `Property: ${inputs.address || "Subject property"}`, { size: 28, color: WHITE, weight: "bold", autoFit: true, maxLines: 1 }));
+  layers.push(text(6, 17.6, 88, 2.8, `Property: ${inputs.address || "Subject property"}`, { size: 28, color: WHITE, weight: "bold", autoFit: true, maxLines: 1 }));
   if (meta.contactName) {
-    layers.push(text(6, 18.8, 88, 2.6, `Prepared for ${meta.contactName}`, { size: 26, color: SOFT, autoFit: true, maxLines: 1 }));
+    layers.push(text(6, 20.4, 88, 2.6, `Prepared for ${meta.contactName}`, { size: 26, color: SOFT, autoFit: true, maxLines: 1 }));
   }
-  layers.push(rule(22.2));
+  layers.push(rule(24.6));
 
-  /* ---- Option A: cash ---- */
-  layers.push(label(6, 23.6, "OPTION A — ALL CASH"));
-  layers.push(text(6, 26.6, 60, 8.2, fmtMoney(cash.amount), { font: "Archivo Black", weight: "bold", size: 120, color: GOLD, autoFit: true, maxLines: 1 }));
-  layers.push(text(6, 34.6, 88, 4.6,
-    `As-is, no repairs, no agent commissions, no fees. Close in as few as ${cash.closeDays} days — you pick the date.`,
-    { size: 27, color: SOFT, maxLines: 3 }));
+  /* ---- the offer ---- */
+  layers.push(label(6, 26.6, "OUR ALL-CASH OFFER"));
+  layers.push(text(6, 29.8, 88, 11, fmtMoney(cash.amount), { font: "Archivo Black", weight: "bold", size: 150, color: GOLD, autoFit: true, maxLines: 1 }));
+  layers.push(text(6, 41.4, 88, 4.6,
+    `Exactly as it sits — no repairs, no cleanouts, no showings. Close in as few as ${cash.closeDays} days, on the date you pick.`,
+    { size: 28, color: SOFT, maxLines: 3, lineHeight: 1.4 }));
 
-  layers.push(rule(40.4));
+  layers.push(rule(48));
 
-  /* ---- Option B: seller finance ---- */
-  layers.push(label(6, 41.8, "OPTION B — SELLER FINANCING"));
-  layers.push(text(6, 44.8, 52, 6.4, fmtMoney(sf.price), { font: "Archivo Black", weight: "bold", size: 92, color: WHITE, autoFit: true, maxLines: 1 }));
-  const sfLines = [
-    `${fmtMoney(sf.down)} down, then ${fmtMoney(sf.monthly)}/month` +
-      (sf.annualRatePct > 0 ? ` at ${sf.annualRatePct}% interest` : " with 0% interest") +
-      (sf.balloon > 0 ? `, ${fmtMoney(sf.balloon)} balloon at year ${sf.balloonYears}` : ` over ${sf.termYears} years`),
-    `Total collected over the term: ${fmtMoney(sf.totalToSeller)} — top-dollar price in exchange for terms.`,
-  ];
-  layers.push(text(6, 51.4, 88, 7, sfLines.join("\n"), { size: 27, color: SOFT, lineHeight: 1.45, maxLines: 5 }));
-
-  layers.push(rule(59.4));
-
-  /* ---- Option C: lease option (only when rent was provided) ---- */
-  let y = 60.8;
-  if (lo) {
-    layers.push(label(6, y, "OPTION C — LEASE OPTION"));
-    layers.push(text(6, y + 3, 52, 6, fmtMoney(lo.price), { font: "Archivo Black", weight: "bold", size: 84, color: WHITE, autoFit: true, maxLines: 1 }));
-    layers.push(text(6, y + 9.2, 88, 6.4,
-      `${fmtMoney(lo.optionFee)} option fee today, ${fmtMoney(lo.monthly)}/month for ${lo.termMonths} months.\n` +
-      `${lo.rentCreditPct}% of every payment (${fmtMoney(lo.monthlyCredit)}/mo) credits toward your price.`,
-      { size: 27, color: SOFT, lineHeight: 1.45, maxLines: 4 }));
-    y += 16.6;
-    layers.push(rule(y));
-    y += 1.4;
-  }
+  /* ---- what this means ---- */
+  layers.push(label(6, 50, "WHAT THIS MEANS FOR YOU"));
+  layers.push(text(6, 53.6, 88, 24,
+    "•  No agent commissions or closing-cost surprises — the number above is our offer\n\n" +
+    "•  No financing contingency — cash means no lender, no appraisal, no falling through\n\n" +
+    "•  Sell strictly as-is — leave anything you don't want, we handle it\n\n" +
+    "•  You choose the closing date — fast, or whenever suits your move",
+    { size: 30, color: "#e2e8f0", lineHeight: 1.5, maxLines: 14 }));
 
   /* ---- validity badge + fine print ---- */
   layers.push({
-    id: uid("badge"), type: "badge", x: 6, y, width: 46, height: 4.2,
+    id: uid("badge"), type: "badge", x: 6, y: 79, width: 46, height: 4.2,
     icon: "check", text: meta.validLabel ? `Offer valid through ${meta.validLabel}` : "Limited-time offer",
     bgColor: GOLD, textColor: INK, fontFamily: "Inter", fontSize: 28, cornerRadius: 999, visible: true,
   });
-  layers.push(text(6, y + 6, 88, 8,
-    "This letter is a non-binding expression of interest, not a purchase contract. Any accepted option will be " +
+  layers.push(text(6, 85, 88, 6.5,
+    "This letter is a non-binding expression of interest, not a purchase contract. An accepted offer will be " +
     "documented in a standard purchase agreement and is subject to interior inspection and clear, marketable title. " +
-    "Choose whichever option works best for you — or reply with a counter.",
+    "Have a number in mind? Reply with a counter — we're flexible.",
     { size: 21, color: "#64748b", lineHeight: 1.4, maxLines: 6 }));
 
   /* ---- footer band ---- */

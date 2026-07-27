@@ -189,63 +189,37 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
   );
 }
 
-/* ---------------- offer option cards ---------------- */
-
-function OptionCard({ tag, title, amount, lines, accent }) {
-  return (
-    <div className={`rounded-xl border p-4 ${accent ? "border-amber-400 bg-amber-50" : "border-gray-200 bg-white"}`}>
-      <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">{tag}</div>
-      <div className="mt-0.5 text-sm font-semibold text-gray-700">{title}</div>
-      <div className="mt-1 text-2xl font-black tracking-tight">{amount}</div>
-      <ul className="mt-2 space-y-1 text-xs text-gray-600">
-        {lines.map((l, i) => <li key={i}>{l}</li>)}
-      </ul>
-    </div>
-  );
-}
+/* ---------------- the cash offer card ---------------- */
 
 function OfferCards({ calc }) {
   if (!calc) {
     return (
       <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-400">
-        Enter an asking price to see the three offers.
+        Enter an asking price to see the cash offer.
       </div>
     );
   }
-  const { cash, sellerFinance: sf, leaseOption: lo } = calc.offers;
+  const { cash } = calc.offers;
+  const Row = ({ label, value }) => (
+    <div className="flex justify-between gap-4 text-sm">
+      <span className="text-gray-500">{label}</span>
+      <span className="font-medium tabular-nums">{value}</span>
+    </div>
+  );
   return (
-    <div className="grid gap-3 sm:grid-cols-3">
-      <OptionCard
-        tag="Option A" title="All cash" amount={fmtMoney(cash.amount)} accent
-        lines={[
-          `~${cash.pctOfArv}% of ARV − ${fmtMoney(cash.repairAdjustment)} repair adj. − ${fmtMoney(cash.wholesaleFee)} fee`,
-          `≈ ${cash.pctOfAsking}% of asking`,
-          `As-is · close in ~${cash.closeDays} days`,
-        ]}
-      />
-      <OptionCard
-        tag="Option B" title="Seller finance" amount={fmtMoney(sf.price)}
-        lines={[
-          `${fmtMoney(sf.down)} down · ${fmtMoney(sf.monthly)}/mo`,
-          sf.annualRatePct > 0 ? `${sf.annualRatePct}% over ${sf.termYears} yrs` : `0% interest · ${sf.termYears} yrs`,
-          sf.balloon > 0 ? `Balloon ${fmtMoney(sf.balloon)} @ yr ${sf.balloonYears}` : `Total to seller ${fmtMoney(sf.totalToSeller)}`,
-        ]}
-      />
-      {lo ? (
-        <OptionCard
-          tag="Option C" title="Lease option" amount={fmtMoney(lo.price)}
-          lines={[
-            `${fmtMoney(lo.optionFee)} option fee`,
-            `${fmtMoney(lo.monthly)}/mo · ${lo.termMonths} months`,
-            `${lo.rentCreditPct}% rent credit (${fmtMoney(lo.monthlyCredit)}/mo)`,
-          ]}
-        />
-      ) : (
-        <div className="rounded-xl border border-dashed border-gray-300 p-4 text-xs text-gray-400">
-          <div className="font-bold uppercase tracking-wider">Option C</div>
-          Add a monthly rent estimate to include a lease-option offer.
+    <div className="rounded-xl border border-amber-400 bg-amber-50 p-5 sm:flex sm:items-center sm:justify-between sm:gap-8">
+      <div>
+        <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">All-cash offer</div>
+        <div className="mt-1 text-4xl font-black tracking-tight">{fmtMoney(cash.amount)}</div>
+        <div className="mt-1 text-xs text-gray-500">
+          ≈ {cash.pctOfAsking}% of asking · as-is · close in ~{cash.closeDays} days
         </div>
-      )}
+      </div>
+      <div className="mt-4 w-full max-w-xs space-y-1 border-t border-amber-200 pt-3 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
+        <Row label={`~${cash.pctOfArv}% of ARV`} value={fmtMoney(cash.base)} />
+        <Row label="Repair adjustment" value={`− ${fmtMoney(cash.repairAdjustment)}`} />
+        <Row label="Fee / spread" value={`− ${fmtMoney(cash.wholesaleFee)}`} />
+      </div>
     </div>
   );
 }
@@ -256,7 +230,7 @@ export default function NewOffer({ settings }) {
   const [mode, setMode] = useState("existing");
   const [contact, setContact] = useState(null);
   const [newContact, setNewContact] = useState({ name: "", phone: "" });
-  const [inputs, setInputs] = useState({ address: "", askingPrice: "", arv: "", repairs: "", monthlyRent: "" });
+  const [inputs, setInputs] = useState({ address: "", askingPrice: "", arv: "", repairs: "" });
   const [preview, setPreview] = useState(null);   // data-url image
   const [previewing, setPreviewing] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -264,7 +238,10 @@ export default function NewOffer({ settings }) {
   const [error, setError] = useState("");
   const [sendState, setSendState] = useState(null); // { dryRun info } | { sent }
 
-  const set = (k) => (e) => setInputs((s) => ({ ...s, [k]: e.target.value }));
+  // Money fields format with thousands separators as you type; the calc
+  // engine strips $ , and spaces, so the formatted string feeds it directly.
+  const fmtTyped = (v) => { const d = String(v).replace(/[^\d]/g, ""); return d ? Number(d).toLocaleString("en-US") : ""; };
+  const setMoney = (k) => (e) => setInputs((s) => ({ ...s, [k]: fmtTyped(e.target.value) }));
 
   // Selecting a contact pulls their custom fields and prefills the address
   // (Property Address Short Hand etc.) — without clobbering anything typed.
@@ -410,16 +387,13 @@ export default function NewOffer({ settings }) {
             </Field>
           </div>
           <Field label="Asking price ($)">
-            <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={set("askingPrice")} placeholder="200,000" />
+            <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={setMoney("askingPrice")} placeholder="200,000" />
           </Field>
           <Field label="After-repair value / ARV ($)">
-            <input className={INPUT_CLS} inputMode="numeric" value={inputs.arv} onChange={set("arv")} placeholder="defaults to asking" />
+            <input className={INPUT_CLS} inputMode="numeric" value={inputs.arv} onChange={setMoney("arv")} placeholder="defaults to asking" />
           </Field>
           <Field label="Estimated repairs ($)">
-            <input className={INPUT_CLS} inputMode="numeric" value={inputs.repairs} onChange={set("repairs")} placeholder="0" />
-          </Field>
-          <Field label="Market rent ($/mo, optional)">
-            <input className={INPUT_CLS} inputMode="numeric" value={inputs.monthlyRent} onChange={set("monthlyRent")} placeholder="enables lease option" />
+            <input className={INPUT_CLS} inputMode="numeric" value={inputs.repairs} onChange={setMoney("repairs")} placeholder="0" />
           </Field>
         </div>
       </div>
