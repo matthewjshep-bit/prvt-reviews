@@ -116,11 +116,11 @@ export default function SettingsView({ settings, onSaved }) {
         <Txt label="Anthropic API key" value={form.aiApiKey || ""} onChange={set("aiApiKey")} placeholder="sk-ant-..." />
         <div className="mt-3">
           <p className="mb-2 text-xs text-gray-500">
-            Automatic listing photos for the scan: rapidapi.com → search "Zillow" (zillow-com1) →
-            subscribe → copy your X-RapidAPI-Key. Unofficial scraper — can break if Zillow changes
-            defenses; uploading photos always works as the fallback.
+            Automatic listing photos for the scan via Apify's Zillow scraper (~$0.002 per lookup,
+            $5/month free credits): apify.com → sign up → Settings → API tokens → copy. Unofficial
+            scraper — can break if Zillow changes defenses; uploading photos always works as the fallback.
           </p>
-          <Txt label="Zillow RapidAPI key" value={form.zillowRapidApiKey || ""} onChange={set("zillowRapidApiKey")} placeholder="your X-RapidAPI-Key" />
+          <Txt label="Apify API token" value={form.apifyToken || ""} onChange={set("apifyToken")} placeholder="apify_api_..." />
         </div>
       </section>
 

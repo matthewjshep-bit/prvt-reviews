@@ -44,43 +44,58 @@ export async function fetchListingPhotos(address, compsApiKey) {
   };
 }
 
-// Fetch listing photos from Zillow via RapidAPI (zillow-com1) — the practical
-// photo source for accounts without RealEstateAPI's MLS add-on. Two calls:
-// /property (address → zpid + facts) then /images (zpid → photo URLs).
+// Fetch listing photos from Zillow via Apify's zillow-detail-scraper actor —
+// the practical photo source for accounts without RealEstateAPI's MLS add-on.
+// One synchronous actor run: address in, dataset items (facts + photos) out.
 // Caveat, acknowledged when this was chosen: unofficial scraper, Zillow ToS.
-const RAPID_HOST = "zillow-com1.p.rapidapi.com";
-export async function fetchZillowPhotos(address, rapidApiKey) {
-  const headers = { "X-RapidAPI-Key": rapidApiKey, "X-RapidAPI-Host": RAPID_HOST, Accept: "application/json" };
-  const get = async (path) => {
-    const r = await fetch(`https://${RAPID_HOST}${path}`, { headers, signal: AbortSignal.timeout(20000) });
-    if (!r.ok) {
-      throw Object.assign(new Error(`Zillow lookup failed (${r.status})`), {
-        http: r.status === 403 || r.status === 401 ? 400 : 502,
-        detail: (await r.text()).slice(0, 300),
-      });
-    }
-    return r.json();
-  };
+const APIFY_ACTOR = "maxcopell~zillow-detail-scraper";
 
-  const prop = await get(`/property?address=${encodeURIComponent(address)}`);
-  const zpid = prop.zpid || prop.data?.zpid;
-  if (!zpid) {
+// Pick a jpeg rendition near 1536px from Zillow's mixedSources photo shape.
+function bestPhotoUrl(photo) {
+  const jpegs = photo?.mixedSources?.jpeg || [];
+  if (jpegs.length) {
+    const under = jpegs.filter((j) => j.width <= 1536).sort((a, b) => b.width - a.width);
+    return (under[0] || jpegs.sort((a, b) => a.width - b.width)[0])?.url || null;
+  }
+  return photo?.url || null;
+}
+
+export async function fetchZillowPhotos(address, apifyToken) {
+  const r = await fetch(
+    `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}&timeout=180`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addresses: [address] }),
+      signal: AbortSignal.timeout(200000),
+    }
+  );
+  if (!r.ok) {
+    const detail = (await r.text()).slice(0, 300);
+    throw Object.assign(new Error(`Zillow lookup failed (Apify ${r.status})`), {
+      http: r.status === 401 || r.status === 403 ? 400 : 502,
+      detail,
+    });
+  }
+  const items = await r.json();
+  const item = Array.isArray(items) ? items[0] : null;
+  if (!item) {
     throw Object.assign(new Error("Zillow couldn't match that address"), { http: 404 });
   }
-  const imgs = await get(`/images?zpid=${encodeURIComponent(zpid)}`);
-  const photos = (imgs.images || imgs.photos || []).filter((u) => typeof u === "string").slice(0, MAX_PHOTOS);
+  const rawPhotos = item.photos?.length ? item.photos : item.responsivePhotos || [];
+  const photos = rawPhotos.map(bestPhotoUrl).filter(Boolean).slice(0, MAX_PHOTOS);
   return {
     photos,
-    photosCount: (imgs.images || imgs.photos || []).length,
+    photosCount: rawPhotos.length,
     listing: {
-      status: prop.homeStatus || null,
-      listPrice: prop.price || null,
-      remarks: (prop.description || "").slice(0, 1500) || null,
+      status: item.homeStatus || null,
+      listPrice: item.price || null,
+      remarks: (item.description || "").slice(0, 1500) || null,
     },
     facts: {
-      beds: Number(prop.bedrooms) || null,
-      baths: Number(prop.bathrooms) || null,
-      sqft: Number(prop.livingArea) || null,
+      beds: Number(item.bedrooms) || null,
+      baths: Number(item.bathrooms) || null,
+      sqft: Number(item.livingArea) || null,
     },
   };
 }

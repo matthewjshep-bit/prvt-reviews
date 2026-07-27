@@ -33,7 +33,7 @@ export const DEFAULT_OFFER_SETTINGS = {
   earnestMoney: 2500,        // earnest-money deposit named in the letter
   compsApiKey: "",           // enables the comps map + MLS photos (realestateapi.com API key)
   aiApiKey: "",              // enables the AI rehab photo scan (Anthropic API key)
-  zillowRapidApiKey: "",     // Zillow listing photos via RapidAPI (zillow-com1)
+  apifyToken: "",            // Zillow listing photos via Apify (zillow-detail-scraper)
   // Printed on the offer document letterhead
   company: { name: "", tagline: "", signer: "", phone: "", email: "" },
 };

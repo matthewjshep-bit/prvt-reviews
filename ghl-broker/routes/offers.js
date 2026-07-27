@@ -494,9 +494,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const aiApiKey = String(saved?.aiApiKey || "").trim();
       if (!aiApiKey) return res.status(400).json({ error: "Anthropic API key required (Settings) for AI photo scan" });
 
-      // Photo source order: user-uploaded data URLs → Zillow (RapidAPI) →
+      // Photo source order: user-uploaded data URLs → Zillow (Apify) →
       // RealEstateAPI MLS Detail (requires their MLS add-on plan).
-      const zillowRapidApiKey = String(saved?.zillowRapidApiKey || "").trim();
+      const apifyToken = String(saved?.apifyToken || "").trim();
       let photos;
       let photosCount;
       let listing = null;
@@ -507,8 +507,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (uploaded.length) {
         photos = uploaded;
         photosCount = uploaded.length;
-      } else if (zillowRapidApiKey) {
-        ({ photos, photosCount, listing, facts } = await fetchZillowPhotos(address, zillowRapidApiKey));
+      } else if (apifyToken) {
+        ({ photos, photosCount, listing, facts } = await fetchZillowPhotos(address, apifyToken));
         if (!photos.length) {
           return res.status(404).json({ error: "Zillow has no photos for this address — upload the listing photos instead" });
         }
@@ -518,7 +518,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           return res.status(404).json({ error: "no MLS photos found for this address — upload the listing photos instead" });
         }
       } else {
-        return res.status(400).json({ error: "add a Zillow RapidAPI key in Settings (or upload photos)" });
+        return res.status(400).json({ error: "add an Apify token in Settings (or upload photos)" });
       }
 
       let suggestion;
