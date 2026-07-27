@@ -74,6 +74,9 @@ function offerNoteBody(offer) {
     `Offer: ${fmtMoney(offers.cash.amount)} (as-is, ~${offers.cash.closeDays}-day close, valid through ${offer.validLabel})`,
     `Inputs: asking ${fmtMoney(inputs.askingPrice)} · ARV ${fmtMoney(inputs.arv)} · repairs ${fmtMoney(inputs.repairs)}`,
   ];
+  if (offer.scope?.length) {
+    lines.push(`Rehab scope: ${offer.scope.map((s) => `${s.label} ${fmtMoney(s.cost)}`).join("; ")}`);
+  }
   if (offer.pdfUrl) lines.push(`Document (PDF): ${offer.pdfUrl}`);
   if (offer.imageUrl) lines.push(`Document (image): ${offer.imageUrl}`);
   return lines.join("\n");
@@ -354,6 +357,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const { locationId, client } = resolveLocation(req);
       const { contactId: bodyContactId, newContact, inputs, settings: settingsOverride } = req.body || {};
+      // Rehab scope of work (internal — saved + noted, never on the letter).
+      const scope = Array.isArray(req.body?.scope)
+        ? req.body.scope
+            .filter((s) => s && s.label && Number(s.cost) > 0)
+            .slice(0, 60)
+            .map((s) => ({ label: String(s.label).slice(0, 120), cost: Math.round(Number(s.cost)) }))
+        : [];
 
       // 1. Resolve the contact (existing id, or find/create by phone).
       let contactId = bodyContactId || "";
@@ -392,6 +402,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         pdfUrl,
         dateLabel: meta.dateLabel,
         validLabel: meta.validLabel,
+        scope,
         calc,
       });
 

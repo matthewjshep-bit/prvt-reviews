@@ -73,6 +73,17 @@ function OfferDetail({ offer, onClose }) {
                 <Row label="Monthly" value={`${fmtMoney(lo.monthly)} × ${lo.termMonths} mo`} />
               </div>
             )}
+            {(offer.scope || []).length > 0 && (
+              <div className="rounded-xl border border-gray-200 p-3">
+                <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-gray-500">Rehab scope</div>
+                {offer.scope.map((s, i) => (
+                  <div key={i} className="flex justify-between gap-4 text-sm">
+                    <span className="text-gray-600">{s.label}</span>
+                    <span className="font-medium tabular-nums">{fmtMoney(s.cost)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {(offer.warnings || []).length > 0 && (
               <ul className="list-inside list-disc rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
                 {offer.warnings.map((w, i) => <li key={i}>{w}</li>)}

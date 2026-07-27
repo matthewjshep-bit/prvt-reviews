@@ -21,15 +21,14 @@ const median = (xs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-export default function CompsPane({ address, onUseArv }) {
+export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqft: setSubjectSqft }) {
   const [state, setState] = useState(null); // { subject:{lat,lng}, info, comps, estimate, enabled }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(new Set());
   const [manual, setManual] = useState([]);
   const [draft, setDraft] = useState({ label: "", price: "", sqft: "" });
-  const [subjectSqft, setSubjectSqft] = useState("");
-  const [months, setMonths] = useState(12);
+    const [months, setMonths] = useState(12);
 
   const parse = (v) => Number(String(v).replace(/[^\d.]/g, "")) || 0;
 

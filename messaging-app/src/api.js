@@ -75,8 +75,8 @@ export const ghlContactUrl = (contactId) =>
 /* ---------- offers ---------- */
 export const previewDocument = (inputs, settings, contactName) =>
   post(`/api/offers/preview`, { inputs, settings, contactName });
-export const createOffer = ({ contactId, newContact, inputs, settings }) =>
-  post(`/api/offers`, { contactId, newContact, inputs, settings });
+export const createOffer = ({ contactId, newContact, inputs, settings, scope }) =>
+  post(`/api/offers`, { contactId, newContact, inputs, settings, scope });
 export const listOffers = ({ contactId = "", limit = 50 } = {}) => {
   const p = new URLSearchParams({ location_id: getLocationId(), limit });
   if (contactId) p.set("contact_id", contactId);

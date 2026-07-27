@@ -8,6 +8,7 @@ import {
   createOffer, getContactDetail, previewDocument, searchContacts, sendOffer, suggestAddresses,
 } from "./api.js";
 import CompsPane from "./CompsPane.jsx";
+import RehabPane from "./RehabPane.jsx";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -232,6 +233,8 @@ export default function NewOffer({ settings }) {
   const [contact, setContact] = useState(null);
   const [newContact, setNewContact] = useState({ name: "", phone: "" });
   const [inputs, setInputs] = useState({ address: "", askingPrice: "", arv: "", repairs: "" });
+  const [subjectSqft, setSubjectSqft] = useState(""); // shared: comps $/sqft + rehab per-sqft items
+  const [scope, setScope] = useState([]);             // applied rehab line items, saved with the offer
   const [preview, setPreview] = useState(null);   // data-url image
   const [previewing, setPreviewing] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -285,6 +288,7 @@ export default function NewOffer({ settings }) {
         newContact: mode === "new" ? newContact : undefined,
         inputs,
         settings: settings || {},
+        scope,
       });
       setResult(r);
       setPreview(null);
@@ -401,7 +405,17 @@ export default function NewOffer({ settings }) {
 
       <CompsPane
         address={inputs.address}
+        sqft={subjectSqft}
+        setSqft={setSubjectSqft}
         onUseArv={(arv) => setInputs((s) => ({ ...s, arv: Number(arv).toLocaleString("en-US") }))}
+      />
+
+      <RehabPane
+        sqft={subjectSqft}
+        onApply={(total, lines) => {
+          setInputs((s) => ({ ...s, repairs: Number(total).toLocaleString("en-US") }));
+          setScope(lines);
+        }}
       />
 
       <OfferCards calc={calc} />
