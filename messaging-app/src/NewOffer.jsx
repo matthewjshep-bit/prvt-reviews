@@ -487,6 +487,7 @@ export default function NewOffer({ settings, initialContactId, restore }) {
         sqft={subjectSqft}
         beds={Number(subjectInfo?.beds) || 0}
         baths={Number(subjectInfo?.baths) || 0}
+        address={inputs.address}
         initialState={rehabInit}
         onStateChange={(s) => { rehabStateRef.current = s; }}
         onApply={(total, lines) => {

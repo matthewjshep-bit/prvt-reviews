@@ -107,6 +107,16 @@ export default function SettingsView({ settings, onSaved }) {
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">AI photo scan (Anthropic)</h2>
+        <p className="mb-3 text-xs text-gray-500">
+          Powers "AI scan listing photos" in the rehab estimator — Claude reviews the MLS photos and
+          pre-fills the scope of work. Get a key at console.anthropic.com → API Keys. Uses your
+          RealEstateAPI key to fetch the photos. Each scan costs roughly $0.15–0.50 in API usage.
+        </p>
+        <Txt label="Anthropic API key" value={form.aiApiKey || ""} onChange={set("aiApiKey")} placeholder="sk-ant-..." />
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Company (printed on the document)</h2>
         <div className="grid grid-cols-2 gap-3">
           <Txt label="Company name" value={form.company.name} onChange={setCo("name")} placeholder="PRVT MKT" />

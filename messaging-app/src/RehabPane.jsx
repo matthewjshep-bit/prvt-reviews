@@ -7,73 +7,32 @@
 // the GHL contact note.
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Hammer, Plus, X } from "lucide-react";
+import { Hammer, Loader2, Plus, Sparkles, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
+import {
+  REHAB_CATALOG as CATALOG_SHARED, BED_TIERS as BED_TIERS_SHARED,
+  BATH_TIERS as BATH_TIERS_SHARED, ALL_REHAB_ITEMS,
+} from "@shared/rehab-catalog.js";
+import { scanRehab } from "./api.js";
 
-// mode: "flat" ($ once) | "qty" ($ × count) | "sqft" ($ × subject sqft)
-const CATALOG = [
-  { group: "Kitchen", items: [
-    { id: "kit-reface", label: "Cabinet paint / reface", mode: "flat", unit: 3000 },
-    { id: "kit-cab", label: "New cabinets & countertops", mode: "flat", unit: 12000 },
-    { id: "kit-counter", label: "Countertops only", mode: "flat", unit: 3500 },
-    { id: "kit-appl", label: "Appliance package", mode: "flat", unit: 4500 },
-    { id: "kit-sink", label: "Sink & faucet", mode: "flat", unit: 600 },
-    { id: "kit-bs", label: "Backsplash", mode: "flat", unit: 800 },
-    { id: "kit-floor", label: "Kitchen flooring", mode: "flat", unit: 1500 },
-    { id: "kit-gut", label: "Full kitchen gut remodel", mode: "flat", unit: 25000 },
-  ]},
-  { group: "Living areas & interior", items: [
-    { id: "paint-int", label: "Interior paint (whole house)", mode: "sqft", unit: 3 },
-    { id: "lvp", label: "LVP flooring throughout", mode: "sqft", unit: 6 },
-    { id: "living", label: "Living / dining refresh", mode: "flat", unit: 1500 },
-    { id: "fireplace", label: "Fireplace refacing", mode: "flat", unit: 1200 },
-    { id: "popcorn", label: "Popcorn ceiling removal", mode: "sqft", unit: 2 },
-    { id: "drywall", label: "Drywall / wall repairs", mode: "flat", unit: 2000 },
-    { id: "doors", label: "Interior doors & trim", mode: "flat", unit: 2500 },
-    { id: "fixtures", label: "Light fixtures & hardware", mode: "flat", unit: 1200 },
-    { id: "blinds", label: "Blinds / window coverings", mode: "flat", unit: 800 },
-  ]},
-  { group: "Systems", items: [
-    { id: "roof", label: "Roof replacement", mode: "flat", unit: 12000 },
-    { id: "hvac", label: "HVAC / furnace", mode: "flat", unit: 8000 },
-    { id: "wh", label: "Water heater", mode: "flat", unit: 1800 },
-    { id: "elec", label: "Electrical panel / updates", mode: "flat", unit: 4000 },
-    { id: "plumb", label: "Plumbing updates", mode: "flat", unit: 5000 },
-    { id: "sewer", label: "Sewer line repair", mode: "flat", unit: 8000 },
-    { id: "insul", label: "Insulation / attic", mode: "flat", unit: 1500 },
-    { id: "windows", label: "Windows", mode: "qty", unit: 650 },
-  ]},
-  { group: "Exterior", items: [
-    { id: "paint-ext", label: "Exterior paint", mode: "flat", unit: 6000 },
-    { id: "siding", label: "Siding repair", mode: "flat", unit: 4000 },
-    { id: "gutters", label: "Gutters", mode: "flat", unit: 900 },
-    { id: "landscape", label: "Yard cleanup & landscaping", mode: "flat", unit: 2500 },
-    { id: "deck", label: "Deck / fence repair", mode: "flat", unit: 3500 },
-    { id: "concrete", label: "Driveway / concrete", mode: "flat", unit: 2500 },
-    { id: "garage", label: "Garage door", mode: "flat", unit: 1200 },
-  ]},
-  { group: "Other", items: [
-    { id: "junk", label: "Junk-out / cleanout", mode: "flat", unit: 1500 },
-    { id: "pest", label: "Pest / dry-rot repair", mode: "flat", unit: 3000 },
-    { id: "found", label: "Foundation repair", mode: "flat", unit: 10000 },
-    { id: "permits", label: "Permits & misc", mode: "flat", unit: 1500 },
-  ]},
-];
+const CATALOG = CATALOG_SHARED;
+const BED_TIERS = BED_TIERS_SHARED;
+const BATH_TIERS = BATH_TIERS_SHARED;
+const ALL_ITEMS = ALL_REHAB_ITEMS;
 
-const BED_TIERS = [
-  { id: "none", label: "No work", unit: 0 },
-  { id: "refresh", label: "Refresh (paint + carpet)", unit: 900 },
-  { id: "full", label: "Full redo (floor/paint/closet/door)", unit: 2200 },
-];
-const BATH_TIERS = [
-  { id: "none", label: "No work", unit: 0 },
-  { id: "refresh", label: "Refresh (vanity/toilet/fixtures)", unit: 1800 },
-  { id: "mid", label: "Mid remodel (surround/tile/vanity)", unit: 8000 },
-  { id: "gut", label: "Full gut", unit: 12000 },
-];
-
-const ALL_ITEMS = CATALOG.flatMap((g) => g.items);
 const parse = (v) => Number(String(v).replace(/[^\d.]/g, "")) || 0;
+
+// Downscale an uploaded photo client-side (max 1400px, JPEG) so a batch of
+// listing photos stays a few MB.
+async function fileToDataUrl(file, maxDim = 1400) {
+  const img = await createImageBitmap(file);
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.8);
+}
 
 const resizeRooms = (rooms, n) => {
   const next = rooms.slice(0, n);
@@ -108,7 +67,7 @@ function RoomRow({ label, tiers, room, onChange }) {
   );
 }
 
-export default function RehabPane({ sqft, beds, baths, onApply, initialState, onStateChange }) {
+export default function RehabPane({ sqft, beds, baths, address, onApply, initialState, onStateChange }) {
   const [rows, setRows] = useState(() => ({
     ...Object.fromEntries(ALL_ITEMS.map((i) => [i.id, { on: false, unit: i.unit, qty: 1 }])),
     ...(initialState?.rows || {}),
@@ -121,6 +80,71 @@ export default function RehabPane({ sqft, beds, baths, onApply, initialState, on
   const [draft, setDraft] = useState({ label: "", cost: "" });
   const [contingency, setContingency] = useState(initialState?.contingency ?? "10");
   const [applied, setApplied] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState("");
+  const [aiResult, setAiResult] = useState(null);
+
+  // AI scan: MLS photos (or user-uploaded photos) → suggested scope, applied
+  // onto the checklist for review.
+  async function doScan(files) {
+    if (!address?.trim()) { setScanError("Enter the property address first."); return; }
+    setScanning(true); setScanError("");
+    try {
+      let images;
+      if (files?.length) {
+        images = await Promise.all([...files].slice(0, 16).map((f) => fileToDataUrl(f)));
+      }
+      const r = await scanRehab(address.trim(), {
+        beds: bedCount || undefined, baths: bathCount || undefined, sqft: parse(sqft) || undefined,
+        images,
+      });
+      const s = r.suggestion || {};
+      setApplied(false);
+      // Tick suggested catalog items
+      setRows((prev) => {
+        const next = { ...prev };
+        for (const it of s.items || []) if (next[it.id]) next[it.id] = { ...next[it.id], on: true };
+        return next;
+      });
+      // Apply bathroom/bedroom tiers in order (expanding counts if photos show more rooms)
+      if ((s.bathrooms || []).length) {
+        const n = Math.min(10, Math.max(bathCount, s.bathrooms.length));
+        setBathCount(n);
+        setBathRooms((prev) => resizeRooms(prev, n).map((room, i) => {
+          const t = s.bathrooms[i] && BATH_TIERS.find((x) => x.id === s.bathrooms[i].tier);
+          return t ? { tier: t.id, unit: t.unit } : room;
+        }));
+      }
+      if ((s.bedrooms || []).length) {
+        const n = Math.min(10, Math.max(bedCount, s.bedrooms.length));
+        setBedCount(n);
+        setBedRooms((prev) => resizeRooms(prev, n).map((room, i) => {
+          const t = s.bedrooms[i] && BED_TIERS.find((x) => x.id === s.bedrooms[i].tier);
+          return t ? { tier: t.id, unit: t.unit } : room;
+        }));
+      }
+      // Custom items the catalog doesn't cover
+      if ((s.custom || []).length) {
+        setCustom((c) => [
+          ...c,
+          ...s.custom.filter((x) => Number(x.cost) > 0)
+            .map((x, i) => ({ id: `ai-${Date.now()}-${i}`, label: x.label, cost: Math.round(Number(x.cost)) })),
+        ]);
+      }
+      const labelOf = (id) => ALL_ITEMS.find((i) => i.id === id)?.label || id;
+      setAiResult({
+        summary: s.summary || "",
+        photosAnalyzed: r.photosAnalyzed,
+        notes: [
+          ...(s.items || []).map((it) => ({ label: labelOf(it.id), note: it.note })),
+          ...(s.bathrooms || []).map((b, i) => ({ label: `Bathroom ${i + 1} — ${b.tier}`, note: b.note })),
+          ...(s.bedrooms || []).map((b, i) => ({ label: `Bedroom ${i + 1} — ${b.tier}`, note: b.note })),
+          ...(s.custom || []).map((c) => ({ label: c.label, note: c.note })),
+        ].filter((n) => n.note),
+      });
+    } catch (e) { setScanError(e.message); }
+    setScanning(false);
+  }
 
   // Report state upward so drafts can snapshot the whole scope.
   useEffect(() => {
@@ -200,8 +224,47 @@ export default function RehabPane({ sqft, beds, baths, onApply, initialState, on
           <span className="text-gray-400">
             {sqftNum ? `${sqftNum.toLocaleString()} sqft` : "load comps for sqft + bed/bath counts"}
           </span>
+          <button type="button" onClick={() => doScan()} disabled={scanning}
+            className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40 hover:bg-violet-700"
+            title="Analyze the MLS listing photos and pre-fill this scope">
+            {scanning ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            {scanning ? "Scanning photos…" : "AI scan MLS photos"}
+          </button>
+          <label className="cursor-pointer rounded-lg border border-violet-300 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50"
+            title="Upload listing photos (screenshots or saved images) for the AI to analyze">
+            or upload photos
+            <input type="file" accept="image/*" multiple className="hidden" disabled={scanning}
+              onChange={(e) => { if (e.target.files?.length) doScan(e.target.files); e.target.value = ""; }} />
+          </label>
         </div>
       </div>
+
+      {scanError && <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{scanError}</div>}
+      {aiResult && (
+        <div className="mb-3 rounded-lg border border-violet-200 bg-violet-50 p-3">
+          <div className="mb-1 flex items-center justify-between">
+            <div className="text-xs font-bold text-violet-900">
+              AI assessment ({aiResult.photosAnalyzed} photos) — review the pre-filled scope below
+            </div>
+            <button type="button" onClick={() => setAiResult(null)} className="text-violet-400 hover:text-violet-700">
+              <X size={14} />
+            </button>
+          </div>
+          <p className="text-sm text-violet-900">{aiResult.summary}</p>
+          {aiResult.notes.length > 0 && (
+            <details className="mt-1.5">
+              <summary className="cursor-pointer text-xs font-medium text-violet-700">
+                Why each item ({aiResult.notes.length})
+              </summary>
+              <ul className="mt-1 space-y-0.5 text-xs text-violet-800">
+                {aiResult.notes.map((n, i) => (
+                  <li key={i}><span className="font-semibold">{n.label}:</span> {n.note}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
 
       {(bedCount > 0 || bathCount > 0) && (
         <div className="mb-3 grid gap-x-6 gap-y-3 sm:grid-cols-2">

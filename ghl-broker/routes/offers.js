@@ -19,6 +19,7 @@ import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { buildOfferDocument, buildScopeDocument } from "../offer-doc.js";
+import { fetchListingPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "../rehab-scan.js";
 import { jpegToPdf } from "../pdf.js";
 import { uploadAsset, r2Enabled } from "../r2.js";
 import {
@@ -475,6 +476,67 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         }
       }
       res.json({ ok: true, results });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- AI rehab scan (MLS photos → suggested scope of work) ---------- */
+  // POST { address, beds?, baths?, sqft? } — pulls the listing's MLS photos
+  // (RealEstateAPI key) and has Claude produce a scope suggestion keyed to
+  // the shared rehab catalog (Anthropic key). Both keys live in Settings.
+  router.post("/scan-rehab", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const address = String(req.body?.address || "").trim();
+      if (!address) return res.status(400).json({ error: "address required" });
+
+      const saved = await store.getOfferSettings(locationId);
+      const compsApiKey = String(saved?.compsApiKey || "").trim();
+      const aiApiKey = String(saved?.aiApiKey || "").trim();
+      if (!aiApiKey) return res.status(400).json({ error: "Anthropic API key required (Settings) for AI photo scan" });
+
+      // Photo source: user-uploaded data URLs, or MLS photos via RealEstateAPI.
+      let photos;
+      let photosCount;
+      let listing = null;
+      const uploaded = Array.isArray(req.body?.images)
+        ? req.body.images.filter((i) => typeof i === "string" && i.startsWith("data:image/")).slice(0, 16)
+        : [];
+      if (uploaded.length) {
+        photos = uploaded;
+        photosCount = uploaded.length;
+      } else {
+        if (!compsApiKey) {
+          return res.status(400).json({ error: "RealEstateAPI key required for MLS photos — or upload photos instead" });
+        }
+        ({ photos, photosCount, listing } = await fetchListingPhotos(address, compsApiKey));
+        if (!photos.length) {
+          return res.status(404).json({ error: "no MLS photos found for this address — upload the listing photos instead" });
+        }
+      }
+
+      let suggestion;
+      try {
+        suggestion = await scanRehabFromPhotos({
+          photos,
+          listing,
+          subject: {
+            beds: Number(req.body?.beds) || null,
+            baths: Number(req.body?.baths) || null,
+            sqft: Number(req.body?.sqft) || null,
+          },
+          aiApiKey,
+        });
+      } catch (e) {
+        throw anthropicErrorToHttp(e);
+      }
+
+      res.json({
+        ok: true,
+        suggestion,
+        photosAnalyzed: photos.length,
+        photosCount,
+        listing,
+      });
     } catch (err) { fail(res, err); }
   });
 

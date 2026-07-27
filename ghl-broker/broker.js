@@ -29,7 +29,8 @@ function getTokenFor(_locationId) {
 }
 
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+// 30mb: the AI rehab scan accepts user-uploaded listing photos as data URLs.
+app.use(express.json({ limit: "30mb" }));
 
 // CORS — only needed if the page is served from a different origin than this API.
 app.use((req, res, next) => {

@@ -34,7 +34,8 @@ export const DEFAULT_OFFER_SETTINGS = {
   closeDays: 14,             // advertised days-to-close
   validityDays: 7,           // offer expiry window printed on the document
   earnestMoney: 2500,        // earnest-money deposit named in the letter
-  compsApiKey: "",           // enables the comps map (realestateapi.com API key)
+  compsApiKey: "",           // enables the comps map + MLS photos (realestateapi.com API key)
+  aiApiKey: "",              // enables the AI rehab photo scan (Anthropic API key)
   // Printed on the offer document letterhead
   company: { name: "", tagline: "", signer: "", phone: "", email: "" },
 };
