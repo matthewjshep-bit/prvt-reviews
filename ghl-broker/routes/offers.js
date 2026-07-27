@@ -19,7 +19,7 @@ import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { buildOfferDocument, buildScopeDocument } from "../offer-doc.js";
-import { fetchListingPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "../rehab-scan.js";
+import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "../rehab-scan.js";
 import { jpegToPdf } from "../pdf.js";
 import { uploadAsset, r2Enabled } from "../r2.js";
 import {
@@ -494,24 +494,31 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const aiApiKey = String(saved?.aiApiKey || "").trim();
       if (!aiApiKey) return res.status(400).json({ error: "Anthropic API key required (Settings) for AI photo scan" });
 
-      // Photo source: user-uploaded data URLs, or MLS photos via RealEstateAPI.
+      // Photo source order: user-uploaded data URLs → Zillow (RapidAPI) →
+      // RealEstateAPI MLS Detail (requires their MLS add-on plan).
+      const zillowRapidApiKey = String(saved?.zillowRapidApiKey || "").trim();
       let photos;
       let photosCount;
       let listing = null;
+      let facts = null;
       const uploaded = Array.isArray(req.body?.images)
         ? req.body.images.filter((i) => typeof i === "string" && i.startsWith("data:image/")).slice(0, 16)
         : [];
       if (uploaded.length) {
         photos = uploaded;
         photosCount = uploaded.length;
-      } else {
-        if (!compsApiKey) {
-          return res.status(400).json({ error: "RealEstateAPI key required for MLS photos — or upload photos instead" });
+      } else if (zillowRapidApiKey) {
+        ({ photos, photosCount, listing, facts } = await fetchZillowPhotos(address, zillowRapidApiKey));
+        if (!photos.length) {
+          return res.status(404).json({ error: "Zillow has no photos for this address — upload the listing photos instead" });
         }
+      } else if (compsApiKey) {
         ({ photos, photosCount, listing } = await fetchListingPhotos(address, compsApiKey));
         if (!photos.length) {
           return res.status(404).json({ error: "no MLS photos found for this address — upload the listing photos instead" });
         }
+      } else {
+        return res.status(400).json({ error: "add a Zillow RapidAPI key in Settings (or upload photos)" });
       }
 
       let suggestion;
@@ -520,9 +527,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           photos,
           listing,
           subject: {
-            beds: Number(req.body?.beds) || null,
-            baths: Number(req.body?.baths) || null,
-            sqft: Number(req.body?.sqft) || null,
+            beds: Number(req.body?.beds) || facts?.beds || null,
+            baths: Number(req.body?.baths) || facts?.baths || null,
+            sqft: Number(req.body?.sqft) || facts?.sqft || null,
           },
           aiApiKey,
         });

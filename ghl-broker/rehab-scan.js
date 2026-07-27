@@ -44,6 +44,47 @@ export async function fetchListingPhotos(address, compsApiKey) {
   };
 }
 
+// Fetch listing photos from Zillow via RapidAPI (zillow-com1) — the practical
+// photo source for accounts without RealEstateAPI's MLS add-on. Two calls:
+// /property (address → zpid + facts) then /images (zpid → photo URLs).
+// Caveat, acknowledged when this was chosen: unofficial scraper, Zillow ToS.
+const RAPID_HOST = "zillow-com1.p.rapidapi.com";
+export async function fetchZillowPhotos(address, rapidApiKey) {
+  const headers = { "X-RapidAPI-Key": rapidApiKey, "X-RapidAPI-Host": RAPID_HOST, Accept: "application/json" };
+  const get = async (path) => {
+    const r = await fetch(`https://${RAPID_HOST}${path}`, { headers, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) {
+      throw Object.assign(new Error(`Zillow lookup failed (${r.status})`), {
+        http: r.status === 403 || r.status === 401 ? 400 : 502,
+        detail: (await r.text()).slice(0, 300),
+      });
+    }
+    return r.json();
+  };
+
+  const prop = await get(`/property?address=${encodeURIComponent(address)}`);
+  const zpid = prop.zpid || prop.data?.zpid;
+  if (!zpid) {
+    throw Object.assign(new Error("Zillow couldn't match that address"), { http: 404 });
+  }
+  const imgs = await get(`/images?zpid=${encodeURIComponent(zpid)}`);
+  const photos = (imgs.images || imgs.photos || []).filter((u) => typeof u === "string").slice(0, MAX_PHOTOS);
+  return {
+    photos,
+    photosCount: (imgs.images || imgs.photos || []).length,
+    listing: {
+      status: prop.homeStatus || null,
+      listPrice: prop.price || null,
+      remarks: (prop.description || "").slice(0, 1500) || null,
+    },
+    facts: {
+      beds: Number(prop.bedrooms) || null,
+      baths: Number(prop.bathrooms) || null,
+      sqft: Number(prop.livingArea) || null,
+    },
+  };
+}
+
 const SCAN_SCHEMA = {
   type: "object",
   additionalProperties: false,

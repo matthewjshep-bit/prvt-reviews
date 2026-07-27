@@ -114,6 +114,14 @@ export default function SettingsView({ settings, onSaved }) {
           RealEstateAPI key to fetch the photos. Each scan costs roughly $0.15–0.50 in API usage.
         </p>
         <Txt label="Anthropic API key" value={form.aiApiKey || ""} onChange={set("aiApiKey")} placeholder="sk-ant-..." />
+        <div className="mt-3">
+          <p className="mb-2 text-xs text-gray-500">
+            Automatic listing photos for the scan: rapidapi.com → search "Zillow" (zillow-com1) →
+            subscribe → copy your X-RapidAPI-Key. Unofficial scraper — can break if Zillow changes
+            defenses; uploading photos always works as the fallback.
+          </p>
+          <Txt label="Zillow RapidAPI key" value={form.zillowRapidApiKey || ""} onChange={set("zillowRapidApiKey")} placeholder="your X-RapidAPI-Key" />
+        </div>
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-4">
