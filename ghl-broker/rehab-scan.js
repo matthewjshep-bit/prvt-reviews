@@ -6,15 +6,17 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { ALL_REHAB_ITEMS, BATH_TIERS, BED_TIERS } from "./shared/rehab-catalog.js";
+import { normalizeUsAddress } from "./us-address.js";
 
 const MAX_PHOTOS = 40;
 
 // Fetch listing photos (midRes ≈ 900px — plenty for condition assessment).
+// RealEstateAPI's parser wants USPS-abbreviated addresses (see us-address.js).
 export async function fetchListingPhotos(address, compsApiKey) {
   const r = await fetch("https://api.realestateapi.com/v2/MLSDetail", {
     method: "POST",
     headers: { "x-api-key": compsApiKey, "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ address }),
+    body: JSON.stringify({ address: normalizeUsAddress(address) }),
     signal: AbortSignal.timeout(15000),
   });
   if (!r.ok) {

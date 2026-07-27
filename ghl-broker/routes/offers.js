@@ -20,6 +20,7 @@ import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { buildOfferDocument, buildScopeDocument, buildCompsDocument } from "../offer-doc.js";
 import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "../rehab-scan.js";
+import { normalizeUsAddress } from "../us-address.js";
 import { jpegToPdf } from "../pdf.js";
 import { uploadAsset, r2Enabled } from "../r2.js";
 import {
@@ -357,7 +358,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (hit && Date.now() - hit.ts < 24 * 3600 * 1000) return res.json(hit.data);
 
       const body = {
-        address,
         max_days_back: monthsBack * 30,
         max_radius_miles: 2,
         max_results: 15,
@@ -369,17 +369,32 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           ? { living_square_feet_min: Math.round(sqft * 0.8), living_square_feet_max: Math.round(sqft * 1.2) }
           : {}),
       };
-      const r = await fetch("https://api.realestateapi.com/v3/PropertyComps", {
-        method: "POST",
-        headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!r.ok) {
-        const detail = (await r.text()).slice(0, 300);
-        return res.status(502).json({ error: `RealEstateAPI ${r.status}`, detail });
+      const queryComps = async (addr) => {
+        const r = await fetch("https://api.realestateapi.com/v3/PropertyComps", {
+          method: "POST",
+          headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ ...body, address: addr }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!r.ok) {
+          const detail = (await r.text()).slice(0, 300);
+          throw Object.assign(new Error(`RealEstateAPI ${r.status}`), { http: 502, detail });
+        }
+        return r.json();
+      };
+      // The provider's address parser wants USPS abbreviations ("166th Ave NE,
+      // WA"); the spelled-out forms GHL/autocomplete produce ("166th Avenue
+      // Northeast, Washington") often resolve to an empty record. Query the
+      // normalized form first; fall back to the raw string if it finds nothing.
+      const noRecord = (x) => !x?.subject?.propertyInfo?.latitude && !(x?.comps || []).length;
+      const normalized = normalizeUsAddress(address);
+      let j = await queryComps(normalized);
+      if (noRecord(j) && normalized !== address) {
+        try {
+          const rawResult = await queryComps(address);
+          if (!noRecord(rawResult)) j = rawResult;
+        } catch { /* keep the normalized (empty) result */ }
       }
-      const j = await r.json();
       const subjInfo = j.subject?.propertyInfo || {};
       const num = (v) => (v == null || v === "" ? null : Number(v) || null);
       const data = {
