@@ -3,11 +3,14 @@
 // (document, all three options, attach status).
 
 import React, { useEffect, useState } from "react";
-import { ExternalLink, FileText, Loader2, Trash2, X } from "lucide-react";
+import { ExternalLink, FileText, Loader2, Pencil, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { deleteOffer, ghlContactUrl, listOffers, zillowUrl } from "./api.js";
 
 function AttachStatus({ offer }) {
+  if (offer.status === "draft") {
+    return <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-800">Draft</span>;
+  }
   if (!offer.ghl) return <span className="text-gray-400">—</span>;
   const ok = offer.ghl.fields && offer.ghl.note && offer.ghl.tag;
   return ok ? (
@@ -114,7 +117,7 @@ function OfferDetail({ offer, onClose }) {
   );
 }
 
-export default function OffersHistory() {
+export default function OffersHistory({ onEdit }) {
   const [offers, setOffers] = useState(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(null);
@@ -160,21 +163,28 @@ export default function OffersHistory() {
           </thead>
           <tbody>
             {offers.map((o) => (
-              <tr key={o.id} onClick={() => setSelected(o)}
+              <tr key={o.id}
+                onClick={() => (o.status === "draft" ? onEdit?.(o) : setSelected(o))}
                 className="cursor-pointer border-b border-gray-100 last:border-0 hover:bg-gray-50">
                 <td className="whitespace-nowrap px-4 py-2.5 text-gray-500">
                   {(o.createdAt || "").slice(0, 10)}
                 </td>
                 <td className="px-4 py-2.5">
-                  <a href={ghlContactUrl(o.contactId)} target="_blank" rel="noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="inline-flex items-center gap-1 font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-900"
-                    title="Open contact in GHL">
-                    {o.contactName || o.contactId || "—"} <ExternalLink size={12} className="text-gray-400" />
-                  </a>
+                  {o.contactId ? (
+                    <a href={ghlContactUrl(o.contactId)} target="_blank" rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center gap-1 font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-900"
+                      title="Open contact in GHL">
+                      {o.contactName || o.contactId} <ExternalLink size={12} className="text-gray-400" />
+                    </a>
+                  ) : (
+                    <span className="font-medium">{o.contactName || "—"}</span>
+                  )}
                 </td>
                 <td className="max-w-[16rem] truncate px-4 py-2.5">{o.address || "—"}</td>
-                <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold">{fmtMoney(o.cashAmount)}</td>
+                <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold">
+                  {o.cashAmount != null ? fmtMoney(o.cashAmount) : "—"}
+                </td>
                 <td className="whitespace-nowrap px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                   <span className="flex gap-2">
                     {o.pdfUrl && (
@@ -194,9 +204,14 @@ export default function OffersHistory() {
                 <td className="whitespace-nowrap px-4 py-2.5 text-xs">
                   <AttachStatus offer={o} />
                 </td>
-                <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                <td className="whitespace-nowrap px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                  <button type="button" onClick={() => onEdit?.(o)}
+                    className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-800"
+                    title={o.status === "draft" ? "Continue editing draft" : "Reopen as a new working copy"}>
+                    <Pencil size={15} />
+                  </button>
                   <button type="button" onClick={() => remove(o.id)}
-                    className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Delete offer">
+                    className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Delete">
                     <Trash2 size={15} />
                   </button>
                 </td>

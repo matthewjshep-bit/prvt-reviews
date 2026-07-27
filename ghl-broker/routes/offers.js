@@ -456,6 +456,38 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  /* ---------- drafts (save the form, come back later) ---------- */
+  // POST { id?, draft } — creates or updates a draft offer row. The draft
+  // holds the full form state; no document is generated and nothing touches
+  // GHL until the draft is turned into a real offer.
+  router.post("/draft", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const { id, draft } = req.body || {};
+      if (!draft || typeof draft !== "object") return res.status(400).json({ error: "draft required" });
+      const record = {
+        locationId,
+        status: "draft",
+        contactId: draft.contact?.id || null,
+        contactName: draft.contact?.name || draft.newContact?.name || "",
+        address: draft.inputs?.address || "",
+        cashAmount: Number(draft.cashPreview) || null,
+        draft,
+        updatedAt: new Date().toISOString(),
+      };
+      if (id) {
+        const prev = await store.getOffer(id);
+        if (prev && prev.locationId === locationId && prev.status === "draft") {
+          const full = { ...prev, ...record, id, createdAt: prev.createdAt };
+          await store.updateOffer(id, full);
+          return res.json({ ok: true, offer: full });
+        }
+      }
+      const offer = await store.createOffer(record);
+      res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---------- create: calculate + document + attach to contact ---------- */
   router.post("/", async (req, res) => {
     try {
@@ -552,6 +584,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       offer.ghl = ghl;
       offer.warnings = warnings;
       await store.updateOffer(offer.id, offer).catch(() => {});
+
+      // Creating from a draft consumes the draft.
+      const draftId = req.body?.draftId;
+      if (draftId) {
+        const d = await store.getOffer(draftId).catch(() => null);
+        if (d && d.locationId === locationId && d.status === "draft") {
+          await store.deleteOffer(draftId).catch(() => {});
+        }
+      }
 
       res.json({ ok: true, offer, ghl, warnings });
     } catch (err) { fail(res, err); }

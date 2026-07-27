@@ -108,18 +108,25 @@ function RoomRow({ label, tiers, room, onChange }) {
   );
 }
 
-export default function RehabPane({ sqft, beds, baths, onApply }) {
-  const [rows, setRows] = useState(() =>
-    Object.fromEntries(ALL_ITEMS.map((i) => [i.id, { on: false, unit: i.unit, qty: 1 }]))
-  );
-  const [bedCount, setBedCount] = useState(0);
-  const [bathCount, setBathCount] = useState(0);
-  const [bedRooms, setBedRooms] = useState([]);
-  const [bathRooms, setBathRooms] = useState([]);
-  const [custom, setCustom] = useState([]);
+export default function RehabPane({ sqft, beds, baths, onApply, initialState, onStateChange }) {
+  const [rows, setRows] = useState(() => ({
+    ...Object.fromEntries(ALL_ITEMS.map((i) => [i.id, { on: false, unit: i.unit, qty: 1 }])),
+    ...(initialState?.rows || {}),
+  }));
+  const [bedCount, setBedCount] = useState(initialState?.bedCount || 0);
+  const [bathCount, setBathCount] = useState(initialState?.bathCount || 0);
+  const [bedRooms, setBedRooms] = useState(initialState?.bedRooms || []);
+  const [bathRooms, setBathRooms] = useState(initialState?.bathRooms || []);
+  const [custom, setCustom] = useState(initialState?.custom || []);
   const [draft, setDraft] = useState({ label: "", cost: "" });
-  const [contingency, setContingency] = useState("10");
+  const [contingency, setContingency] = useState(initialState?.contingency ?? "10");
   const [applied, setApplied] = useState(false);
+
+  // Report state upward so drafts can snapshot the whole scope.
+  useEffect(() => {
+    onStateChange?.({ rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency]);
 
   const sqftNum = parse(sqft);
 

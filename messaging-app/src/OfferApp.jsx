@@ -30,6 +30,7 @@ export default function OfferApp() {
     return NAV.some((n) => n.view === v) ? v : "new";
   });
   const [initialContactId] = useState(() => readParam("contact_id"));
+  const [editing, setEditing] = useState(null); // draft/offer being reopened in the form
   const [settings, setSettings] = useState(null);
   const [settingsError, setSettingsError] = useState("");
 
@@ -59,7 +60,7 @@ export default function OfferApp() {
             <button
               key={n.view}
               type="button"
-              onClick={() => setView(n.view)}
+              onClick={() => { if (n.view === "new") setEditing(null); setView(n.view); }}
               className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
                 n.view === view ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
               }`}
@@ -75,8 +76,17 @@ export default function OfferApp() {
             Couldn't load saved settings ({settingsError}) — using defaults.
           </div>
         )}
-        {view === "new" && <NewOffer settings={settings} initialContactId={initialContactId} />}
-        {view === "history" && <OffersHistory />}
+        {view === "new" && (
+          <NewOffer
+            key={editing?.id || "blank"}
+            settings={settings}
+            initialContactId={initialContactId}
+            restore={editing}
+          />
+        )}
+        {view === "history" && (
+          <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }} />
+        )}
         {view === "settings" && (
           <SettingsView settings={settings} onSaved={(s) => setSettings(s)} />
         )}

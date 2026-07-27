@@ -2,10 +2,10 @@
 // offers → generate the document and attach everything to the GHL contact.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Check, FileText, Loader2, Search, Send, X } from "lucide-react";
+import { Check, FileText, Loader2, Save, Search, Send, X } from "lucide-react";
 import { calculateOffers, fmtMoney } from "@shared/offer-calc.js";
 import {
-  createOffer, getContactDetail, previewDocument, searchContacts, sendOffer, suggestAddresses, zillowUrl,
+  createOffer, getContactDetail, previewDocument, saveDraft, searchContacts, sendOffer, suggestAddresses, zillowUrl,
 } from "./api.js";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
@@ -228,14 +228,42 @@ function OfferCards({ calc }) {
 
 /* ---------------- main view ---------------- */
 
-export default function NewOffer({ settings, initialContactId }) {
-  const [mode, setMode] = useState("existing");
-  const [contact, setContact] = useState(null);
-  const [newContact, setNewContact] = useState({ name: "", phone: "" });
-  const [inputs, setInputs] = useState({ address: "", askingPrice: "", arv: "", repairs: "" });
-  const [subjectSqft, setSubjectSqft] = useState(""); // shared: comps $/sqft + rehab per-sqft items
-  const [subjectInfo, setSubjectInfo] = useState(null); // beds/baths from the comps subject record
-  const [scope, setScope] = useState([]);             // applied rehab line items, saved with the offer
+export default function NewOffer({ settings, initialContactId, restore }) {
+  // `restore` reopens a saved draft (full form state) or an existing offer
+  // (inputs + scope become a fresh working copy).
+  const fromDraft = restore?.status === "draft" ? restore.draft : null;
+  const fromOffer = restore && restore.status !== "draft" ? restore : null;
+  const fmtN = (n) => (Number(n) ? Number(n).toLocaleString("en-US") : "");
+
+  const [mode, setMode] = useState(fromDraft?.mode || "existing");
+  const [contact, setContact] = useState(
+    fromDraft?.contact ||
+    (fromOffer?.contactId ? { id: fromOffer.contactId, name: fromOffer.contactName || "", phone: "", email: "" } : null)
+  );
+  const [newContact, setNewContact] = useState(fromDraft?.newContact || { name: "", phone: "" });
+  const [inputs, setInputs] = useState(
+    fromDraft?.inputs ||
+    (fromOffer?.calc
+      ? {
+          address: fromOffer.calc.inputs.address || "",
+          askingPrice: fmtN(fromOffer.calc.inputs.askingPrice),
+          arv: fmtN(fromOffer.calc.inputs.arv),
+          repairs: fmtN(fromOffer.calc.inputs.repairs),
+        }
+      : { address: "", askingPrice: "", arv: "", repairs: "" })
+  );
+  const [subjectSqft, setSubjectSqft] = useState(fromDraft?.subjectSqft || ""); // shared: comps $/sqft + rehab per-sqft items
+  const [subjectInfo, setSubjectInfo] = useState(fromDraft?.subjectInfo || null); // beds/baths from the comps subject record
+  const [scope, setScope] = useState(fromDraft?.scope || fromOffer?.scope || []); // applied rehab line items
+  const [draftId, setDraftId] = useState(fromDraft ? restore.id : null);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [draftSaved, setDraftSaved] = useState(false);
+  const rehabStateRef = useRef(fromDraft?.rehab || null);
+  const rehabInit =
+    fromDraft?.rehab ||
+    (fromOffer?.scope?.length
+      ? { custom: fromOffer.scope.map((s, i) => ({ id: `c-${i}`, label: s.label, cost: s.cost })) }
+      : undefined);
   const [preview, setPreview] = useState(null);   // data-url image
   const [previewing, setPreviewing] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -251,7 +279,7 @@ export default function NewOffer({ settings, initialContactId }) {
   // Deep link (?contact_id= from the GHL contact panel): preselect the
   // contact and prefill their property address.
   useEffect(() => {
-    if (!initialContactId) return;
+    if (!initialContactId || contact) return;
     getContactDetail(initialContactId)
       .then((d) => {
         setContact({ id: d.id, name: d.name, phone: d.phone, email: d.email });
@@ -304,11 +332,28 @@ export default function NewOffer({ settings, initialContactId }) {
         inputs,
         settings: settings || {},
         scope,
+        draftId,
       });
       setResult(r);
       setPreview(null);
+      setDraftId(null);
     } catch (e) { setError(e.message); }
     setCreating(false);
+  }
+
+  async function doSaveDraft() {
+    setError(""); setSavingDraft(true);
+    try {
+      const r = await saveDraft(draftId, {
+        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope,
+        rehab: rehabStateRef.current,
+        cashPreview: calc?.offers?.cash?.amount ?? null,
+      });
+      setDraftId(r.offer.id);
+      setDraftSaved(true);
+      setTimeout(() => setDraftSaved(false), 2500);
+    } catch (e) { setError(e.message); }
+    setSavingDraft(false);
   }
 
   async function doSend(live) {
@@ -436,6 +481,8 @@ export default function NewOffer({ settings, initialContactId }) {
         sqft={subjectSqft}
         beds={Number(subjectInfo?.beds) || 0}
         baths={Number(subjectInfo?.baths) || 0}
+        initialState={rehabInit}
+        onStateChange={(s) => { rehabStateRef.current = s; }}
         onApply={(total, lines) => {
           setInputs((s) => ({ ...s, repairs: Number(total).toLocaleString("en-US") }));
           setScope(lines);
@@ -454,6 +501,11 @@ export default function NewOffer({ settings, initialContactId }) {
           className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-gray-800">
           {creating ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
           Create offer & attach to contact
+        </button>
+        <button type="button" disabled={savingDraft} onClick={doSaveDraft}
+          className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-gray-50">
+          {savingDraft ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+          {draftSaved ? "Draft saved ✓" : draftId ? "Update draft" : "Save draft"}
         </button>
         {!canCreate && calc && (
           <span className="text-xs text-gray-400">Pick a contact (or enter a phone) to create the offer.</span>

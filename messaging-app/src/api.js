@@ -81,8 +81,9 @@ export const zillowUrl = (address) => {
 /* ---------- offers ---------- */
 export const previewDocument = (inputs, settings, contactName) =>
   post(`/api/offers/preview`, { inputs, settings, contactName });
-export const createOffer = ({ contactId, newContact, inputs, settings, scope }) =>
-  post(`/api/offers`, { contactId, newContact, inputs, settings, scope });
+export const createOffer = ({ contactId, newContact, inputs, settings, scope, draftId }) =>
+  post(`/api/offers`, { contactId, newContact, inputs, settings, scope, draftId });
+export const saveDraft = (id, draft) => post(`/api/offers/draft`, { id, draft });
 export const listOffers = ({ contactId = "", limit = 50 } = {}) => {
   const p = new URLSearchParams({ location_id: getLocationId(), limit });
   if (contactId) p.set("contact_id", contactId);
