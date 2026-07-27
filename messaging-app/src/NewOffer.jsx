@@ -228,7 +228,7 @@ function OfferCards({ calc }) {
 
 /* ---------------- main view ---------------- */
 
-export default function NewOffer({ settings }) {
+export default function NewOffer({ settings, initialContactId }) {
   const [mode, setMode] = useState("existing");
   const [contact, setContact] = useState(null);
   const [newContact, setNewContact] = useState({ name: "", phone: "" });
@@ -246,6 +246,20 @@ export default function NewOffer({ settings }) {
   // engine strips $ , and spaces, so the formatted string feeds it directly.
   const fmtTyped = (v) => { const d = String(v).replace(/[^\d]/g, ""); return d ? Number(d).toLocaleString("en-US") : ""; };
   const setMoney = (k) => (e) => setInputs((s) => ({ ...s, [k]: fmtTyped(e.target.value) }));
+
+  // Deep link (?contact_id= from the GHL contact panel): preselect the
+  // contact and prefill their property address.
+  useEffect(() => {
+    if (!initialContactId) return;
+    getContactDetail(initialContactId)
+      .then((d) => {
+        setContact({ id: d.id, name: d.name, phone: d.phone, email: d.email });
+        const addr = pickContactAddress(d.custom);
+        if (addr) setInputs((s) => (s.address.trim() ? s : { ...s, address: addr }));
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialContactId]);
 
   // Selecting a contact pulls their custom fields and prefills the address
   // (Property Address Short Hand etc.) — without clobbering anything typed.

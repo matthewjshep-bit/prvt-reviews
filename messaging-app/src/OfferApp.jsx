@@ -16,8 +16,20 @@ const NAV = [
   { view: "settings", label: "Settings" },
 ];
 
+function readParam(name) {
+  try {
+    return new URLSearchParams(window.location.search).get(name) || "";
+  } catch {
+    return "";
+  }
+}
+
 export default function OfferApp() {
-  const [view, setView] = useState("new");
+  const [view, setView] = useState(() => {
+    const v = readParam("view");
+    return NAV.some((n) => n.view === v) ? v : "new";
+  });
+  const [initialContactId] = useState(() => readParam("contact_id"));
   const [settings, setSettings] = useState(null);
   const [settingsError, setSettingsError] = useState("");
 
@@ -63,7 +75,7 @@ export default function OfferApp() {
             Couldn't load saved settings ({settingsError}) — using defaults.
           </div>
         )}
-        {view === "new" && <NewOffer settings={settings} />}
+        {view === "new" && <NewOffer settings={settings} initialContactId={initialContactId} />}
         {view === "history" && <OffersHistory />}
         {view === "settings" && (
           <SettingsView settings={settings} onSaved={(s) => setSettings(s)} />

@@ -30,6 +30,34 @@ import {
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
 const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
 const OFFER_TAG = process.env.OFFER_TAG || "offer-created";
+const APP_ORIGIN = (process.env.APP_ORIGIN || "").replace(/\/$/, "");
+
+// Deep link into the offer app scoped to one contact (clickable from the GHL
+// contact panel). Empty when APP_ORIGIN isn't configured.
+const offerAppLink = (locationId, contactId) =>
+  APP_ORIGIN
+    ? `${APP_ORIGIN}/?location_id=${encodeURIComponent(locationId)}&contact_id=${encodeURIComponent(contactId)}`
+    : "";
+
+// Best property address among a contact's custom fields (mirrors the app's
+// prefill logic: "…address…short…" first, then property-address, then any).
+function bestContactAddress(custom) {
+  const score = (k) => {
+    const n = k.toLowerCase().replace(/[^a-z]/g, "");
+    if (n.includes("address") && n.includes("short")) return 3;
+    if (n.includes("property") && n.includes("address")) return 2;
+    if (n.includes("address")) return 1;
+    return 0;
+  };
+  let best = "", bestScore = 0;
+  for (const [k, v] of Object.entries(custom || {})) {
+    const val = String(v || "").trim();
+    if (!val) continue;
+    const s = score(k);
+    if (s > bestScore) { bestScore = s; best = val; }
+  }
+  return best;
+}
 
 // Contact custom fields the app writes on every offer (created on demand).
 const OFFER_FIELDS = [
@@ -38,6 +66,7 @@ const OFFER_FIELDS = [
   { key: "last_offer_doc_url", name: "Last Offer Document URL", dataType: "TEXT" },
   { key: "last_offer_image_url", name: "Last Offer Image URL", dataType: "TEXT" },
   { key: "zillow_link", name: "Zillow Link", dataType: "TEXT" },
+  { key: "offer_app_link", name: "Offer App Link", dataType: "TEXT" },
 ];
 
 // Zillow deep link from a street address — /homes/<slug>_rb/ redirects to the
@@ -362,6 +391,41 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  /* ---------- contact-link webhook (GHL workflow: stamp app + Zillow links) ---------- */
+  // Wire a GHL workflow (e.g. trigger: Contact Created, or tag applied) to
+  // POST here with { location_id, contact_id } — accepts GHL's native payload
+  // shapes too. Writes offer_app_link (deep link into this app scoped to the
+  // contact) and, when the contact has a property-address custom field,
+  // zillow_link. No offer required.
+  router.post("/contact-link", async (req, res) => {
+    try {
+      const b = req.body || {};
+      const locId = b.location_id || b.locationId || b.location?.id;
+      if (locId) req.body.location_id = locId;
+      const { locationId, client } = resolveLocation(req);
+      const contactId = b.contact_id || b.contactId || b.contact?.id;
+      if (!contactId) return res.status(400).json({ error: "contact_id required (send {{contact.id}})" });
+
+      const contact = await getContact(client, contactId);
+      const map = await customFieldIdKeyMap(client, locationId);
+      const custom = contactCustomRecord(contact, map);
+      const address = bestContactAddress(custom);
+
+      const values = {
+        offer_app_link: offerAppLink(locationId, contactId),
+        ...(address ? { zillow_link: zillowUrl(address) } : {}),
+      };
+      const fieldWrites = [];
+      for (const f of OFFER_FIELDS) {
+        if (!values[f.key]) continue;
+        const id = await findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType);
+        if (id) fieldWrites.push({ id, value: values[f.key] });
+      }
+      if (fieldWrites.length) await updateContact(client, contactId, { customFields: fieldWrites });
+      res.json({ ok: true, wrote: Object.keys(values), address: address || null });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---------- create: calculate + document + attach to contact ---------- */
   router.post("/", async (req, res) => {
     try {
@@ -432,6 +496,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           last_offer_doc_url: pdfUrl,
           last_offer_image_url: imageUrl,
           zillow_link: zillowUrl(calc.inputs.address),
+          offer_app_link: offerAppLink(locationId, contactId),
         };
         const fieldWrites = [];
         for (const f of OFFER_FIELDS) {
