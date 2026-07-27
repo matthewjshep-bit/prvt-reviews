@@ -1,24 +1,113 @@
-// OffersHistory.jsx — every offer created for this location: who, what,
-// the numbers, and links to the generated documents.
+// OffersHistory.jsx — every offer created for this location. The contact links
+// to the GHL contact record; clicking a row opens the full offer detail
+// (document, all three options, attach status).
 
 import React, { useEffect, useState } from "react";
-import { FileText, Loader2, Trash2 } from "lucide-react";
+import { ExternalLink, FileText, Loader2, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { deleteOffer, listOffers } from "./api.js";
+import { deleteOffer, ghlContactUrl, listOffers } from "./api.js";
+
+function AttachStatus({ offer }) {
+  if (!offer.ghl) return <span className="text-gray-400">—</span>;
+  const ok = offer.ghl.fields && offer.ghl.note && offer.ghl.tag;
+  return ok ? (
+    <span className="font-medium text-emerald-700">✓ contact</span>
+  ) : (
+    <span className="font-medium text-amber-700" title={(offer.warnings || []).join("\n")}>
+      ⚠ partial
+    </span>
+  );
+}
+
+function OfferDetail({ offer, onClose }) {
+  const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
+  const Row = ({ label, value }) => (
+    <div className="flex justify-between gap-4 text-sm">
+      <span className="text-gray-500">{label}</span>
+      <span className="font-medium">{value}</span>
+    </div>
+  );
+  return (
+    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={onClose}>
+      <div className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <div className="text-lg font-bold">{offer.address || "Offer"}</div>
+            <div className="text-sm text-gray-500">
+              {offer.dateLabel} ·{" "}
+              <a href={ghlContactUrl(offer.contactId)} target="_blank" rel="noreferrer"
+                className="inline-flex items-center gap-1 text-gray-700 underline hover:text-gray-900">
+                {offer.contactName || offer.contactId} <ExternalLink size={12} />
+              </a>{" "}
+              · <AttachStatus offer={offer} />
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="rounded p-1.5 text-gray-400 hover:bg-gray-100">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="grid gap-5 sm:grid-cols-2">
+          <img src={offer.imageUrl} alt="Offer document" className="w-full rounded-xl border border-gray-200 shadow-sm" />
+          <div className="space-y-4">
+            {cash && (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 p-3">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">Option A — Cash</div>
+                <div className="text-xl font-black">{fmtMoney(cash.amount)}</div>
+              </div>
+            )}
+            {sf && (
+              <div className="rounded-xl border border-gray-200 p-3">
+                <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-gray-500">Option B — Seller finance</div>
+                <Row label="Price" value={fmtMoney(sf.price)} />
+                <Row label="Down" value={fmtMoney(sf.down)} />
+                <Row label="Monthly" value={`${fmtMoney(sf.monthly)} × ${sf.termYears} yrs${sf.annualRatePct ? ` @ ${sf.annualRatePct}%` : " @ 0%"}`} />
+                {sf.balloon > 0 && <Row label="Balloon" value={`${fmtMoney(sf.balloon)} @ yr ${sf.balloonYears}`} />}
+              </div>
+            )}
+            {lo && (
+              <div className="rounded-xl border border-gray-200 p-3">
+                <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-gray-500">Option C — Lease option</div>
+                <Row label="Price" value={fmtMoney(lo.price)} />
+                <Row label="Option fee" value={fmtMoney(lo.optionFee)} />
+                <Row label="Monthly" value={`${fmtMoney(lo.monthly)} × ${lo.termMonths} mo`} />
+              </div>
+            )}
+            {(offer.warnings || []).length > 0 && (
+              <ul className="list-inside list-disc rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+                {offer.warnings.map((w, i) => <li key={i}>{w}</li>)}
+              </ul>
+            )}
+            <div className="flex gap-2">
+              <a href={offer.pdfUrl} target="_blank" rel="noreferrer"
+                className="flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-semibold text-white hover:bg-gray-800">
+                <FileText size={15} /> PDF
+              </a>
+              <a href={offer.imageUrl} target="_blank" rel="noreferrer"
+                className="flex items-center gap-2 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50">
+                <FileText size={15} /> Image
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function OffersHistory() {
   const [offers, setOffers] = useState(null);
   const [error, setError] = useState("");
+  const [selected, setSelected] = useState(null);
 
-  const load = () =>
+  useEffect(() => {
     listOffers({ limit: 100 })
       .then(setOffers)
       .catch((e) => setError(e.message));
-
-  useEffect(() => { load(); }, []);
+  }, []);
 
   async function remove(id) {
-    if (!window.confirm("Delete this offer record? The generated documents stay at their URLs.")) return;
+    if (!window.confirm("Delete this offer record and its documents?")) return;
     try {
       await deleteOffer(id);
       setOffers((list) => list.filter((o) => o.id !== id));
@@ -36,67 +125,68 @@ export default function OffersHistory() {
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
-            <th className="px-4 py-2.5">Date</th>
-            <th className="px-4 py-2.5">Contact</th>
-            <th className="px-4 py-2.5">Property</th>
-            <th className="px-4 py-2.5 text-right">Cash offer</th>
-            <th className="px-4 py-2.5">Document</th>
-            <th className="px-4 py-2.5">Attached</th>
-            <th className="px-4 py-2.5" />
-          </tr>
-        </thead>
-        <tbody>
-          {offers.map((o) => (
-            <tr key={o.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-              <td className="whitespace-nowrap px-4 py-2.5 text-gray-500">
-                {(o.createdAt || "").slice(0, 10)}
-              </td>
-              <td className="px-4 py-2.5 font-medium">{o.contactName || o.contactId || "—"}</td>
-              <td className="max-w-[16rem] truncate px-4 py-2.5">{o.address || "—"}</td>
-              <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold">{fmtMoney(o.cashAmount)}</td>
-              <td className="whitespace-nowrap px-4 py-2.5">
-                <span className="flex gap-2">
-                  {o.pdfUrl && (
-                    <a href={o.pdfUrl} target="_blank" rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
-                      <FileText size={14} /> PDF
-                    </a>
-                  )}
-                  {o.imageUrl && (
-                    <a href={o.imageUrl} target="_blank" rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
-                      <FileText size={14} /> Image
-                    </a>
-                  )}
-                </span>
-              </td>
-              <td className="whitespace-nowrap px-4 py-2.5 text-xs">
-                {o.ghl ? (
-                  o.ghl.fields && o.ghl.note && o.ghl.tag ? (
-                    <span className="font-medium text-emerald-700">✓ contact</span>
-                  ) : (
-                    <span className="font-medium text-amber-700" title={(o.warnings || []).join("\n")}>
-                      ⚠ partial
-                    </span>
-                  )
-                ) : (
-                  <span className="text-gray-400">—</span>
-                )}
-              </td>
-              <td className="px-4 py-2.5 text-right">
-                <button type="button" onClick={() => remove(o.id)}
-                  className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Delete offer">
-                  <Trash2 size={15} />
-                </button>
-              </td>
+    <>
+      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
+              <th className="px-4 py-2.5">Date</th>
+              <th className="px-4 py-2.5">Contact</th>
+              <th className="px-4 py-2.5">Property</th>
+              <th className="px-4 py-2.5 text-right">Cash offer</th>
+              <th className="px-4 py-2.5">Document</th>
+              <th className="px-4 py-2.5">Attached</th>
+              <th className="px-4 py-2.5" />
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {offers.map((o) => (
+              <tr key={o.id} onClick={() => setSelected(o)}
+                className="cursor-pointer border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                <td className="whitespace-nowrap px-4 py-2.5 text-gray-500">
+                  {(o.createdAt || "").slice(0, 10)}
+                </td>
+                <td className="px-4 py-2.5">
+                  <a href={ghlContactUrl(o.contactId)} target="_blank" rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="inline-flex items-center gap-1 font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-900"
+                    title="Open contact in GHL">
+                    {o.contactName || o.contactId || "—"} <ExternalLink size={12} className="text-gray-400" />
+                  </a>
+                </td>
+                <td className="max-w-[16rem] truncate px-4 py-2.5">{o.address || "—"}</td>
+                <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold">{fmtMoney(o.cashAmount)}</td>
+                <td className="whitespace-nowrap px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                  <span className="flex gap-2">
+                    {o.pdfUrl && (
+                      <a href={o.pdfUrl} target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
+                        <FileText size={14} /> PDF
+                      </a>
+                    )}
+                    {o.imageUrl && (
+                      <a href={o.imageUrl} target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
+                        <FileText size={14} /> Image
+                      </a>
+                    )}
+                  </span>
+                </td>
+                <td className="whitespace-nowrap px-4 py-2.5 text-xs">
+                  <AttachStatus offer={o} />
+                </td>
+                <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                  <button type="button" onClick={() => remove(o.id)}
+                    className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Delete offer">
+                    <Trash2 size={15} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {selected && <OfferDetail offer={selected} onClose={() => setSelected(null)} />}
+    </>
   );
 }

@@ -49,6 +49,18 @@ export const searchContacts = (query) =>
   fetch(`${API_BASE}/api/offers/contacts?location_id=${loc()}&query=${encodeURIComponent(query)}`)
     .then(j)
     .then((r) => r.contacts);
+export const getContactDetail = (id) =>
+  fetch(`${API_BASE}/api/offers/contacts/${encodeURIComponent(id)}?location_id=${loc()}`)
+    .then(j)
+    .then((r) => r.contact);
+export const suggestAddresses = (query) =>
+  fetch(`${API_BASE}/api/offers/address-suggest?location_id=${loc()}&query=${encodeURIComponent(query)}`)
+    .then(j)
+    .then((r) => r.suggestions);
+
+// Deep link to a contact record inside GHL (opens in a new tab).
+export const ghlContactUrl = (contactId) =>
+  `https://app.gohighlevel.com/v2/location/${getLocationId()}/contacts/detail/${contactId}`;
 
 /* ---------- offers ---------- */
 export const previewDocument = (inputs, settings, contactName) =>

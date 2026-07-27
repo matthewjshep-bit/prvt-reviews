@@ -4,7 +4,77 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, FileText, Loader2, Search, Send, X } from "lucide-react";
 import { calculateOffers, fmtMoney } from "@shared/offer-calc.js";
-import { createOffer, previewDocument, searchContacts, sendOffer } from "./api.js";
+import {
+  createOffer, getContactDetail, previewDocument, searchContacts, sendOffer, suggestAddresses,
+} from "./api.js";
+
+// Pick the best address from a contact's custom fields: prefer a
+// "…address…short…" key (the Property Address Short Hand field), then any
+// property-address field, then anything address-like.
+function pickContactAddress(custom) {
+  const score = (k) => {
+    const n = k.toLowerCase().replace(/[^a-z]/g, "");
+    if (n.includes("address") && n.includes("short")) return 3;
+    if (n.includes("property") && n.includes("address")) return 2;
+    if (n.includes("address")) return 1;
+    return 0;
+  };
+  let best = "", bestScore = 0;
+  for (const [k, v] of Object.entries(custom || {})) {
+    const val = String(v || "").trim();
+    if (!val) continue;
+    const s = score(k);
+    if (s > bestScore) { bestScore = s; best = val; }
+  }
+  return best;
+}
+
+// Address input with debounced suggestions (broker-proxied geocoder).
+function AddressInput({ value, onChange, placeholder }) {
+  const [options, setOptions] = useState([]);
+  const [open, setOpen] = useState(false);
+  const timer = useRef(null);
+  const skipNext = useRef(false);
+
+  useEffect(() => {
+    clearTimeout(timer.current);
+    if (skipNext.current) { skipNext.current = false; return; }
+    if (!open || value.trim().length < 5) { setOptions([]); return; }
+    timer.current = setTimeout(() => {
+      suggestAddresses(value.trim()).then((s) => setOptions(s || [])).catch(() => setOptions([]));
+    }, 350);
+    return () => clearTimeout(timer.current);
+  }, [value, open]);
+
+  return (
+    <div className="relative">
+      <input
+        className={INPUT_CLS}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => { setOpen(true); onChange(e.target.value); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        autoComplete="off"
+      />
+      {open && options.length > 0 && (
+        <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
+          {options.map((o) => (
+            <button
+              key={o}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { skipNext.current = true; onChange(o); setOptions([]); setOpen(false); }}
+              className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+            >
+              {o}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const INPUT_CLS =
   "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
@@ -196,6 +266,19 @@ export default function NewOffer({ settings }) {
 
   const set = (k) => (e) => setInputs((s) => ({ ...s, [k]: e.target.value }));
 
+  // Selecting a contact pulls their custom fields and prefills the address
+  // (Property Address Short Hand etc.) — without clobbering anything typed.
+  function selectContact(c) {
+    setContact(c);
+    if (!c?.id) return;
+    getContactDetail(c.id)
+      .then((d) => {
+        const addr = pickContactAddress(d.custom);
+        if (addr) setInputs((s) => (s.address.trim() ? s : { ...s, address: addr }));
+      })
+      .catch(() => {});
+  }
+
   const calc = useMemo(() => {
     try {
       return calculateOffers(inputs, settings || {});
@@ -309,7 +392,7 @@ export default function NewOffer({ settings }) {
   return (
     <div className="space-y-4">
       <ContactPicker
-        selected={contact} onSelect={setContact}
+        selected={contact} onSelect={selectContact}
         newContact={newContact} setNewContact={setNewContact}
         mode={mode} setMode={setMode}
       />
@@ -319,8 +402,11 @@ export default function NewOffer({ settings }) {
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <Field label="Property address">
-              <input className={INPUT_CLS} value={inputs.address} onChange={set("address")}
-                placeholder="412 Maple Ave SW, Tacoma, WA 98466" />
+              <AddressInput
+                value={inputs.address}
+                onChange={(v) => setInputs((s) => ({ ...s, address: v }))}
+                placeholder="412 Maple Ave SW, Tacoma, WA 98466"
+              />
             </Field>
           </div>
           <Field label="Asking price ($)">

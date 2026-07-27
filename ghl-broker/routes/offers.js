@@ -24,6 +24,7 @@ import { uploadAsset, r2Enabled } from "../r2.js";
 import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, sendSms,
+  customFieldIdKeyMap, contactCustomRecord,
 } from "../ghl.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
@@ -193,6 +194,56 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         })),
       });
     } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- contact detail (custom fields, for address prefill) ---------- */
+  router.get("/contacts/:id", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contact = await getContact(client, req.params.id);
+      const map = await customFieldIdKeyMap(client, locationId);
+      res.json({
+        contact: {
+          id: contact.id || req.params.id,
+          name: contactName(contact),
+          phone: contact.phone || "",
+          email: contact.email || "",
+          custom: contactCustomRecord(contact, map),
+        },
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- address autocomplete (OSM/Photon, no API key) ---------- */
+  router.get("/address-suggest", async (req, res) => {
+    try {
+      resolveLocation(req);
+      const q = String(req.query.query || "").trim();
+      if (q.length < 4) return res.json({ suggestions: [] });
+      const r = await fetch(
+        `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8&lang=en`,
+        { signal: AbortSignal.timeout(4000) }
+      );
+      if (!r.ok) return res.json({ suggestions: [] });
+      const j = await r.json();
+      const suggestions = [];
+      for (const f of j.features || []) {
+        const p = f.properties || {};
+        if ((p.countrycode || "").toLowerCase() !== "us") continue;
+        if (!p.housenumber || !p.street) continue; // real street addresses only
+        const street = `${p.housenumber} ${p.street}`;
+        const label = [
+          street,
+          p.city || p.district || p.county,
+          [p.state, p.postcode].filter(Boolean).join(" "),
+        ].filter(Boolean).join(", ");
+        if (!suggestions.includes(label)) suggestions.push(label);
+        if (suggestions.length >= 6) break;
+      }
+      res.json({ suggestions });
+    } catch {
+      res.json({ suggestions: [] }); // autocomplete is best-effort — never block typing
+    }
   });
 
   /* ---------- create: calculate + document + attach to contact ---------- */
