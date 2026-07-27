@@ -22,7 +22,17 @@
 //
 // All percentage settings are whole numbers (90 = 90%). Money in dollars.
 
+// How the cash number is underwritten. "lowball" is the reverse-engineered
+// lowballoffer.ai model below; "mao" is the classic flipper 70% rule:
+// maoPctOfArv% of ARV minus repairs, no fee, no jitter.
+export const UNDERWRITE_MODES = [
+  { key: "lowball", label: "90% ARV − 2× rehab", hint: "aggressive spread + fee" },
+  { key: "mao", label: "70% ARV − rehab", hint: "classic 70% rule" },
+];
+
 export const DEFAULT_OFFER_SETTINGS = {
+  underwriteMode: "lowball", // "lowball" (below) | "mao" (maoPctOfArv·ARV − repairs)
+  maoPctOfArv: 70,           // % of ARV for the "mao" mode
   cashPctOfArv: 90,          // base % of ARV before deductions
   repairBuffer: 30000,       // small-repair floor: repairs < buffer → repairs + buffer
   repairHeavyPctOfArv: 10,   // repairs above this % of ARV are "heavy"
@@ -99,28 +109,51 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
     askingPrice, arv, repairs,
   };
 
-  // Deterministic jitter: theirs picks the multiplier at random from a table
-  // spanning 89.479–90.2987 (i.e. base −0.52…+0.30) and appends random cents.
-  const seed = hash32(`${inputs.address}|${askingPrice}|${arv}|${repairs}`);
-  const pctWobble = s.precisionJitter ? (seed % 83) / 100 - 0.52 : 0;
-  const cents = s.precisionJitter ? ((seed >>> 8) % 100) / 100 : 0;
-  const pctUsed = s.cashPctOfArv + pctWobble;
-  const base = (pctUsed / 100) * arv;
-  const repairAdj = repairsAdjustment(repairs, arv, s);
-  const cashRaw = base - repairAdj - num(s.wholesaleFee);
-  const cash = {
-    key: "cash",
-    label: "Cash",
-    amount: cashRaw > 0 ? Math.floor(cashRaw) + cents : 0,
-    base: Math.round(base),
-    pctOfArv: s.cashPctOfArv,
-    pctUsed: Math.round(pctUsed * 100) / 100,
-    repairs,
-    repairAdjustment: Math.round(repairAdj),
-    wholesaleFee: num(s.wholesaleFee),
-    closeDays: s.closeDays,
-    pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : null,
-  };
+  let cash;
+  if (s.underwriteMode === "mao") {
+    // Classic 70% rule: maoPctOfArv% of ARV minus repairs at face value.
+    // No wholesale-fee line, no jitter — a clean underwriting number.
+    const base = (num(s.maoPctOfArv, 70) / 100) * arv;
+    const cashRaw = base - repairs;
+    cash = {
+      key: "cash",
+      label: "Cash",
+      mode: "mao",
+      amount: cashRaw > 0 ? Math.round(cashRaw) : 0,
+      base: Math.round(base),
+      pctOfArv: num(s.maoPctOfArv, 70),
+      pctUsed: num(s.maoPctOfArv, 70),
+      repairs,
+      repairAdjustment: repairs,
+      wholesaleFee: 0,
+      closeDays: s.closeDays,
+      pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : null,
+    };
+  } else {
+    // Deterministic jitter: theirs picks the multiplier at random from a table
+    // spanning 89.479–90.2987 (i.e. base −0.52…+0.30) and appends random cents.
+    const seed = hash32(`${inputs.address}|${askingPrice}|${arv}|${repairs}`);
+    const pctWobble = s.precisionJitter ? (seed % 83) / 100 - 0.52 : 0;
+    const cents = s.precisionJitter ? ((seed >>> 8) % 100) / 100 : 0;
+    const pctUsed = s.cashPctOfArv + pctWobble;
+    const base = (pctUsed / 100) * arv;
+    const repairAdj = repairsAdjustment(repairs, arv, s);
+    const cashRaw = base - repairAdj - num(s.wholesaleFee);
+    cash = {
+      key: "cash",
+      label: "Cash",
+      mode: "lowball",
+      amount: cashRaw > 0 ? Math.floor(cashRaw) + cents : 0,
+      base: Math.round(base),
+      pctOfArv: s.cashPctOfArv,
+      pctUsed: Math.round(pctUsed * 100) / 100,
+      repairs,
+      repairAdjustment: Math.round(repairAdj),
+      wholesaleFee: num(s.wholesaleFee),
+      closeDays: s.closeDays,
+      pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : null,
+    };
+  }
 
   return { inputs, settings: s, offers: { cash } };
 }

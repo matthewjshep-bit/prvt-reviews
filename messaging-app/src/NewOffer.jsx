@@ -3,7 +3,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, FileText, Loader2, Save, Search, Send, X } from "lucide-react";
-import { calculateOffers, fmtMoney } from "@shared/offer-calc.js";
+import { calculateOffers, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
   createOffer, getContactDetail, previewDocument, saveDraft, searchContacts, sendOffer, suggestAddresses, zillowUrl,
 } from "./api.js";
@@ -193,10 +193,21 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
 
 /* ---------------- the cash offer card ---------------- */
 
-function OfferCards({ calc }) {
+function OfferCards({ calc, underwriteMode, setUnderwriteMode }) {
+  const modeToggle = (
+    <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5 text-xs font-semibold">
+      {UNDERWRITE_MODES.map((m) => (
+        <button key={m.key} type="button" onClick={() => setUnderwriteMode(m.key)} title={m.hint}
+          className={`rounded-md px-3 py-1.5 ${underwriteMode === m.key ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"}`}>
+          {m.label}
+        </button>
+      ))}
+    </div>
+  );
   if (!calc) {
     return (
       <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-400">
+        <div className="mb-3">{modeToggle}</div>
         Enter an ARV (or use the comps below) to see the cash offer.
       </div>
     );
@@ -209,18 +220,23 @@ function OfferCards({ calc }) {
     </div>
   );
   return (
-    <div className="rounded-xl border border-amber-400 bg-amber-50 p-5 sm:flex sm:items-center sm:justify-between sm:gap-8">
-      <div>
+    <div className="rounded-xl border border-amber-400 bg-amber-50 p-5">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
         <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">All-cash offer</div>
-        <div className="mt-1 text-4xl font-black tracking-tight">{fmtMoney(cash.amount)}</div>
-        <div className="mt-1 text-xs text-gray-500">
-          {cash.pctOfAsking != null ? `≈ ${cash.pctOfAsking}% of asking · ` : ""}as-is · close in ~{cash.closeDays} days
-        </div>
+        {modeToggle}
       </div>
-      <div className="mt-4 w-full max-w-xs space-y-1 border-t border-amber-200 pt-3 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
-        <Row label={`~${cash.pctOfArv}% of ARV`} value={fmtMoney(cash.base)} />
-        <Row label="Repair adjustment" value={`− ${fmtMoney(cash.repairAdjustment)}`} />
-        <Row label="Fee / spread" value={`− ${fmtMoney(cash.wholesaleFee)}`} />
+      <div className="sm:flex sm:items-center sm:justify-between sm:gap-8">
+        <div>
+          <div className="mt-1 text-4xl font-black tracking-tight">{fmtMoney(cash.amount)}</div>
+          <div className="mt-1 text-xs text-gray-500">
+            {cash.pctOfAsking != null ? `≈ ${cash.pctOfAsking}% of asking · ` : ""}as-is · close in ~{cash.closeDays} days
+          </div>
+        </div>
+        <div className="mt-4 w-full max-w-xs space-y-1 border-t border-amber-200 pt-3 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
+          <Row label={`~${cash.pctOfArv}% of ARV`} value={fmtMoney(cash.base)} />
+          <Row label={cash.mode === "mao" ? "Repairs" : "Repair adjustment"} value={`− ${fmtMoney(cash.repairAdjustment)}`} />
+          {cash.wholesaleFee > 0 && <Row label="Fee / spread" value={`− ${fmtMoney(cash.wholesaleFee)}`} />}
+        </div>
       </div>
     </div>
   );
@@ -253,6 +269,9 @@ export default function NewOffer({ settings, initialContactId, restore }) {
           repairs: fmtN(fromOffer.calc.inputs.repairs),
         }
       : { address: "", askingPrice: "", arv: "", repairs: "" })
+  );
+  const [underwriteMode, setUnderwriteMode] = useState(
+    snap?.underwriteMode || fromOffer?.calc?.settings?.underwriteMode || settings?.underwriteMode || "lowball"
   );
   const [subjectSqft, setSubjectSqft] = useState(snap?.subjectSqft || ""); // shared: comps $/sqft + rehab per-sqft items
   const [subjectInfo, setSubjectInfo] = useState(snap?.subjectInfo || null); // beds/baths from the comps subject record
@@ -307,13 +326,17 @@ export default function NewOffer({ settings, initialContactId, restore }) {
       .catch(() => {});
   }
 
+  // The per-offer underwrite toggle rides on top of the saved settings for
+  // the live preview, the rendered document, and the created offer alike.
+  const effSettings = useMemo(() => ({ ...(settings || {}), underwriteMode }), [settings, underwriteMode]);
+
   const calc = useMemo(() => {
     try {
-      return calculateOffers(inputs, settings || {});
+      return calculateOffers(inputs, effSettings);
     } catch {
       return null;
     }
-  }, [inputs, settings]);
+  }, [inputs, effSettings]);
 
   const contactName = mode === "existing" ? contact?.name || "" : newContact.name;
   const canCreate = Boolean(calc && (mode === "existing" ? contact?.id : newContact.phone.trim()));
@@ -321,7 +344,7 @@ export default function NewOffer({ settings, initialContactId, restore }) {
   async function doPreview() {
     setError(""); setPreviewing(true);
     try {
-      const r = await previewDocument(inputs, settings || {}, contactName);
+      const r = await previewDocument(inputs, effSettings, contactName);
       setPreview(r.image);
     } catch (e) { setError(e.message); }
     setPreviewing(false);
@@ -334,12 +357,12 @@ export default function NewOffer({ settings, initialContactId, restore }) {
         contactId: mode === "existing" ? contact?.id : undefined,
         newContact: mode === "new" ? newContact : undefined,
         inputs,
-        settings: settings || {},
+        settings: effSettings,
         scope,
         draftId,
         // Full form snapshot so History → Edit restores comps + rehab intact.
         snapshot: {
-          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope,
+          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode,
           rehab: rehabStateRef.current,
           comps: compsStateRef.current,
         },
@@ -355,7 +378,7 @@ export default function NewOffer({ settings, initialContactId, restore }) {
     setError(""); setSavingDraft(true);
     try {
       const r = await saveDraft(draftId, {
-        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope,
+        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode,
         rehab: rehabStateRef.current,
         comps: compsStateRef.current,
         cashPreview: calc?.offers?.cash?.amount ?? null,
@@ -515,7 +538,7 @@ export default function NewOffer({ settings, initialContactId, restore }) {
         }}
       />
 
-      <OfferCards calc={calc} />
+      <OfferCards calc={calc} underwriteMode={underwriteMode} setUnderwriteMode={setUnderwriteMode} />
 
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" disabled={!calc || previewing} onClick={doPreview}
