@@ -54,6 +54,21 @@ export async function listCustomFields(client, locationId) {
   }));
 }
 
+// Raw custom-field definitions (all provider fields incl. folder/position
+// metadata) — used by the field-admin endpoints.
+export async function listCustomFieldsRaw(client, locationId) {
+  const data = await client.call(`/locations/${encodeURIComponent(locationId)}/customFields`);
+  return data.customFields || data.customField || [];
+}
+
+// Permanently delete a custom field definition AND its values on all records.
+export async function deleteCustomField(client, locationId, fieldId) {
+  return client.call(
+    `/locations/${encodeURIComponent(locationId)}/customFields/${encodeURIComponent(fieldId)}`,
+    { method: "DELETE" }
+  );
+}
+
 // Find a custom field by its logical key (e.g. "last_offer_doc_url"), creating
 // it if absent. Returns the field id. dataType: TEXT | NUMERICAL | DATE.
 export async function findOrCreateCustomFieldByKey(client, locationId, key, name, dataType = "TEXT") {

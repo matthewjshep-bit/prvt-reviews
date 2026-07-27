@@ -24,7 +24,7 @@ import { uploadAsset, r2Enabled } from "../r2.js";
 import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, sendSms,
-  customFieldIdKeyMap, contactCustomRecord,
+  customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField,
 } from "../ghl.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
@@ -424,6 +424,35 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       if (fieldWrites.length) await updateContact(client, contactId, { customFields: fieldWrites });
       res.json({ ok: true, wrote: Object.keys(values), address: address || null });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- field admin (inventory + explicit prune) ---------- */
+  // GET returns the raw custom-field definitions (incl. folder metadata) so
+  // cleanup can be planned. DELETE requires an explicit id list — deleting a
+  // field permanently erases its values on every contact.
+  router.get("/custom-fields", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      res.json({ fields: await listCustomFieldsRaw(client, locationId) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/custom-fields/prune", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
+      if (!ids.length) return res.status(400).json({ error: "ids required" });
+      const results = [];
+      for (const id of ids) {
+        try {
+          await deleteCustomField(client, locationId, id);
+          results.push({ id, ok: true });
+        } catch (e) {
+          results.push({ id, ok: false, error: e.message.slice(0, 200) });
+        }
+      }
+      res.json({ ok: true, results });
     } catch (err) { fail(res, err); }
   });
 
