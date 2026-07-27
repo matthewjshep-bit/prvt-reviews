@@ -1,8 +1,9 @@
-// svg.js — vector-layer → SVG string builders for the render pipeline.
-// Every vector layer (text, name-box, shape, badge) becomes a FULL-CANVAS SVG
-// positioned internally, so it composites over bitmap layers in z-order at
-// top:0,left:0 (§ render pipeline step 5). All resolved user/provider data is
-// XML-escaped — it is untrusted input (§4).
+// svg.js — vector-layer → SVG fragment builders for the render pipeline.
+// Every vector layer (text, name-box, shape, badge) becomes a { defs, body }
+// fragment positioned in full-canvas coordinates; the compositor assembles
+// consecutive fragments into one full-canvas SVG (svgDocument) that composites
+// over bitmap layers in z-order at top:0,left:0 (§ render pipeline step 5).
+// All resolved user/provider data is XML-escaped — it is untrusted input (§4).
 
 import { cssFamily, measureLine, wrapText, fitText } from "./fonts.js";
 
@@ -52,11 +53,25 @@ function shadowDefs(id, shadow) {
   return { defs, attr: ` filter="url(#${id})"` };
 }
 
-function wrap(inner, { W, H, opacity, rotation, cx, cy, defs = "" }) {
-  const g0 = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
+// Builders return { defs, body } fragments; the compositor merges every run of
+// consecutive vector layers into ONE full-canvas SVG via svgDocument(). One
+// merged SVG rasterizes as a single canvas-sized bitmap — per-layer SVGs made
+// libvips hold a ~7.8MB RGBA buffer per layer, which OOM-killed the service on
+// layer-heavy documents.
+function wrap(inner, { opacity, rotation, cx, cy, defs = "" }) {
   const t = rotation ? ` transform="rotate(${rotation} ${cx} ${cy})"` : "";
   const o = opacity != null && opacity < 1 ? ` opacity="${Math.max(0, Math.min(1, opacity))}"` : "";
-  return Buffer.from(`${g0}${defs ? `<defs>${defs}</defs>` : ""}<g${t}${o}>${inner}</g></svg>`);
+  return { defs, body: `<g${t}${o}>${inner}</g>` };
+}
+
+// Assemble layer fragments (in z-order) into one full-canvas SVG buffer.
+export function svgDocument(fragments, { W, H }) {
+  const defs = fragments.map((f) => f.defs).filter(Boolean).join("");
+  const body = fragments.map((f) => f.body).join("");
+  return Buffer.from(
+    `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">` +
+    `${defs ? `<defs>${defs}</defs>` : ""}${body}</svg>`
+  );
 }
 
 // ---------- text ----------

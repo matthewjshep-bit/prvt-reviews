@@ -11,7 +11,7 @@ import { parseTemplate } from "./shared/template-schema.js";
 import { resolveBindings } from "./shared/bindings.js";
 import { safeFetch } from "./net.js";
 import { prepareBitmap } from "./bitmap.js";
-import { textLayerSvg, nameBoxLayerSvg, badgeLayerSvg, shapeLayerSvg } from "./svg.js";
+import { textLayerSvg, nameBoxLayerSvg, badgeLayerSvg, shapeLayerSvg, svgDocument } from "./svg.js";
 
 const JPEG_THRESHOLD = 600 * 1024; // above this, prefer JPEG for MMS
 const JPEG_TARGET = 500 * 1024; // final asset target
@@ -71,6 +71,16 @@ export async function renderTemplate(rawTemplate, { context = {}, images = {}, f
   });
 
   const composites = [];
+  // Consecutive vector layers merge into one full-canvas SVG so libvips
+  // rasterizes a single canvas-sized bitmap per run instead of one per layer
+  // (77-layer documents OOM-killed the 512MB instance). A bitmap layer breaks
+  // the run to preserve z-order.
+  let vectorRun = [];
+  const flushVectors = () => {
+    if (!vectorRun.length) return;
+    composites.push({ input: svgDocument(vectorRun, { W, H }), top: 0, left: 0 });
+    vectorRun = [];
+  };
   const resolve = (str) => {
     const { value, missing: m } = resolveBindings(str, context);
     if (m.length) missing.push(...m);
@@ -85,33 +95,36 @@ export async function renderTemplate(rawTemplate, { context = {}, images = {}, f
       if (layer.type === "image") {
         if (!layer.src) continue;
         const { buffer } = await safeFetch(layer.src, { contentTypePrefix: "image/", maxBytes: 10_000_000 });
-        { const spec = await clampSpec(await prepareBitmap(buffer, layer, box), W, H); if (spec) composites.push(spec); }
+        const spec = await clampSpec(await prepareBitmap(buffer, layer, box), W, H);
+        if (spec) { flushVectors(); composites.push(spec); }
       } else if (layer.type === "dynamic-image") {
         const buf = images[layer.sourceId];
         if (!buf) {
           warnings.push({ layer: layer.id, error: "no_provider_image", sourceId: layer.sourceId });
           continue;
         }
-        { const spec = await clampSpec(await prepareBitmap(buf, layer, box), W, H); if (spec) composites.push(spec); }
+        const spec = await clampSpec(await prepareBitmap(buf, layer, box), W, H);
+        if (spec) { flushVectors(); composites.push(spec); }
       } else if (layer.type === "text") {
         const value = resolve(layer.content);
         if (!value.trim()) continue; // empty-binding-skips-layer
-        composites.push({ input: textLayerSvg(layer, value, box, { W, H }), top: 0, left: 0 });
+        vectorRun.push(textLayerSvg(layer, value, box, { W, H }));
       } else if (layer.type === "name-box") {
         const value = resolve(layer.content);
         if (!value.trim()) continue;
-        composites.push({ input: nameBoxLayerSvg(layer, value, box, { W, H }), top: 0, left: 0 });
+        vectorRun.push(nameBoxLayerSvg(layer, value, box, { W, H }));
       } else if (layer.type === "shape") {
-        composites.push({ input: shapeLayerSvg(layer, box, { W, H }), top: 0, left: 0 });
+        vectorRun.push(shapeLayerSvg(layer, box, { W, H }));
       } else if (layer.type === "badge") {
         const value = resolve(layer.text);
         if (!value.trim() && !layer.icon) continue;
-        composites.push({ input: badgeLayerSvg(layer, value, box, { W, H }), top: 0, left: 0 });
+        vectorRun.push(badgeLayerSvg(layer, value, box, { W, H }));
       }
     } catch (err) {
       warnings.push({ layer: layer.id, error: err.message });
     }
   }
+  flushVectors();
 
   const composed = base.composite(composites);
   const out = await encode(composed, format, W);
