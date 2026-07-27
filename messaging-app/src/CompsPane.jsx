@@ -4,7 +4,7 @@
 // comparable (or add manual ones), and turns the selection into a suggested
 // ARV (avg $/sqft × subject sqft, else median price) with one click to apply.
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { Loader2, MapPin, Plus, X } from "lucide-react";
