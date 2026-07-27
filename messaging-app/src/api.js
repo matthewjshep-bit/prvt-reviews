@@ -72,6 +72,12 @@ export const getComps = (address, { sqft, months } = {}) => {
 export const ghlContactUrl = (contactId) =>
   `https://app.gohighlevel.com/v2/location/${getLocationId()}/contacts/detail/${contactId}`;
 
+// Zillow deep link from a street address (redirects to the property page).
+export const zillowUrl = (address) => {
+  const slug = String(address || "").trim().replace(/[,#.]/g, "").replace(/\s+/g, "-");
+  return slug ? `https://www.zillow.com/homes/${encodeURIComponent(slug)}_rb/` : "";
+};
+
 /* ---------- offers ---------- */
 export const previewDocument = (inputs, settings, contactName) =>
   post(`/api/offers/preview`, { inputs, settings, contactName });

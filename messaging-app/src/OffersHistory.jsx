@@ -5,7 +5,7 @@
 import React, { useEffect, useState } from "react";
 import { ExternalLink, FileText, Loader2, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { deleteOffer, ghlContactUrl, listOffers } from "./api.js";
+import { deleteOffer, ghlContactUrl, listOffers, zillowUrl } from "./api.js";
 
 function AttachStatus({ offer }) {
   if (!offer.ghl) return <span className="text-gray-400">—</span>;
@@ -32,7 +32,15 @@ function OfferDetail({ offer, onClose }) {
       <div className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
-            <div className="text-lg font-bold">{offer.address || "Offer"}</div>
+            <div className="text-lg font-bold">
+              {offer.address || "Offer"}
+              {offer.address && (
+                <a href={zillowUrl(offer.address)} target="_blank" rel="noreferrer"
+                  className="ml-2 align-middle text-xs font-medium text-blue-700 underline hover:text-blue-900">
+                  Zillow ↗
+                </a>
+              )}
+            </div>
             <div className="text-sm text-gray-500">
               {offer.dateLabel} ·{" "}
               <a href={ghlContactUrl(offer.contactId)} target="_blank" rel="noreferrer"

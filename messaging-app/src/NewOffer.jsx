@@ -5,7 +5,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, FileText, Loader2, Search, Send, X } from "lucide-react";
 import { calculateOffers, fmtMoney } from "@shared/offer-calc.js";
 import {
-  createOffer, getContactDetail, previewDocument, searchContacts, sendOffer, suggestAddresses,
+  createOffer, getContactDetail, previewDocument, searchContacts, sendOffer, suggestAddresses, zillowUrl,
 } from "./api.js";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
@@ -390,6 +390,12 @@ export default function NewOffer({ settings }) {
                 placeholder="412 Maple Ave SW, Tacoma, WA 98466"
               />
             </Field>
+            {inputs.address.trim() && (
+              <a href={zillowUrl(inputs.address)} target="_blank" rel="noreferrer"
+                className="mt-1 inline-block text-xs font-medium text-blue-700 underline hover:text-blue-900">
+                View on Zillow ↗
+              </a>
+            )}
           </div>
           <Field label="Asking price ($)">
             <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={setMoney("askingPrice")} placeholder="200,000" />

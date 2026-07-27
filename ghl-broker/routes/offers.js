@@ -37,7 +37,15 @@ const OFFER_FIELDS = [
   { key: "last_offer_date", name: "Last Offer Date", dataType: "TEXT" },
   { key: "last_offer_doc_url", name: "Last Offer Document URL", dataType: "TEXT" },
   { key: "last_offer_image_url", name: "Last Offer Image URL", dataType: "TEXT" },
+  { key: "zillow_link", name: "Zillow Link", dataType: "TEXT" },
 ];
+
+// Zillow deep link from a street address — /homes/<slug>_rb/ redirects to the
+// property page when the address resolves.
+export function zillowUrl(address) {
+  const slug = String(address || "").trim().replace(/[,#.]/g, "").replace(/\s+/g, "-");
+  return slug ? `https://www.zillow.com/homes/${encodeURIComponent(slug)}_rb/` : "";
+}
 
 const dateLabel = (d = new Date()) =>
   d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
@@ -79,6 +87,8 @@ function offerNoteBody(offer) {
   }
   if (offer.pdfUrl) lines.push(`Document (PDF): ${offer.pdfUrl}`);
   if (offer.imageUrl) lines.push(`Document (image): ${offer.imageUrl}`);
+  const zUrl = zillowUrl(inputs.address);
+  if (zUrl) lines.push(`Zillow: ${zUrl}`);
   return lines.join("\n");
 }
 
@@ -421,9 +431,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           last_offer_date: created.toISOString().slice(0, 10),
           last_offer_doc_url: pdfUrl,
           last_offer_image_url: imageUrl,
+          zillow_link: zillowUrl(calc.inputs.address),
         };
         const fieldWrites = [];
         for (const f of OFFER_FIELDS) {
+          if (!fieldValues[f.key]) continue; // e.g. no address → no Zillow link
           const id = await findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType);
           if (id) fieldWrites.push({ id, value: fieldValues[f.key] });
         }
