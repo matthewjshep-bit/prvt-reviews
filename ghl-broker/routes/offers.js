@@ -18,7 +18,7 @@ import express from "express";
 import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
-import { buildOfferDocument } from "../offer-doc.js";
+import { buildOfferDocument, buildScopeDocument } from "../offer-doc.js";
 import { jpegToPdf } from "../pdf.js";
 import { uploadAsset, r2Enabled } from "../r2.js";
 import {
@@ -115,8 +115,9 @@ function offerNoteBody(offer) {
   if (offer.scope?.length) {
     lines.push(`Rehab scope: ${offer.scope.map((s) => `${s.label} ${fmtMoney(s.cost)}`).join("; ")}`);
   }
-  if (offer.pdfUrl) lines.push(`Document (PDF): ${offer.pdfUrl}`);
-  if (offer.imageUrl) lines.push(`Document (image): ${offer.imageUrl}`);
+  if (offer.pdfUrl) lines.push(`Offer letter (PDF): ${offer.pdfUrl}`);
+  if (offer.scopePdfUrl) lines.push(`Rehab scope of work (PDF): ${offer.scopePdfUrl}`);
+  if (offer.imageUrl) lines.push(`Offer letter (image): ${offer.imageUrl}`);
   const zUrl = zillowUrl(inputs.address);
   if (zUrl) lines.push(`Zillow: ${zUrl}`);
   return lines.join("\n");
@@ -164,6 +165,27 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   };
   router.get("/:id/doc.pdf", serveDoc("pdf"));
   router.get("/:id/doc.jpg", serveDoc("image"));
+  router.get("/:id/scope.pdf", serveDoc("scopepdf"));
+
+  // Render the Rehab Scope of Work companion PDF. Best-effort: a failure
+  // never blocks the offer itself.
+  async function storeScopeDocument({ offerId, locationId, scope, total, address, meta, company }) {
+    const template = buildScopeDocument({ scope, total, address, meta, company, locationId });
+    const r = await fetch(`${CARD_SERVICE_URL}/render`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template, context: {}, store: false, format: "jpeg" }),
+    });
+    if (!r.ok) throw new Error(`scope render ${r.status}`);
+    const jpeg = Buffer.from(await r.arrayBuffer());
+    const pdf = jpegToPdf(jpeg, template.canvas.width, template.canvas.height);
+    if (r2Enabled) {
+      const localOpts = { localDir: uploadDir, localBaseUrl: `${publicBaseUrl}/uploads` };
+      return uploadAsset(`offers/${locationId}/${offerId}-scope.pdf`, pdf, "application/pdf", localOpts);
+    }
+    await store.saveOfferDoc(offerId, "scopepdf", pdf, "application/pdf");
+    return `${publicBaseUrl}/api/offers/${offerId}/scope.pdf`;
+  }
 
   /* ---------- settings ---------- */
   router.get("/settings", async (req, res) => {
@@ -526,6 +548,20 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const offerId = crypto.randomUUID();
       const { imageUrl, pdfUrl } = await storeDocuments(offerId, locationId, jpeg, pdf);
 
+      // Companion document: Rehab Scope of Work (when a scope was applied).
+      let scopePdfUrl = null;
+      let scopeWarning = null;
+      if (scope.length) {
+        try {
+          scopePdfUrl = await storeScopeDocument({
+            offerId, locationId, scope,
+            total: calc.inputs.repairs,
+            address: calc.inputs.address,
+            meta, company: calc.settings.company || {},
+          });
+        } catch (e) { scopeWarning = `rehab SOW: ${e.message}`; }
+      }
+
       // 4. Persist the offer.
       const offer = await store.createOffer({
         id: offerId,
@@ -536,6 +572,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         cashAmount: calc.offers.cash.amount,
         imageUrl,
         pdfUrl,
+        scopePdfUrl,
         dateLabel: meta.dateLabel,
         validLabel: meta.validLabel,
         scope,
@@ -546,6 +583,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       //    failures are reported + logged, not fatal (the offer itself is saved).
       const ghl = { fields: false, note: false, tag: false };
       const warnings = [];
+      if (scopeWarning) warnings.push(scopeWarning);
       const noteFailure = (step, e) => {
         const detail = e?.data ? `${e.message} :: ${JSON.stringify(e.data).slice(0, 200)}` : e?.message;
         console.error(`offers: GHL attach failed [${step}] contact=${contactId}:`, detail);

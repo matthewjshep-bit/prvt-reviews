@@ -100,11 +100,17 @@ function OfferDetail({ offer, onClose }) {
                 {offer.warnings.map((w, i) => <li key={i}>{w}</li>)}
               </ul>
             )}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <a href={offer.pdfUrl} target="_blank" rel="noreferrer"
                 className="flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-semibold text-white hover:bg-gray-800">
-                <FileText size={15} /> PDF
+                <FileText size={15} /> Offer PDF
               </a>
+              {offer.scopePdfUrl && (
+                <a href={offer.scopePdfUrl} target="_blank" rel="noreferrer"
+                  className="flex items-center gap-2 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50">
+                  <FileText size={15} /> Rehab SOW
+                </a>
+              )}
               <a href={offer.imageUrl} target="_blank" rel="noreferrer"
                 className="flex items-center gap-2 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50">
                 <FileText size={15} /> Image
@@ -191,6 +197,12 @@ export default function OffersHistory({ onEdit }) {
                       <a href={o.pdfUrl} target="_blank" rel="noreferrer"
                         className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
                         <FileText size={14} /> PDF
+                      </a>
+                    )}
+                    {o.scopePdfUrl && (
+                      <a href={o.scopePdfUrl} target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
+                        <FileText size={14} /> SOW
                       </a>
                     )}
                     {o.imageUrl && (

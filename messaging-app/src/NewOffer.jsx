@@ -397,6 +397,12 @@ export default function NewOffer({ settings, initialContactId, restore }) {
               className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800">
               <FileText size={16} /> Open PDF document
             </a>
+            {offer.scopePdfUrl && (
+              <a href={offer.scopePdfUrl} target="_blank" rel="noreferrer"
+                className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+                <FileText size={16} /> Open Rehab Scope of Work (PDF)
+              </a>
+            )}
             <a href={offer.imageUrl} target="_blank" rel="noreferrer"
               className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
               <FileText size={16} /> Open image version

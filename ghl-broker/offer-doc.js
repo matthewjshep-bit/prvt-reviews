@@ -65,6 +65,88 @@ export function moneyInWords(amount) {
   return `${parts.join(" ")} Dollars${cents ? ` and ${cents}/100` : ""}`;
 }
 
+// Rehab Scope of Work — the internal second document saved with each offer:
+// property address, itemized scope lines, contingency, and the total that
+// backs the repairs number used in the offer math.
+export function buildScopeDocument({ scope = [], total = 0, address = "", meta = {}, company = {}, locationId = "" }) {
+  const layers = [];
+  const subtotal = scope.reduce((t, s) => t + (Number(s.cost) || 0), 0);
+  const contingency = Math.max(0, Math.round(total - subtotal));
+
+  /* ---- letterhead ---- */
+  layers.push({ id: uid("bar"), type: "shape", shape: "rect", x: 0, y: 0, width: 100, height: 0.55, fill: GOLD, visible: true });
+  if (company.name) {
+    layers.push(text(8, 3.6, 56, 3.6, sp(company.name), { font: "Source Serif", weight: "bold", size: 40, color: DARK, autoFit: true, maxLines: 1 }));
+  }
+  if (company.tagline) {
+    layers.push(text(8, 7.3, 56, 2.2, sp(company.tagline), { size: 17, color: GOLD, weight: "bold", autoFit: true, maxLines: 1 }));
+  }
+  if (meta.dateLabel) {
+    layers.push(text(56, 3.6, 36, 3, meta.dateLabel, { size: 20, color: MUTED, align: "right" }));
+  }
+  layers.push(rule(11));
+
+  /* ---- title + property ---- */
+  layers.push(text(8, 13.6, 84, 3, sp("Rehab Scope of Work"), { font: "Source Serif", weight: "bold", size: 34, color: DARK, align: "center", autoFit: true, maxLines: 1 }));
+  layers.push(text(8, 17.2, 84, 2.6, address || "Subject property", { size: 26, weight: "bold", color: INK, align: "center", autoFit: true, maxLines: 1 }));
+  layers.push(text(8, 20, 84, 2, sp("Estimated Repair Items"), { size: 16, color: MUTED, align: "center" }));
+
+  /* ---- line items (single column ≤ 26 items, else two columns) ---- */
+  const startY = 24;
+  const rowH = 2.35;
+  const drawRows = (items, x, w) => {
+    let y = startY;
+    for (const s of items) {
+      layers.push(text(x, y, w - 12, 2.1, s.label, { size: 20, color: INK, autoFit: true, maxLines: 1 }));
+      layers.push(text(x + w - 12, y, 12, 2.1, fmtMoney(s.cost), { size: 20, color: DARK, weight: "bold", align: "right", autoFit: true, maxLines: 1 }));
+      layers.push({ id: uid("r"), type: "shape", shape: "rect", x, y: y + 2.05, width: w, height: 0.08, fill: "rgba(100,116,139,0.18)", visible: true });
+      y += rowH;
+    }
+    return y;
+  };
+  const items = scope.slice(0, 52);
+  let endY;
+  if (items.length <= 26) {
+    endY = drawRows(items, 8, 84);
+  } else {
+    const half = Math.ceil(items.length / 2);
+    const y1 = drawRows(items.slice(0, half), 8, 41);
+    const y2 = drawRows(items.slice(half), 51, 41);
+    endY = Math.max(y1, y2);
+  }
+
+  /* ---- totals ---- */
+  let y = Math.min(endY + 1.5, 84);
+  layers.push(text(8, y, 72, 2.2, "Line items subtotal", { size: 21, color: MUTED, align: "right" }));
+  layers.push(text(80, y, 12, 2.2, fmtMoney(subtotal), { size: 21, color: INK, align: "right", autoFit: true, maxLines: 1 }));
+  if (contingency > 0) {
+    y += 2.6;
+    layers.push(text(8, y, 72, 2.2, "Contingency & rounding", { size: 21, color: MUTED, align: "right" }));
+    layers.push(text(80, y, 12, 2.2, fmtMoney(contingency), { size: 21, color: INK, align: "right", autoFit: true, maxLines: 1 }));
+  }
+  y += 3;
+  layers.push({ id: uid("tbar"), type: "shape", shape: "rect", x: 8, y, width: 84, height: 0.18, fill: RULE, visible: true });
+  y += 1.2;
+  layers.push(text(8, y, 60, 3.4, sp("Total Rehab Estimate"), { size: 20, color: GOLD, weight: "bold" }));
+  layers.push(text(48, y - 0.8, 44, 4.4, fmtMoney(total || subtotal), { font: "Source Serif", weight: "bold", size: 54, color: DARK, align: "right", autoFit: true, maxLines: 1 }));
+
+  /* ---- fine print ---- */
+  layers.push(rule(95.4));
+  layers.push(text(8, 96.4, 84, 3.4,
+    "Preliminary walkthrough estimate for planning and underwriting purposes only — not a contractor bid. " +
+    "Quantities and costs subject to interior inspection and licensed contractor quotes.",
+    { size: 14, color: FAINT, lineHeight: 1.4, maxLines: 3 }));
+
+  return {
+    locationId,
+    name: `Rehab SOW — ${address || "property"}`.slice(0, 120),
+    canvas: LETTER,
+    background: { color: PAPER },
+    dataSources: [],
+    layers,
+  };
+}
+
 // calc: output of calculateOffers(). meta: { contactName, dateLabel, validLabel }.
 export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
   const { inputs, settings } = calc;
