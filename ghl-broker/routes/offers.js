@@ -235,6 +235,82 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     }
   });
 
+  /* ---------- geocode (map centering for the comps pane) ---------- */
+  router.get("/geocode", async (req, res) => {
+    try {
+      resolveLocation(req);
+      const q = String(req.query.query || "").trim();
+      if (q.length < 4) return res.json({ result: null });
+      const r = await fetch(
+        `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=en`,
+        { signal: AbortSignal.timeout(4000) }
+      );
+      if (!r.ok) return res.json({ result: null });
+      const j = await r.json();
+      const f = (j.features || [])[0];
+      if (!f?.geometry?.coordinates) return res.json({ result: null });
+      const [lng, lat] = f.geometry.coordinates;
+      res.json({ result: { lat, lng } });
+    } catch {
+      res.json({ result: null });
+    }
+  });
+
+  /* ---------- comps (RentCast AVM, key configured in Settings) ---------- */
+  // Cached per address for 24h — the RentCast free tier is 50 requests/month.
+  const compsCache = new Map();
+  router.get("/comps", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const address = String(req.query.address || "").trim();
+      if (!address) return res.status(400).json({ error: "address required" });
+
+      const saved = await store.getOfferSettings(locationId);
+      const apiKey = String(saved?.rentcastApiKey || "").trim();
+      if (!apiKey) return res.json({ enabled: false, comps: [], estimate: null });
+
+      const cacheKey = address.toLowerCase();
+      const hit = compsCache.get(cacheKey);
+      if (hit && Date.now() - hit.ts < 24 * 3600 * 1000) return res.json(hit.data);
+
+      const p = new URLSearchParams({ address, compCount: "15" });
+      const sqft = parseInt(req.query.sqft, 10);
+      if (sqft > 0) p.set("squareFootage", String(sqft));
+      const r = await fetch(`https://api.rentcast.io/v1/avm/value?${p}`, {
+        headers: { "X-Api-Key": apiKey, Accept: "application/json" },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!r.ok) {
+        const detail = (await r.text()).slice(0, 200);
+        return res.status(502).json({ error: `RentCast ${r.status}`, detail });
+      }
+      const j = await r.json();
+      const data = {
+        enabled: true,
+        estimate: j.price
+          ? { price: Math.round(j.price), low: Math.round(j.priceRangeLow || 0), high: Math.round(j.priceRangeHigh || 0) }
+          : null,
+        comps: (j.comparables || [])
+          .filter((c) => c.latitude && c.longitude && c.price)
+          .map((c) => ({
+            id: c.id || c.formattedAddress,
+            address: c.formattedAddress || "",
+            price: Math.round(c.price),
+            sqft: c.squareFootage || 0,
+            beds: c.bedrooms || null,
+            baths: c.bathrooms || null,
+            distance: c.distance != null ? Math.round(c.distance * 100) / 100 : null,
+            correlation: c.correlation != null ? Math.round(c.correlation * 100) : null,
+            lat: c.latitude,
+            lng: c.longitude,
+          })),
+      };
+      if (compsCache.size > 100) compsCache.clear();
+      compsCache.set(cacheKey, { ts: Date.now(), data });
+      res.json(data);
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---------- create: calculate + document + attach to contact ---------- */
   router.post("/", async (req, res) => {
     try {

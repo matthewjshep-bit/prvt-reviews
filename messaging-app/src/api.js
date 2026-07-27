@@ -57,6 +57,15 @@ export const suggestAddresses = (query) =>
   fetch(`${API_BASE}/api/offers/address-suggest?location_id=${loc()}&query=${encodeURIComponent(query)}`)
     .then(j)
     .then((r) => r.suggestions);
+export const geocode = (query) =>
+  fetch(`${API_BASE}/api/offers/geocode?location_id=${loc()}&query=${encodeURIComponent(query)}`)
+    .then(j)
+    .then((r) => r.result);
+export const getComps = (address, sqft) => {
+  const p = new URLSearchParams({ location_id: getLocationId(), address });
+  if (sqft) p.set("sqft", sqft);
+  return fetch(`${API_BASE}/api/offers/comps?${p}`).then(j);
+};
 
 // Deep link to a contact record inside GHL (opens in a new tab).
 export const ghlContactUrl = (contactId) =>

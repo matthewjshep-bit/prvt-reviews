@@ -7,6 +7,7 @@ import { calculateOffers, fmtMoney } from "@shared/offer-calc.js";
 import {
   createOffer, getContactDetail, previewDocument, searchContacts, sendOffer, suggestAddresses,
 } from "./api.js";
+import CompsPane from "./CompsPane.jsx";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -397,6 +398,11 @@ export default function NewOffer({ settings }) {
           </Field>
         </div>
       </div>
+
+      <CompsPane
+        address={inputs.address}
+        onUseArv={(arv) => setInputs((s) => ({ ...s, arv: Number(arv).toLocaleString("en-US") }))}
+      />
 
       <OfferCards calc={calc} />
 

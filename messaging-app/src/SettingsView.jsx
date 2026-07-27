@@ -98,6 +98,15 @@ export default function SettingsView({ settings, onSaved }) {
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Comps map (RentCast)</h2>
+        <p className="mb-3 text-xs text-gray-500">
+          Powers the automatic comps on the New Offer map. Free key at rentcast.io → API Dashboard
+          (50 lookups/month on the free tier). Leave blank to use manual comps only.
+        </p>
+        <Txt label="RentCast API key" value={form.rentcastApiKey || ""} onChange={set("rentcastApiKey")} placeholder="rc_..." />
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Company (printed on the document)</h2>
         <div className="grid grid-cols-2 gap-3">
           <Txt label="Company name" value={form.company.name} onChange={setCo("name")} placeholder="PRVT MKT" />
