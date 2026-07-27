@@ -31,7 +31,7 @@ GHL_LOCATION_ID=...               # single-tenant guard
 CARD_SERVICE_URL=https://prvt-reviews.onrender.com
 PUBLIC_BASE_URL=https://prvt-reviews-1.onrender.com
 DATABASE_URL=postgres://...       # Render Postgres; schema auto-applies on boot
-R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET / R2_PUBLIC_BASE
+# R2_* (optional) — when set, documents go to Cloudflare R2 instead of Postgres
 APP_ORIGIN=https://<your-netlify-site>   # frontend origin (cross-origin CORS)
 # CARD_SENDS_ENABLED=true         # leave unset until you want live SMS sends
 ```
@@ -71,6 +71,7 @@ should load and contact search should return results.
   preview unless the request passes `dryRun:false` AND the broker has
   `CARD_SENDS_ENABLED=true`.
 - The broker rejects any `location_id` that doesn't match `GHL_LOCATION_ID`.
+- Generated documents are stored in Postgres and served at /api/offers/:id/doc.(pdf|jpg) — no storage config needed; links survive redeploys. Setting the R2_* vars switches storage to R2.
 - Offer creation degrades gracefully: if a GHL write fails (fields/note/tag),
   the offer + documents still save and the response lists per-step warnings.
 

@@ -15,12 +15,12 @@
 //   POST   /api/offers/:id/send              text the offer doc to the contact
 
 import express from "express";
-import path from "node:path";
+import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { buildOfferDocument } from "../offer-doc.js";
 import { jpegToPdf } from "../pdf.js";
-import { uploadAsset } from "../r2.js";
+import { uploadAsset, r2Enabled } from "../r2.js";
 import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, sendSms,
@@ -96,11 +96,41 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     if (code >= 500) console.error("offers error:", code, err.message, err.detail || "");
     res.status(code).json({ error: err.message, detail: err.detail });
   };
-  // Keys already carry the offers/ prefix; store relative to the upload root.
-  const localOpts = {
-    localDir: uploadDir,
-    localBaseUrl: `${publicBaseUrl}/uploads`,
+  // Where generated documents live:
+  //   • R2 when configured (permanent public URLs, offloaded bandwidth), else
+  //   • Postgres via store.saveOfferDoc, served by the doc routes below —
+  //     zero storage configuration and the URLs survive redeploys.
+  async function storeDocuments(offerId, locationId, jpeg, pdf) {
+    if (r2Enabled) {
+      const keyBase = `offers/${locationId}/${offerId}`;
+      const localOpts = { localDir: uploadDir, localBaseUrl: `${publicBaseUrl}/uploads` };
+      return {
+        imageUrl: await uploadAsset(`${keyBase}.jpg`, jpeg, "image/jpeg", localOpts),
+        pdfUrl: await uploadAsset(`${keyBase}.pdf`, pdf, "application/pdf", localOpts),
+      };
+    }
+    await store.saveOfferDoc(offerId, "image", jpeg, "image/jpeg");
+    await store.saveOfferDoc(offerId, "pdf", pdf, "application/pdf");
+    return {
+      imageUrl: `${publicBaseUrl}/api/offers/${offerId}/doc.jpg`,
+      pdfUrl: `${publicBaseUrl}/api/offers/${offerId}/doc.pdf`,
+    };
+  }
+
+  // Public document routes (the URLs written onto the contact / texted out).
+  // No location gate: the unguessable offer UUID is the capability, exactly
+  // like a public R2 URL.
+  const serveDoc = (kind) => async (req, res) => {
+    try {
+      const doc = await store.getOfferDoc(req.params.id, kind);
+      if (!doc) return res.status(404).type("text/plain").send("not found");
+      res.set("Content-Type", doc.contentType);
+      res.set("Cache-Control", "public, max-age=31536000, immutable");
+      res.send(doc.bytes);
+    } catch (err) { fail(res, err); }
   };
+  router.get("/:id/doc.pdf", serveDoc("pdf"));
+  router.get("/:id/doc.jpg", serveDoc("image"));
 
   /* ---------- settings ---------- */
   router.get("/settings", async (req, res) => {
@@ -193,13 +223,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       };
       const { jpeg, width, height } = await renderDocument(calc, meta, locationId);
       const pdf = jpegToPdf(jpeg, width, height);
-      const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-      const keyBase = `offers/${locationId}/${stamp}`;
-      const imageUrl = await uploadAsset(`${keyBase}.jpg`, jpeg, "image/jpeg", localOpts);
-      const pdfUrl = await uploadAsset(`${keyBase}.pdf`, pdf, "application/pdf", localOpts);
+      const offerId = crypto.randomUUID();
+      const { imageUrl, pdfUrl } = await storeDocuments(offerId, locationId, jpeg, pdf);
 
       // 4. Persist the offer.
       const offer = await store.createOffer({
+        id: offerId,
         locationId,
         contactId,
         contactName: meta.contactName,

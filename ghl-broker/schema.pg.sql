@@ -25,6 +25,18 @@ create table if not exists offer_settings (
   updated_at   timestamptz not null default now()
 );
 
+-- Generated offer documents (PDF + JPEG bytes), served by the broker at
+-- /api/offers/:id/doc.(pdf|jpg). Kept in Postgres so links survive deploys
+-- with zero storage configuration; R2 is used instead when configured.
+create table if not exists offer_documents (
+  offer_id      uuid not null,
+  kind          text not null,          -- 'pdf' | 'image'
+  content_type  text not null,
+  bytes         bytea not null,
+  created_at    timestamptz not null default now(),
+  primary key (offer_id, kind)
+);
+
 -- The pre-overhaul Card Studio / Home tables (templates, template_versions,
 -- renders, assets, connections, home_sends, campaigns, journeys,
 -- journey_enrollments, data_source_tests) are no longer used. They are left

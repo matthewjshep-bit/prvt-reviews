@@ -26,7 +26,7 @@ const pgStore = {
 
   /* ---- offers ---- */
   async createOffer(doc) {
-    const id = uuid();
+    const id = doc.id || uuid();
     const ts = nowIso();
     const full = { ...doc, id, createdAt: ts };
     await query(
@@ -57,8 +57,26 @@ const pgStore = {
     return rowCount > 0;
   },
   async deleteOffer(id) {
+    await query(`delete from offer_documents where offer_id = $1`, [id]).catch(() => {});
     const { rowCount } = await query(`delete from offers where id = $1`, [id]);
     return rowCount > 0;
+  },
+
+  /* ---- offer documents (bytes in Postgres; used when R2 isn't configured) ---- */
+  async saveOfferDoc(offerId, kind, bytes, contentType) {
+    await query(
+      `insert into offer_documents (offer_id, kind, content_type, bytes) values ($1,$2,$3,$4)
+       on conflict (offer_id, kind) do update set content_type = $3, bytes = $4`,
+      [offerId, kind, contentType, bytes]
+    );
+    return true;
+  },
+  async getOfferDoc(offerId, kind) {
+    const { rows } = await query(
+      `select content_type as "contentType", bytes from offer_documents where offer_id = $1 and kind = $2`,
+      [offerId, kind]
+    );
+    return rows[0] || null;
   },
 
   /* ---- offer settings (one row per location) ---- */
@@ -122,7 +140,7 @@ const fileStore = (() => {
 
     async createOffer(doc) {
       ensure();
-      const id = uuid();
+      const id = doc.id || uuid();
       const full = { ...doc, id, createdAt: nowIso() };
       data.offers[id] = full;
       persist();
@@ -150,8 +168,33 @@ const fileStore = (() => {
       ensure();
       if (!data.offers[id]) return false;
       delete data.offers[id];
+      for (const kind of ["pdf", "image"]) {
+        fs.rmSync(path.join(DATA_DIR, "docs", `${id}.${kind}`), { force: true });
+      }
       persist();
       return true;
+    },
+
+    // Documents live as files under DATA_DIR/docs (dev only).
+    async saveOfferDoc(offerId, kind, bytes, contentType) {
+      ensure();
+      const dir = path.join(DATA_DIR, "docs");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `${offerId}.${kind}`), bytes);
+      fs.writeFileSync(path.join(dir, `${offerId}.${kind}.meta`), contentType);
+      return true;
+    },
+    async getOfferDoc(offerId, kind) {
+      ensure();
+      try {
+        const dir = path.join(DATA_DIR, "docs");
+        return {
+          bytes: fs.readFileSync(path.join(dir, `${offerId}.${kind}`)),
+          contentType: fs.readFileSync(path.join(dir, `${offerId}.${kind}.meta`), "utf8"),
+        };
+      } catch {
+        return null;
+      }
     },
 
     async getOfferSettings(locationId) {
