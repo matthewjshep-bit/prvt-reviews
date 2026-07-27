@@ -104,9 +104,12 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
     throw Object.assign(new Error("arv (or askingPrice) must be a positive number"), { http: 400 });
   }
   const repairs = Math.max(0, num(rawInputs.repairs));
+  // Manual final-price override: when set, it replaces the modeled amount on
+  // the letter (the breakdown still shows the model that anchored it).
+  const priceOverride = Math.max(0, num(rawInputs.priceOverride));
   const inputs = {
     address: String(rawInputs.address || "").trim(),
-    askingPrice, arv, repairs,
+    askingPrice, arv, repairs, priceOverride,
   };
 
   let cash;
@@ -153,6 +156,13 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
       closeDays: s.closeDays,
       pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : null,
     };
+  }
+
+  if (priceOverride > 0) {
+    cash.systemAmount = cash.amount;
+    cash.amount = priceOverride;
+    cash.overridden = true;
+    cash.pctOfAsking = askingPrice > 0 ? Math.round((priceOverride / askingPrice) * 100) : null;
   }
 
   return { inputs, settings: s, offers: { cash } };

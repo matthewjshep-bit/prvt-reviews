@@ -193,7 +193,7 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
 
 /* ---------------- the cash offer card ---------------- */
 
-function OfferCards({ calc, underwriteMode, setUnderwriteMode }) {
+function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, setPriceOverride, feeOverride, setFeeOverride, fmtTyped }) {
   const modeToggle = (
     <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5 text-xs font-semibold">
       {UNDERWRITE_MODES.map((m) => (
@@ -228,14 +228,46 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode }) {
       <div className="sm:flex sm:items-center sm:justify-between sm:gap-8">
         <div>
           <div className="mt-1 text-4xl font-black tracking-tight">{fmtMoney(cash.amount)}</div>
-          <div className="mt-1 text-xs text-gray-500">
-            {cash.pctOfAsking != null ? `≈ ${cash.pctOfAsking}% of asking · ` : ""}as-is · close in ~{cash.closeDays} days
-          </div>
+          {cash.overridden ? (
+            <div className="mt-1 text-xs text-gray-500">
+              manually set — system: {fmtMoney(cash.systemAmount)}{" "}
+              <button type="button" onClick={() => setPriceOverride("")} className="font-semibold underline hover:text-gray-700">
+                use calculated
+              </button>
+            </div>
+          ) : (
+            <div className="mt-1 text-xs text-gray-500">
+              {cash.pctOfAsking != null ? `≈ ${cash.pctOfAsking}% of asking · ` : ""}as-is · close in ~{cash.closeDays} days
+            </div>
+          )}
+          <label className="mt-3 flex items-center gap-2 text-xs text-gray-500">
+            Offer amount on letter $
+            <input
+              className="w-32 rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-sm font-semibold tabular-nums focus:border-gray-900 focus:outline-none"
+              inputMode="numeric" placeholder="auto"
+              value={priceOverride}
+              onChange={(e) => setPriceOverride(fmtTyped(e.target.value))}
+            />
+          </label>
         </div>
         <div className="mt-4 w-full max-w-xs space-y-1 border-t border-amber-200 pt-3 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
           <Row label={`~${cash.pctOfArv}% of ARV`} value={fmtMoney(cash.base)} />
           <Row label={cash.mode === "mao" ? "Repairs" : "Repair adjustment"} value={`− ${fmtMoney(cash.repairAdjustment)}`} />
-          {cash.wholesaleFee > 0 && <Row label="Fee / spread" value={`− ${fmtMoney(cash.wholesaleFee)}`} />}
+          {cash.mode !== "mao" && (
+            <div className="flex items-center justify-between gap-4 text-sm">
+              <span className="text-gray-500">Fee / spread</span>
+              <span className="flex items-center gap-1 font-medium tabular-nums">
+                − $
+                <input
+                  className="w-20 rounded-lg border border-amber-300 bg-white px-1.5 py-0.5 text-right text-sm focus:border-gray-900 focus:outline-none"
+                  inputMode="numeric"
+                  placeholder={fmtTyped(String(cash.wholesaleFee))}
+                  value={feeOverride}
+                  onChange={(e) => setFeeOverride(fmtTyped(e.target.value))}
+                />
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -259,17 +291,22 @@ export default function NewOffer({ settings, initialContactId, restore }) {
     (fromOffer?.contactId ? { id: fromOffer.contactId, name: fromOffer.contactName || "", phone: "", email: "" } : null)
   );
   const [newContact, setNewContact] = useState(snap?.newContact || { name: "", phone: "" });
+  const BLANK_INPUTS = { address: "", askingPrice: "", arv: "", repairs: "", priceOverride: "" };
   const [inputs, setInputs] = useState(
-    snap?.inputs ||
+    snap?.inputs ? { ...BLANK_INPUTS, ...snap.inputs } :
     (fromOffer?.calc
       ? {
+          ...BLANK_INPUTS,
           address: fromOffer.calc.inputs.address || "",
           askingPrice: fmtN(fromOffer.calc.inputs.askingPrice),
           arv: fmtN(fromOffer.calc.inputs.arv),
           repairs: fmtN(fromOffer.calc.inputs.repairs),
+          priceOverride: fmtN(fromOffer.calc.inputs.priceOverride),
         }
-      : { address: "", askingPrice: "", arv: "", repairs: "" })
+      : BLANK_INPUTS)
   );
+  // Per-offer fee/spread override ("" → use the settings default).
+  const [feeOverride, setFeeOverride] = useState(snap?.feeOverride ?? "");
   const [underwriteMode, setUnderwriteMode] = useState(
     snap?.underwriteMode || fromOffer?.calc?.settings?.underwriteMode || settings?.underwriteMode || "lowball"
   );
@@ -326,9 +363,16 @@ export default function NewOffer({ settings, initialContactId, restore }) {
       .catch(() => {});
   }
 
-  // The per-offer underwrite toggle rides on top of the saved settings for
-  // the live preview, the rendered document, and the created offer alike.
-  const effSettings = useMemo(() => ({ ...(settings || {}), underwriteMode }), [settings, underwriteMode]);
+  // The per-offer underwrite toggle + fee override ride on top of the saved
+  // settings for the live preview, the rendered document, and the created
+  // offer alike.
+  const effSettings = useMemo(() => {
+    const s = { ...(settings || {}), underwriteMode };
+    if (String(feeOverride).trim() !== "") {
+      s.wholesaleFee = Number(String(feeOverride).replace(/[^\d]/g, "")) || 0;
+    }
+    return s;
+  }, [settings, underwriteMode, feeOverride]);
 
   const calc = useMemo(() => {
     try {
@@ -362,7 +406,7 @@ export default function NewOffer({ settings, initialContactId, restore }) {
         draftId,
         // Full form snapshot so History → Edit restores comps + rehab intact.
         snapshot: {
-          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode,
+          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride,
           rehab: rehabStateRef.current,
           comps: compsStateRef.current,
         },
@@ -378,7 +422,7 @@ export default function NewOffer({ settings, initialContactId, restore }) {
     setError(""); setSavingDraft(true);
     try {
       const r = await saveDraft(draftId, {
-        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode,
+        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride,
         rehab: rehabStateRef.current,
         comps: compsStateRef.current,
         cashPreview: calc?.offers?.cash?.amount ?? null,
@@ -538,7 +582,9 @@ export default function NewOffer({ settings, initialContactId, restore }) {
         }}
       />
 
-      <OfferCards calc={calc} underwriteMode={underwriteMode} setUnderwriteMode={setUnderwriteMode} />
+      <OfferCards calc={calc} underwriteMode={underwriteMode} setUnderwriteMode={setUnderwriteMode}
+        priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
+        feeOverride={feeOverride} setFeeOverride={setFeeOverride} fmtTyped={fmtTyped} />
 
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" disabled={!calc || previewing} onClick={doPreview}
