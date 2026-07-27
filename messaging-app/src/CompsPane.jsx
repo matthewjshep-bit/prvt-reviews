@@ -21,7 +21,7 @@ const median = (xs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqft: setSubjectSqft }) {
+export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqft: setSubjectSqft, onSubjectInfo }) {
   const [state, setState] = useState(null); // { subject:{lat,lng}, info, comps, estimate, enabled }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -46,6 +46,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
         : geo;
       if (!center) throw new Error("couldn't locate that address on the map");
       setState({ subject: center, info: comps.subject || null, ...comps });
+      if (comps.subject) onSubjectInfo?.(comps.subject);
       // The subject's recorded sqft powers the $/sqft math if none was typed.
       if (!parse(subjectSqft) && comps.subject?.sqft) {
         setSubjectSqft(String(comps.subject.sqft));

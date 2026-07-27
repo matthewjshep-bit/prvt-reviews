@@ -109,7 +109,8 @@ function offerNoteBody(offer) {
   const lines = [
     `CASH OFFER — ${inputs.address || "subject property"} (${offer.dateLabel})`,
     `Offer: ${fmtMoney(offers.cash.amount)} (as-is, ~${offers.cash.closeDays}-day close, valid through ${offer.validLabel})`,
-    `Inputs: asking ${fmtMoney(inputs.askingPrice)} · ARV ${fmtMoney(inputs.arv)} · repairs ${fmtMoney(inputs.repairs)}`,
+    `Inputs: ARV ${fmtMoney(inputs.arv)} · repairs ${fmtMoney(inputs.repairs)}` +
+      (inputs.askingPrice > 0 ? ` · asking ${fmtMoney(inputs.askingPrice)}` : ""),
   ];
   if (offer.scope?.length) {
     lines.push(`Rehab scope: ${offer.scope.map((s) => `${s.label} ${fmtMoney(s.cost)}`).join("; ")}`);

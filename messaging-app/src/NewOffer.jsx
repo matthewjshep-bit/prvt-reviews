@@ -197,7 +197,7 @@ function OfferCards({ calc }) {
   if (!calc) {
     return (
       <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-400">
-        Enter an asking price to see the cash offer.
+        Enter an ARV (or use the comps below) to see the cash offer.
       </div>
     );
   }
@@ -214,7 +214,7 @@ function OfferCards({ calc }) {
         <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">All-cash offer</div>
         <div className="mt-1 text-4xl font-black tracking-tight">{fmtMoney(cash.amount)}</div>
         <div className="mt-1 text-xs text-gray-500">
-          ≈ {cash.pctOfAsking}% of asking · as-is · close in ~{cash.closeDays} days
+          {cash.pctOfAsking != null ? `≈ ${cash.pctOfAsking}% of asking · ` : ""}as-is · close in ~{cash.closeDays} days
         </div>
       </div>
       <div className="mt-4 w-full max-w-xs space-y-1 border-t border-amber-200 pt-3 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
@@ -234,6 +234,7 @@ export default function NewOffer({ settings, initialContactId }) {
   const [newContact, setNewContact] = useState({ name: "", phone: "" });
   const [inputs, setInputs] = useState({ address: "", askingPrice: "", arv: "", repairs: "" });
   const [subjectSqft, setSubjectSqft] = useState(""); // shared: comps $/sqft + rehab per-sqft items
+  const [subjectInfo, setSubjectInfo] = useState(null); // beds/baths from the comps subject record
   const [scope, setScope] = useState([]);             // applied rehab line items, saved with the offer
   const [preview, setPreview] = useState(null);   // data-url image
   const [previewing, setPreviewing] = useState(false);
@@ -411,14 +412,14 @@ export default function NewOffer({ settings, initialContactId }) {
               </a>
             )}
           </div>
-          <Field label="Asking price ($)">
-            <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={setMoney("askingPrice")} placeholder="200,000" />
-          </Field>
           <Field label="After-repair value / ARV ($)">
-            <input className={INPUT_CLS} inputMode="numeric" value={inputs.arv} onChange={setMoney("arv")} placeholder="defaults to asking" />
+            <input className={INPUT_CLS} inputMode="numeric" value={inputs.arv} onChange={setMoney("arv")} placeholder="from comps below" />
           </Field>
           <Field label="Estimated repairs ($)">
-            <input className={INPUT_CLS} inputMode="numeric" value={inputs.repairs} onChange={setMoney("repairs")} placeholder="0" />
+            <input className={INPUT_CLS} inputMode="numeric" value={inputs.repairs} onChange={setMoney("repairs")} placeholder="from scope below" />
+          </Field>
+          <Field label="Asking price ($, optional)">
+            <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={setMoney("askingPrice")} placeholder="for %-of-asking context" />
           </Field>
         </div>
       </div>
@@ -427,11 +428,14 @@ export default function NewOffer({ settings, initialContactId }) {
         address={inputs.address}
         sqft={subjectSqft}
         setSqft={setSubjectSqft}
+        onSubjectInfo={setSubjectInfo}
         onUseArv={(arv) => setInputs((s) => ({ ...s, arv: Number(arv).toLocaleString("en-US") }))}
       />
 
       <RehabPane
         sqft={subjectSqft}
+        beds={Number(subjectInfo?.beds) || 0}
+        baths={Number(subjectInfo?.baths) || 0}
         onApply={(total, lines) => {
           setInputs((s) => ({ ...s, repairs: Number(total).toLocaleString("en-US") }));
           setScope(lines);

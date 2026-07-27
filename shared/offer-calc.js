@@ -75,17 +75,19 @@ export function effectiveSettings(overrides = {}) {
   return s;
 }
 
-// inputs: { address, askingPrice, arv?, repairs? }
+// inputs: { address, arv, repairs?, askingPrice? } — the offer is driven by
+// ARV + repairs; asking price is optional context (defaults ARV when ARV is
+// blank, and powers the "% of asking" readout).
 // Returns { inputs, settings, offers: { cash } }.
 // Throws { message, http:400 } on unusable inputs.
 export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
   const s = effectiveSettings(settingsOverride);
 
-  const askingPrice = num(rawInputs.askingPrice);
-  if (askingPrice <= 0) {
-    throw Object.assign(new Error("askingPrice must be a positive number"), { http: 400 });
-  }
+  const askingPrice = Math.max(0, num(rawInputs.askingPrice));
   const arv = num(rawInputs.arv) > 0 ? num(rawInputs.arv) : askingPrice;
+  if (arv <= 0) {
+    throw Object.assign(new Error("arv (or askingPrice) must be a positive number"), { http: 400 });
+  }
   const repairs = Math.max(0, num(rawInputs.repairs));
   const inputs = {
     address: String(rawInputs.address || "").trim(),
@@ -112,7 +114,7 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
     repairAdjustment: Math.round(repairAdj),
     wholesaleFee: num(s.wholesaleFee),
     closeDays: s.closeDays,
-    pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : 0,
+    pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : null,
   };
 
   return { inputs, settings: s, offers: { cash } };
