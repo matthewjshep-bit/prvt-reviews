@@ -51,7 +51,10 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
         ? { lat: comps.subject.lat, lng: comps.subject.lng }
         : geo;
       if (!center) throw new Error("couldn't locate that address on the map");
-      setState({ subject: center, info: comps.subject || null, ...comps });
+      // Spread first: comps carries its own `subject` (the provider record,
+      // which can be all-null when the address has no record) and must not
+      // clobber the resolved map center.
+      setState({ ...comps, subject: center, info: comps.subject || null });
       if (comps.subject) onSubjectInfo?.(comps.subject);
       // The subject's recorded sqft powers the $/sqft math if none was typed.
       if (!parse(subjectSqft) && comps.subject?.sqft) {
@@ -121,7 +124,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
           </button>
         </div>
       </div>
-      {state?.info && (
+      {state?.info && (state.info.beds != null || state.info.sqft || state.info.lastSalePrice) && (
         <div className="mb-2 text-xs text-gray-500">
           Subject record: {[
             state.info.beds != null ? `${state.info.beds} bd` : "",
@@ -172,6 +175,13 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             {!state.enabled && (
               <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 Automatic sold comps are off — add your RealEstateAPI key in Settings. You can still add comps manually below.
+              </div>
+            )}
+            {state.enabled && !(state.comps || []).length && (
+              <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                {state.info?.sqft || state.info?.beds != null
+                  ? <>No sold comps matched the record ({[state.info.beds != null ? `${state.info.beds} bd` : "", state.info.baths != null ? `${state.info.baths} ba` : "", state.info.sqft ? `${state.info.sqft.toLocaleString()} sqft` : ""].filter(Boolean).join(" / ")}). If that record looks wrong, type the correct sqft above and reload — or add comps manually below.</>
+                  : <>No property record found for this address — automatic comps unavailable. Add comps manually below.</>}
               </div>
             )}
             {state.estimate && (
