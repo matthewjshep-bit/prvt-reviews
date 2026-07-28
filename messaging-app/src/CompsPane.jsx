@@ -7,9 +7,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { Loader2, MapPin, Plus, X } from "lucide-react";
+import { ExternalLink, Loader2, MapPin, Plus, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { geocode, getComps } from "./api.js";
+import { geocode, getComps, zillowUrl } from "./api.js";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
@@ -29,12 +29,29 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   const [manual, setManual] = useState(initialState?.manual || []);
   const [draft, setDraft] = useState({ label: "", price: "", sqft: "" });
   const [months, setMonths] = useState(initialState?.months || 12);
+  // User-corrected subject beds/baths — the provider's record is sometimes
+  // wrong; these drive the comps filters and the rehab room counts.
+  const [beds, setBeds] = useState(initialState?.beds || "");
+  const [baths, setBaths] = useState(initialState?.baths || "");
 
   // Report state upward so drafts/offers can snapshot the comps workspace.
   useEffect(() => {
-    onStateChange?.({ result: state, selected: [...selected], manual, months });
+    onStateChange?.({ result: state, selected: [...selected], manual, months, beds, baths });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, selected, manual, months]);
+  }, [state, selected, manual, months, beds, baths]);
+
+  // Keep the rehab pane's room counts in sync with corrected beds/baths.
+  const editSubjectFacts = (nextBeds, nextBaths) => {
+    setBeds(nextBeds); setBaths(nextBaths);
+    if (state?.info) {
+      const info = {
+        ...state.info,
+        ...(Number(nextBeds) > 0 ? { beds: Number(nextBeds) } : {}),
+        ...(Number(nextBaths) > 0 ? { baths: Number(nextBaths) } : {}),
+      };
+      onSubjectInfo?.(info);
+    }
+  };
 
   const parse = (v) => Number(String(v).replace(/[^\d.]/g, "")) || 0;
 
@@ -44,7 +61,12 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
     try {
       const [geo, comps] = await Promise.all([
         geocode(address.trim()).catch(() => null),
-        getComps(address.trim(), { sqft: parse(subjectSqft) || undefined, months }),
+        getComps(address.trim(), {
+          sqft: parse(subjectSqft) || undefined,
+          months,
+          beds: Number(beds) > 0 ? Number(beds) : undefined,
+          baths: Number(baths) > 0 ? Number(baths) : undefined,
+        }),
       ]);
       // Prefer the data provider's subject coordinates; fall back to geocode.
       const center = comps.subject?.lat
@@ -55,11 +77,20 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       // which can be all-null when the address has no record) and must not
       // clobber the resolved map center.
       setState({ ...comps, subject: center, info: comps.subject || null });
-      if (comps.subject) onSubjectInfo?.(comps.subject);
-      // The subject's recorded sqft powers the $/sqft math if none was typed.
+      // User-typed beds/baths win over the provider record everywhere.
+      if (comps.subject) {
+        onSubjectInfo?.({
+          ...comps.subject,
+          ...(Number(beds) > 0 ? { beds: Number(beds) } : {}),
+          ...(Number(baths) > 0 ? { baths: Number(baths) } : {}),
+        });
+      }
+      // The subject's recorded facts prefill anything not already typed.
       if (!parse(subjectSqft) && comps.subject?.sqft) {
         setSubjectSqft(String(comps.subject.sqft));
       }
+      if (!Number(beds) && comps.subject?.beds != null) setBeds(String(comps.subject.beds));
+      if (!Number(baths) && comps.subject?.baths != null) setBaths(String(comps.subject.baths));
       // Preselect the closest comps (max 6).
       const pre = (comps.comps || [])
         .slice()
@@ -112,6 +143,18 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             <option value={9}>Sold ≤ 9 mo</option>
             <option value={12}>Sold ≤ 12 mo</option>
           </select>
+          <input
+            className="w-16 rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+            inputMode="numeric" placeholder="Beds" title="Subject beds — corrects the record and filters comps"
+            value={beds}
+            onChange={(e) => editSubjectFacts(e.target.value.replace(/[^\d]/g, ""), baths)}
+          />
+          <input
+            className="w-16 rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+            inputMode="decimal" placeholder="Baths" title="Subject baths — corrects the record and filters comps"
+            value={baths}
+            onChange={(e) => editSubjectFacts(beds, e.target.value.replace(/[^\d.]/g, ""))}
+          />
           <input
             className="w-32 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
             inputMode="numeric" placeholder="Subject sqft"
@@ -192,19 +235,25 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             )}
             <div className="max-h-56 flex-1 space-y-1 overflow-y-auto pr-1">
               {(state.comps || []).map((c) => (
-                <label key={c.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-gray-50">
-                  <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
-                  <span className="min-w-0 flex-1 truncate">{c.address}</span>
-                  <span className="whitespace-nowrap text-xs text-gray-500">
-                    {[
-                      c.beds != null ? `${c.beds}/${c.baths ?? "?"}` : "",
-                      c.sqft ? `${c.sqft.toLocaleString()} sf` : "",
-                      c.saleDate ? c.saleDate.slice(0, 7) : "",
-                      c.distance != null ? `${c.distance} mi` : "",
-                    ].filter(Boolean).join(" · ")}
-                  </span>
-                  <span className="whitespace-nowrap font-semibold tabular-nums">{fmtMoney(c.price)}</span>
-                </label>
+                <div key={c.id} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm hover:bg-gray-50">
+                  <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                    <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
+                    <span className="min-w-0 flex-1 truncate">{c.address}</span>
+                    <span className="whitespace-nowrap text-xs text-gray-500">
+                      {[
+                        c.beds != null ? `${c.beds}/${c.baths ?? "?"}` : "",
+                        c.sqft ? `${c.sqft.toLocaleString()} sf` : "",
+                        c.saleDate ? c.saleDate.slice(0, 7) : "",
+                        c.distance != null ? `${c.distance} mi` : "",
+                      ].filter(Boolean).join(" · ")}
+                    </span>
+                    <span className="whitespace-nowrap font-semibold tabular-nums">{fmtMoney(c.price)}</span>
+                  </label>
+                  <a href={zillowUrl(c.address)} target="_blank" rel="noreferrer" title="Open on Zillow (photos)"
+                    className="shrink-0 rounded p-1 text-gray-400 hover:bg-blue-50 hover:text-blue-700">
+                    <ExternalLink size={14} />
+                  </a>
+                </div>
               ))}
               {manual.map((c) => (
                 <div key={c.id} className="flex items-center gap-2 rounded-lg bg-blue-50/60 px-2 py-1.5 text-sm">

@@ -348,12 +348,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!address) return res.status(400).json({ error: "address required" });
       const monthsBack = Math.min(24, Math.max(1, parseInt(req.query.months, 10) || 12));
       const sqft = parseInt(req.query.sqft, 10) || 0;
+      // Optional user-corrected subject facts. When present they replace the
+      // same_beds/same_baths matching (which trusts the provider's own record
+      // — sometimes wrong) with explicit range filters.
+      const beds = Math.max(0, parseInt(req.query.beds, 10) || 0);
+      const baths = Math.max(0, parseFloat(req.query.baths) || 0);
 
       const saved = await store.getOfferSettings(locationId);
       const apiKey = String(saved?.compsApiKey || saved?.rentcastApiKey || "").trim();
       if (!apiKey) return res.json({ enabled: false, comps: [], estimate: null, subject: null });
 
-      const cacheKey = `${address.toLowerCase()}|${monthsBack}|${sqft}`;
+      const cacheKey = `${address.toLowerCase()}|${monthsBack}|${sqft}|${beds}|${baths}`;
       const hit = compsCache.get(cacheKey);
       if (hit && Date.now() - hit.ts < 24 * 3600 * 1000) return res.json(hit.data);
 
@@ -361,8 +366,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         max_days_back: monthsBack * 30,
         max_radius_miles: 2,
         max_results: 15,
-        same_beds: true,
-        same_baths: true,
+        ...(beds > 0 ? { bedrooms_min: beds, bedrooms_max: beds } : { same_beds: true }),
+        ...(baths > 0 ? { bathrooms_min: baths, bathrooms_max: baths } : { same_baths: true }),
         same_county: true,
         arms_length: true,
         ...(sqft > 0

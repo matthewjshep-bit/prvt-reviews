@@ -61,10 +61,12 @@ export const geocode = (query) =>
   fetch(`${API_BASE}/api/offers/geocode?location_id=${loc()}&query=${encodeURIComponent(query)}`)
     .then(j)
     .then((r) => r.result);
-export const getComps = (address, { sqft, months } = {}) => {
+export const getComps = (address, { sqft, months, beds, baths } = {}) => {
   const p = new URLSearchParams({ location_id: getLocationId(), address });
   if (sqft) p.set("sqft", sqft);
   if (months) p.set("months", months);
+  if (beds) p.set("beds", beds);
+  if (baths) p.set("baths", baths);
   return fetch(`${API_BASE}/api/offers/comps?${p}`).then(j);
 };
 
