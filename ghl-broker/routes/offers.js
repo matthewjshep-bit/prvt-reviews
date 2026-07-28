@@ -318,21 +318,28 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   });
 
   /* ---------- geocode (map centering for the comps pane) ---------- */
+  async function photonGeocode(q) {
+    try {
+      const r = await fetch(
+        `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=en`,
+        { signal: AbortSignal.timeout(4000) }
+      );
+      if (!r.ok) return null;
+      const f = ((await r.json()).features || [])[0];
+      if (!f?.geometry?.coordinates) return null;
+      const [lng, lat] = f.geometry.coordinates;
+      return { lat, lng };
+    } catch {
+      return null;
+    }
+  }
+
   router.get("/geocode", async (req, res) => {
     try {
       resolveLocation(req);
       const q = String(req.query.query || "").trim();
       if (q.length < 4) return res.json({ result: null });
-      const r = await fetch(
-        `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=en`,
-        { signal: AbortSignal.timeout(4000) }
-      );
-      if (!r.ok) return res.json({ result: null });
-      const j = await r.json();
-      const f = (j.features || [])[0];
-      if (!f?.geometry?.coordinates) return res.json({ result: null });
-      const [lng, lat] = f.geometry.coordinates;
-      res.json({ result: { lat, lng } });
+      res.json({ result: await photonGeocode(q) });
     } catch {
       res.json({ result: null });
     }
@@ -381,11 +388,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           ? { living_square_feet_min: Math.round(sqft * 0.8), living_square_feet_max: Math.round(sqft * 1.2) }
           : {}),
       };
-      const queryComps = async (addr) => {
+      const queryComps = async (subject) => {
         const r = await fetch("https://api.realestateapi.com/v3/PropertyComps", {
           method: "POST",
           headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ ...body, address: addr }),
+          body: JSON.stringify({ ...body, ...subject }),
           signal: AbortSignal.timeout(15000),
         });
         if (!r.ok) {
@@ -403,10 +410,37 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       let lastErr = null;
       for (const variant of addressQueryVariants(address)) {
         try {
-          const attempt = await queryComps(variant);
+          const attempt = await queryComps({ address: variant });
           if (!noRecord(attempt)) { j = attempt; break; }
           if (!j) j = attempt; // remember the first empty result as a fallback
         } catch (e) { lastErr = e; }
+      }
+      // Last resort: their address parser can miss parcels whose county
+      // record is keyed differently (wrong postal city, grid-address quirks).
+      // Geocode the typed address and look the parcel up BY COORDINATES via
+      // PropertySearch, then run comps against the property id.
+      if (!j || noRecord(j)) {
+        try {
+          const geo = await photonGeocode(address);
+          if (geo) {
+            const sr = await fetch("https://api.realestateapi.com/v2/PropertySearch", {
+              method: "POST",
+              headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({ latitude: geo.lat, longitude: geo.lng, radius: 0.05, size: 10 }),
+              signal: AbortSignal.timeout(15000),
+            });
+            if (sr.ok) {
+              const list = ((await sr.json()).data || []).filter((p) => p?.id);
+              const houseNo = (address.match(/^\s*(\d+)/) || [])[1];
+              const label = (p) => String(p.address?.address || p.address?.label || "");
+              const pick = (houseNo && list.find((p) => label(p).startsWith(houseNo))) || list[0];
+              if (pick) {
+                const byId = await queryComps({ id: pick.id });
+                if (!noRecord(byId)) j = byId;
+              }
+            }
+          }
+        } catch { /* keep whatever the ladder produced */ }
       }
       if (!j) throw lastErr || Object.assign(new Error("comps lookup failed"), { http: 502 });
       const subjInfo = j.subject?.propertyInfo || {};
