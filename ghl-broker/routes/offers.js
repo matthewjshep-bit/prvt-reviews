@@ -487,12 +487,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       // User-corrected beds/baths: match server-side (comps missing the datum
       // are kept, mirroring the sqft rule). Baths allow ±0.5 so a 2.75-bath
-      // comp still matches a "3 baths" subject.
-      if (beds > 0) {
-        data.comps = data.comps.filter((c) => c.beds == null || Math.round(Number(c.beds)) === beds);
-      }
-      if (baths > 0) {
-        data.comps = data.comps.filter((c) => c.baths == null || Math.abs(Number(c.baths) - baths) <= 0.5);
+      // comp still matches a "3 baths" subject. When the exact match filters
+      // EVERYTHING out (a 6-bed in an area of 3-beds), fall back to the
+      // unfiltered similar-size pool and flag it — hand-picking from nearby
+      // sales beats a dead end.
+      if (beds > 0 || baths > 0) {
+        const pool = data.comps;
+        let filtered = pool;
+        if (beds > 0) filtered = filtered.filter((c) => c.beds == null || Math.round(Number(c.beds)) === beds);
+        if (baths > 0) filtered = filtered.filter((c) => c.baths == null || Math.abs(Number(c.baths) - baths) <= 0.5);
+        if (filtered.length) {
+          data.comps = filtered;
+        } else if (pool.length) {
+          data.comps = pool;
+          data.bedBathRelaxed = true;
+        }
       }
       data.comps = data.comps.slice(0, 15);
       // Cache hits only — caching an empty result would pin a transient

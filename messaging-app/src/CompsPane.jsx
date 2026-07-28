@@ -91,12 +91,15 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       }
       if (!Number(beds) && comps.subject?.beds != null) setBeds(String(comps.subject.beds));
       if (!Number(baths) && comps.subject?.baths != null) setBaths(String(comps.subject.baths));
-      // Preselect the closest comps (max 6).
-      const pre = (comps.comps || [])
-        .slice()
-        .sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))
-        .slice(0, 6)
-        .map((c) => c.id);
+      // Preselect the closest comps (max 6) — but not when the server relaxed
+      // the bed/bath match: those need a deliberate look before they count.
+      const pre = comps.bedBathRelaxed
+        ? []
+        : (comps.comps || [])
+            .slice()
+            .sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))
+            .slice(0, 6)
+            .map((c) => c.id);
       setSelected(new Set(pre));
     } catch (e) { setError(e.message); setState(null); }
     setLoading(false);
@@ -231,9 +234,19 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             )}
             {state.enabled && !(state.comps || []).length && (
               <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                {state.info?.sqft || state.info?.beds != null
-                  ? <>No sold comps matched the record ({[state.info.beds != null ? `${state.info.beds} bd` : "", state.info.baths != null ? `${state.info.baths} ba` : "", state.info.sqft ? `${state.info.sqft.toLocaleString()} sqft` : ""].filter(Boolean).join(" / ")}). If that record looks wrong, type the correct sqft above and reload — or add comps manually below.</>
+                {state.info?.sqft || state.info?.beds != null || Number(beds) > 0 || Number(baths) > 0
+                  ? <>No sold comps matched {[
+                      Number(beds) > 0 ? `${Number(beds)} bd` : state.info?.beds != null ? `${state.info.beds} bd` : "",
+                      Number(baths) > 0 ? `${Number(baths)} ba` : state.info?.baths != null ? `${state.info.baths} ba` : "",
+                      parse(subjectSqft) > 0 ? `${parse(subjectSqft).toLocaleString()} sqft` : state.info?.sqft ? `${state.info.sqft.toLocaleString()} sqft` : "",
+                    ].filter(Boolean).join(" / ")} in the sold window. Widen the window, adjust beds/baths/sqft and reload — or add comps manually below.</>
                   : <>No property record found for this address — automatic comps unavailable. Add comps manually below.</>}
+              </div>
+            )}
+            {state.enabled && state.bedBathRelaxed && (state.comps || []).length > 0 && (
+              <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                No sold comps matched {[Number(beds) > 0 ? `${Number(beds)} bd` : "", Number(baths) > 0 ? `${Number(baths)} ba` : ""].filter(Boolean).join(" / ")} exactly —
+                showing other nearby similar-size sales instead. Tick only the ones that truly compare.
               </div>
             )}
             {state.estimate && (
