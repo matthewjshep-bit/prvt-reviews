@@ -243,6 +243,12 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                   : <>No property record found for this address — automatic comps unavailable. Add comps manually below.</>}
               </div>
             )}
+            {state.enabled && state.widened && (state.comps || []).length > 0 && (
+              <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Not enough recent sales close by — the search was expanded to {state.widened}. Check each comp's
+                distance and sale date before ticking.
+              </div>
+            )}
             {state.enabled && state.bedBathRelaxed && (state.comps || []).length > 0 && (
               <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 No sold comps matched {[Number(beds) > 0 ? `${Number(beds)} bd` : "", Number(baths) > 0 ? `${Number(baths)} ba` : ""].filter(Boolean).join(" / ")} exactly —

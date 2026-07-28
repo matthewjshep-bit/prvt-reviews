@@ -377,22 +377,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // whole property "not exist". Instead: drop same_beds/same_baths, pull a
       // wider pool, and filter the comps ourselves below.
       const hasBedBathOverride = beds > 0 || baths > 0;
-      const body = {
-        max_days_back: monthsBack * 30,
-        max_radius_miles: 2,
+      const makeBody = ({ radiusMiles, daysBack, matchBedBath }) => ({
+        max_days_back: daysBack,
+        max_radius_miles: radiusMiles,
         max_results: hasBedBathOverride ? 30 : 15,
-        ...(hasBedBathOverride ? {} : { same_beds: true, same_baths: true }),
+        ...(matchBedBath && !hasBedBathOverride ? { same_beds: true, same_baths: true } : {}),
         same_county: true,
         arms_length: true,
         ...(sqft > 0
           ? { living_square_feet_min: Math.round(sqft * 0.8), living_square_feet_max: Math.round(sqft * 1.2) }
           : {}),
-      };
-      const queryComps = async (subject) => {
+      });
+      const queryComps = async (subject, params) => {
         const r = await fetch("https://api.realestateapi.com/v3/PropertyComps", {
           method: "POST",
           headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ ...body, ...subject }),
+          body: JSON.stringify({ ...makeBody(params), ...subject }),
           signal: AbortSignal.timeout(15000),
         });
         if (!r.ok) {
@@ -401,24 +401,31 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         }
         return r.json();
       };
-      // The provider's address matcher is inconsistent about formats — the
-      // same property has required "166th Ave NE" one day and "166th Avenue
-      // NE" the next, while GHL/autocomplete always produce the fully
-      // spelled-out form. Walk the variant ladder until one resolves.
+      // IMPORTANT provider quirk: when fewer than 3 comps match the filters,
+      // PropertyComps suppresses the ENTIRE response — empty subject included,
+      // with only a `reason` string. So "no property record" can really mean
+      // "not enough sales matched"; the relaxation ladder below distinguishes
+      // the two.
       const noRecord = (x) => !x?.subject?.propertyInfo?.latitude && !(x?.comps || []).length;
+      const asRequested = { radiusMiles: 2, daysBack: monthsBack * 30, matchBedBath: true };
       let j = null;
       let lastErr = null;
+      // Phase A — resolve by address: the provider's address matcher is
+      // inconsistent about formats ("166th Ave NE" one day, "166th Avenue NE"
+      // the next) while GHL/autocomplete produce the spelled-out form. Walk
+      // the variant ladder until one resolves.
       for (const variant of addressQueryVariants(address)) {
         try {
-          const attempt = await queryComps({ address: variant });
+          const attempt = await queryComps({ address: variant }, asRequested);
           if (!noRecord(attempt)) { j = attempt; break; }
           if (!j) j = attempt; // remember the first empty result as a fallback
         } catch (e) { lastErr = e; }
       }
-      // Last resort: their address parser can miss parcels whose county
-      // record is keyed differently (wrong postal city, grid-address quirks).
-      // Geocode the typed address and look the parcel up BY COORDINATES via
-      // PropertySearch, then run comps against the property id.
+      // Phase B — resolve by coordinates: county records keyed under another
+      // postal city or grid-address quirks make some parcels unfindable by
+      // address entirely. Geocode the typed address and find the parcel via
+      // PropertySearch, then query comps against the property id.
+      let subjectRef = null;
       if (!j || noRecord(j)) {
         try {
           const geo = await photonGeocode(address);
@@ -435,18 +442,37 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
               const label = (p) => String(p.address?.address || p.address?.label || "");
               const pick = (houseNo && list.find((p) => label(p).startsWith(houseNo))) || list[0];
               if (pick) {
-                const byId = await queryComps({ id: pick.id });
+                subjectRef = { id: pick.id };
+                const byId = await queryComps(subjectRef, asRequested);
                 if (!noRecord(byId)) j = byId;
               }
             }
           }
         } catch { /* keep whatever the ladder produced */ }
       }
+      // Phase C — widen the search: still nothing means "fewer than 3 sales
+      // matched", not "no such property" (rural areas rarely have 3 same-bed
+      // sales within 2 miles). Expand stepwise and tell the UI we did.
+      let widened = null;
+      if (!j || noRecord(j)) {
+        const ref = subjectRef || { address: addressQueryVariants(address)[0] };
+        const steps = [
+          { params: { radiusMiles: 5, daysBack: monthsBack * 30, matchBedBath: true }, label: "5 mi" },
+          { params: { radiusMiles: 5, daysBack: Math.max(monthsBack * 30, 730), matchBedBath: false }, label: "5 mi / 24 mo / any beds-baths" },
+        ];
+        for (const step of steps) {
+          try {
+            const attempt = await queryComps(ref, step.params);
+            if (!noRecord(attempt)) { j = attempt; widened = step.label; break; }
+          } catch (e) { lastErr = e; }
+        }
+      }
       if (!j) throw lastErr || Object.assign(new Error("comps lookup failed"), { http: 502 });
       const subjInfo = j.subject?.propertyInfo || {};
       const num = (v) => (v == null || v === "" ? null : Number(v) || null);
       const data = {
         enabled: true,
+        ...(widened ? { widened } : {}),
         subject: {
           lat: num(subjInfo.latitude),
           lng: num(subjInfo.longitude),
