@@ -6,44 +6,62 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { ALL_REHAB_ITEMS, BATH_TIERS, BED_TIERS } from "./shared/rehab-catalog.js";
-import { normalizeUsAddress } from "./us-address.js";
+import { addressQueryVariants } from "./shared/us-address.js";
 
 const MAX_PHOTOS = 40;
 
 // Fetch listing photos (midRes ≈ 900px — plenty for condition assessment).
-// RealEstateAPI's parser wants USPS-abbreviated addresses (see us-address.js).
+// The provider's address matcher is picky and inconsistent about formats, so
+// walk the variant ladder (see shared/us-address.js) until one resolves.
 export async function fetchListingPhotos(address, compsApiKey) {
-  const r = await fetch("https://api.realestateapi.com/v2/MLSDetail", {
-    method: "POST",
-    headers: { "x-api-key": compsApiKey, "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ address: normalizeUsAddress(address) }),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!r.ok) {
-    const detail = (await r.text()).slice(0, 300);
-    if (r.status === 403 && /not available/i.test(detail)) {
-      throw Object.assign(
-        new Error("Your RealEstateAPI plan doesn't include MLS photos — upload the listing photos instead"),
-        { http: 402, detail }
-      );
+  const tryOnce = async (addr) => {
+    const r = await fetch("https://api.realestateapi.com/v2/MLSDetail", {
+      method: "POST",
+      headers: { "x-api-key": compsApiKey, "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ address: addr }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) {
+      const detail = (await r.text()).slice(0, 300);
+      if (r.status === 403 && /not available/i.test(detail)) {
+        throw Object.assign(
+          new Error("Your RealEstateAPI plan doesn't include MLS photos — upload the listing photos instead"),
+          { http: 402, detail }
+        );
+      }
+      throw Object.assign(new Error(`MLS lookup failed (${r.status})`), { http: 502, detail });
     }
-    throw Object.assign(new Error(`MLS lookup failed (${r.status})`), { http: 502, detail });
-  }
-  const j = await r.json();
-  const media = j.data?.media || {};
-  const photos = (media.photosList || [])
-    .map((p) => p.midRes || p.highRes || p.lowRes)
-    .filter(Boolean)
-    .slice(0, MAX_PHOTOS);
-  return {
-    photos,
-    photosCount: Number(media.photosCount) || photos.length,
-    listing: {
-      status: j.data?.standardStatus || j.data?.customStatus || null,
-      listPrice: j.data?.listPrice || null,
-      remarks: (j.data?.publicRemarks || "").slice(0, 1500) || null,
-    },
+    const j = await r.json();
+    const media = j.data?.media || {};
+    const photos = (media.photosList || [])
+      .map((p) => p.midRes || p.highRes || p.lowRes)
+      .filter(Boolean)
+      .slice(0, MAX_PHOTOS);
+    return {
+      photos,
+      photosCount: Number(media.photosCount) || photos.length,
+      listing: {
+        status: j.data?.standardStatus || j.data?.customStatus || null,
+        listPrice: j.data?.listPrice || null,
+        remarks: (j.data?.publicRemarks || "").slice(0, 1500) || null,
+      },
+    };
   };
+
+  let empty = null;
+  let lastErr = null;
+  for (const variant of addressQueryVariants(address)) {
+    try {
+      const out = await tryOnce(variant);
+      if (out.photos.length) return out;
+      if (!empty) empty = out;
+    } catch (e) {
+      if (e.http === 402) throw e; // plan limitation — retrying won't help
+      lastErr = e;
+    }
+  }
+  if (empty) return empty;
+  throw lastErr || Object.assign(new Error("MLS lookup failed"), { http: 502 });
 }
 
 // Fetch listing photos from Zillow via Apify's zillow-detail-scraper actor —

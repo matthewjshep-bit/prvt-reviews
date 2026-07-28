@@ -20,7 +20,8 @@ import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { buildOfferDocument, buildScopeDocument, buildCompsDocument } from "../offer-doc.js";
 import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "../rehab-scan.js";
-import { normalizeUsAddress } from "../us-address.js";
+import { addressQueryVariants, zillowUrl } from "../shared/us-address.js";
+export { zillowUrl };
 import { jpegToPdf } from "../pdf.js";
 import { uploadAsset, r2Enabled } from "../r2.js";
 import {
@@ -70,13 +71,6 @@ const OFFER_FIELDS = [
   { key: "zillow_link", name: "Zillow Link", dataType: "TEXT" },
   { key: "offer_app_link", name: "Offer App Link", dataType: "TEXT" },
 ];
-
-// Zillow deep link from a street address — /homes/<slug>_rb/ redirects to the
-// property page when the address resolves.
-export function zillowUrl(address) {
-  const slug = String(address || "").trim().replace(/[,#.]/g, "").replace(/\s+/g, "-");
-  return slug ? `https://www.zillow.com/homes/${encodeURIComponent(slug)}_rb/` : "";
-}
 
 const dateLabel = (d = new Date()) =>
   d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
@@ -387,19 +381,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         }
         return r.json();
       };
-      // The provider's address parser wants USPS abbreviations ("166th Ave NE,
-      // WA"); the spelled-out forms GHL/autocomplete produce ("166th Avenue
-      // Northeast, Washington") often resolve to an empty record. Query the
-      // normalized form first; fall back to the raw string if it finds nothing.
+      // The provider's address matcher is inconsistent about formats — the
+      // same property has required "166th Ave NE" one day and "166th Avenue
+      // NE" the next, while GHL/autocomplete always produce the fully
+      // spelled-out form. Walk the variant ladder until one resolves.
       const noRecord = (x) => !x?.subject?.propertyInfo?.latitude && !(x?.comps || []).length;
-      const normalized = normalizeUsAddress(address);
-      let j = await queryComps(normalized);
-      if (noRecord(j) && normalized !== address) {
+      let j = null;
+      let lastErr = null;
+      for (const variant of addressQueryVariants(address)) {
         try {
-          const rawResult = await queryComps(address);
-          if (!noRecord(rawResult)) j = rawResult;
-        } catch { /* keep the normalized (empty) result */ }
+          const attempt = await queryComps(variant);
+          if (!noRecord(attempt)) { j = attempt; break; }
+          if (!j) j = attempt; // remember the first empty result as a fallback
+        } catch (e) { lastErr = e; }
       }
+      if (!j) throw lastErr || Object.assign(new Error("comps lookup failed"), { http: 502 });
       const subjInfo = j.subject?.propertyInfo || {};
       const num = (v) => (v == null || v === "" ? null : Number(v) || null);
       const data = {
@@ -442,8 +438,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (effSqft > 0) {
         data.comps = data.comps.filter((c) => !c.sqft || (c.sqft >= effSqft * 0.8 && c.sqft <= effSqft * 1.2));
       }
-      if (compsCache.size > 100) compsCache.clear();
-      compsCache.set(cacheKey, { ts: Date.now(), data });
+      // Cache hits only — caching an empty result would pin a transient
+      // provider blip as "no record" for 24h.
+      if (data.subject.lat || data.comps.length) {
+        if (compsCache.size > 100) compsCache.clear();
+        compsCache.set(cacheKey, { ts: Date.now(), data });
+      }
       res.json(data);
     } catch (err) { fail(res, err); }
   });
