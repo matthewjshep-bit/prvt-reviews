@@ -29,8 +29,16 @@ export default function OfferApp() {
     const v = readParam("view");
     return NAV.some((n) => n.view === v) ? v : "new";
   });
-  const [initialContactId] = useState(() => readParam("contact_id"));
+  const [initialContactId, setInitialContactId] = useState(() => readParam("contact_id"));
   const [editing, setEditing] = useState(null); // draft/offer being reopened in the form
+  const [formNonce, setFormNonce] = useState(0); // bump to remount NewOffer blank
+
+  const resetForm = () => {
+    setEditing(null);
+    setInitialContactId(""); // a deep-linked contact stays only for the first form
+    setFormNonce((n) => n + 1);
+    try { window.scrollTo({ top: 0 }); } catch { /* noop */ }
+  };
   const [settings, setSettings] = useState(null);
   const [settingsError, setSettingsError] = useState("");
 
@@ -78,10 +86,11 @@ export default function OfferApp() {
         )}
         {view === "new" && (
           <NewOffer
-            key={editing?.id || "blank"}
+            key={editing?.id || `blank-${formNonce}`}
             settings={settings}
             initialContactId={initialContactId}
             restore={editing}
+            onReset={resetForm}
           />
         )}
         {view === "history" && (

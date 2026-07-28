@@ -217,7 +217,10 @@ export default function RehabPane({ sqft, beds, baths, address, onApply, initial
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-bold">Rehab estimate — scope of work</h2>
+        <h2 className="flex items-center gap-2 text-sm font-bold">
+          <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-900 text-[11px] font-bold leading-none text-white">4</span>
+          Rehab estimate — scope of work
+        </h2>
         <div className="flex items-center gap-3 text-xs text-gray-500">
           <span className="flex items-center gap-1">Beds {countInput(bedCount, setCount("bed"))}</span>
           <span className="flex items-center gap-1">Baths {countInput(bathCount, setCount("bath"))}</span>

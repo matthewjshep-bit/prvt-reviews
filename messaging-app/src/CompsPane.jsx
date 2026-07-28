@@ -76,7 +76,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       // Spread first: comps carries its own `subject` (the provider record,
       // which can be all-null when the address has no record) and must not
       // clobber the resolved map center.
-      setState({ ...comps, subject: center, info: comps.subject || null });
+      setState({ ...comps, subject: center, info: comps.subject || null, loadedFor: address.trim() });
       // User-typed beds/baths win over the provider record everywhere.
       if (comps.subject) {
         onSubjectInfo?.({
@@ -135,7 +135,10 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-bold">Comps &amp; ARV</h2>
+        <h2 className="flex items-center gap-2 text-sm font-bold">
+          <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-900 text-[11px] font-bold leading-none text-white">3</span>
+          Comps &amp; ARV
+        </h2>
         <div className="flex items-center gap-2">
           <select value={months} onChange={(e) => setMonths(Number(e.target.value))}
             className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none">
@@ -181,6 +184,12 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       )}
 
       {error && <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+
+      {state?.loadedFor && address?.trim() && state.loadedFor !== address.trim() && (
+        <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          The address changed since these comps loaded (they're for {state.loadedFor}) — hit <b>Load comps</b> to refresh.
+        </div>
+      )}
 
       {state && (
         <div className="grid gap-4 lg:grid-cols-2">

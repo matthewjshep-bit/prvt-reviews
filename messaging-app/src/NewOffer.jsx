@@ -2,7 +2,7 @@
 // offers → generate the document and attach everything to the GHL contact.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Check, FileText, Loader2, Save, Search, Send, X } from "lucide-react";
+import { Check, FileText, Loader2, RotateCcw, Save, Search, Send, X } from "lucide-react";
 import { calculateOffers, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
   createOffer, getContactDetail, previewDocument, saveDraft, searchContacts, sendOffer, suggestAddresses, zillowUrl,
@@ -118,7 +118,7 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-bold">Seller contact</h2>
+        <h2 className="flex items-center gap-2 text-sm font-bold"><StepBadge n={1} /> Seller contact</h2>
         <div className="flex gap-1 text-xs">
           {["existing", "new"].map((m) => (
             <button
@@ -191,6 +191,15 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
   );
 }
 
+// Numbered section badge — the New Offer page reads top-to-bottom as steps.
+export function StepBadge({ n }) {
+  return (
+    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-900 text-[11px] font-bold leading-none text-white">
+      {n}
+    </span>
+  );
+}
+
 /* ---------------- the cash offer card ---------------- */
 
 function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, setPriceOverride, feeOverride, setFeeOverride, fmtTyped }) {
@@ -222,7 +231,7 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
   return (
     <div className="rounded-xl border border-amber-400 bg-amber-50 p-5">
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">All-cash offer</div>
+        <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-gray-500"><StepBadge n={5} /> All-cash offer</div>
         {modeToggle}
       </div>
       <div className="sm:flex sm:items-center sm:justify-between sm:gap-8">
@@ -276,7 +285,7 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
 
 /* ---------------- main view ---------------- */
 
-export default function NewOffer({ settings, initialContactId, restore }) {
+export default function NewOffer({ settings, initialContactId, restore, onReset }) {
   // `restore` reopens a saved draft or an existing offer. Both carry a full
   // form snapshot (drafts in .draft, created offers in .snapshot) so the
   // comps workspace and rehab scope come back exactly as they were; very old
@@ -511,10 +520,16 @@ export default function NewOffer({ settings, initialContactId, restore }) {
               <div className="rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800">Sent ✓</div>
             )}
             {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-            <button type="button" onClick={() => { setResult(null); setSendState(null); setError(""); }}
-              className="text-sm font-medium text-gray-500 underline hover:text-gray-800">
-              Start another offer
-            </button>
+            <div className="flex flex-wrap gap-4">
+              <button type="button" onClick={() => (onReset ? onReset() : (setResult(null), setSendState(null), setError("")))}
+                className="text-sm font-medium text-gray-500 underline hover:text-gray-800">
+                Start another offer
+              </button>
+              <button type="button" onClick={() => { setResult(null); setSendState(null); setError(""); }}
+                className="text-sm font-medium text-gray-500 underline hover:text-gray-800">
+                Back to this offer's form
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -523,6 +538,24 @@ export default function NewOffer({ settings, initialContactId, restore }) {
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h1 className="text-lg font-bold tracking-tight">
+            {restore ? (restore.status === "draft" ? "Editing draft" : "Editing offer") : "New cash offer"}
+          </h1>
+          <p className="text-xs text-gray-500">
+            {restore
+              ? `${restore.address || "restored from History"} — clearing starts a fresh offer`
+              : "Work top to bottom: contact → property → comps → rehab → offer."}
+          </p>
+        </div>
+        <button type="button"
+          onClick={() => { if (window.confirm("Clear the whole form and start a fresh offer?")) onReset?.(); }}
+          className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900">
+          <RotateCcw size={14} /> Clear form
+        </button>
+      </div>
+
       <ContactPicker
         selected={contact} onSelect={selectContact}
         newContact={newContact} setNewContact={setNewContact}
@@ -530,7 +563,7 @@ export default function NewOffer({ settings, initialContactId, restore }) {
       />
 
       <div className="rounded-xl border border-gray-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-bold">Property</h2>
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-bold"><StepBadge n={2} /> Property</h2>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <Field label="Property address">
@@ -586,24 +619,38 @@ export default function NewOffer({ settings, initialContactId, restore }) {
         priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
         feeOverride={feeOverride} setFeeOverride={setFeeOverride} fmtTyped={fmtTyped} />
 
-      <div className="flex flex-wrap items-center gap-3">
-        <button type="button" disabled={!calc || previewing} onClick={doPreview}
-          className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-gray-50">
-          {previewing ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
-          Preview document
-        </button>
-        <button type="button" disabled={!canCreate || creating} onClick={doCreate}
-          className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-gray-800">
-          {creating ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-          Create offer & attach to contact
-        </button>
-        <button type="button" disabled={savingDraft} onClick={doSaveDraft}
-          className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-gray-50">
-          {savingDraft ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-          {draftSaved ? "Draft saved ✓" : draftId ? "Update draft" : "Save draft"}
-        </button>
+      {/* Sticky action bar: the live number + actions stay in reach while
+          scrolling through comps and rehab above. */}
+      <div className="sticky bottom-0 z-20 -mx-4 border-t border-gray-200 bg-white/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="mr-auto min-w-0">
+            {calc ? (
+              <>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">Cash offer</div>
+                <div className="truncate text-lg font-black leading-tight tracking-tight">{fmtMoney(calc.offers.cash.amount)}</div>
+              </>
+            ) : (
+              <span className="text-xs text-gray-400">Enter an ARV (or use comps) to see the offer.</span>
+            )}
+          </div>
+          <button type="button" disabled={!calc || previewing} onClick={doPreview}
+            className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-gray-50">
+            {previewing ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
+            Preview document
+          </button>
+          <button type="button" disabled={savingDraft} onClick={doSaveDraft}
+            className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-gray-50">
+            {savingDraft ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+            {draftSaved ? "Draft saved ✓" : draftId ? "Update draft" : "Save draft"}
+          </button>
+          <button type="button" disabled={!canCreate || creating} onClick={doCreate}
+            className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-gray-800">
+            {creating ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+            Create offer & attach to contact
+          </button>
+        </div>
         {!canCreate && calc && (
-          <span className="text-xs text-gray-400">Pick a contact (or enter a phone) to create the offer.</span>
+          <div className="mt-1 text-right text-xs text-gray-400">Pick a contact in step 1 (or enter a phone) to create the offer.</div>
         )}
       </div>
 

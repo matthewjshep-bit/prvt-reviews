@@ -356,12 +356,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const hit = compsCache.get(cacheKey);
       if (hit && Date.now() - hit.ts < 24 * 3600 * 1000) return res.json(hit.data);
 
+      // When the user corrects beds/baths we do NOT pass bedrooms/bathrooms
+      // filters to the API — RealEstateAPI applies them to the subject lookup
+      // too, so a corrected count that disagrees with their record makes the
+      // whole property "not exist". Instead: drop same_beds/same_baths, pull a
+      // wider pool, and filter the comps ourselves below.
+      const hasBedBathOverride = beds > 0 || baths > 0;
       const body = {
         max_days_back: monthsBack * 30,
         max_radius_miles: 2,
-        max_results: 15,
-        ...(beds > 0 ? { bedrooms_min: beds, bedrooms_max: beds } : { same_beds: true }),
-        ...(baths > 0 ? { bathrooms_min: baths, bathrooms_max: baths } : { same_baths: true }),
+        max_results: hasBedBathOverride ? 30 : 15,
+        ...(hasBedBathOverride ? {} : { same_beds: true, same_baths: true }),
         same_county: true,
         arms_length: true,
         ...(sqft > 0
@@ -438,6 +443,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (effSqft > 0) {
         data.comps = data.comps.filter((c) => !c.sqft || (c.sqft >= effSqft * 0.8 && c.sqft <= effSqft * 1.2));
       }
+      // User-corrected beds/baths: match server-side (comps missing the datum
+      // are kept, mirroring the sqft rule). Baths allow ±0.5 so a 2.75-bath
+      // comp still matches a "3 baths" subject.
+      if (beds > 0) {
+        data.comps = data.comps.filter((c) => c.beds == null || Math.round(Number(c.beds)) === beds);
+      }
+      if (baths > 0) {
+        data.comps = data.comps.filter((c) => c.baths == null || Math.abs(Number(c.baths) - baths) <= 0.5);
+      }
+      data.comps = data.comps.slice(0, 15);
       // Cache hits only — caching an empty result would pin a transient
       // provider blip as "no record" for 24h.
       if (data.subject.lat || data.comps.length) {
