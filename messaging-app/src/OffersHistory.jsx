@@ -22,7 +22,7 @@ function AttachStatus({ offer }) {
   );
 }
 
-function OfferDetail({ offer, onClose }) {
+function OfferDetail({ offer, onClose, onEdit }) {
   const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
   const Row = ({ label, value }) => (
     <div className="flex justify-between gap-4 text-sm">
@@ -53,9 +53,15 @@ function OfferDetail({ offer, onClose }) {
               · <AttachStatus offer={offer} />
             </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded p-1.5 text-gray-400 hover:bg-gray-100">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => onEdit?.(offer)}
+              className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50">
+              <Pencil size={14} /> Edit offer
+            </button>
+            <button type="button" onClick={onClose} className="rounded p-1.5 text-gray-400 hover:bg-gray-100">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="grid gap-5 sm:grid-cols-2">
@@ -170,14 +176,14 @@ export default function OffersHistory({ onEdit }) {
               <th className="px-4 py-2.5 text-right">Cash offer</th>
               <th className="px-4 py-2.5">Document</th>
               <th className="px-4 py-2.5">Attached</th>
-              <th className="px-4 py-2.5" />
+              <th className="sticky right-0 bg-white px-4 py-2.5" />
             </tr>
           </thead>
           <tbody>
             {offers.map((o) => (
               <tr key={o.id}
                 onClick={() => (o.status === "draft" ? onEdit?.(o) : setSelected(o))}
-                className="cursor-pointer border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                className="group cursor-pointer border-b border-gray-100 last:border-0 hover:bg-gray-50">
                 <td className="whitespace-nowrap px-4 py-2.5 text-gray-500">
                   {(o.createdAt || "").slice(0, 10)}
                 </td>
@@ -193,46 +199,34 @@ export default function OffersHistory({ onEdit }) {
                     <span className="font-medium">{o.contactName || "—"}</span>
                   )}
                 </td>
-                <td className="max-w-[16rem] truncate px-4 py-2.5">{o.address || "—"}</td>
+                <td className="max-w-[13rem] truncate px-4 py-2.5">{o.address || "—"}</td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold">
                   {o.cashAmount != null ? fmtMoney(o.cashAmount) : "—"}
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
-                  <span className="flex gap-2">
+                  <span className="flex gap-2 text-gray-600">
                     {o.pdfUrl && (
-                      <a href={o.pdfUrl} target="_blank" rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
-                        <FileText size={14} /> PDF
-                      </a>
+                      <a href={o.pdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-gray-900">PDF</a>
                     )}
                     {o.scopePdfUrl && (
-                      <a href={o.scopePdfUrl} target="_blank" rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
-                        <FileText size={14} /> SOW
-                      </a>
+                      <a href={o.scopePdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-gray-900">SOW</a>
                     )}
                     {o.compsPdfUrl && (
-                      <a href={o.compsPdfUrl} target="_blank" rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
-                        <FileText size={14} /> Comps
-                      </a>
+                      <a href={o.compsPdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-gray-900">Comps</a>
                     )}
                     {o.imageUrl && (
-                      <a href={o.imageUrl} target="_blank" rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-gray-600 underline hover:text-gray-900">
-                        <FileText size={14} /> Image
-                      </a>
+                      <a href={o.imageUrl} target="_blank" rel="noreferrer" className="underline hover:text-gray-900">Image</a>
                     )}
                   </span>
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-xs">
                   <AttachStatus offer={o} />
                 </td>
-                <td className="whitespace-nowrap px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                <td className="sticky right-0 whitespace-nowrap bg-white px-4 py-2.5 text-right group-hover:bg-gray-50" onClick={(e) => e.stopPropagation()}>
                   <button type="button" onClick={() => onEdit?.(o)}
-                    className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-800"
+                    className="mr-1 inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
                     title={o.status === "draft" ? "Continue editing draft" : "Reopen as a new working copy"}>
-                    <Pencil size={15} />
+                    <Pencil size={13} /> Edit
                   </button>
                   <button type="button" onClick={() => remove(o.id)}
                     className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Delete">
@@ -244,7 +238,8 @@ export default function OffersHistory({ onEdit }) {
           </tbody>
         </table>
       </div>
-      {selected && <OfferDetail offer={selected} onClose={() => setSelected(null)} />}
+      {selected && <OfferDetail offer={selected} onClose={() => setSelected(null)}
+        onEdit={(o) => { setSelected(null); onEdit?.(o); }} />}
     </>
   );
 }

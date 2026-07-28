@@ -24,7 +24,7 @@
 // maoPctOfArv% of ARV minus repairs, no fee, no jitter.
 export const UNDERWRITE_MODES = [
   { key: "lowball", label: "90% ARV − 2× rehab", hint: "aggressive spread + fee" },
-  { key: "mao", label: "70% ARV − rehab", hint: "classic 70% rule" },
+  { key: "mao", label: "70% ARV − rehab", hint: "classic 70% rule, minus your fee/spread" },
 ];
 
 export const DEFAULT_OFFER_SETTINGS = {
@@ -111,10 +111,10 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
 
   let cash;
   if (s.underwriteMode === "mao") {
-    // Classic 70% rule: maoPctOfArv% of ARV minus repairs at face value.
-    // No wholesale-fee line, no jitter — a clean underwriting number.
+    // Classic 70% rule: maoPctOfArv% of ARV minus repairs at face value,
+    // minus the fee/spread. No jitter — a clean underwriting number.
     const base = (num(s.maoPctOfArv, 70) / 100) * arv;
-    const cashRaw = base - repairs;
+    const cashRaw = base - repairs - num(s.wholesaleFee);
     cash = {
       key: "cash",
       label: "Cash",
@@ -125,7 +125,7 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
       pctUsed: num(s.maoPctOfArv, 70),
       repairs,
       repairAdjustment: repairs,
-      wholesaleFee: 0,
+      wholesaleFee: num(s.wholesaleFee),
       closeDays: s.closeDays,
       pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : null,
     };

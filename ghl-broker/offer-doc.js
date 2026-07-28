@@ -147,6 +147,89 @@ export function buildScopeDocument({ scope = [], total = 0, address = "", meta =
   };
 }
 
+// Condition notes — page 2 of the Rehab Scope of Work: the walkthrough
+// summary and the per-item rationale from the photo review. Deliberately
+// phrased as inspection notes (no tooling references) — this page can be
+// shown to partners/lenders. Returns null when there's nothing to print.
+export function buildScopeNotesDocument({ summary = "", notes = [], address = "", meta = {}, company = {}, locationId = "" }) {
+  const cleanSummary = String(summary || "").slice(0, 700);
+  const items = (Array.isArray(notes) ? notes : [])
+    .map((n) => ({ label: String(n?.label || "").slice(0, 60), note: String(n?.note || "").slice(0, 220) }))
+    .filter((n) => n.label && n.note)
+    .slice(0, 24);
+  if (!cleanSummary && !items.length) return null;
+
+  const layers = [];
+
+  /* ---- letterhead ---- */
+  layers.push({ id: uid("bar"), type: "shape", shape: "rect", x: 0, y: 0, width: 100, height: 0.55, fill: GOLD, visible: true });
+  if (company.name) {
+    layers.push(text(8, 3.6, 56, 3.6, sp(company.name), { font: "Source Serif", weight: "bold", size: 40, color: DARK, autoFit: true, maxLines: 1 }));
+  }
+  if (company.tagline) {
+    layers.push(text(8, 7.3, 56, 2.2, sp(company.tagline), { size: 17, color: GOLD, weight: "bold", autoFit: true, maxLines: 1 }));
+  }
+  if (meta.dateLabel) {
+    layers.push(text(56, 3.6, 36, 3, meta.dateLabel, { size: 20, color: MUTED, align: "right" }));
+  }
+  layers.push(rule(11));
+
+  /* ---- title + property ---- */
+  layers.push(text(8, 13.6, 84, 3, sp("Condition Assessment"), { font: "Source Serif", weight: "bold", size: 34, color: DARK, align: "center", autoFit: true, maxLines: 1 }));
+  layers.push(text(8, 17.2, 84, 2.6, address || "Subject property", { size: 26, weight: "bold", color: INK, align: "center", autoFit: true, maxLines: 1 }));
+  layers.push(text(8, 20, 84, 2, sp("Walkthrough & photo-review notes"), { size: 16, color: MUTED, align: "center" }));
+
+  /* ---- summary ---- */
+  let y = 24;
+  if (cleanSummary) {
+    layers.push(text(8, y, 84, 2, sp("Overall condition"), { size: 15, color: GOLD, weight: "bold" }));
+    y += 2.4;
+    layers.push(text(8, y, 84, 9, cleanSummary, { size: 19, color: INK, lineHeight: 1.4, maxLines: 6 }));
+    y += 9.6;
+    layers.push(rule(y - 0.6));
+  }
+
+  /* ---- per-item notes (single column when few, two columns when dense) ---- */
+  if (items.length) {
+    layers.push(text(8, y, 84, 2, sp("Item notes"), { size: 15, color: GOLD, weight: "bold" }));
+    y += 2.6;
+    const available = 93.5 - y;
+    const drawNotes = (list, x, w, rowH, size, maxLines) => {
+      let ny = y;
+      for (const n of list) {
+        layers.push(text(x, ny, w, rowH - 0.4, `${n.label} — ${n.note}`, { size, color: INK, lineHeight: 1.3, maxLines }));
+        ny += rowH;
+      }
+    };
+    if (items.length <= 14) {
+      const rowH = Math.max(3.0, Math.min(3.8, available / items.length));
+      drawNotes(items, 8, 84, rowH, rowH >= 3.4 ? 17 : 16, 2);
+    } else {
+      const half = Math.ceil(items.length / 2);
+      const rowH = Math.max(3.4, Math.min(5.2, available / half));
+      const maxLines = rowH >= 4.4 ? 3 : 2;
+      drawNotes(items.slice(0, half), 8, 40.5, rowH, 14, maxLines);
+      drawNotes(items.slice(half), 51.5, 40.5, rowH, 14, maxLines);
+    }
+  }
+
+  /* ---- fine print ---- */
+  layers.push(rule(95.4));
+  layers.push(text(8, 96.4, 84, 3.4,
+    "Observations from listing photos and exterior review for planning purposes only — not an inspection report. " +
+    "Conditions subject to interior walkthrough and licensed contractor evaluation.",
+    { size: 14, color: FAINT, lineHeight: 1.4, maxLines: 3 }));
+
+  return {
+    locationId,
+    name: `Condition notes — ${address || "property"}`.slice(0, 120),
+    canvas: LETTER,
+    background: { color: PAPER },
+    dataSources: [],
+    layers,
+  };
+}
+
 // Comparable Sales Analysis — the companion document listing the closed sales
 // (and manual comps) selected in the comps workspace to back the ARV used in
 // the offer. comps: [{address, price, sqft, beds, baths, saleDate, distance,

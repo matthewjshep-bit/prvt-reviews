@@ -18,11 +18,11 @@ import express from "express";
 import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
-import { buildOfferDocument, buildScopeDocument, buildCompsDocument } from "../offer-doc.js";
+import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument } from "../offer-doc.js";
 import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "../rehab-scan.js";
 import { addressQueryVariants, zillowUrl } from "../shared/us-address.js";
 export { zillowUrl };
-import { jpegToPdf } from "../pdf.js";
+import { jpegToPdf, jpegsToPdf } from "../pdf.js";
 import { uploadAsset, r2Enabled } from "../r2.js";
 import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
@@ -166,17 +166,20 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   router.get("/:id/comps.pdf", serveDoc("compspdf"));
 
   // Render a companion PDF (Rehab SOW, Comps Analysis) through cardgen and
-  // store it next to the offer documents. Best-effort at every call site: a
-  // failure never blocks the offer itself.
-  async function storeCompanionPdf({ offerId, locationId, template, kind, slug, docKind }) {
-    const r = await fetch(`${CARD_SERVICE_URL}/render`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ template, context: {}, store: false, format: "jpeg" }),
-    });
-    if (!r.ok) throw new Error(`${kind} render ${r.status}`);
-    const jpeg = Buffer.from(await r.arrayBuffer());
-    const pdf = jpegToPdf(jpeg, template.canvas.width, template.canvas.height);
+  // store it next to the offer documents. Accepts one template per page.
+  // Best-effort at every call site: a failure never blocks the offer itself.
+  async function storeCompanionPdf({ offerId, locationId, templates, kind, slug, docKind }) {
+    const pages = [];
+    for (const template of templates) {
+      const r = await fetch(`${CARD_SERVICE_URL}/render`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template, context: {}, store: false, format: "jpeg" }),
+      });
+      if (!r.ok) throw new Error(`${kind} render ${r.status}`);
+      pages.push({ jpeg: Buffer.from(await r.arrayBuffer()), width: template.canvas.width, height: template.canvas.height });
+    }
+    const pdf = jpegsToPdf(pages);
     if (r2Enabled) {
       const localOpts = { localDir: uploadDir, localBaseUrl: `${publicBaseUrl}/uploads` };
       return uploadAsset(`offers/${locationId}/${offerId}-${slug}.pdf`, pdf, "application/pdf", localOpts);
@@ -185,15 +188,20 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     return `${publicBaseUrl}/api/offers/${offerId}/${slug}.pdf`;
   }
 
-  async function storeScopeDocument({ offerId, locationId, scope, total, address, meta, company }) {
-    const template = buildScopeDocument({ scope, total, address, meta, company, locationId });
-    return storeCompanionPdf({ offerId, locationId, template, kind: "scope", slug: "scope", docKind: "scopepdf" });
+  async function storeScopeDocument({ offerId, locationId, scope, total, address, meta, company, assessment }) {
+    const templates = [buildScopeDocument({ scope, total, address, meta, company, locationId })];
+    // Page 2 — condition summary + per-item rationale (when a photo review ran).
+    const notesTemplate = assessment
+      ? buildScopeNotesDocument({ ...assessment, address, meta, company, locationId })
+      : null;
+    if (notesTemplate) templates.push(notesTemplate);
+    return storeCompanionPdf({ offerId, locationId, templates, kind: "scope", slug: "scope", docKind: "scopepdf" });
   }
 
   async function storeCompsDocument({ offerId, locationId, meta, company, ...doc }) {
     const template = buildCompsDocument({ ...doc, meta, company, locationId });
     if (!template) return null; // no priced comps selected — nothing to render
-    return storeCompanionPdf({ offerId, locationId, template, kind: "comps", slug: "comps", docKind: "compspdf" });
+    return storeCompanionPdf({ offerId, locationId, templates: [template], kind: "comps", slug: "comps", docKind: "compspdf" });
   }
 
   /* ---------- settings ---------- */
@@ -677,11 +685,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       let scopeWarning = null;
       if (scope.length) {
         try {
+          // Photo-review summary + per-item rationale from the form snapshot
+          // (rendered as "condition notes" — no tooling references on paper).
+          const ai = snapshot?.rehab?.aiResult;
+          const assessment = ai && (ai.summary || (ai.notes || []).length)
+            ? { summary: ai.summary || "", notes: Array.isArray(ai.notes) ? ai.notes : [] }
+            : null;
           scopePdfUrl = await storeScopeDocument({
             offerId, locationId, scope,
             total: calc.inputs.repairs,
             address: calc.inputs.address,
             meta, company: calc.settings.company || {},
+            assessment,
           });
         } catch (e) { scopeWarning = `rehab SOW: ${e.message}`; }
       }

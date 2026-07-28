@@ -262,21 +262,19 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
         <div className="mt-4 w-full max-w-xs space-y-1 border-t border-amber-200 pt-3 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
           <Row label={`~${cash.pctOfArv}% of ARV`} value={fmtMoney(cash.base)} />
           <Row label={cash.mode === "mao" ? "Repairs" : "Repair adjustment"} value={`− ${fmtMoney(cash.repairAdjustment)}`} />
-          {cash.mode !== "mao" && (
-            <div className="flex items-center justify-between gap-4 text-sm">
-              <span className="text-gray-500">Fee / spread</span>
-              <span className="flex items-center gap-1 font-medium tabular-nums">
-                − $
-                <input
-                  className="w-20 rounded-lg border border-amber-300 bg-white px-1.5 py-0.5 text-right text-sm focus:border-gray-900 focus:outline-none"
-                  inputMode="numeric"
-                  placeholder={fmtTyped(String(cash.wholesaleFee))}
-                  value={feeOverride}
-                  onChange={(e) => setFeeOverride(fmtTyped(e.target.value))}
-                />
-              </span>
-            </div>
-          )}
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <span className="text-gray-500">Fee / spread</span>
+            <span className="flex items-center gap-1 font-medium tabular-nums">
+              − $
+              <input
+                className="w-20 rounded-lg border border-amber-300 bg-white px-1.5 py-0.5 text-right text-sm focus:border-gray-900 focus:outline-none"
+                inputMode="numeric"
+                placeholder={fmtTyped(String(cash.wholesaleFee))}
+                value={feeOverride}
+                onChange={(e) => setFeeOverride(fmtTyped(e.target.value))}
+              />
+            </span>
+          </div>
         </div>
       </div>
     </div>
