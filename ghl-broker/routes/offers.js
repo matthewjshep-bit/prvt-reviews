@@ -915,7 +915,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const text = message ||
         `Hi ${firstName}, here's our written cash offer on ${offer.address || "your property"} — ` +
         `${fmtMoney(offer.cashAmount)}, as-is, close on your timeline (attached). ` +
-        `Reply with any questions or a counter.`;
+        `Happy to answer any questions.`;
 
       const live = dryRun === false && CARD_SENDS_ENABLED;
       if (!live) {
