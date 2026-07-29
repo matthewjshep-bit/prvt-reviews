@@ -44,7 +44,7 @@ export const DEFAULT_OFFER_SETTINGS = {
   // "Tentative terms" lines printed on the letter. termClosing "" → built
   // from closeDays ("On or before N days from acceptance — or a date of your
   // choosing"). All overridable per offer from the New Offer page.
-  termFinancing: "None — funded with cash; no loan or appraisal contingency",
+  termFinancing: "None — funded with cash",
   termClosing: "",
   termCondition: "Purchased strictly as-is; no repairs or clean-out required",
   termPossession: "At closing, or flexible if you need additional time",

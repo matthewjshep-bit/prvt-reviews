@@ -474,7 +474,7 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
   layers.push(text(8, y + 9.3, 84, 2.2, moneyInWords(cash.amount), { size: 21, color: MUTED, align: "center", autoFit: true, maxLines: 1 }));
   layers.push({
     id: uid("badge"), type: "badge", x: 27, y: y + 12, width: 46, height: 3.2,
-    icon: "check", text: "ALL CASH · NO FINANCING CONTINGENCY",
+    icon: "check", text: "ALL CASH",
     bgColor: "#f4ecd7", textColor: GOLD, fontFamily: "Inter", fontSize: 20, cornerRadius: 999, visible: true,
   });
 
@@ -484,7 +484,7 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
   y += 2.9;
   const terms = [
     ["Purchase Price", `${fmtMoney(cash.amount)}, all cash`],
-    ["Financing", String(settings.termFinancing || "").trim() || "None — funded with cash; no loan or appraisal contingency"],
+    ["Financing", String(settings.termFinancing || "").trim() || "None — funded with cash"],
     ["Earnest Money", `${fmtMoney(settings.earnestMoney)}, deposited with escrow upon mutual acceptance`],
     ["Closing Date", String(settings.termClosing || "").trim() || `On or before ${cash.closeDays} days from acceptance — or a date of your choosing`],
     ["Condition", String(settings.termCondition || "").trim() || "Purchased strictly as-is; no repairs or clean-out required"],
