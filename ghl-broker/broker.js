@@ -47,7 +47,10 @@ app.use((req, res, next) => {
 // Local-dev fallback for generated documents (production stores them in R2).
 app.use("/uploads", express.static(UPLOAD_DIR, { maxAge: "1d" }));
 
-app.get("/", (_req, res) => res.type("text/plain").send("offer broker ok"));
+// Root doubles as a deploy check: Render injects RENDER_GIT_COMMIT, so this
+// shows exactly which commit is live.
+app.get("/", (_req, res) =>
+  res.type("text/plain").send(`offer broker ok @ ${(process.env.RENDER_GIT_COMMIT || "dev").slice(0, 7)}`));
 
 // Resolve + validate the location for an incoming request.
 function resolveLocation(req) {
