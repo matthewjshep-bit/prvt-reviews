@@ -19,7 +19,7 @@ import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument } from "../offer-doc.js";
-import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "../rehab-scan.js";
+import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
 import { addressQueryVariants, zillowUrl } from "../shared/us-address.js";
 export { zillowUrl };
 import { jpegToPdf, jpegsToPdf } from "../pdf.js";
@@ -497,6 +497,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const num = (v) => (v == null || v === "" ? null : Number(v) || null);
       const data = {
         enabled: true,
+        // AI condition grading needs both the Anthropic key and the Apify
+        // token (Zillow photos) — tell the UI whether to offer the button.
+        gradeEnabled: Boolean(String(saved?.aiApiKey || "").trim() && String(saved?.apifyToken || "").trim()),
         ...(widened ? { widened } : {}),
         subject: {
           lat: num(subjInfo.latitude),
@@ -523,6 +526,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
               sqft: Number(c.squareFeet) || 0,
               beds: c.bedrooms ?? null,
               baths: c.bathrooms ?? null,
+              yearBuilt: num(c.yearBuilt),
               distance: c.distance != null ? Math.round(c.distance * 100) / 100 : null,
               lat: c.latitude,
               lng: c.longitude,
@@ -562,6 +566,91 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         compsCache.set(cacheKey, { ts: Date.now(), data });
       }
       res.json(data);
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- AI comp condition grading (renovated / updated / dated …) ---------- */
+  // POST { address, comps: [{id, address, price, sqft, beds, baths, saleDate}] }
+  // For each comp: pull the Zillow sold-listing photos + description (Apify),
+  // then one batched Claude call grades them all. ARV should be derived from
+  // renovated/updated comps — that's what "after repair" means. The client
+  // sends comps in small chunks (~4) so each request stays fast.
+  const gradeCache = new Map(); // comp address → { ts, grade } (7-day TTL; sold condition is immutable)
+  const GRADE_TTL = 7 * 24 * 3600 * 1000;
+
+  async function mapPool(items, limit, fn) {
+    const out = new Array(items.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i], i);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return out;
+  }
+
+  router.post("/comps/grade", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const subjectAddress = String(req.body?.address || "").trim();
+      const comps = (Array.isArray(req.body?.comps) ? req.body.comps : [])
+        .filter((c) => c && c.id && String(c.address || "").trim())
+        .slice(0, 12);
+      if (!comps.length) return res.status(400).json({ error: "comps required" });
+
+      const saved = await store.getOfferSettings(locationId);
+      const aiApiKey = String(saved?.aiApiKey || "").trim();
+      const apifyToken = String(saved?.apifyToken || "").trim();
+      if (!aiApiKey) return res.status(400).json({ error: "Anthropic API key required (Settings) for comp grading" });
+      if (!apifyToken) return res.status(400).json({ error: "Apify token required (Settings) for comp grading — it pulls the sold listings' photos" });
+
+      const cacheKey = (c) => String(c.address).trim().toLowerCase();
+      const grades = {}; // id → {condition, confidence, note, cached}
+      const failed = [];
+
+      const uncached = [];
+      for (const c of comps) {
+        const hit = gradeCache.get(cacheKey(c));
+        if (hit && Date.now() - hit.ts < GRADE_TTL) grades[c.id] = { ...hit.grade, cached: true };
+        else uncached.push(c);
+      }
+
+      // Pull each uncached comp's sold listing from Zillow (photos + description).
+      const fetched = await mapPool(uncached, 3, async (c) => {
+        try {
+          const z = await fetchZillowPhotos(c.address, apifyToken);
+          if (!z.photos.length) throw new Error("no photos on the listing");
+          return { ...c, photos: z.photos.slice(0, 6), description: z.listing?.remarks || "" };
+        } catch (e) {
+          const reason = e.message.slice(0, 120);
+          grades[c.id] = { condition: "unknown", confidence: "low", note: `Couldn't pull listing photos (${reason})` };
+          failed.push({ id: c.id, reason });
+          return null;
+        }
+      });
+
+      const gradeable = fetched.filter(Boolean);
+      if (gradeable.length) {
+        let result;
+        try {
+          result = await gradeCompConditions({ subjectAddress, comps: gradeable, aiApiKey });
+        } catch (e) {
+          throw anthropicErrorToHttp(e);
+        }
+        for (const g of result.grades || []) {
+          const comp = gradeable.find((c) => c.id === g.id);
+          if (!comp) continue;
+          const grade = { condition: g.condition, confidence: g.confidence, note: g.note };
+          grades[g.id] = grade;
+          // Cache only grades backed by real photos — scrape failures stay retryable.
+          if (gradeCache.size > 200) gradeCache.clear();
+          gradeCache.set(cacheKey(comp), { ts: Date.now(), grade });
+        }
+      }
+
+      res.json({ ok: true, grades, failed });
     } catch (err) { fail(res, err); }
   });
 
@@ -679,6 +768,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             beds: Number(req.body?.beds) || facts?.beds || null,
             baths: Number(req.body?.baths) || facts?.baths || null,
             sqft: Number(req.body?.sqft) || facts?.sqft || null,
+            yearBuilt: Number(req.body?.yearBuilt) || facts?.yearBuilt || null,
           },
           aiApiKey,
         });
@@ -782,8 +872,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           // Photo-review summary + per-item rationale from the form snapshot
           // (rendered as "condition notes" — no tooling references on paper).
           const ai = snapshot?.rehab?.aiResult;
-          const assessment = ai && (ai.summary || (ai.notes || []).length)
-            ? { summary: ai.summary || "", notes: Array.isArray(ai.notes) ? ai.notes : [] }
+          const assessment = ai && (ai.summary || (ai.notes || []).length || (ai.areas || []).length)
+            ? {
+                summary: ai.summary || "",
+                notes: Array.isArray(ai.notes) ? ai.notes : [],
+                areas: Array.isArray(ai.areas) ? ai.areas : [],
+              }
             : null;
           scopePdfUrl = await storeScopeDocument({
             offerId, locationId, scope,
@@ -801,14 +895,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       try {
         const cs = snapshot?.comps;
         const sel = new Set(Array.isArray(cs?.selected) ? cs.selected : []);
+        const gr = cs?.grades || {};
+        const withCondition = (c) => ({ ...c, condition: gr[c.id]?.condition || null });
         const picked = [
-          ...(cs?.result?.comps || []).filter((c) => sel.has(c.id)),
-          ...(Array.isArray(cs?.manual) ? cs.manual : []),
+          ...(cs?.result?.comps || []).filter((c) => sel.has(c.id)).map(withCondition),
+          ...(Array.isArray(cs?.manual) ? cs.manual : []).map(withCondition),
         ];
         if (picked.length) {
           compsPdfUrl = await storeCompsDocument({
             offerId, locationId,
             comps: picked,
+            arvBasis: String(cs?.arvBasis || ""),
             subject: cs?.result?.info || null,
             estimate: cs?.result?.estimate || null,
             months: Number(cs?.months) || 0,

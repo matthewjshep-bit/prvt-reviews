@@ -151,13 +151,25 @@ export function buildScopeDocument({ scope = [], total = 0, address = "", meta =
 // summary and the per-item rationale from the photo review. Deliberately
 // phrased as inspection notes (no tooling references) — this page can be
 // shown to partners/lenders. Returns null when there's nothing to print.
-export function buildScopeNotesDocument({ summary = "", notes = [], address = "", meta = {}, company = {}, locationId = "" }) {
+const AREA_LABELS = {
+  roof: "Roof", exterior: "Exterior", kitchen: "Kitchen", bathrooms: "Bathrooms",
+  flooring: "Flooring", paint_walls: "Paint/Walls", windows: "Windows", hvac: "HVAC",
+  plumbing: "Plumbing", electrical: "Electrical", yard: "Yard", foundation_structure: "Foundation",
+};
+const AREA_GRADE_COLORS = {
+  good: "#047857", fair: "#1d4ed8", dated: "#b45309", poor: "#b91c1c", not_visible: FAINT,
+};
+
+export function buildScopeNotesDocument({ summary = "", notes = [], areas = [], address = "", meta = {}, company = {}, locationId = "" }) {
   const cleanSummary = String(summary || "").slice(0, 700);
   const items = (Array.isArray(notes) ? notes : [])
     .map((n) => ({ label: String(n?.label || "").slice(0, 60), note: String(n?.note || "").slice(0, 220) }))
     .filter((n) => n.label && n.note)
     .slice(0, 24);
-  if (!cleanSummary && !items.length) return null;
+  const grades = (Array.isArray(areas) ? areas : [])
+    .filter((a) => AREA_LABELS[a?.area] && AREA_GRADE_COLORS[a?.grade])
+    .slice(0, 12);
+  if (!cleanSummary && !items.length && !grades.length) return null;
 
   const layers = [];
 
@@ -186,6 +198,24 @@ export function buildScopeNotesDocument({ summary = "", notes = [], address = ""
     y += 2.4;
     layers.push(text(8, y, 84, 9, cleanSummary, { size: 19, color: INK, lineHeight: 1.4, maxLines: 6 }));
     y += 9.6;
+    layers.push(rule(y - 0.6));
+  }
+
+  /* ---- area grades (3-column grid: "Kitchen — dated") ---- */
+  if (grades.length) {
+    layers.push(text(8, y, 84, 2, sp("Area grades"), { size: 15, color: GOLD, weight: "bold" }));
+    y += 2.4;
+    const colX = [8, 36.5, 65];
+    const gridRowH = 2.1;
+    grades.forEach((a, i) => {
+      const gx = colX[i % 3];
+      const gy = y + Math.floor(i / 3) * gridRowH;
+      const label = a.grade === "not_visible" ? "not visible" : a.grade;
+      layers.push(text(gx, gy, 27, gridRowH - 0.2, `${AREA_LABELS[a.area]} — ${label}`, {
+        size: 16, color: AREA_GRADE_COLORS[a.grade], autoFit: true, maxLines: 1,
+      }));
+    });
+    y += Math.ceil(grades.length / 3) * gridRowH + 1;
     layers.push(rule(y - 0.6));
   }
 
@@ -235,7 +265,15 @@ export function buildScopeNotesDocument({ summary = "", notes = [], address = ""
 // the offer. comps: [{address, price, sqft, beds, baths, saleDate, distance,
 // manual}]. subject: provider record for the subject. All inputs originate
 // from the client snapshot, so counts and string lengths are capped here.
-export function buildCompsDocument({ comps = [], subject = null, estimate = null, arv = 0, subjectSqft = 0, months = 0, address = "", meta = {}, company = {}, locationId = "" }) {
+const COMP_CONDITION_PRINT = {
+  renovated: { label: "Renov", color: "#047857" },
+  updated: { label: "Updated", color: "#047857" },
+  dated: { label: "Dated", color: "#b45309" },
+  distressed: { label: "Distr", color: "#b91c1c" },
+  unknown: { label: "—", color: MUTED },
+};
+
+export function buildCompsDocument({ comps = [], subject = null, estimate = null, arv = 0, subjectSqft = 0, months = 0, arvBasis = "", address = "", meta = {}, company = {}, locationId = "" }) {
   const items = comps.slice(0, 20).map((c) => ({
     address: String(c.address || "Comp").slice(0, 90),
     price: Math.round(Number(c.price) || 0),
@@ -244,9 +282,13 @@ export function buildCompsDocument({ comps = [], subject = null, estimate = null
     baths: c.baths != null && c.baths !== "" ? Number(c.baths) : null,
     saleDate: String(c.saleDate || "").slice(0, 10),
     distance: c.distance != null ? Number(c.distance) : null,
+    yearBuilt: Math.round(Number(c.yearBuilt)) || null,
+    condition: COMP_CONDITION_PRINT[c.condition] ? c.condition : null,
     manual: Boolean(c.manual),
   })).filter((c) => c.price > 0);
   if (!items.length) return null;
+  const hasCond = items.some((c) => c.condition);
+  const hasYr = items.some((c) => c.yearBuilt);
 
   const layers = [];
 
@@ -276,16 +318,29 @@ export function buildCompsDocument({ comps = [], subject = null, estimate = null
     sp(subjBits ? `Subject: ${subjBits}` : months ? `Closed sales · last ${months} months` : "Closed sales"),
     { size: 15, color: MUTED, align: "center", autoFit: true, maxLines: 1 }));
 
-  /* ---- table header ---- */
-  const col = {
-    addr: { x: 8, w: 31 }, bdba: { x: 40, w: 6 }, sqft: { x: 46.5, w: 7 },
-    sold: { x: 54.5, w: 9 }, dist: { x: 64.5, w: 5.5 }, ppsf: { x: 71, w: 8.5 }, price: { x: 80.5, w: 11.5 },
-  };
+  /* ---- table header (layout depends on which optional columns exist) ---- */
+  const col = hasCond
+    ? {
+        addr: { x: 8, w: 23 }, yr: { x: 31.5, w: 4.5 }, bdba: { x: 36.5, w: 5 }, sqft: { x: 42, w: 6.5 },
+        sold: { x: 49, w: 7.5 }, cond: { x: 57, w: 7 }, dist: { x: 64.5, w: 5 }, ppsf: { x: 70, w: 9 }, price: { x: 80, w: 12 },
+      }
+    : hasYr
+    ? {
+        addr: { x: 8, w: 27 }, yr: { x: 35.5, w: 4.5 }, bdba: { x: 40.5, w: 5.5 }, sqft: { x: 46.5, w: 7 },
+        sold: { x: 54.5, w: 9 }, dist: { x: 64.5, w: 5.5 }, ppsf: { x: 71, w: 8.5 }, price: { x: 80.5, w: 11.5 },
+      }
+    : {
+        addr: { x: 8, w: 31 }, bdba: { x: 40, w: 6 }, sqft: { x: 46.5, w: 7 },
+        sold: { x: 54.5, w: 9 }, dist: { x: 64.5, w: 5.5 }, ppsf: { x: 71, w: 8.5 }, price: { x: 80.5, w: 11.5 },
+      };
   const headY = 24;
   const head = (c, label, align = "right") =>
     layers.push(text(col[c].x, headY, col[c].w, 1.8, label.toUpperCase(), { size: 13, color: FAINT, weight: "bold", align }));
-  head("addr", "Address", "left"); head("bdba", "Bd/Ba"); head("sqft", "Sqft");
-  head("sold", "Sold"); head("dist", "Mi"); head("ppsf", "$/Sqft"); head("price", "Price");
+  head("addr", "Address", "left");
+  if (col.yr) head("yr", "Yr");
+  head("bdba", "Bd/Ba"); head("sqft", "Sqft"); head("sold", "Sold");
+  if (col.cond) head("cond", "Cond");
+  head("dist", "Mi"); head("ppsf", "$/Sqft"); head("price", "Price");
   layers.push({ id: uid("hr"), type: "shape", shape: "rect", x: 8, y: headY + 1.9, width: 84, height: 0.14, fill: RULE, visible: true });
 
   /* ---- rows ---- */
@@ -294,9 +349,14 @@ export function buildCompsDocument({ comps = [], subject = null, estimate = null
   for (const c of items) {
     const cell = (k, v, o = {}) => v && layers.push(text(col[k].x, y, col[k].w, 2, v, { size: 19, color: INK, align: "right", autoFit: true, maxLines: 1, ...o }));
     cell("addr", c.address + (c.manual ? " *" : ""), { align: "left" });
+    if (col.yr) cell("yr", c.yearBuilt ? String(c.yearBuilt) : "", { color: MUTED });
     cell("bdba", c.beds != null ? `${c.beds}/${c.baths ?? "?"}` : "");
     cell("sqft", c.sqft ? c.sqft.toLocaleString() : "");
     cell("sold", c.saleDate ? c.saleDate.slice(0, 7) : c.manual ? "manual" : "", { color: MUTED });
+    if (col.cond && c.condition) {
+      const cond = COMP_CONDITION_PRINT[c.condition];
+      cell("cond", cond.label, { size: 16, color: cond.color, weight: "bold" });
+    }
     cell("dist", c.distance != null ? String(Math.round(c.distance * 100) / 100) : "", { color: MUTED });
     cell("ppsf", c.sqft > 0 ? fmtMoney(Math.round(c.price / c.sqft)) : "", { color: MUTED });
     cell("price", fmtMoney(c.price), { weight: "bold", color: DARK });
@@ -335,7 +395,8 @@ export function buildCompsDocument({ comps = [], subject = null, estimate = null
   layers.push({ id: uid("tbar"), type: "shape", shape: "rect", x: 8, y, width: 84, height: 0.18, fill: RULE, visible: true });
   y += 1.2;
   const sqftNum = Math.round(Number(subjectSqft) || 0) || (subject?.sqft ? Math.round(Number(subject.sqft)) : 0);
-  const basis = avgPpsf > 0 && sqftNum > 0 ? `${fmtMoney(avgPpsf)}/sqft × ${sqftNum.toLocaleString()} sqft` : `${items.length} comparable sales`;
+  const basis = String(arvBasis || "").slice(0, 80) ||
+    (avgPpsf > 0 && sqftNum > 0 ? `${fmtMoney(avgPpsf)}/sqft × ${sqftNum.toLocaleString()} sqft` : `${items.length} comparable sales`);
   layers.push(text(8, y, 58, 3.4, sp("After-Repair Value (ARV)"), { size: 20, color: GOLD, weight: "bold", autoFit: true, maxLines: 1 }));
   layers.push(text(8, y + 3, 58, 2, basis, { size: 17, color: MUTED }));
   layers.push(text(48, y - 0.8, 44, 4.4, fmtMoney(arv), { font: "Source Serif", weight: "bold", size: 54, color: DARK, align: "right", autoFit: true, maxLines: 1 }));

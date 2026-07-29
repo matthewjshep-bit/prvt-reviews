@@ -116,74 +116,106 @@ export async function fetchZillowPhotos(address, apifyToken) {
       beds: Number(item.bedrooms) || null,
       baths: Number(item.bathrooms) || null,
       sqft: Number(item.livingArea) || null,
+      yearBuilt: Number(item.yearBuilt) || Number(item.resoFacts?.yearBuilt) || null,
     },
   };
 }
 
-const SCAN_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["summary", "items", "bathrooms", "bedrooms", "custom"],
-  properties: {
-    summary: {
-      type: "string",
-      description: "2-3 sentence overall condition assessment of the property",
-    },
-    items: {
-      type: "array",
-      description: "Catalog line items that the photos show are needed",
+// Property areas every scan must grade — a complete assessment, not just a
+// list of problems. Rendered as chips in the app and a grid on the SOW PDF.
+export const SCAN_AREAS = [
+  "roof", "exterior", "kitchen", "bathrooms", "flooring", "paint_walls",
+  "windows", "hvac", "plumbing", "electrical", "yard", "foundation_structure",
+];
+export const AREA_GRADES = ["good", "fair", "dated", "poor", "not_visible"];
+
+// Schema is built per scan: when the bathroom/bedroom counts are known, the
+// model is FORCED to grade exactly that many rooms (it used to skip rooms not
+// shown in photos), and every area must be graded exactly once.
+function makeScanSchema({ bathCount = 0, bedCount = 0 } = {}) {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["summary", "items", "bathrooms", "bedrooms", "areas", "custom"],
+    properties: {
+      summary: {
+        type: "string",
+        description: "2-3 sentence overall condition assessment of the property",
+      },
       items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["id", "note"],
-        properties: {
-          id: { type: "string", enum: ALL_REHAB_ITEMS.map((i) => i.id) },
-          note: { type: "string", description: "What in the photos justifies this item" },
+        type: "array",
+        description: "Catalog line items that the photos show are needed",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "note"],
+          properties: {
+            id: { type: "string", enum: ALL_REHAB_ITEMS.map((i) => i.id) },
+            note: { type: "string", description: "What in the photos justifies this item" },
+          },
+        },
+      },
+      bathrooms: {
+        type: "array",
+        description: "One entry per bathroom, in photo order",
+        ...(bathCount > 0 ? { minItems: bathCount, maxItems: bathCount } : {}),
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["tier", "note"],
+          properties: {
+            tier: { type: "string", enum: BATH_TIERS.map((t) => t.id) },
+            note: { type: "string" },
+          },
+        },
+      },
+      bedrooms: {
+        type: "array",
+        description: "One entry per bedroom, in photo order",
+        ...(bedCount > 0 ? { minItems: bedCount, maxItems: bedCount } : {}),
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["tier", "note"],
+          properties: {
+            tier: { type: "string", enum: BED_TIERS.map((t) => t.id) },
+            note: { type: "string" },
+          },
+        },
+      },
+      areas: {
+        type: "array",
+        description: "Condition grade for every area of the property, one per area in the listed order",
+        minItems: SCAN_AREAS.length,
+        maxItems: SCAN_AREAS.length,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["area", "grade", "note"],
+          properties: {
+            area: { type: "string", enum: SCAN_AREAS },
+            grade: { type: "string", enum: AREA_GRADES },
+            note: { type: "string", maxLength: 160 },
+          },
+        },
+      },
+      custom: {
+        type: "array",
+        description: "Visible issues not covered by the catalog",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["label", "cost", "note"],
+          properties: {
+            label: { type: "string" },
+            cost: { type: "integer", description: "Rough repair cost estimate in dollars" },
+            note: { type: "string" },
+          },
         },
       },
     },
-    bathrooms: {
-      type: "array",
-      description: "One entry per distinct bathroom visible in the photos, in order",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["tier", "note"],
-        properties: {
-          tier: { type: "string", enum: BATH_TIERS.map((t) => t.id) },
-          note: { type: "string" },
-        },
-      },
-    },
-    bedrooms: {
-      type: "array",
-      description: "One entry per distinct bedroom visible in the photos, in order",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["tier", "note"],
-        properties: {
-          tier: { type: "string", enum: BED_TIERS.map((t) => t.id) },
-          note: { type: "string" },
-        },
-      },
-    },
-    custom: {
-      type: "array",
-      description: "Visible issues not covered by the catalog",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["label", "cost", "note"],
-        properties: {
-          label: { type: "string" },
-          cost: { type: "integer", description: "Rough repair cost estimate in dollars" },
-          note: { type: "string" },
-        },
-      },
-    },
-  },
-};
+  };
+}
 
 const SYSTEM_PROMPT =
   "You are an experienced residential rehab estimator for a house-flipping / wholesaling operation. " +
@@ -192,21 +224,31 @@ const SYSTEM_PROMPT =
   "assume hidden problems; if a room looks recently updated, it needs no work. Prefer the cheapest catalog item " +
   "that addresses what you see (e.g. cabinet reface over new cabinets when boxes look sound). MLS photos flatter " +
   "the property, so when a finish looks dated-but-borderline, lean toward including a refresh-level item. Systems " +
-  "(roof, HVAC, water heater, electrical) only when visibly aged or damaged in the photos.";
+  "(roof, HVAC, water heater, electrical) only when visibly aged or damaged in the photos. " +
+  "Grade every listed area of the property, including areas that need no work, and estimate the age of the " +
+  "finishes in each. Explicitly flag any water staining, mold, or structural concerns you can see. Use the stated " +
+  "square footage to size flooring and paint quantities. Cross-check listing-remark claims (e.g. 'updated 2023') " +
+  "against what the photos actually show — the photos win. Be explicit in notes about what you could not see. " +
+  "Half bathrooms count as bathrooms — grade them with the appropriate (usually cheaper) tier.";
 
-// Run the scan. settings must carry aiApiKey; subject: {beds, baths, sqft}.
+// Run the scan. settings must carry aiApiKey; subject: {beds, baths, sqft, yearBuilt}.
 export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }) {
   const client = new Anthropic({ apiKey: aiApiKey });
 
   const catalogText = ALL_REHAB_ITEMS
     .map((i) => `- ${i.id}: ${i.label} (${i.mode === "sqft" ? `$${i.unit}/sqft` : i.mode === "qty" ? `$${i.unit} each` : `$${i.unit}`})`)
     .join("\n");
+  const yearBuilt = Number(subject?.yearBuilt) || 0;
+  const age = yearBuilt ? new Date().getFullYear() - yearBuilt : 0;
   const facts = [
     subject?.beds ? `${subject.beds} bedrooms` : null,
     subject?.baths ? `${subject.baths} bathrooms` : null,
     subject?.sqft ? `${subject.sqft} sqft` : null,
+    yearBuilt ? `built ${yearBuilt} (${age} years old)` : null,
     listing?.listPrice ? `listed at $${Number(listing.listPrice).toLocaleString()}` : null,
   ].filter(Boolean).join(", ");
+  const bathCount = Math.ceil(Number(subject?.baths)) || 0;
+  const bedCount = Math.round(Number(subject?.beds)) || 0;
 
   // Photos may be public URLs (MLS CDN) or data URLs (user-uploaded).
   const toImageBlock = (p) => {
@@ -221,6 +263,22 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }
     return { type: "image", source: { type: "url", url: p } };
   };
 
+  const roomInstructions = [
+    yearBuilt
+      ? `Given the ${yearBuilt} build year, expect original-era systems (roof, HVAC, electrical, plumbing) unless the photos or remarks show updates.`
+      : "",
+    bathCount > 0
+      ? `The property has ${bathCount} bathroom${bathCount > 1 ? "s" : ""} — assess EVERY one separately, in the order they appear in the photos. ` +
+        `If a bathroom is not shown, grade it to match the overall interior condition trend (refresh if the rest of the interior is dated, ` +
+        `none if the house is clearly renovated throughout) and say "not shown in photos" in its note.`
+      : "",
+    bedCount > 0
+      ? `The property has ${bedCount} bedroom${bedCount > 1 ? "s" : ""} — assess every one the same way.`
+      : "",
+    `Also grade each of these areas (one entry per area, in this order): ${SCAN_AREAS.join(", ")}. ` +
+    `Use "not_visible" when the photos don't show it.`,
+  ].filter(Boolean).join("\n");
+
   const content = [
     ...photos.slice(0, MAX_PHOTOS).map(toImageBlock),
     {
@@ -231,6 +289,7 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }
         `\n\nAvailable catalog items (use these ids):\n${catalogText}\n\n` +
         `Bathroom tiers: ${BATH_TIERS.map((t) => `${t.id} ($${t.unit})`).join(", ")}. ` +
         `Bedroom tiers: ${BED_TIERS.map((t) => `${t.id} ($${t.unit})`).join(", ")}.\n\n` +
+        `${roomInstructions}\n\n` +
         `Produce the rehab scope of work.`,
     },
   ];
@@ -240,7 +299,7 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }
     max_tokens: 16000,
     thinking: { type: "adaptive" },
     system: SYSTEM_PROMPT,
-    output_config: { format: { type: "json_schema", schema: SCAN_SCHEMA } },
+    output_config: { format: { type: "json_schema", schema: makeScanSchema({ bathCount, bedCount }) } },
     messages: [{ role: "user", content }],
   });
 
@@ -249,6 +308,91 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }
   }
   if (response.stop_reason === "refusal") {
     throw Object.assign(new Error("AI scan was declined"), { http: 502 });
+  }
+  const text = response.content.find((b) => b.type === "text")?.text || "{}";
+  return JSON.parse(text);
+}
+
+/* ---------- comp condition grading (for ARV accuracy) ---------- */
+
+export const COMP_CONDITIONS = ["renovated", "updated", "dated", "distressed", "unknown"];
+
+const GRADE_SYSTEM_PROMPT =
+  "You are a comp analyst for a house flipper, grading the renovation condition of SOLD comparable properties " +
+  "AT THE TIME OF SALE from their listing photos and description. Grades: " +
+  "renovated = full recent remodel with magazine/HGTV-ready finishes throughout; " +
+  "updated = meaningful partial updates (kitchen or baths redone, newer flooring/paint) but not a full remodel; " +
+  "dated = mostly original finishes 15+ years old; " +
+  "distressed = visible damage, gut-level condition, or heavy deferred maintenance; " +
+  "unknown = photos and description are insufficient to judge. " +
+  "Weight kitchen and bathroom condition most heavily. Trust the photos over description claims. " +
+  "Give exactly one grade per comp, with a note citing the decisive evidence.";
+
+// Grade a batch of comps in one Claude call. Each comp: {id, address, price,
+// sqft, beds, baths, saleDate, photos: [url...], description}. Returns
+// { grades: [{id, condition, confidence, note}] } — one entry per comp,
+// enforced by the schema.
+export async function gradeCompConditions({ subjectAddress, comps, aiApiKey }) {
+  const client = new Anthropic({ apiKey: aiApiKey });
+
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["grades"],
+    properties: {
+      grades: {
+        type: "array",
+        minItems: comps.length,
+        maxItems: comps.length,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "condition", "confidence", "note"],
+          properties: {
+            id: { type: "string", enum: comps.map((c) => c.id) },
+            condition: { type: "string", enum: COMP_CONDITIONS },
+            confidence: { type: "string", enum: ["low", "medium", "high"] },
+            note: { type: "string", maxLength: 200 },
+          },
+        },
+      },
+    },
+  };
+
+  const content = [];
+  for (const c of comps) {
+    const header = [
+      `COMP ${c.id} — ${c.address}.`,
+      c.saleDate || c.price ? `Sold${c.saleDate ? ` ${c.saleDate}` : ""}${c.price ? ` for $${Number(c.price).toLocaleString()}` : ""}.` : "",
+      c.beds != null || c.sqft ? `${c.beds ?? "?"}/${c.baths ?? "?"} · ${c.sqft ? `${Number(c.sqft).toLocaleString()} sqft` : "sqft unknown"}.` : "",
+      c.description ? `Listing description: "${String(c.description).slice(0, 800)}"` : "No listing description available.",
+    ].filter(Boolean).join(" ");
+    content.push({ type: "text", text: header });
+    for (const url of (c.photos || []).slice(0, 6)) {
+      content.push({ type: "image", source: { type: "url", url } });
+    }
+  }
+  content.push({
+    type: "text",
+    text:
+      `These ${comps.length} comps are being used to estimate the after-repair value of ${subjectAddress || "a subject property"}. ` +
+      `Grade the renovation condition of each comp at its time of sale.`,
+  });
+
+  const response = await client.messages.create({
+    model: "claude-opus-4-8",
+    max_tokens: 8000,
+    thinking: { type: "adaptive" },
+    system: GRADE_SYSTEM_PROMPT,
+    output_config: { format: { type: "json_schema", schema } },
+    messages: [{ role: "user", content }],
+  });
+
+  if (response.stop_reason === "max_tokens") {
+    throw Object.assign(new Error("comp grading output truncated — try again"), { http: 502 });
+  }
+  if (response.stop_reason === "refusal") {
+    throw Object.assign(new Error("comp grading was declined"), { http: 502 });
   }
   const text = response.content.find((b) => b.type === "text")?.text || "{}";
   return JSON.parse(text);

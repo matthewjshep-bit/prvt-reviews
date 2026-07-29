@@ -85,8 +85,10 @@ export const previewDocument = (inputs, settings, contactName) =>
 export const createOffer = ({ contactId, newContact, inputs, settings, scope, draftId, snapshot }) =>
   post(`/api/offers`, { contactId, newContact, inputs, settings, scope, draftId, snapshot });
 export const saveDraft = (id, draft) => post(`/api/offers/draft`, { id, draft });
-export const scanRehab = (address, { beds, baths, sqft, images } = {}) =>
-  post(`/api/offers/scan-rehab`, { address, beds, baths, sqft, images });
+export const scanRehab = (address, { beds, baths, sqft, yearBuilt, images } = {}) =>
+  post(`/api/offers/scan-rehab`, { address, beds, baths, sqft, yearBuilt, images });
+export const gradeComps = (address, comps) =>
+  post(`/api/offers/comps/grade`, { address, comps });
 export const listOffers = ({ contactId = "", limit = 50 } = {}) => {
   const p = new URLSearchParams({ location_id: getLocationId(), limit });
   if (contactId) p.set("contact_id", contactId);

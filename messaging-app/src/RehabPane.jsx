@@ -67,7 +67,21 @@ function RoomRow({ label, tiers, room, onChange }) {
   );
 }
 
-export default function RehabPane({ sqft, beds, baths, address, onApply, initialState, onStateChange }) {
+// Area-by-area condition grades from the AI scan (chips + SOW notes page).
+const AREA_LABELS = {
+  roof: "Roof", exterior: "Exterior", kitchen: "Kitchen", bathrooms: "Bathrooms",
+  flooring: "Flooring", paint_walls: "Paint/Walls", windows: "Windows", hvac: "HVAC",
+  plumbing: "Plumbing", electrical: "Electrical", yard: "Yard", foundation_structure: "Foundation",
+};
+const AREA_GRADE_CLS = {
+  good: "bg-emerald-100 text-emerald-800",
+  fair: "bg-blue-100 text-blue-800",
+  dated: "bg-amber-100 text-amber-800",
+  poor: "bg-red-100 text-red-700",
+  not_visible: "bg-gray-100 text-gray-500",
+};
+
+export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApply, initialState, onStateChange }) {
   const [rows, setRows] = useState(() => ({
     ...Object.fromEntries(ALL_ITEMS.map((i) => [i.id, { on: false, unit: i.unit, qty: 1 }])),
     ...(initialState?.rows || {}),
@@ -96,6 +110,7 @@ export default function RehabPane({ sqft, beds, baths, address, onApply, initial
       }
       const r = await scanRehab(address.trim(), {
         beds: bedCount || undefined, baths: bathCount || undefined, sqft: parse(sqft) || undefined,
+        yearBuilt: yearBuilt || undefined,
         images,
       });
       const s = r.suggestion || {};
@@ -135,6 +150,7 @@ export default function RehabPane({ sqft, beds, baths, address, onApply, initial
       setAiResult({
         summary: s.summary || "",
         photosAnalyzed: r.photosAnalyzed,
+        areas: Array.isArray(s.areas) ? s.areas : [],
         notes: [
           ...(s.items || []).map((it) => ({ label: labelOf(it.id), note: it.note })),
           ...(s.bathrooms || []).map((b, i) => ({ label: `Bathroom ${i + 1} — ${b.tier}`, note: b.note })),
@@ -254,6 +270,16 @@ export default function RehabPane({ sqft, beds, baths, address, onApply, initial
             </button>
           </div>
           <p className="text-sm text-violet-900">{aiResult.summary}</p>
+          {(aiResult.areas || []).length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {aiResult.areas.filter((a) => AREA_LABELS[a.area] && AREA_GRADE_CLS[a.grade]).map((a) => (
+                <span key={a.area} title={a.note || undefined}
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${AREA_GRADE_CLS[a.grade]}`}>
+                  {AREA_LABELS[a.area]}: {a.grade === "not_visible" ? "not visible" : a.grade}
+                </span>
+              ))}
+            </div>
+          )}
           {aiResult.notes.length > 0 && (
             <details className="mt-1.5">
               <summary className="cursor-pointer text-xs font-medium text-violet-700">

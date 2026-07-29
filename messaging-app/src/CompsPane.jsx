@@ -7,9 +7,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { ExternalLink, Loader2, MapPin, Plus, X } from "lucide-react";
+import { ExternalLink, Loader2, MapPin, Plus, Sparkles, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { geocode, getComps, zillowUrl } from "./api.js";
+import { geocode, getComps, gradeComps, zillowUrl } from "./api.js";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
@@ -19,6 +19,19 @@ const median = (xs) => {
   const s = [...xs].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+// Renovation condition of a comp at time of sale. ARV is an AFTER-REPAIR
+// value, so renovated/updated comps are the ones that should drive it.
+const CONDITIONS = ["renovated", "updated", "dated", "distressed", "unknown"];
+const COND_LABELS = { renovated: "Renovated", updated: "Updated", dated: "Dated", distressed: "Distressed", unknown: "Unknown" };
+const COND_CLS = {
+  renovated: "bg-emerald-100 text-emerald-800",
+  updated: "bg-blue-100 text-blue-800",
+  dated: "bg-amber-100 text-amber-800",
+  distressed: "bg-red-100 text-red-700",
+  unknown: "bg-gray-100 text-gray-500",
+  "": "bg-gray-50 text-gray-400",
 };
 
 export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqft: setSubjectSqft, onSubjectInfo, initialState, onStateChange }) {
@@ -33,12 +46,10 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   // wrong; these drive the comps filters and the rehab room counts.
   const [beds, setBeds] = useState(initialState?.beds || "");
   const [baths, setBaths] = useState(initialState?.baths || "");
-
-  // Report state upward so drafts/offers can snapshot the comps workspace.
-  useEffect(() => {
-    onStateChange?.({ result: state, selected: [...selected], manual, months, beds, baths });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, selected, manual, months, beds, baths]);
+  // Condition per comp id: {condition, confidence?, note?, source: "ai"|"manual"}.
+  // Manual settings always win over AI grading.
+  const [grades, setGrades] = useState(initialState?.grades || {});
+  const [grading, setGrading] = useState(null); // {done, total} while the AI pass runs
 
   // Keep the rehab pane's room counts in sync with corrected beds/baths.
   const editSubjectFacts = (nextBeds, nextBaths) => {
@@ -112,6 +123,47 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       return n;
     });
 
+  // Manual comps default to renovated — the user picked them deliberately,
+  // usually from vetted research — but the dropdown can demote them.
+  const condOf = (c) => grades[c.id]?.condition ?? (c.manual ? "renovated" : undefined);
+
+  const setCondition = (id, condition) =>
+    setGrades((g) => {
+      if (!condition) {
+        const { [id]: _drop, ...rest } = g;
+        return rest;
+      }
+      return { ...g, [id]: { ...(g[id] || {}), condition, source: "manual" } };
+    });
+
+  // AI-grade the loaded comps in small chunks (each chunk = a few Zillow
+  // scrapes + one AI call server-side) so requests stay fast and progress is
+  // visible. Manual settings are never overwritten; partial results are kept.
+  async function gradeAll() {
+    const targets = (state?.comps || []).filter((c) => grades[c.id]?.source !== "manual").slice(0, 12);
+    if (!targets.length) return;
+    setGrading({ done: 0, total: targets.length });
+    setError("");
+    try {
+      for (let i = 0; i < targets.length; i += 4) {
+        const chunk = targets.slice(i, i + 4)
+          .map(({ id, address: a, price, sqft, beds: b, baths: ba, saleDate }) => ({ id, address: a, price, sqft, beds: b, baths: ba, saleDate }));
+        const r = await gradeComps(address.trim(), chunk);
+        setGrades((g) => {
+          const next = { ...g };
+          for (const [id, gr] of Object.entries(r.grades || {})) {
+            if (next[id]?.source !== "manual") next[id] = { ...gr, source: "ai" };
+          }
+          return next;
+        });
+        setGrading((p) => (p ? { ...p, done: Math.min(p.total, i + chunk.length) } : p));
+      }
+    } catch (e) {
+      setError(`Grading stopped: ${e.message} — grades so far are kept.`);
+    }
+    setGrading(null);
+  }
+
   const picked = useMemo(() => {
     const auto = (state?.comps || []).filter((c) => selected.has(c.id));
     return [...auto, ...manual];
@@ -119,14 +171,54 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
 
   const suggestion = useMemo(() => {
     if (!picked.length) return null;
-    const withSqft = picked.filter((c) => c.sqft > 0);
     const sqft = parse(subjectSqft);
+    // Graded path: ARV from renovated/updated comps only — size-adjusted to
+    // the subject (marginal sqft ≈ half the average $/sqft, the standard
+    // appraiser rule) and outlier-trimmed, then the median. Dated/distressed
+    // comps stay visible but don't drag the after-repair value down.
+    const pool = picked.filter((c) => c.price > 0 && ["renovated", "updated"].includes(condOf(c)));
+    if (sqft > 0 && pool.length >= 2) {
+      const withSqft = pool.filter((c) => c.sqft > 0);
+      const avgPpsf = withSqft.length ? withSqft.reduce((t, c) => t + c.price / c.sqft, 0) / withSqft.length : 0;
+      let kept = pool;
+      let dropped = 0;
+      if (withSqft.length >= 5) {
+        const ps = withSqft.map((c) => c.price / c.sqft).sort((a, b) => a - b);
+        const q1 = ps[Math.floor(ps.length * 0.25)];
+        const q3 = ps[Math.floor(ps.length * 0.75)];
+        const iqr = q3 - q1;
+        const inRange = (c) => {
+          if (!(c.sqft > 0)) return true;
+          const p = c.price / c.sqft;
+          return p >= q1 - 1.5 * iqr && p <= q3 + 1.5 * iqr;
+        };
+        const trimmed = pool.filter(inRange);
+        if (trimmed.length >= 2) { dropped = pool.length - trimmed.length; kept = trimmed; }
+      }
+      const adjusted = kept.map((c) => (c.sqft > 0 && avgPpsf > 0 ? c.price + (sqft - c.sqft) * 0.5 * avgPpsf : c.price));
+      return {
+        arv: Math.round(median(adjusted) / 1000) * 1000,
+        ppsf: null,
+        graded: true,
+        basis: `${kept.length} renovated/updated comps, size-adjusted${dropped ? `, ${dropped} outlier dropped` : ""}`,
+      };
+    }
+    // Ungraded path — unchanged.
+    const withSqft = picked.filter((c) => c.sqft > 0);
     if (sqft > 0 && withSqft.length) {
       const ppsf = withSqft.reduce((t, c) => t + c.price / c.sqft, 0) / withSqft.length;
       return { arv: Math.round((ppsf * sqft) / 1000) * 1000, ppsf: Math.round(ppsf), basis: `${withSqft.length} comps × ${sqft.toLocaleString()} sqft` };
     }
     return { arv: Math.round(median(picked.map((c) => c.price)) / 1000) * 1000, ppsf: null, basis: `median of ${picked.length} comps` };
-  }, [picked, subjectSqft]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picked, subjectSqft, grades]);
+
+  // Report state upward so drafts/offers can snapshot the comps workspace
+  // (grades + the ARV basis ride along for restore and the comps PDF).
+  useEffect(() => {
+    onStateChange?.({ result: state, selected: [...selected], manual, months, beds, baths, grades, arvBasis: suggestion?.basis || "" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, selected, manual, months, beds, baths, grades, suggestion]);
 
   function addManual() {
     const price = parse(draft.price);
@@ -261,15 +353,29 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                 {state.estimate.low ? <> (range {fmtMoney(state.estimate.low)} – {fmtMoney(state.estimate.high)})</> : null}
               </div>
             )}
+            {state.gradeEnabled && (state.comps || []).length > 0 && (
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <button type="button" onClick={gradeAll} disabled={Boolean(grading)}
+                  className="flex items-center gap-1.5 rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-100 disabled:opacity-60"
+                  title="Pull each comp's sold-listing photos and grade its renovation condition — ARV should come from renovated comps">
+                  {grading
+                    ? <><Loader2 size={13} className="animate-spin" /> Grading {grading.done}/{grading.total}…</>
+                    : <><Sparkles size={13} /> Grade condition (AI)</>}
+                </button>
+                <span className="text-[11px] text-gray-400">ARV uses renovated/updated comps once graded</span>
+              </div>
+            )}
             <div className="max-h-56 flex-1 space-y-1 overflow-y-auto pr-1">
               {(state.comps || []).map((c) => (
                 <div key={c.id} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm hover:bg-gray-50">
                   <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
                     <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
                     <span className="min-w-0 flex-1 truncate">{c.address}</span>
-                    <span className="whitespace-nowrap text-xs text-gray-500">
+                    <span className="whitespace-nowrap text-xs text-gray-500"
+                      title={c.yearBuilt ? `Built ${c.yearBuilt}` : undefined}>
                       {[
                         c.beds != null ? `${c.beds}/${c.baths ?? "?"}` : "",
+                        c.yearBuilt ? `'${String(c.yearBuilt).slice(2)}` : "",
                         c.sqft ? `${c.sqft.toLocaleString()} sf` : "",
                         c.saleDate ? c.saleDate.slice(0, 7) : "",
                         c.distance != null ? `${c.distance} mi` : "",
@@ -277,6 +383,17 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                     </span>
                     <span className="whitespace-nowrap font-semibold tabular-nums">{fmtMoney(c.price)}</span>
                   </label>
+                  <select
+                    value={grades[c.id]?.condition || ""}
+                    onChange={(e) => setCondition(c.id, e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    title={grades[c.id]?.note
+                      ? `${grades[c.id].note}${grades[c.id].confidence ? ` (${grades[c.id].confidence} confidence${grades[c.id].source === "ai" ? ", AI" : ""})` : ""}`
+                      : "Condition at sale — set manually or use Grade condition (AI)"}
+                    className={`shrink-0 cursor-pointer appearance-none rounded-full border-0 px-2 py-0.5 text-[11px] font-semibold focus:outline-none ${COND_CLS[grades[c.id]?.condition || ""]}`}>
+                    <option value="">cond?</option>
+                    {CONDITIONS.map((k) => <option key={k} value={k}>{COND_LABELS[k]}</option>)}
+                  </select>
                   <a href={zillowUrl(c.address)} target="_blank" rel="noreferrer" title="Open on Zillow (photos)"
                     className="shrink-0 rounded p-1 text-gray-400 hover:bg-blue-50 hover:text-blue-700">
                     <ExternalLink size={14} />
@@ -288,6 +405,13 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                   <span className="min-w-0 flex-1 truncate">{c.address}</span>
                   <span className="whitespace-nowrap text-xs text-gray-500">{c.sqft ? `${c.sqft.toLocaleString()} sf · ` : ""}manual</span>
                   <span className="whitespace-nowrap font-semibold tabular-nums">{fmtMoney(c.price)}</span>
+                  <select
+                    value={condOf(c)}
+                    onChange={(e) => setCondition(c.id, e.target.value)}
+                    title="Condition at sale — manual comps count as renovated unless demoted"
+                    className={`shrink-0 cursor-pointer appearance-none rounded-full border-0 px-2 py-0.5 text-[11px] font-semibold focus:outline-none ${COND_CLS[condOf(c)]}`}>
+                    {CONDITIONS.map((k) => <option key={k} value={k}>{COND_LABELS[k]}</option>)}
+                  </select>
                   <button type="button" onClick={() => setManual((m) => m.filter((x) => x.id !== c.id))}
                     className="rounded p-0.5 text-gray-400 hover:text-red-600"><X size={13} /></button>
                 </div>
