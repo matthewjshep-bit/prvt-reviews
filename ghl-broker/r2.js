@@ -29,8 +29,9 @@ async function client() {
 }
 
 // Upload bytes and return a public URL. localDir/localBaseUrl are the dev
-// fallback location + the URL prefix that maps to it.
-export async function uploadAsset(key, buffer, contentType, { localDir, localBaseUrl }) {
+// fallback location + the URL prefix that maps to it. contentDisposition, when
+// set, is stored on the object and served back by R2 (names the Save dialog).
+export async function uploadAsset(key, buffer, contentType, { localDir, localBaseUrl, contentDisposition }) {
   if (r2Enabled) {
     const { PutObjectCommand } = await import("@aws-sdk/client-s3");
     await (await client()).send(
@@ -40,6 +41,7 @@ export async function uploadAsset(key, buffer, contentType, { localDir, localBas
         Body: buffer,
         ContentType: contentType,
         CacheControl: "public, max-age=31536000, immutable",
+        ...(contentDisposition ? { ContentDisposition: contentDisposition } : {}),
       })
     );
     return `${R2_PUBLIC_BASE}/${key}`;

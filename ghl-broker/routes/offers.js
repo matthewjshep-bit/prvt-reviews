@@ -12,7 +12,7 @@
 //   GET    /api/offers?contact_id=&limit=    list saved offers
 //   GET    /api/offers/:id
 //   DELETE /api/offers/:id
-//   POST   /api/offers/:id/send              text the offer doc to the contact
+//   POST   /api/offers/:id/send              send offer docs via text/email
 
 import express from "express";
 import crypto from "node:crypto";
@@ -26,7 +26,7 @@ import { jpegToPdf, jpegsToPdf } from "../pdf.js";
 import { uploadAsset, r2Enabled } from "../r2.js";
 import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
-  findOrCreateCustomFieldByKey, createContactNote, addContactTags, sendSms,
+  findOrCreateCustomFieldByKey, createContactNote, addContactTags, sendSms, sendEmail,
   customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField,
 } from "../ghl.js";
 
@@ -115,6 +115,8 @@ function offerNoteBody(offer) {
   if (offer.scopePdfUrl) lines.push(`Rehab scope of work (PDF): ${offer.scopePdfUrl}`);
   if (offer.compsPdfUrl) lines.push(`Comparable sales analysis (PDF): ${offer.compsPdfUrl}`);
   if (offer.imageUrl) lines.push(`Offer letter (image): ${offer.imageUrl}`);
+  const appLink = offerAppLink(offer.locationId, offer.contactId);
+  if (appLink) lines.push(`Edit this offer in the app: ${appLink}&offer_id=${encodeURIComponent(offer.id)}`);
   const zUrl = zillowUrl(inputs.address);
   if (zUrl) lines.push(`Zillow: ${zUrl}`);
   return lines.join("\n");
@@ -131,13 +133,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   //   • R2 when configured (permanent public URLs, offloaded bandwidth), else
   //   • Postgres via store.saveOfferDoc, served by the doc routes below —
   //     zero storage configuration and the URLs survive redeploys.
-  async function storeDocuments(offerId, locationId, jpeg, pdf) {
+  async function storeDocuments(offerId, locationId, jpeg, pdf, address) {
     if (r2Enabled) {
       const keyBase = `offers/${locationId}/${offerId}`;
       const localOpts = { localDir: uploadDir, localBaseUrl: `${publicBaseUrl}/uploads` };
+      const named = (suffix, ext) => ({
+        ...localOpts,
+        contentDisposition: `inline; filename="${docFilename(address, suffix, ext)}"`,
+      });
       return {
-        imageUrl: await uploadAsset(`${keyBase}.jpg`, jpeg, "image/jpeg", localOpts),
-        pdfUrl: await uploadAsset(`${keyBase}.pdf`, pdf, "application/pdf", localOpts),
+        imageUrl: await uploadAsset(`${keyBase}.jpg`, jpeg, "image/jpeg", named("OFFER", "jpg")),
+        pdfUrl: await uploadAsset(`${keyBase}.pdf`, pdf, "application/pdf", named("OFFER", "pdf")),
       };
     }
     await store.saveOfferDoc(offerId, "image", jpeg, "image/jpeg");
@@ -148,27 +154,42 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     };
   }
 
+  // Filename the browser's Save dialog offers for a document, e.g.
+  // "7316 166th Avenue East Sumner OFFER.pdf". Content-Disposition quoted
+  // strings must stay ASCII and can't contain filesystem-reserved characters.
+  const docFilename = (address, suffix, ext) => {
+    const addr = String(address || "")
+      .replace(/[^\x20-\x7e]/g, "")
+      .replace(/[\\/:*?"<>|,]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+    return `${addr ? `${addr} ` : ""}${suffix}.${ext}`;
+  };
+
   // Public document routes (the URLs written onto the contact / texted out).
   // No location gate: the unguessable offer UUID is the capability, exactly
   // like a public R2 URL.
-  const serveDoc = (kind) => async (req, res) => {
+  const serveDoc = (kind, suffix, ext) => async (req, res) => {
     try {
       const doc = await store.getOfferDoc(req.params.id, kind);
       if (!doc) return res.status(404).type("text/plain").send("not found");
+      const offer = await store.getOffer(req.params.id).catch(() => null);
       res.set("Content-Type", doc.contentType);
+      res.set("Content-Disposition", `inline; filename="${docFilename(offer?.address, suffix, ext)}"`);
       res.set("Cache-Control", "public, max-age=31536000, immutable");
       res.send(doc.bytes);
     } catch (err) { fail(res, err); }
   };
-  router.get("/:id/doc.pdf", serveDoc("pdf"));
-  router.get("/:id/doc.jpg", serveDoc("image"));
-  router.get("/:id/scope.pdf", serveDoc("scopepdf"));
-  router.get("/:id/comps.pdf", serveDoc("compspdf"));
+  router.get("/:id/doc.pdf", serveDoc("pdf", "OFFER", "pdf"));
+  router.get("/:id/doc.jpg", serveDoc("image", "OFFER", "jpg"));
+  router.get("/:id/scope.pdf", serveDoc("scopepdf", "REHAB SOW", "pdf"));
+  router.get("/:id/comps.pdf", serveDoc("compspdf", "COMPS", "pdf"));
 
   // Render a companion PDF (Rehab SOW, Comps Analysis) through cardgen and
   // store it next to the offer documents. Accepts one template per page.
   // Best-effort at every call site: a failure never blocks the offer itself.
-  async function storeCompanionPdf({ offerId, locationId, templates, kind, slug, docKind }) {
+  async function storeCompanionPdf({ offerId, locationId, templates, kind, slug, docKind, address, suffix }) {
     const pages = [];
     for (const template of templates) {
       const r = await fetch(`${CARD_SERVICE_URL}/render`, {
@@ -181,7 +202,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     }
     const pdf = jpegsToPdf(pages);
     if (r2Enabled) {
-      const localOpts = { localDir: uploadDir, localBaseUrl: `${publicBaseUrl}/uploads` };
+      const localOpts = {
+        localDir: uploadDir,
+        localBaseUrl: `${publicBaseUrl}/uploads`,
+        contentDisposition: `inline; filename="${docFilename(address, suffix, "pdf")}"`,
+      };
       return uploadAsset(`offers/${locationId}/${offerId}-${slug}.pdf`, pdf, "application/pdf", localOpts);
     }
     await store.saveOfferDoc(offerId, docKind, pdf, "application/pdf");
@@ -195,13 +220,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       ? buildScopeNotesDocument({ ...assessment, address, meta, company, locationId })
       : null;
     if (notesTemplate) templates.push(notesTemplate);
-    return storeCompanionPdf({ offerId, locationId, templates, kind: "scope", slug: "scope", docKind: "scopepdf" });
+    return storeCompanionPdf({ offerId, locationId, templates, kind: "scope", slug: "scope", docKind: "scopepdf", address, suffix: "REHAB SOW" });
   }
 
   async function storeCompsDocument({ offerId, locationId, meta, company, ...doc }) {
     const template = buildCompsDocument({ ...doc, meta, company, locationId });
     if (!template) return null; // no priced comps selected — nothing to render
-    return storeCompanionPdf({ offerId, locationId, templates: [template], kind: "comps", slug: "comps", docKind: "compspdf" });
+    return storeCompanionPdf({ offerId, locationId, templates: [template], kind: "comps", slug: "comps", docKind: "compspdf", address: doc.address, suffix: "COMPS" });
   }
 
   /* ---------- settings ---------- */
@@ -747,7 +772,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { jpeg, width, height } = await renderDocument(calc, meta, locationId);
       const pdf = jpegToPdf(jpeg, width, height);
       const offerId = crypto.randomUUID();
-      const { imageUrl, pdfUrl } = await storeDocuments(offerId, locationId, jpeg, pdf);
+      const { imageUrl, pdfUrl } = await storeDocuments(offerId, locationId, jpeg, pdf, calc.inputs.address);
 
       // Companion document: Rehab Scope of Work (when a scope was applied).
       let scopePdfUrl = null;
@@ -901,28 +926,146 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
-  /* ---------- text the offer document to the contact ---------- */
-  // dryRun defaults to true; a live send also requires CARD_SENDS_ENABLED=true
-  // on the server (same safety gate the old send engine used).
+  /* ---------- send the offer documents to the contact (text / email) ---------- */
+  // Body: { channels?: ["sms","email"], docs?: ["pdf","scope","comps","image"],
+  //         message?, emailSubject?, dryRun? }. Defaults ({channels:["sms"],
+  //         docs:["image"]}) reproduce the legacy text-with-image behavior.
+  // dryRun defaults to true and returns per-channel previews; a live send also
+  // requires CARD_SENDS_ENABLED=true on the server (same safety gate the old
+  // send engine used). Live sends are recorded on the offer as offer.sends.
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   router.post("/:id/send", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
       const offer = await store.getOffer(req.params.id);
       if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
 
-      const { message = "", dryRun = true } = req.body || {};
+      const b = req.body || {};
+      const { message = "", emailSubject = "", dryRun = true } = b;
+      const channels = (Array.isArray(b.channels) ? b.channels : ["sms"]).filter((c) => c === "sms" || c === "email");
+      const docKeys = Array.isArray(b.docs) ? b.docs : ["image"];
+      if (!channels.length) return res.status(400).json({ error: "no channel selected" });
+
+      // Requested documents, filtered to what this offer actually has.
+      const DOC_DEFS = [
+        ["pdf", "Offer letter (PDF)", offer.pdfUrl],
+        ["scope", "Rehab scope of work", offer.scopePdfUrl],
+        ["comps", "Comparable sales analysis", offer.compsPdfUrl],
+        ["image", "Offer letter (image)", offer.imageUrl],
+      ];
+      const picked = DOC_DEFS.filter(([key, , url]) => docKeys.includes(key) && url);
+      if (!picked.length) return res.status(400).json({ error: "no documents selected (or the offer has none)" });
+      const imagePicked = picked.some(([key]) => key === "image");
+      const pdfDocs = picked.filter(([key]) => key !== "image");
+
+      // Destination phone/email live on the GHL contact, not the offer. A
+      // lookup failure never fails the request — it surfaces per channel.
+      let contact = null;
+      let contactErr = "";
+      try {
+        contact = await getContact(client, offer.contactId);
+      } catch (e) { contactErr = e.message; }
+      const phone = contact?.phone || "";
+      const email = contact?.email || "";
+      const channelErr = (dest, label) =>
+        contactErr ? `contact lookup failed: ${contactErr}` : !dest ? `contact has no ${label}` : "";
+
       const firstName = (offer.contactName || "").split(" ")[0] || "there";
       const text = message ||
         `Hi ${firstName}, here's our written cash offer on ${offer.address || "your property"} — ` +
         `${fmtMoney(offer.cashAmount)}, as-is, close on your timeline (attached). ` +
         `Happy to answer any questions.`;
 
+      // SMS: image rides as the MMS attachment; PDFs go as links in the text.
+      const smsText = [text, ...pdfDocs.map(([, label, url]) => `${label}: ${url}`)].join("\n\n");
+      const smsAttachments = imagePicked ? [offer.imageUrl] : [];
+
+      // Email: every picked document attached as a file, short HTML body.
+      const company = offer.calc?.settings?.company || {};
+      const subject = (emailSubject || `Cash offer — ${offer.address || "your property"}`).slice(0, 150);
+      const emailAttachments = picked.map(([, , url]) => url);
+      const signoffLines = [company.signer || company.name, company.email, company.phone].filter(Boolean);
+      const html = [
+        `<p>${esc(message || `Hi ${firstName},`).replace(/\n/g, "<br>")}</p>`,
+        ...(message ? [] : [
+          `<p>Please find our written cash offer on <strong>${esc(offer.address || "your property")}</strong> attached — ` +
+          `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, as-is, close on your timeline. ` +
+          `Happy to answer any questions.</p>`,
+        ]),
+        `<p>Attached:</p><ul>${picked.map(([, label]) => `<li>${esc(label)}</li>`).join("")}</ul>`,
+        signoffLines.length ? `<p>${signoffLines.map(esc).join("<br>")}</p>` : "",
+      ].filter(Boolean).join("\n");
+
       const live = dryRun === false && CARD_SENDS_ENABLED;
       if (!live) {
-        return res.json({ ok: true, dryRun: true, sendsEnabled: CARD_SENDS_ENABLED, wouldSendTo: offer.contactId, message: text, attachment: offer.imageUrl });
+        return res.json({
+          ok: true,
+          dryRun: true,
+          sendsEnabled: CARD_SENDS_ENABLED,
+          wouldSendTo: offer.contactId,
+          // Legacy fields (the New Offer tab's simple send flow reads these).
+          message: smsText,
+          attachment: offer.imageUrl,
+          contact: { phone, email },
+          ...(contactErr ? { contactError: contactErr } : {}),
+          previews: {
+            ...(channels.includes("sms") ? {
+              sms: {
+                to: phone, message: smsText, attachments: smsAttachments,
+                ...(channelErr(phone, "phone number") ? { error: channelErr(phone, "phone number") } : {}),
+              },
+            } : {}),
+            ...(channels.includes("email") ? {
+              email: {
+                to: email, subject, html, attachments: emailAttachments,
+                docs: picked.map(([key, label]) => ({ key, label })),
+                ...(channelErr(email, "email address") ? { error: channelErr(email, "email address") } : {}),
+              },
+            } : {}),
+          },
+        });
       }
-      const result = await sendSms(client, { contactId: offer.contactId, message: text, attachments: [offer.imageUrl] });
-      res.json({ ok: true, sent: true, result });
+
+      // Live send — each channel independently; one failing never blocks the other.
+      const results = {};
+      if (channels.includes("sms")) {
+        const err = channelErr(phone, "phone number");
+        if (err) results.sms = { ok: false, error: err };
+        else {
+          try {
+            await sendSms(client, { contactId: offer.contactId, message: smsText, attachments: smsAttachments });
+            results.sms = { ok: true };
+          } catch (e) { results.sms = { ok: false, error: e.message }; }
+        }
+      }
+      if (channels.includes("email")) {
+        const err = channelErr(email, "email address");
+        if (err) results.email = { ok: false, error: err };
+        else {
+          try {
+            await sendEmail(client, { contactId: offer.contactId, subject, html, attachments: emailAttachments });
+            results.email = { ok: true };
+          } catch (e) { results.email = { ok: false, error: e.message }; }
+        }
+      }
+
+      // Record the send on the offer so History can show what went out.
+      // (Failed attempts are recorded too — they're part of the story.)
+      offer.sends = [...(offer.sends || []), {
+        ts: new Date().toISOString(),
+        channels,
+        docs: picked.map(([key]) => key),
+        results,
+      }];
+      await store.updateOffer(offer.id, offer).catch(() => {});
+
+      const outcomes = Object.values(results);
+      if (!outcomes.some((r) => r.ok)) {
+        // Nothing went out — error response, like the old route on a failed text.
+        const detail = Object.entries(results).map(([ch, r]) => `${ch}: ${r.error}`).join("; ");
+        return res.status(502).json({ error: "send failed", detail, results, sends: offer.sends });
+      }
+      res.json({ ok: outcomes.every((r) => r.ok), sent: true, results, sends: offer.sends });
     } catch (err) { fail(res, err); }
   });
 

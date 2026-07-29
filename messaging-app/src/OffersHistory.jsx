@@ -3,9 +3,10 @@
 // (document, all three options, attach status).
 
 import React, { useEffect, useState } from "react";
-import { ExternalLink, FileText, Loader2, Pencil, Trash2, X } from "lucide-react";
+import { ExternalLink, FileText, Loader2, Pencil, Search, Send, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { deleteOffer, ghlContactUrl, listOffers, zillowUrl } from "./api.js";
+import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 
 function AttachStatus({ offer }) {
   if (offer.status === "draft") {
@@ -22,7 +23,29 @@ function AttachStatus({ offer }) {
   );
 }
 
-function OfferDetail({ offer, onClose, onEdit }) {
+// Compact "what went out" label for a sends entry: "text+email · 07-29".
+const sendLabel = (s) =>
+  `${s.channels.map((c) => CHANNEL_LABELS[c] || c).join("+")} · ${(s.ts || "").slice(5, 10)}`;
+
+function SentBadge({ offer }) {
+  const sends = offer.sends || [];
+  if (!sends.length) return null;
+  const last = sends[sends.length - 1];
+  const failed = Object.values(last.results || {}).some((r) => !r.ok);
+  const cls = failed ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800";
+  const title = sends
+    .map((s) => `${(s.ts || "").slice(0, 16).replace("T", " ")} — ${s.channels
+      .map((c) => `${CHANNEL_LABELS[c] || c}${s.results?.[c]?.ok === false ? ` (failed: ${s.results[c].error})` : ""}`)
+      .join(", ")} · docs: ${(s.docs || []).join(", ")}`)
+    .join("\n");
+  return (
+    <span className={`ml-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${cls}`} title={title}>
+      {failed ? "⚠ " : ""}Sent {sendLabel(last)}
+    </span>
+  );
+}
+
+function OfferDetail({ offer, onClose, onEdit, onSend }) {
   const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
   const Row = ({ label, value }) => (
     <div className="flex justify-between gap-4 text-sm">
@@ -54,6 +77,12 @@ function OfferDetail({ offer, onClose, onEdit }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {offer.contactId && (
+              <button type="button" onClick={() => onSend?.(offer)}
+                className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-800">
+                <Send size={14} /> Send
+              </button>
+            )}
             <button type="button" onClick={() => onEdit?.(offer)}
               className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50">
               <Pencil size={14} /> Edit offer
@@ -106,6 +135,25 @@ function OfferDetail({ offer, onClose, onEdit }) {
                 {offer.warnings.map((w, i) => <li key={i}>{w}</li>)}
               </ul>
             )}
+            {(offer.sends || []).length > 0 && (
+              <div className="rounded-xl border border-gray-200 p-3">
+                <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-gray-500">Send history</div>
+                {offer.sends.map((s, i) => (
+                  <div key={i} className="flex items-start justify-between gap-3 py-0.5 text-xs">
+                    <span className="whitespace-nowrap text-gray-500">{(s.ts || "").slice(0, 16).replace("T", " ")}</span>
+                    <span className="text-right">
+                      {s.channels.map((c) => (
+                        <span key={c} className={s.results?.[c]?.ok === false ? "text-red-600" : "text-emerald-700"}
+                          title={s.results?.[c]?.error || ""}>
+                          {CHANNEL_LABELS[c] || c}{s.results?.[c]?.ok === false ? " ✗" : " ✓"}{" "}
+                        </span>
+                      ))}
+                      <span className="text-gray-500">· {(s.docs || []).join(", ")}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="flex flex-wrap gap-2">
               <a href={offer.pdfUrl} target="_blank" rel="noreferrer"
                 className="flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-semibold text-white hover:bg-gray-800">
@@ -139,6 +187,8 @@ export default function OffersHistory({ onEdit }) {
   const [offers, setOffers] = useState(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(null);
+  const [sending, setSending] = useState(null);
+  const [q, setQ] = useState("");
 
   useEffect(() => {
     listOffers({ limit: 100 })
@@ -154,6 +204,14 @@ export default function OffersHistory({ onEdit }) {
     } catch (e) { setError(e.message); }
   }
 
+  // A live send appends to offer.sends — refresh every copy of the row we hold.
+  function handleSent(id, sends) {
+    const patch = (o) => (o && o.id === id ? { ...o, sends } : o);
+    setOffers((list) => (list || []).map(patch));
+    setSelected(patch);
+    setSending(patch);
+  }
+
   if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
   if (!offers) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-gray-400" /></div>;
   if (!offers.length) {
@@ -164,8 +222,39 @@ export default function OffersHistory({ onEdit }) {
     );
   }
 
+  const needle = q.trim().toLowerCase();
+  const shown = !needle
+    ? offers
+    : offers.filter((o) =>
+        [
+          o.contactName,
+          o.address,
+          (o.createdAt || "").slice(0, 10),
+          o.cashAmount != null ? String(o.cashAmount) : "",
+          o.cashAmount != null ? fmtMoney(o.cashAmount) : "",
+        ].some((v) => (v || "").toLowerCase().includes(needle)));
+
   return (
     <>
+      <div className="mb-3 flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2">
+        <Search size={15} className="text-gray-400" />
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search by contact, address, amount, or date…"
+          className="w-full text-sm focus:outline-none"
+        />
+        {q && (
+          <button type="button" onClick={() => setQ("")} className="rounded p-0.5 text-gray-400 hover:bg-gray-100">
+            <X size={14} />
+          </button>
+        )}
+      </div>
+      {shown.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-300 p-10 text-center text-sm text-gray-400">
+          No offers match "{q.trim()}".
+        </div>
+      ) : (
       <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
         <table className="w-full text-sm">
           <thead>
@@ -180,7 +269,7 @@ export default function OffersHistory({ onEdit }) {
             </tr>
           </thead>
           <tbody>
-            {offers.map((o) => (
+            {shown.map((o) => (
               <tr key={o.id}
                 onClick={() => (o.status === "draft" ? onEdit?.(o) : setSelected(o))}
                 className="group cursor-pointer border-b border-gray-100 last:border-0 hover:bg-gray-50">
@@ -221,8 +310,16 @@ export default function OffersHistory({ onEdit }) {
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-xs">
                   <AttachStatus offer={o} />
+                  <SentBadge offer={o} />
                 </td>
                 <td className="sticky right-0 whitespace-nowrap bg-white px-4 py-2.5 text-right group-hover:bg-gray-50" onClick={(e) => e.stopPropagation()}>
+                  {o.status !== "draft" && o.contactId && (
+                    <button type="button" onClick={() => setSending(o)}
+                      className="mr-1 inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                      title="Text or email the offer documents">
+                      <Send size={13} /> Send
+                    </button>
+                  )}
                   <button type="button" onClick={() => onEdit?.(o)}
                     className="mr-1 inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
                     title={o.status === "draft" ? "Continue editing draft" : "Reopen as a new working copy"}>
@@ -238,8 +335,11 @@ export default function OffersHistory({ onEdit }) {
           </tbody>
         </table>
       </div>
+      )}
       {selected && <OfferDetail offer={selected} onClose={() => setSelected(null)}
-        onEdit={(o) => { setSelected(null); onEdit?.(o); }} />}
+        onEdit={(o) => { setSelected(null); onEdit?.(o); }}
+        onSend={(o) => setSending(o)} />}
+      {sending && <SendModal offer={sending} onClose={() => setSending(null)} onSent={handleSent} />}
     </>
   );
 }

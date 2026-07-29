@@ -8,7 +8,7 @@ import React, { useEffect, useState } from "react";
 import NewOffer from "./NewOffer.jsx";
 import OffersHistory from "./OffersHistory.jsx";
 import SettingsView from "./SettingsView.jsx";
-import { getLocationId, getSettings } from "./api.js";
+import { getLocationId, getOffer, getSettings } from "./api.js";
 
 const NAV = [
   { view: "new", label: "New Offer" },
@@ -46,6 +46,16 @@ export default function OfferApp() {
     getSettings()
       .then(setSettings)
       .catch((e) => setSettingsError(e.message));
+  }, []);
+
+  // Deep link from the GHL contact note: ?offer_id= reopens that offer in the
+  // editor (same path as History → Edit) once it loads.
+  useEffect(() => {
+    const offerId = readParam("offer_id");
+    if (!offerId) return;
+    getOffer(offerId)
+      .then((o) => { if (o) { setEditing(o); setView("new"); } })
+      .catch(() => { /* wrong location or deleted offer — stay on the blank form */ });
   }, []);
 
   if (!getLocationId()) {

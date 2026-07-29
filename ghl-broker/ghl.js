@@ -179,3 +179,17 @@ export async function sendSms(client, { contactId, message, attachments }) {
     },
   });
 }
+
+export async function sendEmail(client, { contactId, subject, html, attachments }) {
+  return client.call(`/conversations/messages`, {
+    method: "POST",
+    version: V_CONVERSATIONS,
+    body: {
+      type: "Email",
+      contactId,
+      subject,
+      html,
+      ...(attachments && attachments.length ? { attachments } : {}),
+    },
+  });
+}
