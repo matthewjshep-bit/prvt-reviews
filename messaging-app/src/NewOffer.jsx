@@ -657,7 +657,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
           <div className="sm:col-span-2">
             <Field label="Financing">
               <input className={INPUT_CLS} value={terms.financing} onChange={setTerm("financing")}
-                placeholder="None — funded with cash" />
+                placeholder="Funded with cash or private loan" />
             </Field>
           </div>
           <div className="sm:col-span-2">

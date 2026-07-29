@@ -484,7 +484,7 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
   y += 2.9;
   const terms = [
     ["Purchase Price", `${fmtMoney(cash.amount)}, all cash`],
-    ["Financing", String(settings.termFinancing || "").trim() || "None — funded with cash"],
+    ["Financing", String(settings.termFinancing || "").trim() || "Funded with cash or private loan"],
     ["Earnest Money", `${fmtMoney(settings.earnestMoney)}, deposited with escrow upon mutual acceptance`],
     ["Closing Date", String(settings.termClosing || "").trim() || `On or before ${cash.closeDays} days from acceptance — or a date of your choosing`],
     ["Condition", String(settings.termCondition || "").trim() || "Purchased strictly as-is; no repairs or clean-out required"],
