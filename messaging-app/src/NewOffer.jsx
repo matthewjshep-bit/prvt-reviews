@@ -314,6 +314,10 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
   );
   // Per-offer fee/spread override ("" → use the settings default).
   const [feeOverride, setFeeOverride] = useState(snap?.feeOverride ?? "");
+  // Per-offer letter terms ("" everywhere → the settings/built-in defaults).
+  const BLANK_TERMS = { earnestMoney: "", closeDays: "", closing: "", financing: "", condition: "", possession: "" };
+  const [terms, setTerms] = useState({ ...BLANK_TERMS, ...(snap?.terms || {}) });
+  const setTerm = (k) => (e) => setTerms((t) => ({ ...t, [k]: e.target.value }));
   const [underwriteMode, setUnderwriteMode] = useState(
     snap?.underwriteMode || fromOffer?.calc?.settings?.underwriteMode || settings?.underwriteMode || "lowball"
   );
@@ -378,8 +382,18 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
     if (String(feeOverride).trim() !== "") {
       s.wholesaleFee = Number(String(feeOverride).replace(/[^\d]/g, "")) || 0;
     }
+    if (String(terms.earnestMoney).trim() !== "") {
+      s.earnestMoney = Number(String(terms.earnestMoney).replace(/[^\d]/g, "")) || 0;
+    }
+    if (String(terms.closeDays).trim() !== "") {
+      s.closeDays = Math.max(1, parseInt(terms.closeDays, 10) || s.closeDays || 14);
+    }
+    if (terms.closing.trim()) s.termClosing = terms.closing.trim();
+    if (terms.financing.trim()) s.termFinancing = terms.financing.trim();
+    if (terms.condition.trim()) s.termCondition = terms.condition.trim();
+    if (terms.possession.trim()) s.termPossession = terms.possession.trim();
     return s;
-  }, [settings, underwriteMode, feeOverride]);
+  }, [settings, underwriteMode, feeOverride, terms]);
 
   const calc = useMemo(() => {
     try {
@@ -413,7 +427,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
         draftId,
         // Full form snapshot so History → Edit restores comps + rehab intact.
         snapshot: {
-          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride,
+          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, terms,
           rehab: rehabStateRef.current,
           comps: compsStateRef.current,
         },
@@ -429,7 +443,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
     setError(""); setSavingDraft(true);
     try {
       const r = await saveDraft(draftId, {
-        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride,
+        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, terms,
         rehab: rehabStateRef.current,
         comps: compsStateRef.current,
         cashPreview: calc?.offers?.cash?.amount ?? null,
@@ -616,6 +630,49 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
       <OfferCards calc={calc} underwriteMode={underwriteMode} setUnderwriteMode={setUnderwriteMode}
         priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
         feeOverride={feeOverride} setFeeOverride={setFeeOverride} fmtTyped={fmtTyped} />
+
+      <div className="rounded-xl border border-gray-200 bg-white p-4">
+        <h2 className="text-sm font-bold">Letter terms</h2>
+        <p className="mb-3 mt-0.5 text-xs text-gray-500">
+          The "Tentative terms" printed on the offer letter. Leave a field blank to use the default shown in it.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Earnest money ($)">
+            <input className={INPUT_CLS} inputMode="numeric" value={terms.earnestMoney}
+              onChange={(e) => setTerms((t) => ({ ...t, earnestMoney: fmtTyped(e.target.value) }))}
+              placeholder={fmtTyped(String(settings?.earnestMoney ?? 2500))} />
+          </Field>
+          <Field label="Close within (days)">
+            <input className={INPUT_CLS} inputMode="numeric" value={terms.closeDays}
+              onChange={(e) => setTerms((t) => ({ ...t, closeDays: e.target.value.replace(/[^\d]/g, "") }))}
+              placeholder={String(settings?.closeDays ?? 14)} />
+          </Field>
+          <div className="sm:col-span-2">
+            <Field label="Closing date line (overrides the days above)">
+              <input className={INPUT_CLS} value={terms.closing} onChange={setTerm("closing")}
+                placeholder={`On or before ${calc?.offers?.cash?.closeDays ?? settings?.closeDays ?? 14} days from acceptance — or a date of your choosing`} />
+            </Field>
+          </div>
+          <div className="sm:col-span-2">
+            <Field label="Financing">
+              <input className={INPUT_CLS} value={terms.financing} onChange={setTerm("financing")}
+                placeholder="None — funded with cash; no loan or appraisal contingency" />
+            </Field>
+          </div>
+          <div className="sm:col-span-2">
+            <Field label="Condition">
+              <input className={INPUT_CLS} value={terms.condition} onChange={setTerm("condition")}
+                placeholder="Purchased strictly as-is; no repairs or clean-out required" />
+            </Field>
+          </div>
+          <div className="sm:col-span-2">
+            <Field label="Possession">
+              <input className={INPUT_CLS} value={terms.possession} onChange={setTerm("possession")}
+                placeholder="At closing, or flexible if you need additional time" />
+            </Field>
+          </div>
+        </div>
+      </div>
 
       {/* Sticky action bar: the live number + actions stay in reach while
           scrolling through comps and rehab above. */}

@@ -423,11 +423,11 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
   y += 2.9;
   const terms = [
     ["Purchase Price", `${fmtMoney(cash.amount)}, all cash`],
-    ["Financing", "None — funded with cash; no loan or appraisal contingency"],
+    ["Financing", String(settings.termFinancing || "").trim() || "None — funded with cash; no loan or appraisal contingency"],
     ["Earnest Money", `${fmtMoney(settings.earnestMoney)}, deposited with escrow upon mutual acceptance`],
-    ["Closing Date", `On or before ${cash.closeDays} days from acceptance — or a date of your choosing`],
-    ["Condition", "Purchased strictly as-is; no repairs or clean-out required"],
-    ["Possession", "At closing, or flexible if you need additional time"],
+    ["Closing Date", String(settings.termClosing || "").trim() || `On or before ${cash.closeDays} days from acceptance — or a date of your choosing`],
+    ["Condition", String(settings.termCondition || "").trim() || "Purchased strictly as-is; no repairs or clean-out required"],
+    ["Possession", String(settings.termPossession || "").trim() || "At closing, or flexible if you need additional time"],
   ];
   for (const [k, v] of terms) {
     layers.push(text(8, y, 19, 4.2, k, { size: 20, weight: "bold", color: DARK, lineHeight: 1.25, maxLines: 2 }));

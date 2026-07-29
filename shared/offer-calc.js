@@ -41,6 +41,13 @@ export const DEFAULT_OFFER_SETTINGS = {
   closeDays: 14,             // advertised days-to-close
   validityDays: 7,           // offer expiry window printed on the document
   earnestMoney: 2500,        // earnest-money deposit named in the letter
+  // "Tentative terms" lines printed on the letter. termClosing "" → built
+  // from closeDays ("On or before N days from acceptance — or a date of your
+  // choosing"). All overridable per offer from the New Offer page.
+  termFinancing: "None — funded with cash; no loan or appraisal contingency",
+  termClosing: "",
+  termCondition: "Purchased strictly as-is; no repairs or clean-out required",
+  termPossession: "At closing, or flexible if you need additional time",
   compsApiKey: "",           // enables the comps map + MLS photos (realestateapi.com API key)
   aiApiKey: "",              // enables the AI rehab photo scan (Anthropic API key)
   apifyToken: "",            // Zillow listing photos via Apify (zillow-detail-scraper)
