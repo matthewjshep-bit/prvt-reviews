@@ -132,6 +132,37 @@ export const AREA_GRADES = ["good", "fair", "dated", "poor", "not_visible"];
 // Schema is built per scan: when the bathroom/bedroom counts are known, the
 // model is FORCED to grade exactly that many rooms (it used to skip rooms not
 // shown in photos), and every area must be graded exactly once.
+// NOTE: the structured-output API rejects minItems > 1 on arrays, so exact
+// counts are enforced with objects whose keys are all required (bathroom_1…N,
+// one key per area). scanRehabFromPhotos normalizes them back to the arrays
+// the app expects.
+const roomEntrySchema = (tiers) => ({
+  type: "object",
+  additionalProperties: false,
+  required: ["tier", "note"],
+  properties: {
+    tier: { type: "string", enum: tiers.map((t) => t.id) },
+    note: { type: "string" },
+  },
+});
+
+const roomsSchema = (tiers, count, noun) =>
+  count > 0
+    ? {
+        type: "object",
+        additionalProperties: false,
+        description: `One entry per ${noun}, in photo order`,
+        required: Array.from({ length: count }, (_, i) => `${noun}_${i + 1}`),
+        properties: Object.fromEntries(
+          Array.from({ length: count }, (_, i) => [`${noun}_${i + 1}`, roomEntrySchema(tiers)])
+        ),
+      }
+    : {
+        type: "array",
+        description: `One entry per ${noun} visible in the photos, in order`,
+        items: roomEntrySchema(tiers),
+      };
+
 function makeScanSchema({ bathCount = 0, bedCount = 0 } = {}) {
   return {
     type: "object",
@@ -155,49 +186,22 @@ function makeScanSchema({ bathCount = 0, bedCount = 0 } = {}) {
           },
         },
       },
-      bathrooms: {
-        type: "array",
-        description: "One entry per bathroom, in photo order",
-        ...(bathCount > 0 ? { minItems: bathCount, maxItems: bathCount } : {}),
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["tier", "note"],
-          properties: {
-            tier: { type: "string", enum: BATH_TIERS.map((t) => t.id) },
-            note: { type: "string" },
-          },
-        },
-      },
-      bedrooms: {
-        type: "array",
-        description: "One entry per bedroom, in photo order",
-        ...(bedCount > 0 ? { minItems: bedCount, maxItems: bedCount } : {}),
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["tier", "note"],
-          properties: {
-            tier: { type: "string", enum: BED_TIERS.map((t) => t.id) },
-            note: { type: "string" },
-          },
-        },
-      },
+      bathrooms: roomsSchema(BATH_TIERS, bathCount, "bathroom"),
+      bedrooms: roomsSchema(BED_TIERS, bedCount, "bedroom"),
       areas: {
-        type: "array",
-        description: "Condition grade for every area of the property, one per area in the listed order",
-        minItems: SCAN_AREAS.length,
-        maxItems: SCAN_AREAS.length,
-        items: {
+        type: "object",
+        additionalProperties: false,
+        description: "Condition grade for every area of the property",
+        required: [...SCAN_AREAS],
+        properties: Object.fromEntries(SCAN_AREAS.map((a) => [a, {
           type: "object",
           additionalProperties: false,
-          required: ["area", "grade", "note"],
+          required: ["grade", "note"],
           properties: {
-            area: { type: "string", enum: SCAN_AREAS },
             grade: { type: "string", enum: AREA_GRADES },
-            note: { type: "string", maxLength: 160 },
+            note: { type: "string", description: "Short evidence note, one sentence" },
           },
-        },
+        }])),
       },
       custom: {
         type: "array",
@@ -310,7 +314,23 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }
     throw Object.assign(new Error("AI scan was declined"), { http: 502 });
   }
   const text = response.content.find((b) => b.type === "text")?.text || "{}";
-  return JSON.parse(text);
+  const parsed = JSON.parse(text);
+  // Count-enforced rooms/areas come back as keyed objects (see makeScanSchema)
+  // — normalize to the arrays the app and PDF expect.
+  const roomList = (v) =>
+    Array.isArray(v)
+      ? v
+      : v && typeof v === "object"
+      ? Object.keys(v)
+          .sort((a, b) => (parseInt(a.split("_").pop(), 10) || 0) - (parseInt(b.split("_").pop(), 10) || 0))
+          .map((k) => v[k])
+      : [];
+  parsed.bathrooms = roomList(parsed.bathrooms);
+  parsed.bedrooms = roomList(parsed.bedrooms);
+  parsed.areas = Array.isArray(parsed.areas)
+    ? parsed.areas
+    : SCAN_AREAS.filter((a) => parsed.areas?.[a]).map((a) => ({ area: a, ...parsed.areas[a] }));
+  return parsed;
 }
 
 /* ---------- comp condition grading (for ARV accuracy) ---------- */
@@ -335,26 +355,30 @@ const GRADE_SYSTEM_PROMPT =
 export async function gradeCompConditions({ subjectAddress, comps, aiApiKey }) {
   const client = new Anthropic({ apiKey: aiApiKey });
 
+  // One required key per comp id — the structured-output API rejects
+  // minItems > 1 on arrays, and this enforces exactly-one-grade-per-comp
+  // even harder than a fixed-length array would.
+  const gradeEntrySchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["condition", "confidence", "note"],
+    properties: {
+      condition: { type: "string", enum: COMP_CONDITIONS },
+      confidence: { type: "string", enum: ["low", "medium", "high"] },
+      note: { type: "string", description: "Decisive evidence, one sentence" },
+    },
+  };
   const schema = {
     type: "object",
     additionalProperties: false,
     required: ["grades"],
     properties: {
       grades: {
-        type: "array",
-        minItems: comps.length,
-        maxItems: comps.length,
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["id", "condition", "confidence", "note"],
-          properties: {
-            id: { type: "string", enum: comps.map((c) => c.id) },
-            condition: { type: "string", enum: COMP_CONDITIONS },
-            confidence: { type: "string", enum: ["low", "medium", "high"] },
-            note: { type: "string", maxLength: 200 },
-          },
-        },
+        type: "object",
+        additionalProperties: false,
+        description: "One grade per comp, keyed by comp id",
+        required: comps.map((c) => c.id),
+        properties: Object.fromEntries(comps.map((c) => [c.id, gradeEntrySchema])),
       },
     },
   };
@@ -395,7 +419,9 @@ export async function gradeCompConditions({ subjectAddress, comps, aiApiKey }) {
     throw Object.assign(new Error("comp grading was declined"), { http: 502 });
   }
   const text = response.content.find((b) => b.type === "text")?.text || "{}";
-  return JSON.parse(text);
+  const parsed = JSON.parse(text);
+  // Keyed object → the [{id, ...grade}] list the route expects.
+  return { grades: Object.entries(parsed.grades || {}).map(([id, g]) => ({ id, ...g })) };
 }
 
 // Map Anthropic SDK errors to clean HTTP responses.
