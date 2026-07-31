@@ -88,7 +88,7 @@ export default function OfferApp() {
           ))}
         </div>
       </header>
-      <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
+      <div className={`mx-auto px-4 py-6 sm:px-6 ${view === "new" ? "max-w-7xl" : "max-w-5xl"}`}>
         {settingsError && (
           <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
             Couldn't load saved settings ({settingsError}) — using defaults.

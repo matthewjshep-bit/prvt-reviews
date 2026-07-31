@@ -336,6 +336,31 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  /* ---------- contact notes (full list + add, for the notes panel) ---------- */
+  // Unlike the best-effort embed on /contacts/:id, errors here are returned
+  // to the client — a missing notes scope on the GHL token should be visible,
+  // not silently an empty list.
+  router.get("/contacts/:id/notes", async (req, res) => {
+    try {
+      const { client } = resolveLocation(req);
+      const notes = (await getContactNotes(client, req.params.id))
+        .sort((a, b) => new Date(b.dateAdded || 0) - new Date(a.dateAdded || 0))
+        .slice(0, 50)
+        .map((n) => ({ id: n.id || null, body: String(n.body || ""), dateAdded: n.dateAdded || null }));
+      res.json({ notes });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/contacts/:id/notes", async (req, res) => {
+    try {
+      const { client } = resolveLocation(req);
+      const body = String(req.body?.body || "").trim();
+      if (!body) return res.status(400).json({ error: "note body required" });
+      const note = await createContactNote(client, req.params.id, { body: body.slice(0, 5000) });
+      res.json({ ok: true, note });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---------- address autocomplete (OSM/Photon, no API key) ---------- */
   router.get("/address-suggest", async (req, res) => {
     try {

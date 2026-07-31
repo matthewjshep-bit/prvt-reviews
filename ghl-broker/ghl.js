@@ -157,7 +157,8 @@ export async function createContactNote(client, contactId, body) {
 
 export async function getContactNotes(client, contactId) {
   const data = await client.call(`/contacts/${encodeURIComponent(contactId)}/notes`);
-  return data.notes || [];
+  // Defensive on shape: documented as { notes: [...] }, but accept a bare array.
+  return Array.isArray(data?.notes) ? data.notes : Array.isArray(data) ? data : [];
 }
 
 /* ---------- contact tags ---------- */

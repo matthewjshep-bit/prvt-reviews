@@ -53,6 +53,12 @@ export const getContactDetail = (id) =>
   fetch(`${API_BASE}/api/offers/contacts/${encodeURIComponent(id)}?location_id=${loc()}`)
     .then(j)
     .then((r) => r.contact);
+export const getContactNotes = (id) =>
+  fetch(`${API_BASE}/api/offers/contacts/${encodeURIComponent(id)}/notes?location_id=${loc()}`)
+    .then(j)
+    .then((r) => r.notes);
+export const addContactNote = (id, body) =>
+  post(`/api/offers/contacts/${encodeURIComponent(id)}/notes`, { body });
 export const suggestAddresses = (query) =>
   fetch(`${API_BASE}/api/offers/address-suggest?location_id=${loc()}&query=${encodeURIComponent(query)}`)
     .then(j)

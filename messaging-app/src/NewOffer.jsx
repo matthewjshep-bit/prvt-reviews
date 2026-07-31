@@ -5,10 +5,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, FileText, Loader2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
 import { calculateOffers, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
-  createOffer, getContactDetail, previewDocument, saveDraft, saveSettings, searchContacts, sendOffer, suggestAddresses, zillowUrl,
+  addContactNote, createOffer, getContactDetail, getContactNotes, previewDocument, saveDraft, saveSettings, searchContacts, sendOffer, suggestAddresses, zillowUrl,
 } from "./api.js";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
+import NotesPanel from "./NotesPanel.jsx";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -148,7 +149,8 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
               </button>
             </div>
             {notes.length > 0 && (
-              <details className="mt-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+              // Small screens only — on xl+ the sticky NotesPanel rail takes over.
+              <details className="mt-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 xl:hidden">
                 <summary className="cursor-pointer select-none text-xs font-semibold text-gray-600">
                   Recent notes on this contact ({notes.length})
                 </summary>
@@ -471,15 +473,28 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialContactId]);
 
-  // Recent GHL notes for the selected contact — covers manual selection,
-  // the ?contact_id= deep link, and draft/offer restore alike.
+  // The contact's GHL notes (all of them) — covers manual selection, the
+  // ?contact_id= deep link, and draft/offer restore alike. Errors surface in
+  // the panel instead of being swallowed.
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesError, setNotesError] = useState("");
   useEffect(() => {
     setContactNotes([]);
+    setNotesError("");
     if (mode !== "existing" || !contact?.id) return;
-    getContactDetail(contact.id)
-      .then((d) => setContactNotes(d.notes || []))
-      .catch(() => {});
+    setNotesLoading(true);
+    getContactNotes(contact.id)
+      .then((n) => setContactNotes(n || []))
+      .catch((e) => setNotesError(e.message))
+      .finally(() => setNotesLoading(false));
   }, [contact?.id, mode]);
+
+  async function addNote(body) {
+    await addContactNote(contact.id, body);
+    const n = await getContactNotes(contact.id).catch(() => null);
+    if (n) setContactNotes(n);
+    else setContactNotes((list) => [{ body, dateAdded: new Date().toISOString() }, ...list]);
+  }
 
   // Selecting a contact pulls their custom fields and prefills the address
   // (Property Address Short Hand etc.) — without clobbering anything typed.
@@ -667,7 +682,8 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex items-start gap-5">
+    <div className="min-w-0 flex-1 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-lg font-bold tracking-tight">
@@ -890,6 +906,20 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
           <img src={preview} alt="Offer document preview" className="mx-auto w-full max-w-lg rounded-lg border border-gray-200 shadow" />
         </div>
       )}
+    </div>
+
+    {/* Right rail: the contact's GHL notes, always in view while underwriting. */}
+    {mode === "existing" && contact?.id && (
+      <aside className="hidden w-72 shrink-0 xl:block">
+        <NotesPanel
+          contactName={contact.name}
+          notes={contactNotes}
+          loading={notesLoading}
+          error={notesError}
+          onAdd={addNote}
+        />
+      </aside>
+    )}
     </div>
   );
 }
