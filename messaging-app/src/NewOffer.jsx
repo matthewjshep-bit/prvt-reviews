@@ -2,7 +2,7 @@
 // offers → generate the document and attach everything to the GHL contact.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Check, FileText, Loader2, RotateCcw, Save, Search, Send, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, FileText, Loader2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
 import { calculateOffers, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
   createOffer, getContactDetail, previewDocument, saveDraft, searchContacts, sendOffer, suggestAddresses, zillowUrl,
@@ -304,6 +304,31 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
 
 /* ---------------- main view ---------------- */
 
+// Default "Tentative terms" rows for the letter, seeded from saved Settings.
+// Every row is fully editable per offer — label and text — and rows can be
+// removed, reordered, or added ("Inspection", …). Purchase Price is not a row
+// here; the letter always prints it first.
+const defaultTermRows = (s) => [
+  { id: "financing", label: "Financing", value: String(s?.termFinancing || "").trim() || "Funded with cash or private loan" },
+  { id: "earnest", label: "Earnest Money", value: `${fmtMoney(s?.earnestMoney ?? 2500)}, deposited with escrow upon mutual acceptance` },
+  { id: "closing", label: "Closing Date", value: String(s?.termClosing || "").trim() || `On or before ${s?.closeDays ?? 14} days from acceptance — or a date of your choosing` },
+  { id: "condition", label: "Condition", value: String(s?.termCondition || "").trim() || "Purchased strictly as-is; no repairs or clean-out required" },
+  { id: "possession", label: "Possession", value: String(s?.termPossession || "").trim() || "At closing, or flexible if you need additional time" },
+];
+
+// Pre-revamp snapshots stored terms as a fixed object of overrides — fold
+// them into the settings the defaults are built from.
+const legacyTermsToRows = (t, s) =>
+  defaultTermRows({
+    ...(s || {}),
+    ...(String(t?.financing || "").trim() ? { termFinancing: t.financing } : {}),
+    ...(String(t?.closing || "").trim() ? { termClosing: t.closing } : {}),
+    ...(String(t?.condition || "").trim() ? { termCondition: t.condition } : {}),
+    ...(String(t?.possession || "").trim() ? { termPossession: t.possession } : {}),
+    ...(String(t?.earnestMoney || "").trim() ? { earnestMoney: Number(String(t.earnestMoney).replace(/[^\d]/g, "")) || undefined } : {}),
+    ...(String(t?.closeDays || "").trim() ? { closeDays: parseInt(t.closeDays, 10) || undefined } : {}),
+  });
+
 export default function NewOffer({ settings, initialContactId, restore, onReset }) {
   // `restore` reopens a saved draft or an existing offer. Both carry a full
   // form snapshot (drafts in .draft, created offers in .snapshot) so the
@@ -335,10 +360,39 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
   );
   // Per-offer fee/spread override ("" → use the settings default).
   const [feeOverride, setFeeOverride] = useState(snap?.feeOverride ?? "");
-  // Per-offer letter terms ("" everywhere → the settings/built-in defaults).
-  const BLANK_TERMS = { earnestMoney: "", closeDays: "", closing: "", financing: "", condition: "", possession: "" };
-  const [terms, setTerms] = useState({ ...BLANK_TERMS, ...(snap?.terms || {}) });
-  const setTerm = (k) => (e) => setTerms((t) => ({ ...t, [k]: e.target.value }));
+  // Per-offer letter terms: a fully flexible row list (label + printed text).
+  const [letterTerms, setLetterTerms] = useState(() =>
+    Array.isArray(snap?.letterTerms)
+      ? snap.letterTerms.map((r, i) => ({ id: r.id || `t-${i}`, label: String(r.label || ""), value: String(r.value || "") }))
+      : snap?.terms
+      ? legacyTermsToRows(snap.terms, settings)
+      : defaultTermRows(settings)
+  );
+  // Settings load async on a fresh form — reseed the default rows once they
+  // arrive, unless the rows came from a snapshot or were already edited.
+  const termsTouchedRef = useRef(Boolean(snap?.letterTerms || snap?.terms));
+  useEffect(() => {
+    if (termsTouchedRef.current || !settings) return;
+    setLetterTerms(defaultTermRows(settings));
+  }, [settings]);
+  const touchTerms = () => { termsTouchedRef.current = true; };
+  const patchTerm = (id, p) => { touchTerms(); setLetterTerms((rows) => rows.map((r) => (r.id === id ? { ...r, ...p } : r))); };
+  const removeTerm = (id) => { touchTerms(); setLetterTerms((rows) => rows.filter((r) => r.id !== id)); };
+  const addTerm = () => { touchTerms(); setLetterTerms((rows) => [...rows, { id: `t-${Date.now()}`, label: "", value: "" }]); };
+  const moveTerm = (id, dir) => {
+    touchTerms();
+    setLetterTerms((rows) => {
+      const i = rows.findIndex((r) => r.id === id);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= rows.length) return rows;
+      const next = [...rows];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  };
+  // Advertised days-to-close — drives the "~N-day close" wording in notes and
+  // texts plus the default Closing Date row ("" → settings default).
+  const [closeDays, setCloseDays] = useState(String(snap?.closeDays ?? snap?.terms?.closeDays ?? ""));
   // Internal property notes (site visit, condition, ARV rationale) — saved
   // with the offer/draft and stamped into the GHL contact note; never printed.
   const [propertyNotes, setPropertyNotes] = useState(snap?.propertyNotes || "");
@@ -417,18 +471,16 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
     if (String(feeOverride).trim() !== "") {
       s.wholesaleFee = Number(String(feeOverride).replace(/[^\d]/g, "")) || 0;
     }
-    if (String(terms.earnestMoney).trim() !== "") {
-      s.earnestMoney = Number(String(terms.earnestMoney).replace(/[^\d]/g, "")) || 0;
+    if (String(closeDays).trim() !== "") {
+      s.closeDays = Math.max(1, parseInt(closeDays, 10) || s.closeDays || 14);
     }
-    if (String(terms.closeDays).trim() !== "") {
-      s.closeDays = Math.max(1, parseInt(terms.closeDays, 10) || s.closeDays || 14);
-    }
-    if (terms.closing.trim()) s.termClosing = terms.closing.trim();
-    if (terms.financing.trim()) s.termFinancing = terms.financing.trim();
-    if (terms.condition.trim()) s.termCondition = terms.condition.trim();
-    if (terms.possession.trim()) s.termPossession = terms.possession.trim();
+    // The letter prints exactly these rows (after Purchase Price) — an empty
+    // list is honored, so deleted rows stay deleted.
+    s.letterTerms = letterTerms
+      .map((r) => ({ label: r.label.trim(), value: r.value.trim() }))
+      .filter((r) => r.label && r.value);
     return s;
-  }, [settings, underwriteMode, feeOverride, terms]);
+  }, [settings, underwriteMode, feeOverride, closeDays, letterTerms]);
 
   const calc = useMemo(() => {
     try {
@@ -462,7 +514,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
         draftId,
         // Full form snapshot so History → Edit restores comps + rehab intact.
         snapshot: {
-          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, terms, propertyNotes,
+          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, letterTerms, closeDays, propertyNotes,
           rehab: rehabStateRef.current,
           comps: compsStateRef.current,
         },
@@ -478,7 +530,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
     setError(""); setSavingDraft(true);
     try {
       const r = await saveDraft(draftId, {
-        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, terms, propertyNotes,
+        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, letterTerms, closeDays, propertyNotes,
         rehab: rehabStateRef.current,
         comps: compsStateRef.current,
         cashPreview: calc?.offers?.cash?.amount ?? null,
@@ -669,46 +721,65 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
         feeOverride={feeOverride} setFeeOverride={setFeeOverride} fmtTyped={fmtTyped} />
 
       <div className="rounded-xl border border-gray-200 bg-white p-4">
-        <h2 className="text-sm font-bold">Letter terms</h2>
-        <p className="mb-3 mt-0.5 text-xs text-gray-500">
-          The "Tentative terms" printed on the offer letter. Leave a field blank to use the default shown in it.
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Earnest money ($)">
-            <input className={INPUT_CLS} inputMode="numeric" value={terms.earnestMoney}
-              onChange={(e) => setTerms((t) => ({ ...t, earnestMoney: fmtTyped(e.target.value) }))}
-              placeholder={fmtTyped(String(settings?.earnestMoney ?? 2500))} />
-          </Field>
-          <Field label="Close within (days)">
-            <input className={INPUT_CLS} inputMode="numeric" value={terms.closeDays}
-              onChange={(e) => setTerms((t) => ({ ...t, closeDays: e.target.value.replace(/[^\d]/g, "") }))}
-              placeholder={String(settings?.closeDays ?? 14)} />
-          </Field>
-          <div className="sm:col-span-2">
-            <Field label="Closing date line (overrides the days above)">
-              <input className={INPUT_CLS} value={terms.closing} onChange={setTerm("closing")}
-                placeholder={`On or before ${calc?.offers?.cash?.closeDays ?? settings?.closeDays ?? 14} days from acceptance — or a date of your choosing`} />
-            </Field>
-          </div>
-          <div className="sm:col-span-2">
-            <Field label="Financing">
-              <input className={INPUT_CLS} value={terms.financing} onChange={setTerm("financing")}
-                placeholder="Funded with cash or private loan" />
-            </Field>
-          </div>
-          <div className="sm:col-span-2">
-            <Field label="Condition">
-              <input className={INPUT_CLS} value={terms.condition} onChange={setTerm("condition")}
-                placeholder="Purchased strictly as-is; no repairs or clean-out required" />
-            </Field>
-          </div>
-          <div className="sm:col-span-2">
-            <Field label="Possession">
-              <input className={INPUT_CLS} value={terms.possession} onChange={setTerm("possession")}
-                placeholder="At closing, or flexible if you need additional time" />
-            </Field>
-          </div>
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold">Letter terms</h2>
+          <label className="flex items-center gap-1.5 text-xs text-gray-500">
+            Close within
+            <input
+              className="w-14 rounded-lg border border-gray-300 px-2 py-1 text-center text-sm focus:border-gray-900 focus:outline-none"
+              inputMode="numeric" value={closeDays}
+              onChange={(e) => setCloseDays(e.target.value.replace(/[^\d]/g, ""))}
+              placeholder={String(settings?.closeDays ?? 14)}
+            />
+            days
+          </label>
         </div>
+        <p className="mb-3 text-xs text-gray-500">
+          The "Tentative terms" printed on the offer letter — edit any label or text, remove, reorder, or add rows.
+          "Purchase Price" always prints first. The days above drive the "~N-day close" wording in notes and texts.
+        </p>
+        <div className="space-y-2">
+          {letterTerms.map((row, i) => (
+            <div key={row.id} className="flex items-center gap-2">
+              <div className="flex shrink-0 flex-col">
+                <button type="button" onClick={() => moveTerm(row.id, -1)} disabled={i === 0}
+                  className="rounded p-0.5 text-gray-400 hover:text-gray-700 disabled:opacity-30" title="Move up">
+                  <ChevronUp size={13} />
+                </button>
+                <button type="button" onClick={() => moveTerm(row.id, 1)} disabled={i === letterTerms.length - 1}
+                  className="rounded p-0.5 text-gray-400 hover:text-gray-700 disabled:opacity-30" title="Move down">
+                  <ChevronDown size={13} />
+                </button>
+              </div>
+              <input
+                className="w-36 shrink-0 rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold focus:border-gray-900 focus:outline-none sm:w-44"
+                value={row.label} placeholder="Label"
+                onChange={(e) => patchTerm(row.id, { label: e.target.value })}
+              />
+              <input
+                className={INPUT_CLS} value={row.value} placeholder="Text printed on the letter"
+                onChange={(e) => patchTerm(row.id, { value: e.target.value })}
+              />
+              <button type="button" onClick={() => removeTerm(row.id)}
+                className="shrink-0 rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Remove this term">
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+          {letterTerms.length === 0 && (
+            <p className="rounded-lg border border-dashed border-gray-300 px-3 py-2 text-xs text-gray-400">
+              No term rows — the letter will show only the purchase price. Add rows below.
+            </p>
+          )}
+        </div>
+        {letterTerms.length < 7 ? (
+          <button type="button" onClick={addTerm}
+            className="mt-2 flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50">
+            <Plus size={13} /> Add term (e.g. Inspection)
+          </button>
+        ) : (
+          <p className="mt-2 text-xs text-gray-400">Seven rows max — the letter runs out of room after that.</p>
+        )}
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-4">

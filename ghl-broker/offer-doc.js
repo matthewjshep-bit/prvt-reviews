@@ -504,18 +504,33 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
   y += 17.4;
   layers.push(text(8, y, 84, 2.2, sp("Tentative Terms"), { size: 18, color: GOLD, weight: "bold" }));
   y += 2.9;
+  // Per-offer rows when the form supplied them (settings.letterTerms — any
+  // labels, any order, possibly empty = price only); the classic five rows
+  // for offers created before the flexible editor.
+  const customTerms = Array.isArray(settings.letterTerms)
+    ? settings.letterTerms
+        .map((t) => [String(t?.label || "").trim().slice(0, 30), String(t?.value || "").trim().slice(0, 220)])
+        .filter(([k, v]) => k && v)
+        .slice(0, 7)
+    : null;
   const terms = [
     ["Purchase Price", `${fmtMoney(cash.amount)}, all cash`],
-    ["Financing", String(settings.termFinancing || "").trim() || "Funded with cash or private loan"],
-    ["Earnest Money", `${fmtMoney(settings.earnestMoney)}, deposited with escrow upon mutual acceptance`],
-    ["Closing Date", String(settings.termClosing || "").trim() || `On or before ${cash.closeDays} days from acceptance — or a date of your choosing`],
-    ["Condition", String(settings.termCondition || "").trim() || "Purchased strictly as-is; no repairs or clean-out required"],
-    ["Possession", String(settings.termPossession || "").trim() || "At closing, or flexible if you need additional time"],
+    ...(customTerms ?? [
+      ["Financing", String(settings.termFinancing || "").trim() || "Funded with cash or private loan"],
+      ["Earnest Money", `${fmtMoney(settings.earnestMoney)}, deposited with escrow upon mutual acceptance`],
+      ["Closing Date", String(settings.termClosing || "").trim() || `On or before ${cash.closeDays} days from acceptance — or a date of your choosing`],
+      ["Condition", String(settings.termCondition || "").trim() || "Purchased strictly as-is; no repairs or clean-out required"],
+      ["Possession", String(settings.termPossession || "").trim() || "At closing, or flexible if you need additional time"],
+    ]),
   ];
+  // Six rows fit at the classic spacing; more rows compress so the validity
+  // paragraph and signature stay on the page.
+  const rowH = terms.length <= 6 ? 3.1 : Math.max(2.35, 18.6 / terms.length);
+  const rowLines = rowH >= 3 ? 2 : 1;
   for (const [k, v] of terms) {
-    layers.push(text(8, y, 19, 4.2, k, { size: 20, weight: "bold", color: DARK, lineHeight: 1.25, maxLines: 2 }));
-    layers.push(text(28, y, 64, 4.2, v, { size: 20, color: INK, lineHeight: 1.3, maxLines: 2 }));
-    y += 3.1;
+    layers.push(text(8, y, 19, rowH + 1.1, k, { size: 20, weight: "bold", color: DARK, lineHeight: 1.25, maxLines: rowLines, autoFit: rowLines === 1 }));
+    layers.push(text(28, y, 64, rowH + 1.1, v, { size: 20, color: INK, lineHeight: 1.3, maxLines: rowLines, autoFit: rowLines === 1 }));
+    y += rowH;
   }
 
   /* ---- validity + closing paragraph ---- */
