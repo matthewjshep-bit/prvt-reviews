@@ -101,6 +101,7 @@ export default function OfferApp() {
             initialContactId={initialContactId}
             restore={editing}
             onReset={resetForm}
+            onSettingsSaved={(s) => setSettings(s)}
           />
         )}
         {view === "history" && (

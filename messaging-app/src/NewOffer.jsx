@@ -5,7 +5,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, FileText, Loader2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
 import { calculateOffers, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
-  createOffer, getContactDetail, previewDocument, saveDraft, searchContacts, sendOffer, suggestAddresses, zillowUrl,
+  createOffer, getContactDetail, previewDocument, saveDraft, saveSettings, searchContacts, sendOffer, suggestAddresses, zillowUrl,
 } from "./api.js";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
@@ -304,11 +304,19 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
 
 /* ---------------- main view ---------------- */
 
-// Default "Tentative terms" rows for the letter, seeded from saved Settings.
-// Every row is fully editable per offer — label and text — and rows can be
-// removed, reordered, or added ("Inspection", …). Purchase Price is not a row
-// here; the letter always prints it first.
-const defaultTermRows = (s) => [
+// Default "Tentative terms" rows for the letter. When the user has saved a
+// template (Settings.letterTermsTemplate — "Save as default template"), every
+// new offer seeds from it; otherwise the classic five rows below. Every row
+// is fully editable per offer, and Purchase Price always prints first.
+const defaultTermRows = (s) => {
+  if (Array.isArray(s?.letterTermsTemplate) && s.letterTermsTemplate.length) {
+    return s.letterTermsTemplate.map((r, i) => ({
+      id: `tpl-${i}`, label: String(r?.label || ""), value: String(r?.value || ""),
+    }));
+  }
+  return builtinTermRows(s);
+};
+const builtinTermRows = (s) => [
   { id: "financing", label: "Financing", value: String(s?.termFinancing || "").trim() || "Funded with cash or private loan" },
   { id: "earnest", label: "Earnest Money", value: `${fmtMoney(s?.earnestMoney ?? 2500)}, deposited with escrow upon mutual acceptance` },
   { id: "closing", label: "Closing Date", value: String(s?.termClosing || "").trim() || `On or before ${s?.closeDays ?? 14} days from acceptance — or a date of your choosing` },
@@ -317,9 +325,9 @@ const defaultTermRows = (s) => [
 ];
 
 // Pre-revamp snapshots stored terms as a fixed object of overrides — fold
-// them into the settings the defaults are built from.
+// them into the classic rows (they predate templates).
 const legacyTermsToRows = (t, s) =>
-  defaultTermRows({
+  builtinTermRows({
     ...(s || {}),
     ...(String(t?.financing || "").trim() ? { termFinancing: t.financing } : {}),
     ...(String(t?.closing || "").trim() ? { termClosing: t.closing } : {}),
@@ -329,7 +337,7 @@ const legacyTermsToRows = (t, s) =>
     ...(String(t?.closeDays || "").trim() ? { closeDays: parseInt(t.closeDays, 10) || undefined } : {}),
   });
 
-export default function NewOffer({ settings, initialContactId, restore, onReset }) {
+export default function NewOffer({ settings, initialContactId, restore, onReset, onSettingsSaved }) {
   // `restore` reopens a saved draft or an existing offer. Both carry a full
   // form snapshot (drafts in .draft, created offers in .snapshot) so the
   // comps workspace and rehab scope come back exactly as they were; very old
@@ -393,6 +401,29 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
   // Advertised days-to-close — drives the "~N-day close" wording in notes and
   // texts plus the default Closing Date row ("" → settings default).
   const [closeDays, setCloseDays] = useState(String(snap?.closeDays ?? snap?.terms?.closeDays ?? ""));
+  // Save the current rows as the location-wide template every new offer
+  // seeds from; reset reverts this offer's rows to that template.
+  const [tplSaving, setTplSaving] = useState(false);
+  const [tplSaved, setTplSaved] = useState(false);
+  async function saveTermsTemplate() {
+    if (!settings) return; // settings still loading — a save now would clobber them
+    setTplSaving(true);
+    setError("");
+    try {
+      const template = letterTerms
+        .map((r) => ({ label: r.label.trim(), value: r.value.trim() }))
+        .filter((r) => r.label && r.value);
+      const r = await saveSettings({ ...settings, letterTermsTemplate: template });
+      onSettingsSaved?.(r.settings);
+      setTplSaved(true);
+      setTimeout(() => setTplSaved(false), 2500);
+    } catch (e) { setError(e.message); }
+    setTplSaving(false);
+  }
+  const resetTermsToTemplate = () => {
+    termsTouchedRef.current = true; // an explicit reset shouldn't be re-seeded over
+    setLetterTerms(defaultTermRows(settings));
+  };
   // Internal property notes (site visit, condition, ARV rationale) — saved
   // with the offer/draft and stamped into the GHL contact note; never printed.
   const [propertyNotes, setPropertyNotes] = useState(snap?.propertyNotes || "");
@@ -772,14 +803,29 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
             </p>
           )}
         </div>
-        {letterTerms.length < 7 ? (
-          <button type="button" onClick={addTerm}
-            className="mt-2 flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50">
-            <Plus size={13} /> Add term (e.g. Inspection)
-          </button>
-        ) : (
-          <p className="mt-2 text-xs text-gray-400">Seven rows max — the letter runs out of room after that.</p>
-        )}
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+          {letterTerms.length < 7 ? (
+            <button type="button" onClick={addTerm}
+              className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50">
+              <Plus size={13} /> Add term (e.g. Inspection)
+            </button>
+          ) : (
+            <p className="text-xs text-gray-400">Seven rows max — the letter runs out of room after that.</p>
+          )}
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={resetTermsToTemplate}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100"
+              title="Revert this offer's rows to your saved template (or the built-in defaults)">
+              <RotateCcw size={12} /> Reset to template
+            </button>
+            <button type="button" onClick={saveTermsTemplate} disabled={tplSaving || !settings}
+              className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+              title="Save these rows as the default template every new offer starts from">
+              {tplSaving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+              {tplSaved ? "Template saved ✓" : "Save as default template"}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-4">

@@ -51,6 +51,10 @@ export const DEFAULT_OFFER_SETTINGS = {
   termClosing: "",
   termCondition: "Purchased strictly as-is; no repairs or clean-out required",
   termPossession: "At closing, or flexible if you need additional time",
+  // Saved letter-terms template: [{label, value}] rows every new offer seeds
+  // from ("Save as default template" on the New Offer page). null → the
+  // classic five rows built from the term* strings above.
+  letterTermsTemplate: null,
   compsApiKey: "",           // enables the comps map + MLS photos (realestateapi.com API key)
   aiApiKey: "",              // enables the AI rehab photo scan (Anthropic API key)
   apifyToken: "",            // Zillow listing photos via Apify (zillow-detail-scraper)
