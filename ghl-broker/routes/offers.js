@@ -75,8 +75,31 @@ const OFFER_FIELDS = [
 const dateLabel = (d = new Date()) =>
   d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
 
+// The offer's expiry date: the per-offer "Offer expires" picker when set
+// (settings.offerExpires, yyyy-mm-dd, parsed as a local date so the label
+// never drifts a day across timezones), else `from` + validityDays.
+function offerExpiryDate(settings, from = new Date()) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(settings.offerExpires || "").trim());
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  return new Date(from.getTime() + settings.validityDays * 86400000);
+}
+
+// GHL contact names often arrive lowercased (or SHOUTED) from ingestion.
+// Single-case words get Title Case (incl. after - and '); mixed-case words
+// (McDonald, DeAngelo) are assumed intentional and left as typed.
+function titleCaseName(name) {
+  return String(name || "")
+    .split(/\s+/)
+    .map((w) => {
+      if (w !== w.toLowerCase() && w !== w.toUpperCase()) return w;
+      return w.toLowerCase().replace(/(^|[-'’])\p{L}/gu, (c) => c.toUpperCase());
+    })
+    .join(" ")
+    .trim();
+}
+
 function contactName(c) {
-  return [c?.firstName, c?.lastName].filter(Boolean).join(" ") || c?.contactName || "";
+  return titleCaseName([c?.firstName, c?.lastName].filter(Boolean).join(" ") || c?.contactName || "");
 }
 
 // Render the offer document through cardgen. Returns { jpeg, width, height }.
@@ -104,7 +127,7 @@ function offerNoteBody(offer) {
   const { inputs, offers } = offer.calc;
   const lines = [
     `CASH OFFER — ${inputs.address || "subject property"} (${offer.dateLabel})`,
-    `Offer: ${fmtMoney(offers.cash.amount)} (as-is, ~${offers.cash.closeDays}-day close, valid through ${offer.validLabel})`,
+    `Offer: ${fmtMoney(offers.cash.amount)} (as-is, valid through ${offer.validLabel})`,
     `Inputs: ARV ${fmtMoney(inputs.arv)} · repairs ${fmtMoney(inputs.repairs)}` +
       (inputs.askingPrice > 0 ? ` · asking ${fmtMoney(inputs.askingPrice)}` : ""),
   ];
@@ -280,9 +303,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { locationId } = resolveLocation(req);
       const saved = await store.getOfferSettings(locationId);
       const calc = calculateOffers(req.body?.inputs || {}, { ...(saved || {}), ...(req.body?.settings || {}) });
-      const validUntil = new Date(Date.now() + calc.settings.validityDays * 86400000);
+      const validUntil = offerExpiryDate(calc.settings);
       const { jpeg } = await renderDocument(calc, {
-        contactName: req.body?.contactName || "",
+        contactName: titleCaseName(req.body?.contactName || ""),
         dateLabel: dateLabel(),
         validLabel: dateLabel(validUntil),
       }, locationId);
@@ -904,7 +927,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       // 3. Render the document, wrap as PDF, store both.
       const created = new Date();
-      const validUntil = new Date(created.getTime() + calc.settings.validityDays * 86400000);
+      const validUntil = offerExpiryDate(calc.settings, created);
       const meta = {
         contactName: contactName(contact),
         dateLabel: dateLabel(created),

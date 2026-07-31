@@ -41,12 +41,12 @@ export const DEFAULT_OFFER_SETTINGS = {
   wholesaleFee: 30000,       // flat assignment-fee spread subtracted at the end
   precisionJitter: true,     // deterministic ±0.5pp ARV wobble + cents (lowball anchoring)
   // Presentation
-  closeDays: 14,             // advertised days-to-close
-  validityDays: 7,           // offer expiry window printed on the document
+  validityDays: 7,           // default offer-expiry window: seeds the per-offer
+                             // "Offer expires" date picker (offerExpires, a
+                             // yyyy-mm-dd override that rides along per offer)
   earnestMoney: 2500,        // earnest-money deposit named in the letter
-  // "Tentative terms" lines printed on the letter. termClosing "" → built
-  // from closeDays ("On or before N days from acceptance — or a date of your
-  // choosing"). All overridable per offer from the New Offer page.
+  // "Tentative terms" lines printed on the letter. All overridable per offer
+  // from the New Offer page.
   termFinancing: "Funded with cash or private loan",
   termClosing: "",
   termCondition: "Purchased strictly as-is; no repairs or clean-out required",
@@ -140,7 +140,6 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
       repairs,
       repairAdjustment: repairs,
       wholesaleFee: num(s.wholesaleFee),
-      closeDays: s.closeDays,
       pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : null,
     };
   } else {
@@ -164,7 +163,6 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
       repairs,
       repairAdjustment: Math.round(repairAdj),
       wholesaleFee: num(s.wholesaleFee),
-      closeDays: s.closeDays,
       pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : null,
     };
   }

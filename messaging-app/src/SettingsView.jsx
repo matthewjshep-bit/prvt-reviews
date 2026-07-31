@@ -86,7 +86,6 @@ export default function SettingsView({ settings, onSaved }) {
           <Num label="Repair multiplier" suffix="×" value={form.repairBaseMult} onChange={set("repairBaseMult")} />
           <Num label="Heavy-repair threshold" suffix="% of ARV" value={form.repairHeavyPctOfArv} onChange={set("repairHeavyPctOfArv")} />
           <Num label="Heavy-repair multiplier" suffix="×" value={form.repairHeavyMult} onChange={set("repairHeavyMult")} />
-          <Num label="Advertised close" suffix="days" value={form.closeDays} onChange={set("closeDays")} />
           <Num label="Offer valid for" suffix="days" value={form.validityDays} onChange={set("validityDays")} />
           <Num label="Earnest money" suffix="$" money value={form.earnestMoney} onChange={set("earnestMoney")} />
         </div>

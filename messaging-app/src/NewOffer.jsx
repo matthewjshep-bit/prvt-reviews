@@ -269,7 +269,7 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
             </div>
           ) : (
             <div className="mt-1 text-xs text-gray-500">
-              {cash.pctOfAsking != null ? `≈ ${cash.pctOfAsking}% of asking · ` : ""}as-is · close in ~{cash.closeDays} days
+              {cash.pctOfAsking != null ? `≈ ${cash.pctOfAsking}% of asking · ` : ""}as-is
             </div>
           )}
           <label className="mt-3 flex items-center gap-2 text-xs text-gray-500">
@@ -321,7 +321,7 @@ const defaultTermRows = (s) => {
 const builtinTermRows = (s) => [
   { id: "financing", label: "Financing", value: String(s?.termFinancing || "").trim() || "Funded with cash or private loan" },
   { id: "earnest", label: "Earnest Money", value: `${fmtMoney(s?.earnestMoney ?? 2500)}, deposited with escrow upon mutual acceptance` },
-  { id: "closing", label: "Closing Date", value: String(s?.termClosing || "").trim() || `On or before ${s?.closeDays ?? 14} days from acceptance — or a date of your choosing` },
+  { id: "closing", label: "Closing Date", value: String(s?.termClosing || "").trim() || "On or before 14 days from acceptance — or a date of your choosing" },
   { id: "condition", label: "Condition", value: String(s?.termCondition || "").trim() || "Purchased strictly as-is; no repairs or clean-out required" },
   { id: "possession", label: "Possession", value: String(s?.termPossession || "").trim() || "At closing, or flexible if you need additional time" },
 ];
@@ -336,7 +336,6 @@ const legacyTermsToRows = (t, s) =>
     ...(String(t?.condition || "").trim() ? { termCondition: t.condition } : {}),
     ...(String(t?.possession || "").trim() ? { termPossession: t.possession } : {}),
     ...(String(t?.earnestMoney || "").trim() ? { earnestMoney: Number(String(t.earnestMoney).replace(/[^\d]/g, "")) || undefined } : {}),
-    ...(String(t?.closeDays || "").trim() ? { closeDays: parseInt(t.closeDays, 10) || undefined } : {}),
   });
 
 export default function NewOffer({ settings, initialContactId, restore, onReset, onSettingsSaved }) {
@@ -400,9 +399,9 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       return next;
     });
   };
-  // Advertised days-to-close — drives the "~N-day close" wording in notes and
-  // texts plus the default Closing Date row ("" → settings default).
-  const [closeDays, setCloseDays] = useState(String(snap?.closeDays ?? snap?.terms?.closeDays ?? ""));
+  // "Offer expires" date (yyyy-mm-dd) — prints as the letter's "valid
+  // through" date ("" → today + validityDays, which the picker shows).
+  const [offerExpires, setOfferExpires] = useState(String(snap?.offerExpires ?? ""));
   // Save the current rows as the location-wide template every new offer
   // seeds from; reset reverts this offer's rows to that template.
   const [tplSaving, setTplSaving] = useState(false);
@@ -426,9 +425,6 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     termsTouchedRef.current = true; // an explicit reset shouldn't be re-seeded over
     setLetterTerms(defaultTermRows(settings));
   };
-  // Internal property notes (site visit, condition, ARV rationale) — saved
-  // with the offer/draft and stamped into the GHL contact note; never printed.
-  const [propertyNotes, setPropertyNotes] = useState(snap?.propertyNotes || "");
   const [contactNotes, setContactNotes] = useState([]); // recent GHL notes on the selected contact
   const [underwriteMode, setUnderwriteMode] = useState(
     snap?.underwriteMode || fromOffer?.calc?.settings?.underwriteMode || settings?.underwriteMode || "lowball"
@@ -509,6 +505,12 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       .catch(() => {});
   }
 
+  // Local yyyy-mm-dd strings for the "Offer expires" picker (en-CA formats
+  // as ISO); the default the picker shows matches the server's fallback of
+  // today + validityDays.
+  const todayIso = new Date().toLocaleDateString("en-CA");
+  const expiryDefault = new Date(Date.now() + (Number(settings?.validityDays) || 7) * 86400000).toLocaleDateString("en-CA");
+
   // The per-offer underwrite toggle + fee override ride on top of the saved
   // settings for the live preview, the rendered document, and the created
   // offer alike.
@@ -517,16 +519,14 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     if (String(feeOverride).trim() !== "") {
       s.wholesaleFee = Number(String(feeOverride).replace(/[^\d]/g, "")) || 0;
     }
-    if (String(closeDays).trim() !== "") {
-      s.closeDays = Math.max(1, parseInt(closeDays, 10) || s.closeDays || 14);
-    }
+    if (offerExpires) s.offerExpires = offerExpires;
     // The letter prints exactly these rows (after Purchase Price) — an empty
     // list is honored, so deleted rows stay deleted.
     s.letterTerms = letterTerms
       .map((r) => ({ label: r.label.trim(), value: r.value.trim() }))
       .filter((r) => r.label && r.value);
     return s;
-  }, [settings, underwriteMode, feeOverride, closeDays, letterTerms]);
+  }, [settings, underwriteMode, feeOverride, offerExpires, letterTerms]);
 
   const calc = useMemo(() => {
     try {
@@ -560,7 +560,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         draftId,
         // Full form snapshot so History → Edit restores comps + rehab intact.
         snapshot: {
-          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, letterTerms, closeDays, propertyNotes,
+          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, letterTerms, offerExpires,
           rehab: rehabStateRef.current,
           comps: compsStateRef.current,
         },
@@ -576,7 +576,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     setError(""); setSavingDraft(true);
     try {
       const r = await saveDraft(draftId, {
-        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, letterTerms, closeDays, propertyNotes,
+        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, letterTerms, offerExpires,
         rehab: rehabStateRef.current,
         comps: compsStateRef.current,
         cashPreview: calc?.offers?.cash?.amount ?? null,
@@ -771,19 +771,19 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-bold">Letter terms</h2>
           <label className="flex items-center gap-1.5 text-xs text-gray-500">
-            Close within
+            Offer expires
             <input
-              className="w-14 rounded-lg border border-gray-300 px-2 py-1 text-center text-sm focus:border-gray-900 focus:outline-none"
-              inputMode="numeric" value={closeDays}
-              onChange={(e) => setCloseDays(e.target.value.replace(/[^\d]/g, ""))}
-              placeholder={String(settings?.closeDays ?? 14)}
+              type="date"
+              className="rounded-lg border border-gray-300 px-2 py-1 text-sm focus:border-gray-900 focus:outline-none"
+              value={offerExpires || expiryDefault}
+              min={todayIso}
+              onChange={(e) => setOfferExpires(e.target.value)}
             />
-            days
           </label>
         </div>
         <p className="mb-3 text-xs text-gray-500">
           The "Tentative terms" printed on the offer letter — edit any label or text, remove, reorder, or add rows.
-          "Purchase Price" always prints first. The days above drive the "~N-day close" wording in notes and texts.
+          "Purchase Price" always prints first. The date above prints as the offer's valid-through date.
         </p>
         <div className="space-y-2">
           {letterTerms.map((row, i) => (
@@ -842,20 +842,6 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
             </button>
           </div>
         </div>
-      </div>
-
-      <div className="rounded-xl border border-gray-200 bg-white p-4">
-        <h2 className="text-sm font-bold">Property notes</h2>
-        <p className="mb-3 mt-0.5 text-xs text-gray-500">
-          Internal only — never printed on the letter. Saved with the offer and stamped into the GHL contact note.
-        </p>
-        <textarea
-          className={`${INPUT_CLS} min-h-[96px]`}
-          maxLength={2000}
-          value={propertyNotes}
-          onChange={(e) => setPropertyNotes(e.target.value)}
-          placeholder="Site visit: roof sags over garage, furnace ~2005, busy road — held ARV to low end…"
-        />
       </div>
 
       {/* Sticky action bar: the live number + actions stay in reach while

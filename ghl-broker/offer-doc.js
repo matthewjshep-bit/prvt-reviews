@@ -518,7 +518,7 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
     ...(customTerms ?? [
       ["Financing", String(settings.termFinancing || "").trim() || "Funded with cash or private loan"],
       ["Earnest Money", `${fmtMoney(settings.earnestMoney)}, deposited with escrow upon mutual acceptance`],
-      ["Closing Date", String(settings.termClosing || "").trim() || `On or before ${cash.closeDays} days from acceptance — or a date of your choosing`],
+      ["Closing Date", String(settings.termClosing || "").trim() || "On or before 14 days from acceptance — or a date of your choosing"],
       ["Condition", String(settings.termCondition || "").trim() || "Purchased strictly as-is; no repairs or clean-out required"],
       ["Possession", String(settings.termPossession || "").trim() || "At closing, or flexible if you need additional time"],
     ]),
