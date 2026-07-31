@@ -93,7 +93,7 @@ function Field({ label, children }) {
 
 /* ---------------- contact picker ---------------- */
 
-function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, setMode }) {
+function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, setMode, notes = [] }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -137,15 +137,36 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
 
       {mode === "existing" ? (
         selected ? (
-          <div className="flex items-center justify-between rounded-lg bg-gray-100 px-3 py-2">
-            <div>
-              <div className="text-sm font-semibold">{selected.name || "(no name)"}</div>
-              <div className="text-xs text-gray-500">{[selected.phone, selected.email].filter(Boolean).join(" · ")}</div>
+          <>
+            <div className="flex items-center justify-between rounded-lg bg-gray-100 px-3 py-2">
+              <div>
+                <div className="text-sm font-semibold">{selected.name || "(no name)"}</div>
+                <div className="text-xs text-gray-500">{[selected.phone, selected.email].filter(Boolean).join(" · ")}</div>
+              </div>
+              <button type="button" onClick={() => onSelect(null)} className="rounded p-1 text-gray-400 hover:bg-gray-200">
+                <X size={16} />
+              </button>
             </div>
-            <button type="button" onClick={() => onSelect(null)} className="rounded p-1 text-gray-400 hover:bg-gray-200">
-              <X size={16} />
-            </button>
-          </div>
+            {notes.length > 0 && (
+              <details className="mt-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                <summary className="cursor-pointer select-none text-xs font-semibold text-gray-600">
+                  Recent notes on this contact ({notes.length})
+                </summary>
+                <div className="mt-2 max-h-48 space-y-2 overflow-y-auto">
+                  {notes.map((n, i) => (
+                    <div key={i} className="rounded-md bg-white px-2.5 py-2 text-xs text-gray-700">
+                      {n.dateAdded && (
+                        <div className="mb-0.5 text-[10px] font-medium text-gray-400">
+                          {new Date(n.dateAdded).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                        </div>
+                      )}
+                      <p className="whitespace-pre-wrap">{n.body}</p>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+          </>
         ) : (
           <div className="relative">
             <div className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2">
@@ -318,6 +339,10 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
   const BLANK_TERMS = { earnestMoney: "", closeDays: "", closing: "", financing: "", condition: "", possession: "" };
   const [terms, setTerms] = useState({ ...BLANK_TERMS, ...(snap?.terms || {}) });
   const setTerm = (k) => (e) => setTerms((t) => ({ ...t, [k]: e.target.value }));
+  // Internal property notes (site visit, condition, ARV rationale) — saved
+  // with the offer/draft and stamped into the GHL contact note; never printed.
+  const [propertyNotes, setPropertyNotes] = useState(snap?.propertyNotes || "");
+  const [contactNotes, setContactNotes] = useState([]); // recent GHL notes on the selected contact
   const [underwriteMode, setUnderwriteMode] = useState(
     snap?.underwriteMode || fromOffer?.calc?.settings?.underwriteMode || settings?.underwriteMode || "lowball"
   );
@@ -360,6 +385,16 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialContactId]);
+
+  // Recent GHL notes for the selected contact — covers manual selection,
+  // the ?contact_id= deep link, and draft/offer restore alike.
+  useEffect(() => {
+    setContactNotes([]);
+    if (mode !== "existing" || !contact?.id) return;
+    getContactDetail(contact.id)
+      .then((d) => setContactNotes(d.notes || []))
+      .catch(() => {});
+  }, [contact?.id, mode]);
 
   // Selecting a contact pulls their custom fields and prefills the address
   // (Property Address Short Hand etc.) — without clobbering anything typed.
@@ -427,7 +462,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
         draftId,
         // Full form snapshot so History → Edit restores comps + rehab intact.
         snapshot: {
-          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, terms,
+          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, terms, propertyNotes,
           rehab: rehabStateRef.current,
           comps: compsStateRef.current,
         },
@@ -443,7 +478,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
     setError(""); setSavingDraft(true);
     try {
       const r = await saveDraft(draftId, {
-        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, terms,
+        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, terms, propertyNotes,
         rehab: rehabStateRef.current,
         comps: compsStateRef.current,
         cashPreview: calc?.offers?.cash?.amount ?? null,
@@ -572,6 +607,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
         selected={contact} onSelect={selectContact}
         newContact={newContact} setNewContact={setNewContact}
         mode={mode} setMode={setMode}
+        notes={contactNotes}
       />
 
       <div className="rounded-xl border border-gray-200 bg-white p-4">
@@ -673,6 +709,20 @@ export default function NewOffer({ settings, initialContactId, restore, onReset 
             </Field>
           </div>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-gray-200 bg-white p-4">
+        <h2 className="text-sm font-bold">Property notes</h2>
+        <p className="mb-3 mt-0.5 text-xs text-gray-500">
+          Internal only — never printed on the letter. Saved with the offer and stamped into the GHL contact note.
+        </p>
+        <textarea
+          className={`${INPUT_CLS} min-h-[96px]`}
+          maxLength={2000}
+          value={propertyNotes}
+          onChange={(e) => setPropertyNotes(e.target.value)}
+          placeholder="Site visit: roof sags over garage, furnace ~2005, busy road — held ARV to low end…"
+        />
       </div>
 
       {/* Sticky action bar: the live number + actions stay in reach while

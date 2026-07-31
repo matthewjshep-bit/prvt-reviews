@@ -273,8 +273,15 @@ const COMP_CONDITION_PRINT = {
   unknown: { label: "—", color: MUTED },
 };
 
-export function buildCompsDocument({ comps = [], subject = null, estimate = null, arv = 0, subjectSqft = 0, months = 0, arvBasis = "", address = "", meta = {}, company = {}, locationId = "" }) {
-  const items = comps.slice(0, 20).map((c) => ({
+export function buildCompsDocument({ comps = [], subject = null, estimate = null, arv = 0, subjectSqft = 0, months = 0, arvBasis = "", arvBase = 0, arvAdjustments = [], address = "", meta = {}, company = {}, locationId = "" }) {
+  const adjRows = (Array.isArray(arvAdjustments) ? arvAdjustments : [])
+    .map((a) => ({ label: String(a?.label || "").slice(0, 60), pct: Number(a?.pct) || 0 }))
+    .filter((a) => a.pct !== 0)
+    .slice(0, 6);
+  const baseArv = Math.round(Number(arvBase)) || 0;
+  const showAdj = adjRows.length > 0 && baseArv > 0;
+  // Adjustment rows eat vertical budget — keep the comp table shorter then.
+  const items = comps.slice(0, showAdj ? 14 : 20).map((c) => ({
     address: String(c.address || "Comp").slice(0, 90),
     price: Math.round(Number(c.price) || 0),
     sqft: Math.round(Number(c.sqft) || 0),
@@ -376,7 +383,7 @@ export function buildCompsDocument({ comps = [], subject = null, estimate = null
   const prices = items.map((c) => c.price).sort((a, b) => a - b);
   const mid = Math.floor(prices.length / 2);
   const medianPrice = prices.length % 2 ? prices[mid] : Math.round((prices[mid - 1] + prices[mid]) / 2);
-  y = Math.min(y + 1.5, 82);
+  y = Math.min(y + 1.5, 82 - (showAdj ? (adjRows.length + 1) * 2.2 : 0));
   layers.push(text(8, y, 72, 2.2, `Median sale price (${items.length} comps)`, { size: 21, color: MUTED, align: "right" }));
   layers.push(text(80, y, 12, 2.2, fmtMoney(medianPrice), { size: 21, color: INK, align: "right", autoFit: true, maxLines: 1 }));
   if (avgPpsf > 0) {
@@ -388,6 +395,21 @@ export function buildCompsDocument({ comps = [], subject = null, estimate = null
     y += 2.6;
     layers.push(text(8, y, 72, 2.2, "Automated valuation (AVM)", { size: 21, color: MUTED, align: "right" }));
     layers.push(text(72, y, 20, 2.2, fmtMoney(estimate.price), { size: 21, color: INK, align: "right", autoFit: true, maxLines: 1 }));
+  }
+
+  /* ---- subject adjustments (busy road, power lines, …) ---- */
+  if (showAdj) {
+    y += 2.6;
+    layers.push(text(8, y, 72, 2.2, "Base ARV (selected comps)", { size: 21, color: MUTED, align: "right" }));
+    layers.push(text(80, y, 12, 2.2, fmtMoney(baseArv), { size: 21, color: INK, align: "right", autoFit: true, maxLines: 1 }));
+    for (const a of adjRows) {
+      y += 2.2;
+      const amt = Math.round((baseArv * a.pct) / 100);
+      layers.push(text(8, y, 72, 2, `Adjustment — ${a.label} (${a.pct > 0 ? "+" : "−"}${Math.abs(a.pct)}%)`,
+        { size: 18, color: MUTED, align: "right", autoFit: true, maxLines: 1 }));
+      layers.push(text(80, y, 12, 2, `${amt < 0 ? "−" : "+"} ${fmtMoney(Math.abs(amt))}`,
+        { size: 18, color: amt < 0 ? "#b45309" : "#047857", align: "right", autoFit: true, maxLines: 1 }));
+    }
   }
 
   /* ---- ARV ---- */

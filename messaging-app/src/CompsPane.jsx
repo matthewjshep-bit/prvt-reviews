@@ -34,6 +34,20 @@ const COND_CLS = {
   "": "bg-gray-50 text-gray-400",
 };
 
+// Location/site detractors that discount the subject relative to the comps
+// (external obsolescence). Percent of base ARV; defaults from published
+// study ranges, editable per offer. Positive percentages work too (premiums).
+const ADJ_PRESETS = [
+  { key: "busy_road", label: "Busy road", pct: -5 },
+  { key: "power_lines", label: "Power lines / easement", pct: -6 },
+  { key: "backs_commercial", label: "Backs commercial / industrial", pct: -5 },
+  { key: "railroad", label: "Railroad / highway noise", pct: -6 },
+  { key: "steep_lot", label: "Steep / difficult lot", pct: -4 },
+  { key: "flood_zone", label: "Flood zone", pct: -7 },
+  { key: "airport", label: "Airport flight path", pct: -5 },
+  { key: "cell_tower", label: "Cell tower / substation", pct: -3 },
+];
+
 export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqft: setSubjectSqft, onSubjectInfo, initialState, onStateChange }) {
   const [state, setState] = useState(initialState?.result || null); // { subject:{lat,lng}, info, comps, estimate, enabled }
   const [loading, setLoading] = useState(false);
@@ -50,6 +64,25 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   // Manual settings always win over AI grading.
   const [grades, setGrades] = useState(initialState?.grades || {});
   const [grading, setGrading] = useState(null); // {done, total} while the AI pass runs
+  // ARV adjustments: [{key, label, pct}] — pct stays a string while editing.
+  const [adjustments, setAdjustments] = useState(initialState?.adjustments || []);
+  const [adjDraft, setAdjDraft] = useState({ label: "", pct: "" });
+
+  const toggleAdjustment = (preset) =>
+    setAdjustments((list) =>
+      list.some((a) => a.key === preset.key)
+        ? list.filter((a) => a.key !== preset.key)
+        : [...list, { key: preset.key, label: preset.label, pct: String(preset.pct) }]
+    );
+  const setAdjPct = (key, pct) =>
+    setAdjustments((list) => list.map((a) => (a.key === key ? { ...a, pct } : a)));
+  const removeAdjustment = (key) => setAdjustments((list) => list.filter((a) => a.key !== key));
+  const addCustomAdjustment = () => {
+    const pct = Number(adjDraft.pct);
+    if (!adjDraft.label.trim() || !pct) return;
+    setAdjustments((list) => [...list, { key: `custom-${Date.now()}`, label: adjDraft.label.trim(), pct: String(pct) }]);
+    setAdjDraft({ label: "", pct: "" });
+  };
 
   // Keep the rehab pane's room counts in sync with corrected beds/baths.
   const editSubjectFacts = (nextBeds, nextBaths) => {
@@ -172,6 +205,14 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   const suggestion = useMemo(() => {
     if (!picked.length) return null;
     const sqft = parse(subjectSqft);
+
+    // Base ARV from the comps (three paths, unchanged math), then subject
+    // detractor/premium adjustments applied on top.
+    let base = 0;
+    let baseBasis = "";
+    let ppsf = null;
+    let graded = false;
+
     // Graded path: ARV from renovated/updated comps only — size-adjusted to
     // the subject (marginal sqft ≈ half the average $/sqft, the standard
     // appraiser rule) and outlier-trimmed, then the median. Dated/distressed
@@ -195,30 +236,47 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
         const trimmed = pool.filter(inRange);
         if (trimmed.length >= 2) { dropped = pool.length - trimmed.length; kept = trimmed; }
       }
-      const adjusted = kept.map((c) => (c.sqft > 0 && avgPpsf > 0 ? c.price + (sqft - c.sqft) * 0.5 * avgPpsf : c.price));
-      return {
-        arv: Math.round(median(adjusted) / 1000) * 1000,
-        ppsf: null,
-        graded: true,
-        basis: `${kept.length} renovated/updated comps, size-adjusted${dropped ? `, ${dropped} outlier dropped` : ""}`,
-      };
+      const sizeAdj = kept.map((c) => (c.sqft > 0 && avgPpsf > 0 ? c.price + (sqft - c.sqft) * 0.5 * avgPpsf : c.price));
+      base = Math.round(median(sizeAdj) / 1000) * 1000;
+      graded = true;
+      baseBasis = `${kept.length} renovated/updated comps, size-adjusted${dropped ? `, ${dropped} outlier dropped` : ""}`;
+    } else {
+      const withSqft = picked.filter((c) => c.sqft > 0);
+      if (sqft > 0 && withSqft.length) {
+        const rawPpsf = withSqft.reduce((t, c) => t + c.price / c.sqft, 0) / withSqft.length;
+        base = Math.round((rawPpsf * sqft) / 1000) * 1000;
+        ppsf = Math.round(rawPpsf);
+        baseBasis = `${withSqft.length} comps × ${sqft.toLocaleString()} sqft`;
+      } else {
+        base = Math.round(median(picked.map((c) => c.price)) / 1000) * 1000;
+        baseBasis = `median of ${picked.length} comps`;
+      }
     }
-    // Ungraded path — unchanged.
-    const withSqft = picked.filter((c) => c.sqft > 0);
-    if (sqft > 0 && withSqft.length) {
-      const ppsf = withSqft.reduce((t, c) => t + c.price / c.sqft, 0) / withSqft.length;
-      return { arv: Math.round((ppsf * sqft) / 1000) * 1000, ppsf: Math.round(ppsf), basis: `${withSqft.length} comps × ${sqft.toLocaleString()} sqft` };
-    }
-    return { arv: Math.round(median(picked.map((c) => c.price)) / 1000) * 1000, ppsf: null, basis: `median of ${picked.length} comps` };
+
+    // Subject adjustments (busy road, power lines, …) — % of the base ARV.
+    const applied = adjustments
+      .map((a) => ({ key: a.key, label: a.label, pct: Number(a.pct) || 0 }))
+      .filter((a) => a.pct !== 0);
+    const totalPct = applied.reduce((t, a) => t + a.pct, 0);
+    const arv = applied.length ? Math.round((base * (1 + totalPct / 100)) / 1000) * 1000 : base;
+    const adjStr = applied.map((a) => `${a.label} ${a.pct > 0 ? "+" : "−"}${Math.abs(a.pct)}%`).join(", ");
+    return {
+      arv, base, ppsf, graded, totalPct,
+      adjustments: applied,
+      basis: applied.length ? `${baseBasis}; ${adjStr}` : baseBasis,
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picked, subjectSqft, grades]);
+  }, [picked, subjectSqft, grades, adjustments]);
 
   // Report state upward so drafts/offers can snapshot the comps workspace
   // (grades + the ARV basis ride along for restore and the comps PDF).
   useEffect(() => {
-    onStateChange?.({ result: state, selected: [...selected], manual, months, beds, baths, grades, arvBasis: suggestion?.basis || "" });
+    onStateChange?.({
+      result: state, selected: [...selected], manual, months, beds, baths, grades,
+      adjustments, arvBase: suggestion?.base ?? null, arvBasis: suggestion?.basis || "",
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, selected, manual, months, beds, baths, grades, suggestion]);
+  }, [state, selected, manual, months, beds, baths, grades, adjustments, suggestion]);
 
   function addManual() {
     const price = parse(draft.price);
@@ -432,17 +490,91 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             </div>
 
             {suggestion && (
-              <div className="mt-3 flex items-center justify-between rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2.5">
-                <div>
-                  <div className="text-xs text-emerald-800">
-                    Suggested ARV ({suggestion.basis}{suggestion.ppsf ? ` @ ${fmtMoney(suggestion.ppsf)}/sqft` : ""})
-                  </div>
-                  <div className="text-lg font-black text-emerald-900">{fmtMoney(suggestion.arv)}</div>
+              <div className="mt-3 rounded-lg border border-gray-200 p-2.5">
+                <div className="mb-1.5 flex items-baseline justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500">ARV adjustments</span>
+                  <span className="text-[11px] text-gray-400">site/location detractors — % of base ARV</span>
                 </div>
-                <button type="button" onClick={() => onUseArv(suggestion.arv)}
-                  className="rounded-lg bg-emerald-700 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
-                  Use as ARV
-                </button>
+                <div className="flex flex-wrap gap-1.5">
+                  {ADJ_PRESETS.map((p) => {
+                    const active = adjustments.some((a) => a.key === p.key);
+                    return (
+                      <button key={p.key} type="button" onClick={() => toggleAdjustment(p)}
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                          active ? "bg-gray-900 text-white" : "border border-gray-300 text-gray-600 hover:bg-gray-100"
+                        }`}>
+                        {p.label} {p.pct}%
+                      </button>
+                    );
+                  })}
+                </div>
+                {adjustments.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {adjustments.map((a) => (
+                      <div key={a.key} className="flex items-center gap-2 text-xs">
+                        <span className="min-w-0 flex-1 truncate text-gray-700">{a.label}</span>
+                        <input
+                          className="w-14 rounded border border-gray-300 px-1.5 py-0.5 text-right text-xs tabular-nums focus:border-gray-900 focus:outline-none"
+                          inputMode="decimal" value={a.pct}
+                          onChange={(e) => setAdjPct(a.key, e.target.value.replace(/[^\d.+-]/g, ""))}
+                        />
+                        <span className="text-gray-500">%</span>
+                        <button type="button" onClick={() => removeAdjustment(a.key)}
+                          className="rounded p-0.5 text-gray-400 hover:text-red-600"><X size={12} /></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-2 flex items-center gap-2">
+                  <input className="min-w-0 flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-gray-900 focus:outline-none"
+                    placeholder="Custom (e.g. Territorial view)" value={adjDraft.label}
+                    onChange={(e) => setAdjDraft({ ...adjDraft, label: e.target.value })} />
+                  <input className="w-16 rounded-lg border border-gray-300 px-2 py-1.5 text-right text-xs focus:border-gray-900 focus:outline-none"
+                    placeholder="+/−%" inputMode="decimal" value={adjDraft.pct}
+                    onChange={(e) => setAdjDraft({ ...adjDraft, pct: e.target.value.replace(/[^\d.+-]/g, "") })} />
+                  <button type="button" onClick={addCustomAdjustment}
+                    className="rounded-lg border border-gray-300 p-1.5 text-gray-600 hover:bg-gray-50" title="Add custom adjustment">
+                    <Plus size={13} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {suggestion && (
+              <div className="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2.5">
+                {suggestion.adjustments.length > 0 && (
+                  <div className="mb-1.5 space-y-0.5 border-b border-emerald-200 pb-1.5 text-xs">
+                    <div className="flex justify-between text-emerald-800">
+                      <span>Base ARV ({suggestion.basis.split(";")[0]})</span>
+                      <span className="font-semibold tabular-nums">{fmtMoney(suggestion.base)}</span>
+                    </div>
+                    {suggestion.adjustments.map((a) => {
+                      const amt = Math.round((suggestion.base * a.pct) / 100);
+                      return (
+                        <div key={a.key} className="flex justify-between">
+                          <span className="text-gray-600">{a.label} ({a.pct > 0 ? "+" : "−"}{Math.abs(a.pct)}%)</span>
+                          <span className={`font-medium tabular-nums ${amt < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                            {amt < 0 ? "−" : "+"}{fmtMoney(Math.abs(amt))}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-emerald-800">
+                      {suggestion.adjustments.length
+                        ? `Adjusted ARV (${suggestion.totalPct > 0 ? "+" : "−"}${Math.abs(suggestion.totalPct)}%)`
+                        : `Suggested ARV (${suggestion.basis}${suggestion.ppsf ? ` @ ${fmtMoney(suggestion.ppsf)}/sqft` : ""})`}
+                    </div>
+                    <div className="text-lg font-black text-emerald-900">{fmtMoney(suggestion.arv)}</div>
+                  </div>
+                  <button type="button" onClick={() => onUseArv(suggestion.arv)}
+                    className="rounded-lg bg-emerald-700 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
+                    Use as ARV
+                  </button>
+                </div>
               </div>
             )}
           </div>

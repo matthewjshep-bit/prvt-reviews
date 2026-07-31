@@ -155,6 +155,11 @@ export async function createContactNote(client, contactId, body) {
   return data.note || data;
 }
 
+export async function getContactNotes(client, contactId) {
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}/notes`);
+  return data.notes || [];
+}
+
 /* ---------- contact tags ---------- */
 
 export async function addContactTags(client, contactId, tags) {

@@ -27,7 +27,7 @@ import { uploadAsset, r2Enabled } from "../r2.js";
 import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, sendSms, sendEmail,
-  customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField,
+  customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField, getContactNotes,
 } from "../ghl.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
@@ -111,6 +111,22 @@ function offerNoteBody(offer) {
   if (offer.scope?.length) {
     lines.push(`Rehab scope: ${offer.scope.map((s) => `${s.label} ${fmtMoney(s.cost)}`).join("; ")}`);
   }
+  // ARV adjustments applied in the comps workspace (busy road, power lines…).
+  const cs = offer.snapshot?.comps;
+  const adjs = (Array.isArray(cs?.adjustments) ? cs.adjustments : [])
+    .map((a) => ({ label: String(a?.label || "").slice(0, 60), pct: Number(a?.pct) || 0 }))
+    .filter((a) => a.pct !== 0);
+  if (adjs.length) {
+    const base = Math.round(Number(cs?.arvBase)) || 0;
+    const totalPct = adjs.reduce((t, a) => t + a.pct, 0);
+    const adjusted = base ? Math.round((base * (1 + totalPct / 100)) / 1000) * 1000 : 0;
+    lines.push(
+      `ARV adjustments: ${adjs.map((a) => `${a.label} ${a.pct > 0 ? "+" : "-"}${Math.abs(a.pct)}%`).join(", ")}` +
+      (base ? ` (base ${fmtMoney(base)} → ${fmtMoney(adjusted)})` : "")
+    );
+  }
+  const pnotes = String(offer.snapshot?.propertyNotes || "").trim();
+  if (pnotes) lines.push(`Property notes: ${pnotes.slice(0, 600)}`);
   if (offer.pdfUrl) lines.push(`Offer letter (PDF): ${offer.pdfUrl}`);
   if (offer.scopePdfUrl) lines.push(`Rehab scope of work (PDF): ${offer.scopePdfUrl}`);
   if (offer.compsPdfUrl) lines.push(`Comparable sales analysis (PDF): ${offer.compsPdfUrl}`);
@@ -298,6 +314,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { locationId, client } = resolveLocation(req);
       const contact = await getContact(client, req.params.id);
       const map = await customFieldIdKeyMap(client, locationId);
+      // Recent notes ride along (best-effort — a notes failure never blocks
+      // the contact prefill).
+      let notes = [];
+      try {
+        notes = (await getContactNotes(client, req.params.id))
+          .sort((a, b) => new Date(b.dateAdded || 0) - new Date(a.dateAdded || 0))
+          .slice(0, 5)
+          .map((n) => ({ body: String(n.body || "").slice(0, 500), dateAdded: n.dateAdded || null }));
+      } catch { /* notes are optional */ }
       res.json({
         contact: {
           id: contact.id || req.params.id,
@@ -305,6 +330,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           phone: contact.phone || "",
           email: contact.email || "",
           custom: contactCustomRecord(contact, map),
+          notes,
         },
       });
     } catch (err) { fail(res, err); }
@@ -906,6 +932,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             offerId, locationId,
             comps: picked,
             arvBasis: String(cs?.arvBasis || ""),
+            arvBase: Math.round(Number(cs?.arvBase)) || 0,
+            arvAdjustments: (Array.isArray(cs?.adjustments) ? cs.adjustments : [])
+              .map((a) => ({ label: String(a?.label || "").slice(0, 60), pct: Number(a?.pct) || 0 }))
+              .filter((a) => a.pct !== 0)
+              .slice(0, 6),
             subject: cs?.result?.info || null,
             estimate: cs?.result?.estimate || null,
             months: Number(cs?.months) || 0,
