@@ -5,11 +5,12 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, FileText, Loader2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
 import { calculateOffers, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
-  addContactNote, createOffer, getContactDetail, getContactNotes, previewDocument, saveDraft, saveSettings, searchContacts, sendOffer, suggestAddresses, zillowUrl,
+  addContactNote, createOffer, getContactDetail, getContactNotes, previewDocument, saveDraft, saveSettings, searchContacts, suggestAddresses, zillowUrl,
 } from "./api.js";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
 import NotesPanel from "./NotesPanel.jsx";
+import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -448,7 +449,8 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const [creating, setCreating] = useState(false);
   const [result, setResult] = useState(null);     // { offer, ghl, warnings }
   const [error, setError] = useState("");
-  const [sendState, setSendState] = useState(null); // { dryRun info } | { sent }
+  const [sendOpen, setSendOpen] = useState(false); // SendModal (text and/or email via GHL)
+  const [lastSend, setLastSend] = useState(null);  // most recent send record, for the ✓ banner
 
   // Money fields format with thousands separators as you type; the calc
   // engine strips $ , and spaces, so the formatted string feeds it directly.
@@ -549,7 +551,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   }
 
   async function doCreate() {
-    setError(""); setCreating(true); setSendState(null);
+    setError(""); setCreating(true); setLastSend(null);
     try {
       const r = await createOffer({
         contactId: mode === "existing" ? contact?.id : undefined,
@@ -586,13 +588,6 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       setTimeout(() => setDraftSaved(false), 2500);
     } catch (e) { setError(e.message); }
     setSavingDraft(false);
-  }
-
-  async function doSend(live) {
-    try {
-      const r = await sendOffer(result.offer.id, { dryRun: !live });
-      setSendState(r);
-    } catch (e) { setError(e.message); }
   }
 
   if (result) {
@@ -645,38 +640,36 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
               <FileText size={16} /> Open image version
             </a>
-            {!sendState?.sent && (
-              <button type="button" onClick={() => doSend(Boolean(sendState?.dryRun))}
-                className="flex w-full items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
-                <Send size={16} />
-                {sendState?.dryRun ? "Confirm — text it to the contact now" : "Text this offer to the contact"}
-              </button>
-            )}
-            {sendState?.dryRun && !sendState?.sent && (
-              <div className="rounded-lg bg-gray-100 p-3 text-xs text-gray-600">
-                <div className="font-semibold text-gray-800">Dry run — nothing sent yet.</div>
-                <p className="mt-1 whitespace-pre-wrap">{sendState.message}</p>
-                {!sendState.sendsEnabled && (
-                  <p className="mt-1 text-amber-700">Live sends are disabled on the server (CARD_SENDS_ENABLED).</p>
-                )}
+            <button type="button" onClick={() => setSendOpen(true)}
+              className="flex w-full items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+              <Send size={16} /> Send to the contact — text or email
+            </button>
+            {lastSend && (
+              <div className="rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800">
+                Sent via {(lastSend.channels || []).map((c) => CHANNEL_LABELS[c] || c).join(" + ")} ✓
               </div>
-            )}
-            {sendState?.sent && (
-              <div className="rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800">Sent ✓</div>
             )}
             {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
             <div className="flex flex-wrap gap-4">
-              <button type="button" onClick={() => (onReset ? onReset() : (setResult(null), setSendState(null), setError("")))}
+              <button type="button" onClick={() => (onReset ? onReset() : (setResult(null), setLastSend(null), setError("")))}
                 className="text-sm font-medium text-gray-500 underline hover:text-gray-800">
                 Start another offer
               </button>
-              <button type="button" onClick={() => { setResult(null); setSendState(null); setError(""); }}
+              <button type="button" onClick={() => { setResult(null); setLastSend(null); setError(""); }}
                 className="text-sm font-medium text-gray-500 underline hover:text-gray-800">
                 Back to this offer's form
               </button>
             </div>
           </div>
         </div>
+
+        {sendOpen && (
+          <SendModal
+            offer={offer}
+            onClose={() => setSendOpen(false)}
+            onSent={(id, sends) => setLastSend(sends?.[sends.length - 1] || { channels: [] })}
+          />
+        )}
       </div>
     );
   }
