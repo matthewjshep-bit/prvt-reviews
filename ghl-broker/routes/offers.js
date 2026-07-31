@@ -1132,7 +1132,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const picked = DOC_DEFS.filter(([key, , url]) => docKeys.includes(key) && url);
       if (!picked.length) return res.status(400).json({ error: "no documents selected (or the offer has none)" });
       const imagePicked = picked.some(([key]) => key === "image");
-      const pdfDocs = picked.filter(([key]) => key !== "image");
 
       // Destination phone/email live on the GHL contact, not the offer. A
       // lookup failure never fails the request — it surfaces per channel.
@@ -1152,8 +1151,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         `${fmtMoney(offer.cashAmount)}, as-is, close on your timeline (attached). ` +
         `Happy to answer any questions.`;
 
-      // SMS: image rides as the MMS attachment; PDFs go as links in the text.
-      const smsText = [text, ...pdfDocs.map(([, label, url]) => `${label}: ${url}`)].join("\n\n");
+      // SMS: just the message, with the image as the MMS attachment. PDFs are
+      // email-only — no links in the text.
+      const smsText = text;
       const smsAttachments = imagePicked ? [offer.imageUrl] : [];
 
       // Email: every picked document attached as a file, short HTML body.

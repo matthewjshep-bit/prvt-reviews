@@ -195,7 +195,9 @@ export default function SendModal({ offer, onClose, onSent }) {
                 ))}
               </div>
               {channels.sms && [...docs].some((k) => k !== "image") && (
-                <p className="mt-1 text-xs text-gray-500">PDFs are included as links in the text message.</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  PDFs go out on email only — the text sends just the message{docs.has("image") ? " and the offer image" : ""}.
+                </p>
               )}
             </div>
 
