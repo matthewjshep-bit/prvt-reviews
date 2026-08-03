@@ -37,6 +37,49 @@ create table if not exists offer_documents (
   primary key (offer_id, kind)
 );
 
+-- Agent Outreach: listing agents discovered from RentCast pulls.
+-- agent_key encodes the dedupe identity: "e:<email>" else "p:<10-digit phone>"
+-- else "n:<name-slug>|<office-slug>". Lifecycle lives in columns (not doc) so
+-- pull-time upserts can replace doc without clobbering import status.
+create table if not exists outreach_agents (
+  id           uuid primary key,
+  location_id  text not null,
+  agent_key    text not null,
+  status       text not null default 'new',   -- 'new' | 'skipped' | 'imported'
+  contact_id   text,
+  imported_at  timestamptz,
+  first_seen   timestamptz not null default now(),
+  last_seen    timestamptz not null default now(),
+  doc          jsonb not null,
+  unique (location_id, agent_key)
+);
+create index if not exists outreach_agents_loc_idx on outreach_agents (location_id, last_seen desc);
+create index if not exists outreach_agents_status_idx on outreach_agents (location_id, status);
+
+-- Listings backing the outreach agents. listing_key = "<mlsName>:<mlsNumber>"
+-- (fallback: normalized address) so re-pulls upsert instead of duplicating.
+create table if not exists outreach_listings (
+  id           uuid primary key,
+  location_id  text not null,
+  listing_key  text not null,
+  agent_key    text not null,
+  first_seen   timestamptz not null default now(),
+  last_seen    timestamptz not null default now(),
+  doc          jsonb not null,
+  unique (location_id, listing_key)
+);
+create index if not exists outreach_listings_agent_idx on outreach_listings (location_id, agent_key);
+
+-- One row per RentCast pull (params, requestsUsed, counts) — powers the
+-- month-to-date request meter in the UI (free tier = 50 requests/month).
+create table if not exists outreach_pulls (
+  id           uuid primary key,
+  location_id  text not null,
+  doc          jsonb not null,
+  created_at   timestamptz not null default now()
+);
+create index if not exists outreach_pulls_loc_idx on outreach_pulls (location_id, created_at desc);
+
 -- The pre-overhaul Card Studio / Home tables (templates, template_versions,
 -- renders, assets, connections, home_sends, campaigns, journeys,
 -- journey_enrollments, data_source_tests) are no longer used. They are left

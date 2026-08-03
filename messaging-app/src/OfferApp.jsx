@@ -7,14 +7,34 @@
 import React, { useEffect, useState } from "react";
 import NewOffer from "./NewOffer.jsx";
 import OffersHistory from "./OffersHistory.jsx";
+import AgentOutreach from "./AgentOutreach.jsx";
 import SettingsView from "./SettingsView.jsx";
 import { getLocationId, getOffer, getSettings } from "./api.js";
 
-const NAV = [
-  { view: "new", label: "New Offer" },
-  { view: "history", label: "History" },
-  { view: "settings", label: "Settings" },
-];
+// Which product this page is. One deploy serves both: /agents (any depth) is
+// the Agent Outreach app, everything else is the offer generator. The Netlify
+// SPA redirect sends /agents to this same bundle; VITE_APP_MODE=outreach still
+// forces outreach mode for a dedicated-domain deploy.
+const APP_MODE = (() => {
+  try {
+    if (import.meta.env.VITE_APP_MODE === "outreach") return "outreach";
+    return /^\/agents(\/|$)/.test(window.location.pathname) ? "outreach" : "offers";
+  } catch {
+    return "offers";
+  }
+})();
+
+const NAV =
+  APP_MODE === "outreach"
+    ? [
+        { view: "outreach", label: "Agents" },
+        { view: "settings", label: "Settings" },
+      ]
+    : [
+        { view: "new", label: "New Offer" },
+        { view: "history", label: "History" },
+        { view: "settings", label: "Settings" },
+      ];
 
 function readParam(name) {
   try {
@@ -27,7 +47,7 @@ function readParam(name) {
 export default function OfferApp() {
   const [view, setView] = useState(() => {
     const v = readParam("view");
-    return NAV.some((n) => n.view === v) ? v : "new";
+    return NAV.some((n) => n.view === v) ? v : NAV[0].view;
   });
   const [initialContactId, setInitialContactId] = useState(() => readParam("contact_id"));
   const [editing, setEditing] = useState(null); // draft/offer being reopened in the form
@@ -51,6 +71,7 @@ export default function OfferApp() {
   // Deep link from the GHL contact note: ?offer_id= reopens that offer in the
   // editor (same path as History → Edit) once it loads.
   useEffect(() => {
+    if (APP_MODE === "outreach") return; // offers-only deep link
     const offerId = readParam("offer_id");
     if (!offerId) return;
     getOffer(offerId)
@@ -73,7 +94,9 @@ export default function OfferApp() {
     <div className="min-h-screen bg-gray-50 text-gray-900">
       <header className="sticky top-0 z-30 border-b border-gray-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-2.5 sm:px-6">
-          <div className="mr-2 text-sm font-bold tracking-tight">Offer Generator</div>
+          <div className="mr-2 text-sm font-bold tracking-tight">
+            {APP_MODE === "outreach" ? "Agent Outreach" : "Offer Generator"}
+          </div>
           {NAV.map((n) => (
             <button
               key={n.view}
@@ -107,8 +130,9 @@ export default function OfferApp() {
         {view === "history" && (
           <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }} />
         )}
+        {view === "outreach" && <AgentOutreach settings={settings} />}
         {view === "settings" && (
-          <SettingsView settings={settings} onSaved={(s) => setSettings(s)} />
+          <SettingsView settings={settings} onSaved={(s) => setSettings(s)} mode={APP_MODE} />
         )}
       </div>
     </div>

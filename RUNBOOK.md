@@ -65,11 +65,47 @@ should load and contact search should return results.
    (`last_offer_amount`, `last_offer_date`, `last_offer_doc_url`) and applies
    the `offer-created` tag — no manual field setup needed.
 
+## Agent Outreach
+
+**Separate app, same Netlify site.** Agent Outreach lives at the `/agents`
+path: `https://<site>/agents?location_id=<LOCATION>` (own header/nav, no offer
+tabs; the offers app at `/` does not show Agent Outreach). No extra deploy or
+env needed — the SPA redirect serves the same bundle and the app switches on
+the path. Add it to GHL as a second Custom Menu Link pointing at
+`https://<site>/agents?location_id={{location.id}}`.
+
+To later split it onto its own domain: deploy a second Netlify site from this
+repo with env `VITE_APP_MODE=outreach`, and add that origin to the broker's
+comma-separated `APP_ORIGIN`.
+
+
+The Agent Outreach tab pulls active MLS listings from RentCast, groups them by
+listing agent (each agent's most-fixer-like listing becomes the outreach
+"hook"), flags agents already in GHL, and bulk-imports selected agents as
+contacts.
+
+1. Settings → "Agent Outreach (RentCast)" → paste a RentCast API key
+   (rentcast.io/api, free Developer tier = 50 requests/month) and set the
+   default market (zips or city/state).
+2. The first import auto-creates the contact custom fields (`hook_address`,
+   `hook_price`, `hook_dom`, `hook_url`, `brokerage`) and applies the
+   `agent-outreach` tag (override with `OUTREACH_TAG`).
+3. Build a GHL workflow triggered on that tag to send the actual outreach
+   (reference the hook fields in the message; set re-entry OFF).
+4. Live imports require `OUTREACH_IMPORTS_ENABLED=true` on the broker;
+   otherwise every import is a dry-run preview.
+5. Pulls are manual (button) today. For a nightly sync later, add a Render
+   Cron Job: `curl -fsS -X POST "$BROKER_URL/api/outreach/pull" -H
+   'Content-Type: application/json' -d '{"location_id":"<LOCATION>"}'` —
+   the endpoint defaults its market params from Settings.
+
 ## Safety rails
 
 - **SMS sends are dry-run by default.** `POST /api/offers/:id/send` returns a
   preview unless the request passes `dryRun:false` AND the broker has
   `CARD_SENDS_ENABLED=true`.
+- **Agent Outreach imports are dry-run by default** — same double gate via
+  `OUTREACH_IMPORTS_ENABLED`.
 - The broker rejects any `location_id` that doesn't match `GHL_LOCATION_ID`.
 - Generated documents are stored in Postgres and served at /api/offers/:id/doc.(pdf|jpg) — no storage config needed; links survive redeploys. Setting the R2_* vars switches storage to R2.
 - Offer creation degrades gracefully: if a GHL write fails (fields/note/tag),

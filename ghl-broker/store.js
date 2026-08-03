@@ -92,6 +92,94 @@ const pgStore = {
     );
     return doc;
   },
+
+  /* ---- agent outreach ---- */
+  // Upserts replace doc + bump last_seen but never touch the lifecycle
+  // columns (status, contact_id, imported_at, first_seen).
+  async upsertOutreachAgents(locationId, agents) {
+    for (const a of agents) {
+      await query(
+        `insert into outreach_agents (id, location_id, agent_key, doc)
+         values ($1,$2,$3,$4)
+         on conflict (location_id, agent_key)
+         do update set doc = excluded.doc, last_seen = now()`,
+        [uuid(), locationId, a.agentKey, a.doc]
+      );
+    }
+  },
+  async listOutreachAgents(locationId, { status = null, limit = 1000 } = {}) {
+    const { rows } = status
+      ? await query(
+          `select agent_key as "agentKey", status, contact_id as "contactId",
+                  imported_at as "importedAt", first_seen as "firstSeen", last_seen as "lastSeen", doc
+           from outreach_agents where location_id = $1 and status = $2
+           order by last_seen desc limit $3`,
+          [locationId, status, limit]
+        )
+      : await query(
+          `select agent_key as "agentKey", status, contact_id as "contactId",
+                  imported_at as "importedAt", first_seen as "firstSeen", last_seen as "lastSeen", doc
+           from outreach_agents where location_id = $1
+           order by last_seen desc limit $2`,
+          [locationId, limit]
+        );
+    return rows;
+  },
+  async getOutreachAgent(locationId, agentKey) {
+    const { rows } = await query(
+      `select agent_key as "agentKey", status, contact_id as "contactId",
+              imported_at as "importedAt", first_seen as "firstSeen", last_seen as "lastSeen", doc
+       from outreach_agents where location_id = $1 and agent_key = $2`,
+      [locationId, agentKey]
+    );
+    return rows[0] || null;
+  },
+  async setOutreachAgentStatus(locationId, agentKey, { status, contactId, importedAt } = {}) {
+    const { rowCount } = await query(
+      `update outreach_agents
+       set status = coalesce($3, status),
+           contact_id = coalesce($4, contact_id),
+           imported_at = coalesce($5, imported_at)
+       where location_id = $1 and agent_key = $2`,
+      [locationId, agentKey, status || null, contactId || null, importedAt || null]
+    );
+    return rowCount > 0;
+  },
+  async upsertOutreachListings(locationId, listings) {
+    for (const l of listings) {
+      await query(
+        `insert into outreach_listings (id, location_id, listing_key, agent_key, doc)
+         values ($1,$2,$3,$4,$5)
+         on conflict (location_id, listing_key)
+         do update set doc = excluded.doc, agent_key = excluded.agent_key, last_seen = now()`,
+        [uuid(), locationId, l.listingKey, l.agentKey, l.doc]
+      );
+    }
+  },
+  async listOutreachListings(locationId, { agentKey } = {}) {
+    const { rows } = await query(
+      `select listing_key as "listingKey", agent_key as "agentKey",
+              first_seen as "firstSeen", last_seen as "lastSeen", doc
+       from outreach_listings where location_id = $1 and agent_key = $2`,
+      [locationId, agentKey]
+    );
+    return rows;
+  },
+  async recordOutreachPull(locationId, doc) {
+    await query(`insert into outreach_pulls (id, location_id, doc) values ($1,$2,$3)`, [
+      uuid(),
+      locationId,
+      doc,
+    ]);
+  },
+  async listOutreachPulls(locationId, { limit = 50 } = {}) {
+    const { rows } = await query(
+      `select doc, created_at as "createdAt" from outreach_pulls
+       where location_id = $1 order by created_at desc limit $2`,
+      [locationId, limit]
+    );
+    return rows;
+  },
 };
 
 /* ============================================================= *
@@ -118,6 +206,9 @@ const fileStore = (() => {
       data = loadFile();
       data.offers = data.offers || {};
       data.offerSettings = data.offerSettings || {};
+      data.outreachAgents = data.outreachAgents || {};
+      data.outreachListings = data.outreachListings || {};
+      data.outreachPulls = data.outreachPulls || [];
     }
     return data;
   };
@@ -207,6 +298,84 @@ const fileStore = (() => {
       data.offerSettings[locationId] = doc;
       persist();
       return doc;
+    },
+
+    /* ---- agent outreach (rows keyed "<locationId>|<key>") ---- */
+    async upsertOutreachAgents(locationId, agents) {
+      ensure();
+      for (const a of agents) {
+        const k = `${locationId}|${a.agentKey}`;
+        const prev = data.outreachAgents[k];
+        data.outreachAgents[k] = prev
+          ? { ...prev, doc: a.doc, lastSeen: nowIso() }
+          : {
+              agentKey: a.agentKey,
+              locationId,
+              status: "new",
+              contactId: null,
+              importedAt: null,
+              firstSeen: nowIso(),
+              lastSeen: nowIso(),
+              doc: a.doc,
+            };
+      }
+      persist();
+    },
+    async listOutreachAgents(locationId, { status = null, limit = 1000 } = {}) {
+      ensure();
+      return Object.values(data.outreachAgents)
+        .filter((a) => a.locationId === locationId && (!status || a.status === status))
+        .sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""))
+        .slice(0, limit);
+    },
+    async getOutreachAgent(locationId, agentKey) {
+      ensure();
+      return data.outreachAgents[`${locationId}|${agentKey}`] || null;
+    },
+    async setOutreachAgentStatus(locationId, agentKey, { status, contactId, importedAt } = {}) {
+      ensure();
+      const row = data.outreachAgents[`${locationId}|${agentKey}`];
+      if (!row) return false;
+      if (status) row.status = status;
+      if (contactId) row.contactId = contactId;
+      if (importedAt) row.importedAt = importedAt;
+      persist();
+      return true;
+    },
+    async upsertOutreachListings(locationId, listings) {
+      ensure();
+      for (const l of listings) {
+        const k = `${locationId}|${l.listingKey}`;
+        const prev = data.outreachListings[k];
+        data.outreachListings[k] = {
+          listingKey: l.listingKey,
+          locationId,
+          agentKey: l.agentKey,
+          firstSeen: prev?.firstSeen || nowIso(),
+          lastSeen: nowIso(),
+          doc: l.doc,
+        };
+      }
+      persist();
+    },
+    async listOutreachListings(locationId, { agentKey } = {}) {
+      ensure();
+      return Object.values(data.outreachListings).filter(
+        (l) => l.locationId === locationId && l.agentKey === agentKey
+      );
+    },
+    async recordOutreachPull(locationId, doc) {
+      ensure();
+      data.outreachPulls.push({ locationId, doc, createdAt: nowIso() });
+      if (data.outreachPulls.length > 200) data.outreachPulls = data.outreachPulls.slice(-200);
+      persist();
+    },
+    async listOutreachPulls(locationId, { limit = 50 } = {}) {
+      ensure();
+      return data.outreachPulls
+        .filter((p) => p.locationId === locationId)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .slice(0, limit);
     },
   };
 })();

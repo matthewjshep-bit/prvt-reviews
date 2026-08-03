@@ -39,7 +39,10 @@ function Txt({ label, value, onChange, placeholder }) {
   );
 }
 
-export default function SettingsView({ settings, onSaved }) {
+// mode: "offers" shows everything; "outreach" (the standalone Agent Outreach
+// site) shows only the RentCast section — same per-location settings blob
+// underneath, so saves from either site merge safely via the full form state.
+export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const [form, setForm] = useState(effectiveSettings(settings || {}));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -98,6 +101,7 @@ export default function SettingsView({ settings, onSaved }) {
 
   return (
     <div className="max-w-2xl space-y-5">
+      {mode === "offers" && (<>
       <section className="rounded-xl border border-gray-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Cash offer</h2>
         <p className="mb-3 text-xs text-gray-500">
@@ -147,7 +151,27 @@ export default function SettingsView({ settings, onSaved }) {
           <Txt label="Apify API token" value={form.apifyToken || ""} onChange={set("apifyToken")} placeholder="apify_api_..." />
         </div>
       </section>
+      </>)}
 
+      <section className="rounded-xl border border-gray-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Agent Outreach (RentCast)</h2>
+        <p className="mb-3 text-xs text-gray-500">
+          Powers the Agent Outreach page — active MLS listings with listing-agent contact info.
+          Sign up at rentcast.io/api (free Developer tier: 50 requests/month, each returns up to
+          500 listings). The zips/city here prefill the pull form.
+        </p>
+        <Txt label="RentCast API key" value={form.rentcastApiKey || ""} onChange={set("rentcastApiKey")} placeholder="..." />
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <Txt label="Default zip codes" value={form.outreachZips || ""} onChange={set("outreachZips")} placeholder="98092, 98002" />
+          <div className="grid grid-cols-2 gap-3">
+            <Txt label="City" value={form.outreachCity || ""} onChange={set("outreachCity")} placeholder="Auburn" />
+            <Txt label="State" value={form.outreachState || ""} onChange={set("outreachState")} placeholder="WA" />
+          </div>
+          <Num label="Max listing age" suffix="days" value={form.outreachDaysOld} onChange={set("outreachDaysOld")} />
+        </div>
+      </section>
+
+      {mode === "offers" && (<>
       <section className="rounded-xl border border-gray-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Company (printed on the document)</h2>
         <div className="grid grid-cols-2 gap-3">
@@ -209,6 +233,7 @@ export default function SettingsView({ settings, onSaved }) {
           </button>
         </div>
       </section>
+      </>)}
 
       <div className="flex items-center gap-3">
         <button type="button" disabled={saving} onClick={save}

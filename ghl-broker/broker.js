@@ -9,6 +9,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { makeClient } from "./ghl.js";
 import createOffersRouter from "./routes/offers.js";
+import createOutreachRouter from "./routes/outreach.js";
 import { store } from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -17,7 +18,12 @@ const PORT = process.env.PORT || 4000;
 const GHL_TOKEN = process.env.GHL_TOKEN || "";
 const ALLOWED_LOCATION = process.env.GHL_LOCATION_ID || ""; // single-tenant guard
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
-const APP_ORIGIN = (process.env.APP_ORIGIN || "").replace(/\/$/, ""); // iframe app origin, if cross-origin
+// Allowed browser origins (comma-separated) — the offers site and the
+// standalone Agent Outreach site both talk to this one broker.
+const APP_ORIGINS = (process.env.APP_ORIGIN || "")
+  .split(",")
+  .map((o) => o.trim().replace(/\/$/, ""))
+  .filter(Boolean);
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "uploads");
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -35,7 +41,7 @@ app.use(express.json({ limit: "30mb" }));
 // CORS — only needed if the page is served from a different origin than this API.
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin && origin === APP_ORIGIN) {
+  if (origin && APP_ORIGINS.includes(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Access-Control-Allow-Headers", "Content-Type");
     res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
@@ -76,6 +82,7 @@ function resolveLocation(req) {
 }
 
 app.use("/api/offers", createOffersRouter({ resolveLocation, uploadDir: UPLOAD_DIR, publicBaseUrl: PUBLIC_BASE_URL }));
+app.use("/api/outreach", createOutreachRouter({ resolveLocation }));
 
 store.init().catch((e) => console.error("store init failed:", e.message));
 

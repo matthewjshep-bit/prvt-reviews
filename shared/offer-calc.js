@@ -58,6 +58,11 @@ export const DEFAULT_OFFER_SETTINGS = {
   compsApiKey: "",           // enables the comps map + MLS photos (realestateapi.com API key)
   aiApiKey: "",              // enables the AI rehab photo scan (Anthropic API key)
   apifyToken: "",            // Zillow listing photos via Apify (zillow-detail-scraper)
+  rentcastApiKey: "",        // enables the Agent Outreach page (rentcast.io API key)
+  outreachZips: "",          // default pull market: comma-separated zips (wins over city/state)
+  outreachCity: "",
+  outreachState: "",
+  outreachDaysOld: 180,      // only pull listings listed/updated in the last N days
   // Printed on the offer document letterhead
   company: { name: "", tagline: "", signer: "", phone: "", email: "" },
 };

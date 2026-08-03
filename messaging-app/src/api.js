@@ -115,4 +115,17 @@ export const sendOffer = (id, { message = "", dryRun = true, channels, docs, ema
     ...(emailSubject ? { emailSubject } : {}),
   });
 
+/* ---------- agent outreach ---------- */
+export const getOutreachAgents = () =>
+  fetch(`${API_BASE}/api/outreach/agents?location_id=${loc()}`).then(j);
+export const getAgentListings = (agentKey) =>
+  fetch(`${API_BASE}/api/outreach/agents/${encodeURIComponent(agentKey)}/listings?location_id=${loc()}`)
+    .then(j)
+    .then((r) => r.listings);
+export const pullOutreach = (params = {}) => post(`/api/outreach/pull`, params);
+export const importOutreachAgents = ({ agentKeys, applyTag = true, dryRun = true }) =>
+  post(`/api/outreach/import`, { agentKeys, applyTag, dryRun });
+export const setOutreachStatus = (agentKey, status) =>
+  post(`/api/outreach/agents/${encodeURIComponent(agentKey)}/status`, { status });
+
 export { API_BASE };

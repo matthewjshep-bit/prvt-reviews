@@ -124,6 +124,36 @@ export async function findOrCreateContactByPhone(client, locationId, phone, firs
   return created?.contact?.id || created?.id;
 }
 
+// Look up an existing contact by email and/or phone via the duplicate-search
+// endpoint, one identifier at a time so the match source is unambiguous.
+// Returns { id, matchedBy: "email" | "phone" } or null. A failed lookup on one
+// identifier falls through to the next (matches findOrCreateContactByPhone's
+// tolerance) — callers treat null as "assume new".
+export async function findDuplicateContact(client, locationId, { email, phone }) {
+  const loc = encodeURIComponent(locationId);
+  if (email) {
+    try {
+      const found = await client.call(`/contacts/search/duplicate?locationId=${loc}&email=${encodeURIComponent(email)}`);
+      if (found?.contact?.id) return { id: found.contact.id, matchedBy: "email" };
+    } catch { /* fall through */ }
+  }
+  if (phone) {
+    try {
+      const found = await client.call(`/contacts/search/duplicate?locationId=${loc}&number=${encodeURIComponent(phone)}`);
+      if (found?.contact?.id) return { id: found.contact.id, matchedBy: "phone" };
+    } catch { /* fall through */ }
+  }
+  return null;
+}
+
+// Plain contact create — dedupe is the caller's responsibility (agent outreach
+// checks findDuplicateContact first, so the phone-only find-or-create above
+// doesn't fit). body: { firstName, lastName, phone, email, source, ... }.
+export async function createContact(client, locationId, body) {
+  const created = await client.call(`/contacts/`, { method: "POST", body: { locationId, ...body } });
+  return created?.contact?.id || created?.id;
+}
+
 export async function searchContacts(client, locationId, query) {
   const data = await client.call(
     `/contacts/?locationId=${encodeURIComponent(locationId)}&query=${encodeURIComponent(query)}&limit=20`

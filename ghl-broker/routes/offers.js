@@ -27,6 +27,7 @@ import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, gradeCompCo
 import { addressQueryVariants, zillowUrl } from "../shared/us-address.js";
 export { zillowUrl };
 import { jpegToPdf, jpegsToPdf } from "../pdf.js";
+import { mapPool } from "../map-pool.js";
 import { uploadAsset, r2Enabled } from "../r2.js";
 import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
@@ -656,19 +657,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // sends comps in small chunks (~4) so each request stays fast.
   const gradeCache = new Map(); // comp address → { ts, grade } (7-day TTL; sold condition is immutable)
   const GRADE_TTL = 7 * 24 * 3600 * 1000;
-
-  async function mapPool(items, limit, fn) {
-    const out = new Array(items.length);
-    let next = 0;
-    const worker = async () => {
-      while (next < items.length) {
-        const i = next++;
-        out[i] = await fn(items[i], i);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-    return out;
-  }
 
   router.post("/comps/grade", async (req, res) => {
     try {
