@@ -465,7 +465,6 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
 
   /* ---- title ---- */
   layers.push(text(8, 13.6, 84, 3, sp("Letter of Intent to Purchase"), { font: "Source Serif", weight: "bold", size: 34, color: DARK, align: "center", autoFit: true, maxLines: 1 }));
-  layers.push(text(8, 16.8, 84, 2, sp("All-Cash Offer"), { size: 18, color: GOLD, weight: "bold", align: "center" }));
 
   /* ---- meta lines ---- */
   const metaRows = [
@@ -473,7 +472,7 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
     ...(meta.contactName ? [["TO", meta.contactName]] : []),
     ["PROPERTY", inputs.address || "Subject property"],
   ];
-  let y = 20.6;
+  let y = 19.0;
   for (const [k, v] of metaRows) {
     layers.push(text(8, y, 18, 2.4, k, { size: 19, color: FAINT, weight: "bold" }));
     layers.push(text(27, y - 0.15, 65, 2.4, v, { size: 24, color: INK, weight: k === "PROPERTY" ? "bold" : "regular", autoFit: true, maxLines: 1 }));
@@ -494,14 +493,9 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
   layers.push(text(8, y, 84, 2, sp("Purchase Price"), { size: 18, color: MUTED, align: "center" }));
   layers.push(text(8, y + 2.4, 84, 6.6, fmtMoney(cash.amount), { font: "Source Serif", weight: "bold", size: 104, color: DARK, align: "center", autoFit: true, maxLines: 1 }));
   layers.push(text(8, y + 9.3, 84, 2.2, moneyInWords(cash.amount), { size: 21, color: MUTED, align: "center", autoFit: true, maxLines: 1 }));
-  layers.push({
-    id: uid("badge"), type: "badge", x: 27, y: y + 12, width: 46, height: 3.2,
-    icon: "check", text: "ALL CASH",
-    bgColor: "#f4ecd7", textColor: GOLD, fontFamily: "Inter", fontSize: 20, cornerRadius: 999, visible: true,
-  });
 
   /* ---- tentative terms ---- */
-  y += 17.4;
+  y += 14.2;
   layers.push(text(8, y, 84, 2.2, sp("Tentative Terms"), { size: 18, color: GOLD, weight: "bold" }));
   y += 2.9;
   // Per-offer rows when the form supplied them (settings.letterTerms — any
@@ -514,7 +508,7 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
         .slice(0, 7)
     : null;
   const terms = [
-    ["Purchase Price", `${fmtMoney(cash.amount)}, all cash`],
+    ["Purchase Price", fmtMoney(cash.amount)],
     ...(customTerms ?? [
       ["Financing", String(settings.termFinancing || "").trim() || "Funded with cash or private loan"],
       ["Earnest Money", `${fmtMoney(settings.earnestMoney)}, deposited with escrow upon mutual acceptance`],
