@@ -165,6 +165,20 @@ const pgStore = {
     );
     return rows;
   },
+  // Delete all non-imported agents + their listings (reset before a
+  // re-filtered pull). Returns the number of agents removed.
+  async clearOutreachAgents(locationId) {
+    await query(
+      `delete from outreach_listings where location_id = $1 and agent_key in
+         (select agent_key from outreach_agents where location_id = $1 and status <> 'imported')`,
+      [locationId]
+    );
+    const { rowCount } = await query(
+      `delete from outreach_agents where location_id = $1 and status <> 'imported'`,
+      [locationId]
+    );
+    return rowCount;
+  },
   async recordOutreachPull(locationId, doc) {
     await query(`insert into outreach_pulls (id, location_id, doc) values ($1,$2,$3)`, [
       uuid(),
@@ -363,6 +377,20 @@ const fileStore = (() => {
       return Object.values(data.outreachListings).filter(
         (l) => l.locationId === locationId && l.agentKey === agentKey
       );
+    },
+    async clearOutreachAgents(locationId) {
+      ensure();
+      let removed = 0;
+      for (const [k, a] of Object.entries(data.outreachAgents)) {
+        if (a.locationId !== locationId || a.status === "imported") continue;
+        for (const [lk, l] of Object.entries(data.outreachListings)) {
+          if (l.locationId === locationId && l.agentKey === a.agentKey) delete data.outreachListings[lk];
+        }
+        delete data.outreachAgents[k];
+        removed++;
+      }
+      persist();
+      return removed;
     },
     async recordOutreachPull(locationId, doc) {
       ensure();

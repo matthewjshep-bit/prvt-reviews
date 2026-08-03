@@ -127,5 +127,6 @@ export const importOutreachAgents = ({ agentKeys, applyTag = true, dryRun = true
   post(`/api/outreach/import`, { agentKeys, applyTag, dryRun });
 export const setOutreachStatus = (agentKey, status) =>
   post(`/api/outreach/agents/${encodeURIComponent(agentKey)}/status`, { status });
+export const clearOutreach = () => post(`/api/outreach/clear`, {});
 
 export { API_BASE };

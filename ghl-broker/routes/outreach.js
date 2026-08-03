@@ -17,7 +17,7 @@
 import express from "express";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { scoreListing, medianPricePerSqft } from "../outreach-score.js";
+import { scoreListing, medianPricePerSqft, priceCuts } from "../outreach-score.js";
 import { zillowUrl } from "../shared/us-address.js";
 import {
   findDuplicateContact, createContact, getContact, updateContact,
@@ -136,7 +136,12 @@ export default function createOutreachRouter({ resolveLocation }) {
     const daysOld = Math.min(365, Math.max(1, parseInt(body.daysOld, 10) || parseInt(settings.outreachDaysOld, 10) || 180));
     const propertyType = String(body.propertyType || "").trim();
     const maxRequests = Math.min(5, Math.max(1, parseInt(body.maxRequests, 10) || 3));
-    return { zips, city, state, daysOld, propertyType, maxRequests };
+    // Post-fetch filters (applied to the cohort, not the RentCast query):
+    // keep listings within ±N% of the pull's median price, and/or only
+    // below-market ones (price-cut history or cheap $/sqft vs cohort median).
+    const priceBandPct = Math.min(75, Math.max(0, parseInt(body.priceBandPct, 10) || 0));
+    const belowMarketOnly = body.belowMarketOnly === true;
+    return { zips, city, state, daysOld, propertyType, maxRequests, priceBandPct, belowMarketOnly };
   }
 
   async function runPull(locationId, client, body) {
@@ -144,7 +149,8 @@ export default function createOutreachRouter({ resolveLocation }) {
     const apiKey = String(settings.rentcastApiKey || "").trim();
     if (!apiKey) throw Object.assign(new Error("RentCast API key not configured — add it in Settings"), { http: 400 });
 
-    const { zips, city, state, daysOld, propertyType, maxRequests } = pullParams(body, settings);
+    const { zips, city, state, daysOld, propertyType, maxRequests, priceBandPct, belowMarketOnly } =
+      pullParams(body, settings);
     // One RentCast query per zip; else one for city/state.
     const targets = zips.length
       ? zips.map((z) => ({ zipCode: z }))
@@ -188,12 +194,37 @@ export default function createOutreachRouter({ resolveLocation }) {
       }
     }
 
-    // Score against this pull's cohort and group by agent.
+    // Cohort medians come from the FULL pull (pre-filter) so they describe the
+    // market, not the filtered slice.
     const medianPpsf = medianPricePerSqft(listings);
+    const prices = listings.map((l) => Number(l.price)).filter((p) => p > 0).sort((a, b) => a - b);
+    const medianPrice = prices.length
+      ? prices.length % 2 ? prices[(prices.length - 1) / 2] : (prices[prices.length / 2 - 1] + prices[prices.length / 2]) / 2
+      : 0;
+
+    let pool = listings;
+    if (priceBandPct && medianPrice) {
+      const lo = medianPrice * (1 - priceBandPct / 100);
+      const hi = medianPrice * (1 + priceBandPct / 100);
+      const before = pool.length;
+      pool = pool.filter((l) => Number(l.price) >= lo && Number(l.price) <= hi);
+      warnings.push(`price band ±${priceBandPct}% of $${Math.round(medianPrice).toLocaleString()} median kept ${pool.length} of ${before}`);
+    }
+    if (belowMarketOnly) {
+      const before = pool.length;
+      pool = pool.filter((l) => {
+        const cheap =
+          Number(l.price) > 0 && Number(l.squareFootage) > 0 && medianPpsf > 0 &&
+          Number(l.price) / Number(l.squareFootage) <= 0.9 * medianPpsf;
+        return cheap || priceCuts(l).count > 0;
+      });
+      warnings.push(`below-market filter kept ${pool.length} of ${before}`);
+    }
+
     const byAgent = new Map();
     const listingRows = [];
     let droppedNoAgent = 0;
-    for (const l of listings) {
+    for (const l of pool) {
       const idc = agentIdentity(l);
       if (!idc.agentKey) { droppedNoAgent++; continue; }
       const { score, components } = scoreListing(l, { medianPpsf });
@@ -267,14 +298,16 @@ export default function createOutreachRouter({ resolveLocation }) {
     await store.upsertOutreachListings(locationId, listingRows);
     await store.upsertOutreachAgents(locationId, agentRows.map(({ agentKey, doc }) => ({ agentKey, doc })));
     await store.recordOutreachPull(locationId, {
-      params: { targets, daysOld, propertyType, maxRequests },
-      requestsUsed, cached, listingsFetched: listings.length,
+      params: { targets, daysOld, propertyType, maxRequests, priceBandPct, belowMarketOnly },
+      requestsUsed, cached, listingsFetched: listings.length, listingsKept: pool.length,
       agentsTotal: byAgent.size, agentsNew, medianPpsf: Math.round(medianPpsf),
+      medianPrice: Math.round(medianPrice),
     });
 
     return {
       ok: true, cached, requestsUsed,
-      listingsFetched: listings.length,
+      listingsFetched: listings.length, listingsKept: pool.length,
+      medianPrice: Math.round(medianPrice),
       agentsTotal: byAgent.size, agentsNew,
       warnings,
     };
@@ -441,6 +474,19 @@ export default function createOutreachRouter({ resolveLocation }) {
         imported: results.filter((r) => r.ok && r.action).length,
         warnings,
       });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- clear (reset before a re-filtered pull) ---------- */
+
+  // Remove all non-imported agents (and their listings) so the next pull
+  // starts fresh — pulls only ever add/update, so tightening filters would
+  // otherwise leave stale agents in the list. Imported agents are kept.
+  router.post("/clear", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const removed = await store.clearOutreachAgents(locationId);
+      res.json({ ok: true, removed });
     } catch (err) { fail(res, err); }
   });
 

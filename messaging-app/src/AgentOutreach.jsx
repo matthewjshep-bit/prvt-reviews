@@ -7,12 +7,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown, ChevronUp, Download, ExternalLink, EyeOff, Loader2,
-  RefreshCw, RotateCcw, Search, X,
+  RefreshCw, RotateCcw, Search, Trash2, X,
 } from "lucide-react";
 import {
   getOutreachAgents, getAgentListings, pullOutreach, importOutreachAgents,
-  setOutreachStatus, ghlContactUrl,
+  setOutreachStatus, clearOutreach, ghlContactUrl,
 } from "./api.js";
+
+// RentCast propertyType values.
+const PROPERTY_TYPES = ["Single Family", "Condo", "Townhouse", "Multi-Family", "Manufactured", "Land"];
 
 const INPUT_CLS =
   "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
@@ -101,7 +104,11 @@ export default function AgentOutreach({ settings }) {
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
   const [daysOld, setDaysOld] = useState("");
+  const [propertyType, setPropertyType] = useState("Single Family");
+  const [priceBandPct, setPriceBandPct] = useState("0"); // 0 = off
+  const [belowMarketOnly, setBelowMarketOnly] = useState(false);
   const [pulling, setPulling] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [pullMsg, setPullMsg] = useState(null); // { ok, text }
 
   // Import flow.
@@ -159,11 +166,16 @@ export default function AgentOutreach({ settings }) {
       const r = await pullOutreach({
         zipCodes: zips, city, state,
         daysOld: parseInt(daysOld, 10) || undefined,
+        propertyType,
+        priceBandPct: parseInt(priceBandPct, 10) || 0,
+        belowMarketOnly,
       });
+      const kept = r.listingsKept != null && r.listingsKept !== r.listingsFetched
+        ? ` (kept ${r.listingsKept} after filters)` : "";
       setPullMsg({
         ok: true,
         text:
-          `Pulled ${r.listingsFetched} listings → ${r.agentsTotal} agents (${r.agentsNew} new)` +
+          `Pulled ${r.listingsFetched} listings${kept} → ${r.agentsTotal} agents (${r.agentsNew} new)` +
           ` — ${r.requestsUsed} RentCast request${r.requestsUsed === 1 ? "" : "s"}${r.cached ? " (cached)" : ""}` +
           (r.warnings?.length ? ` · ${r.warnings.join(" · ")}` : ""),
       });
@@ -202,6 +214,23 @@ export default function AgentOutreach({ settings }) {
       setImportResult({ error: e.message });
     } finally {
       setImporting(false);
+    }
+  };
+
+  const doClear = async () => {
+    if (!window.confirm("Remove all non-imported agents from the list? Imported agents are kept. Your next pull starts fresh with the current filters.")) return;
+    setClearing(true);
+    setPullMsg(null);
+    try {
+      const r = await clearOutreach();
+      setSelected(new Set());
+      setExpanded("");
+      setPullMsg({ ok: true, text: `Cleared ${r.removed} agent${r.removed === 1 ? "" : "s"}.` });
+      await refresh();
+    } catch (e) {
+      setPullMsg({ ok: false, text: e.message });
+    } finally {
+      setClearing(false);
     }
   };
 
@@ -256,13 +285,46 @@ export default function AgentOutreach({ settings }) {
                 <label className={LABEL_CLS}>Max listing age (days)</label>
                 <input className={INPUT_CLS} type="number" value={daysOld} onChange={(e) => setDaysOld(e.target.value)} />
               </div>
+              <div className="col-span-2 sm:col-span-1">
+                <label className={LABEL_CLS}>Property type</label>
+                <select className={INPUT_CLS} value={propertyType} onChange={(e) => setPropertyType(e.target.value)}>
+                  <option value="">Any</option>
+                  {PROPERTY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div className="col-span-2 sm:col-span-1">
+                <label className={LABEL_CLS} title="Keep only listings near the pull's median price — where the deepest buyer pool is">
+                  Price band (± of median)
+                </label>
+                <select className={INPUT_CLS} value={priceBandPct} onChange={(e) => setPriceBandPct(e.target.value)}>
+                  <option value="0">Off</option>
+                  <option value="25">±25%</option>
+                  <option value="35">±35%</option>
+                  <option value="50">±50%</option>
+                </select>
+              </div>
+              <div className="col-span-2 flex items-end pb-2 sm:col-span-2">
+                <label className="flex items-center gap-1.5 text-sm text-gray-700"
+                  title="Keep only listings priced ≤90% of the area's median $/sqft or that have taken a price cut">
+                  <input type="checkbox" checked={belowMarketOnly} onChange={(e) => setBelowMarketOnly(e.target.checked)} />
+                  Below-market only (cheap $/sqft or price-cut)
+                </label>
+              </div>
             </div>
-            <div className="mt-3 flex items-center gap-3">
-              <button type="button" onClick={doPull} disabled={pulling}
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button type="button" onClick={doPull} disabled={pulling || clearing}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-40">
                 {pulling ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
                 Pull listings
               </button>
+              {agents.length > 0 && (
+                <button type="button" onClick={doClear} disabled={pulling || clearing}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                  title="Remove all non-imported agents so a re-filtered pull starts fresh (imported agents are kept)">
+                  {clearing ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                  Clear list
+                </button>
+              )}
               <span className="text-xs text-gray-400">Zips are used when set; otherwise city + state. Results cache for 24h.</span>
             </div>
             {pullMsg && (
