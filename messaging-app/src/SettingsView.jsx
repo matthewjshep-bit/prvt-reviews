@@ -2,8 +2,9 @@
 // printed on every offer document. Saved server-side per location.
 
 import React, { useEffect, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { DEFAULT_OFFER_SETTINGS, effectiveSettings } from "@shared/offer-calc.js";
+import { CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES } from "@shared/contract-template.js";
 import { saveSettings } from "./api.js";
 
 const INPUT_CLS =
@@ -50,6 +51,30 @@ export default function SettingsView({ settings, onSaved }) {
 
   const set = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, [k]: v })); };
   const setCo = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, company: { ...f.company, [k]: v } })); };
+
+  // Contract clause template. null/empty → the built-in default language; the
+  // first edit materializes a copy into form.contractTemplate (same pattern as
+  // the letter-terms template on the New Offer page).
+  const clauseList = (f) =>
+    Array.isArray(f.contractTemplate) && f.contractTemplate.length
+      ? f.contractTemplate
+      : DEFAULT_CONTRACT_CLAUSES;
+  const clauses = clauseList(form);
+  const clausesAreDefault = !Array.isArray(form.contractTemplate) || !form.contractTemplate.length;
+  const setClauses = (mutate) => {
+    setSaved(false);
+    setForm((f) => ({ ...f, contractTemplate: mutate(clauseList(f).map((c) => ({ ...c }))) }));
+  };
+  const patchClause = (i, k) => (e) => setClauses((list) => { list[i] = { ...list[i], [k]: e.target.value }; return list; });
+  const moveClause = (i, dir) => setClauses((list) => {
+    const j = i + dir;
+    if (j < 0 || j >= list.length) return list;
+    [list[i], list[j]] = [list[j], list[i]];
+    return list;
+  });
+  const removeClause = (i) => setClauses((list) => list.filter((_, x) => x !== i));
+  const addClause = () => setClauses((list) => [...list, { id: `c-${Date.now()}`, title: "", body: "" }]);
+  const resetClauses = () => { setSaved(false); setForm((f) => ({ ...f, contractTemplate: null })); };
 
   async function save() {
     setSaving(true); setError("");
@@ -131,6 +156,57 @@ export default function SettingsView({ settings, onSaved }) {
           <Txt label="Signer" value={form.company.signer} onChange={setCo("signer")} placeholder="Matt Shepherd" />
           <Txt label="Phone" value={form.company.phone} onChange={setCo("phone")} placeholder="(206) 555-0142" />
           <Txt label="Email" value={form.company.email} onChange={setCo("email")} placeholder="matt@prvtmkt.com" />
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-4">
+        <h2 className="mb-1 text-sm font-bold">Purchase &amp; sale contract</h2>
+        <p className="mb-3 text-xs text-gray-500">
+          Clause language for the generated contract (New Offer → result → Generate purchase contract).
+          Clauses are numbered by their position here, so reference other clauses by name ("under the
+          Inspection Period paragraph"), never by number. Not legal advice — have your attorney review
+          your template.
+        </p>
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {CONTRACT_TOKENS.map((t) => (
+            <span key={t.key} className="rounded-full bg-gray-100 px-2 py-0.5 font-mono text-[11px] text-gray-600"
+              title={`${t.label} — filled from the contract form; empty prints a blank line`}>
+              {`{{${t.key}}}`}
+            </span>
+          ))}
+        </div>
+        {clauses.map((c, i) => (
+          <div key={c.id || i} className="mb-2 rounded-lg border border-gray-200 p-2.5">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="w-6 shrink-0 text-right text-xs font-bold text-gray-400">{i + 1}.</span>
+              <input className={INPUT_CLS} value={c.title} onChange={patchClause(i, "title")} placeholder="Clause title" />
+              <button type="button" onClick={() => moveClause(i, -1)} disabled={i === 0}
+                className="rounded p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30" title="Move up">
+                <ChevronUp size={15} />
+              </button>
+              <button type="button" onClick={() => moveClause(i, 1)} disabled={i === clauses.length - 1}
+                className="rounded p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30" title="Move down">
+                <ChevronDown size={15} />
+              </button>
+              <button type="button" onClick={() => removeClause(i)}
+                className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Remove clause">
+                <Trash2 size={15} />
+              </button>
+            </div>
+            <textarea rows={3} className={INPUT_CLS} value={c.body} onChange={patchClause(i, "body")}
+              placeholder="Clause text — use {{tokens}} for the fill-in fields" />
+          </div>
+        ))}
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button type="button" onClick={addClause}
+            className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50">
+            <Plus size={14} /> Add clause
+          </button>
+          <button type="button" onClick={resetClauses} disabled={clausesAreDefault}
+            className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50 disabled:opacity-40"
+            title="Discard edits and go back to the built-in wholesale-friendly language">
+            <RotateCcw size={14} /> Reset to default language
+          </button>
         </div>
       </section>
 

@@ -5,8 +5,9 @@
 import React, { useEffect, useState } from "react";
 import { ExternalLink, FileText, Loader2, Pencil, Search, Send, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { deleteOffer, ghlContactUrl, listOffers, zillowUrl } from "./api.js";
+import { deleteOffer, getSettings, ghlContactUrl, listOffers, zillowUrl } from "./api.js";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
+import ContractModal from "./ContractModal.jsx";
 
 function AttachStatus({ offer }) {
   if (offer.status === "draft") {
@@ -45,7 +46,7 @@ function SentBadge({ offer }) {
   );
 }
 
-function OfferDetail({ offer, onClose, onEdit, onSend }) {
+function OfferDetail({ offer, onClose, onEdit, onSend, onContract }) {
   const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
   const Row = ({ label, value }) => (
     <div className="flex justify-between gap-4 text-sm">
@@ -175,6 +176,19 @@ function OfferDetail({ offer, onClose, onEdit, onSend }) {
                 className="flex items-center gap-2 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50">
                 <FileText size={15} /> Image
               </a>
+              {offer.contractPdfUrl && (
+                <a href={offer.contractPdfUrl} target="_blank" rel="noreferrer"
+                  className="flex items-center gap-2 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50">
+                  <FileText size={15} /> Contract PDF
+                </a>
+              )}
+              {offer.status !== "draft" && (
+                <button type="button" onClick={() => onContract?.(offer)}
+                  className="flex items-center gap-2 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50"
+                  title="Generate or update the purchase & sale contract">
+                  <FileText size={15} /> {offer.contractPdfUrl ? "Update contract" : "Generate contract"}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -188,6 +202,8 @@ export default function OffersHistory({ onEdit }) {
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(null);
   const [sending, setSending] = useState(null);
+  const [contracting, setContracting] = useState(null); // offer open in ContractModal
+  const [settings, setSettings] = useState(null); // fetched lazily for contract prefills
   const [q, setQ] = useState("");
 
   useEffect(() => {
@@ -210,6 +226,20 @@ export default function OffersHistory({ onEdit }) {
     setOffers((list) => (list || []).map(patch));
     setSelected(patch);
     setSending(patch);
+  }
+
+  function openContract(offer) {
+    setContracting(offer);
+    // Buyer-name prefill comes from settings.company; fetch once, best-effort.
+    if (!settings) getSettings().then(setSettings).catch(() => {});
+  }
+
+  // Contract generation updates the whole offer (contractPdfUrl + fields).
+  function handleContractGenerated(updated) {
+    const patch = (o) => (o && o.id === updated.id ? updated : o);
+    setOffers((list) => (list || []).map(patch));
+    setSelected(patch);
+    setContracting(patch);
   }
 
   if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
@@ -306,6 +336,9 @@ export default function OffersHistory({ onEdit }) {
                     {o.imageUrl && (
                       <a href={o.imageUrl} target="_blank" rel="noreferrer" className="underline hover:text-gray-900">Image</a>
                     )}
+                    {o.contractPdfUrl && (
+                      <a href={o.contractPdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-gray-900">Contract</a>
+                    )}
                   </span>
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-xs">
@@ -338,8 +371,11 @@ export default function OffersHistory({ onEdit }) {
       )}
       {selected && <OfferDetail offer={selected} onClose={() => setSelected(null)}
         onEdit={(o) => { setSelected(null); onEdit?.(o); }}
-        onSend={(o) => setSending(o)} />}
+        onSend={(o) => setSending(o)}
+        onContract={openContract} />}
       {sending && <SendModal offer={sending} onClose={() => setSending(null)} onSent={handleSent} />}
+      {contracting && <ContractModal offer={contracting} settings={settings}
+        onClose={() => setContracting(null)} onGenerated={handleContractGenerated} />}
     </>
   );
 }

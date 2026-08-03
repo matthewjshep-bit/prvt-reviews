@@ -20,7 +20,7 @@ const srcDir = path.join(root, "shared");
 
 const targets = [
   { dir: path.join(root, "cardgen", "shared"), files: ["template-schema.js", "bindings.js"] },
-  { dir: path.join(root, "ghl-broker", "shared"), files: ["offer-calc.js", "rehab-catalog.js", "us-address.js"] },
+  { dir: path.join(root, "ghl-broker", "shared"), files: ["offer-calc.js", "rehab-catalog.js", "us-address.js", "contract-template.js"] },
 ];
 
 const banner = "// AUTO-GENERATED COPY of /shared — do NOT edit here.\n// Edit /shared/<file> then run: node scripts/sync-shared.mjs\n\n";

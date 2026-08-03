@@ -104,6 +104,8 @@ export const getOffer = (id) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}?location_id=${loc()}`).then(j).then((r) => r.offer);
 export const deleteOffer = (id) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}?location_id=${loc()}`, { method: "DELETE" }).then(j);
+export const generateContract = (id, fields) =>
+  post(`/api/offers/${encodeURIComponent(id)}/contract`, { fields });
 export const sendOffer = (id, { message = "", dryRun = true, channels, docs, emailSubject } = {}) =>
   post(`/api/offers/${encodeURIComponent(id)}/send`, {
     message,

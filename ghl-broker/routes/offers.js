@@ -13,12 +13,16 @@
 //   GET    /api/offers/:id
 //   DELETE /api/offers/:id
 //   POST   /api/offers/:id/send              send offer docs via text/email
+//   POST   /api/offers/:id/contract          render the purchase & sale contract PDF
+//   GET    /api/offers/:id/contract.pdf
 
 import express from "express";
 import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
-import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument } from "../offer-doc.js";
+import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, moneyInWords } from "../offer-doc.js";
+import { renderContractPdf } from "../contract-pdf.js";
+import { DEFAULT_CONTRACT_CLAUSES } from "../shared/contract-template.js";
 import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
 import { addressQueryVariants, zillowUrl } from "../shared/us-address.js";
 export { zillowUrl };
@@ -224,6 +228,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   router.get("/:id/doc.jpg", serveDoc("image", "OFFER", "jpg"));
   router.get("/:id/scope.pdf", serveDoc("scopepdf", "REHAB SOW", "pdf"));
   router.get("/:id/comps.pdf", serveDoc("compspdf", "COMPS", "pdf"));
+  router.get("/:id/contract.pdf", serveDoc("contractpdf", "CONTRACT", "pdf"));
 
   // Render a companion PDF (Rehab SOW, Comps Analysis) through cardgen and
   // store it next to the offer documents. Accepts one template per page.
@@ -1099,6 +1104,97 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
       await store.deleteOffer(req.params.id);
       res.json({ ok: true });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- purchase & sale contract (text PDF via pdf-lib) ---------- */
+  // Body: { fields: { effectiveDate, buyerName, sellerName, address, price,
+  //         earnestMoney, inspectionDays, closingDate, titleCompany,
+  //         specialProvisions, state, county } }. Renders the location's clause
+  //         template (Settings; falls back to the built-in wholesale-friendly
+  //         default) merged with these fill-ins, stores the PDF next to the
+  //         offer documents, and records the fields on the offer so the form
+  //         rehydrates on regeneration. Empty fields print as signable blanks.
+  router.post("/:id/contract", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const offer = await store.getOffer(req.params.id);
+      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
+
+      const raw = req.body?.fields || {};
+      const str = (k, max = 200) => String(raw[k] ?? "").trim().slice(0, max);
+      const money = (k) => {
+        const n = Number(String(raw[k] ?? "").replace(/[$,\s]/g, ""));
+        return Number.isFinite(n) && n > 0 ? n : 0;
+      };
+      const fields = {
+        effectiveDate: str("effectiveDate"),
+        buyerName: str("buyerName"),
+        sellerName: str("sellerName"),
+        address: str("address"),
+        price: money("price"),
+        earnestMoney: money("earnestMoney"),
+        inspectionDays: Math.max(0, parseInt(raw.inspectionDays, 10) || 0),
+        closingDate: str("closingDate"),
+        titleCompany: str("titleCompany"),
+        specialProvisions: str("specialProvisions", 4000),
+        state: str("state"),
+        county: str("county"),
+      };
+
+      const settings = effectiveSettings(await store.getOfferSettings(locationId));
+      const clauses = Array.isArray(settings.contractTemplate) && settings.contractTemplate.length
+        ? settings.contractTemplate
+        : DEFAULT_CONTRACT_CLAUSES;
+
+      // yyyy-mm-dd (the date inputs) parses as a LOCAL date so the printed
+      // label never drifts a day across timezones; anything else passes
+      // through as typed.
+      const dateText = (v) => {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+        return m ? dateLabel(new Date(+m[1], +m[2] - 1, +m[3])) : v;
+      };
+      const values = {
+        effective_date: dateText(fields.effectiveDate),
+        buyer_name: fields.buyerName,
+        seller_name: fields.sellerName,
+        address: fields.address,
+        price: fields.price ? fmtMoney(fields.price) : "",
+        price_words: fields.price ? moneyInWords(fields.price) : "",
+        earnest_money: fields.earnestMoney ? fmtMoney(fields.earnestMoney) : "",
+        inspection_days: fields.inspectionDays ? String(fields.inspectionDays) : "",
+        closing_date: dateText(fields.closingDate),
+        title_company: fields.titleCompany,
+        special_provisions: fields.specialProvisions,
+        state: fields.state,
+        county: fields.county,
+      };
+
+      const pdf = await renderContractPdf({
+        clauses,
+        values,
+        meta: { buyerName: fields.buyerName, sellerName: fields.sellerName },
+      });
+
+      let url;
+      if (r2Enabled) {
+        url = await uploadAsset(`offers/${locationId}/${offer.id}-contract.pdf`, pdf, "application/pdf", {
+          localDir: uploadDir,
+          localBaseUrl: `${publicBaseUrl}/uploads`,
+          contentDisposition: `inline; filename="${docFilename(offer.address, "CONTRACT", "pdf")}"`,
+        });
+      } else {
+        await store.saveOfferDoc(offer.id, "contractpdf", pdf, "application/pdf");
+        url = `${publicBaseUrl}/api/offers/${offer.id}/contract.pdf`;
+      }
+      // The doc routes serve immutable/long-cache; version the URL so a
+      // regenerated contract isn't hidden behind the old cached copy.
+      url += `${url.includes("?") ? "&" : "?"}v=${Date.now()}`;
+
+      offer.contract = { fields, generatedAt: new Date().toISOString() };
+      offer.contractPdfUrl = url;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
   });
 

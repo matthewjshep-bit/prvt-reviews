@@ -52,6 +52,9 @@ export const DEFAULT_OFFER_SETTINGS = {
   // from ("Save as default template" on the New Offer page). null → the
   // classic five rows built from the term* strings above.
   letterTermsTemplate: null,
+  // Saved Purchase & Sale contract clause template: [{id, title, body}] rows
+  // edited in Settings. null → DEFAULT_CONTRACT_CLAUSES in contract-template.js.
+  contractTemplate: null,
   compsApiKey: "",           // enables the comps map + MLS photos (realestateapi.com API key)
   aiApiKey: "",              // enables the AI rehab photo scan (Anthropic API key)
   apifyToken: "",            // Zillow listing photos via Apify (zillow-detail-scraper)
