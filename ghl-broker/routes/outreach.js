@@ -29,6 +29,9 @@ const OUTREACH_IMPORTS_ENABLED = process.env.OUTREACH_IMPORTS_ENABLED === "true"
 
 // Contact custom fields written on import (created on demand, like OFFER_FIELDS).
 const OUTREACH_FIELDS = [
+  // Pre-existing field in this GHL location (contact.short_hand_property_address)
+  // — matched by key, so the existing definition is reused, not duplicated.
+  { key: "short_hand_property_address", name: "short hand property address", dataType: "TEXT" },
   { key: "hook_address", name: "Hook Address", dataType: "TEXT" },
   { key: "hook_price", name: "Hook Price", dataType: "NUMERICAL" },
   { key: "hook_dom", name: "Hook Days on Market", dataType: "NUMERICAL" },
@@ -441,6 +444,8 @@ export default function createOutreachRouter({ resolveLocation }) {
 
           const hook = a.hook || {};
           const values = {
+            // Street portion only — "1911 9th Ave W, Seattle, WA 98119" → "1911 9th Ave W"
+            short_hand_property_address: String(hook.address || "").split(",")[0].trim(),
             hook_address: hook.address || "",
             hook_price: hook.price || "",
             hook_dom: hook.dom || "",
