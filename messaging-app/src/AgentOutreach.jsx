@@ -377,7 +377,6 @@ export default function AgentOutreach({ settings }) {
                     <th className="px-4 py-2.5 text-center">Listings</th>
                     <th className="px-4 py-2.5">Hook listing</th>
                     <th className="px-4 py-2.5 text-center">Score</th>
-                    <th className="px-4 py-2.5">Status</th>
                     <th className="sticky right-0 bg-white px-4 py-2.5" />
                   </tr>
                 </thead>
@@ -391,7 +390,9 @@ export default function AgentOutreach({ settings }) {
                             onChange={() => toggle(a.agentKey)} />
                         </td>
                         <td className="px-4 py-2.5">
-                          <div className="font-medium">{a.name || "—"}</div>
+                          <div className="flex items-center gap-2 font-medium">
+                            {a.name || "—"} <StatusBadge agent={a} />
+                          </div>
                           <div className="text-xs text-gray-500">
                             {[a.phone, a.email].filter(Boolean).join(" · ") || "no contact info"}
                           </div>
@@ -407,7 +408,6 @@ export default function AgentOutreach({ settings }) {
                         <td className="px-4 py-2.5 text-center">
                           <ScorePill score={a.hook?.score || 0} components={a.hook?.components} />
                         </td>
-                        <td className="whitespace-nowrap px-4 py-2.5"><StatusBadge agent={a} /></td>
                         <td className="sticky right-0 whitespace-nowrap bg-white px-3 py-2.5 text-right group-hover:bg-gray-50">
                           <button type="button"
                             onClick={() => setExpanded(expanded === a.agentKey ? "" : a.agentKey)}
@@ -426,7 +426,7 @@ export default function AgentOutreach({ settings }) {
                       </tr>
                       {expanded === a.agentKey && (
                         <tr className="border-b border-gray-100 bg-gray-50">
-                          <td colSpan={8} className="px-6 py-3">
+                          <td colSpan={7} className="px-6 py-3">
                             <AgentListings agentKey={a.agentKey} />
                           </td>
                         </tr>

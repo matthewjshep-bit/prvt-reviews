@@ -70,6 +70,9 @@ const splitName = (name) => {
   return { firstName: parts[0] || "", lastName: parts.slice(1).join(" ") };
 };
 
+// GHL stores phones as E.164 — send +1XXXXXXXXXX, not bare digits.
+const e164 = (phone) => (phone ? `+1${normPhone(phone)}` : "");
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Retry a GHL call on 429 (2s, then 4s). Other errors propagate.
@@ -382,7 +385,7 @@ export default function createOutreachRouter({ resolveLocation }) {
             // Fill blanks only — never clobber an existing name/phone/email.
             const existing = await withRetry(() => getContact(client, contactId));
             const patch = {};
-            if (!existing.phone && a.phone) patch.phone = a.phone;
+            if (!existing.phone && a.phone) patch.phone = e164(a.phone);
             if (!existing.email && a.email) patch.email = a.email;
             if (!existing.firstName && !existing.lastName && a.name) {
               patch.firstName = a.firstName;
@@ -395,7 +398,7 @@ export default function createOutreachRouter({ resolveLocation }) {
               createContact(client, locationId, {
                 firstName: a.firstName || a.name || "Agent",
                 lastName: a.lastName || "",
-                ...(a.phone ? { phone: a.phone } : {}),
+                ...(a.phone ? { phone: e164(a.phone) } : {}),
                 ...(a.email ? { email: a.email } : {}),
                 source: "agent-outreach",
               })

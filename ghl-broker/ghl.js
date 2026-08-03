@@ -138,8 +138,12 @@ export async function findDuplicateContact(client, locationId, { email, phone })
     } catch { /* fall through */ }
   }
   if (phone) {
+    // GHL stores phones as E.164; a bare 10-digit US number silently fails to
+    // match, so normalize before querying.
+    const digits = String(phone).replace(/\D/g, "");
+    const e164 = digits.length === 10 ? `+1${digits}` : digits.length === 11 && digits.startsWith("1") ? `+${digits}` : phone;
     try {
-      const found = await client.call(`/contacts/search/duplicate?locationId=${loc}&number=${encodeURIComponent(phone)}`);
+      const found = await client.call(`/contacts/search/duplicate?locationId=${loc}&number=${encodeURIComponent(e164)}`);
       if (found?.contact?.id) return { id: found.contact.id, matchedBy: "phone" };
     } catch { /* fall through */ }
   }
