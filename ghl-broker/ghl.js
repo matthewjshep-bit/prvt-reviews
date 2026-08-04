@@ -205,6 +205,22 @@ export async function addContactTags(client, contactId, tags) {
   return data.tags || data;
 }
 
+// Most recent message activity for a contact (any channel). Returns
+// { at: ISO, direction, type } or null. Needs the conversations.readonly
+// scope — callers should treat 401/403 as "scope not granted".
+export async function getLastMessageDate(client, locationId, contactId) {
+  const data = await client.call(
+    `/conversations/search?locationId=${encodeURIComponent(locationId)}&contactId=${encodeURIComponent(contactId)}&limit=1`,
+    { version: V_CONVERSATIONS }
+  );
+  const c = (data.conversations || [])[0];
+  if (!c || !c.lastMessageDate) return null;
+  const ts = Number(c.lastMessageDate);
+  const at = Number.isFinite(ts) && ts > 0 ? new Date(ts) : new Date(c.lastMessageDate);
+  if (Number.isNaN(at.getTime())) return null;
+  return { at: at.toISOString(), direction: c.lastMessageDirection || null, type: c.lastMessageType || null };
+}
+
 /* ---------- messaging ---------- */
 
 export async function sendSms(client, { contactId, message, attachments }) {

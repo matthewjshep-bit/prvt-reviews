@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import {
   getOutreachAgents, getAgentListings, pullOutreach, importOutreachAgents,
-  setOutreachStatus, clearOutreach, ghlContactUrl,
+  setOutreachStatus, clearOutreach, ghlContactUrl, getLocationId, zillowUrl,
 } from "./api.js";
 
 // RentCast propertyType values.
@@ -23,6 +23,29 @@ const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text
 
 const fmtPrice = (n) =>
   n != null && n !== "" ? `$${Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "—";
+
+const fmtAgo = (iso) => {
+  const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  return d <= 0 ? "today" : d === 1 ? "yesterday" : `${d}d ago`;
+};
+
+// Address rendered as a Zillow deep link (falls back to plain text when the
+// address doesn't produce a usable slug).
+function ZLink({ address, className = "" }) {
+  const url = address ? zillowUrl(address) : "";
+  if (!url) return <span className={className}>{address || "—"}</span>;
+  return (
+    <a href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+      className={`underline decoration-gray-300 underline-offset-2 hover:text-gray-900 ${className}`}
+      title="Open on Zillow">
+      {address}
+    </a>
+  );
+}
+
+// Deep link into the offers app (same site, root path) for a saved offer.
+const offerAppUrl = (offerId) =>
+  `/?location_id=${encodeURIComponent(getLocationId())}&offer_id=${encodeURIComponent(offerId)}`;
 
 function StatusBadge({ agent }) {
   if (agent.status === "imported")
@@ -64,7 +87,7 @@ function AgentListings({ agentKey }) {
       {listings.map((l) => (
         <div key={l.listingKey} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-sm">
           <div className="min-w-0">
-            <div className="truncate font-medium">{l.address}</div>
+            <div className="truncate font-medium"><ZLink address={l.address} /></div>
             <div className="text-xs text-gray-500">
               {fmtPrice(l.price)} · {l.daysOnMarket != null ? `${l.daysOnMarket} DOM` : "DOM —"}
               {l.yearBuilt ? ` · built ${l.yearBuilt}` : ""}
@@ -443,11 +466,26 @@ export default function AgentOutreach({ settings }) {
                           <div className="text-xs text-gray-500">
                             {[a.phone, a.email].filter(Boolean).join(" · ") || "no contact info"}
                           </div>
+                          {a.ghl?.lastMessageAt && (
+                            <div className="text-xs text-gray-400" title={new Date(a.ghl.lastMessageAt).toLocaleString()}>
+                              last messaged {fmtAgo(a.ghl.lastMessageAt)}
+                            </div>
+                          )}
+                          {(a.offers || []).map((o) => (
+                            <div key={o.id} className="text-xs">
+                              <a href={offerAppUrl(o.id)} target="_blank" rel="noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-emerald-700 underline decoration-emerald-200 underline-offset-2 hover:text-emerald-900"
+                                title={`Open this offer (${o.address || ""})`}>
+                                Offer {fmtPrice(o.cashAmount)} · {(o.createdAt || "").slice(0, 10)}
+                              </a>
+                            </div>
+                          ))}
                         </td>
                         <td className="max-w-[10rem] truncate px-4 py-2.5 text-gray-600">{a.brokerage || "—"}</td>
                         <td className="px-4 py-2.5 text-center text-gray-600">{a.listingCount}</td>
                         <td className="max-w-[16rem] px-4 py-2.5">
-                          <div className="truncate">{a.hook?.address || "—"}</div>
+                          <div className="truncate"><ZLink address={a.hook?.address} /></div>
                           <div className="text-xs text-gray-500">
                             {fmtPrice(a.hook?.price)} · {a.hook?.dom != null ? `${a.hook.dom} DOM` : "DOM —"}
                           </div>

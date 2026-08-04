@@ -21,7 +21,7 @@ import { scoreListing, medianPricePerSqft, priceCuts } from "../outreach-score.j
 import { zillowUrl } from "../shared/us-address.js";
 import {
   findDuplicateContact, createContact, getContact, updateContact,
-  addContactTags, findOrCreateCustomFieldByKey,
+  addContactTags, findOrCreateCustomFieldByKey, getLastMessageDate,
 } from "../ghl.js";
 
 const OUTREACH_TAG = process.env.OUTREACH_TAG || "agent-outreach";
@@ -298,6 +298,26 @@ export default function createOutreachRouter({ resolveLocation }) {
       }
     });
 
+    // Last message activity for every agent that has a GHL contact (matched or
+    // already imported) — shown in the UI so recently-touched agents stand out.
+    // Needs conversations.readonly; a 401/403 means the scope isn't granted.
+    let convScopeMissing = false;
+    const withContact = agentRows.filter((r) => r.doc.ghl.contactId || r.stored?.contactId);
+    await mapPool(withContact, 3, async (r) => {
+      if (convScopeMissing) return;
+      try {
+        const lm = await withRetry(() =>
+          getLastMessageDate(client, locationId, r.doc.ghl.contactId || r.stored.contactId)
+        );
+        r.doc.ghl.lastMessageAt = lm?.at || null;
+        r.doc.ghl.lastMessageDirection = lm?.direction || null;
+      } catch (e) {
+        if (e.status === 401 || e.status === 403) convScopeMissing = true;
+      }
+    });
+    if (convScopeMissing)
+      warnings.push("last-message dates unavailable — add the conversations.readonly scope to the GHL private integration");
+
     await store.upsertOutreachListings(locationId, listingRows);
     await store.upsertOutreachAgents(locationId, agentRows.map(({ agentKey, doc }) => ({ agentKey, doc })));
     await store.recordOutreachPull(locationId, {
@@ -334,11 +354,50 @@ export default function createOutreachRouter({ resolveLocation }) {
       const rows = await store.listOutreachAgents(locationId, {
         status: String(req.query.status || "") || null,
       });
-      const agents = rows.map((r) => ({
-        agentKey: r.agentKey, status: r.status, contactId: r.contactId,
-        importedAt: r.importedAt, firstSeen: r.firstSeen, lastSeen: r.lastSeen,
-        ...r.doc,
-      }));
+
+      // Join saved offers onto agents: an offer counts as "theirs" when its
+      // property matches one of the agent's listings (street-level compare) or
+      // it's attached to the agent's GHL contact.
+      const normStreet = (s) => String(s || "").split(",")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
+      const offers = await store.listOffers(locationId, { limit: 500 });
+      const offersByStreet = new Map();
+      for (const o of offers) {
+        const k = normStreet(o.address);
+        if (!k) continue;
+        if (!offersByStreet.has(k)) offersByStreet.set(k, []);
+        offersByStreet.get(k).push(o);
+      }
+      const offersByContact = new Map();
+      for (const o of offers) {
+        if (!o.contactId) continue;
+        if (!offersByContact.has(o.contactId)) offersByContact.set(o.contactId, []);
+        offersByContact.get(o.contactId).push(o);
+      }
+      const listingStreetsByAgent = new Map();
+      for (const l of await store.listAllOutreachListings(locationId)) {
+        const k = normStreet(l.doc?.address);
+        if (!k) continue;
+        if (!listingStreetsByAgent.has(l.agentKey)) listingStreetsByAgent.set(l.agentKey, new Set());
+        listingStreetsByAgent.get(l.agentKey).add(k);
+      }
+
+      const agents = rows.map((r) => {
+        const matched = new Map();
+        for (const street of listingStreetsByAgent.get(r.agentKey) || [])
+          for (const o of offersByStreet.get(street) || []) matched.set(o.id, o);
+        const cid = r.contactId || r.doc?.ghl?.contactId;
+        for (const o of offersByContact.get(cid) || []) matched.set(o.id, o);
+        const agentOffers = [...matched.values()]
+          .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+          .slice(0, 5)
+          .map((o) => ({ id: o.id, address: o.address, cashAmount: o.cashAmount, createdAt: o.createdAt }));
+        return {
+          agentKey: r.agentKey, status: r.status, contactId: r.contactId,
+          importedAt: r.importedAt, firstSeen: r.firstSeen, lastSeen: r.lastSeen,
+          ...r.doc,
+          offers: agentOffers,
+        };
+      });
 
       // Month-to-date RentCast request usage (free tier = 50/month).
       const pulls = await store.listOutreachPulls(locationId, { limit: 50 });

@@ -165,6 +165,14 @@ const pgStore = {
     );
     return rows;
   },
+  async listAllOutreachListings(locationId) {
+    const { rows } = await query(
+      `select listing_key as "listingKey", agent_key as "agentKey", doc
+       from outreach_listings where location_id = $1`,
+      [locationId]
+    );
+    return rows;
+  },
   // Delete all non-imported agents + their listings (reset before a
   // re-filtered pull). Returns the number of agents removed.
   async clearOutreachAgents(locationId) {
@@ -377,6 +385,10 @@ const fileStore = (() => {
       return Object.values(data.outreachListings).filter(
         (l) => l.locationId === locationId && l.agentKey === agentKey
       );
+    },
+    async listAllOutreachListings(locationId) {
+      ensure();
+      return Object.values(data.outreachListings).filter((l) => l.locationId === locationId);
     },
     async clearOutreachAgents(locationId) {
       ensure();
