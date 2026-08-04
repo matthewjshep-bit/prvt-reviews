@@ -90,6 +90,7 @@ function AgentListings({ agentKey }) {
             <div className="truncate font-medium"><ZLink address={l.address} /></div>
             <div className="text-xs text-gray-500">
               {fmtPrice(l.price)} · {l.daysOnMarket != null ? `${l.daysOnMarket} DOM` : "DOM —"}
+              {l.propertyType ? ` · ${l.propertyType}` : ""}
               {l.yearBuilt ? ` · built ${l.yearBuilt}` : ""}
               {l.sqft ? ` · ${Number(l.sqft).toLocaleString()} sqft` : ""}
             </div>
@@ -334,7 +335,10 @@ export default function AgentOutreach({ settings }) {
                   Clear list
                 </button>
               )}
-              <span className="text-xs text-gray-400">Zips are used when set; otherwise city + state. Results cache for 24h.</span>
+              <span className="text-xs text-gray-400">
+                Filters apply when you pull — the list below keeps agents from earlier pulls until you Clear list.
+                Zips are used when set; otherwise city + state. Same-filter re-pulls are cached 24h.
+              </span>
             </div>
             {pullMsg && (
               <div className={`mt-3 rounded-lg px-3 py-2 text-sm ${pullMsg.ok ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700"}`}>
@@ -488,6 +492,7 @@ export default function AgentOutreach({ settings }) {
                           <div className="truncate"><ZLink address={a.hook?.address} /></div>
                           <div className="text-xs text-gray-500">
                             {fmtPrice(a.hook?.price)} · {a.hook?.dom != null ? `${a.hook.dom} DOM` : "DOM —"}
+                            {a.hook?.propertyType ? ` · ${a.hook.propertyType}` : ""}
                           </div>
                         </td>
                         <td className="sticky right-0 whitespace-nowrap bg-white px-3 py-2.5 text-right group-hover:bg-gray-50">

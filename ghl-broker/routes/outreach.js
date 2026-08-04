@@ -275,7 +275,8 @@ export default function createOutreachRouter({ resolveLocation }) {
           ghl: stored?.doc?.ghl || { contactId: null, matchedBy: null, checkedAt: null },
           hook: {
             listingKey: hook.listingKey, address: hook.address, price: hook.price,
-            dom: hook.daysOnMarket, score: hook.score, components: hook.components,
+            dom: hook.daysOnMarket, propertyType: hook.propertyType,
+            score: hook.score, components: hook.components,
           },
           listingCount: g.listings.length,
         },
