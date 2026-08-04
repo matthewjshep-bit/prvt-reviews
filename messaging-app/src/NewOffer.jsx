@@ -2,10 +2,10 @@
 // offers → generate the document and attach everything to the GHL contact.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronUp, FileText, Loader2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ExternalLink, FileText, Loader2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
 import { calculateOffers, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
-  addContactNote, createOffer, getContactDetail, getContactNotes, previewDocument, saveDraft, saveSettings, searchContacts, suggestAddresses, zillowUrl,
+  addContactNote, createOffer, getContactDetail, getContactNotes, ghlContactUrl, previewDocument, saveDraft, saveSettings, searchContacts, suggestAddresses, zillowUrl,
 } from "./api.js";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
@@ -142,10 +142,13 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
         selected ? (
           <>
             <div className="flex items-center justify-between rounded-lg bg-gray-100 px-3 py-2">
-              <div>
-                <div className="text-sm font-semibold">{selected.name || "(no name)"}</div>
+              <a href={ghlContactUrl(selected.id)} target="_blank" rel="noreferrer" title="Open contact in GHL"
+                className="group -mx-1 rounded px-1 hover:bg-gray-200">
+                <div className="inline-flex items-center gap-1 text-sm font-semibold group-hover:underline">
+                  {selected.name || "(no name)"} <ExternalLink size={12} className="text-gray-400" />
+                </div>
                 <div className="text-xs text-gray-500">{[selected.phone, selected.email].filter(Boolean).join(" · ")}</div>
-              </div>
+              </a>
               <button type="button" onClick={() => onSelect(null)} className="rounded p-1 text-gray-400 hover:bg-gray-200">
                 <X size={16} />
               </button>
@@ -605,7 +608,16 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       <div className="space-y-4">
         <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-4">
           <div className="text-sm font-bold text-emerald-900">
-            Offer created for {offer.contactName || "contact"} — {offer.address || "property"}
+            Offer created for{" "}
+            {offer.contactId ? (
+              <a href={ghlContactUrl(offer.contactId)} target="_blank" rel="noreferrer" title="Open contact in GHL"
+                className="inline-flex items-center gap-1 underline hover:text-emerald-700">
+                {offer.contactName || "contact"} <ExternalLink size={12} />
+              </a>
+            ) : (
+              offer.contactName || "contact"
+            )}{" "}
+            — {offer.address || "property"}
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
             <Badge ok={ghl.fields} label="Custom fields" />

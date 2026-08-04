@@ -24,19 +24,6 @@ const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text
 const fmtPrice = (n) =>
   n != null && n !== "" ? `$${Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "—";
 
-function ScorePill({ score, components }) {
-  const cls =
-    score >= 70 ? "bg-red-100 text-red-700" : score >= 40 ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600";
-  const tip = (components || [])
-    .map((c) => `${c.label}: ${c.points}/${c.max} — ${c.detail}`)
-    .join("\n");
-  return (
-    <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${cls}`} title={tip}>
-      {score}
-    </span>
-  );
-}
-
 function StatusBadge({ agent }) {
   if (agent.status === "imported")
     return (
@@ -84,7 +71,6 @@ function AgentListings({ agentKey }) {
               {l.sqft ? ` · ${Number(l.sqft).toLocaleString()} sqft` : ""}
             </div>
           </div>
-          <ScorePill score={l.score || 0} components={l.components} />
         </div>
       ))}
     </div>
@@ -438,7 +424,6 @@ export default function AgentOutreach({ settings }) {
                     <th className="px-4 py-2.5">Brokerage</th>
                     <th className="px-4 py-2.5 text-center">Listings</th>
                     <th className="px-4 py-2.5">Hook listing</th>
-                    <th className="px-4 py-2.5 text-center">Score</th>
                     <th className="sticky right-0 bg-white px-4 py-2.5" />
                   </tr>
                 </thead>
@@ -467,9 +452,6 @@ export default function AgentOutreach({ settings }) {
                             {fmtPrice(a.hook?.price)} · {a.hook?.dom != null ? `${a.hook.dom} DOM` : "DOM —"}
                           </div>
                         </td>
-                        <td className="px-4 py-2.5 text-center">
-                          <ScorePill score={a.hook?.score || 0} components={a.hook?.components} />
-                        </td>
                         <td className="sticky right-0 whitespace-nowrap bg-white px-3 py-2.5 text-right group-hover:bg-gray-50">
                           <button type="button"
                             onClick={() => setExpanded(expanded === a.agentKey ? "" : a.agentKey)}
@@ -488,7 +470,7 @@ export default function AgentOutreach({ settings }) {
                       </tr>
                       {expanded === a.agentKey && (
                         <tr className="border-b border-gray-100 bg-gray-50">
-                          <td colSpan={7} className="px-6 py-3">
+                          <td colSpan={6} className="px-6 py-3">
                             <AgentListings agentKey={a.agentKey} />
                           </td>
                         </tr>
