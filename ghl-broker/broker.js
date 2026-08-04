@@ -6,6 +6,7 @@
 import express from "express";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { makeClient } from "./ghl.js";
 import createOffersRouter from "./routes/offers.js";
@@ -28,10 +29,35 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "uploads");
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-// --- single-tenant token resolution. Swap this for a per-location lookup
-//     (DB/KV keyed by locationId holding OAuth access+refresh tokens) later. ---
-function getTokenFor(_locationId) {
-  return GHL_TOKEN;
+// --- per-location token resolution. GHL_TOKENS is a JSON map of
+//     locationId -> Private Integration token, one entry per tenant:
+//       GHL_TOKENS={"PvdeT4y...":"pit-...","AbCdEf...":"pit-..."}
+//     The legacy GHL_TOKEN/GHL_LOCATION_ID pair still works as a fallback. ---
+function parseEnvJson(name) {
+  try {
+    return JSON.parse(process.env[name] || "{}");
+  } catch (e) {
+    console.error(`ignoring malformed ${name}: ${e.message}`);
+    return {};
+  }
+}
+const GHL_TOKENS = parseEnvJson("GHL_TOKENS");
+// Optional per-location access keys: locationId -> shared secret. When a key is
+// set for a location, every request must carry it (?location_key= / body) — the
+// secret rides in the GHL custom-menu-link URL, so only people inside that GHL
+// account have it. Locations without an entry are unaffected.
+const GHL_LOCATION_KEYS = parseEnvJson("GHL_LOCATION_KEYS");
+
+function getTokenFor(locationId) {
+  if (GHL_TOKENS[locationId]) return GHL_TOKENS[locationId];
+  if (GHL_TOKEN && (!ALLOWED_LOCATION || locationId === ALLOWED_LOCATION)) return GHL_TOKEN;
+  return "";
+}
+
+function timingSafeEq(a, b) {
+  const ab = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
 
 const app = express();
@@ -66,17 +92,22 @@ function resolveLocation(req) {
     e.http = 400;
     throw e;
   }
-  if (ALLOWED_LOCATION && loc !== ALLOWED_LOCATION) {
-    // The single token only works for one location; reject spoofed IDs.
+  const token = getTokenFor(loc);
+  if (!token) {
+    // Unknown location — a token only exists for onboarded tenants, so this
+    // also rejects spoofed IDs.
     const e = new Error("location not permitted");
     e.http = 403;
     throw e;
   }
-  const token = getTokenFor(loc);
-  if (!token) {
-    const e = new Error("no token configured for this location");
-    e.http = 500;
-    throw e;
+  const requiredKey = GHL_LOCATION_KEYS[loc];
+  if (requiredKey) {
+    const got = req.query.location_key || req.body?.location_key || "";
+    if (!timingSafeEq(got, requiredKey)) {
+      const e = new Error("bad or missing location key");
+      e.http = 403;
+      throw e;
+    }
   }
   return { locationId: loc, client: makeClient(token) };
 }

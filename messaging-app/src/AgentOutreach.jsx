@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import {
   getOutreachAgents, getAgentListings, pullOutreach, importOutreachAgents,
-  setOutreachStatus, clearOutreach, ghlContactUrl, getLocationId, zillowUrl,
+  setOutreachStatus, clearOutreach, ghlContactUrl, getLocationId, getLocationKey, zillowUrl,
 } from "./api.js";
 
 // RentCast propertyType values.
@@ -44,8 +44,13 @@ function ZLink({ address, className = "" }) {
 }
 
 // Deep link into the offers app (same site, root path) for a saved offer.
-const offerAppUrl = (offerId) =>
-  `/?location_id=${encodeURIComponent(getLocationId())}&offer_id=${encodeURIComponent(offerId)}`;
+// Carries the ?key= access key through so key-protected locations still work.
+const offerAppUrl = (offerId) => {
+  const p = new URLSearchParams({ location_id: getLocationId(), offer_id: offerId });
+  const key = getLocationKey();
+  if (key) p.set("key", key);
+  return `/?${p}`;
+};
 
 // Condo/apartment detection for the hook listing: RentCast's propertyType when
 // present, plus an address-suffix heuristic (Apt/Unit/Ste/#) — unit-numbered

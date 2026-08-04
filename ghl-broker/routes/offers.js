@@ -40,12 +40,19 @@ const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
 const OFFER_TAG = process.env.OFFER_TAG || "offer-created";
 const APP_ORIGIN = (process.env.APP_ORIGIN || "").replace(/\/$/, "");
 
+// Per-location access keys (enforced in broker.js resolveLocation) — deep
+// links must carry the key or they'd 403 for key-protected locations.
+let LOCATION_KEYS = {};
+try { LOCATION_KEYS = JSON.parse(process.env.GHL_LOCATION_KEYS || "{}"); } catch { /* broker.js logs it */ }
+
 // Deep link into the offer app scoped to one contact (clickable from the GHL
 // contact panel). Empty when APP_ORIGIN isn't configured.
-const offerAppLink = (locationId, contactId) =>
-  APP_ORIGIN
-    ? `${APP_ORIGIN}/?location_id=${encodeURIComponent(locationId)}&contact_id=${encodeURIComponent(contactId)}`
-    : "";
+const offerAppLink = (locationId, contactId) => {
+  if (!APP_ORIGIN) return "";
+  const p = new URLSearchParams({ location_id: locationId, contact_id: contactId });
+  if (LOCATION_KEYS[locationId]) p.set("key", LOCATION_KEYS[locationId]);
+  return `${APP_ORIGIN}/?${p}`;
+};
 
 // Best property address among a contact's custom fields (mirrors the app's
 // prefill logic: "…address…short…" first, then property-address, then any).

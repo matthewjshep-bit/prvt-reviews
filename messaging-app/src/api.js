@@ -11,7 +11,24 @@ export function getLocationId() {
     return "";
   }
 }
-const loc = () => encodeURIComponent(getLocationId());
+
+// Optional per-location access key: the GHL menu-link URL may carry ?key=,
+// which the broker verifies when one is configured for the location.
+export function getLocationKey() {
+  try {
+    return new URLSearchParams(window.location.search).get("key") || "";
+  } catch {
+    return "";
+  }
+}
+
+// Location-scope query fragment: "location_id=...&location_key=...".
+const locq = () => {
+  const p = new URLSearchParams({ location_id: getLocationId() });
+  const key = getLocationKey();
+  if (key) p.set("location_key", key);
+  return p.toString();
+};
 
 async function j(res) {
   if (!res.ok) {
@@ -36,39 +53,44 @@ const post = (path, body, method = "POST") =>
   fetch(`${API_BASE}${path}`, {
     method,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ location_id: getLocationId(), ...body }),
+    body: JSON.stringify({
+      location_id: getLocationId(),
+      ...(getLocationKey() ? { location_key: getLocationKey() } : {}),
+      ...body,
+    }),
   }).then(j);
 
 /* ---------- settings ---------- */
 export const getSettings = () =>
-  fetch(`${API_BASE}/api/offers/settings?location_id=${loc()}`).then(j).then((r) => r.settings);
+  fetch(`${API_BASE}/api/offers/settings?${locq()}`).then(j).then((r) => r.settings);
 export const saveSettings = (settings) => post(`/api/offers/settings`, { settings }, "PUT");
 
 /* ---------- contacts ---------- */
 export const searchContacts = (query) =>
-  fetch(`${API_BASE}/api/offers/contacts?location_id=${loc()}&query=${encodeURIComponent(query)}`)
+  fetch(`${API_BASE}/api/offers/contacts?${locq()}&query=${encodeURIComponent(query)}`)
     .then(j)
     .then((r) => r.contacts);
 export const getContactDetail = (id) =>
-  fetch(`${API_BASE}/api/offers/contacts/${encodeURIComponent(id)}?location_id=${loc()}`)
+  fetch(`${API_BASE}/api/offers/contacts/${encodeURIComponent(id)}?${locq()}`)
     .then(j)
     .then((r) => r.contact);
 export const getContactNotes = (id) =>
-  fetch(`${API_BASE}/api/offers/contacts/${encodeURIComponent(id)}/notes?location_id=${loc()}`)
+  fetch(`${API_BASE}/api/offers/contacts/${encodeURIComponent(id)}/notes?${locq()}`)
     .then(j)
     .then((r) => r.notes);
 export const addContactNote = (id, body) =>
   post(`/api/offers/contacts/${encodeURIComponent(id)}/notes`, { body });
 export const suggestAddresses = (query) =>
-  fetch(`${API_BASE}/api/offers/address-suggest?location_id=${loc()}&query=${encodeURIComponent(query)}`)
+  fetch(`${API_BASE}/api/offers/address-suggest?${locq()}&query=${encodeURIComponent(query)}`)
     .then(j)
     .then((r) => r.suggestions);
 export const geocode = (query) =>
-  fetch(`${API_BASE}/api/offers/geocode?location_id=${loc()}&query=${encodeURIComponent(query)}`)
+  fetch(`${API_BASE}/api/offers/geocode?${locq()}&query=${encodeURIComponent(query)}`)
     .then(j)
     .then((r) => r.result);
 export const getComps = (address, { sqft, months, beds, baths } = {}) => {
-  const p = new URLSearchParams({ location_id: getLocationId(), address });
+  const p = new URLSearchParams(locq());
+  p.set("address", address);
   if (sqft) p.set("sqft", sqft);
   if (months) p.set("months", months);
   if (beds) p.set("beds", beds);
@@ -96,14 +118,15 @@ export const scanRehab = (address, { beds, baths, sqft, yearBuilt, images } = {}
 export const gradeComps = (address, comps) =>
   post(`/api/offers/comps/grade`, { address, comps });
 export const listOffers = ({ contactId = "", limit = 50 } = {}) => {
-  const p = new URLSearchParams({ location_id: getLocationId(), limit });
+  const p = new URLSearchParams(locq());
+  p.set("limit", limit);
   if (contactId) p.set("contact_id", contactId);
   return fetch(`${API_BASE}/api/offers?${p}`).then(j).then((r) => r.offers);
 };
 export const getOffer = (id) =>
-  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}?location_id=${loc()}`).then(j).then((r) => r.offer);
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}?${locq()}`).then(j).then((r) => r.offer);
 export const deleteOffer = (id) =>
-  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}?location_id=${loc()}`, { method: "DELETE" }).then(j);
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}?${locq()}`, { method: "DELETE" }).then(j);
 export const generateContract = (id, fields) =>
   post(`/api/offers/${encodeURIComponent(id)}/contract`, { fields });
 export const sendOffer = (id, { message = "", dryRun = true, channels, docs, emailSubject } = {}) =>
@@ -117,9 +140,9 @@ export const sendOffer = (id, { message = "", dryRun = true, channels, docs, ema
 
 /* ---------- agent outreach ---------- */
 export const getOutreachAgents = () =>
-  fetch(`${API_BASE}/api/outreach/agents?location_id=${loc()}`).then(j);
+  fetch(`${API_BASE}/api/outreach/agents?${locq()}`).then(j);
 export const getAgentListings = (agentKey) =>
-  fetch(`${API_BASE}/api/outreach/agents/${encodeURIComponent(agentKey)}/listings?location_id=${loc()}`)
+  fetch(`${API_BASE}/api/outreach/agents/${encodeURIComponent(agentKey)}/listings?${locq()}`)
     .then(j)
     .then((r) => r.listings);
 export const pullOutreach = (params = {}) => post(`/api/outreach/pull`, params);
