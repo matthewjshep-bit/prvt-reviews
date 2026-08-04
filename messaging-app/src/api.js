@@ -139,17 +139,30 @@ export const sendOffer = (id, { message = "", dryRun = true, channels, docs, ema
   });
 
 /* ---------- agent outreach ---------- */
-export const getOutreachAgents = () =>
-  fetch(`${API_BASE}/api/outreach/agents?${locq()}`).then(j);
-export const getAgentListings = (agentKey) =>
-  fetch(`${API_BASE}/api/outreach/agents/${encodeURIComponent(agentKey)}/listings?${locq()}`)
+// Agents/listings are scoped to a batch (a saved pull cohort). batchId is
+// optional everywhere — the server falls back to the most recent batch.
+const batchQ = (batchId) => (batchId ? `&batch_id=${encodeURIComponent(batchId)}` : "");
+
+export const getOutreachBatches = () =>
+  fetch(`${API_BASE}/api/outreach/batches?${locq()}`).then(j).then((r) => r.batches);
+export const createOutreachBatch = (name) =>
+  post(`/api/outreach/batches`, name ? { name } : {}).then((r) => r.batch);
+export const renameOutreachBatch = (batchId, name) =>
+  post(`/api/outreach/batches/${encodeURIComponent(batchId)}/rename`, { name }).then((r) => r.batch);
+export const deleteOutreachBatch = (batchId) =>
+  fetch(`${API_BASE}/api/outreach/batches/${encodeURIComponent(batchId)}?${locq()}`, { method: "DELETE" }).then(j);
+
+export const getOutreachAgents = (batchId) =>
+  fetch(`${API_BASE}/api/outreach/agents?${locq()}${batchQ(batchId)}`).then(j);
+export const getAgentListings = (agentKey, batchId) =>
+  fetch(`${API_BASE}/api/outreach/agents/${encodeURIComponent(agentKey)}/listings?${locq()}${batchQ(batchId)}`)
     .then(j)
     .then((r) => r.listings);
 export const pullOutreach = (params = {}) => post(`/api/outreach/pull`, params);
-export const importOutreachAgents = ({ agentKeys, applyTag = true, dryRun = true }) =>
-  post(`/api/outreach/import`, { agentKeys, applyTag, dryRun });
-export const setOutreachStatus = (agentKey, status) =>
-  post(`/api/outreach/agents/${encodeURIComponent(agentKey)}/status`, { status });
-export const clearOutreach = () => post(`/api/outreach/clear`, {});
+export const importOutreachAgents = ({ agentKeys, applyTag = true, dryRun = true, batchId }) =>
+  post(`/api/outreach/import`, { agentKeys, applyTag, dryRun, ...(batchId ? { batchId } : {}) });
+export const setOutreachStatus = (agentKey, status, batchId) =>
+  post(`/api/outreach/agents/${encodeURIComponent(agentKey)}/status`, { status, ...(batchId ? { batchId } : {}) });
+export const clearOutreach = (batchId) => post(`/api/outreach/clear`, batchId ? { batchId } : {});
 
 export { API_BASE };

@@ -80,6 +80,32 @@ create table if not exists outreach_pulls (
 );
 create index if not exists outreach_pulls_loc_idx on outreach_pulls (location_id, created_at desc);
 
+-- Agent Outreach batches: a saved, named cohort of agents. Pulls land in a
+-- batch; the GHL import tag derives from the batch name.
+create table if not exists outreach_batches (
+  id           uuid primary key,
+  location_id  text not null,
+  name         text not null,
+  auto_named   boolean not null default true,  -- false once the user renames
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+create index if not exists outreach_batches_loc_idx on outreach_batches (location_id, created_at desc);
+
+-- Batch-scope agents + listings (each batch is an independent snapshot).
+-- Legacy rows (batch_id null) are adopted into an "Earlier pulls" batch by
+-- store init right after this file runs, so app code always has a batch_id.
+alter table outreach_agents   add column if not exists batch_id uuid;
+alter table outreach_listings add column if not exists batch_id uuid;
+alter table outreach_agents   drop constraint if exists outreach_agents_location_id_agent_key_key;
+alter table outreach_listings drop constraint if exists outreach_listings_location_id_listing_key_key;
+create unique index if not exists outreach_agents_batch_agent_uniq
+  on outreach_agents (location_id, batch_id, agent_key);
+create unique index if not exists outreach_listings_batch_listing_uniq
+  on outreach_listings (location_id, batch_id, listing_key);
+create index if not exists outreach_agents_batch_idx on outreach_agents (location_id, batch_id, last_seen desc);
+create index if not exists outreach_listings_batch_idx2 on outreach_listings (location_id, batch_id, agent_key);
+
 -- The pre-overhaul Card Studio / Home tables (templates, template_versions,
 -- renders, assets, connections, home_sends, campaigns, journeys,
 -- journey_enrollments, data_source_tests) are no longer used. They are left

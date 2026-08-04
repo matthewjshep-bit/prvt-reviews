@@ -22,6 +22,22 @@ const uuid = () => crypto.randomUUID();
 const pgStore = {
   async init() {
     await migrate();
+    // Adopt pre-batch outreach rows (batch_id null) into one "Earlier pulls"
+    // batch per location. Idempotent: after the first run no null rows remain.
+    try {
+      const { rows } = await query(
+        `select distinct location_id as "locationId" from outreach_agents where batch_id is null
+         union
+         select distinct location_id from outreach_listings where batch_id is null`
+      );
+      for (const { locationId } of rows) {
+        const batch = await this.createOutreachBatch(locationId, { name: "Earlier pulls", autoNamed: false });
+        await query(`update outreach_agents set batch_id = $2 where location_id = $1 and batch_id is null`, [locationId, batch.id]);
+        await query(`update outreach_listings set batch_id = $2 where location_id = $1 and batch_id is null`, [locationId, batch.id]);
+      }
+    } catch (e) {
+      console.error("store: legacy outreach batch adoption failed:", e.message);
+    }
   },
 
   /* ---- offers ---- */
@@ -93,97 +109,148 @@ const pgStore = {
     return doc;
   },
 
-  /* ---- agent outreach ---- */
+  /* ---- agent outreach batches ---- */
+  async createOutreachBatch(locationId, { name, autoNamed = true } = {}) {
+    const id = uuid();
+    const ts = nowIso();
+    await query(
+      `insert into outreach_batches (id, location_id, name, auto_named, created_at, updated_at)
+       values ($1,$2,$3,$4,$5,$5)`,
+      [id, locationId, name, autoNamed, ts]
+    );
+    return { id, name, autoNamed, createdAt: ts };
+  },
+  async listOutreachBatches(locationId) {
+    const { rows } = await query(
+      `select b.id, b.name, b.auto_named as "autoNamed", b.created_at as "createdAt",
+              count(a.id)::int as "agentCount",
+              (count(a.id) filter (where a.status = 'imported'))::int as "importedCount"
+       from outreach_batches b
+       left join outreach_agents a on a.location_id = b.location_id and a.batch_id = b.id
+       where b.location_id = $1
+       group by b.id
+       order by b.created_at desc`,
+      [locationId]
+    );
+    return rows;
+  },
+  async getOutreachBatch(locationId, batchId) {
+    const { rows } = await query(
+      `select id, name, auto_named as "autoNamed", created_at as "createdAt"
+       from outreach_batches where location_id = $1 and id = $2`,
+      [locationId, batchId]
+    );
+    return rows[0] || null;
+  },
+  async renameOutreachBatch(locationId, batchId, name, { autoNamed = false } = {}) {
+    const { rowCount } = await query(
+      `update outreach_batches set name = $3, auto_named = $4, updated_at = now()
+       where location_id = $1 and id = $2`,
+      [locationId, batchId, name, autoNamed]
+    );
+    return rowCount > 0;
+  },
+  async deleteOutreachBatch(locationId, batchId) {
+    await query(`delete from outreach_listings where location_id = $1 and batch_id = $2`, [locationId, batchId]);
+    const { rowCount } = await query(
+      `delete from outreach_agents where location_id = $1 and batch_id = $2`,
+      [locationId, batchId]
+    );
+    await query(`delete from outreach_batches where location_id = $1 and id = $2`, [locationId, batchId]);
+    return { removedAgents: rowCount };
+  },
+
+  /* ---- agent outreach (all rows scoped to a batch) ---- */
   // Upserts replace doc + bump last_seen but never touch the lifecycle
   // columns (status, contact_id, imported_at, first_seen).
-  async upsertOutreachAgents(locationId, agents) {
+  async upsertOutreachAgents(locationId, batchId, agents) {
     for (const a of agents) {
       await query(
-        `insert into outreach_agents (id, location_id, agent_key, doc)
-         values ($1,$2,$3,$4)
-         on conflict (location_id, agent_key)
+        `insert into outreach_agents (id, location_id, batch_id, agent_key, doc)
+         values ($1,$2,$3,$4,$5)
+         on conflict (location_id, batch_id, agent_key)
          do update set doc = excluded.doc, last_seen = now()`,
-        [uuid(), locationId, a.agentKey, a.doc]
+        [uuid(), locationId, batchId, a.agentKey, a.doc]
       );
     }
   },
-  async listOutreachAgents(locationId, { status = null, limit = 1000 } = {}) {
+  async listOutreachAgents(locationId, { batchId, status = null, limit = 1000 } = {}) {
     const { rows } = status
       ? await query(
           `select agent_key as "agentKey", status, contact_id as "contactId",
                   imported_at as "importedAt", first_seen as "firstSeen", last_seen as "lastSeen", doc
-           from outreach_agents where location_id = $1 and status = $2
-           order by last_seen desc limit $3`,
-          [locationId, status, limit]
+           from outreach_agents where location_id = $1 and batch_id = $2 and status = $3
+           order by last_seen desc limit $4`,
+          [locationId, batchId, status, limit]
         )
       : await query(
           `select agent_key as "agentKey", status, contact_id as "contactId",
                   imported_at as "importedAt", first_seen as "firstSeen", last_seen as "lastSeen", doc
-           from outreach_agents where location_id = $1
-           order by last_seen desc limit $2`,
-          [locationId, limit]
+           from outreach_agents where location_id = $1 and batch_id = $2
+           order by last_seen desc limit $3`,
+          [locationId, batchId, limit]
         );
     return rows;
   },
-  async getOutreachAgent(locationId, agentKey) {
+  async getOutreachAgent(locationId, batchId, agentKey) {
     const { rows } = await query(
       `select agent_key as "agentKey", status, contact_id as "contactId",
               imported_at as "importedAt", first_seen as "firstSeen", last_seen as "lastSeen", doc
-       from outreach_agents where location_id = $1 and agent_key = $2`,
-      [locationId, agentKey]
+       from outreach_agents where location_id = $1 and batch_id = $2 and agent_key = $3`,
+      [locationId, batchId, agentKey]
     );
     return rows[0] || null;
   },
-  async setOutreachAgentStatus(locationId, agentKey, { status, contactId, importedAt } = {}) {
+  async setOutreachAgentStatus(locationId, batchId, agentKey, { status, contactId, importedAt } = {}) {
     const { rowCount } = await query(
       `update outreach_agents
-       set status = coalesce($3, status),
-           contact_id = coalesce($4, contact_id),
-           imported_at = coalesce($5, imported_at)
-       where location_id = $1 and agent_key = $2`,
-      [locationId, agentKey, status || null, contactId || null, importedAt || null]
+       set status = coalesce($4, status),
+           contact_id = coalesce($5, contact_id),
+           imported_at = coalesce($6, imported_at)
+       where location_id = $1 and batch_id = $2 and agent_key = $3`,
+      [locationId, batchId, agentKey, status || null, contactId || null, importedAt || null]
     );
     return rowCount > 0;
   },
-  async upsertOutreachListings(locationId, listings) {
+  async upsertOutreachListings(locationId, batchId, listings) {
     for (const l of listings) {
       await query(
-        `insert into outreach_listings (id, location_id, listing_key, agent_key, doc)
-         values ($1,$2,$3,$4,$5)
-         on conflict (location_id, listing_key)
+        `insert into outreach_listings (id, location_id, batch_id, listing_key, agent_key, doc)
+         values ($1,$2,$3,$4,$5,$6)
+         on conflict (location_id, batch_id, listing_key)
          do update set doc = excluded.doc, agent_key = excluded.agent_key, last_seen = now()`,
-        [uuid(), locationId, l.listingKey, l.agentKey, l.doc]
+        [uuid(), locationId, batchId, l.listingKey, l.agentKey, l.doc]
       );
     }
   },
-  async listOutreachListings(locationId, { agentKey } = {}) {
+  async listOutreachListings(locationId, { batchId, agentKey } = {}) {
     const { rows } = await query(
       `select listing_key as "listingKey", agent_key as "agentKey",
               first_seen as "firstSeen", last_seen as "lastSeen", doc
-       from outreach_listings where location_id = $1 and agent_key = $2`,
-      [locationId, agentKey]
+       from outreach_listings where location_id = $1 and batch_id = $2 and agent_key = $3`,
+      [locationId, batchId, agentKey]
     );
     return rows;
   },
-  async listAllOutreachListings(locationId) {
+  async listAllOutreachListings(locationId, { batchId } = {}) {
     const { rows } = await query(
       `select listing_key as "listingKey", agent_key as "agentKey", doc
-       from outreach_listings where location_id = $1`,
-      [locationId]
+       from outreach_listings where location_id = $1 and batch_id = $2`,
+      [locationId, batchId]
     );
     return rows;
   },
-  // Delete all non-imported agents + their listings (reset before a
-  // re-filtered pull). Returns the number of agents removed.
-  async clearOutreachAgents(locationId) {
+  // Delete the batch's non-imported agents + their listings. Returns the
+  // number of agents removed.
+  async clearOutreachAgents(locationId, batchId) {
     await query(
-      `delete from outreach_listings where location_id = $1 and agent_key in
-         (select agent_key from outreach_agents where location_id = $1 and status <> 'imported')`,
-      [locationId]
+      `delete from outreach_listings where location_id = $1 and batch_id = $2 and agent_key in
+         (select agent_key from outreach_agents where location_id = $1 and batch_id = $2 and status <> 'imported')`,
+      [locationId, batchId]
     );
     const { rowCount } = await query(
-      `delete from outreach_agents where location_id = $1 and status <> 'imported'`,
-      [locationId]
+      `delete from outreach_agents where location_id = $1 and batch_id = $2 and status <> 'imported'`,
+      [locationId, batchId]
     );
     return rowCount;
   },
@@ -231,8 +298,38 @@ const fileStore = (() => {
       data.outreachAgents = data.outreachAgents || {};
       data.outreachListings = data.outreachListings || {};
       data.outreachPulls = data.outreachPulls || [];
+      data.outreachBatches = data.outreachBatches || {};
+      adoptLegacyOutreachRows();
     }
     return data;
+  };
+  // Adopt pre-batch rows (no batchId) into one "Earlier pulls" batch per
+  // location, re-keying "<loc>|<key>" entries to "<loc>|<batchId>|<key>".
+  const adoptLegacyOutreachRows = () => {
+    const legacyBatchByLoc = {};
+    const batchFor = (locationId) => {
+      if (!legacyBatchByLoc[locationId]) {
+        const id = uuid();
+        data.outreachBatches[id] = {
+          id, locationId, name: "Earlier pulls", autoNamed: false,
+          createdAt: nowIso(), updatedAt: nowIso(),
+        };
+        legacyBatchByLoc[locationId] = id;
+      }
+      return legacyBatchByLoc[locationId];
+    };
+    let touched = false;
+    for (const bucket of ["outreachAgents", "outreachListings"]) {
+      for (const [k, row] of Object.entries(data[bucket])) {
+        if (row.batchId) continue;
+        row.batchId = batchFor(row.locationId);
+        delete data[bucket][k];
+        const key = bucket === "outreachAgents" ? row.agentKey : row.listingKey;
+        data[bucket][`${row.locationId}|${row.batchId}|${key}`] = row;
+        touched = true;
+      }
+    }
+    if (touched) persist();
   };
   const persist = () => {
     clearTimeout(writeTimer);
@@ -322,17 +419,75 @@ const fileStore = (() => {
       return doc;
     },
 
-    /* ---- agent outreach (rows keyed "<locationId>|<key>") ---- */
-    async upsertOutreachAgents(locationId, agents) {
+    /* ---- agent outreach batches ---- */
+    async createOutreachBatch(locationId, { name, autoNamed = true } = {}) {
+      ensure();
+      const id = uuid();
+      const ts = nowIso();
+      data.outreachBatches[id] = { id, locationId, name, autoNamed, createdAt: ts, updatedAt: ts };
+      persist();
+      return { id, name, autoNamed, createdAt: ts };
+    },
+    async listOutreachBatches(locationId) {
+      ensure();
+      const agents = Object.values(data.outreachAgents);
+      return Object.values(data.outreachBatches)
+        .filter((b) => b.locationId === locationId)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .map((b) => {
+          const mine = agents.filter((a) => a.locationId === locationId && a.batchId === b.id);
+          return {
+            id: b.id, name: b.name, autoNamed: b.autoNamed, createdAt: b.createdAt,
+            agentCount: mine.length,
+            importedCount: mine.filter((a) => a.status === "imported").length,
+          };
+        });
+    },
+    async getOutreachBatch(locationId, batchId) {
+      ensure();
+      const b = data.outreachBatches[batchId];
+      return b && b.locationId === locationId
+        ? { id: b.id, name: b.name, autoNamed: b.autoNamed, createdAt: b.createdAt }
+        : null;
+    },
+    async renameOutreachBatch(locationId, batchId, name, { autoNamed = false } = {}) {
+      ensure();
+      const b = data.outreachBatches[batchId];
+      if (!b || b.locationId !== locationId) return false;
+      b.name = name;
+      b.autoNamed = autoNamed;
+      b.updatedAt = nowIso();
+      persist();
+      return true;
+    },
+    async deleteOutreachBatch(locationId, batchId) {
+      ensure();
+      let removedAgents = 0;
+      for (const bucket of ["outreachListings", "outreachAgents"]) {
+        for (const [k, row] of Object.entries(data[bucket])) {
+          if (row.locationId === locationId && row.batchId === batchId) {
+            delete data[bucket][k];
+            if (bucket === "outreachAgents") removedAgents++;
+          }
+        }
+      }
+      delete data.outreachBatches[batchId];
+      persist();
+      return { removedAgents };
+    },
+
+    /* ---- agent outreach (rows keyed "<locationId>|<batchId>|<key>") ---- */
+    async upsertOutreachAgents(locationId, batchId, agents) {
       ensure();
       for (const a of agents) {
-        const k = `${locationId}|${a.agentKey}`;
+        const k = `${locationId}|${batchId}|${a.agentKey}`;
         const prev = data.outreachAgents[k];
         data.outreachAgents[k] = prev
           ? { ...prev, doc: a.doc, lastSeen: nowIso() }
           : {
               agentKey: a.agentKey,
               locationId,
+              batchId,
               status: "new",
               contactId: null,
               importedAt: null,
@@ -343,20 +498,20 @@ const fileStore = (() => {
       }
       persist();
     },
-    async listOutreachAgents(locationId, { status = null, limit = 1000 } = {}) {
+    async listOutreachAgents(locationId, { batchId, status = null, limit = 1000 } = {}) {
       ensure();
       return Object.values(data.outreachAgents)
-        .filter((a) => a.locationId === locationId && (!status || a.status === status))
+        .filter((a) => a.locationId === locationId && a.batchId === batchId && (!status || a.status === status))
         .sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""))
         .slice(0, limit);
     },
-    async getOutreachAgent(locationId, agentKey) {
+    async getOutreachAgent(locationId, batchId, agentKey) {
       ensure();
-      return data.outreachAgents[`${locationId}|${agentKey}`] || null;
+      return data.outreachAgents[`${locationId}|${batchId}|${agentKey}`] || null;
     },
-    async setOutreachAgentStatus(locationId, agentKey, { status, contactId, importedAt } = {}) {
+    async setOutreachAgentStatus(locationId, batchId, agentKey, { status, contactId, importedAt } = {}) {
       ensure();
-      const row = data.outreachAgents[`${locationId}|${agentKey}`];
+      const row = data.outreachAgents[`${locationId}|${batchId}|${agentKey}`];
       if (!row) return false;
       if (status) row.status = status;
       if (contactId) row.contactId = contactId;
@@ -364,14 +519,15 @@ const fileStore = (() => {
       persist();
       return true;
     },
-    async upsertOutreachListings(locationId, listings) {
+    async upsertOutreachListings(locationId, batchId, listings) {
       ensure();
       for (const l of listings) {
-        const k = `${locationId}|${l.listingKey}`;
+        const k = `${locationId}|${batchId}|${l.listingKey}`;
         const prev = data.outreachListings[k];
         data.outreachListings[k] = {
           listingKey: l.listingKey,
           locationId,
+          batchId,
           agentKey: l.agentKey,
           firstSeen: prev?.firstSeen || nowIso(),
           lastSeen: nowIso(),
@@ -380,23 +536,26 @@ const fileStore = (() => {
       }
       persist();
     },
-    async listOutreachListings(locationId, { agentKey } = {}) {
+    async listOutreachListings(locationId, { batchId, agentKey } = {}) {
       ensure();
       return Object.values(data.outreachListings).filter(
-        (l) => l.locationId === locationId && l.agentKey === agentKey
+        (l) => l.locationId === locationId && l.batchId === batchId && l.agentKey === agentKey
       );
     },
-    async listAllOutreachListings(locationId) {
+    async listAllOutreachListings(locationId, { batchId } = {}) {
       ensure();
-      return Object.values(data.outreachListings).filter((l) => l.locationId === locationId);
+      return Object.values(data.outreachListings).filter(
+        (l) => l.locationId === locationId && l.batchId === batchId
+      );
     },
-    async clearOutreachAgents(locationId) {
+    async clearOutreachAgents(locationId, batchId) {
       ensure();
       let removed = 0;
       for (const [k, a] of Object.entries(data.outreachAgents)) {
-        if (a.locationId !== locationId || a.status === "imported") continue;
+        if (a.locationId !== locationId || a.batchId !== batchId || a.status === "imported") continue;
         for (const [lk, l] of Object.entries(data.outreachListings)) {
-          if (l.locationId === locationId && l.agentKey === a.agentKey) delete data.outreachListings[lk];
+          if (l.locationId === locationId && l.batchId === batchId && l.agentKey === a.agentKey)
+            delete data.outreachListings[lk];
         }
         delete data.outreachAgents[k];
         removed++;

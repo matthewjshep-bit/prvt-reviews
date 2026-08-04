@@ -7,11 +7,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown, ChevronUp, Download, ExternalLink, EyeOff, Loader2,
-  RefreshCw, RotateCcw, Search, Trash2, X,
+  Pencil, Plus, RefreshCw, RotateCcw, Search, Trash2, X,
 } from "lucide-react";
 import {
   getOutreachAgents, getAgentListings, pullOutreach, importOutreachAgents,
-  setOutreachStatus, clearOutreach, ghlContactUrl, getLocationId, getLocationKey, zillowUrl,
+  setOutreachStatus, clearOutreach, getOutreachBatches, createOutreachBatch,
+  renameOutreachBatch, deleteOutreachBatch,
+  ghlContactUrl, getLocationId, getLocationKey, zillowUrl,
 } from "./api.js";
 
 // RentCast propertyType values.
@@ -90,12 +92,12 @@ function StatusBadge({ agent }) {
 }
 
 // Expanded row: the agent's listings ranked by fixer score.
-function AgentListings({ agentKey }) {
+function AgentListings({ agentKey, batchId }) {
   const [listings, setListings] = useState(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    getAgentListings(agentKey).then(setListings).catch((e) => setError(e.message));
-  }, [agentKey]);
+    getAgentListings(agentKey, batchId).then(setListings).catch((e) => setError(e.message));
+  }, [agentKey, batchId]);
   if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
   if (!listings) return <div className="flex justify-center p-4"><Loader2 size={18} className="animate-spin text-gray-400" /></div>;
   return (
@@ -118,8 +120,19 @@ function AgentListings({ agentKey }) {
 }
 
 export default function AgentOutreach({ settings }) {
-  const [data, setData] = useState(null); // { enabled, agents, tag, importsEnabled, usage }
+  const [data, setData] = useState(null); // { enabled, agents, tag, importsEnabled, batch, usage }
   const [error, setError] = useState("");
+
+  // Batches (saved pull cohorts). Active selection sticks per location.
+  const BATCH_LS = `outreach.batch.${getLocationId()}`;
+  const [batches, setBatches] = useState(null);
+  const [batchId, setBatchId] = useState(() => {
+    try { return localStorage.getItem(BATCH_LS) || ""; } catch { return ""; }
+  });
+  const [renaming, setRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [batchBusy, setBatchBusy] = useState(false);
+  const activeBatch = (batches || []).find((b) => b.id === batchId) || null;
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all"); // all | new | inghl | imported | skipped
   const [kindFilter, setKindFilter] = useState("all"); // all | house | condo
@@ -155,8 +168,31 @@ export default function AgentOutreach({ settings }) {
     setDaysOld((d) => d || String(settings.outreachDaysOld || 180));
   }, [settings]);
 
-  const refresh = () => getOutreachAgents().then(setData).catch((e) => setError(e.message));
-  useEffect(() => { refresh(); }, []);
+  const refresh = (bid = batchId) => getOutreachAgents(bid).then(setData).catch((e) => setError(e.message));
+
+  // Load batches once, then keep the active id honest: stick with the saved
+  // one when it still exists, else fall back to the most recent.
+  const loadBatches = async () => {
+    const list = await getOutreachBatches();
+    setBatches(list);
+    setBatchId((cur) => (list.some((b) => b.id === cur) ? cur : list[0]?.id || ""));
+    return list;
+  };
+  useEffect(() => { loadBatches().catch((e) => setError(e.message)); }, []);
+  useEffect(() => {
+    try { localStorage.setItem(BATCH_LS, batchId || ""); } catch { /* ignore */ }
+  }, [batchId]);
+
+  // (Re)load the batch's agents once batches are known; switching batches
+  // resets everything scoped to the previous one.
+  useEffect(() => {
+    if (batches === null) return;
+    setSelected(new Set());
+    setExpanded("");
+    setPreview(null);
+    setImportResult(null);
+    refresh(batchId);
+  }, [batchId, batches === null]);
 
   const agents = data?.agents || [];
   const shown = useMemo(() => {
@@ -211,21 +247,74 @@ export default function AgentOutreach({ settings }) {
         propertyType,
         priceBandPct: parseInt(priceBandPct, 10) || 0,
         belowMarketOnly,
+        ...(batchId ? { batchId } : {}),
       });
       const kept = r.listingsKept != null && r.listingsKept !== r.listingsFetched
         ? ` (kept ${r.listingsKept} after filters)` : "";
       setPullMsg({
         ok: true,
         text:
-          `Pulled ${r.listingsFetched} listings${kept} → ${r.agentsTotal} agents (${r.agentsNew} new)` +
+          `Pulled ${r.listingsFetched} listings${kept} into "${r.batchName}" → ${r.agentsTotal} agents (${r.agentsNew} new)` +
           ` — ${r.requestsUsed} RentCast request${r.requestsUsed === 1 ? "" : "s"}${r.cached ? " (cached)" : ""}` +
           (r.warnings?.length ? ` · ${r.warnings.join(" · ")}` : ""),
       });
-      await refresh();
+      // The server may have created or renamed the batch (first pull).
+      setBatchId(r.batchId);
+      await loadBatches();
+      await refresh(r.batchId);
     } catch (e) {
       setPullMsg({ ok: false, text: e.message });
     } finally {
       setPulling(false);
+    }
+  };
+
+  const doNewBatch = async () => {
+    setBatchBusy(true);
+    setPullMsg(null);
+    try {
+      const b = await createOutreachBatch();
+      await loadBatches();
+      setBatchId(b.id);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
+  const doRenameBatch = async () => {
+    const name = renameDraft.trim();
+    setRenaming(false);
+    if (!name || !batchId || name === activeBatch?.name) return;
+    setBatchBusy(true);
+    try {
+      await renameOutreachBatch(batchId, name);
+      await loadBatches();
+      await refresh(batchId); // picks up the renamed batch's new import tag
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
+  const doDeleteBatch = async () => {
+    if (!activeBatch) return;
+    const n = activeBatch.agentCount;
+    if (!window.confirm(
+      `Delete batch "${activeBatch.name}" and its ${n} agent${n === 1 ? "" : "s"}? ` +
+      `Contacts already imported to GoHighLevel are not affected.`
+    )) return;
+    setBatchBusy(true);
+    setPullMsg(null);
+    try {
+      await deleteOutreachBatch(batchId);
+      await loadBatches(); // falls back to the most recent remaining batch
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBatchBusy(false);
     }
   };
 
@@ -234,7 +323,7 @@ export default function AgentOutreach({ settings }) {
     setPreview(null);
     setImportResult(null);
     try {
-      setPreview(await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: true }));
+      setPreview(await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: true, batchId }));
     } catch (e) {
       setPreview({ error: e.message });
     } finally {
@@ -244,14 +333,19 @@ export default function AgentOutreach({ settings }) {
 
   const doImport = async () => {
     const n = selected.size;
-    if (!window.confirm(`Import ${n} agent${n === 1 ? "" : "s"} to GoHighLevel${applyTag ? ` and apply the "${data?.tag}" tag (starts outreach)` : ""}?`)) return;
+    const batchTag = data?.batch?.tag || "";
+    if (!window.confirm(
+      `Import ${n} agent${n === 1 ? "" : "s"} to GoHighLevel with batch tag "${batchTag}"` +
+      `${applyTag ? ` and the "${data?.tag}" trigger tag (starts outreach)` : " (no trigger tag — start the automation manually)"}?`
+    )) return;
     setImporting(true);
     try {
-      const r = await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: false });
+      const r = await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: false, batchId });
       setImportResult(r);
       setPreview(null);
       if (!r.dryRun) setSelected(new Set());
       await refresh();
+      await loadBatches(); // imported counts changed
     } catch (e) {
       setImportResult({ error: e.message });
     } finally {
@@ -260,15 +354,16 @@ export default function AgentOutreach({ settings }) {
   };
 
   const doClear = async () => {
-    if (!window.confirm("Remove all non-imported agents from the list? Imported agents are kept. Your next pull starts fresh with the current filters.")) return;
+    if (!window.confirm(`Remove all non-imported agents from "${activeBatch?.name || "this batch"}"? Imported agents are kept. Your next pull into it starts fresh with the current filters.`)) return;
     setClearing(true);
     setPullMsg(null);
     try {
-      const r = await clearOutreach();
+      const r = await clearOutreach(batchId);
       setSelected(new Set());
       setExpanded("");
       setPullMsg({ ok: true, text: `Cleared ${r.removed} agent${r.removed === 1 ? "" : "s"}.` });
       await refresh();
+      await loadBatches();
     } catch (e) {
       setPullMsg({ ok: false, text: e.message });
     } finally {
@@ -278,7 +373,7 @@ export default function AgentOutreach({ settings }) {
 
   const skip = async (agent, undo) => {
     try {
-      await setOutreachStatus(agent.agentKey, undo ? "new" : "skipped");
+      await setOutreachStatus(agent.agentKey, undo ? "new" : "skipped", batchId);
       const next = new Set(selected);
       next.delete(agent.agentKey);
       setSelected(next);
@@ -304,6 +399,55 @@ export default function AgentOutreach({ settings }) {
             {usage.requestsThisMonth || 0} / 50 RentCast requests this month
           </div>
         </div>
+
+        {/* ---- batch picker ---- */}
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Batch</span>
+          {renaming ? (
+            <input autoFocus value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") doRenameBatch();
+                if (e.key === "Escape") setRenaming(false);
+              }}
+              onBlur={doRenameBatch}
+              className="w-64 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-gray-900 focus:outline-none" />
+          ) : (
+            <select value={batchId} onChange={(e) => setBatchId(e.target.value)}
+              disabled={batchBusy || !batches?.length}
+              className="max-w-[24rem] rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none">
+              {(batches || []).map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name} — {b.agentCount} agent{b.agentCount === 1 ? "" : "s"} ({b.importedCount} imported)
+                </option>
+              ))}
+              {!batches?.length && <option value="">No batches yet — pull to create one</option>}
+            </select>
+          )}
+          <button type="button" onClick={doNewBatch} disabled={batchBusy}
+            className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40">
+            <Plus size={13} /> New batch
+          </button>
+          {activeBatch && !renaming && (
+            <button type="button" disabled={batchBusy}
+              onClick={() => { setRenameDraft(activeBatch.name); setRenaming(true); }}
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40">
+              <Pencil size={13} /> Rename
+            </button>
+          )}
+          {activeBatch && (
+            <button type="button" onClick={doDeleteBatch} disabled={batchBusy}
+              title="Delete this batch and its agents (imported GHL contacts are unaffected)"
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-40">
+              {batchBusy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Delete
+            </button>
+          )}
+          {data.batch?.tag && (
+            <span className="text-xs text-gray-400" title="GHL tag applied to every contact imported from this batch">
+              Import tag: {data.batch.tag}
+            </span>
+          )}
+        </div>
+
         {!data.enabled ? (
           <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-400">
             Add your RentCast API key in Settings to enable Agent Outreach.
@@ -362,13 +506,13 @@ export default function AgentOutreach({ settings }) {
               {agents.length > 0 && (
                 <button type="button" onClick={doClear} disabled={pulling || clearing}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-                  title="Remove all non-imported agents so a re-filtered pull starts fresh (imported agents are kept)">
+                  title="Remove this batch's non-imported agents so a re-filtered pull starts fresh (imported agents are kept)">
                   {clearing ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                  Clear list
+                  Clear non-imported
                 </button>
               )}
               <span className="text-xs text-gray-400">
-                Filters apply when you pull — the list below keeps agents from earlier pulls until you Clear list.
+                Pulls add to the selected batch — create a New batch for a fresh list.
                 Zips are used when set; otherwise city + state. Same-filter re-pulls are cached 24h.
               </span>
             </div>
@@ -426,6 +570,9 @@ export default function AgentOutreach({ settings }) {
                   <input type="checkbox" checked={applyTag} onChange={(e) => setApplyTag(e.target.checked)} />
                   Apply "{data.tag}" tag (starts the outreach texts)
                 </label>
+                <span className="text-xs text-gray-500">
+                  Each import also gets this batch's tag ({data.batch?.tag})
+                </span>
                 <div className="ml-auto flex gap-2">
                   <button type="button" onClick={doPreview} disabled={previewing || importing}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40">
@@ -465,7 +612,7 @@ export default function AgentOutreach({ settings }) {
                       <span className={importResult.dryRun ? "text-amber-800" : "text-emerald-800"}>
                         {importResult.dryRun
                           ? "Server ran a dry-run (imports disabled) — nothing was written."
-                          : `Imported ${importResult.imported} agent${importResult.imported === 1 ? "" : "s"}.`}
+                          : `Imported ${importResult.imported} agent${importResult.imported === 1 ? "" : "s"} with batch tag "${importResult.batchTag}".`}
                       </span>
                       {importResult.results.filter((r) => !r.ok).map((r) => (
                         <div key={r.agentKey} className="mt-1 text-xs text-red-700">{r.agentKey}: {r.error}</div>
@@ -557,7 +704,7 @@ export default function AgentOutreach({ settings }) {
                       {expanded === a.agentKey && (
                         <tr className="border-b border-gray-100 bg-gray-50">
                           <td colSpan={6} className="px-6 py-3">
-                            <AgentListings agentKey={a.agentKey} />
+                            <AgentListings agentKey={a.agentKey} batchId={batchId} />
                           </td>
                         </tr>
                       )}
@@ -572,7 +719,7 @@ export default function AgentOutreach({ settings }) {
 
       {data.enabled && agents.length === 0 && (
         <div className="rounded-xl border border-dashed border-gray-300 p-10 text-center text-sm text-gray-400">
-          No agents yet — pull listings above to get started.
+          {activeBatch ? `No agents in "${activeBatch.name}" yet — pull listings above.` : "No agents yet — pull listings above to get started."}
         </div>
       )}
     </div>

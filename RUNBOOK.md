@@ -82,22 +82,30 @@ comma-separated `APP_ORIGIN`.
 The Agent Outreach tab pulls active MLS listings from RentCast, groups them by
 listing agent (each agent's most-fixer-like listing becomes the outreach
 "hook"), flags agents already in GHL, and bulk-imports selected agents as
-contacts.
+contacts. Every pull lands in a **batch** — a saved, named cohort you can
+switch between, rename, and delete from the batch picker (auto-named
+"zips · date"; renaming changes future import tags).
 
 1. Settings → "Agent Outreach (RentCast)" → paste a RentCast API key
    (rentcast.io/api, free Developer tier = 50 requests/month) and set the
    default market (zips or city/state).
 2. The first import auto-creates the contact custom fields (`hook_address`,
-   `hook_price`, `hook_dom`, `hook_url`, `brokerage`) and applies the
-   `agent-outreach` tag (override with `OUTREACH_TAG`).
-3. Build a GHL workflow triggered on that tag to send the actual outreach
-   (reference the hook fields in the message; set re-entry OFF).
+   `hook_price`, `hook_dom`, `hook_url`, `brokerage`) and tags each contact
+   with the batch's tag (`agent-outreach-<batch-name-slug>` — always applied)
+   plus the `agent-outreach` trigger tag when the checkbox is on (override the
+   base with `OUTREACH_TAG`).
+3. Build a GHL workflow triggered on the trigger tag to send the actual
+   outreach (reference the hook fields in the message; set re-entry OFF) — or
+   leave the checkbox off and add contacts to the workflow manually by
+   filtering on the batch tag.
 4. Live imports require `OUTREACH_IMPORTS_ENABLED=true` on the broker;
    otherwise every import is a dry-run preview.
 5. Pulls are manual (button) today. For a nightly sync later, add a Render
    Cron Job: `curl -fsS -X POST "$BROKER_URL/api/outreach/pull" -H
    'Content-Type: application/json' -d '{"location_id":"<LOCATION>"}'` —
-   the endpoint defaults its market params from Settings.
+   the endpoint defaults its market params from Settings and lands in the
+   most recent batch (auto-creating one if none exists); pass `"batchId"` to
+   target a specific batch.
 
 ## Safety rails
 

@@ -4,11 +4,19 @@
 // import selected agents as GHL contacts (custom fields + tag — the tag fires
 // the outreach workflow inside GHL). Mounted at /api/outreach.
 //
-//   GET  /api/outreach/agents                        saved agents + request-meter usage
+//   GET  /api/outreach/batches                       saved batches (named pull cohorts)
+//   POST /api/outreach/batches                       create a batch
+//   POST /api/outreach/batches/:batchId/rename       rename (changes the import tag)
+//   DELETE /api/outreach/batches/:batchId            delete batch + its agents/listings
+//   GET  /api/outreach/agents                        one batch's agents + request-meter usage
 //   GET  /api/outreach/agents/:agentKey/listings     one agent's listings, ranked
-//   POST /api/outreach/pull                          fetch + score + persist (manual now, cron later)
+//   POST /api/outreach/pull                          fetch + score + persist into a batch
 //   POST /api/outreach/import                        bulk import to GHL (dry-run by default)
 //   POST /api/outreach/agents/:agentKey/status       skip / unskip
+//
+// Agents and listings are scoped to a BATCH (a saved, named pull cohort);
+// batchId/batch_id defaults to the most recent batch so the cron pull keeps
+// working without one. The GHL import tag derives from the batch name.
 //
 // RentCast is billed per REQUEST (up to 500 listings each, free tier 50/mo),
 // so pulls carry a hard request budget and a 24h cache, and every pull is
@@ -127,6 +135,39 @@ export default function createOutreachRouter({ resolveLocation }) {
     return (await store.getOfferSettings(locationId)) || {};
   }
 
+  /* ---------- batches ---------- */
+
+  const sanitizeTag = (s) =>
+    String(s || "").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  // Stable GHL tag for a batch, derived from its name: batch "Queen Anne
+  // fixers" → "agent-outreach-queen-anne-fixers". Same tag across every import
+  // session from the batch.
+  const batchTagFor = (batch) => sanitizeTag(`${OUTREACH_TAG}-${batch.name}`) || OUTREACH_TAG;
+
+  const shortDate = () => new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  // "98119, 98109 · Aug 4"  /  "Seattle, WA · Aug 4"
+  function autoBatchName({ zips, city, state }) {
+    const market = zips?.length
+      ? zips.slice(0, 3).join(", ") + (zips.length > 3 ? ` +${zips.length - 3}` : "")
+      : [city, state].filter(Boolean).join(", ") || "Pull";
+    return `${market} · ${shortDate()}`;
+  }
+
+  // Resolve the batch a request operates on: explicit id must exist (404);
+  // otherwise the most recent batch; otherwise create one when createName is
+  // given (the pull path — keeps the batchless cron POST working), else null.
+  async function resolveBatch(locationId, batchId, { createName = null } = {}) {
+    if (batchId) {
+      const b = await store.getOutreachBatch(locationId, String(batchId));
+      if (!b) throw Object.assign(new Error("unknown batch"), { http: 404 });
+      return b;
+    }
+    const [latest] = await store.listOutreachBatches(locationId);
+    if (latest) return latest;
+    if (createName) return store.createOutreachBatch(locationId, { name: createName, autoNamed: true });
+    return null;
+  }
+
   /* ---------- pull ---------- */
 
   // Resolve pull targets from the request body, falling back to the location's
@@ -161,6 +202,20 @@ export default function createOutreachRouter({ resolveLocation }) {
         ? [{ city, state }]
         : null;
     if (!targets) throw Object.assign(new Error("no market configured — set zip codes or city/state"), { http: 400 });
+
+    // Every pull lands in a batch: explicit batchId, else most recent, else a
+    // fresh auto-named one. An untouched auto-named empty batch adopts this
+    // pull's market · date name.
+    const batch = await resolveBatch(locationId, body.batchId, {
+      createName: autoBatchName({ zips, city, state }),
+    });
+    if (batch.autoNamed) {
+      const existing = await store.listOutreachAgents(locationId, { batchId: batch.id, limit: 1 });
+      if (!existing.length) {
+        batch.name = autoBatchName({ zips, city, state });
+        await store.renameOutreachBatch(locationId, batch.id, batch.name, { autoNamed: true });
+      }
+    }
 
     const warnings = [];
     const common = { daysOld: String(daysOld), ...(propertyType ? { propertyType } : {}) };
@@ -259,7 +314,7 @@ export default function createOutreachRouter({ resolveLocation }) {
     const agentRows = [];
     let agentsNew = 0;
     for (const [agentKey, g] of byAgent) {
-      const stored = await store.getOutreachAgent(locationId, agentKey);
+      const stored = await store.getOutreachAgent(locationId, batch.id, agentKey);
       if (!stored) agentsNew++;
       const officePhone = normPhone(
         listings.find((l) => agentIdentity(l).agentKey === agentKey)?.listingOffice?.phone
@@ -319,9 +374,10 @@ export default function createOutreachRouter({ resolveLocation }) {
     if (convScopeMissing)
       warnings.push("last-message dates unavailable — add the conversations.readonly scope to the GHL private integration");
 
-    await store.upsertOutreachListings(locationId, listingRows);
-    await store.upsertOutreachAgents(locationId, agentRows.map(({ agentKey, doc }) => ({ agentKey, doc })));
+    await store.upsertOutreachListings(locationId, batch.id, listingRows);
+    await store.upsertOutreachAgents(locationId, batch.id, agentRows.map(({ agentKey, doc }) => ({ agentKey, doc })));
     await store.recordOutreachPull(locationId, {
+      batchId: batch.id,
       params: { targets, daysOld, propertyType, maxRequests, priceBandPct, belowMarketOnly },
       requestsUsed, cached, listingsFetched: listings.length, listingsKept: pool.length,
       agentsTotal: byAgent.size, agentsNew, medianPpsf: Math.round(medianPpsf),
@@ -330,6 +386,7 @@ export default function createOutreachRouter({ resolveLocation }) {
 
     return {
       ok: true, cached, requestsUsed,
+      batchId: batch.id, batchName: batch.name,
       listingsFetched: listings.length, listingsKept: pool.length,
       medianPrice: Math.round(medianPrice),
       agentsTotal: byAgent.size, agentsNew,
@@ -344,6 +401,52 @@ export default function createOutreachRouter({ resolveLocation }) {
     } catch (err) { fail(res, err); }
   });
 
+  /* ---------- batches CRUD ---------- */
+
+  router.get("/batches", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const batches = (await store.listOutreachBatches(locationId)).map((b) => ({ ...b, tag: batchTagFor(b) }));
+      res.json({ batches });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/batches", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const name = String(req.body?.name || "").trim().slice(0, 80);
+      // Unnamed batches stay autoNamed so the first pull renames them to
+      // "market · date"; an explicit name sticks.
+      const batch = await store.createOutreachBatch(locationId, {
+        name: name || `New batch · ${shortDate()}`,
+        autoNamed: !name,
+      });
+      res.json({ ok: true, batch: { ...batch, tag: batchTagFor(batch) } });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/batches/:batchId/rename", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const name = String(req.body?.name || "").trim().slice(0, 80);
+      if (!name) return res.status(400).json({ error: "name required" });
+      const ok = await store.renameOutreachBatch(locationId, req.params.batchId, name);
+      if (!ok) return res.status(404).json({ error: "unknown batch" });
+      const batch = await store.getOutreachBatch(locationId, req.params.batchId);
+      res.json({ ok: true, batch: { ...batch, tag: batchTagFor(batch) } });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.delete("/batches/:batchId", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const batch = await store.getOutreachBatch(locationId, req.params.batchId);
+      if (!batch) return res.status(404).json({ error: "unknown batch" });
+      const { removedAgents } = await store.deleteOutreachBatch(locationId, batch.id);
+      res.json({ ok: true, removedAgents });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---------- list ---------- */
 
   router.get("/agents", async (req, res) => {
@@ -352,9 +455,14 @@ export default function createOutreachRouter({ resolveLocation }) {
       const settings = await getSettings(locationId);
       const enabled = Boolean(String(settings.rentcastApiKey || "").trim());
 
-      const rows = await store.listOutreachAgents(locationId, {
-        status: String(req.query.status || "") || null,
-      });
+      // Scope to one batch (explicit or most recent). No batches yet → empty list.
+      const batch = await resolveBatch(locationId, String(req.query.batch_id || "") || null);
+      const rows = batch
+        ? await store.listOutreachAgents(locationId, {
+            batchId: batch.id,
+            status: String(req.query.status || "") || null,
+          })
+        : [];
 
       // Join saved offers onto agents: an offer counts as "theirs" when its
       // property matches one of the agent's listings (street-level compare) or
@@ -375,7 +483,8 @@ export default function createOutreachRouter({ resolveLocation }) {
         offersByContact.get(o.contactId).push(o);
       }
       const listingStreetsByAgent = new Map();
-      for (const l of await store.listAllOutreachListings(locationId)) {
+      const batchListings = batch ? await store.listAllOutreachListings(locationId, { batchId: batch.id }) : [];
+      for (const l of batchListings) {
         const k = normStreet(l.doc?.address);
         if (!k) continue;
         if (!listingStreetsByAgent.has(l.agentKey)) listingStreetsByAgent.set(l.agentKey, new Set());
@@ -410,6 +519,7 @@ export default function createOutreachRouter({ resolveLocation }) {
 
       res.json({
         enabled, agents, tag: OUTREACH_TAG, importsEnabled: OUTREACH_IMPORTS_ENABLED,
+        batch: batch ? { id: batch.id, name: batch.name, tag: batchTagFor(batch) } : null,
         usage: { requestsThisMonth, lastPullAt: pulls[0]?.createdAt || null },
       });
     } catch (err) { fail(res, err); }
@@ -418,7 +528,9 @@ export default function createOutreachRouter({ resolveLocation }) {
   router.get("/agents/:agentKey/listings", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
-      const rows = await store.listOutreachListings(locationId, { agentKey: req.params.agentKey });
+      const batch = await resolveBatch(locationId, String(req.query.batch_id || "") || null);
+      if (!batch) return res.json({ listings: [] });
+      const rows = await store.listOutreachListings(locationId, { batchId: batch.id, agentKey: req.params.agentKey });
       const listings = rows
         .map((r) => ({ listingKey: r.listingKey, ...r.doc }))
         .sort((a, b) => (b.score || 0) - (a.score || 0));
@@ -434,6 +546,13 @@ export default function createOutreachRouter({ resolveLocation }) {
       const agentKeys = Array.isArray(req.body?.agentKeys) ? req.body.agentKeys.slice(0, 200) : [];
       if (!agentKeys.length) return res.status(400).json({ error: "agentKeys required" });
       const applyTag = req.body?.applyTag !== false;
+      const batch = await resolveBatch(locationId, req.body?.batchId);
+      if (!batch) return res.status(400).json({ error: "no batch — pull listings first" });
+      // Batch tag (e.g. "agent-outreach-queen-anne-fixers") — applied to every
+      // contact regardless of applyTag, so the batch can be targeted in GHL
+      // later (manual automation triggers). Derived from the batch name, so
+      // it's stable across import sessions from the same batch.
+      const batchTag = batchTagFor(batch);
       // Live only when explicitly requested AND enabled server-side — same
       // double gate as offer sends (CARD_SENDS_ENABLED).
       const dryRun = req.body?.dryRun !== false || !OUTREACH_IMPORTS_ENABLED;
@@ -452,7 +571,7 @@ export default function createOutreachRouter({ resolveLocation }) {
 
       const results = await mapPool(agentKeys, 2, async (agentKey) => {
         try {
-          const row = await store.getOutreachAgent(locationId, agentKey);
+          const row = await store.getOutreachAgent(locationId, batch.id, agentKey);
           if (!row) return { agentKey, ok: false, error: "unknown agent" };
           if (row.status === "imported")
             return { agentKey, ok: true, alreadyImported: true, contactId: row.contactId };
@@ -517,13 +636,14 @@ export default function createOutreachRouter({ resolveLocation }) {
             .map((f) => ({ id: fieldIds[f.key], value: values[f.key] }));
           if (customFields.length) await withRetry(() => updateContact(client, contactId, { customFields }));
 
-          let tagged = false;
-          if (applyTag) {
-            await withRetry(() => addContactTags(client, contactId, [OUTREACH_TAG]));
-            tagged = true;
-          }
+          // Batch tag always; the trigger tag only when requested (it fires
+          // the GHL texting workflow).
+          await withRetry(() =>
+            addContactTags(client, contactId, applyTag ? [batchTag, OUTREACH_TAG] : [batchTag])
+          );
+          const tagged = applyTag;
 
-          await store.setOutreachAgentStatus(locationId, agentKey, {
+          await store.setOutreachAgentStatus(locationId, batch.id, agentKey, {
             status: "imported", contactId, importedAt: new Date().toISOString(),
           });
           return { agentKey, ok: true, name: a.name, action, contactId, tagged };
@@ -535,6 +655,7 @@ export default function createOutreachRouter({ resolveLocation }) {
 
       res.json({
         ok: true, dryRun, importsEnabled: OUTREACH_IMPORTS_ENABLED, tag: OUTREACH_TAG,
+        batchTag, batchId: batch.id,
         results,
         imported: results.filter((r) => r.ok && r.action).length,
         warnings,
@@ -542,15 +663,17 @@ export default function createOutreachRouter({ resolveLocation }) {
     } catch (err) { fail(res, err); }
   });
 
-  /* ---------- clear (reset before a re-filtered pull) ---------- */
+  /* ---------- clear (reset a batch before a re-filtered pull) ---------- */
 
-  // Remove all non-imported agents (and their listings) so the next pull
-  // starts fresh — pulls only ever add/update, so tightening filters would
-  // otherwise leave stale agents in the list. Imported agents are kept.
+  // Remove a batch's non-imported agents (and their listings) so the next
+  // pull into it starts fresh — pulls only ever add/update, so tightening
+  // filters would otherwise leave stale agents. Imported agents are kept.
   router.post("/clear", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
-      const removed = await store.clearOutreachAgents(locationId);
+      const batch = await resolveBatch(locationId, req.body?.batchId);
+      if (!batch) return res.json({ ok: true, removed: 0 });
+      const removed = await store.clearOutreachAgents(locationId, batch.id);
       res.json({ ok: true, removed });
     } catch (err) { fail(res, err); }
   });
@@ -563,11 +686,13 @@ export default function createOutreachRouter({ resolveLocation }) {
       const status = String(req.body?.status || "");
       if (!["skipped", "new"].includes(status))
         return res.status(400).json({ error: 'status must be "skipped" or "new"' });
-      const row = await store.getOutreachAgent(locationId, req.params.agentKey);
+      const batch = await resolveBatch(locationId, req.body?.batchId);
+      if (!batch) return res.status(404).json({ error: "unknown agent" });
+      const row = await store.getOutreachAgent(locationId, batch.id, req.params.agentKey);
       if (!row) return res.status(404).json({ error: "unknown agent" });
       if (row.status === "imported")
         return res.status(400).json({ error: "imported agents can't change status" });
-      await store.setOutreachAgentStatus(locationId, req.params.agentKey, { status });
+      await store.setOutreachAgentStatus(locationId, batch.id, req.params.agentKey, { status });
       res.json({ ok: true, status });
     } catch (err) { fail(res, err); }
   });
