@@ -136,6 +136,15 @@ export const AREA_GRADES = ["good", "fair", "dated", "poor", "not_visible"];
 // counts are enforced with objects whose keys are all required (bathroom_1…N,
 // one key per area). scanRehabFromPhotos normalizes them back to the arrays
 // the app expects.
+// Grammar-size guard: the API compiles the schema into a grammar and 400s when
+// it's too large ("The compiled grammar is too large"). Every keyed room adds
+// a grammar branch, so (a) repeated sub-schemas are $refs, not inline copies,
+// (b) keyed enforcement only applies up to the caps below (beyond them the
+// array form + prompt instructions carry the count), and (c) scanRehabFromPhotos
+// retries once with the all-array schema if the API still rejects it.
+const MAX_KEYED_BATHS = 8;
+const MAX_KEYED_BEDS = 10;
+
 const roomEntrySchema = (tiers) => ({
   type: "object",
   additionalProperties: false,
@@ -146,7 +155,7 @@ const roomEntrySchema = (tiers) => ({
   },
 });
 
-const roomsSchema = (tiers, count, noun) =>
+const roomsSchema = (ref, count, noun) =>
   count > 0
     ? {
         type: "object",
@@ -154,13 +163,13 @@ const roomsSchema = (tiers, count, noun) =>
         description: `One entry per ${noun}, in photo order`,
         required: Array.from({ length: count }, (_, i) => `${noun}_${i + 1}`),
         properties: Object.fromEntries(
-          Array.from({ length: count }, (_, i) => [`${noun}_${i + 1}`, roomEntrySchema(tiers)])
+          Array.from({ length: count }, (_, i) => [`${noun}_${i + 1}`, { $ref: ref }])
         ),
       }
     : {
         type: "array",
         description: `One entry per ${noun} visible in the photos, in order`,
-        items: roomEntrySchema(tiers),
+        items: { $ref: ref },
       };
 
 function makeScanSchema({ bathCount = 0, bedCount = 0 } = {}) {
@@ -168,6 +177,19 @@ function makeScanSchema({ bathCount = 0, bedCount = 0 } = {}) {
     type: "object",
     additionalProperties: false,
     required: ["summary", "items", "bathrooms", "bedrooms", "areas", "custom"],
+    $defs: {
+      bathEntry: roomEntrySchema(BATH_TIERS),
+      bedEntry: roomEntrySchema(BED_TIERS),
+      areaEntry: {
+        type: "object",
+        additionalProperties: false,
+        required: ["grade", "note"],
+        properties: {
+          grade: { type: "string", enum: AREA_GRADES },
+          note: { type: "string", description: "Short evidence note, one sentence" },
+        },
+      },
+    },
     properties: {
       summary: {
         type: "string",
@@ -186,22 +208,14 @@ function makeScanSchema({ bathCount = 0, bedCount = 0 } = {}) {
           },
         },
       },
-      bathrooms: roomsSchema(BATH_TIERS, bathCount, "bathroom"),
-      bedrooms: roomsSchema(BED_TIERS, bedCount, "bedroom"),
+      bathrooms: roomsSchema("#/$defs/bathEntry", bathCount <= MAX_KEYED_BATHS ? bathCount : 0, "bathroom"),
+      bedrooms: roomsSchema("#/$defs/bedEntry", bedCount <= MAX_KEYED_BEDS ? bedCount : 0, "bedroom"),
       areas: {
         type: "object",
         additionalProperties: false,
         description: "Condition grade for every area of the property",
         required: [...SCAN_AREAS],
-        properties: Object.fromEntries(SCAN_AREAS.map((a) => [a, {
-          type: "object",
-          additionalProperties: false,
-          required: ["grade", "note"],
-          properties: {
-            grade: { type: "string", enum: AREA_GRADES },
-            note: { type: "string", description: "Short evidence note, one sentence" },
-          },
-        }])),
+        properties: Object.fromEntries(SCAN_AREAS.map((a) => [a, { $ref: "#/$defs/areaEntry" }])),
       },
       custom: {
         type: "array",
@@ -220,6 +234,11 @@ function makeScanSchema({ bathCount = 0, bedCount = 0 } = {}) {
     },
   };
 }
+
+// The API 400s when a schema compiles to an oversized grammar; detect that
+// specific rejection so callers can retry with a smaller schema.
+const isGrammarTooLarge = (e) =>
+  e instanceof Anthropic.APIError && e.status === 400 && /grammar is too large/i.test(String(e.message));
 
 const SYSTEM_PROMPT =
   "You are an experienced residential rehab estimator for a house-flipping / wholesaling operation. " +
@@ -298,14 +317,25 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }
     },
   ];
 
-  const response = await client.messages.create({
-    model: "claude-opus-4-8",
-    max_tokens: 16000,
-    thinking: { type: "adaptive" },
-    system: SYSTEM_PROMPT,
-    output_config: { format: { type: "json_schema", schema: makeScanSchema({ bathCount, bedCount }) } },
-    messages: [{ role: "user", content }],
-  });
+  const runScan = (schema) =>
+    client.messages.create({
+      model: "claude-opus-4-8",
+      max_tokens: 16000,
+      thinking: { type: "adaptive" },
+      system: SYSTEM_PROMPT,
+      output_config: { format: { type: "json_schema", schema } },
+      messages: [{ role: "user", content }],
+    });
+
+  let response;
+  try {
+    response = await runScan(makeScanSchema({ bathCount, bedCount }));
+  } catch (e) {
+    if (!isGrammarTooLarge(e)) throw e;
+    // Count-keyed schema blew the API's grammar-size limit — the array form is
+    // a fraction of the size, and the prompt still states the room counts.
+    response = await runScan(makeScanSchema());
+  }
 
   if (response.stop_reason === "max_tokens") {
     throw Object.assign(new Error("AI scan output truncated — try again"), { http: 502 });
@@ -368,17 +398,37 @@ export async function gradeCompConditions({ subjectAddress, comps, aiApiKey }) {
       note: { type: "string", description: "Decisive evidence, one sentence" },
     },
   };
-  const schema = {
+  const keyedSchema = {
     type: "object",
     additionalProperties: false,
     required: ["grades"],
+    $defs: { gradeEntry: gradeEntrySchema },
     properties: {
       grades: {
         type: "object",
         additionalProperties: false,
         description: "One grade per comp, keyed by comp id",
         required: comps.map((c) => c.id),
-        properties: Object.fromEntries(comps.map((c) => [c.id, gradeEntrySchema])),
+        properties: Object.fromEntries(comps.map((c) => [c.id, { $ref: "#/$defs/gradeEntry" }])),
+      },
+    },
+  };
+  // Fallback if the keyed schema blows the API's grammar-size limit (long comp
+  // ids inflate it): an open array, with the id echoed per entry.
+  const arraySchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["grades"],
+    properties: {
+      grades: {
+        type: "array",
+        description: "One grade per comp, in the order the comps were given",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "condition", "confidence", "note"],
+          properties: { id: { type: "string", description: "The comp id" }, ...gradeEntrySchema.properties },
+        },
       },
     },
   };
@@ -403,14 +453,23 @@ export async function gradeCompConditions({ subjectAddress, comps, aiApiKey }) {
       `Grade the renovation condition of each comp at its time of sale.`,
   });
 
-  const response = await client.messages.create({
-    model: "claude-opus-4-8",
-    max_tokens: 8000,
-    thinking: { type: "adaptive" },
-    system: GRADE_SYSTEM_PROMPT,
-    output_config: { format: { type: "json_schema", schema } },
-    messages: [{ role: "user", content }],
-  });
+  const runGrade = (schema) =>
+    client.messages.create({
+      model: "claude-opus-4-8",
+      max_tokens: 8000,
+      thinking: { type: "adaptive" },
+      system: GRADE_SYSTEM_PROMPT,
+      output_config: { format: { type: "json_schema", schema } },
+      messages: [{ role: "user", content }],
+    });
+
+  let response;
+  try {
+    response = await runGrade(keyedSchema);
+  } catch (e) {
+    if (!isGrammarTooLarge(e)) throw e;
+    response = await runGrade(arraySchema);
+  }
 
   if (response.stop_reason === "max_tokens") {
     throw Object.assign(new Error("comp grading output truncated — try again"), { http: 502 });
@@ -420,8 +479,13 @@ export async function gradeCompConditions({ subjectAddress, comps, aiApiKey }) {
   }
   const text = response.content.find((b) => b.type === "text")?.text || "{}";
   const parsed = JSON.parse(text);
-  // Keyed object → the [{id, ...grade}] list the route expects.
-  return { grades: Object.entries(parsed.grades || {}).map(([id, g]) => ({ id, ...g })) };
+  // Keyed object (or the fallback's array, which already carries id) → the
+  // [{id, ...grade}] list the route expects.
+  return {
+    grades: Array.isArray(parsed.grades)
+      ? parsed.grades
+      : Object.entries(parsed.grades || {}).map(([id, g]) => ({ id, ...g })),
+  };
 }
 
 // Map Anthropic SDK errors to clean HTTP responses.
