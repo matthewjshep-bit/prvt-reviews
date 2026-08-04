@@ -47,6 +47,17 @@ function ZLink({ address, className = "" }) {
 const offerAppUrl = (offerId) =>
   `/?location_id=${encodeURIComponent(getLocationId())}&offer_id=${encodeURIComponent(offerId)}`;
 
+// Condo/apartment detection for the hook listing: RentCast's propertyType when
+// present, plus an address-suffix heuristic (Apt/Unit/Ste/#) — unit-numbered
+// addresses are condos or apartments regardless of how the feed labeled them.
+const isCondoish = (a) => {
+  const t = String(a.hook?.propertyType || "").toLowerCase();
+  if (t.includes("condo") || t.includes("apartment")) return true;
+  return /(\b(apt|unit|ste|suite)\b|#)/i.test(String(a.hook?.address || ""));
+};
+
+const parseMoney = (s) => Number(String(s).replace(/[^0-9]/g, "")) || 0;
+
 function StatusBadge({ agent }) {
   if (agent.status === "imported")
     return (
@@ -106,6 +117,9 @@ export default function AgentOutreach({ settings }) {
   const [error, setError] = useState("");
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all"); // all | new | inghl | imported | skipped
+  const [kindFilter, setKindFilter] = useState("all"); // all | house | condo
+  const [priceMin, setPriceMin] = useState("");
+  const [priceMax, setPriceMax] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [expanded, setExpanded] = useState("");
 
@@ -142,17 +156,30 @@ export default function AgentOutreach({ settings }) {
   const agents = data?.agents || [];
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
+    const min = parseMoney(priceMin);
+    const max = parseMoney(priceMax);
     return agents.filter((a) => {
       if (filter === "new" && (a.status !== "new" || a.ghl?.contactId)) return false;
       if (filter === "inghl" && !(a.status === "new" && a.ghl?.contactId)) return false;
       if (filter === "imported" && a.status !== "imported") return false;
       if (filter === "skipped" && a.status !== "skipped") return false;
+      if (kindFilter !== "all") {
+        const condo = isCondoish(a);
+        if (kindFilter === "condo" && !condo) return false;
+        if (kindFilter === "house" && condo) return false;
+      }
+      if (min || max) {
+        const price = Number(a.hook?.price) || 0;
+        if (!price) return false; // price filters active → hide unknown-price rows
+        if (min && price < min) return false;
+        if (max && price > max) return false;
+      }
       if (!needle) return true;
       return [a.name, a.email, a.phone, a.brokerage, a.hook?.address].some((v) =>
         (v || "").toLowerCase().includes(needle)
       );
     });
-  }, [agents, q, filter]);
+  }, [agents, q, filter, kindFilter, priceMin, priceMax]);
 
   const selectable = shown.filter((a) => a.status !== "imported" && a.status !== "skipped");
   const allSelected = selectable.length > 0 && selectable.every((a) => selected.has(a.agentKey));
@@ -362,6 +389,17 @@ export default function AgentOutreach({ settings }) {
                 {label}
               </button>
             ))}
+            <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}
+              className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs font-medium text-gray-700 focus:border-gray-900 focus:outline-none"
+              title="Classified by RentCast's property type plus address suffix (Apt/Unit/#)">
+              <option value="all">All types</option>
+              <option value="house">Houses only</option>
+              <option value="condo">Condos &amp; apts only</option>
+            </select>
+            <input value={priceMin} onChange={(e) => setPriceMin(e.target.value)} placeholder="Min $" inputMode="numeric"
+              className="w-24 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs focus:border-gray-900 focus:outline-none" />
+            <input value={priceMax} onChange={(e) => setPriceMax(e.target.value)} placeholder="Max $" inputMode="numeric"
+              className="w-24 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs focus:border-gray-900 focus:outline-none" />
             <div className="ml-auto flex min-w-[14rem] items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5">
               <Search size={14} className="text-gray-400" />
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agents…"
