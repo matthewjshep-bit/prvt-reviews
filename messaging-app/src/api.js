@@ -159,8 +159,12 @@ export const getAgentListings = (agentKey, batchId) =>
     .then(j)
     .then((r) => r.listings);
 export const pullOutreach = (params = {}) => post(`/api/outreach/pull`, params);
-export const importOutreachAgents = ({ agentKeys, applyTag = true, dryRun = true, batchId }) =>
-  post(`/api/outreach/import`, { agentKeys, applyTag, dryRun, ...(batchId ? { batchId } : {}) });
+export const importOutreachAgents = ({ agentKeys, applyTag = true, dryRun = true, batchId, sessionTag }) =>
+  post(`/api/outreach/import`, {
+    agentKeys, applyTag, dryRun,
+    ...(batchId ? { batchId } : {}),
+    ...(sessionTag ? { sessionTag } : {}),
+  });
 export const setOutreachStatus = (agentKey, status, batchId) =>
   post(`/api/outreach/agents/${encodeURIComponent(agentKey)}/status`, { status, ...(batchId ? { batchId } : {}) });
 export const clearOutreach = (batchId) => post(`/api/outreach/clear`, batchId ? { batchId } : {});

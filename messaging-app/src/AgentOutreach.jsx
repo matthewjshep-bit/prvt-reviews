@@ -163,7 +163,14 @@ export default function AgentOutreach({ settings }) {
   const [clearing, setClearing] = useState(false);
   const [pullMsg, setPullMsg] = useState(null); // { ok, text }
 
-  // Import flow.
+  // Import flow. Each import session gets its own tag (batch tag + this
+  // suffix) so same-day imports stay individually filterable in GHL.
+  const sessionSuffixNow = () => {
+    const d = new Date();
+    const md = d.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toLowerCase().replace(" ", "");
+    return `${md}-${d.getHours()}${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const [sessionTag, setSessionTag] = useState(sessionSuffixNow);
   const [applyTag, setApplyTag] = useState(true);
   const [previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -335,7 +342,7 @@ export default function AgentOutreach({ settings }) {
     setPreview(null);
     setImportResult(null);
     try {
-      setPreview(await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: true, batchId }));
+      setPreview(await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: true, batchId, sessionTag: sessionTag.trim() }));
     } catch (e) {
       setPreview({ error: e.message });
     } finally {
@@ -346,16 +353,21 @@ export default function AgentOutreach({ settings }) {
   const doImport = async () => {
     const n = selected.size;
     const batchTag = data?.batch?.tag || "";
+    const suffix = sessionTag.trim();
+    const tagList = [batchTag, ...(suffix ? [`${batchTag}-${suffix}`] : [])].map((t) => `"${t}"`).join(" + ");
     if (!window.confirm(
-      `Import ${n} agent${n === 1 ? "" : "s"} to GoHighLevel with batch tag "${batchTag}"` +
+      `Import ${n} agent${n === 1 ? "" : "s"} to GoHighLevel with tags ${tagList}` +
       `${applyTag ? ` and the "${data?.tag}" trigger tag (starts outreach)` : " (no trigger tag — start the automation manually)"}?`
     )) return;
     setImporting(true);
     try {
-      const r = await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: false, batchId });
+      const r = await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: false, batchId, sessionTag: suffix });
       setImportResult(r);
       setPreview(null);
-      if (!r.dryRun) setSelected(new Set());
+      if (!r.dryRun) {
+        setSelected(new Set());
+        setSessionTag(sessionSuffixNow()); // fresh suffix for the next import session
+      }
       await refresh();
       await loadBatches(); // imported counts changed
     } catch (e) {
@@ -596,9 +608,13 @@ export default function AgentOutreach({ settings }) {
                   <input type="checkbox" checked={applyTag} onChange={(e) => setApplyTag(e.target.checked)} />
                   Apply "{data.tag}" tag (starts the outreach texts)
                 </label>
-                <span className="text-xs text-gray-500">
-                  Each import also gets this batch's tag ({data.batch?.tag})
-                </span>
+                <label className="flex items-center gap-1.5 text-xs text-gray-500"
+                  title="This import session's tag = batch tag + this suffix, so same-day imports stay individually filterable in GHL. Clear it to apply only the batch tag.">
+                  Import tag:
+                  <span className="text-gray-400">{data.batch?.tag}-</span>
+                  <input value={sessionTag} onChange={(e) => setSessionTag(e.target.value)}
+                    className="w-28 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-xs focus:border-gray-900 focus:outline-none" />
+                </label>
                 <div className="ml-auto flex gap-2">
                   <button type="button" onClick={doPreview} disabled={previewing || importing}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40">
@@ -638,7 +654,7 @@ export default function AgentOutreach({ settings }) {
                       <span className={importResult.dryRun ? "text-amber-800" : "text-emerald-800"}>
                         {importResult.dryRun
                           ? "Server ran a dry-run (imports disabled) — nothing was written."
-                          : `Imported ${importResult.imported} agent${importResult.imported === 1 ? "" : "s"} with batch tag "${importResult.batchTag}".`}
+                          : `Imported ${importResult.imported} agent${importResult.imported === 1 ? "" : "s"} with tag${importResult.sessionTag ? `s "${importResult.batchTag}" + "${importResult.sessionTag}"` : ` "${importResult.batchTag}"`}.`}
                       </span>
                       {importResult.results.filter((r) => !r.ok).map((r) => (
                         <div key={r.agentKey} className="mt-1 text-xs text-red-700">{r.agentKey}: {r.error}</div>

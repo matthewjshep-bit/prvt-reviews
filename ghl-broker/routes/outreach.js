@@ -571,6 +571,11 @@ export default function createOutreachRouter({ resolveLocation }) {
       // later (manual automation triggers). Derived from the batch name, so
       // it's stable across import sessions from the same batch.
       const batchTag = batchTagFor(batch);
+      // Session tag — batch tag + a caller-supplied suffix (the UI defaults it
+      // to date+time), unique per import click so same-day imports from one
+      // batch stay individually targetable in GHL. Empty suffix = no session tag.
+      const sessionSuffix = sanitizeTag(req.body?.sessionTag);
+      const sessionTag = sessionSuffix ? sanitizeTag(`${batchTag}-${sessionSuffix}`) : null;
       // Live only when explicitly requested AND enabled server-side — same
       // double gate as offer sends (CARD_SENDS_ENABLED).
       const dryRun = req.body?.dryRun !== false || !OUTREACH_IMPORTS_ENABLED;
@@ -654,10 +659,14 @@ export default function createOutreachRouter({ resolveLocation }) {
             .map((f) => ({ id: fieldIds[f.key], value: values[f.key] }));
           if (customFields.length) await withRetry(() => updateContact(client, contactId, { customFields }));
 
-          // Batch tag always; the trigger tag only when requested (it fires
-          // the GHL texting workflow).
+          // Batch + session tags always; the trigger tag only when requested
+          // (it fires the GHL texting workflow).
           await withRetry(() =>
-            addContactTags(client, contactId, applyTag ? [batchTag, OUTREACH_TAG] : [batchTag])
+            addContactTags(client, contactId, [
+              batchTag,
+              ...(sessionTag ? [sessionTag] : []),
+              ...(applyTag ? [OUTREACH_TAG] : []),
+            ])
           );
           const tagged = applyTag;
 
@@ -673,7 +682,7 @@ export default function createOutreachRouter({ resolveLocation }) {
 
       res.json({
         ok: true, dryRun, importsEnabled: OUTREACH_IMPORTS_ENABLED, tag: OUTREACH_TAG,
-        batchTag, batchId: batch.id,
+        batchTag, sessionTag, batchId: batch.id,
         results,
         imported: results.filter((r) => r.ok && r.action).length,
         warnings,
