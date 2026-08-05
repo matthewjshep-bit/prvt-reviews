@@ -103,7 +103,8 @@ function AgentListings({ agentKey, batchId }) {
   return (
     <div className="space-y-1.5">
       {listings.map((l) => (
-        <div key={l.listingKey} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-sm">
+        <div key={l.listingKey}
+          className={`flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-sm ${l.qualifies === false ? "opacity-60" : ""}`}>
           <div className="min-w-0">
             <div className="truncate font-medium"><ZLink address={l.address} /></div>
             <div className="text-xs text-gray-500">
@@ -113,6 +114,13 @@ function AgentListings({ agentKey, batchId }) {
               {l.sqft ? ` · ${Number(l.sqft).toLocaleString()} sqft` : ""}
             </div>
           </div>
+          {l.distress && (l.distress.stale || l.distress.cut || l.distress.cheap) && (
+            <div className="flex shrink-0 flex-wrap justify-end gap-1">
+              {l.distress.stale && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">stale</span>}
+              {l.distress.cut && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">price cut</span>}
+              {l.distress.cheap && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">cheap $/sqft</span>}
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -136,6 +144,7 @@ export default function AgentOutreach({ settings }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all"); // all | new | inghl | imported | skipped
   const [kindFilter, setKindFilter] = useState("all"); // all | house | condo
+  const [minActive, setMinActive] = useState("0"); // min active listings per agent, 0 = any
   const [priceMin, setPriceMin] = useState("");
   const [priceMax, setPriceMax] = useState("");
   const [selected, setSelected] = useState(() => new Set());
@@ -148,8 +157,8 @@ export default function AgentOutreach({ settings }) {
   const [daysOld, setDaysOld] = useState("");
   const [propertyType, setPropertyType] = useState("Single Family");
   const [priceBandPct, setPriceBandPct] = useState("0"); // 0 = off
-  const [minDom, setMinDom] = useState(""); // blank = off
-  const [belowMarketOnly, setBelowMarketOnly] = useState(false);
+  const [distressOnly, setDistressOnly] = useState(true);
+  const [staleDom, setStaleDom] = useState("45"); // DOM at which a listing counts as stale
   const [pulling, setPulling] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [pullMsg, setPullMsg] = useState(null); // { ok, text }
@@ -205,6 +214,7 @@ export default function AgentOutreach({ settings }) {
       if (filter === "inghl" && !(a.status === "new" && a.ghl?.contactId)) return false;
       if (filter === "imported" && a.status !== "imported") return false;
       if (filter === "skipped" && a.status !== "skipped") return false;
+      if (minActive !== "0" && (Number(a.listingCount) || 0) < Number(minActive)) return false;
       if (kindFilter !== "all") {
         const condo = isCondoish(a);
         if (kindFilter === "condo" && !condo) return false;
@@ -221,7 +231,7 @@ export default function AgentOutreach({ settings }) {
         (v || "").toLowerCase().includes(needle)
       );
     });
-  }, [agents, q, filter, kindFilter, priceMin, priceMax]);
+  }, [agents, q, filter, kindFilter, minActive, priceMin, priceMax]);
 
   const selectable = shown.filter((a) => a.status !== "imported" && a.status !== "skipped");
   const allSelected = selectable.length > 0 && selectable.every((a) => selected.has(a.agentKey));
@@ -247,8 +257,8 @@ export default function AgentOutreach({ settings }) {
         daysOld: parseInt(daysOld, 10) || undefined,
         propertyType,
         priceBandPct: parseInt(priceBandPct, 10) || 0,
-        minDom: parseInt(minDom, 10) || 0,
-        belowMarketOnly,
+        distressOnly,
+        staleDom: parseInt(staleDom, 10) || 45,
         ...(batchId ? { batchId } : {}),
       });
       const kept = r.listingsKept != null && r.listingsKept !== r.listingsFetched
@@ -481,11 +491,11 @@ export default function AgentOutreach({ settings }) {
                 </select>
               </div>
               <div className="col-span-2 sm:col-span-1">
-                <label className={LABEL_CLS} title="Keep only listings that have sat on the market at least this many days — stale listings mean motivated sellers. Blank = off">
-                  Min days on market
+                <label className={LABEL_CLS} title="A listing counts as distressed once it has sat this many days on market (one of the three distress signals)">
+                  Stale after (days)
                 </label>
-                <input className={INPUT_CLS} type="number" min="0" value={minDom}
-                  onChange={(e) => setMinDom(e.target.value)} placeholder="e.g. 45" />
+                <input className={INPUT_CLS} type="number" min="1" value={staleDom}
+                  onChange={(e) => setStaleDom(e.target.value)} placeholder="45" disabled={!distressOnly} />
               </div>
               <div className="col-span-2 sm:col-span-1">
                 <label className={LABEL_CLS} title="Keep only listings near the pull's median price — where the deepest buyer pool is">
@@ -500,9 +510,9 @@ export default function AgentOutreach({ settings }) {
               </div>
               <div className="col-span-2 flex items-end pb-2 sm:col-span-2">
                 <label className="flex items-center gap-1.5 text-sm text-gray-700"
-                  title="Keep only listings priced ≤90% of the area's median $/sqft or that have taken a price cut">
-                  <input type="checkbox" checked={belowMarketOnly} onChange={(e) => setBelowMarketOnly(e.target.checked)} />
-                  Below-market only (cheap $/sqft or price-cut)
+                  title="Keep only listings with at least one distress signal: stale (see days input), a price-cut history, or priced ≤90% of the area's median $/sqft. Agents keep their full listing count either way.">
+                  <input type="checkbox" checked={distressOnly} onChange={(e) => setDistressOnly(e.target.checked)} />
+                  Distress signals only (stale, price-cut, or cheap $/sqft)
                 </label>
               </div>
             </div>
@@ -553,6 +563,13 @@ export default function AgentOutreach({ settings }) {
               <option value="all">All types</option>
               <option value="house">Houses only</option>
               <option value="condo">Condos &amp; apts only</option>
+            </select>
+            <select value={minActive} onChange={(e) => setMinActive(e.target.value)}
+              className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs font-medium text-gray-700 focus:border-gray-900 focus:outline-none"
+              title="Filter by how many active listings the agent has in this market (from the full pull)">
+              <option value="0">Any activity</option>
+              <option value="2">2+ listings</option>
+              <option value="3">3+ listings</option>
             </select>
             <input value={priceMin} onChange={(e) => setPriceMin(e.target.value)} placeholder="Min $" inputMode="numeric"
               className="w-24 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs focus:border-gray-900 focus:outline-none" />
@@ -686,7 +703,12 @@ export default function AgentOutreach({ settings }) {
                           ))}
                         </td>
                         <td className="max-w-[10rem] truncate px-4 py-2.5 text-gray-600">{a.brokerage || "—"}</td>
-                        <td className="px-4 py-2.5 text-center text-gray-600">{a.listingCount}</td>
+                        <td className="px-4 py-2.5 text-center text-gray-600">
+                          {a.listingCount}
+                          {a.distressedCount != null && (
+                            <div className="text-[11px] text-amber-600">{a.distressedCount} distressed</div>
+                          )}
+                        </td>
                         <td className="max-w-[16rem] px-4 py-2.5">
                           <div className="truncate"><ZLink address={a.hook?.address} /></div>
                           <div className="text-xs text-gray-500">

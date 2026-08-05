@@ -30,6 +30,18 @@ export function priceCuts(listing) {
   return { count, totalDropPct };
 }
 
+// Distress = ANY of: stale (DOM ≥ staleDom), a price-cut history, or priced
+// ≤90% of the cohort's median $/sqft. OR semantics — the signals are
+// alternatives, not requirements.
+export function distressSignals(listing, { medianPpsf = 0, staleDom = 45 } = {}) {
+  const stale = staleDom > 0 && Number(listing.daysOnMarket) >= staleDom;
+  const cut = priceCuts(listing).count > 0;
+  const price = Number(listing.price);
+  const sqft = Number(listing.squareFootage);
+  const cheap = price > 0 && sqft > 0 && medianPpsf > 0 && price / sqft <= 0.9 * medianPpsf;
+  return { stale, cut, cheap, any: stale || cut || cheap };
+}
+
 export function scoreListing(listing, { medianPpsf = 0 } = {}) {
   const components = [];
   const add = (key, label, points, max, detail, na = false) =>

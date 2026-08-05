@@ -25,7 +25,7 @@
 import express from "express";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { scoreListing, medianPricePerSqft, priceCuts } from "../outreach-score.js";
+import { scoreListing, medianPricePerSqft, distressSignals } from "../outreach-score.js";
 import { zillowUrl } from "../shared/us-address.js";
 import {
   findDuplicateContact, createContact, getContact, updateContact,
@@ -181,14 +181,16 @@ export default function createOutreachRouter({ resolveLocation }) {
     const propertyType = String(body.propertyType || "").trim();
     const maxRequests = Math.min(5, Math.max(1, parseInt(body.maxRequests, 10) || 3));
     // Post-fetch filters (applied to the cohort, not the RentCast query —
-    // RentCast can't filter on price or days-on-market server-side):
-    // keep listings within ±N% of the pull's median price, only stale ones
-    // (≥N days on market), and/or only below-market ones (price-cut history
-    // or cheap $/sqft vs cohort median).
+    // RentCast can't filter on price or days-on-market server-side).
+    // distressOnly keeps listings with ANY distress signal (stale ≥ staleDom
+    // days, price-cut history, or ≤90% of median $/sqft) — OR semantics, the
+    // signals are alternatives. Defaults ON so the batchless cron POST pulls
+    // distressed cohorts. priceBandPct additionally trims to ±N% of the
+    // pull's median price.
     const priceBandPct = Math.min(75, Math.max(0, parseInt(body.priceBandPct, 10) || 0));
-    const minDom = Math.min(365, Math.max(0, parseInt(body.minDom, 10) || 0));
-    const belowMarketOnly = body.belowMarketOnly === true;
-    return { zips, city, state, daysOld, propertyType, maxRequests, priceBandPct, minDom, belowMarketOnly };
+    const distressOnly = body.distressOnly !== false;
+    const staleDom = Math.min(365, Math.max(1, parseInt(body.staleDom, 10) || 45));
+    return { zips, city, state, daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom };
   }
 
   async function runPull(locationId, client, body) {
@@ -196,7 +198,7 @@ export default function createOutreachRouter({ resolveLocation }) {
     const apiKey = String(settings.rentcastApiKey || "").trim();
     if (!apiKey) throw Object.assign(new Error("RentCast API key not configured — add it in Settings"), { http: 400 });
 
-    const { zips, city, state, daysOld, propertyType, maxRequests, priceBandPct, minDom, belowMarketOnly } =
+    const { zips, city, state, daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom } =
       pullParams(body, settings);
     // One RentCast query per zip; else one for city/state.
     const targets = zips.length
@@ -264,10 +266,12 @@ export default function createOutreachRouter({ resolveLocation }) {
       : 0;
 
     let pool = listings;
-    if (minDom) {
+    if (distressOnly) {
       const before = pool.length;
-      pool = pool.filter((l) => Number(l.daysOnMarket) >= minDom);
-      warnings.push(`min ${minDom} days on market kept ${pool.length} of ${before}`);
+      pool = pool.filter((l) => distressSignals(l, { medianPpsf, staleDom }).any);
+      warnings.push(
+        `distress filter (${staleDom}+ DOM, price cut, or ≤90% of $${Math.round(medianPpsf)}/sqft median) kept ${pool.length} of ${before}`
+      );
     }
     if (priceBandPct && medianPrice) {
       const lo = medianPrice * (1 - priceBandPct / 100);
@@ -276,24 +280,18 @@ export default function createOutreachRouter({ resolveLocation }) {
       pool = pool.filter((l) => Number(l.price) >= lo && Number(l.price) <= hi);
       warnings.push(`price band ±${priceBandPct}% of $${Math.round(medianPrice).toLocaleString()} median kept ${pool.length} of ${before}`);
     }
-    if (belowMarketOnly) {
-      const before = pool.length;
-      pool = pool.filter((l) => {
-        const cheap =
-          Number(l.price) > 0 && Number(l.squareFootage) > 0 && medianPpsf > 0 &&
-          Number(l.price) / Number(l.squareFootage) <= 0.9 * medianPpsf;
-        return cheap || priceCuts(l).count > 0;
-      });
-      warnings.push(`below-market filter kept ${pool.length} of ${before}`);
-    }
 
+    // Group the FULL pull by agent — filters decide which agents qualify and
+    // which listing becomes the hook, but activity counts (listingCount) must
+    // reflect the agent's whole book of business in this market.
+    const qualifying = new Set(pool);
     const byAgent = new Map();
-    const listingRows = [];
     let droppedNoAgent = 0;
-    for (const l of pool) {
+    for (const l of listings) {
       const idc = agentIdentity(l);
       if (!idc.agentKey) { droppedNoAgent++; continue; }
       const { score, components } = scoreListing(l, { medianPpsf });
+      const { stale, cut, cheap } = distressSignals(l, { medianPpsf, staleDom });
       const key = listingKey(l);
       const address = l.formattedAddress || [l.addressLine1, l.city, l.state, l.zipCode].filter(Boolean).join(", ");
       const docListing = {
@@ -301,8 +299,8 @@ export default function createOutreachRouter({ resolveLocation }) {
         price: l.price, daysOnMarket: l.daysOnMarket, listedDate: l.listedDate,
         yearBuilt: l.yearBuilt, sqft: l.squareFootage, propertyType: l.propertyType,
         mlsName: l.mlsName, mlsNumber: l.mlsNumber, score, components,
+        distress: { stale, cut, cheap }, qualifies: qualifying.has(l),
       };
-      listingRows.push({ listingKey: key, agentKey: idc.agentKey, doc: docListing });
       const g = byAgent.get(idc.agentKey) || { identity: idc, listings: [] };
       // Prefer the richest identity seen (a later listing may add email/phone).
       g.identity = {
@@ -318,16 +316,25 @@ export default function createOutreachRouter({ resolveLocation }) {
     if (droppedNoAgent) warnings.push(`${droppedNoAgent} listing(s) had no agent identity and were skipped`);
 
     // Merge with stored rows (preserve ghl match + import status), then check
-    // GHL for the agents we haven't matched yet.
+    // GHL for the agents we haven't matched yet. An agent joins the batch only
+    // when at least one of their listings survived the filters; the hook is
+    // their best-scoring qualifying listing, while listingCount/listingRows
+    // cover their full book so activity stays visible.
     const agentRows = [];
+    const listingRows = [];
     let agentsNew = 0;
+    let agentsExcluded = 0;
     for (const [agentKey, g] of byAgent) {
+      const qual = g.listings.filter((x) => x.qualifies);
+      if (!qual.length) { agentsExcluded++; continue; }
       const stored = await store.getOutreachAgent(locationId, batch.id, agentKey);
       if (!stored) agentsNew++;
       const officePhone = normPhone(
         listings.find((l) => agentIdentity(l).agentKey === agentKey)?.listingOffice?.phone
       );
-      const hook = g.listings.slice().sort((a, b) => b.score - a.score)[0];
+      const hook = qual.slice().sort((a, b) => b.score - a.score)[0];
+      for (const { listingKey: lk, ...docListing } of g.listings)
+        listingRows.push({ listingKey: lk, agentKey, doc: docListing });
       agentRows.push({
         agentKey,
         stored,
@@ -342,9 +349,12 @@ export default function createOutreachRouter({ resolveLocation }) {
             score: hook.score, components: hook.components,
           },
           listingCount: g.listings.length,
+          distressedCount: g.listings.filter((x) => x.distress.stale || x.distress.cut || x.distress.cheap).length,
         },
       });
     }
+    if (agentsExcluded)
+      warnings.push(`${agentsExcluded} agent(s) had no qualifying listing and were excluded`);
 
     const unchecked = agentRows.filter((r) => !r.doc.ghl.contactId && r.stored?.status !== "imported");
     await mapPool(unchecked, 3, async (r) => {
@@ -386,9 +396,9 @@ export default function createOutreachRouter({ resolveLocation }) {
     await store.upsertOutreachAgents(locationId, batch.id, agentRows.map(({ agentKey, doc }) => ({ agentKey, doc })));
     await store.recordOutreachPull(locationId, {
       batchId: batch.id,
-      params: { targets, daysOld, propertyType, maxRequests, priceBandPct, minDom, belowMarketOnly },
+      params: { targets, daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom },
       requestsUsed, cached, listingsFetched: listings.length, listingsKept: pool.length,
-      agentsTotal: byAgent.size, agentsNew, medianPpsf: Math.round(medianPpsf),
+      agentsTotal: agentRows.length, agentsNew, medianPpsf: Math.round(medianPpsf),
       medianPrice: Math.round(medianPrice),
     });
 
@@ -397,7 +407,7 @@ export default function createOutreachRouter({ resolveLocation }) {
       batchId: batch.id, batchName: batch.name,
       listingsFetched: listings.length, listingsKept: pool.length,
       medianPrice: Math.round(medianPrice),
-      agentsTotal: byAgent.size, agentsNew,
+      agentsTotal: agentRows.length, agentsNew,
       warnings,
     };
   }
