@@ -148,6 +148,7 @@ export default function AgentOutreach({ settings }) {
   const [daysOld, setDaysOld] = useState("");
   const [propertyType, setPropertyType] = useState("Single Family");
   const [priceBandPct, setPriceBandPct] = useState("0"); // 0 = off
+  const [minDom, setMinDom] = useState(""); // blank = off
   const [belowMarketOnly, setBelowMarketOnly] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -246,6 +247,7 @@ export default function AgentOutreach({ settings }) {
         daysOld: parseInt(daysOld, 10) || undefined,
         propertyType,
         priceBandPct: parseInt(priceBandPct, 10) || 0,
+        minDom: parseInt(minDom, 10) || 0,
         belowMarketOnly,
         ...(batchId ? { batchId } : {}),
       });
@@ -477,6 +479,13 @@ export default function AgentOutreach({ settings }) {
                   <option value="">Any</option>
                   {PROPERTY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
+              </div>
+              <div className="col-span-2 sm:col-span-1">
+                <label className={LABEL_CLS} title="Keep only listings that have sat on the market at least this many days — stale listings mean motivated sellers. Blank = off">
+                  Min days on market
+                </label>
+                <input className={INPUT_CLS} type="number" min="0" value={minDom}
+                  onChange={(e) => setMinDom(e.target.value)} placeholder="e.g. 45" />
               </div>
               <div className="col-span-2 sm:col-span-1">
                 <label className={LABEL_CLS} title="Keep only listings near the pull's median price — where the deepest buyer pool is">

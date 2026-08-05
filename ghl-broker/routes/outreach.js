@@ -180,12 +180,15 @@ export default function createOutreachRouter({ resolveLocation }) {
     const daysOld = Math.min(365, Math.max(1, parseInt(body.daysOld, 10) || parseInt(settings.outreachDaysOld, 10) || 180));
     const propertyType = String(body.propertyType || "").trim();
     const maxRequests = Math.min(5, Math.max(1, parseInt(body.maxRequests, 10) || 3));
-    // Post-fetch filters (applied to the cohort, not the RentCast query):
-    // keep listings within ±N% of the pull's median price, and/or only
-    // below-market ones (price-cut history or cheap $/sqft vs cohort median).
+    // Post-fetch filters (applied to the cohort, not the RentCast query —
+    // RentCast can't filter on price or days-on-market server-side):
+    // keep listings within ±N% of the pull's median price, only stale ones
+    // (≥N days on market), and/or only below-market ones (price-cut history
+    // or cheap $/sqft vs cohort median).
     const priceBandPct = Math.min(75, Math.max(0, parseInt(body.priceBandPct, 10) || 0));
+    const minDom = Math.min(365, Math.max(0, parseInt(body.minDom, 10) || 0));
     const belowMarketOnly = body.belowMarketOnly === true;
-    return { zips, city, state, daysOld, propertyType, maxRequests, priceBandPct, belowMarketOnly };
+    return { zips, city, state, daysOld, propertyType, maxRequests, priceBandPct, minDom, belowMarketOnly };
   }
 
   async function runPull(locationId, client, body) {
@@ -193,7 +196,7 @@ export default function createOutreachRouter({ resolveLocation }) {
     const apiKey = String(settings.rentcastApiKey || "").trim();
     if (!apiKey) throw Object.assign(new Error("RentCast API key not configured — add it in Settings"), { http: 400 });
 
-    const { zips, city, state, daysOld, propertyType, maxRequests, priceBandPct, belowMarketOnly } =
+    const { zips, city, state, daysOld, propertyType, maxRequests, priceBandPct, minDom, belowMarketOnly } =
       pullParams(body, settings);
     // One RentCast query per zip; else one for city/state.
     const targets = zips.length
@@ -261,6 +264,11 @@ export default function createOutreachRouter({ resolveLocation }) {
       : 0;
 
     let pool = listings;
+    if (minDom) {
+      const before = pool.length;
+      pool = pool.filter((l) => Number(l.daysOnMarket) >= minDom);
+      warnings.push(`min ${minDom} days on market kept ${pool.length} of ${before}`);
+    }
     if (priceBandPct && medianPrice) {
       const lo = medianPrice * (1 - priceBandPct / 100);
       const hi = medianPrice * (1 + priceBandPct / 100);
@@ -378,7 +386,7 @@ export default function createOutreachRouter({ resolveLocation }) {
     await store.upsertOutreachAgents(locationId, batch.id, agentRows.map(({ agentKey, doc }) => ({ agentKey, doc })));
     await store.recordOutreachPull(locationId, {
       batchId: batch.id,
-      params: { targets, daysOld, propertyType, maxRequests, priceBandPct, belowMarketOnly },
+      params: { targets, daysOld, propertyType, maxRequests, priceBandPct, minDom, belowMarketOnly },
       requestsUsed, cached, listingsFetched: listings.length, listingsKept: pool.length,
       agentsTotal: byAgent.size, agentsNew, medianPpsf: Math.round(medianPpsf),
       medianPrice: Math.round(medianPrice),
