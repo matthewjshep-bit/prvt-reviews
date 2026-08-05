@@ -240,6 +240,11 @@ export default function AgentOutreach({ settings }) {
     });
   }, [agents, q, filter, kindFilter, minActive, priceMin, priceMax]);
 
+  // Selection describes the CURRENT view — changing any filter clears it so
+  // "N selected" never includes rows hidden by the active filters (importing
+  // invisible agents is a footgun).
+  useEffect(() => { setSelected(new Set()); }, [q, filter, kindFilter, minActive, priceMin, priceMax]);
+
   const selectable = shown.filter((a) => a.status !== "imported" && a.status !== "skipped");
   const allSelected = selectable.length > 0 && selectable.every((a) => selected.has(a.agentKey));
 
