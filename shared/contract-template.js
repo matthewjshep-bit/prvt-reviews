@@ -1,6 +1,8 @@
-// contract-template.js — the wholesale-friendly Purchase & Sale Agreement
-// template: default clause language, the placeholder tokens it may reference,
-// and the merge helper that fills tokens (or prints a signable blank line).
+// contract-template.js — the wholesale-friendly contract templates: the
+// Purchase & Sale Agreement (seller-facing) and the Assignment of Contract
+// Agreement (dispositions/buyer-facing). Default clause language, the
+// placeholder tokens each may reference, and the merge helper that fills
+// tokens (or prints a signable blank line).
 //
 // Shared by the broker (PDF rendering in contract-pdf.js) and the frontend
 // (Settings clause editor + token legend). Pure data + string functions.
@@ -160,14 +162,153 @@ export const DEFAULT_CONTRACT_CLAUSES = [
   },
 ];
 
+/* ======================= Assignment of Contract ========================== */
+// The dispositions-side document: assigns the Purchase & Sale contract to the
+// end buyer (Assignee). Goes to the person BUYING the deal — never the seller.
+
+export const ASSIGNMENT_TOKENS = [
+  { key: "effective_date", label: "Agreement date", blankWidth: 18 },
+  { key: "assignor_name", label: "Assignor (you)", blankWidth: 30 },
+  { key: "assignor_company", label: "Assignor company", blankWidth: 30 },
+  { key: "assignee_name", label: "Assignee / buyer", blankWidth: 30 },
+  { key: "assignee_company", label: "Assignee company", blankWidth: 30 },
+  { key: "address", label: "Property address", blankWidth: 40 },
+  { key: "total_price", label: "Total purchase price", blankWidth: 14 },
+  { key: "total_price_words", label: "Total price in words", blankWidth: 40 },
+  { key: "deposit", label: "Deposit", blankWidth: 12 },
+  { key: "deposit_due_date", label: "Deposit due", blankWidth: 18 },
+  { key: "closing_date", label: "Closing date", blankWidth: 18 },
+];
+
+// The opening paragraph above the numbered clauses.
+export const ASSIGNMENT_PREAMBLE =
+  'This Assignment Agreement ("Agreement") is made as of {{effective_date}} by and between ' +
+  '{{assignor_name}} ("Assignor") and {{assignee_name}} ("Assignee"), regarding the real ' +
+  'property located at {{address}} (the "Property").';
+
+export const DEFAULT_ASSIGNMENT_CLAUSES = [
+  {
+    id: "original_contract",
+    title: "Original Contract",
+    body:
+      "Assignor has a purchase contract with the current owner/seller of the Property (the " +
+      '"Original Contract"). Assignor now agrees to assign its rights in the Original Contract ' +
+      "to Assignee.",
+  },
+  {
+    id: "assignment_price",
+    title: "Assignment Price",
+    body:
+      "Assignee agrees to pay a total purchase price of {{total_price}} ({{total_price_words}}). " +
+      "This amount includes the purchase price under the Original Contract plus Assignor's " +
+      "assignment fee.",
+  },
+  {
+    id: "deposit",
+    title: "Deposit",
+    body:
+      "Assignee agrees to pay Assignor a deposit of {{deposit}}, due on or before " +
+      "{{deposit_due_date}}. The deposit is non-refundable if Assignee backs out, fails to " +
+      "close, or does not perform. However, if the deal cannot close for reasons outside of " +
+      "Assignee's control, such as bad title or the seller being unable to convey the Property, " +
+      "the deposit shall be refunded.",
+  },
+  {
+    id: "closing",
+    title: "Closing Date",
+    body: "Closing shall take place on or before {{closing_date}}.",
+  },
+  {
+    id: "closing_costs",
+    title: "Closing Costs",
+    body: "Assignee agrees to pay all closing costs unless otherwise agreed in writing.",
+  },
+  {
+    id: "assignment",
+    title: "Assignment",
+    body:
+      "Assignor assigns all rights, title, and interest in the Original Contract to Assignee. " +
+      "Assignee accepts the assignment and agrees to complete the purchase according to the " +
+      "Original Contract.",
+  },
+  {
+    id: "accepts_contract",
+    title: "Buyer Accepts the Contract",
+    body:
+      "Assignee confirms they have reviewed the Original Contract and accepts all of its terms. " +
+      "Assignee agrees to perform all buyer obligations under the Original Contract.",
+  },
+  {
+    id: "as_is",
+    title: "As-Is Property",
+    body:
+      "Assignee accepts the Property in AS-IS condition. Assignor makes no promises or " +
+      "warranties about the Property's condition, repairs, value, square footage, permits, " +
+      "utilities, zoning, or any other property details. Assignee is responsible for doing " +
+      "their own due diligence.",
+  },
+  {
+    id: "no_financing",
+    title: "No Financing Contingency",
+    body:
+      "This is a cash or hard money transaction. Assignee's obligation to close is not " +
+      "contingent on financing, inspections, appraisal, or resale of the Property.",
+  },
+  {
+    id: "no_marketing",
+    title: "No Marketing",
+    body:
+      "Assignee may not publicly market, advertise, post, blast, or resell the Property without " +
+      "Assignor's written permission. This includes, but is not limited to, Facebook, " +
+      "InvestorLift, email blasts, SMS blasts, websites, or buyer groups.",
+  },
+  {
+    id: "no_reassignment",
+    title: "No Re-Assignment Without Permission",
+    body:
+      "Assignee may not assign this Agreement or the Original Contract to another buyer without " +
+      "written permission from Assignor. If Assignee violates this section, Assignor may keep " +
+      "the assignment fee and/or pursue damages.",
+  },
+  {
+    id: "failure_to_close",
+    title: "Failure to Close",
+    body:
+      "If Assignee fails to close or otherwise defaults, Assignor may keep the deposit as " +
+      "liquidated damages. Assignor may also step back into the Original Contract and pursue " +
+      "any additional legal remedies available.",
+  },
+  {
+    id: "no_ownership",
+    title: "Assignor Does Not Own the Property",
+    body:
+      "Assignee understands that Assignor does not currently own the Property. Assignor only " +
+      "has a contractual interest in the Property through the Original Contract.",
+  },
+  {
+    id: "entire_agreement",
+    title: "Entire Agreement",
+    body:
+      "This Agreement is the full agreement between the parties. Any changes must be in " +
+      "writing and signed by both parties.",
+  },
+  {
+    id: "esignatures",
+    title: "Electronic Signatures",
+    body: "Electronic signatures are valid and may be used to sign this Agreement.",
+  },
+];
+
 // Fill {{token}} placeholders from a values map. Empty/missing values print as
 // an underscore blank sized by the token's blankWidth (unknown tokens get 20).
-// Values are pre-formatted by the caller (money, dates, words).
-export function mergeTokens(body, values = {}) {
+// Values are pre-formatted by the caller (money, dates, words). Pass the token
+// list matching the document (CONTRACT_TOKENS or ASSIGNMENT_TOKENS) so blanks
+// come out the right width.
+export function mergeTokens(body, values = {}, tokens = CONTRACT_TOKENS) {
   return String(body || "").replace(/\{\{(\w+)\}\}/g, (_, key) => {
     const v = values[key];
     if (v !== undefined && v !== null && String(v).trim() !== "") return String(v);
-    const tok = CONTRACT_TOKENS.find((t) => t.key === key);
+    const tok = tokens.find((t) => t.key === key);
     return "_".repeat(tok?.blankWidth || 20);
   });
 }

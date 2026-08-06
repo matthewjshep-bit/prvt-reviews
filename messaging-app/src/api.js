@@ -129,6 +129,8 @@ export const deleteOffer = (id) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}?${locq()}`, { method: "DELETE" }).then(j);
 export const generateContract = (id, fields) =>
   post(`/api/offers/${encodeURIComponent(id)}/contract`, { fields });
+export const generateAssignment = (id, fields) =>
+  post(`/api/offers/${encodeURIComponent(id)}/assignment`, { fields });
 export const sendOffer = (id, { message = "", dryRun = true, channels, docs, emailSubject } = {}) =>
   post(`/api/offers/${encodeURIComponent(id)}/send`, {
     message,

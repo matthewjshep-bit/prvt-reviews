@@ -4,7 +4,10 @@
 import React, { useEffect, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { DEFAULT_OFFER_SETTINGS, effectiveSettings } from "@shared/offer-calc.js";
-import { CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES } from "@shared/contract-template.js";
+import {
+  CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
+  ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
+} from "@shared/contract-template.js";
 import { saveSettings } from "./api.js";
 
 const INPUT_CLS =
@@ -39,6 +42,70 @@ function Txt({ label, value, onChange, placeholder }) {
   );
 }
 
+// Clause-template editor shared by the Purchase & Sale and Assignment contract
+// sections. `value` is the saved override ([{id, title, body}] or null/empty
+// for the built-in defaults); the first edit materializes a copy via onChange;
+// Reset passes null back.
+function ClauseEditor({ value, defaults, tokens, onChange }) {
+  const list = Array.isArray(value) && value.length ? value : defaults;
+  const isDefault = !Array.isArray(value) || !value.length;
+  const mutate = (fn) => onChange(fn(list.map((c) => ({ ...c }))));
+  const patchClause = (i, k) => (e) => mutate((l) => { l[i] = { ...l[i], [k]: e.target.value }; return l; });
+  const moveClause = (i, dir) => mutate((l) => {
+    const j = i + dir;
+    if (j < 0 || j >= l.length) return l;
+    [l[i], l[j]] = [l[j], l[i]];
+    return l;
+  });
+  const removeClause = (i) => mutate((l) => l.filter((_, x) => x !== i));
+  const addClause = () => mutate((l) => [...l, { id: `c-${Date.now()}`, title: "", body: "" }]);
+  return (
+    <>
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {tokens.map((t) => (
+          <span key={t.key} className="rounded-full bg-gray-100 px-2 py-0.5 font-mono text-[11px] text-gray-600"
+            title={`${t.label} — filled from the contract form; empty prints a blank line`}>
+            {`{{${t.key}}}`}
+          </span>
+        ))}
+      </div>
+      {list.map((c, i) => (
+        <div key={c.id || i} className="mb-2 rounded-lg border border-gray-200 p-2.5">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="w-6 shrink-0 text-right text-xs font-bold text-gray-400">{i + 1}.</span>
+            <input className={INPUT_CLS} value={c.title} onChange={patchClause(i, "title")} placeholder="Clause title" />
+            <button type="button" onClick={() => moveClause(i, -1)} disabled={i === 0}
+              className="rounded p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30" title="Move up">
+              <ChevronUp size={15} />
+            </button>
+            <button type="button" onClick={() => moveClause(i, 1)} disabled={i === list.length - 1}
+              className="rounded p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30" title="Move down">
+              <ChevronDown size={15} />
+            </button>
+            <button type="button" onClick={() => removeClause(i)}
+              className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Remove clause">
+              <Trash2 size={15} />
+            </button>
+          </div>
+          <textarea rows={3} className={INPUT_CLS} value={c.body} onChange={patchClause(i, "body")}
+            placeholder="Clause text — use {{tokens}} for the fill-in fields" />
+        </div>
+      ))}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button type="button" onClick={addClause}
+          className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50">
+          <Plus size={14} /> Add clause
+        </button>
+        <button type="button" onClick={() => onChange(null)} disabled={isDefault}
+          className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50 disabled:opacity-40"
+          title="Discard edits and go back to the built-in wholesale-friendly language">
+          <RotateCcw size={14} /> Reset to default language
+        </button>
+      </div>
+    </>
+  );
+}
+
 // mode: "offers" shows everything; "outreach" (the standalone Agent Outreach
 // site) shows only the RentCast section — same per-location settings blob
 // underneath, so saves from either site merge safely via the full form state.
@@ -55,29 +122,10 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const set = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, [k]: v })); };
   const setCo = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, company: { ...f.company, [k]: v } })); };
 
-  // Contract clause template. null/empty → the built-in default language; the
-  // first edit materializes a copy into form.contractTemplate (same pattern as
-  // the letter-terms template on the New Offer page).
-  const clauseList = (f) =>
-    Array.isArray(f.contractTemplate) && f.contractTemplate.length
-      ? f.contractTemplate
-      : DEFAULT_CONTRACT_CLAUSES;
-  const clauses = clauseList(form);
-  const clausesAreDefault = !Array.isArray(form.contractTemplate) || !form.contractTemplate.length;
-  const setClauses = (mutate) => {
-    setSaved(false);
-    setForm((f) => ({ ...f, contractTemplate: mutate(clauseList(f).map((c) => ({ ...c }))) }));
-  };
-  const patchClause = (i, k) => (e) => setClauses((list) => { list[i] = { ...list[i], [k]: e.target.value }; return list; });
-  const moveClause = (i, dir) => setClauses((list) => {
-    const j = i + dir;
-    if (j < 0 || j >= list.length) return list;
-    [list[i], list[j]] = [list[j], list[i]];
-    return list;
-  });
-  const removeClause = (i) => setClauses((list) => list.filter((_, x) => x !== i));
-  const addClause = () => setClauses((list) => [...list, { id: `c-${Date.now()}`, title: "", body: "" }]);
-  const resetClauses = () => { setSaved(false); setForm((f) => ({ ...f, contractTemplate: null })); };
+  // Contract clause templates (Purchase & Sale + Assignment). null/empty → the
+  // built-in default language; the first edit materializes a copy into the form
+  // (same pattern as the letter-terms template on the New Offer page).
+  const setTemplate = (key) => (v) => { setSaved(false); setForm((f) => ({ ...f, [key]: v })); };
 
   async function save() {
     setSaving(true); setError("");
@@ -191,47 +239,21 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           Inspection Period paragraph"), never by number. Not legal advice — have your attorney review
           your template.
         </p>
-        <div className="mb-3 flex flex-wrap gap-1.5">
-          {CONTRACT_TOKENS.map((t) => (
-            <span key={t.key} className="rounded-full bg-gray-100 px-2 py-0.5 font-mono text-[11px] text-gray-600"
-              title={`${t.label} — filled from the contract form; empty prints a blank line`}>
-              {`{{${t.key}}}`}
-            </span>
-          ))}
-        </div>
-        {clauses.map((c, i) => (
-          <div key={c.id || i} className="mb-2 rounded-lg border border-gray-200 p-2.5">
-            <div className="mb-2 flex items-center gap-2">
-              <span className="w-6 shrink-0 text-right text-xs font-bold text-gray-400">{i + 1}.</span>
-              <input className={INPUT_CLS} value={c.title} onChange={patchClause(i, "title")} placeholder="Clause title" />
-              <button type="button" onClick={() => moveClause(i, -1)} disabled={i === 0}
-                className="rounded p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30" title="Move up">
-                <ChevronUp size={15} />
-              </button>
-              <button type="button" onClick={() => moveClause(i, 1)} disabled={i === clauses.length - 1}
-                className="rounded p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30" title="Move down">
-                <ChevronDown size={15} />
-              </button>
-              <button type="button" onClick={() => removeClause(i)}
-                className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Remove clause">
-                <Trash2 size={15} />
-              </button>
-            </div>
-            <textarea rows={3} className={INPUT_CLS} value={c.body} onChange={patchClause(i, "body")}
-              placeholder="Clause text — use {{tokens}} for the fill-in fields" />
-          </div>
-        ))}
-        <div className="mt-2 flex flex-wrap gap-2">
-          <button type="button" onClick={addClause}
-            className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50">
-            <Plus size={14} /> Add clause
-          </button>
-          <button type="button" onClick={resetClauses} disabled={clausesAreDefault}
-            className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50 disabled:opacity-40"
-            title="Discard edits and go back to the built-in wholesale-friendly language">
-            <RotateCcw size={14} /> Reset to default language
-          </button>
-        </div>
+        <ClauseEditor value={form.contractTemplate} defaults={DEFAULT_CONTRACT_CLAUSES}
+          tokens={CONTRACT_TOKENS} onChange={setTemplate("contractTemplate")} />
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-4">
+        <h2 className="mb-1 text-sm font-bold">Assignment contract (dispositions)</h2>
+        <p className="mb-3 text-xs text-gray-500">
+          Clause language for the Assignment of Contract agreement — the document your dispositions
+          side sends to the END BUYER (assignee), never the seller. Generated from an offer's result
+          page or History → Generate assignment. Clauses are numbered by their position here, so
+          reference other clauses by name, never by number. Not legal advice — have your attorney
+          review your template.
+        </p>
+        <ClauseEditor value={form.assignmentTemplate} defaults={DEFAULT_ASSIGNMENT_CLAUSES}
+          tokens={ASSIGNMENT_TOKENS} onChange={setTemplate("assignmentTemplate")} />
       </section>
       </>)}
 

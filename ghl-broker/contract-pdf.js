@@ -1,4 +1,5 @@
-// contract-pdf.js — renders the Purchase & Sale Agreement as a real text PDF
+// contract-pdf.js — renders the Purchase & Sale Agreement (and, via the
+// `layout` options, the Assignment of Contract Agreement) as a real text PDF
 // via pdf-lib (selectable text, flowing pagination), unlike the image-page
 // offer documents. Layout follows standard association-form conventions —
 // Specific Terms summary table, numbered General Terms clauses, signature
@@ -8,7 +9,7 @@
 // breaks are all manual here, measured with font.widthOfTextAtSize.
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { CONTRACT_DISCLAIMER, CONTRACT_PREAMBLE, mergeTokens } from "./shared/contract-template.js";
+import { CONTRACT_DISCLAIMER, CONTRACT_PREAMBLE, CONTRACT_TOKENS, mergeTokens } from "./shared/contract-template.js";
 
 const PAGE_W = 612; // US Letter, points
 const PAGE_H = 792;
@@ -65,7 +66,10 @@ function wrapText(text, font, size, maxWidth) {
   return lines;
 }
 
-export async function renderContractPdf({ clauses = [], values = {}, meta = {} }) {
+// `layout` customizes the document shell for other contract types (title,
+// preamble, Specific Terms rows, token list for blank widths, signature roles,
+// per-page initials label). Defaults reproduce the Purchase & Sale Agreement.
+export async function renderContractPdf({ clauses = [], values = {}, meta = {}, layout = {} }) {
   const pdf = await PDFDocument.create();
   const times = await pdf.embedFont(StandardFonts.TimesRoman);
   const bold = await pdf.embedFont(StandardFonts.TimesRomanBold);
@@ -100,8 +104,10 @@ export async function renderContractPdf({ clauses = [], values = {}, meta = {} }
 
   const gap = (h) => { ensureSpace(h); y -= h; };
 
+  const tokens = layout.tokens || CONTRACT_TOKENS;
+
   // ---- Heading -------------------------------------------------------------
-  const title = "PURCHASE AND SALE AGREEMENT";
+  const title = layout.title || "PURCHASE AND SALE AGREEMENT";
   const titleSize = 15;
   y -= titleSize;
   page.drawText(title, {
@@ -115,12 +121,12 @@ export async function renderContractPdf({ clauses = [], values = {}, meta = {} }
   gap(12);
 
   // ---- Preamble ------------------------------------------------------------
-  drawWrapped(mergeTokens(CONTRACT_PREAMBLE, values));
+  drawWrapped(mergeTokens(layout.preamble || CONTRACT_PREAMBLE, values, tokens));
   gap(12);
 
   // ---- Specific Terms ------------------------------------------------------
   const blank = (n) => "_".repeat(n);
-  const specificRows = [
+  const specificRows = layout.specificRows || [
     ["Date of Agreement", values.effective_date || blank(18)],
     ["Buyer", values.buyer_name || blank(30)],
     ["Seller", values.seller_name || blank(30)],
@@ -172,34 +178,46 @@ export async function renderContractPdf({ clauses = [], values = {}, meta = {} }
     const num = `${i + 1}.`;
     page.drawText(num, { x: MARGIN, y, size: BODY, font: bold, color: INK });
     page.drawText(sanitizeWinAnsi(clause.title || "").trim(), { x: MARGIN + GUTTER, y, size: BODY, font: bold, color: INK });
-    const body = mergeTokens(clause.body, values);
+    const body = mergeTokens(clause.body, values, tokens);
     drawWrapped(body, { x: MARGIN + GUTTER, width: CONTENT_W - GUTTER });
   });
   gap(18);
 
   // ---- Signature blocks ----------------------------------------------------
+  // Default: SELLER / BUYER, no company lines (the P&S shape). `layout.signatures`
+  // overrides with [{role, name, company?}] — a `company` key (even empty)
+  // prints a Company line in that column.
+  const signatures = layout.signatures || [
+    { role: "SELLER", name: meta.sellerName },
+    { role: "BUYER", name: meta.buyerName },
+  ];
+  const withCompany = signatures.some((s) => "company" in s);
   const COL_W = (CONTENT_W - 40) / 2;
-  const sigBlockH = 14 + 26 + 12 + LINE * 2 + 20;
+  const sigBlockH = 14 + 26 + 12 + LINE * (withCompany ? 3 : 2) + 20;
   ensureSpace(sigBlockH + 10); // whole block stays on one page
   const leftX = MARGIN;
   const rightX = MARGIN + COL_W + 40;
   const topY = y;
-  const sigColumn = (x, role, name) => {
+  const sigColumn = (x, sig) => {
     let cy = topY;
     cy -= 14;
-    page.drawText(`${role}:`, { x, y: cy, size: 11, font: bold, color: INK });
+    page.drawText(`${sig.role}:`, { x, y: cy, size: 11, font: bold, color: INK });
     cy -= 26;
     drawLine(x, cy, x + COL_W, cy, INK, 0.8);
     cy -= 12;
     page.drawText("Signature", { x, y: cy, size: 8, font: times, color: MUTED });
     cy -= LINE + 4;
-    page.drawText(`Name: ${sanitizeWinAnsi(name || "").trim() || "_".repeat(30)}`, { x, y: cy, size: BODY, font: times, color: INK });
+    page.drawText(`Name: ${sanitizeWinAnsi(sig.name || "").trim() || "_".repeat(30)}`, { x, y: cy, size: BODY, font: times, color: INK });
+    if ("company" in sig) {
+      cy -= LINE + 4;
+      page.drawText(`Company: ${sanitizeWinAnsi(sig.company || "").trim() || "_".repeat(26)}`, { x, y: cy, size: BODY, font: times, color: INK });
+    }
     cy -= LINE + 4;
     page.drawText(`Date: ${"_".repeat(24)}`, { x, y: cy, size: BODY, font: times, color: INK });
     return cy;
   };
-  const endL = sigColumn(leftX, "SELLER", meta.sellerName);
-  const endR = sigColumn(rightX, "BUYER", meta.buyerName);
+  const endL = sigColumn(leftX, signatures[0]);
+  const endR = sigColumn(rightX, signatures[1]);
   y = Math.min(endL, endR) - 10;
 
   // ---- Footer (second pass — needs the final page count) -------------------
@@ -212,7 +230,8 @@ export async function renderContractPdf({ clauses = [], values = {}, meta = {} }
     });
     if (i < pages.length - 1) {
       // Initials on every page except the signature page.
-      p.drawText(`Seller's Initials ${"_".repeat(8)}    Buyer's Initials ${"_".repeat(8)}`, {
+      const initials = layout.initialsLabels || ["Seller's Initials", "Buyer's Initials"];
+      p.drawText(`${initials[0]} ${"_".repeat(8)}    ${initials[1]} ${"_".repeat(8)}`, {
         x: MARGIN, y: FOOTER_Y, size: 8, font: times, color: MUTED,
       });
     }

@@ -58,6 +58,9 @@ export const DEFAULT_OFFER_SETTINGS = {
   // Saved Purchase & Sale contract clause template: [{id, title, body}] rows
   // edited in Settings. null → DEFAULT_CONTRACT_CLAUSES in contract-template.js.
   contractTemplate: null,
+  // Saved Assignment of Contract clause template (dispositions/buyer-facing).
+  // null → DEFAULT_ASSIGNMENT_CLAUSES in contract-template.js.
+  assignmentTemplate: null,
   compsApiKey: "",           // enables the comps map + MLS photos (realestateapi.com API key)
   aiApiKey: "",              // enables the AI rehab photo scan (Anthropic API key)
   apifyToken: "",            // Zillow listing photos via Apify (zillow-detail-scraper)

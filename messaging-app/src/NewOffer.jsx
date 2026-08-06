@@ -12,6 +12,7 @@ import RehabPane from "./RehabPane.jsx";
 import NotesPanel from "./NotesPanel.jsx";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
+import AssignmentModal from "./AssignmentModal.jsx";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -455,6 +456,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const [error, setError] = useState("");
   const [sendOpen, setSendOpen] = useState(false); // SendModal (text and/or email via GHL)
   const [contractOpen, setContractOpen] = useState(false); // ContractModal (purchase & sale PDF)
+  const [assignmentOpen, setAssignmentOpen] = useState(false); // AssignmentModal (dispositions PDF)
   const [lastSend, setLastSend] = useState(null);  // most recent send record, for the ✓ banner
 
   // Money fields format with thousands separators as you type; the calc
@@ -668,6 +670,21 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               className="flex w-full items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
               <Send size={16} /> Send to the contact — text or email
             </button>
+            <div className="pt-1">
+              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-gray-500">
+                Dispositions — for the end buyer, not the seller
+              </div>
+              {offer.assignmentPdfUrl && (
+                <a href={offer.assignmentPdfUrl} target="_blank" rel="noreferrer"
+                  className="mb-3 flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+                  <FileText size={16} /> Open Assignment Contract (PDF)
+                </a>
+              )}
+              <button type="button" onClick={() => setAssignmentOpen(true)}
+                className="flex w-full items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+                <FileText size={16} /> {offer.assignmentPdfUrl ? "Update assignment contract" : "Generate assignment contract"}
+              </button>
+            </div>
             {lastSend && (
               <div className="rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800">
                 Sent via {(lastSend.channels || []).map((c) => CHANNEL_LABELS[c] || c).join(" + ")} ✓
@@ -699,6 +716,14 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
             offer={offer}
             settings={effSettings}
             onClose={() => setContractOpen(false)}
+            onGenerated={(o) => setResult((r) => ({ ...r, offer: o }))}
+          />
+        )}
+        {assignmentOpen && (
+          <AssignmentModal
+            offer={offer}
+            settings={effSettings}
+            onClose={() => setAssignmentOpen(false)}
             onGenerated={(o) => setResult((r) => ({ ...r, offer: o }))}
           />
         )}

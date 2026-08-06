@@ -8,6 +8,7 @@ import { fmtMoney } from "@shared/offer-calc.js";
 import { deleteOffer, getSettings, ghlContactUrl, listOffers, zillowUrl } from "./api.js";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
+import AssignmentModal from "./AssignmentModal.jsx";
 
 function AttachStatus({ offer }) {
   if (offer.status === "draft") {
@@ -46,7 +47,7 @@ function SentBadge({ offer }) {
   );
 }
 
-function OfferDetail({ offer, onClose, onEdit, onSend, onContract }) {
+function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment }) {
   const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
   const Row = ({ label, value }) => (
     <div className="flex justify-between gap-4 text-sm">
@@ -190,6 +191,26 @@ function OfferDetail({ offer, onClose, onEdit, onSend, onContract }) {
                 </button>
               )}
             </div>
+            {offer.status !== "draft" && (
+              <div className="rounded-xl border border-gray-200 p-3">
+                <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-gray-500">
+                  Dispositions — for the end buyer, not the seller
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {offer.assignmentPdfUrl && (
+                    <a href={offer.assignmentPdfUrl} target="_blank" rel="noreferrer"
+                      className="flex items-center gap-2 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50">
+                      <FileText size={15} /> Assignment PDF
+                    </a>
+                  )}
+                  <button type="button" onClick={() => onAssignment?.(offer)}
+                    className="flex items-center gap-2 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50"
+                    title="Generate or update the assignment of contract for the end buyer">
+                    <FileText size={15} /> {offer.assignmentPdfUrl ? "Update assignment" : "Generate assignment"}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -203,6 +224,7 @@ export default function OffersHistory({ onEdit }) {
   const [selected, setSelected] = useState(null);
   const [sending, setSending] = useState(null);
   const [contracting, setContracting] = useState(null); // offer open in ContractModal
+  const [assigning, setAssigning] = useState(null); // offer open in AssignmentModal
   const [settings, setSettings] = useState(null); // fetched lazily for contract prefills
   const [q, setQ] = useState("");
 
@@ -234,12 +256,19 @@ export default function OffersHistory({ onEdit }) {
     if (!settings) getSettings().then(setSettings).catch(() => {});
   }
 
-  // Contract generation updates the whole offer (contractPdfUrl + fields).
+  function openAssignment(offer) {
+    setAssigning(offer);
+    // Assignor-name prefill comes from settings.company; fetch once, best-effort.
+    if (!settings) getSettings().then(setSettings).catch(() => {});
+  }
+
+  // Contract/assignment generation updates the whole offer (pdf URLs + fields).
   function handleContractGenerated(updated) {
     const patch = (o) => (o && o.id === updated.id ? updated : o);
     setOffers((list) => (list || []).map(patch));
     setSelected(patch);
     setContracting(patch);
+    setAssigning(patch);
   }
 
   if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
@@ -339,6 +368,9 @@ export default function OffersHistory({ onEdit }) {
                     {o.contractPdfUrl && (
                       <a href={o.contractPdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-gray-900">Contract</a>
                     )}
+                    {o.assignmentPdfUrl && (
+                      <a href={o.assignmentPdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-gray-900">Assignment</a>
+                    )}
                   </span>
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-xs">
@@ -372,10 +404,13 @@ export default function OffersHistory({ onEdit }) {
       {selected && <OfferDetail offer={selected} onClose={() => setSelected(null)}
         onEdit={(o) => { setSelected(null); onEdit?.(o); }}
         onSend={(o) => setSending(o)}
-        onContract={openContract} />}
+        onContract={openContract}
+        onAssignment={openAssignment} />}
       {sending && <SendModal offer={sending} onClose={() => setSending(null)} onSent={handleSent} />}
       {contracting && <ContractModal offer={contracting} settings={settings}
         onClose={() => setContracting(null)} onGenerated={handleContractGenerated} />}
+      {assigning && <AssignmentModal offer={assigning} settings={settings}
+        onClose={() => setAssigning(null)} onGenerated={handleContractGenerated} />}
     </>
   );
 }

@@ -15,6 +15,8 @@
 //   POST   /api/offers/:id/send              send offer docs via text/email
 //   POST   /api/offers/:id/contract          render the purchase & sale contract PDF
 //   GET    /api/offers/:id/contract.pdf
+//   POST   /api/offers/:id/assignment        render the assignment of contract PDF (dispositions)
+//   GET    /api/offers/:id/assignment.pdf
 
 import express from "express";
 import crypto from "node:crypto";
@@ -22,7 +24,9 @@ import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, moneyInWords } from "../offer-doc.js";
 import { renderContractPdf } from "../contract-pdf.js";
-import { DEFAULT_CONTRACT_CLAUSES } from "../shared/contract-template.js";
+import {
+  DEFAULT_CONTRACT_CLAUSES, DEFAULT_ASSIGNMENT_CLAUSES, ASSIGNMENT_TOKENS, ASSIGNMENT_PREAMBLE,
+} from "../shared/contract-template.js";
 import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
 import { addressQueryVariants, zillowUrl } from "../shared/us-address.js";
 export { zillowUrl };
@@ -237,6 +241,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   router.get("/:id/scope.pdf", serveDoc("scopepdf", "REHAB SOW", "pdf"));
   router.get("/:id/comps.pdf", serveDoc("compspdf", "COMPS", "pdf"));
   router.get("/:id/contract.pdf", serveDoc("contractpdf", "CONTRACT", "pdf"));
+  router.get("/:id/assignment.pdf", serveDoc("assignmentpdf", "ASSIGNMENT", "pdf"));
 
   // Render a companion PDF (Rehab SOW, Comps Analysis) through cardgen and
   // store it next to the offer documents. Accepts one template per page.
@@ -1188,6 +1193,109 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       offer.contract = { fields, generatedAt: new Date().toISOString() };
       offer.contractPdfUrl = url;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- assignment of contract (dispositions — the end buyer) ---------- */
+  // Body: { fields: { effectiveDate, assignorName, assignorCompany,
+  //         assigneeName, assigneeCompany, address, totalPrice, deposit,
+  //         depositDueDate, closingDate } }. Same machinery as the purchase
+  //         contract but with the assignment clause template and an
+  //         Assignee/Assignor document shell. This document goes to the END
+  //         BUYER — it is deliberately NOT part of the /send doc set, which
+  //         only ever texts/emails the seller-side contact.
+  router.post("/:id/assignment", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const offer = await store.getOffer(req.params.id);
+      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
+
+      const raw = req.body?.fields || {};
+      const str = (k, max = 200) => String(raw[k] ?? "").trim().slice(0, max);
+      const money = (k) => {
+        const n = Number(String(raw[k] ?? "").replace(/[$,\s]/g, ""));
+        return Number.isFinite(n) && n > 0 ? n : 0;
+      };
+      const fields = {
+        effectiveDate: str("effectiveDate"),
+        assignorName: str("assignorName"),
+        assignorCompany: str("assignorCompany"),
+        assigneeName: str("assigneeName"),
+        assigneeCompany: str("assigneeCompany"),
+        address: str("address"),
+        totalPrice: money("totalPrice"),
+        deposit: money("deposit"),
+        depositDueDate: str("depositDueDate"),
+        closingDate: str("closingDate"),
+      };
+
+      const settings = effectiveSettings(await store.getOfferSettings(locationId));
+      const clauses = Array.isArray(settings.assignmentTemplate) && settings.assignmentTemplate.length
+        ? settings.assignmentTemplate
+        : DEFAULT_ASSIGNMENT_CLAUSES;
+
+      const dateText = (v) => {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+        return m ? dateLabel(new Date(+m[1], +m[2] - 1, +m[3])) : v;
+      };
+      const values = {
+        effective_date: dateText(fields.effectiveDate),
+        assignor_name: fields.assignorName,
+        assignor_company: fields.assignorCompany,
+        assignee_name: fields.assigneeName,
+        assignee_company: fields.assigneeCompany,
+        address: fields.address,
+        total_price: fields.totalPrice ? fmtMoney(fields.totalPrice) : "",
+        total_price_words: fields.totalPrice ? moneyInWords(fields.totalPrice) : "",
+        deposit: fields.deposit ? fmtMoney(fields.deposit) : "",
+        deposit_due_date: dateText(fields.depositDueDate),
+        closing_date: dateText(fields.closingDate),
+      };
+
+      const blank = (n) => "_".repeat(n);
+      const pdf = await renderContractPdf({
+        clauses,
+        values,
+        layout: {
+          title: "ASSIGNMENT OF CONTRACT AGREEMENT",
+          preamble: ASSIGNMENT_PREAMBLE,
+          tokens: ASSIGNMENT_TOKENS,
+          specificRows: [
+            ["Date of Agreement", values.effective_date || blank(18)],
+            ["Assignor / Seller", values.assignor_name || blank(30)],
+            ["Assignee / Buyer", values.assignee_name || blank(30)],
+            ["Property Address", values.address || blank(40)],
+            ["Total Purchase Price", values.total_price ? `${values.total_price} (includes Assignor's assignment fee)` : blank(14)],
+            ["Deposit", values.deposit || blank(12)],
+            ["Deposit Due", values.deposit_due_date ? `On or before ${values.deposit_due_date}` : `On or before ${blank(18)}`],
+            ["Closing Date", values.closing_date ? `On or before ${values.closing_date}` : `On or before ${blank(18)}`],
+          ],
+          // Assignee signs first, matching the standard assignment form order.
+          signatures: [
+            { role: "ASSIGNEE / BUYER", name: fields.assigneeName, company: fields.assigneeCompany },
+            { role: "ASSIGNOR / SELLER", name: fields.assignorName, company: fields.assignorCompany },
+          ],
+          initialsLabels: ["Assignor's Initials", "Assignee's Initials"],
+        },
+      });
+
+      let url;
+      if (r2Enabled) {
+        url = await uploadAsset(`offers/${locationId}/${offer.id}-assignment.pdf`, pdf, "application/pdf", {
+          localDir: uploadDir,
+          localBaseUrl: `${publicBaseUrl}/uploads`,
+          contentDisposition: `inline; filename="${docFilename(offer.address, "ASSIGNMENT", "pdf")}"`,
+        });
+      } else {
+        await store.saveOfferDoc(offer.id, "assignmentpdf", pdf, "application/pdf");
+        url = `${publicBaseUrl}/api/offers/${offer.id}/assignment.pdf`;
+      }
+      url += `${url.includes("?") ? "&" : "?"}v=${Date.now()}`;
+
+      offer.assignment = { fields, generatedAt: new Date().toISOString() };
+      offer.assignmentPdfUrl = url;
       await store.updateOffer(offer.id, offer);
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
