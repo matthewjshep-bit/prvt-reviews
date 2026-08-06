@@ -10,7 +10,9 @@
 // fast; the two /ghl endpoints hit GoHighLevel and each degrades independently
 // to { ok: true, scopeMissing: true } when the location's Private Integration
 // token lacks the needed scope (contacts.readonly / conversations.readonly),
-// so the frontend shows a warning banner instead of an error.
+// so the frontend shows a warning banner instead of an error. A slow scan
+// answers { ok: true, pending: true } and keeps running server-side — the
+// client polls until the cached result lands.
 //
 // All bucketing happens here in JS from lean store rows — the store's Postgres
 // and JSON-file backends stay trivially in parity that way. Buckets are the
@@ -59,20 +61,36 @@ const readWindow = (req) => ({
   tzOffset: clamp(parseInt(req.query.tz_offset, 10) || 0, -840, 840),
 });
 
-// 10-minute cache for the GHL scans (they can take ~100s of API calls), plus
-// in-flight dedupe so a double-mounted React effect doesn't scan twice.
+// 10-minute cache for the GHL scans (a busy window is minutes of paced API
+// calls), plus in-flight dedupe so a double-mounted React effect doesn't scan
+// twice. A scan that outlives SOFT_WAIT_MS keeps running in the background and
+// the route answers { pending: true } — the client polls until the cache is
+// warm. Without that, Render's edge kills the long-hanging response and the
+// scan's work is thrown away. Failures are cached briefly so a broken
+// location doesn't rescan on every poll.
 const SCAN_TTL_MS = 10 * 60 * 1000;
-const scanCache = new Map(); // key -> { at, payload }
+const SCAN_ERR_TTL_MS = 60 * 1000;
+const SOFT_WAIT_MS = 25 * 1000;
+const PENDING = Symbol("pending");
+const scanCache = new Map(); // key -> { at, payload?, error? }
 const scanInflight = new Map(); // key -> Promise<payload>
 async function cachedScan(key, run) {
   const hit = scanCache.get(key);
-  if (hit && Date.now() - hit.at < SCAN_TTL_MS) return hit.payload;
-  if (!scanInflight.has(key)) {
-    scanInflight.set(key, run().finally(() => scanInflight.delete(key)));
+  if (hit && Date.now() - hit.at < (hit.error ? SCAN_ERR_TTL_MS : SCAN_TTL_MS)) {
+    if (hit.error) throw hit.error;
+    return hit.payload;
   }
-  const payload = await scanInflight.get(key);
-  scanCache.set(key, { at: Date.now(), payload });
-  return payload;
+  if (!scanInflight.has(key)) {
+    const job = run()
+      .then(
+        (payload) => { scanCache.set(key, { at: Date.now(), payload }); return payload; },
+        (error) => { scanCache.set(key, { at: Date.now(), error }); throw error; }
+      )
+      .finally(() => scanInflight.delete(key));
+    job.catch(() => {}); // the route may have answered pending and moved on
+    scanInflight.set(key, job);
+  }
+  return Promise.race([scanInflight.get(key), sleep(SOFT_WAIT_MS).then(() => PENDING)]);
 }
 
 // GHL rate limit is a per-location burst (100 req / 10s). Two guards: scans
@@ -221,14 +239,21 @@ export default function createDashboardRouter({ resolveLocation }) {
   // page's oldest lastMessageDate) until activity predates the window or the
   // conversation cap, then up to 3 message pages per active conversation,
   // bucketed by type. Calls count both directions; SMS/email count outbound
-  // only ("sent per day"). Bounded by design: very-high-volume locations
-  // undercount and report approx.capped — honest truncation beats an
-  // unbounded scan. ~100ms pacing keeps well under GHL's burst rate limit.
-  const MAX_CONVERSATIONS = 300;
+  // only ("sent per day"). Conversations are deduped by id and collection
+  // stops when a page yields nothing new, so a repeated or stuck cursor can
+  // never count the same conversation twice. Message fetches run in small
+  // concurrent chunks paced under GHL's 100-req/10s burst, so a bulk-send
+  // window (hundreds of active conversations) finishes in minutes. Truly
+  // huge windows still cap out and report approx.capped — honest truncation
+  // beats an unbounded scan.
+  const MAX_CONVERSATIONS = 1000;
+  const MSG_CHUNK = 6;           // concurrent per-conversation message fetches
+  const MSG_CHUNK_PACE_MS = 800; // ≈ 6 req / 0.8s ≈ 75 req / 10s worst case
   async function scanMessages(client, locationId, days, tzOffset) {
     const { startMs, dates } = windowFor(days, tzOffset);
     const daily = new Map(dates.map((date) => [date, { date, calls: 0, sms: 0, email: 0 }]));
 
+    const seen = new Set();
     const active = [];
     let total = 0;
     let cursor = null;
@@ -237,18 +262,28 @@ export default function createDashboardRouter({ resolveLocation }) {
       const page = await ghlPage(() => searchConversations(client, locationId, { limit: 100, startAfterDate: cursor }));
       if (!total) total = page.total;
       if (!page.conversations.length) { sawWindowEnd = true; break; }
+      const before = active.length;
       for (const c of page.conversations) {
-        if (msOf(c.lastMessageDate) >= startMs) active.push(c);
+        if (!c.id || seen.has(c.id)) continue;
+        seen.add(c.id);
+        const ts = msOf(c.lastMessageDate);
+        // A missing lastMessageDate says nothing about the window — skip the
+        // conversation rather than mistaking it for the end of the window.
+        if (!Number.isFinite(ts)) continue;
+        if (ts >= startMs) active.push(c);
         else sawWindowEnd = true;
       }
       if (sawWindowEnd || page.conversations.length < 100) { sawWindowEnd = true; break; }
+      // A page of pure repeats means the cursor is stuck — stop instead of
+      // spinning; approx.capped keeps the truncation honest.
+      if (active.length === before) break;
       cursor = msOf(page.conversations[page.conversations.length - 1].lastMessageDate);
       if (!Number.isFinite(cursor)) break;
       await sleep(PACE_MS);
     }
     let truncated = !sawWindowEnd;
 
-    for (const convo of active) {
+    async function tallyConversation(convo) {
       let lastMessageId = null;
       let pages = 0;
       paging: while (pages < 3) {
@@ -267,11 +302,14 @@ export default function createDashboardRouter({ resolveLocation }) {
           else if (type.includes("EMAIL") && outbound) bucket.email += 1;
         }
         if (!page.nextPage || !page.lastMessageId) break;
-        if (pages === 3) truncated = true;
+        if (pages === 3) { truncated = true; break; }
         lastMessageId = page.lastMessageId;
         await sleep(PACE_MS);
       }
-      await sleep(PACE_MS);
+    }
+    for (let i = 0; i < active.length; i += MSG_CHUNK) {
+      await Promise.all(active.slice(i, i + MSG_CHUNK).map(tallyConversation));
+      if (i + MSG_CHUNK < active.length) await sleep(MSG_CHUNK_PACE_MS);
     }
 
     return {
@@ -280,8 +318,9 @@ export default function createDashboardRouter({ resolveLocation }) {
       approx: {
         conversationsScanned: active.length,
         conversationsTotal: total,
-        // capped: the conversation cap or a per-conversation page cap was hit —
-        // older activity inside the window may be undercounted.
+        // capped: the conversation cap, a stuck cursor, or a per-conversation
+        // page cap cut the scan short — activity inside the window may be
+        // undercounted.
         capped: truncated,
       },
       cachedAt: new Date().toISOString(),
@@ -330,8 +369,9 @@ export default function createDashboardRouter({ resolveLocation }) {
     try {
       const { locationId, client } = resolveLocation(req);
       const { days, tzOffset } = readWindow(req);
-      res.json(await cachedScan(`contacts:${locationId}:${days}:${tzOffset}`,
-        () => serialized(locationId, () => scanContacts(client, locationId, days, tzOffset))));
+      const result = await cachedScan(`contacts:${locationId}:${days}:${tzOffset}`,
+        () => serialized(locationId, () => scanContacts(client, locationId, days, tzOffset)));
+      res.json(result === PENDING ? { ok: true, pending: true } : result);
     } catch (err) {
       if (scopeMissing(err)) return res.json({ ok: true, scopeMissing: true });
       fail(res, err);
@@ -342,8 +382,9 @@ export default function createDashboardRouter({ resolveLocation }) {
     try {
       const { locationId, client } = resolveLocation(req);
       const { days, tzOffset } = readWindow(req);
-      res.json(await cachedScan(`messages:${locationId}:${days}:${tzOffset}`,
-        () => serialized(locationId, () => scanMessages(client, locationId, days, tzOffset))));
+      const result = await cachedScan(`messages:${locationId}:${days}:${tzOffset}`,
+        () => serialized(locationId, () => scanMessages(client, locationId, days, tzOffset)));
+      res.json(result === PENDING ? { ok: true, pending: true } : result);
     } catch (err) {
       if (scopeMissing(err)) return res.json({ ok: true, scopeMissing: true });
       fail(res, err);

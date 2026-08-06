@@ -2,7 +2,8 @@
 // sources loaded independently so one failure never blanks the page:
 //   • /api/dashboard/summary      local: offers, app sends, outreach funnel
 //   • /api/dashboard/ghl/tags     live GHL contact counts per tag
-//   • /api/dashboard/ghl/messages GHL calls/texts/emails (bounded scan, cached)
+//   • /api/dashboard/ghl/messages GHL calls/texts/emails (bounded scan, cached;
+//     long scans answer { pending } and the page polls until the result lands)
 // The GHL panels degrade to an amber scope banner when the location's token
 // lacks contacts.readonly / conversations.readonly.
 //
@@ -287,37 +288,52 @@ export default function Dashboard({ settings, onSettingsSaved }) {
   };
   useEffect(loadTags, [Boolean(settings), tagsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // GHL message/call volume (slow first load; server caches 10 min).
-  const [ghlMsgs, setGhlMsgs] = useState(null);
-  const [msgsLoading, setMsgsLoading] = useState(true);
-  const [msgsError, setMsgsError] = useState("");
-  const [msgsScopeMissing, setMsgsScopeMissing] = useState(false);
-  const loadMsgs = () => {
-    setMsgsLoading(true);
-    setMsgsError("");
-    setMsgsScopeMissing(false);
-    getDashboardMessages(days)
-      .then((r) => (r.scopeMissing ? setMsgsScopeMissing(true) : setGhlMsgs(r)))
-      .catch((e) => setMsgsError(e.message))
-      .finally(() => setMsgsLoading(false));
+  // The GHL scans can outlive one request — the server answers
+  // { pending: true } while a scan is still running, so poll until the real
+  // payload lands. The generation counter cancels a poll loop the moment the
+  // range changes (or the page unmounts) so a stale response never wins.
+  const usePolledScan = (fetcher) => {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState("");
+    const [scopeMissing, setScopeMissing] = useState(false);
+    const gen = useRef(0);
+    const load = () => {
+      const g = ++gen.current;
+      setLoading(true);
+      setError("");
+      setScopeMissing(false);
+      const tick = () =>
+        fetcher(days)
+          .then((r) => {
+            if (g !== gen.current) return;
+            if (r.pending) { setTimeout(tick, 4000); return; }
+            if (r.scopeMissing) setScopeMissing(true);
+            else setData(r);
+            setLoading(false);
+          })
+          .catch((e) => {
+            if (g !== gen.current) return;
+            setError(e.message);
+            setLoading(false);
+          });
+      tick();
+    };
+    useEffect(() => { load(); return () => { gen.current += 1; }; }, [days]); // eslint-disable-line react-hooks/exhaustive-deps
+    return { data, loading, error, scopeMissing, load };
   };
-  useEffect(loadMsgs, [days]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // GHL message/call volume (slow first load; server caches 10 min).
+  const {
+    data: ghlMsgs, loading: msgsLoading, error: msgsError,
+    scopeMissing: msgsScopeMissing, load: loadMsgs,
+  } = usePolledScan(getDashboardMessages);
 
   // GHL contacts created (dateAdded scan; server caches 10 min).
-  const [ghlContacts, setGhlContacts] = useState(null);
-  const [contactsLoading, setContactsLoading] = useState(true);
-  const [contactsError, setContactsError] = useState("");
-  const [contactsScopeMissing, setContactsScopeMissing] = useState(false);
-  const loadContacts = () => {
-    setContactsLoading(true);
-    setContactsError("");
-    setContactsScopeMissing(false);
-    getDashboardContacts(days)
-      .then((r) => (r.scopeMissing ? setContactsScopeMissing(true) : setGhlContacts(r)))
-      .catch((e) => setContactsError(e.message))
-      .finally(() => setContactsLoading(false));
-  };
-  useEffect(loadContacts, [days]); // eslint-disable-line react-hooks/exhaustive-deps
+  const {
+    data: ghlContacts, loading: contactsLoading, error: contactsError,
+    scopeMissing: contactsScopeMissing, load: loadContacts,
+  } = usePolledScan(getDashboardContacts);
 
   // Inline tag-list editor (saves through the shared settings blob).
   const [editingTags, setEditingTags] = useState(false);
@@ -383,13 +399,19 @@ export default function Dashboard({ settings, onSettingsSaved }) {
       { calls: 0, sms: 0, email: 0 });
   }, [ghlMsgs]);
   const ghlKpisReady = Boolean(ghlTotals) && !msgsScopeMissing;
+  // A capped scan is a floor, not a total — say so on the tile ("N+").
+  const ghlCapped = Boolean(ghlMsgs?.approx?.capped);
+  const ghlKpi = (n) => ({
+    value: ghlCapped ? `${n.toLocaleString("en-US")}+` : n,
+    sub: ghlCapped ? "outbound, via GHL (partial scan)" : "outbound, via GHL",
+  });
   const textsKpi = ghlKpisReady
-    ? { value: ghlTotals.sms, sub: "outbound, via GHL" }
+    ? ghlKpi(ghlTotals.sms)
     : msgsScopeMissing || msgsError
     ? { value: summary?.sends.totalSms ?? 0, sub: "from this app" }
     : { value: "…", sub: "scanning GHL…" };
   const emailsKpi = ghlKpisReady
-    ? { value: ghlTotals.email, sub: "outbound, via GHL" }
+    ? ghlKpi(ghlTotals.email)
     : msgsScopeMissing || msgsError
     ? { value: summary?.sends.totalEmail ?? 0, sub: "from this app" }
     : { value: "…", sub: "scanning GHL…" };
@@ -510,7 +532,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
           ) : msgsLoading && !ghlMsgs ? (
             <Empty>
               <Loader2 size={16} className="mx-auto mb-2 animate-spin" />
-              Scanning recent conversations — the first load can take a minute…
+              Scanning recent conversations — the first load can take a few minutes…
             </Empty>
           ) : ghlMsgs ? (
             <div className={dim(msgsLoading, ghlMsgs)}>
