@@ -248,9 +248,29 @@ const Empty = ({ children }) => (
   <div className="py-6 text-center text-sm text-gray-400">{children}</div>
 );
 
+// One row of a "Today" card: label (with an optional series swatch) + number.
+function TodayStat({ label, value, swatch }) {
+  return (
+    <div className="flex items-baseline justify-between py-1.5">
+      <span className="flex items-center gap-2 text-sm text-gray-600">
+        {swatch && <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: swatch }} />}
+        {label}
+      </span>
+      <span className="text-xl font-semibold tabular-nums text-gray-900">{value}</span>
+    </div>
+  );
+}
+
 /* ---------- the page ---------- */
 
-const RANGES = [7, 30, 90];
+// days: 1 renders the "Today" layout — same KPI tiles, but stat cards instead
+// of one-bar daily charts.
+const RANGES = [
+  { days: 1, label: "Today" },
+  { days: 7, label: "Last 7 days" },
+  { days: 30, label: "Last 30 days" },
+  { days: 90, label: "Last 90 days" },
+];
 
 export default function Dashboard({ settings, onSettingsSaved }) {
   const [days, setDays] = useState(30);
@@ -388,6 +408,9 @@ export default function Dashboard({ settings, onSettingsSaved }) {
 
   const usage = summary?.outreach.usage;
   const agentsImported = (summary?.outreach.daily || []).reduce((s, d) => s + d.imported, 0);
+  // In the Today view the window is a single day, so window totals ARE the
+  // day's numbers; the outreach breakdown comes from its one daily bucket.
+  const todayOutreach = summary?.outreach.daily[summary.outreach.daily.length - 1];
 
   // Texts/emails KPIs come from GHL (all outbound activity, incl. workflow
   // sends) when the scan is available; app-send counts are the fallback so
@@ -424,11 +447,11 @@ export default function Dashboard({ settings, onSettingsSaved }) {
       {/* filter row — date range scopes everything below */}
       <div className="flex flex-wrap items-center gap-2">
         {RANGES.map((r) => (
-          <button key={r} type="button" onClick={() => setDays(r)}
+          <button key={r.days} type="button" onClick={() => setDays(r.days)}
             className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
-              days === r ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-100 border border-gray-200"
+              days === r.days ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-100 border border-gray-200"
             }`}>
-            Last {r} days
+            {r.label}
           </button>
         ))}
         {summaryLoading && <Loader2 size={15} className="animate-spin text-gray-400" />}
@@ -439,7 +462,8 @@ export default function Dashboard({ settings, onSettingsSaved }) {
       {/* KPI row */}
       {summary && (
         <div className={`grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 ${dim(summaryLoading, summary)}`}>
-          <KpiTile label="Offers created" value={summary.offers.total} sub={`last ${summary.days} days`} />
+          <KpiTile label="Offers created" value={summary.offers.total}
+            sub={days === 1 ? "today" : `last ${summary.days} days`} />
           <KpiTile label="Total offered" value={compact(summary.offers.cashTotal)} sub="cash offers" />
           <KpiTile label="Contacts created"
             value={contactsScopeMissing ? "—" : ghlContacts ? ghlContacts.total : "…"}
@@ -457,6 +481,60 @@ export default function Dashboard({ settings, onSettingsSaved }) {
         </div>
       )}
 
+      {days === 1 ? (
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Card
+          title="GHL activity today"
+          right={ghlMsgs?.cachedAt && !msgsLoading ? (
+            <span className="text-[11px] text-gray-400">
+              as of {new Date(ghlMsgs.cachedAt).toLocaleTimeString()}
+            </span>
+          ) : null}
+        >
+          {msgsScopeMissing ? (
+            <ScopeBanner scope="conversations.readonly" />
+          ) : msgsError ? (
+            <ErrorNote message={msgsError} onRetry={loadMsgs} />
+          ) : !ghlTotals ? (
+            <Empty><Loader2 size={16} className="mx-auto animate-spin" /></Empty>
+          ) : (
+            <div className={dim(msgsLoading, ghlMsgs)}>
+              <TodayStat label="Calls" swatch={C_CALLS} value={ghlTotals.calls} />
+              <TodayStat label="Texts (outbound)" swatch={C_TEXTS} value={ghlTotals.sms} />
+              <TodayStat label="Emails (outbound)" swatch={C_EMAIL} value={ghlTotals.email} />
+              {ghlMsgs?.approx?.capped && (
+                <div className="mt-1 text-[11px] text-gray-400">
+                  Partial scan — some of today's activity may be missing.
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+
+        <Card title="Sent from this app today">
+          {summary ? (
+            <div className={dim(summaryLoading, summary)}>
+              <TodayStat label="Texts" swatch={C_TEXTS} value={summary.sends.totalSms} />
+              <TodayStat label="Emails" swatch={C_EMAIL} value={summary.sends.totalEmail} />
+            </div>
+          ) : (
+            !summaryError && <Empty><Loader2 size={16} className="mx-auto animate-spin" /></Empty>
+          )}
+        </Card>
+
+        <Card title="Outreach today">
+          {summary && todayOutreach ? (
+            <div className={dim(summaryLoading, summary)}>
+              <TodayStat label="New agents found" swatch={C_NEW} value={todayOutreach.newAgents} />
+              <TodayStat label="Imported to GHL" swatch={C_IMPORTED} value={todayOutreach.imported} />
+              <TodayStat label="RentCast pulls" value={todayOutreach.pulls} />
+            </div>
+          ) : (
+            !summaryError && <Empty><Loader2 size={16} className="mx-auto animate-spin" /></Empty>
+          )}
+        </Card>
+      </div>
+      ) : (
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Offers per day">
           {summary ? (
@@ -574,6 +652,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
           )}
         </Card>
       </div>
+      )}
 
       <Card
         title="Contacts by tag — live from GHL"
