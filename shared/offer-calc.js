@@ -58,6 +58,8 @@ export const DEFAULT_OFFER_SETTINGS = {
   // Saved Assignment of Contract clause template (dispositions/buyer-facing).
   // null → DEFAULT_ASSIGNMENT_CLAUSES in contract-template.js.
   assignmentTemplate: null,
+  // GHL tags counted on the Dashboard page's tag panel (editable inline there).
+  dashboardTags: ["offer-created", "agent-outreach"],
   compsApiKey: "",           // enables the comps map + MLS photos (realestateapi.com API key)
   aiApiKey: "",              // enables the AI rehab photo scan (Anthropic API key)
   apifyToken: "",            // Zillow listing photos via Apify (zillow-detail-scraper)

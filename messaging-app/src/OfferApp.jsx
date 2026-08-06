@@ -8,16 +8,20 @@ import React, { useEffect, useState } from "react";
 import NewOffer from "./NewOffer.jsx";
 import OffersHistory from "./OffersHistory.jsx";
 import AgentOutreach from "./AgentOutreach.jsx";
+import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
 import { getLocationId, getOffer, getSettings } from "./api.js";
 
-// Which product this page is. One deploy serves both: /agents (any depth) is
-// the Agent Outreach app, everything else is the offer generator. The Netlify
-// SPA redirect sends /agents to this same bundle; VITE_APP_MODE=outreach still
-// forces outreach mode for a dedicated-domain deploy.
+// Which product this page is. One deploy serves all three: /agents (any depth)
+// is the Agent Outreach app, /dashboard is the analytics Dashboard, everything
+// else is the offer generator. The Netlify SPA redirect sends every path to
+// this same bundle; VITE_APP_MODE still forces a mode for a dedicated-domain
+// deploy.
 const APP_MODE = (() => {
   try {
     if (import.meta.env.VITE_APP_MODE === "outreach") return "outreach";
+    if (import.meta.env.VITE_APP_MODE === "dashboard") return "dashboard";
+    if (/^\/dashboard(\/|$)/.test(window.location.pathname)) return "dashboard";
     return /^\/agents(\/|$)/.test(window.location.pathname) ? "outreach" : "offers";
   } catch {
     return "offers";
@@ -30,6 +34,8 @@ const NAV =
         { view: "outreach", label: "Agents" },
         { view: "settings", label: "Settings" },
       ]
+    : APP_MODE === "dashboard"
+    ? [{ view: "dashboard", label: "Dashboard" }]
     : [
         { view: "new", label: "New Offer" },
         { view: "history", label: "History" },
@@ -95,9 +101,9 @@ export default function OfferApp() {
       <header className="sticky top-0 z-30 border-b border-gray-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-2.5 sm:px-6">
           <div className="mr-2 text-sm font-bold tracking-tight">
-            {APP_MODE === "outreach" ? "Agent Outreach" : "Offer Generator"}
+            {APP_MODE === "outreach" ? "Agent Outreach" : APP_MODE === "dashboard" ? "Dashboard" : "Offer Generator"}
           </div>
-          {NAV.map((n) => (
+          {NAV.length > 1 && NAV.map((n) => (
             <button
               key={n.view}
               type="button"
@@ -131,6 +137,7 @@ export default function OfferApp() {
           <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }} />
         )}
         {view === "outreach" && <AgentOutreach settings={settings} />}
+        {view === "dashboard" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
         {view === "settings" && (
           <SettingsView settings={settings} onSaved={(s) => setSettings(s)} mode={APP_MODE} />
         )}

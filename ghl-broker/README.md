@@ -17,6 +17,11 @@ GET    /api/offers?contact_id=       list saved offers
 GET    /api/offers/:id
 DELETE /api/offers/:id
 POST   /api/offers/:id/send          text the offer doc (dry-run by default)
+
+GET    /api/dashboard/summary        offers / app sends / outreach funnel per day
+GET    /api/dashboard/ghl/tags       live GHL contact counts per tag (?tags=a,b)
+GET    /api/dashboard/ghl/messages   GHL calls/texts/emails per day (bounded scan,
+                                     10-min cache; needs conversations.readonly)
 ```
 
 `POST /api/offers` attaches to the GHL contact: custom fields

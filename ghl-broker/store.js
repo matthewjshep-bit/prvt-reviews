@@ -64,6 +64,18 @@ const pgStore = {
         );
     return rows.map((r) => r.doc);
   },
+  // Lean offer rows since a timestamp for dashboard aggregation — enough for
+  // daily buckets without the fat doc (snapshot etc.). Ascending by creation.
+  async listOffersSince(locationId, sinceIso) {
+    const { rows } = await query(
+      `select id, created_at as "createdAt", cash_amount as "cashAmount",
+              doc->>'status' as status, coalesce(doc->'sends', '[]'::jsonb) as sends
+       from offers where location_id = $1 and created_at >= $2
+       order by created_at`,
+      [locationId, sinceIso]
+    );
+    return rows;
+  },
   async getOffer(id) {
     const { rows } = await query(`select doc from offers where id = $1`, [id]);
     return rows[0]?.doc || null;
@@ -254,6 +266,17 @@ const pgStore = {
     );
     return rowCount;
   },
+  // Cross-batch agent lifecycle rows for the dashboard funnel: every agent
+  // first seen OR imported since the timestamp.
+  async listOutreachActivity(locationId, sinceIso) {
+    const { rows } = await query(
+      `select first_seen as "firstSeen", imported_at as "importedAt", status
+       from outreach_agents
+       where location_id = $1 and (first_seen >= $2 or imported_at >= $2)`,
+      [locationId, sinceIso]
+    );
+    return rows;
+  },
   async recordOutreachPull(locationId, doc) {
     await query(`insert into outreach_pulls (id, location_id, doc) values ($1,$2,$3)`, [
       uuid(),
@@ -362,6 +385,19 @@ const fileStore = (() => {
         .filter((o) => o.locationId === locationId && (!contactId || o.contactId === contactId))
         .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit);
+    },
+    async listOffersSince(locationId, sinceIso) {
+      ensure();
+      return Object.values(data.offers)
+        .filter((o) => o.locationId === locationId && (o.createdAt || "") >= sinceIso)
+        .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+        .map((o) => ({
+          id: o.id,
+          createdAt: o.createdAt,
+          cashAmount: o.cashAmount ?? null,
+          status: o.status || null,
+          sends: o.sends || [],
+        }));
     },
     async getOffer(id) {
       ensure();
@@ -562,6 +598,13 @@ const fileStore = (() => {
       }
       persist();
       return removed;
+    },
+    async listOutreachActivity(locationId, sinceIso) {
+      ensure();
+      return Object.values(data.outreachAgents)
+        .filter((a) => a.locationId === locationId &&
+          ((a.firstSeen || "") >= sinceIso || (a.importedAt || "") >= sinceIso))
+        .map((a) => ({ firstSeen: a.firstSeen, importedAt: a.importedAt, status: a.status }));
     },
     async recordOutreachPull(locationId, doc) {
       ensure();

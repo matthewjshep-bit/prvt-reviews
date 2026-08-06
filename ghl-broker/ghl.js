@@ -205,6 +205,56 @@ export async function addContactTags(client, contactId, tags) {
   return data.tags || data;
 }
 
+// Count of contacts carrying a tag, via the filtered contact search. Cheapest
+// possible query: one result page of 1, read the total. Throws on GHL errors
+// (err.status set) — callers should treat 401/403 as "scope not granted".
+export async function countContactsByTag(client, locationId, tag) {
+  const data = await client.call(`/contacts/search`, {
+    method: "POST",
+    body: {
+      locationId,
+      pageLimit: 1,
+      filters: [{ field: "tags", operator: "contains", value: [tag] }],
+    },
+  });
+  return Number(data.total) || 0;
+}
+
+/* ---------- conversations (dashboard message/call volume) ---------- */
+
+// One page of the location's conversations, newest activity first. Returns
+// { conversations: [{ id, lastMessageDate, ... }], total }. Needs the
+// conversations.readonly scope (401/403 when missing).
+export async function searchConversations(client, locationId, { limit = 100 } = {}) {
+  const p = new URLSearchParams({
+    locationId,
+    limit: String(limit),
+    sortBy: "last_message_date",
+    sort: "desc",
+  });
+  const data = await client.call(`/conversations/search?${p}`, { version: V_CONVERSATIONS });
+  return { conversations: data.conversations || [], total: Number(data.total) || 0 };
+}
+
+// One page of a conversation's messages, newest first. Returns { messages:
+// [{ type, direction, dateAdded, ... }], lastMessageId, nextPage }. Tolerates
+// both response shapes (data.messages.messages vs data.messages).
+export async function listConversationMessages(client, conversationId, { lastMessageId, limit = 100 } = {}) {
+  const p = new URLSearchParams({ limit: String(limit) });
+  if (lastMessageId) p.set("lastMessageId", lastMessageId);
+  const data = await client.call(
+    `/conversations/${encodeURIComponent(conversationId)}/messages?${p}`,
+    { version: V_CONVERSATIONS }
+  );
+  const box = data.messages && !Array.isArray(data.messages) ? data.messages : data;
+  const messages = Array.isArray(box.messages) ? box.messages : Array.isArray(data.messages) ? data.messages : [];
+  return {
+    messages,
+    lastMessageId: box.lastMessageId || null,
+    nextPage: Boolean(box.nextPage),
+  };
+}
+
 // Most recent message activity for a contact (any channel). Returns
 // { at: ISO, direction, type } or null. Needs the conversations.readonly
 // scope — callers should treat 401/403 as "scope not granted".

@@ -38,7 +38,10 @@ APP_ORIGIN=https://<your-netlify-site>   # frontend origin (cross-origin CORS)
 
 Token scopes: `contacts.readonly`, `contacts.write`,
 `locations/customFields.readonly`, `locations/customFields.write`,
-`conversations.write`, `conversations/message.write`.
+`conversations.write`, `conversations/message.write`, plus
+`conversations.readonly` — required only for the Dashboard's calls/texts
+panel (`/dashboard`); the dashboard shows a warning banner and keeps working
+without it.
 
 Sanity: `GET /` → `offer broker ok`, then
 `POST /api/offers/calculate` with `{"location_id":"...","inputs":{"askingPrice":200000}}`.

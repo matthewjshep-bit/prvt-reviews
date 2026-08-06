@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { makeClient } from "./ghl.js";
 import createOffersRouter from "./routes/offers.js";
 import createOutreachRouter from "./routes/outreach.js";
+import createDashboardRouter from "./routes/dashboard.js";
 import { store } from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -114,6 +115,7 @@ function resolveLocation(req) {
 
 app.use("/api/offers", createOffersRouter({ resolveLocation, uploadDir: UPLOAD_DIR, publicBaseUrl: PUBLIC_BASE_URL }));
 app.use("/api/outreach", createOutreachRouter({ resolveLocation }));
+app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
 
 store.init().catch((e) => console.error("store init failed:", e.message));
 

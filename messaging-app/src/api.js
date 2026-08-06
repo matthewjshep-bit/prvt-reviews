@@ -131,6 +131,16 @@ export const generateContract = (id, fields) =>
   post(`/api/offers/${encodeURIComponent(id)}/contract`, { fields });
 export const generateAssignment = (id, fields) =>
   post(`/api/offers/${encodeURIComponent(id)}/assignment`, { fields });
+
+/* ---------- dashboard ---------- */
+// tz_offset lets the broker bucket daily metrics to the viewer's local day.
+const tzq = () => `&tz_offset=${new Date().getTimezoneOffset()}`;
+export const getDashboardSummary = (days = 30) =>
+  fetch(`${API_BASE}/api/dashboard/summary?${locq()}&days=${days}${tzq()}`).then(j);
+export const getDashboardTagCounts = (tags) =>
+  fetch(`${API_BASE}/api/dashboard/ghl/tags?${locq()}&tags=${encodeURIComponent((tags || []).join(","))}`).then(j);
+export const getDashboardMessages = (days = 30) =>
+  fetch(`${API_BASE}/api/dashboard/ghl/messages?${locq()}&days=${days}${tzq()}`).then(j);
 export const sendOffer = (id, { message = "", dryRun = true, channels, docs, emailSubject } = {}) =>
   post(`/api/offers/${encodeURIComponent(id)}/send`, {
     message,
