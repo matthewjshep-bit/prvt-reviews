@@ -152,6 +152,7 @@ export default function AgentOutreach({ settings }) {
 
   // Pull controls (prefilled from settings once loaded).
   const [zips, setZips] = useState("");
+  const [county, setCounty] = useState("");
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
   const [daysOld, setDaysOld] = useState("");
@@ -180,6 +181,7 @@ export default function AgentOutreach({ settings }) {
   useEffect(() => {
     if (!settings) return;
     setZips((z) => z || settings.outreachZips || "");
+    setCounty((c) => c || settings.outreachCounty || "");
     setCity((c) => c || settings.outreachCity || "");
     setState((s) => s || settings.outreachState || "");
     setDaysOld((d) => d || String(settings.outreachDaysOld || 180));
@@ -265,7 +267,7 @@ export default function AgentOutreach({ settings }) {
     setPullMsg(null);
     try {
       const r = await pullOutreach({
-        zipCodes: zips, city, state,
+        zipCodes: zips, county, city, state,
         daysOld: parseInt(daysOld, 10) || undefined,
         propertyType,
         priceBandPct: parseInt(priceBandPct, 10) || 0,
@@ -483,10 +485,16 @@ export default function AgentOutreach({ settings }) {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
               <div className="col-span-2">
                 <label className={LABEL_CLS}>Zip codes (comma-separated)</label>
                 <input className={INPUT_CLS} value={zips} onChange={(e) => setZips(e.target.value)} placeholder="98092, 98002" />
+              </div>
+              <div>
+                <label className={LABEL_CLS} title="Pulls the whole county (needs the state). Zips win when set; county beats city.">
+                  County
+                </label>
+                <input className={INPUT_CLS} value={county} onChange={(e) => setCounty(e.target.value)} placeholder="King" />
               </div>
               <div>
                 <label className={LABEL_CLS}>City</label>
@@ -525,7 +533,7 @@ export default function AgentOutreach({ settings }) {
                   <option value="50">±50%</option>
                 </select>
               </div>
-              <div className="col-span-2 flex items-end pb-2 sm:col-span-2">
+              <div className="col-span-2 flex items-end pb-2 sm:col-span-3">
                 <label className="flex items-center gap-1.5 text-sm text-gray-700"
                   title="Keep only listings with at least one distress signal: stale (see days input), a price-cut history, or priced ≤90% of the area's median $/sqft. Agents keep their full listing count either way.">
                   <input type="checkbox" checked={distressOnly} onChange={(e) => setDistressOnly(e.target.checked)} />
@@ -549,7 +557,7 @@ export default function AgentOutreach({ settings }) {
               )}
               <span className="text-xs text-gray-400">
                 Pulls add to the selected batch — create a New batch for a fresh list.
-                Zips are used when set; otherwise city + state. Same-filter re-pulls are cached 24h.
+                Zips are used when set; else county + state; else city + state. Same-filter re-pulls are cached 24h.
               </span>
             </div>
             {pullMsg && (
