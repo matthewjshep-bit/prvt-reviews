@@ -246,9 +246,12 @@ export default function createDashboardRouter({ resolveLocation }) {
   // window (hundreds of active conversations) finishes in minutes. Truly
   // huge windows still cap out and report approx.capped — honest truncation
   // beats an unbounded scan.
-  const MAX_CONVERSATIONS = 1000;
-  const MSG_CHUNK = 6;           // concurrent per-conversation message fetches
-  const MSG_CHUNK_PACE_MS = 800; // ≈ 6 req / 0.8s ≈ 75 req / 10s worst case
+  // Sized for real volume: this location creates ~6k contacts / 30 days, so
+  // a 30-day window can have thousands of active conversations. 2,000 at
+  // ~8 req/s is ~5 minutes — beyond that the tiles show "N+" (partial).
+  const MAX_CONVERSATIONS = 2000;
+  const MSG_CHUNK = 8;            // concurrent per-conversation message fetches
+  const MSG_CHUNK_PACE_MS = 1000; // ≈ 8 req/s ≈ 80 req / 10s worst case
   async function scanMessages(client, locationId, days, tzOffset) {
     const { startMs, dates } = windowFor(days, tzOffset);
     const daily = new Map(dates.map((date) => [date, { date, calls: 0, sms: 0, email: 0 }]));
@@ -279,6 +282,11 @@ export default function createDashboardRouter({ resolveLocation }) {
       if (active.length === before) break;
       cursor = msOf(page.conversations[page.conversations.length - 1].lastMessageDate);
       if (!Number.isFinite(cursor)) break;
+      // Overlap the boundary by 1ms: bulk sends give many conversations the
+      // same lastMessageDate, and if the API pages with a strict "older
+      // than", ties sitting exactly on the cursor would be skipped forever.
+      // Re-fetched boundary rows are dropped by the id dedupe instead.
+      cursor += 1;
       await sleep(PACE_MS);
     }
     let truncated = !sawWindowEnd;
@@ -286,13 +294,17 @@ export default function createDashboardRouter({ resolveLocation }) {
     async function tallyConversation(convo) {
       let lastMessageId = null;
       let pages = 0;
-      paging: while (pages < 3) {
+      while (pages < 3) {
         pages += 1;
         const page = await ghlPage(() => listConversationMessages(client, convo.id, { lastMessageId, limit: 100 }));
+        // Pages run newest-first, but a single page may interleave the odd
+        // out-of-order record — so tally the whole page and only stop paging
+        // once it reached back past the window start.
+        let reachedWindowStart = false;
         for (const m of page.messages) {
           const ts = msOf(m.dateAdded);
           if (!Number.isFinite(ts)) continue;
-          if (ts < startMs) break paging; // pages are newest-first
+          if (ts < startMs) { reachedWindowStart = true; continue; }
           const bucket = daily.get(dayKey(ts, tzOffset));
           if (!bucket) continue;
           const type = String(m.messageType || m.type || "").toUpperCase();
@@ -301,7 +313,7 @@ export default function createDashboardRouter({ resolveLocation }) {
           else if (type.includes("SMS") && outbound) bucket.sms += 1;
           else if (type.includes("EMAIL") && outbound) bucket.email += 1;
         }
-        if (!page.nextPage || !page.lastMessageId) break;
+        if (reachedWindowStart || !page.nextPage || !page.lastMessageId) break;
         if (pages === 3) { truncated = true; break; }
         lastMessageId = page.lastMessageId;
         await sleep(PACE_MS);
@@ -331,7 +343,7 @@ export default function createDashboardRouter({ resolveLocation }) {
   // Cursor-pages the filtered contact search (dateAdded >= window start,
   // newest first) and buckets by creation day. `total` is exact from the API
   // even when the page cap is hit.
-  const MAX_CONTACT_PAGES = 30; // × 100 = 3,000 contacts per scan
+  const MAX_CONTACT_PAGES = 100; // × 100 = 10,000 contacts per scan
   async function scanContacts(client, locationId, days, tzOffset) {
     const { startMs, dates } = windowFor(days, tzOffset);
     const sinceIso = new Date(startMs).toISOString();
