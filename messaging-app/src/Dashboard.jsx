@@ -15,7 +15,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Pencil, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
-  getDashboardSummary, getDashboardTagCounts, getDashboardMessages, saveSettings,
+  getDashboardSummary, getDashboardTagCounts, getDashboardMessages, getDashboardContacts, saveSettings,
 } from "./api.js";
 
 /* ---------- palette (validated, light surface) ---------- */
@@ -25,6 +25,7 @@ const C_CALLS = "#4a3aa7";  // violet
 const C_NEW = "#4a3aa7";    // violet — new agents found
 const C_IMPORTED = "#008300"; // green — imported to GHL
 const C_OFFERS = "#2a78d6";
+const C_CONTACTS = "#008300"; // green — a contact added to GHL (same meaning as funnel imports)
 const INK_MUTED = "#898781";
 const GRID = "#e1e0d9";
 const BASELINE = "#c3c2b7";
@@ -302,6 +303,22 @@ export default function Dashboard({ settings, onSettingsSaved }) {
   };
   useEffect(loadMsgs, [days]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // GHL contacts created (dateAdded scan; server caches 10 min).
+  const [ghlContacts, setGhlContacts] = useState(null);
+  const [contactsLoading, setContactsLoading] = useState(true);
+  const [contactsError, setContactsError] = useState("");
+  const [contactsScopeMissing, setContactsScopeMissing] = useState(false);
+  const loadContacts = () => {
+    setContactsLoading(true);
+    setContactsError("");
+    setContactsScopeMissing(false);
+    getDashboardContacts(days)
+      .then((r) => (r.scopeMissing ? setContactsScopeMissing(true) : setGhlContacts(r)))
+      .catch((e) => setContactsError(e.message))
+      .finally(() => setContactsLoading(false));
+  };
+  useEffect(loadContacts, [days]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Inline tag-list editor (saves through the shared settings blob).
   const [editingTags, setEditingTags] = useState(false);
   const [tagDraft, setTagDraft] = useState("");
@@ -348,9 +365,34 @@ export default function Dashboard({ settings, onSettingsSaved }) {
   const ghlData = useMemo(
     () => (ghlMsgs?.daily || []).map((d) => ({ date: d.date, values: [d.calls, d.sms, d.email] })),
     [ghlMsgs]);
+  const contactsData = useMemo(
+    () => (ghlContacts?.daily || []).map((d) => ({ date: d.date, values: [d.count] })),
+    [ghlContacts]);
+  const contactsSeries = [{ label: "Contacts created", color: C_CONTACTS }];
 
   const usage = summary?.outreach.usage;
   const agentsImported = (summary?.outreach.daily || []).reduce((s, d) => s + d.imported, 0);
+
+  // Texts/emails KPIs come from GHL (all outbound activity, incl. workflow
+  // sends) when the scan is available; app-send counts are the fallback so
+  // the tiles never sit empty when the scope is missing or the scan fails.
+  const ghlTotals = useMemo(() => {
+    if (!ghlMsgs?.daily) return null;
+    return ghlMsgs.daily.reduce(
+      (a, d) => ({ calls: a.calls + d.calls, sms: a.sms + d.sms, email: a.email + d.email }),
+      { calls: 0, sms: 0, email: 0 });
+  }, [ghlMsgs]);
+  const ghlKpisReady = Boolean(ghlTotals) && !msgsScopeMissing;
+  const textsKpi = ghlKpisReady
+    ? { value: ghlTotals.sms, sub: "outbound, via GHL" }
+    : msgsScopeMissing || msgsError
+    ? { value: summary?.sends.totalSms ?? 0, sub: "from this app" }
+    : { value: "…", sub: "scanning GHL…" };
+  const emailsKpi = ghlKpisReady
+    ? { value: ghlTotals.email, sub: "outbound, via GHL" }
+    : msgsScopeMissing || msgsError
+    ? { value: summary?.sends.totalEmail ?? 0, sub: "from this app" }
+    : { value: "…", sub: "scanning GHL…" };
 
   // Refetch keeps the frame: previous render held at reduced opacity.
   const dim = (loading, has) => (loading && has ? "opacity-60 transition-opacity" : "");
@@ -374,11 +416,14 @@ export default function Dashboard({ settings, onSettingsSaved }) {
 
       {/* KPI row */}
       {summary && (
-        <div className={`grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 ${dim(summaryLoading, summary)}`}>
+        <div className={`grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 ${dim(summaryLoading, summary)}`}>
           <KpiTile label="Offers created" value={summary.offers.total} sub={`last ${summary.days} days`} />
           <KpiTile label="Total offered" value={compact(summary.offers.cashTotal)} sub="cash offers" />
-          <KpiTile label="Texts sent" value={summary.sends.totalSms} sub="from this app" />
-          <KpiTile label="Emails sent" value={summary.sends.totalEmail} sub="from this app" />
+          <KpiTile label="Contacts created"
+            value={contactsScopeMissing ? "—" : ghlContacts ? ghlContacts.total : "…"}
+            sub="added to GHL" />
+          <KpiTile label="Texts sent" value={textsKpi.value} sub={textsKpi.sub} />
+          <KpiTile label="Emails sent" value={emailsKpi.value} sub={emailsKpi.sub} />
           <div className="rounded-xl border border-gray-200 bg-white p-3.5">
             <div className="text-xs font-medium text-gray-500">RentCast requests</div>
             <div className="mt-0.5 text-2xl font-semibold text-gray-900">
@@ -402,6 +447,36 @@ export default function Dashboard({ settings, onSettingsSaved }) {
             )
           ) : (
             !summaryError && <Empty><Loader2 size={16} className="mx-auto animate-spin" /></Empty>
+          )}
+        </Card>
+
+        <Card
+          title="Contacts created per day — live from GHL"
+          right={ghlContacts?.cachedAt && !contactsLoading ? (
+            <span className="text-[11px] text-gray-400">
+              as of {new Date(ghlContacts.cachedAt).toLocaleTimeString()}
+            </span>
+          ) : null}
+        >
+          {contactsScopeMissing ? (
+            <ScopeBanner scope="contacts.readonly" />
+          ) : contactsError ? (
+            <ErrorNote message={contactsError} onRetry={loadContacts} />
+          ) : !ghlContacts ? (
+            <Empty><Loader2 size={16} className="mx-auto animate-spin" /></Empty>
+          ) : ghlContacts.total === 0 ? (
+            <Empty>No contacts created in this window.</Empty>
+          ) : (
+            <div className={dim(contactsLoading, ghlContacts)}>
+              <DailyBars data={contactsData} series={contactsSeries} />
+              {ghlContacts.approx?.capped && (
+                <div className="mt-2 text-[11px] text-gray-400">
+                  Daily bars cover the {ghlContacts.approx.contactsScanned.toLocaleString("en-US")} newest
+                  of {ghlContacts.total.toLocaleString("en-US")} contacts created in this window — older
+                  days may be undercounted (the total above is exact).
+                </div>
+              )}
+            </div>
           )}
         </Card>
 

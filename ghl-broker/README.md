@@ -22,6 +22,7 @@ GET    /api/dashboard/summary        offers / app sends / outreach funnel per da
 GET    /api/dashboard/ghl/tags       live GHL contact counts per tag (?tags=a,b)
 GET    /api/dashboard/ghl/messages   GHL calls/texts/emails per day (bounded scan,
                                      10-min cache; needs conversations.readonly)
+GET    /api/dashboard/ghl/contacts   GHL contacts created per day (dateAdded scan)
 ```
 
 `POST /api/offers` attaches to the GHL contact: custom fields

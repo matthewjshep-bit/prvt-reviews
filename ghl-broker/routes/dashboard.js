@@ -4,6 +4,7 @@
 //   GET /api/dashboard/summary        local metrics: offers/sends/outreach per day
 //   GET /api/dashboard/ghl/tags       live GHL contact counts per tag
 //   GET /api/dashboard/ghl/messages   GHL calls/texts/emails per day (bounded scan)
+//   GET /api/dashboard/ghl/contacts   GHL contacts created per day (dateAdded)
 //
 // The three endpoints are deliberately separate: /summary is pure local DB and
 // fast; the two /ghl endpoints hit GoHighLevel and each degrades independently
@@ -20,7 +21,9 @@
 
 import express from "express";
 import { store } from "../store.js";
-import { countContactsByTag, searchConversations, listConversationMessages } from "../ghl.js";
+import {
+  countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
+} from "../ghl.js";
 
 const DAY_MS = 86400000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -56,11 +59,21 @@ const readWindow = (req) => ({
   tzOffset: clamp(parseInt(req.query.tz_offset, 10) || 0, -840, 840),
 });
 
-// 10-minute cache for the GHL messages scan (it can take ~100s of API calls),
-// plus in-flight dedupe so a double-mounted React effect doesn't scan twice.
-const MSG_TTL_MS = 10 * 60 * 1000;
-const msgCache = new Map(); // key -> { at, payload }
-const msgInflight = new Map(); // key -> Promise<payload>
+// 10-minute cache for the GHL scans (they can take ~100s of API calls), plus
+// in-flight dedupe so a double-mounted React effect doesn't scan twice.
+const SCAN_TTL_MS = 10 * 60 * 1000;
+const scanCache = new Map(); // key -> { at, payload }
+const scanInflight = new Map(); // key -> Promise<payload>
+async function cachedScan(key, run) {
+  const hit = scanCache.get(key);
+  if (hit && Date.now() - hit.at < SCAN_TTL_MS) return hit.payload;
+  if (!scanInflight.has(key)) {
+    scanInflight.set(key, run().finally(() => scanInflight.delete(key)));
+  }
+  const payload = await scanInflight.get(key);
+  scanCache.set(key, { at: Date.now(), payload });
+  return payload;
+}
 
 export default function createDashboardRouter({ resolveLocation }) {
   const router = express.Router();
@@ -178,18 +191,36 @@ export default function createDashboardRouter({ resolveLocation }) {
   });
 
   /* ---------- GHL message/call volume (bounded conversation scan) ---------- */
-  // One /conversations/search page (100 newest-activity conversations), then
-  // up to 3 message pages per active conversation, bucketed by type. Calls
-  // count both directions; SMS/email count outbound only ("sent per day").
-  // Bounded by design: high-volume locations undercount and report
-  // approx.capped — honest truncation beats an unbounded scan of the whole
-  // location. ~120ms pacing keeps well under GHL's burst rate limit.
+  // Page /conversations/search (newest activity first, cursor = the previous
+  // page's oldest lastMessageDate) until activity predates the window or the
+  // conversation cap, then up to 3 message pages per active conversation,
+  // bucketed by type. Calls count both directions; SMS/email count outbound
+  // only ("sent per day"). Bounded by design: very-high-volume locations
+  // undercount and report approx.capped — honest truncation beats an
+  // unbounded scan. ~100ms pacing keeps well under GHL's burst rate limit.
+  const MAX_CONVERSATIONS = 300;
   async function scanMessages(client, locationId, days, tzOffset) {
     const { startMs, dates } = windowFor(days, tzOffset);
     const daily = new Map(dates.map((date) => [date, { date, calls: 0, sms: 0, email: 0 }]));
-    const { conversations, total } = await searchConversations(client, locationId, { limit: 100 });
-    const active = conversations.filter((c) => msOf(c.lastMessageDate) >= startMs);
-    let truncated = false;
+
+    const active = [];
+    let total = 0;
+    let cursor = null;
+    let sawWindowEnd = false;
+    while (active.length < MAX_CONVERSATIONS) {
+      const page = await searchConversations(client, locationId, { limit: 100, startAfterDate: cursor });
+      if (!total) total = page.total;
+      if (!page.conversations.length) { sawWindowEnd = true; break; }
+      for (const c of page.conversations) {
+        if (msOf(c.lastMessageDate) >= startMs) active.push(c);
+        else sawWindowEnd = true;
+      }
+      if (sawWindowEnd || page.conversations.length < 100) { sawWindowEnd = true; break; }
+      cursor = msOf(page.conversations[page.conversations.length - 1].lastMessageDate);
+      if (!Number.isFinite(cursor)) break;
+      await sleep(100);
+    }
+    let truncated = !sawWindowEnd;
 
     for (const convo of active) {
       let lastMessageId = null;
@@ -212,9 +243,9 @@ export default function createDashboardRouter({ resolveLocation }) {
         if (!page.nextPage || !page.lastMessageId) break;
         if (pages === 3) truncated = true;
         lastMessageId = page.lastMessageId;
-        await sleep(120);
+        await sleep(100);
       }
-      await sleep(120);
+      await sleep(100);
     }
 
     return {
@@ -223,31 +254,70 @@ export default function createDashboardRouter({ resolveLocation }) {
       approx: {
         conversationsScanned: active.length,
         conversationsTotal: total,
-        // capped: the newest-100 page was all still inside the window (older
-        // active conversations exist beyond it), or a conversation hit the
-        // per-conversation page cap.
-        capped: truncated || (conversations.length >= 100 && active.length === conversations.length),
+        // capped: the conversation cap or a per-conversation page cap was hit —
+        // older activity inside the window may be undercounted.
+        capped: truncated,
       },
       cachedAt: new Date().toISOString(),
     };
   }
 
+  /* ---------- GHL contacts created per day (dateAdded) ---------- */
+  // Cursor-pages the filtered contact search (dateAdded >= window start,
+  // newest first) and buckets by creation day. `total` is exact from the API
+  // even when the page cap is hit.
+  const MAX_CONTACT_PAGES = 30; // × 100 = 3,000 contacts per scan
+  async function scanContacts(client, locationId, days, tzOffset) {
+    const { startMs, dates } = windowFor(days, tzOffset);
+    const sinceIso = new Date(startMs).toISOString();
+    const daily = new Map(dates.map((date) => [date, { date, count: 0 }]));
+    let total = 0;
+    let scanned = 0;
+    let cursor = null;
+    let sawEnd = false;
+    for (let p = 0; p < MAX_CONTACT_PAGES; p++) {
+      const page = await searchContactsCreatedSince(client, locationId, {
+        sinceIso, pageLimit: 100, searchAfter: cursor,
+      });
+      total = page.total || total;
+      for (const c of page.contacts) {
+        const ts = msOf(c.dateAdded);
+        if (!Number.isFinite(ts)) continue;
+        const b = daily.get(dayKey(ts, tzOffset));
+        if (b) b.count += 1;
+        scanned += 1;
+      }
+      if (page.contacts.length < 100 || !page.searchAfter) { sawEnd = true; break; }
+      cursor = page.searchAfter;
+      await sleep(100);
+    }
+    return {
+      ok: true,
+      daily: [...daily.values()],
+      total,
+      approx: { contactsScanned: scanned, capped: !sawEnd },
+      cachedAt: new Date().toISOString(),
+    };
+  }
+
+  router.get("/ghl/contacts", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const { days, tzOffset } = readWindow(req);
+      res.json(await cachedScan(`contacts:${locationId}:${days}:${tzOffset}`,
+        () => scanContacts(client, locationId, days, tzOffset)));
+    } catch (err) {
+      if (scopeMissing(err)) return res.json({ ok: true, scopeMissing: true });
+      fail(res, err);
+    }
+  });
+
   router.get("/ghl/messages", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
       const { days, tzOffset } = readWindow(req);
-      const key = `${locationId}:${days}:${tzOffset}`;
-      const hit = msgCache.get(key);
-      if (hit && Date.now() - hit.at < MSG_TTL_MS) return res.json(hit.payload);
-      if (!msgInflight.has(key)) {
-        msgInflight.set(
-          key,
-          scanMessages(client, locationId, days, tzOffset).finally(() => msgInflight.delete(key))
-        );
-      }
-      const payload = await msgInflight.get(key);
-      msgCache.set(key, { at: Date.now(), payload });
-      res.json(payload);
+      res.json(await cachedScan(`messages:${locationId}:${days}:${tzOffset}`,
+        () => scanMessages(client, locationId, days, tzOffset)));
     } catch (err) {
       if (scopeMissing(err)) return res.json({ ok: true, scopeMissing: true });
       fail(res, err);

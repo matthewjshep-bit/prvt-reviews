@@ -141,6 +141,8 @@ export const getDashboardTagCounts = (tags) =>
   fetch(`${API_BASE}/api/dashboard/ghl/tags?${locq()}&tags=${encodeURIComponent((tags || []).join(","))}`).then(j);
 export const getDashboardMessages = (days = 30) =>
   fetch(`${API_BASE}/api/dashboard/ghl/messages?${locq()}&days=${days}${tzq()}`).then(j);
+export const getDashboardContacts = (days = 30) =>
+  fetch(`${API_BASE}/api/dashboard/ghl/contacts?${locq()}&days=${days}${tzq()}`).then(j);
 export const sendOffer = (id, { message = "", dryRun = true, channels, docs, emailSubject } = {}) =>
   post(`/api/offers/${encodeURIComponent(id)}/send`, {
     message,

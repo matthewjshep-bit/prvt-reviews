@@ -222,16 +222,41 @@ export async function countContactsByTag(client, locationId, tag) {
 
 /* ---------- conversations (dashboard message/call volume) ---------- */
 
-// One page of the location's conversations, newest activity first. Returns
-// { conversations: [{ id, lastMessageDate, ... }], total }. Needs the
-// conversations.readonly scope (401/403 when missing).
-export async function searchConversations(client, locationId, { limit = 100 } = {}) {
+// One page of contacts created since a date, newest first, with cursor
+// pagination (pass the previous page's searchAfter to continue). Returns
+// { contacts: [{ dateAdded, ... }], total, searchAfter } — total is the exact
+// match count even when paging stops early.
+export async function searchContactsCreatedSince(client, locationId, { sinceIso, pageLimit = 100, searchAfter } = {}) {
+  const data = await client.call(`/contacts/search`, {
+    method: "POST",
+    body: {
+      locationId,
+      pageLimit,
+      filters: [{ field: "dateAdded", operator: "range", value: { gte: sinceIso } }],
+      sort: [{ field: "dateAdded", direction: "desc" }],
+      ...(searchAfter ? { searchAfter } : {}),
+    },
+  });
+  const contacts = data.contacts || [];
+  return {
+    contacts,
+    total: Number(data.total) || 0,
+    searchAfter: contacts.length ? contacts[contacts.length - 1].searchAfter || null : null,
+  };
+}
+
+// One page of the location's conversations, newest activity first. Pass
+// startAfterDate (epoch ms of the previous page's oldest lastMessageDate) to
+// page older. Returns { conversations: [{ id, lastMessageDate, ... }], total }.
+// Needs the conversations.readonly scope (401/403 when missing).
+export async function searchConversations(client, locationId, { limit = 100, startAfterDate } = {}) {
   const p = new URLSearchParams({
     locationId,
     limit: String(limit),
     sortBy: "last_message_date",
     sort: "desc",
   });
+  if (startAfterDate) p.set("startAfterDate", String(startAfterDate));
   const data = await client.call(`/conversations/search?${p}`, { version: V_CONVERSATIONS });
   return { conversations: data.conversations || [], total: Number(data.total) || 0 };
 }
