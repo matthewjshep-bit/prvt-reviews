@@ -75,6 +75,32 @@ async function cachedScan(key, run) {
   return payload;
 }
 
+// GHL rate limit is a per-location burst (100 req / 10s). Two guards: scans
+// for the same location run one at a time (the dashboard fires the messages
+// and contacts scans together on page load), and every page call retries
+// 429s with exponential backoff.
+const scanQueue = new Map(); // locationId -> promise tail
+function serialized(locationId, run) {
+  const tail = scanQueue.get(locationId) || Promise.resolve();
+  const next = tail.catch(() => {}).then(run);
+  scanQueue.set(locationId, next);
+  return next;
+}
+async function ghlPage(fn) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err.status === 429 && attempt < 3) {
+        await sleep(3000 * 2 ** attempt);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+const PACE_MS = 150; // ≈ 66 req / 10s, comfortably under the burst cap
+
 export default function createDashboardRouter({ resolveLocation }) {
   const router = express.Router();
   const fail = (res, err) => {
@@ -208,7 +234,7 @@ export default function createDashboardRouter({ resolveLocation }) {
     let cursor = null;
     let sawWindowEnd = false;
     while (active.length < MAX_CONVERSATIONS) {
-      const page = await searchConversations(client, locationId, { limit: 100, startAfterDate: cursor });
+      const page = await ghlPage(() => searchConversations(client, locationId, { limit: 100, startAfterDate: cursor }));
       if (!total) total = page.total;
       if (!page.conversations.length) { sawWindowEnd = true; break; }
       for (const c of page.conversations) {
@@ -218,7 +244,7 @@ export default function createDashboardRouter({ resolveLocation }) {
       if (sawWindowEnd || page.conversations.length < 100) { sawWindowEnd = true; break; }
       cursor = msOf(page.conversations[page.conversations.length - 1].lastMessageDate);
       if (!Number.isFinite(cursor)) break;
-      await sleep(100);
+      await sleep(PACE_MS);
     }
     let truncated = !sawWindowEnd;
 
@@ -227,7 +253,7 @@ export default function createDashboardRouter({ resolveLocation }) {
       let pages = 0;
       paging: while (pages < 3) {
         pages += 1;
-        const page = await listConversationMessages(client, convo.id, { lastMessageId, limit: 100 });
+        const page = await ghlPage(() => listConversationMessages(client, convo.id, { lastMessageId, limit: 100 }));
         for (const m of page.messages) {
           const ts = msOf(m.dateAdded);
           if (!Number.isFinite(ts)) continue;
@@ -243,9 +269,9 @@ export default function createDashboardRouter({ resolveLocation }) {
         if (!page.nextPage || !page.lastMessageId) break;
         if (pages === 3) truncated = true;
         lastMessageId = page.lastMessageId;
-        await sleep(100);
+        await sleep(PACE_MS);
       }
-      await sleep(100);
+      await sleep(PACE_MS);
     }
 
     return {
@@ -276,9 +302,9 @@ export default function createDashboardRouter({ resolveLocation }) {
     let cursor = null;
     let sawEnd = false;
     for (let p = 0; p < MAX_CONTACT_PAGES; p++) {
-      const page = await searchContactsCreatedSince(client, locationId, {
+      const page = await ghlPage(() => searchContactsCreatedSince(client, locationId, {
         sinceIso, pageLimit: 100, searchAfter: cursor,
-      });
+      }));
       total = page.total || total;
       for (const c of page.contacts) {
         const ts = msOf(c.dateAdded);
@@ -289,7 +315,7 @@ export default function createDashboardRouter({ resolveLocation }) {
       }
       if (page.contacts.length < 100 || !page.searchAfter) { sawEnd = true; break; }
       cursor = page.searchAfter;
-      await sleep(100);
+      await sleep(PACE_MS);
     }
     return {
       ok: true,
@@ -305,7 +331,7 @@ export default function createDashboardRouter({ resolveLocation }) {
       const { locationId, client } = resolveLocation(req);
       const { days, tzOffset } = readWindow(req);
       res.json(await cachedScan(`contacts:${locationId}:${days}:${tzOffset}`,
-        () => scanContacts(client, locationId, days, tzOffset)));
+        () => serialized(locationId, () => scanContacts(client, locationId, days, tzOffset))));
     } catch (err) {
       if (scopeMissing(err)) return res.json({ ok: true, scopeMissing: true });
       fail(res, err);
@@ -317,7 +343,7 @@ export default function createDashboardRouter({ resolveLocation }) {
       const { locationId, client } = resolveLocation(req);
       const { days, tzOffset } = readWindow(req);
       res.json(await cachedScan(`messages:${locationId}:${days}:${tzOffset}`,
-        () => scanMessages(client, locationId, days, tzOffset)));
+        () => serialized(locationId, () => scanMessages(client, locationId, days, tzOffset))));
     } catch (err) {
       if (scopeMissing(err)) return res.json({ ok: true, scopeMissing: true });
       fail(res, err);
