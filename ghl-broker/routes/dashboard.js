@@ -121,6 +121,13 @@ async function ghlPage(fn) {
         await sleep(3000 * 2 ** attempt);
         continue;
       }
+      // GHL throws the odd transient 401/403 during long scans; retrying
+      // separates those from a genuinely missing scope (which fails every
+      // time and would otherwise paint the whole scan as scope-missing).
+      if ((err.status === 401 || err.status === 403) && attempt < 2) {
+        await sleep(2000 * (attempt + 1));
+        continue;
+      }
       throw err;
     }
   }
