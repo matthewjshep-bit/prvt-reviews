@@ -43,22 +43,30 @@ const msOf = (v) => {
 // The viewer-local day key ("2026-08-05") for a timestamp.
 const dayKey = (ts, tzOffset) => new Date(ts - tzOffset * 60000).toISOString().slice(0, 10);
 
-// The reporting window: UTC start instant + the dense list of local day keys,
-// ending on the viewer's "today".
-function windowFor(days, tzOffset) {
+// The reporting window: UTC start/end instants + the dense list of local day
+// keys. Ends on the viewer's "today" unless endKey ("YYYY-MM-DD", a local
+// day) asks for a window ending on a past day — the date-picker view.
+function windowFor(days, tzOffset, endKey) {
   const todayLocal = Math.floor((Date.now() - tzOffset * 60000) / DAY_MS);
-  const startLocalDay = todayLocal - days + 1;
+  let endLocal = todayLocal;
+  if (endKey) {
+    const d = Math.floor(Date.parse(`${endKey}T00:00:00Z`) / DAY_MS);
+    if (Number.isFinite(d)) endLocal = clamp(d, todayLocal - 365, todayLocal);
+  }
+  const startLocalDay = endLocal - days + 1;
   const startMs = startLocalDay * DAY_MS + tzOffset * 60000;
+  const endMs = (endLocal + 1) * DAY_MS + tzOffset * 60000; // exclusive
   const dates = [];
-  for (let d = startLocalDay; d <= todayLocal; d++) {
+  for (let d = startLocalDay; d <= endLocal; d++) {
     dates.push(new Date(d * DAY_MS).toISOString().slice(0, 10));
   }
-  return { startMs, startIso: new Date(startMs).toISOString(), dates };
+  return { startMs, endMs, startIso: new Date(startMs).toISOString(), dates };
 }
 
 const readWindow = (req) => ({
   days: clamp(parseInt(req.query.days, 10) || 30, 1, 180),
   tzOffset: clamp(parseInt(req.query.tz_offset, 10) || 0, -840, 840),
+  end: /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.end || "")) ? String(req.query.end) : null,
 });
 
 // 10-minute cache for the GHL scans (a busy window is minutes of paced API
@@ -132,8 +140,8 @@ export default function createDashboardRouter({ resolveLocation }) {
   router.get("/summary", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
-      const { days, tzOffset } = readWindow(req);
-      const { startMs, startIso, dates } = windowFor(days, tzOffset);
+      const { days, tzOffset, end } = readWindow(req);
+      const { startMs, startIso, dates } = windowFor(days, tzOffset, end);
       const skeleton = (fields) =>
         new Map(dates.map((date) => [date, { date, ...fields }]));
 
@@ -237,24 +245,36 @@ export default function createDashboardRouter({ resolveLocation }) {
   /* ---------- GHL message/call volume (bounded conversation scan) ---------- */
   // Page /conversations/search (newest activity first, cursor = the previous
   // page's oldest lastMessageDate) until activity predates the window or the
-  // conversation cap, then up to 3 message pages per active conversation,
-  // bucketed by type. Calls count both directions; SMS/email count outbound
-  // only ("sent per day"). Conversations are deduped by id and collection
-  // stops when a page yields nothing new, so a repeated or stuck cursor can
-  // never count the same conversation twice. Message fetches run in small
-  // concurrent chunks paced under GHL's 100-req/10s burst, so a bulk-send
-  // window (hundreds of active conversations) finishes in minutes. Truly
-  // huge windows still cap out and report approx.capped — honest truncation
-  // beats an unbounded scan.
-  // Sized for real volume: this location creates ~6k contacts / 30 days, so
-  // a 30-day window can have thousands of active conversations. 2,000 at
-  // ~8 req/s is ~5 minutes — beyond that the tiles show "N+" (partial).
+  // conversation cap, then tally each active conversation's messages per
+  // local day. Calls count both directions; SMS/email count outbound only
+  // ("sent per day"). Conversations are deduped by id and collection stops
+  // when a page yields nothing new, so a repeated or stuck cursor can never
+  // count the same conversation twice.
+  //
+  // Past days never change, so tallies are cached PER CONVERSATION (keyed by
+  // its lastMessageDate): a conversation's messages are only re-fetched when
+  // it has new activity since the last scan. First load pays full price;
+  // after that a scan costs the conversation listing plus a handful of
+  // fetches, so range switches and the date picker resolve in seconds.
+  // Message fetches run in small concurrent chunks paced under GHL's
+  // 100-req/10s burst. Sized for real volume (~6k contacts / 30 days here):
+  // beyond the cap the tiles show "N+" (partial).
   const MAX_CONVERSATIONS = 2000;
   const MSG_CHUNK = 8;            // concurrent per-conversation message fetches
   const MSG_CHUNK_PACE_MS = 1000; // ≈ 8 req/s ≈ 80 req / 10s worst case
-  async function scanMessages(client, locationId, days, tzOffset) {
-    const { startMs, dates } = windowFor(days, tzOffset);
-    const daily = new Map(dates.map((date) => [date, { date, calls: 0, sms: 0, email: 0 }]));
+  const TALLY_HORIZON_DAYS = 90;  // how far back a conversation is tallied
+  const TALLY_CACHE_MAX = 30000;  // conversations kept per location+tz
+  // `${locationId}:${tzOffset}` -> Map(convoId -> { last, h, days, truncated })
+  // days: { "2026-08-06": { calls, sms, email } } for everything since h.
+  const convoTallies = new Map();
+  async function scanMessages(client, locationId, days, tzOffset, endKey) {
+    const { startMs, dates } = windowFor(days, tzOffset, endKey);
+    // Tally back to the standard horizon, or the window start if it's older
+    // (a date-picker view into deep history).
+    const horizonStart = Math.min(Date.now() - TALLY_HORIZON_DAYS * DAY_MS, startMs);
+    const tallyKey = `${locationId}:${tzOffset}`;
+    if (!convoTallies.has(tallyKey)) convoTallies.set(tallyKey, new Map());
+    const tallies = convoTallies.get(tallyKey);
 
     const seen = new Set();
     const active = [];
@@ -289,9 +309,15 @@ export default function createDashboardRouter({ resolveLocation }) {
       cursor += 1;
       await sleep(PACE_MS);
     }
-    let truncated = !sawWindowEnd;
 
+    // Cache-valid: same last activity, and tallied at least as far back as
+    // this window needs.
+    let cacheHits = 0;
     async function tallyConversation(convo) {
+      const last = msOf(convo.lastMessageDate);
+      const hit = tallies.get(convo.id);
+      if (hit && hit.last === last && hit.h <= startMs) { cacheHits++; return; }
+      const entry = { last, h: horizonStart, days: {}, truncated: false };
       let lastMessageId = null;
       let pages = 0;
       while (pages < 3) {
@@ -299,29 +325,53 @@ export default function createDashboardRouter({ resolveLocation }) {
         const page = await ghlPage(() => listConversationMessages(client, convo.id, { lastMessageId, limit: 100 }));
         // Pages run newest-first, but a single page may interleave the odd
         // out-of-order record — so tally the whole page and only stop paging
-        // once it reached back past the window start.
-        let reachedWindowStart = false;
+        // once it reached back past the horizon.
+        let reachedHorizon = false;
         for (const m of page.messages) {
           const ts = msOf(m.dateAdded);
           if (!Number.isFinite(ts)) continue;
-          if (ts < startMs) { reachedWindowStart = true; continue; }
-          const bucket = daily.get(dayKey(ts, tzOffset));
-          if (!bucket) continue;
+          if (ts < horizonStart) { reachedHorizon = true; continue; }
           const type = String(m.messageType || m.type || "").toUpperCase();
           const outbound = String(m.direction || "").toLowerCase() === "outbound";
-          if (type.includes("CALL")) bucket.calls += 1;
-          else if (type.includes("SMS") && outbound) bucket.sms += 1;
-          else if (type.includes("EMAIL") && outbound) bucket.email += 1;
+          const kind = type.includes("CALL") ? "calls"
+            : type.includes("SMS") && outbound ? "sms"
+            : type.includes("EMAIL") && outbound ? "email"
+            : null;
+          if (!kind) continue;
+          const key = dayKey(ts, tzOffset);
+          const d = entry.days[key] || (entry.days[key] = { calls: 0, sms: 0, email: 0 });
+          d[kind] += 1;
         }
-        if (reachedWindowStart || !page.nextPage || !page.lastMessageId) break;
-        if (pages === 3) { truncated = true; break; }
+        if (reachedHorizon || !page.nextPage || !page.lastMessageId) break;
+        if (pages === 3) { entry.truncated = true; break; }
         lastMessageId = page.lastMessageId;
         await sleep(PACE_MS);
       }
+      tallies.delete(convo.id); // re-insert so Map order stays oldest-first
+      tallies.set(convo.id, entry);
+      if (tallies.size > TALLY_CACHE_MAX) tallies.delete(tallies.keys().next().value);
     }
     for (let i = 0; i < active.length; i += MSG_CHUNK) {
-      await Promise.all(active.slice(i, i + MSG_CHUNK).map(tallyConversation));
-      if (i + MSG_CHUNK < active.length) await sleep(MSG_CHUNK_PACE_MS);
+      const chunk = active.slice(i, i + MSG_CHUNK);
+      const hitsBefore = cacheHits;
+      await Promise.all(chunk.map(tallyConversation));
+      // Pace only when the chunk actually hit the API — cached chunks are free.
+      if (cacheHits - hitsBefore < chunk.length && i + MSG_CHUNK < active.length)
+        await sleep(MSG_CHUNK_PACE_MS);
+    }
+
+    // The window's daily series is a sum over the active conversations' tallies.
+    const daily = new Map(dates.map((date) => [date, { date, calls: 0, sms: 0, email: 0 }]));
+    let truncatedConvo = false;
+    for (const c of active) {
+      const e = tallies.get(c.id);
+      if (!e) continue;
+      if (e.truncated) truncatedConvo = true;
+      for (const [key, v] of Object.entries(e.days)) {
+        const b = daily.get(key);
+        if (!b) continue;
+        b.calls += v.calls; b.sms += v.sms; b.email += v.email;
+      }
     }
 
     return {
@@ -333,7 +383,7 @@ export default function createDashboardRouter({ resolveLocation }) {
         // capped: the conversation cap, a stuck cursor, or a per-conversation
         // page cap cut the scan short — activity inside the window may be
         // undercounted.
-        capped: truncated,
+        capped: !sawWindowEnd || truncatedConvo,
       },
       cachedAt: new Date().toISOString(),
     };
@@ -344,9 +394,10 @@ export default function createDashboardRouter({ resolveLocation }) {
   // newest first) and buckets by creation day. `total` is exact from the API
   // even when the page cap is hit.
   const MAX_CONTACT_PAGES = 100; // × 100 = 10,000 contacts per scan
-  async function scanContacts(client, locationId, days, tzOffset) {
-    const { startMs, dates } = windowFor(days, tzOffset);
+  async function scanContacts(client, locationId, days, tzOffset, endKey) {
+    const { startMs, endMs, dates } = windowFor(days, tzOffset, endKey);
     const sinceIso = new Date(startMs).toISOString();
+    const untilIso = new Date(endMs).toISOString();
     const daily = new Map(dates.map((date) => [date, { date, count: 0 }]));
     let total = 0;
     let scanned = 0;
@@ -354,7 +405,7 @@ export default function createDashboardRouter({ resolveLocation }) {
     let sawEnd = false;
     for (let p = 0; p < MAX_CONTACT_PAGES; p++) {
       const page = await ghlPage(() => searchContactsCreatedSince(client, locationId, {
-        sinceIso, pageLimit: 100, searchAfter: cursor,
+        sinceIso, untilIso, pageLimit: 100, searchAfter: cursor,
       }));
       total = page.total || total;
       for (const c of page.contacts) {
@@ -380,9 +431,9 @@ export default function createDashboardRouter({ resolveLocation }) {
   router.get("/ghl/contacts", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
-      const { days, tzOffset } = readWindow(req);
-      const result = await cachedScan(`contacts:${locationId}:${days}:${tzOffset}`,
-        () => serialized(locationId, () => scanContacts(client, locationId, days, tzOffset)));
+      const { days, tzOffset, end } = readWindow(req);
+      const result = await cachedScan(`contacts:${locationId}:${days}:${tzOffset}:${end || "now"}`,
+        () => serialized(locationId, () => scanContacts(client, locationId, days, tzOffset, end)));
       res.json(result === PENDING ? { ok: true, pending: true } : result);
     } catch (err) {
       if (scopeMissing(err)) return res.json({ ok: true, scopeMissing: true });
@@ -393,9 +444,9 @@ export default function createDashboardRouter({ resolveLocation }) {
   router.get("/ghl/messages", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
-      const { days, tzOffset } = readWindow(req);
-      const result = await cachedScan(`messages:${locationId}:${days}:${tzOffset}`,
-        () => serialized(locationId, () => scanMessages(client, locationId, days, tzOffset)));
+      const { days, tzOffset, end } = readWindow(req);
+      const result = await cachedScan(`messages:${locationId}:${days}:${tzOffset}:${end || "now"}`,
+        () => serialized(locationId, () => scanMessages(client, locationId, days, tzOffset, end)));
       res.json(result === PENDING ? { ok: true, pending: true } : result);
     } catch (err) {
       if (scopeMissing(err)) return res.json({ ok: true, scopeMissing: true });

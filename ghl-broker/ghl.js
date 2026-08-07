@@ -222,17 +222,21 @@ export async function countContactsByTag(client, locationId, tag) {
 
 /* ---------- conversations (dashboard message/call volume) ---------- */
 
-// One page of contacts created since a date, newest first, with cursor
-// pagination (pass the previous page's searchAfter to continue). Returns
-// { contacts: [{ dateAdded, ... }], total, searchAfter } — total is the exact
-// match count even when paging stops early.
-export async function searchContactsCreatedSince(client, locationId, { sinceIso, pageLimit = 100, searchAfter } = {}) {
+// One page of contacts created in [sinceIso, untilIso), newest first, with
+// cursor pagination (pass the previous page's searchAfter to continue).
+// Returns { contacts: [{ dateAdded, ... }], total, searchAfter } — total is
+// the exact match count even when paging stops early.
+export async function searchContactsCreatedSince(client, locationId, { sinceIso, untilIso, pageLimit = 100, searchAfter } = {}) {
   const data = await client.call(`/contacts/search`, {
     method: "POST",
     body: {
       locationId,
       pageLimit,
-      filters: [{ field: "dateAdded", operator: "range", value: { gte: sinceIso } }],
+      filters: [{
+        field: "dateAdded",
+        operator: "range",
+        value: { gte: sinceIso, ...(untilIso ? { lt: untilIso } : {}) },
+      }],
       sort: [{ field: "dateAdded", direction: "desc" }],
       ...(searchAfter ? { searchAfter } : {}),
     },

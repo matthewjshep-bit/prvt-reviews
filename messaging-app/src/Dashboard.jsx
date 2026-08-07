@@ -272,8 +272,21 @@ const RANGES = [
   { days: 90, label: "Last 90 days" },
 ];
 
+// Local "YYYY-MM-DD" for today — the date picker's max, and the sentinel for
+// "picking today just means the live Today view".
+const localDayKey = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
 export default function Dashboard({ settings, onSettingsSaved }) {
   const [days, setDays] = useState(30);
+  // A picked past date shows that single day (same layout as Today).
+  const [endDate, setEndDate] = useState("");
+  const viewDays = endDate ? 1 : days;
+  const dayLabel = endDate
+    ? new Date(`${endDate}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    : "today";
 
   // Local summary (fast).
   const [summary, setSummary] = useState(null);
@@ -282,12 +295,12 @@ export default function Dashboard({ settings, onSettingsSaved }) {
   const loadSummary = () => {
     setSummaryLoading(true);
     setSummaryError("");
-    getDashboardSummary(days)
+    getDashboardSummary(viewDays, endDate)
       .then(setSummary)
       .catch((e) => setSummaryError(e.message))
       .finally(() => setSummaryLoading(false));
   };
-  useEffect(loadSummary, [days]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(loadSummary, [days, endDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // GHL tag counts (waits for settings; point-in-time, not range-scoped).
   const tags = settings?.dashboardTags || [];
@@ -324,7 +337,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
       setError("");
       setScopeMissing(false);
       const tick = () =>
-        fetcher(days)
+        fetcher(viewDays, endDate)
           .then((r) => {
             if (g !== gen.current) return;
             if (r.pending) { setTimeout(tick, 4000); return; }
@@ -339,7 +352,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
           });
       tick();
     };
-    useEffect(() => { load(); return () => { gen.current += 1; }; }, [days]); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => { load(); return () => { gen.current += 1; }; }, [days, endDate]); // eslint-disable-line react-hooks/exhaustive-deps
     return { data, loading, error, scopeMissing, load };
   };
 
@@ -447,13 +460,23 @@ export default function Dashboard({ settings, onSettingsSaved }) {
       {/* filter row — date range scopes everything below */}
       <div className="flex flex-wrap items-center gap-2">
         {RANGES.map((r) => (
-          <button key={r.days} type="button" onClick={() => setDays(r.days)}
+          <button key={r.days} type="button" onClick={() => { setDays(r.days); setEndDate(""); }}
             className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
-              days === r.days ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-100 border border-gray-200"
+              days === r.days && !endDate ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-100 border border-gray-200"
             }`}>
             {r.label}
           </button>
         ))}
+        {/* jump to any past day — picking today just returns to the live view */}
+        <input type="date" value={endDate} max={localDayKey()}
+          onChange={(e) => {
+            const v = e.target.value;
+            setEndDate(v && v !== localDayKey() ? v : "");
+          }}
+          className={`rounded-full border px-3 py-1 text-sm transition-colors ${
+            endDate ? "border-gray-900 text-gray-900 font-medium" : "border-gray-200 bg-white text-gray-500"
+          }`}
+          title="Show a specific day's activity" />
         {summaryLoading && <Loader2 size={15} className="animate-spin text-gray-400" />}
       </div>
 
@@ -463,7 +486,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
       {summary && (
         <div className={`grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 ${dim(summaryLoading, summary)}`}>
           <KpiTile label="Offers created" value={summary.offers.total}
-            sub={days === 1 ? "today" : `last ${summary.days} days`} />
+            sub={viewDays === 1 ? dayLabel : `last ${summary.days} days`} />
           <KpiTile label="Total offered" value={compact(summary.offers.cashTotal)} sub="cash offers" />
           <KpiTile label="Contacts created"
             value={contactsScopeMissing ? "—" : ghlContacts ? ghlContacts.total : "…"}
@@ -481,10 +504,10 @@ export default function Dashboard({ settings, onSettingsSaved }) {
         </div>
       )}
 
-      {days === 1 ? (
+      {viewDays === 1 ? (
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Card
-          title="GHL activity today"
+          title={endDate ? `GHL activity — ${dayLabel}` : "GHL activity today"}
           right={ghlMsgs?.cachedAt && !msgsLoading ? (
             <span className="text-[11px] text-gray-400">
               as of {new Date(ghlMsgs.cachedAt).toLocaleTimeString()}
@@ -511,7 +534,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
           )}
         </Card>
 
-        <Card title="Sent from this app today">
+        <Card title={endDate ? `Sent from this app — ${dayLabel}` : "Sent from this app today"}>
           {summary ? (
             <div className={dim(summaryLoading, summary)}>
               <TodayStat label="Texts" swatch={C_TEXTS} value={summary.sends.totalSms} />
@@ -522,7 +545,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
           )}
         </Card>
 
-        <Card title="Outreach today">
+        <Card title={endDate ? `Outreach — ${dayLabel}` : "Outreach today"}>
           {summary && todayOutreach ? (
             <div className={dim(summaryLoading, summary)}>
               <TodayStat label="New agents found" swatch={C_NEW} value={todayOutreach.newAgents} />
