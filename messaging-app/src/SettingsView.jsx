@@ -9,6 +9,7 @@ import {
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
 import { saveSettings } from "./api.js";
+import FieldsManager from "./FieldsManager.jsx";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
@@ -113,6 +114,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const [form, setForm] = useState(effectiveSettings(settings || {}));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [showFields, setShowFields] = useState(false); // FieldsManager modal (own lifecycle, not part of the settings blob)
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -211,6 +213,19 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           </p>
         </div>
       </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">CRM fields</h2>
+        <p className="mb-3 text-xs text-gray-500">
+          Every contact custom field in one place — the fields this app manages (offers, outreach, AI
+          enrichment), anything else in your GHL location, and a live contact preview where you can
+          see and edit all of a contact's values.
+        </p>
+        <button type="button" onClick={() => setShowFields(true)}
+          className="rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50">
+          Open fields manager
+        </button>
+      </section>
       </>)}
 
       <section className="rounded-xl border border-gray-200 bg-white p-4">
@@ -278,6 +293,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         {saved && <span className="text-sm font-medium text-emerald-700">Saved ✓</span>}
         {error && <span className="text-sm text-red-700">{error}</span>}
       </div>
+      {showFields && <FieldsManager onClose={() => setShowFields(false)} />}
     </div>
   );
 }

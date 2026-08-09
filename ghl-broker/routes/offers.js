@@ -19,6 +19,10 @@
 //   GET    /api/offers/:id/assignment.pdf
 //   POST   /api/offers/contacts/:id/enrich    AI conversation summary → proposed fields/tags (preview)
 //   POST   /api/offers/contacts/:id/enrich/apply    write approved fields/tags/note to the contact
+//   GET    /api/offers/contacts/:id/record    full record: standard + custom fields + app deals
+//   PUT    /api/offers/contacts/:id/record    save standard/custom field edits
+//   GET    /api/offers/field-registry          all app-owned field definitions by source
+//   POST   /api/offers/custom-fields           create one custom field (idempotent)
 //   GET    /api/offers/deals                  offers promoted to active deals
 //   POST   /api/offers/:id/deal               promote an offer to a deal (under contract)
 //   PATCH  /api/offers/:id/deal               update stage / terms
@@ -51,6 +55,7 @@ import {
   enrichFieldDefs, enrichTagVocab, ENRICH_TAG_GROUPS, inferContactType,
   buildTranscript, runEnrichment,
 } from "../enrich.js";
+import { OFFER_FIELDS, APP_FIELD_REGISTRY, registryByKey } from "../field-registry.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
 const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
@@ -97,16 +102,6 @@ function bestContactAddress(custom) {
   }
   return best;
 }
-
-// Contact custom fields the app writes on every offer (created on demand).
-const OFFER_FIELDS = [
-  { key: "last_offer_amount", name: "Last Offer Amount", dataType: "NUMERICAL" },
-  { key: "last_offer_date", name: "Last Offer Date", dataType: "TEXT" },
-  { key: "last_offer_doc_url", name: "Last Offer Document URL", dataType: "TEXT" },
-  { key: "last_offer_image_url", name: "Last Offer Image URL", dataType: "TEXT" },
-  { key: "zillow_link", name: "Zillow Link", dataType: "TEXT" },
-  { key: "offer_app_link", name: "Offer App Link", dataType: "TEXT" },
-];
 
 const dateLabel = (d = new Date()) =>
   d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
@@ -602,6 +597,133 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  /* ---------- full contact record (Fields Manager preview) ---------- */
+  // Standard fields + every custom-field definition joined with the contact's
+  // values (tagged by which app feature owns the field), plus the contact's
+  // app deals (agent side and/or linked investor).
+  router.get("/contacts/:id/record", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const [contact, defs, deals] = await Promise.all([
+        getContact(client, req.params.id),
+        listCustomFieldsRaw(client, locationId),
+        store.listDeals(locationId).catch(() => []),
+      ]);
+      if (!contact) return res.status(404).json({ error: "contact not found" });
+
+      const rawValues = contact.customFields || contact.customField || [];
+      const valueById = new Map(rawValues.map((f) => [f.id, f.value ?? f.fieldValue ?? ""]));
+
+      const fields = [];
+      for (const def of defs) {
+        if (def.model && def.model !== "contact") continue;
+        const key = String(def.fieldKey || "").replace(/^contact\./, "") || def.id;
+        // Same match rule as findOrCreateCustomFieldByKey: key OR name.
+        const reg = registryByKey.get(key)
+          || APP_FIELD_REGISTRY.find((f) => f.name.toLowerCase() === String(def.name || "").toLowerCase());
+        fields.push({
+          id: def.id,
+          key,
+          fieldKey: def.fieldKey || null,
+          name: def.name || key,
+          dataType: def.dataType || "TEXT",
+          picklistOptions: Array.isArray(def.picklistOptions) ? def.picklistOptions : null,
+          value: String(valueById.get(def.id) ?? ""),
+          source: reg?.source || "other",
+          values: reg?.values || null,
+          multi: Boolean(reg?.multi),
+          serverSet: Boolean(reg?.serverSet),
+          keyMismatch: Boolean(reg && reg.key !== key),
+        });
+      }
+
+      const contactDeals = [];
+      for (const o of deals) {
+        const d = o.deal || {};
+        const base = {
+          id: o.id, address: o.address || null, stage: d.stage,
+          contractPrice: d.contractPrice ?? null, assignmentFee: d.assignmentFee ?? null,
+          closingDate: d.closingDate || null,
+        };
+        if (o.contactId === req.params.id) contactDeals.push({ ...base, role: "agent" });
+        const inv = (d.investors || []).find((i) => i.contactId === req.params.id);
+        if (inv) contactDeals.push({ ...base, role: "investor", investorStatus: inv.status });
+      }
+
+      res.json({
+        record: {
+          contact: {
+            id: contact.id || req.params.id,
+            firstName: contact.firstName || "",
+            lastName: contact.lastName || "",
+            name: contactName(contact),
+            phone: contact.phone || "",
+            email: contact.email || "",
+            tags: contact.tags || [],
+            dateAdded: contact.dateAdded || null,
+            source: contact.source || null,
+            address1: contact.address1 || "",
+            city: contact.city || "",
+            state: contact.state || "",
+            postalCode: contact.postalCode || "",
+          },
+          fields,
+          deals: contactDeals,
+        },
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Save edits from the Fields Manager preview. Body:
+  // { standard?: { firstName, lastName, phone, email }, fields?: [{ id, key?, value }] }.
+  // Writes by field id only; values validated against the app registry when
+  // the key is one the app owns.
+  router.put("/contacts/:id/record", async (req, res) => {
+    try {
+      const { client } = resolveLocation(req);
+
+      const fieldWrites = [];
+      for (const f of Array.isArray(req.body?.fields) ? req.body.fields : []) {
+        const id = String(f?.id || "").trim();
+        if (!id) return res.status(400).json({ error: "field id required" });
+        const key = String(f?.key || "").trim();
+        const reg = key ? registryByKey.get(key) : null;
+        let value = String(f?.value ?? "").trim();
+        if (reg?.dataType === "NUMERICAL" && value) {
+          const n = Number(value.replace(/[$,\s]/g, ""));
+          if (!Number.isFinite(n)) return res.status(400).json({ error: `invalid number for ${key}` });
+          value = n;
+        } else if (reg?.values && !reg.multi && value) {
+          if (!reg.values.includes(value)) return res.status(400).json({ error: `invalid value for ${key}: ${value}` });
+        } else if (reg?.values && reg.multi && value) {
+          const parts = value.split(",").map((p) => p.trim()).filter(Boolean);
+          if (parts.some((p) => !reg.values.includes(p))) {
+            return res.status(400).json({ error: `invalid value for ${key}: ${value}` });
+          }
+          value = parts.join(", ");
+        } else if (typeof value === "string") {
+          value = value.slice(0, 2000);
+        }
+        fieldWrites.push({ id, value });
+      }
+
+      const standard = {};
+      const std = req.body?.standard || {};
+      for (const k of ["firstName", "lastName", "phone", "email"]) {
+        if (std[k] !== undefined) standard[k] = String(std[k] ?? "").trim().slice(0, 200);
+      }
+
+      if (!fieldWrites.length && !Object.keys(standard).length) {
+        return res.status(400).json({ error: "nothing to save" });
+      }
+      await updateContact(client, req.params.id, {
+        ...standard,
+        ...(fieldWrites.length ? { customFields: fieldWrites } : {}),
+      });
+      res.json({ ok: true });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---------- address autocomplete (OSM/Photon, no API key) ---------- */
   router.get("/address-suggest", async (req, res) => {
     try {
@@ -994,6 +1116,33 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         }
       }
       res.json({ ok: true, results });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Every field the APP owns (offer writes, outreach imports, AI enrichment),
+  // tagged by source — the Fields Manager joins this against /custom-fields.
+  router.get("/field-registry", async (req, res) => {
+    try {
+      resolveLocation(req);
+      res.json({ registry: APP_FIELD_REGISTRY });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Create one contact custom field (idempotent — reuses an existing
+  // definition matching by key or name). Body: { key?, name, dataType }.
+  router.post("/custom-fields", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const name = String(req.body?.name || "").trim().slice(0, 120);
+      const key = String(req.body?.key || "").trim() || name;
+      const dataType = String(req.body?.dataType || "TEXT").toUpperCase();
+      if (!name) return res.status(400).json({ error: "name required" });
+      if (!["TEXT", "NUMERICAL", "DATE"].includes(dataType)) {
+        return res.status(400).json({ error: "dataType must be TEXT, NUMERICAL, or DATE" });
+      }
+      const id = await findOrCreateCustomFieldByKey(client, locationId, key, name, dataType);
+      if (!id) return res.status(502).json({ error: "GHL did not return a field id" });
+      res.json({ ok: true, id });
     } catch (err) { fail(res, err); }
   });
 

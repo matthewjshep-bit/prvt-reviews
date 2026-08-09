@@ -84,6 +84,20 @@ export const enrichContact = (id, { type } = {}) =>
   post(`/api/offers/contacts/${encodeURIComponent(id)}/enrich`, { ...(type ? { type } : {}) });
 export const applyEnrichment = (id, payload) =>
   post(`/api/offers/contacts/${encodeURIComponent(id)}/enrich/apply`, payload);
+
+/* ---------- CRM fields manager ---------- */
+export const listCustomFields = () =>
+  fetch(`${API_BASE}/api/offers/custom-fields?${locq()}`).then(j).then((r) => r.fields);
+export const getFieldRegistry = () =>
+  fetch(`${API_BASE}/api/offers/field-registry?${locq()}`).then(j).then((r) => r.registry);
+export const createCustomField = ({ key, name, dataType }) =>
+  post(`/api/offers/custom-fields`, { key, name, dataType });
+export const pruneCustomFields = (ids) =>
+  post(`/api/offers/custom-fields/prune`, { ids });
+export const getContactRecord = (id) =>
+  fetch(`${API_BASE}/api/offers/contacts/${encodeURIComponent(id)}/record?${locq()}`).then(j).then((r) => r.record);
+export const saveContactRecord = (id, payload) =>
+  post(`/api/offers/contacts/${encodeURIComponent(id)}/record`, payload, "PUT");
 export const suggestAddresses = (query) =>
   fetch(`${API_BASE}/api/offers/address-suggest?${locq()}&query=${encodeURIComponent(query)}`)
     .then(j)

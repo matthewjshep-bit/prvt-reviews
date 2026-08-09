@@ -28,6 +28,7 @@ import { mapPool } from "../map-pool.js";
 import { scoreListing, medianPricePerSqft, distressSignals } from "../outreach-score.js";
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
+import { OUTREACH_FIELDS } from "../field-registry.js";
 import {
   findDuplicateContact, createContact, getContact, updateContact,
   addContactTags, findOrCreateCustomFieldByKey, getLastMessageDate,
@@ -36,17 +37,8 @@ import {
 const OUTREACH_TAG = process.env.OUTREACH_TAG || "agent-outreach";
 const OUTREACH_IMPORTS_ENABLED = process.env.OUTREACH_IMPORTS_ENABLED === "true";
 
-// Contact custom fields written on import (created on demand, like OFFER_FIELDS).
-const OUTREACH_FIELDS = [
-  // Pre-existing field in this GHL location (contact.short_hand_property_address)
-  // — matched by key, so the existing definition is reused, not duplicated.
-  { key: "short_hand_property_address", name: "short hand property address", dataType: "TEXT" },
-  { key: "hook_address", name: "Hook Address", dataType: "TEXT" },
-  { key: "hook_price", name: "Hook Price", dataType: "NUMERICAL" },
-  { key: "hook_dom", name: "Hook Days on Market", dataType: "NUMERICAL" },
-  { key: "hook_url", name: "Hook URL", dataType: "TEXT" },
-  { key: "brokerage", name: "Brokerage", dataType: "TEXT" },
-];
+// Contact custom fields written on import live in the shared registry so the
+// Fields Manager can visualize them alongside the offer + enrichment fields.
 
 /* ---------- normalization ---------- */
 
