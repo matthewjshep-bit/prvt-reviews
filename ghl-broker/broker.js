@@ -9,6 +9,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { makeClient } from "./ghl.js";
+import { maybeStartNightlySweep } from "./enrich-sweep.js";
 import createOffersRouter from "./routes/offers.js";
 import createOutreachRouter from "./routes/outreach.js";
 import createDashboardRouter from "./routes/dashboard.js";
@@ -118,5 +119,27 @@ app.use("/api/outreach", createOutreachRouter({ resolveLocation }));
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
 
 store.init().catch((e) => console.error("store init failed:", e.message));
+
+// Nightly AI enrichment sweep (Settings → "Nightly conversation sweep").
+// Fires during the 10:00 UTC hour ≈ 2–3am Pacific; maybeStartNightlySweep
+// skips locations without the toggle/AI key and won't run twice in a day.
+const SWEEP_UTC_HOUR = Number(process.env.ENRICH_SWEEP_UTC_HOUR || 10);
+const sweepLocations = () =>
+  [...new Set([...Object.keys(GHL_TOKENS), ...(ALLOWED_LOCATION ? [ALLOWED_LOCATION] : [])])];
+setInterval(async () => {
+  for (const locationId of sweepLocations()) {
+    try {
+      const token = getTokenFor(locationId);
+      if (!token) continue;
+      const saved = await store.getOfferSettings(locationId);
+      const started = maybeStartNightlySweep({
+        client: makeClient(token), locationId, saved, utcHour: SWEEP_UTC_HOUR,
+      });
+      if (started) console.log(`nightly enrich sweep started for ${locationId}`);
+    } catch (e) {
+      console.error(`nightly sweep check failed for ${locationId}: ${e.message}`);
+    }
+  }
+}, 15 * 60 * 1000).unref();
 
 app.listen(PORT, () => console.log(`offer broker on :${PORT}`));

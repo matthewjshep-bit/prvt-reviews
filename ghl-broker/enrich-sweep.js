@@ -1,0 +1,333 @@
+// enrich-sweep.js — batch AI enrichment ("sweep"). Finds every contact with
+// conversation activity inside a time window, runs the same transcript →
+// Claude → fields pipeline as the per-contact ✨ Enrich button, and
+// auto-applies the evidence-backed values (fields + tags + an audit note).
+// Triggered on demand from the UI (Settings → AI conversation sweep) or by
+// the nightly scheduler in broker.js. One job per location at a time, tracked
+// in memory; the UI polls GET /enrich/sweep for progress. Restarts lose job
+// history but never corrupt data — every write is the same idempotent
+// per-contact apply the manual flow uses.
+
+import {
+  buildTranscript, runEnrichment, inferContactType, enrichFieldDefs,
+  enrichTagVocab, ENRICH_TAG_GROUPS,
+} from "./enrich.js";
+import {
+  searchConversations, getContact, updateContact, addContactTags,
+  removeContactTags, createContactNote, findOrCreateCustomFieldByKey,
+  customFieldIdKeyMap, contactCustomRecord,
+} from "./ghl.js";
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Epoch ms from a GHL timestamp that may be a number, numeric string, or ISO.
+const msOf = (v) => {
+  if (v === null || v === undefined || v === "") return NaN;
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 0) return n;
+  const t = new Date(v).getTime();
+  return Number.isFinite(t) ? t : NaN;
+};
+
+const PACE_MS = 150; // GHL burst cap is 100 req / 10s per location
+const MAX_PAGES = 10; // collection scans at most 1000 conversations
+const MAX_RESULTS_KEPT = 200;
+
+/* ---------- job registry ---------- */
+
+const jobs = new Map(); // locationId -> job (the current or most recent run)
+
+export function getSweepJob(locationId) {
+  return jobs.get(locationId) || null;
+}
+
+export function cancelSweepJob(locationId) {
+  const job = jobs.get(locationId);
+  if (!job || job.status !== "running") return false;
+  job.cancelRequested = true;
+  return true;
+}
+
+// JSON-safe snapshot for the polling route.
+export function publicSweepJob(job) {
+  if (!job) return null;
+  const { cancelRequested, ...rest } = job;
+  return rest;
+}
+
+/* ---------- starting a sweep ---------- */
+
+// Kicks off a sweep in the background and returns the job immediately.
+// Throws { http: 409 } if one is already running for the location.
+export function startSweep({ client, locationId, saved, sinceIso, windowLabel, types, maxContacts, trigger }) {
+  const existing = jobs.get(locationId);
+  if (existing?.status === "running") {
+    throw Object.assign(new Error("a sweep is already running for this location"), { http: 409 });
+  }
+  const job = {
+    id: `sweep-${Date.now().toString(36)}`,
+    trigger: trigger || "manual",
+    status: "running", // running | done | canceled | error
+    phase: "collecting", // collecting | enriching
+    windowLabel: windowLabel || "",
+    sinceIso,
+    types,
+    maxContacts,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    total: 0,
+    done: 0,
+    currentName: "",
+    counts: { updated: 0, no_changes: 0, skipped: 0, errors: 0 },
+    overCap: 0, // active contacts beyond maxContacts (not scanned)
+    results: [],
+    error: null,
+    cancelRequested: false,
+  };
+  jobs.set(locationId, job);
+  runSweep(job, { client, locationId, saved }).catch((e) => {
+    job.status = "error";
+    job.error = String(e?.message || e).slice(0, 300);
+    job.finishedAt = new Date().toISOString();
+  });
+  return job;
+}
+
+/* ---------- the sweep itself ---------- */
+
+// Contacts with conversation activity since sinceMs, newest first:
+// [{ contactId, lastMessageMs }]. Same desc-sort + startAfterDate cursor
+// walk as the dashboard scans (1ms overlap so boundary ties aren't skipped).
+async function collectActiveContacts(client, locationId, sinceMs) {
+  const byContact = new Map();
+  const seen = new Set();
+  let cursor;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { conversations } = await searchConversations(client, locationId, {
+      limit: 100,
+      ...(cursor ? { startAfterDate: cursor } : {}),
+    });
+    if (!conversations.length) break;
+    let hitWindowEnd = false;
+    let fresh = 0;
+    for (const c of conversations) {
+      if (!c.id || seen.has(c.id)) continue;
+      seen.add(c.id);
+      fresh++;
+      const ts = msOf(c.lastMessageDate);
+      if (!Number.isFinite(ts)) continue;
+      if (ts < sinceMs) { hitWindowEnd = true; continue; }
+      if (!c.contactId) continue;
+      const prev = byContact.get(c.contactId) || 0;
+      if (ts > prev) byContact.set(c.contactId, ts);
+    }
+    if (hitWindowEnd || conversations.length < 100 || !fresh) break;
+    cursor = msOf(conversations[conversations.length - 1].lastMessageDate);
+    if (!Number.isFinite(cursor)) break;
+    cursor += 1;
+    await sleep(PACE_MS);
+  }
+  return [...byContact.entries()]
+    .map(([contactId, lastMessageMs]) => ({ contactId, lastMessageMs }))
+    .sort((a, b) => b.lastMessageMs - a.lastMessageMs);
+}
+
+// AI-proposed value -> validated write value, or null for "don't write".
+// Mirrors the manual apply route's rules; enums are already schema-enforced
+// at the AI layer, so this is belt-and-suspenders.
+function normalizeProposed(def, v) {
+  if (v === null || v === undefined) return null;
+  const sv = String(v).trim();
+  if (!sv || sv === "unknown") return null;
+  if (def.dataType === "NUMERICAL") {
+    const n = Number(sv.replace(/[$,\s]/g, ""));
+    return Number.isFinite(n) ? n : null;
+  }
+  if (def.values && !def.multi) return def.values.includes(sv) ? sv : null;
+  if (def.values && def.multi) {
+    const parts = sv.split(",").map((p) => p.trim()).filter((p) => def.values.includes(p));
+    return parts.length ? parts.join(", ") : null;
+  }
+  return sv.slice(0, 2000);
+}
+
+async function runSweep(job, { client, locationId, saved }) {
+  const aiApiKey = String(saved?.aiApiKey || "").trim();
+  const extraInstructions = String(saved?.enrichExtraInstructions || "").trim();
+  const sinceMs = new Date(job.sinceIso).getTime();
+
+  const active = await collectActiveContacts(client, locationId, sinceMs);
+  const targets = active.slice(0, job.maxContacts);
+  job.overCap = active.length - targets.length;
+  job.total = targets.length;
+  job.phase = "enriching";
+
+  // One field id per app key, created up front (not per contact) — the
+  // lookup lists the location's fields, so doing it in the loop would be
+  // O(contacts × fields) API calls.
+  const neededDefs = new Map();
+  for (const type of job.types) {
+    for (const def of enrichFieldDefs(type)) neededDefs.set(def.key, def);
+  }
+  const fieldIds = new Map();
+  for (const def of neededDefs.values()) {
+    const id = await findOrCreateCustomFieldByKey(client, locationId, def.key, def.name, def.dataType);
+    if (id) fieldIds.set(def.key, id);
+    await sleep(PACE_MS);
+  }
+  const idKeyMap = await customFieldIdKeyMap(client, locationId);
+
+  const pushResult = (row) => {
+    if (row.status === "error") job.counts.errors++;
+    else job.counts[row.status] = (job.counts[row.status] || 0) + 1;
+    if (job.results.length < MAX_RESULTS_KEPT) job.results.push(row);
+    job.done++;
+  };
+
+  for (const { contactId, lastMessageMs } of targets) {
+    if (job.cancelRequested) {
+      job.status = "canceled";
+      job.finishedAt = new Date().toISOString();
+      return;
+    }
+    let name = contactId;
+    try {
+      const contact = await getContact(client, contactId);
+      if (!contact) { pushResult({ contactId, name, status: "skipped", reason: "contact not found" }); continue; }
+      name = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.contactName || contactId;
+      job.currentName = name;
+      const tags = contact.tags || [];
+
+      const type = inferContactType(tags);
+      if (!type) { pushResult({ contactId, name, status: "skipped", reason: "no agent/investor tag (or both)" }); continue; }
+      if (!job.types.includes(type)) { pushResult({ contactId, name, type, status: "skipped", reason: `${type}s excluded from this sweep` }); continue; }
+
+      const currentFields = contactCustomRecord(contact, idKeyMap);
+
+      // Already enriched on a later day than their newest message — nothing
+      // new to read. (Date-only stamp, so same-day activity always re-runs.)
+      const lastRun = String(currentFields.enrich_last_run || "").slice(0, 10);
+      const lastMsgDay = new Date(lastMessageMs).toISOString().slice(0, 10);
+      if (lastRun && lastRun > lastMsgDay) {
+        pushResult({ contactId, name, type, status: "skipped", reason: `enriched ${lastRun}, no messages since` });
+        continue;
+      }
+
+      let transcript;
+      try {
+        transcript = await buildTranscript(client, locationId, contactId);
+      } catch (e) {
+        if (e?.status === 401 || e?.status === 403) {
+          throw Object.assign(
+            new Error("GHL token is missing the conversations/message readonly scopes"),
+            { fatal: true }
+          );
+        }
+        throw e;
+      }
+      if (!transcript.stats.messages) { pushResult({ contactId, name, type, status: "skipped", reason: "no readable messages" }); continue; }
+
+      const raw = await runEnrichment({
+        contact, currentFields, currentTags: tags, transcript, type, extraInstructions, aiApiKey,
+      });
+
+      // Field writes: evidence-backed proposals that differ from the current
+      // value, plus the two server stamps.
+      const today = new Date().toISOString().slice(0, 10);
+      const applied = []; // { key, name, value } — the meaningful changes
+      const fieldWrites = [];
+      for (const def of enrichFieldDefs(type)) {
+        let value = null;
+        if (def.key === "enrich_last_run") value = today;
+        else if (def.key === "last_convo_date") value = transcript.lastMessageAt ? transcript.lastMessageAt.slice(0, 10) : null;
+        else value = normalizeProposed(def, raw.fields?.[def.key]?.value);
+        if (value === null) continue;
+        const current = String(currentFields[def.key] ?? "").trim();
+        if (String(value) === current) continue;
+        const id = fieldIds.get(def.key);
+        if (!id) continue;
+        fieldWrites.push({ id, value });
+        if (!def.serverSet) applied.push({ key: def.key, name: def.name, value });
+      }
+
+      // Tag changes with the same mutual-exclusion expansion as the manual
+      // preview: adding one of a group removes its currently-present siblings.
+      const vocab = new Set(enrichTagVocab(type));
+      const has = (t) => tags.includes(t);
+      const tagsAdd = [...new Set((raw.tags?.add || []).filter((t) => vocab.has(t) && !has(t)))];
+      const tagsRemove = new Set((raw.tags?.remove || []).filter((t) => vocab.has(t) && has(t)));
+      for (const group of ENRICH_TAG_GROUPS[type] || []) {
+        for (const t of tagsAdd) {
+          if (!group.includes(t)) continue;
+          for (const sib of group) if (sib !== t && has(sib)) tagsRemove.add(sib);
+        }
+      }
+
+      if (fieldWrites.length) await updateContact(client, contactId, { customFields: fieldWrites });
+      if (tagsAdd.length) await addContactTags(client, contactId, tagsAdd);
+      if (tagsRemove.size) await removeContactTags(client, contactId, [...tagsRemove]);
+
+      const changed = applied.length || tagsAdd.length || tagsRemove.size;
+      if (changed) {
+        const noteLines = [
+          `AI SWEEP — ${today}${job.windowLabel ? ` (${job.windowLabel})` : ""}`,
+          String(raw.summary || "").trim(),
+          applied.length ? `Updated: ${applied.map((a) => `${a.name} = ${a.value}`).join("; ")}` : "",
+          tagsAdd.length ? `Tags added: ${tagsAdd.join(", ")}` : "",
+          tagsRemove.size ? `Tags removed: ${[...tagsRemove].join(", ")}` : "",
+        ].filter(Boolean);
+        try {
+          await createContactNote(client, contactId, { body: noteLines.join("\n").slice(0, 4000) });
+        } catch { /* audit note is best-effort */ }
+      }
+
+      pushResult({
+        contactId, name, type,
+        status: changed ? "updated" : "no_changes",
+        confidence: raw.confidence || null,
+        fields: applied,
+        tagsAdded: tagsAdd,
+        tagsRemoved: [...tagsRemove],
+      });
+      await sleep(PACE_MS);
+    } catch (e) {
+      // Failures that would repeat identically for every remaining contact
+      // (missing GHL scope, bad AI key) abort the sweep instead of burning
+      // API calls one contact at a time.
+      if (e?.fatal) throw e;
+      if (e?.status === 401 && String(e.message || "").toLowerCase().includes("api key")) throw e;
+      pushResult({ contactId, name, status: "error", error: String(e?.message || e).slice(0, 200) });
+    }
+  }
+
+  job.currentName = "";
+  job.status = "done";
+  job.finishedAt = new Date().toISOString();
+}
+
+/* ---------- nightly scheduler hook ---------- */
+
+const NIGHTLY_WINDOW_MS = 26 * 3600 * 1000; // last-24h sweep with slack for drift
+const NIGHTLY_MIN_GAP_MS = 20 * 3600 * 1000;
+
+// Called on a timer by broker.js for each known location. Runs at most one
+// nightly sweep per ~day per location; skips quietly when the toggle or the
+// AI key is missing, or when any sweep ran recently.
+export function maybeStartNightlySweep({ client, locationId, saved, utcHour }) {
+  if (new Date().getUTCHours() !== utcHour) return false;
+  if (!saved?.enrichSweepNightly) return false;
+  if (!String(saved?.aiApiKey || "").trim()) return false;
+  const last = jobs.get(locationId);
+  if (last && (last.status === "running" || Date.now() - new Date(last.startedAt).getTime() < NIGHTLY_MIN_GAP_MS)) {
+    return false;
+  }
+  startSweep({
+    client, locationId, saved,
+    sinceIso: new Date(Date.now() - NIGHTLY_WINDOW_MS).toISOString(),
+    windowLabel: "nightly · last 26h",
+    types: ["agent", "investor"],
+    maxContacts: 60,
+    trigger: "nightly",
+  });
+  return true;
+}

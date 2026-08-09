@@ -10,6 +10,7 @@ import {
 } from "@shared/contract-template.js";
 import { saveSettings } from "./api.js";
 import FieldsManager from "./FieldsManager.jsx";
+import EnrichSweep from "./EnrichSweep.jsx";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -212,6 +213,22 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             Appended to the AI's instructions when it analyzes a contact's conversation history.
           </p>
         </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">AI conversation sweep</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Scans every agent/investor contact with conversation activity in the window and auto-fills
+          their CRM fields from what was said — buy box for investors, areas served for agents,
+          personal details for both — leaving an audit note on each updated contact. Uses the
+          Anthropic key above (~$0.10–0.20 per contact scanned).
+        </p>
+        <EnrichSweep />
+        <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" checked={Boolean(form.enrichSweepNightly)}
+            onChange={(e) => { setSaved(false); setForm((f) => ({ ...f, enrichSweepNightly: e.target.checked })); }} />
+          Nightly sweep — automatically scan the last 24h of conversations every night (~2–3am Pacific)
+        </label>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">

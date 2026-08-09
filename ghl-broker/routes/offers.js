@@ -19,6 +19,9 @@
 //   GET    /api/offers/:id/assignment.pdf
 //   POST   /api/offers/contacts/:id/enrich    AI conversation summary → proposed fields/tags (preview)
 //   POST   /api/offers/contacts/:id/enrich/apply    write approved fields/tags/note to the contact
+//   POST   /api/offers/enrich/sweep           batch enrich: all contacts active in a window (auto-apply)
+//   GET    /api/offers/enrich/sweep           current/last sweep job (the UI polls this)
+//   POST   /api/offers/enrich/sweep/cancel    stop after the in-flight contact
 //   GET    /api/offers/contacts/:id/record    full record: standard + custom fields + app deals
 //   PUT    /api/offers/contacts/:id/record    save standard/custom field edits
 //   GET    /api/offers/field-registry          all app-owned field definitions by source
@@ -58,6 +61,7 @@ import {
   buildTranscript, runEnrichment, suggestDealInvestors,
 } from "../enrich.js";
 import { OFFER_FIELDS, APP_FIELD_REGISTRY, registryByKey } from "../field-registry.js";
+import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
 const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
@@ -596,6 +600,52 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       } catch { /* preview state is close enough */ }
 
       res.json({ ok: true, ghl, updated, warnings });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- batch enrichment sweep ---------- */
+  // Start a sweep over every contact with conversation activity since
+  // `since` (ISO, computed client-side so "today" means the user's midnight).
+  // Body: { since, windowLabel?, types?: ["agent","investor"], maxContacts? }.
+  // Runs in the background; poll GET /enrich/sweep for progress.
+  router.post("/enrich/sweep", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await store.getOfferSettings(locationId);
+      if (!String(saved?.aiApiKey || "").trim()) {
+        return res.status(400).json({ error: "Anthropic API key required — add it in Settings → AI features" });
+      }
+      const sinceMs = new Date(String(req.body?.since || "")).getTime();
+      const now = Date.now();
+      if (!Number.isFinite(sinceMs) || sinceMs >= now || sinceMs < now - 90 * 86400000) {
+        return res.status(400).json({ error: "since must be an ISO time within the last 90 days" });
+      }
+      const types = ["agent", "investor"].filter((t) =>
+        Array.isArray(req.body?.types) ? req.body.types.includes(t) : true);
+      if (!types.length) return res.status(400).json({ error: "types must include agent and/or investor" });
+      const maxContacts = Math.min(Math.max(Number(req.body?.maxContacts) || 50, 1), 150);
+
+      const job = startSweep({
+        client, locationId, saved,
+        sinceIso: new Date(sinceMs).toISOString(),
+        windowLabel: String(req.body?.windowLabel || "").slice(0, 60),
+        types, maxContacts, trigger: "manual",
+      });
+      res.json({ ok: true, job: publicSweepJob(job) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.get("/enrich/sweep", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ job: publicSweepJob(getSweepJob(locationId)) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/enrich/sweep/cancel", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ ok: true, canceled: cancelSweepJob(locationId) });
     } catch (err) { fail(res, err); }
   });
 
