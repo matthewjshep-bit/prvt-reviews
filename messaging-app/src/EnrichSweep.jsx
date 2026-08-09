@@ -36,6 +36,7 @@ const STATUS_LABEL = { updated: "updated", no_changes: "no changes", skipped: "s
 export default function EnrichSweep() {
   const [win, setWin] = useState("today");
   const [types, setTypes] = useState({ investor: true, agent: true });
+  const [repliesOnly, setRepliesOnly] = useState(true);
   const [job, setJob] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -67,6 +68,7 @@ export default function EnrichSweep() {
         since: sinceFor(win),
         windowLabel: WINDOWS.find((w) => w.key === win)?.label || win,
         types: selected,
+        repliesOnly,
       });
       setJob(j);
     } catch (e) {
@@ -104,6 +106,12 @@ export default function EnrichSweep() {
             {t === "investor" ? "Investors" : "Agents"}
           </label>
         ))}
+        <label className="flex items-center gap-1.5 text-sm text-slate-700"
+          title="Skip contacts whose only activity in the window is our own outbound messages — no reply, no AI cost">
+          <input type="checkbox" checked={repliesOnly} disabled={running}
+            onChange={(e) => setRepliesOnly(e.target.checked)} />
+          Replied only
+        </label>
         {!running ? (
           <button type="button" disabled={busy} onClick={start}
             className="ml-auto flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">

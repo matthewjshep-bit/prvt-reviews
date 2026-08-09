@@ -606,7 +606,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   /* ---------- batch enrichment sweep ---------- */
   // Start a sweep over every contact with conversation activity since
   // `since` (ISO, computed client-side so "today" means the user's midnight).
-  // Body: { since, windowLabel?, types?: ["agent","investor"], maxContacts? }.
+  // Body: { since, windowLabel?, types?: ["agent","investor"], maxContacts?,
+  // repliesOnly? } — repliesOnly (default true) skips the AI call for
+  // contacts whose window activity is outbound-only.
   // Runs in the background; poll GET /enrich/sweep for progress.
   router.post("/enrich/sweep", async (req, res) => {
     try {
@@ -629,7 +631,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         client, locationId, saved,
         sinceIso: new Date(sinceMs).toISOString(),
         windowLabel: String(req.body?.windowLabel || "").slice(0, 60),
-        types, maxContacts, trigger: "manual",
+        types, maxContacts,
+        repliesOnly: req.body?.repliesOnly !== false,
+        trigger: "manual",
       });
       res.json({ ok: true, job: publicSweepJob(job) });
     } catch (err) { fail(res, err); }

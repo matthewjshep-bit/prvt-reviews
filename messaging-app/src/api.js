@@ -84,8 +84,8 @@ export const enrichContact = (id, { type } = {}) =>
   post(`/api/offers/contacts/${encodeURIComponent(id)}/enrich`, { ...(type ? { type } : {}) });
 export const applyEnrichment = (id, payload) =>
   post(`/api/offers/contacts/${encodeURIComponent(id)}/enrich/apply`, payload);
-export const startEnrichSweep = ({ since, windowLabel, types, maxContacts }) =>
-  post(`/api/offers/enrich/sweep`, { since, windowLabel, types, maxContacts }).then((r) => r.job);
+export const startEnrichSweep = ({ since, windowLabel, types, maxContacts, repliesOnly }) =>
+  post(`/api/offers/enrich/sweep`, { since, windowLabel, types, maxContacts, repliesOnly }).then((r) => r.job);
 export const getEnrichSweep = () =>
   fetch(`${API_BASE}/api/offers/enrich/sweep?${locq()}`).then(j).then((r) => r.job);
 export const cancelEnrichSweep = () => post(`/api/offers/enrich/sweep/cancel`, {});

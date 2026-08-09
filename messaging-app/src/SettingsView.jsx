@@ -190,7 +190,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         <p className="mb-3 text-xs text-slate-500">
           Powers "AI scan listing photos" in the rehab estimator and the ✨ contact enrichment
           (conversation summary → CRM fields). Get a key at console.anthropic.com → API Keys.
-          Photo scans cost roughly $0.15–0.50 each; enrichments roughly $0.10–0.20.
+          Photo scans cost roughly $0.15–0.50 each; enrichments roughly $0.02–0.05.
         </p>
         <Txt label="Anthropic API key" value={form.aiApiKey || ""} onChange={set("aiApiKey")} placeholder="sk-ant-..." />
         <div className="mt-3">
@@ -220,8 +220,9 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         <p className="mb-3 text-xs text-slate-500">
           Scans every agent/investor contact with conversation activity in the window and auto-fills
           their CRM fields from what was said — buy box for investors, areas served for agents,
-          personal details for both — leaving an audit note on each updated contact. Uses the
-          Anthropic key above (~$0.10–0.20 per contact scanned).
+          personal details for both — leaving an audit note on each updated contact. Skips DND
+          contacts and (by default) anyone who didn't reply in the window. Uses the Anthropic key
+          above (~$0.02–0.05 per contact scanned).
         </p>
         <EnrichSweep />
         <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">

@@ -59,7 +59,7 @@ export function publicSweepJob(job) {
 
 // Kicks off a sweep in the background and returns the job immediately.
 // Throws { http: 409 } if one is already running for the location.
-export function startSweep({ client, locationId, saved, sinceIso, windowLabel, types, maxContacts, trigger }) {
+export function startSweep({ client, locationId, saved, sinceIso, windowLabel, types, maxContacts, repliesOnly, trigger }) {
   const existing = jobs.get(locationId);
   if (existing?.status === "running") {
     throw Object.assign(new Error("a sweep is already running for this location"), { http: 409 });
@@ -73,6 +73,7 @@ export function startSweep({ client, locationId, saved, sinceIso, windowLabel, t
     sinceIso,
     types,
     maxContacts,
+    repliesOnly: repliesOnly !== false,
     startedAt: new Date().toISOString(),
     finishedAt: null,
     total: 0,
@@ -198,6 +199,9 @@ async function runSweep(job, { client, locationId, saved }) {
       job.currentName = name;
       const tags = contact.tags || [];
 
+      // DND contacts are out of the pipeline — don't spend AI on them.
+      if (contact.dnd === true) { pushResult({ contactId, name, status: "skipped", reason: "DND enabled" }); continue; }
+
       const type = inferContactType(tags);
       if (!type) { pushResult({ contactId, name, status: "skipped", reason: "no agent/investor tag (or both)" }); continue; }
       if (!job.types.includes(type)) { pushResult({ contactId, name, type, status: "skipped", reason: `${type}s excluded from this sweep` }); continue; }
@@ -226,6 +230,17 @@ async function runSweep(job, { client, locationId, saved }) {
         throw e;
       }
       if (!transcript.stats.messages) { pushResult({ contactId, name, type, status: "skipped", reason: "no readable messages" }); continue; }
+
+      // Replies-only: their newest message must fall inside the window —
+      // outbound-only activity (our blasts, follow-ups) has nothing new to
+      // learn and would burn an AI call for nothing.
+      if (job.repliesOnly) {
+        const inboundMs = transcript.lastInboundAt ? new Date(transcript.lastInboundAt).getTime() : 0;
+        if (inboundMs < sinceMs) {
+          pushResult({ contactId, name, type, status: "skipped", reason: "no reply in window (outbound only)" });
+          continue;
+        }
+      }
 
       const raw = await runEnrichment({
         contact, currentFields, currentTags: tags, transcript, type, extraInstructions, aiApiKey,
@@ -327,6 +342,7 @@ export function maybeStartNightlySweep({ client, locationId, saved, utcHour }) {
     windowLabel: "nightly · last 26h",
     types: ["agent", "investor"],
     maxContacts: 60,
+    repliesOnly: true,
     trigger: "nightly",
   });
   return true;

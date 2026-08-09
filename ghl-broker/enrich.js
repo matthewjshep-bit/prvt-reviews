@@ -8,7 +8,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { searchConversations, listConversationMessages, getMessageTranscription } from "./ghl.js";
 
-export const ENRICH_MODEL = "claude-opus-4-8";
+// Sonnet: structured extraction (buy box, areas, personal details) doesn't
+// need Opus, and it cuts the per-contact sweep cost roughly 5x.
+export const ENRICH_MODEL = "claude-sonnet-5";
 
 /* ---------- field schemas ---------- */
 // { key, name, dataType, values?, hint?, serverSet? } — values = closed vocab
@@ -140,13 +142,13 @@ export async function buildTranscript(client, locationId, contactId, opts = {}) 
         if (channel === "call" || channel === "voicemail") {
           const callId = m.id || m.messageId || null;
           entries.push({
-            ts,
+            ts, dir,
             line: `[${stamp}] ${dir} ${channel}${body ? `: ${body}` : ""}`,
             call: callId ? { id: callId, dir, channel, stamp } : null,
           });
         } else {
           if (!body) continue;
-          entries.push({ ts, line: `[${stamp}] ${dir} ${channel}: ${body}` });
+          entries.push({ ts, dir, line: `[${stamp}] ${dir} ${channel}: ${body}` });
         }
       }
       if (!r.nextPage || !r.lastMessageId) break;
@@ -208,9 +210,15 @@ export async function buildTranscript(client, locationId, contactId, opts = {}) 
     truncated = true;
   }
 
+  // Newest message FROM the contact — lets callers (the sweep's replies-only
+  // mode) skip the AI call when a window contains only our own outbound.
+  let lastInboundTs = 0;
+  for (const e of entries) if (e.dir === "THEM" && e.ts > lastInboundTs) lastInboundTs = e.ts;
+
   return {
     text: entries.map((e) => e.line).join("\n"),
     lastMessageAt: entries.length ? new Date(entries[entries.length - 1].ts).toISOString() : null,
+    lastInboundAt: lastInboundTs ? new Date(lastInboundTs).toISOString() : null,
     stats: {
       conversations: sawConversations,
       messages: entries.length,
