@@ -13,6 +13,7 @@ import NotesPanel from "./NotesPanel.jsx";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
 import AssignmentModal from "./AssignmentModal.jsx";
+import EnrichModal from "./EnrichModal.jsx";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -457,6 +458,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const [sendOpen, setSendOpen] = useState(false); // SendModal (text and/or email via GHL)
   const [contractOpen, setContractOpen] = useState(false); // ContractModal (purchase & sale PDF)
   const [assignmentOpen, setAssignmentOpen] = useState(false); // AssignmentModal (dispositions PDF)
+  const [enrichOpen, setEnrichOpen] = useState(false); // EnrichModal (AI conversation → CRM fields)
   const [lastSend, setLastSend] = useState(null);  // most recent send record, for the ✓ banner
 
   // Money fields format with thousands separators as you type; the calc
@@ -953,8 +955,17 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
           loading={notesLoading}
           error={notesError}
           onAdd={addNote}
+          onEnrich={() => setEnrichOpen(true)}
         />
       </aside>
+    )}
+    {enrichOpen && contact?.id && (
+      <EnrichModal contactId={contact.id} contactName={contact.name} defaultType="agent"
+        onClose={() => setEnrichOpen(false)}
+        onApplied={() => {
+          // The summary lands as a note — refresh the panel.
+          getContactNotes(contact.id).then((n) => n && setContactNotes(n)).catch(() => {});
+        }} />
     )}
     </div>
   );

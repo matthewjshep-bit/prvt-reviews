@@ -205,6 +205,14 @@ export async function addContactTags(client, contactId, tags) {
   return data.tags || data;
 }
 
+export async function removeContactTags(client, contactId, tags) {
+  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}/tags`, {
+    method: "DELETE",
+    body: { tags },
+  });
+  return data.tags || data;
+}
+
 // Count of contacts carrying a tag, via the filtered contact search. Cheapest
 // possible query: one result page of 1, read the total. Throws on GHL errors
 // (err.status set) — callers should treat 401/403 as "scope not granted".
@@ -251,9 +259,10 @@ export async function searchContactsCreatedSince(client, locationId, { sinceIso,
 
 // One page of the location's conversations, newest activity first. Pass
 // startAfterDate (epoch ms of the previous page's oldest lastMessageDate) to
-// page older. Returns { conversations: [{ id, lastMessageDate, ... }], total }.
+// page older; pass contactId to scope to one contact's conversations.
+// Returns { conversations: [{ id, lastMessageDate, ... }], total }.
 // Needs the conversations.readonly scope (401/403 when missing).
-export async function searchConversations(client, locationId, { limit = 100, startAfterDate } = {}) {
+export async function searchConversations(client, locationId, { limit = 100, startAfterDate, contactId } = {}) {
   const p = new URLSearchParams({
     locationId,
     limit: String(limit),
@@ -261,6 +270,7 @@ export async function searchConversations(client, locationId, { limit = 100, sta
     sort: "desc",
   });
   if (startAfterDate) p.set("startAfterDate", String(startAfterDate));
+  if (contactId) p.set("contactId", contactId);
   const data = await client.call(`/conversations/search?${p}`, { version: V_CONVERSATIONS });
   return { conversations: data.conversations || [], total: Number(data.total) || 0 };
 }

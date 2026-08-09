@@ -17,6 +17,8 @@
 //   GET    /api/offers/:id/contract.pdf
 //   POST   /api/offers/:id/assignment        render the assignment of contract PDF (dispositions)
 //   GET    /api/offers/:id/assignment.pdf
+//   POST   /api/offers/contacts/:id/enrich    AI conversation summary → proposed fields/tags (preview)
+//   POST   /api/offers/contacts/:id/enrich/apply    write approved fields/tags/note to the contact
 //   GET    /api/offers/deals                  offers promoted to active deals
 //   POST   /api/offers/:id/deal               promote an offer to a deal (under contract)
 //   PATCH  /api/offers/:id/deal               update stage / terms
@@ -42,9 +44,13 @@ import { mapPool } from "../map-pool.js";
 import { uploadAsset, r2Enabled } from "../r2.js";
 import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
-  findOrCreateCustomFieldByKey, createContactNote, addContactTags, sendSms, sendEmail,
+  findOrCreateCustomFieldByKey, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
   customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField, getContactNotes,
 } from "../ghl.js";
+import {
+  enrichFieldDefs, enrichTagVocab, ENRICH_TAG_GROUPS, inferContactType,
+  buildTranscript, runEnrichment,
+} from "../enrich.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
 const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
@@ -413,6 +419,186 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!body) return res.status(400).json({ error: "note body required" });
       const note = await createContactNote(client, req.params.id, { body: body.slice(0, 5000) });
       res.json({ ok: true, note });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- AI contact enrichment (conversation history → fields + tags) ---------- */
+  // Preview: pull the contact's conversation transcript, run Claude, return
+  // proposed field values + tag changes. NO writes — the /apply route below
+  // does those after the user reviews the diff.
+  router.post("/contacts/:id/enrich", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await store.getOfferSettings(locationId);
+      const aiApiKey = String(saved?.aiApiKey || "").trim();
+      if (!aiApiKey) return res.status(400).json({ error: "Anthropic API key required — add it in Settings → AI features" });
+
+      const contact = await getContact(client, req.params.id);
+      if (!contact) return res.status(404).json({ error: "contact not found" });
+      const idKeyMap = await customFieldIdKeyMap(client, locationId);
+      const currentFields = contactCustomRecord(contact, idKeyMap);
+      const currentTags = (contact.tags || []).map((t) => String(t).toLowerCase());
+
+      const typeInferred = inferContactType(currentTags);
+      const type = ["agent", "investor"].includes(req.body?.type) ? req.body.type : typeInferred;
+      if (!type) return res.json({ ok: false, needsType: true });
+
+      let transcript;
+      try {
+        transcript = await buildTranscript(client, locationId, req.params.id);
+      } catch (e) {
+        if (e?.status === 401 || e?.status === 403) return res.json({ ok: false, scopeMissing: true });
+        throw e;
+      }
+      if (!transcript.stats.messages) return res.json({ ok: false, empty: true, typeInferred });
+
+      let raw;
+      try {
+        raw = await runEnrichment({
+          contact, currentFields, currentTags, transcript, type,
+          extraInstructions: String(saved?.enrichExtraInstructions || "").trim(),
+          aiApiKey,
+        });
+      } catch (e) { throw anthropicErrorToHttp(e); }
+
+      // Flatten to UI-ready diff rows. "unknown"/empty proposals become null
+      // (nothing to apply); last_convo_date is server-computed, not AI.
+      const rows = [];
+      for (const def of enrichFieldDefs(type)) {
+        if (def.key === "enrich_last_run") continue; // stamped on apply
+        let proposed = null;
+        let reason = "";
+        if (def.serverSet) {
+          if (def.key === "last_convo_date" && transcript.lastMessageAt) {
+            proposed = transcript.lastMessageAt.slice(0, 10);
+            reason = "date of the newest message";
+          }
+        } else {
+          const entry = raw.fields?.[def.key];
+          const v = entry?.value;
+          if (v !== null && v !== undefined) {
+            const sv = String(v).trim();
+            if (sv && sv !== "unknown") proposed = def.dataType === "NUMERICAL" ? Number(v) : sv;
+          }
+          reason = String(entry?.reason || "");
+        }
+        const current = String(currentFields[def.key] ?? "").trim() || null;
+        rows.push({
+          key: def.key, name: def.name, dataType: def.dataType,
+          values: def.values || null, multi: Boolean(def.multi),
+          current, proposed, reason,
+        });
+      }
+
+      // Tag changes: whitelist, drop no-ops, and expand mutual exclusivity —
+      // adding one tag of a group removes its currently-present siblings.
+      const vocab = new Set(enrichTagVocab(type));
+      const has = (t) => currentTags.includes(t);
+      const add = [...new Set((raw.tags?.add || []).filter((t) => vocab.has(t) && !has(t)))];
+      const remove = new Set((raw.tags?.remove || []).filter((t) => vocab.has(t) && has(t)));
+      for (const group of ENRICH_TAG_GROUPS[type] || []) {
+        for (const t of add) {
+          if (!group.includes(t)) continue;
+          for (const sib of group) if (sib !== t && has(sib)) remove.add(sib);
+        }
+      }
+
+      res.json({
+        ok: true, type, typeInferred,
+        proposal: {
+          fields: rows,
+          tags: { add, remove: [...remove] },
+          summary: String(raw.summary || ""),
+          confidence: raw.confidence || "low",
+        },
+        transcriptStats: transcript.stats,
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Apply the (user-edited) proposal: custom fields + tags + optional summary
+  // note. Validates everything against the schema consts — the UI can only
+  // send what the vocabulary allows.
+  router.post("/contacts/:id/enrich/apply", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const type = ["agent", "investor"].includes(req.body?.type) ? req.body.type : null;
+      if (!type) return res.status(400).json({ error: "type must be agent or investor" });
+
+      const defs = new Map(enrichFieldDefs(type).map((f) => [f.key, f]));
+      const fields = req.body?.fields && typeof req.body.fields === "object" ? req.body.fields : {};
+      const vocab = new Set(enrichTagVocab(type));
+      const tagsAdd = [...new Set((req.body?.tags?.add || []).filter((t) => vocab.has(t)))];
+      const tagsRemove = [...new Set((req.body?.tags?.remove || []).filter((t) => vocab.has(t)))];
+      const note = String(req.body?.note || "").trim().slice(0, 4000);
+
+      const writes = {};
+      for (const [k, v] of Object.entries(fields)) {
+        const def = defs.get(k);
+        if (!def) return res.status(400).json({ error: `unknown field: ${k}` });
+        const sv = String(v ?? "").trim();
+        if (!sv || sv === "unknown") continue;
+        if (def.dataType === "NUMERICAL") {
+          const n = Number(String(sv).replace(/[$,\s]/g, ""));
+          if (!Number.isFinite(n)) return res.status(400).json({ error: `invalid number for ${k}` });
+          writes[k] = n;
+        } else if (def.values && !def.multi) {
+          if (!def.values.includes(sv)) return res.status(400).json({ error: `invalid value for ${k}: ${sv}` });
+          writes[k] = sv;
+        } else if (def.values && def.multi) {
+          const parts = sv.split(",").map((p) => p.trim()).filter(Boolean);
+          if (parts.some((p) => !def.values.includes(p))) {
+            return res.status(400).json({ error: `invalid value for ${k}: ${sv}` });
+          }
+          writes[k] = parts.join(", ");
+        } else {
+          writes[k] = sv.slice(0, 2000);
+        }
+      }
+      if (!Object.keys(writes).length && !tagsAdd.length && !tagsRemove.length && !note) {
+        return res.status(400).json({ error: "nothing to apply" });
+      }
+      writes.enrich_last_run = new Date().toISOString().slice(0, 10);
+
+      // Each GHL write is independent; failures become warnings, not errors.
+      const warnings = [];
+      const ghl = { fields: false, tagsAdded: false, tagsRemoved: false, note: false };
+      try {
+        const fieldWrites = [];
+        for (const [k, v] of Object.entries(writes)) {
+          const def = defs.get(k);
+          const id = await findOrCreateCustomFieldByKey(client, locationId, k, def.name, def.dataType);
+          if (id) fieldWrites.push({ id, value: v });
+        }
+        if (fieldWrites.length) {
+          await updateContact(client, req.params.id, { customFields: fieldWrites });
+          ghl.fields = true;
+        }
+      } catch (e) { warnings.push(`fields: ${e.message}`); }
+      if (tagsAdd.length) {
+        try { await addContactTags(client, req.params.id, tagsAdd); ghl.tagsAdded = true; }
+        catch (e) { warnings.push(`tags add: ${e.message}`); }
+      }
+      if (tagsRemove.length) {
+        try { await removeContactTags(client, req.params.id, tagsRemove); ghl.tagsRemoved = true; }
+        catch (e) { warnings.push(`tags remove: ${e.message}`); }
+      }
+      if (note) {
+        try {
+          await createContactNote(client, req.params.id, { body: `AI ENRICHMENT — ${dateLabel()}\n${note}` });
+          ghl.note = true;
+        } catch (e) { warnings.push(`note: ${e.message}`); }
+      }
+
+      // Best-effort refetch so the UI can show the post-apply state.
+      let updated = null;
+      try {
+        const idKeyMap = await customFieldIdKeyMap(client, locationId);
+        const c = await getContact(client, req.params.id);
+        updated = { custom: contactCustomRecord(c, idKeyMap), tags: c.tags || [] };
+      } catch { /* preview state is close enough */ }
+
+      res.json({ ok: true, ghl, updated, warnings });
     } catch (err) { fail(res, err); }
   });
 

@@ -80,6 +80,10 @@ export const getContactNotes = (id) =>
     .then((r) => r.notes);
 export const addContactNote = (id, body) =>
   post(`/api/offers/contacts/${encodeURIComponent(id)}/notes`, { body });
+export const enrichContact = (id, { type } = {}) =>
+  post(`/api/offers/contacts/${encodeURIComponent(id)}/enrich`, { ...(type ? { type } : {}) });
+export const applyEnrichment = (id, payload) =>
+  post(`/api/offers/contacts/${encodeURIComponent(id)}/enrich/apply`, payload);
 export const suggestAddresses = (query) =>
   fetch(`${API_BASE}/api/offers/address-suggest?${locq()}&query=${encodeURIComponent(query)}`)
     .then(j)

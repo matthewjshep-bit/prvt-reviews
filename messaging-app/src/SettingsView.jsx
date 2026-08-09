@@ -183,11 +183,11 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-bold">AI photo scan (Anthropic)</h2>
+        <h2 className="mb-3 text-sm font-bold">AI features (Anthropic)</h2>
         <p className="mb-3 text-xs text-gray-500">
-          Powers "AI scan listing photos" in the rehab estimator — Claude reviews the MLS photos and
-          pre-fills the scope of work. Get a key at console.anthropic.com → API Keys. Uses your
-          RealEstateAPI key to fetch the photos. Each scan costs roughly $0.15–0.50 in API usage.
+          Powers "AI scan listing photos" in the rehab estimator and the ✨ contact enrichment
+          (conversation summary → CRM fields). Get a key at console.anthropic.com → API Keys.
+          Photo scans cost roughly $0.15–0.50 each; enrichments roughly $0.10–0.20.
         </p>
         <Txt label="Anthropic API key" value={form.aiApiKey || ""} onChange={set("aiApiKey")} placeholder="sk-ant-..." />
         <div className="mt-3">
@@ -197,6 +197,18 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             scraper — can break if Zillow changes defenses; uploading photos always works as the fallback.
           </p>
           <Txt label="Apify API token" value={form.apifyToken || ""} onChange={set("apifyToken")} placeholder="apify_api_..." />
+        </div>
+        <div className="mt-3">
+          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Extra enrichment instructions (optional)
+          </label>
+          <textarea rows={3} value={form.enrichExtraInstructions || ""}
+            onChange={(e) => set("enrichExtraInstructions")(e.target.value)}
+            placeholder="e.g. local market vocabulary, what 'hot' means for our team, agents to treat differently…"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none" />
+          <p className="mt-1 text-xs text-gray-400">
+            Appended to the AI's instructions when it analyzes a contact's conversation history.
+          </p>
         </div>
       </section>
       </>)}

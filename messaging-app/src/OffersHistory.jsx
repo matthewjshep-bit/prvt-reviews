@@ -4,12 +4,13 @@
 // full offer detail (document, all three options, attach status).
 
 import React, { useEffect, useState } from "react";
-import { Briefcase, ChevronDown, ChevronRight, ExternalLink, FileText, Loader2, Pencil, Search, Send, Trash2, X } from "lucide-react";
+import { Briefcase, ChevronDown, ChevronRight, ExternalLink, FileText, Loader2, Pencil, Search, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { deleteOffer, getSettings, ghlContactUrl, listOffers, promoteDeal, zillowUrl } from "./api.js";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
 import AssignmentModal from "./AssignmentModal.jsx";
+import EnrichModal from "./EnrichModal.jsx";
 import { StagePill } from "./DealsView.jsx";
 
 function AttachStatus({ offer }) {
@@ -239,6 +240,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
   const [sending, setSending] = useState(null);
   const [contracting, setContracting] = useState(null); // offer open in ContractModal
   const [assigning, setAssigning] = useState(null); // offer open in AssignmentModal
+  const [enriching, setEnriching] = useState(null); // { contactId, contactName } in EnrichModal
   const [settings, setSettings] = useState(null); // fetched lazily for contract prefills
   const [q, setQ] = useState("");
   const [expanded, setExpanded] = useState(() => new Set()); // group keys open
@@ -422,7 +424,17 @@ export default function OffersHistory({ onEdit, onDeal }) {
                     </td>
                     <td className="px-4 py-2.5" />
                     <td className="px-4 py-2.5" />
-                    <td className="sticky right-0 bg-gray-50/60 px-4 py-2.5 group-hover:bg-gray-100" />
+                    <td className="sticky right-0 whitespace-nowrap bg-gray-50/60 px-4 py-2.5 text-right group-hover:bg-gray-100"
+                      onClick={(e) => e.stopPropagation()}>
+                      {g.contactId && (
+                        <button type="button"
+                          onClick={() => setEnriching({ contactId: g.contactId, contactName: g.contactName })}
+                          className="rounded p-1 text-amber-500 hover:bg-amber-50"
+                          title="AI enrichment — summarize the conversation and fill CRM fields">
+                          <Sparkles size={15} />
+                        </button>
+                      )}
+                    </td>
                   </tr>
                   {isOpen && g.offers.map((o) => (
               <tr key={o.id}
@@ -513,6 +525,8 @@ export default function OffersHistory({ onEdit, onDeal }) {
         onPromote={(o) => { setSelected(null); promote(o); }}
         onDealNav={onDeal} />}
       {sending && <SendModal offer={sending} onClose={() => setSending(null)} onSent={handleSent} />}
+      {enriching && <EnrichModal contactId={enriching.contactId} contactName={enriching.contactName}
+        defaultType="agent" onClose={() => setEnriching(null)} />}
       {contracting && <ContractModal offer={contracting} settings={settings}
         onClose={() => setContracting(null)} onGenerated={handleContractGenerated} />}
       {assigning && <AssignmentModal offer={assigning} settings={settings}

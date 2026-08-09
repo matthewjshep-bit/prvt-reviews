@@ -3,7 +3,7 @@
 // to the contact record. Presentation-only; the parent owns the data.
 
 import React, { useState } from "react";
-import { Loader2, Send, StickyNote } from "lucide-react";
+import { Loader2, Send, Sparkles, StickyNote } from "lucide-react";
 
 const dateLabel = (d) => {
   if (!d) return "";
@@ -14,7 +14,7 @@ const dateLabel = (d) => {
   }
 };
 
-export default function NotesPanel({ contactName, notes, loading, error, onAdd }) {
+export default function NotesPanel({ contactName, notes, loading, error, onAdd, onEnrich }) {
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState("");
@@ -41,6 +41,13 @@ export default function NotesPanel({ contactName, notes, loading, error, onAdd }
           <span className="ml-auto rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-500">
             {notes.length}
           </span>
+        )}
+        {onEnrich && (
+          <button type="button" onClick={onEnrich}
+            className={`${!loading && notes.length > 0 ? "" : "ml-auto "}rounded p-1 text-amber-500 hover:bg-amber-50`}
+            title="AI enrichment — summarize the conversation and fill CRM fields">
+            <Sparkles size={15} />
+          </button>
         )}
       </div>
 

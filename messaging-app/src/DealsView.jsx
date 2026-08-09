@@ -5,13 +5,14 @@
 // immediately; terms (price / fee / closing / notes) save via the modal.
 
 import React, { useEffect, useRef, useState } from "react";
-import { ExternalLink, FileText, Loader2, Pencil, Trash2, X } from "lucide-react";
+import { ExternalLink, FileText, Loader2, Pencil, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
   addDealInvestor, getOffer, ghlContactUrl, listDeals, removeDeal, removeDealInvestor,
   searchContacts, updateDeal, updateDealInvestor, zillowUrl,
 } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
+import EnrichModal from "./EnrichModal.jsx";
 
 export const DEAL_STAGES = [
   { key: "under_contract", label: "Under contract", cls: "bg-amber-100 text-amber-800" },
@@ -139,7 +140,7 @@ function InvestorPicker({ existingIds, onPick, busy }) {
   );
 }
 
-function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onEdit }) {
+function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onEdit, onEnrich }) {
   const deal = offer.deal;
   const [terms, setTerms] = useState(() => ({
     contractPrice: deal.contractPrice ?? "",
@@ -301,6 +302,12 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                         className="rounded-md border border-gray-300 px-1.5 py-1 text-xs focus:border-gray-900 focus:outline-none">
                         {INVESTOR_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                       </select>
+                      <button type="button" disabled={busy}
+                        title="AI enrichment — summarize the conversation and fill CRM fields"
+                        onClick={() => onEnrich?.(i)}
+                        className="rounded p-1 text-amber-500 hover:bg-amber-50">
+                        <Sparkles size={14} />
+                      </button>
                       <button type="button" disabled={busy} title="Unlink investor"
                         onClick={() => run(() => removeDealInvestor(offer.id, i.contactId))}
                         className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600">
@@ -369,6 +376,7 @@ export default function DealsView({ settings, onEdit }) {
   const [selectedId, setSelectedId] = useState(null);
   const [showTerminal, setShowTerminal] = useState(false);
   const [assigning, setAssigning] = useState(null);
+  const [enriching, setEnriching] = useState(null); // { contactId, name } investor in EnrichModal
 
   useEffect(() => {
     listDeals().then(setDeals).catch((e) => setError(e.message));
@@ -507,7 +515,12 @@ export default function DealsView({ settings, onEdit }) {
           onUpdated={patchDeal}
           onRemoved={dropDeal}
           onAssignment={(o) => setAssigning(o)}
-          onEdit={openOffer} />
+          onEdit={openOffer}
+          onEnrich={(inv) => setEnriching(inv)} />
+      )}
+      {enriching && (
+        <EnrichModal contactId={enriching.contactId} contactName={enriching.name}
+          defaultType="investor" onClose={() => setEnriching(null)} />
       )}
       {assigning && (
         <AssignmentModal offer={assigning} settings={settings}
