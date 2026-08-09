@@ -8,7 +8,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ExternalLink, FileText, Loader2, Pencil, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
-  addDealInvestor, ghlContactUrl, listDeals, removeDeal, removeDealInvestor,
+  addDealInvestor, getOffer, ghlContactUrl, listDeals, removeDeal, removeDealInvestor,
   searchContacts, updateDeal, updateDealInvestor, zillowUrl,
 } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
@@ -139,7 +139,7 @@ function InvestorPicker({ existingIds, onPick, busy }) {
   );
 }
 
-function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment }) {
+function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onEdit }) {
   const deal = offer.deal;
   const [terms, setTerms] = useState(() => ({
     contractPrice: deal.contractPrice ?? "",
@@ -221,6 +221,11 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
           </div>
           <div className="flex items-center gap-2">
             {busy && <Loader2 size={16} className="animate-spin text-gray-400" />}
+            <button type="button" onClick={() => onEdit?.(offer)}
+              className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50"
+              title="Open this offer in the editor — rehab scope, comps, document">
+              <Pencil size={14} /> Open offer
+            </button>
             <button type="button" onClick={onClose} className="rounded p-1.5 text-gray-400 hover:bg-gray-100">
               <X size={18} />
             </button>
@@ -358,7 +363,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   );
 }
 
-export default function DealsView({ settings }) {
+export default function DealsView({ settings, onEdit }) {
   const [deals, setDeals] = useState(null);
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState(null);
@@ -376,6 +381,14 @@ export default function DealsView({ settings }) {
   const dropDeal = (id) => {
     setDeals((list) => (list || []).filter((o) => o.id !== id));
     setSelectedId(null);
+  };
+
+  // The deals list is served without the fat calc/snapshot blobs — fetch the
+  // full offer before handing it to the editor (rehab scope, comps, form state).
+  const openOffer = (o) => {
+    getOffer(o.id)
+      .then((full) => onEdit?.(full || o))
+      .catch(() => onEdit?.(o));
   };
 
   if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
@@ -493,7 +506,8 @@ export default function DealsView({ settings }) {
           onClose={() => setSelectedId(null)}
           onUpdated={patchDeal}
           onRemoved={dropDeal}
-          onAssignment={(o) => setAssigning(o)} />
+          onAssignment={(o) => setAssigning(o)}
+          onEdit={openOffer} />
       )}
       {assigning && (
         <AssignmentModal offer={assigning} settings={settings}
