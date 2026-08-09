@@ -1,9 +1,10 @@
-// OffersHistory.jsx — every offer created for this location. The contact links
-// to the GHL contact record; clicking a row opens the full offer detail
-// (document, all three options, attach status).
+// OffersHistory.jsx — every offer created for this location, grouped by agent
+// (contact): one collapsible row per agent, individual offers nested under it.
+// The contact links to the GHL contact record; clicking an offer row opens the
+// full offer detail (document, all three options, attach status).
 
 import React, { useEffect, useState } from "react";
-import { ExternalLink, FileText, Loader2, Pencil, Search, Send, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, FileText, Loader2, Pencil, Search, Send, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { deleteOffer, getSettings, ghlContactUrl, listOffers, zillowUrl } from "./api.js";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
@@ -227,6 +228,15 @@ export default function OffersHistory({ onEdit }) {
   const [assigning, setAssigning] = useState(null); // offer open in AssignmentModal
   const [settings, setSettings] = useState(null); // fetched lazily for contract prefills
   const [q, setQ] = useState("");
+  const [expanded, setExpanded] = useState(() => new Set()); // group keys open
+
+  function toggleGroup(key) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
 
   useEffect(() => {
     listOffers({ limit: 100 })
@@ -293,6 +303,21 @@ export default function OffersHistory({ onEdit }) {
           o.cashAmount != null ? fmtMoney(o.cashAmount) : "",
         ].some((v) => (v || "").toLowerCase().includes(needle)));
 
+  // Group offers by agent. Offers arrive newest-first, so first appearance
+  // orders the groups by each agent's most recent offer.
+  const groups = [];
+  const byKey = new Map();
+  for (const o of shown) {
+    const key = o.contactId || (o.contactName ? `name:${o.contactName}` : "none");
+    let g = byKey.get(key);
+    if (!g) {
+      g = { key, contactId: o.contactId, contactName: o.contactName, offers: [] };
+      byKey.set(key, g);
+      groups.push(g);
+    }
+    g.offers.push(o);
+  }
+
   return (
     <>
       <div className="mb-3 flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2">
@@ -318,8 +343,8 @@ export default function OffersHistory({ onEdit }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
+              <th className="px-4 py-2.5">Agent</th>
               <th className="px-4 py-2.5">Date</th>
-              <th className="px-4 py-2.5">Contact</th>
               <th className="px-4 py-2.5">Property</th>
               <th className="px-4 py-2.5 text-right">Cash offer</th>
               <th className="px-4 py-2.5">Document</th>
@@ -328,24 +353,56 @@ export default function OffersHistory({ onEdit }) {
             </tr>
           </thead>
           <tbody>
-            {shown.map((o) => (
+            {groups.map((g) => {
+              const isOpen = needle ? true : expanded.has(g.key);
+              const latest = g.offers[0];
+              const addresses = [...new Set(g.offers.map((o) => o.address).filter(Boolean))];
+              return (
+                <React.Fragment key={g.key}>
+                  <tr onClick={() => toggleGroup(g.key)}
+                    className="group cursor-pointer border-b border-gray-100 bg-gray-50/60 last:border-0 hover:bg-gray-100">
+                    <td className="whitespace-nowrap px-4 py-2.5">
+                      <span className="inline-flex items-center gap-1.5">
+                        {isOpen ? <ChevronDown size={15} className="text-gray-400" /> : <ChevronRight size={15} className="text-gray-400" />}
+                        {g.contactId ? (
+                          <a href={ghlContactUrl(g.contactId)} target="_blank" rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 font-semibold underline decoration-gray-300 underline-offset-2 hover:text-gray-900"
+                            title="Open contact in GHL">
+                            {g.contactName || g.contactId} <ExternalLink size={12} className="text-gray-400" />
+                          </a>
+                        ) : (
+                          <span className="font-semibold">{g.contactName || "No contact"}</span>
+                        )}
+                        <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[11px] font-semibold text-gray-600">
+                          {g.offers.length} offer{g.offers.length === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-gray-500">
+                      {(latest.createdAt || "").slice(0, 10)}
+                    </td>
+                    <td className="max-w-[13rem] truncate px-4 py-2.5 text-gray-600">
+                      {addresses.length === 1 ? addresses[0] : addresses.length ? `${addresses.length} properties` : "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold">
+                      {latest.cashAmount != null ? fmtMoney(latest.cashAmount) : "—"}
+                    </td>
+                    <td className="px-4 py-2.5" />
+                    <td className="px-4 py-2.5" />
+                    <td className="sticky right-0 bg-gray-50/60 px-4 py-2.5 group-hover:bg-gray-100" />
+                  </tr>
+                  {isOpen && g.offers.map((o) => (
               <tr key={o.id}
                 onClick={() => (o.status === "draft" ? onEdit?.(o) : setSelected(o))}
                 className="group cursor-pointer border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                <td className="px-4 py-2.5">
+                  <span className="ml-5 block border-l-2 border-gray-200 pl-3 text-[11px] uppercase tracking-wide text-gray-400">
+                    {o.status === "draft" ? "draft" : " "}
+                  </span>
+                </td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-gray-500">
                   {(o.createdAt || "").slice(0, 10)}
-                </td>
-                <td className="px-4 py-2.5">
-                  {o.contactId ? (
-                    <a href={ghlContactUrl(o.contactId)} target="_blank" rel="noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      className="inline-flex items-center gap-1 font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-900"
-                      title="Open contact in GHL">
-                      {o.contactName || o.contactId} <ExternalLink size={12} className="text-gray-400" />
-                    </a>
-                  ) : (
-                    <span className="font-medium">{o.contactName || "—"}</span>
-                  )}
                 </td>
                 <td className="max-w-[13rem] truncate px-4 py-2.5">{o.address || "—"}</td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold">
@@ -396,7 +453,10 @@ export default function OffersHistory({ onEdit }) {
                   </button>
                 </td>
               </tr>
-            ))}
+                  ))}
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
