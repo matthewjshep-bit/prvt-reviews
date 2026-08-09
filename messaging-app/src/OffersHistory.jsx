@@ -4,12 +4,13 @@
 // full offer detail (document, all three options, attach status).
 
 import React, { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, FileText, Loader2, Pencil, Search, Send, Trash2, X } from "lucide-react";
+import { Briefcase, ChevronDown, ChevronRight, ExternalLink, FileText, Loader2, Pencil, Search, Send, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { deleteOffer, getSettings, ghlContactUrl, listOffers, zillowUrl } from "./api.js";
+import { deleteOffer, getSettings, ghlContactUrl, listOffers, promoteDeal, zillowUrl } from "./api.js";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
 import AssignmentModal from "./AssignmentModal.jsx";
+import { StagePill } from "./DealsView.jsx";
 
 function AttachStatus({ offer }) {
   if (offer.status === "draft") {
@@ -48,7 +49,7 @@ function SentBadge({ offer }) {
   );
 }
 
-function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment }) {
+function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment, onPromote, onDealNav }) {
   const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
   const Row = ({ label, value }) => (
     <div className="flex justify-between gap-4 text-sm">
@@ -80,6 +81,18 @@ function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment 
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {offer.status !== "draft" && !offer.deal && (
+              <button type="button" onClick={() => onPromote?.(offer)}
+                className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-semibold text-amber-800 hover:bg-amber-100"
+                title="Accepted offer — start tracking it as an active deal">
+                <Briefcase size={14} /> Mark under contract
+              </button>
+            )}
+            {offer.deal && (
+              <button type="button" onClick={() => onDealNav?.()} title="Open the Deals tab">
+                <StagePill stage={offer.deal.stage} />
+              </button>
+            )}
             {offer.contactId && (
               <button type="button" onClick={() => onSend?.(offer)}
                 className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-800">
@@ -219,7 +232,7 @@ function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment 
   );
 }
 
-export default function OffersHistory({ onEdit }) {
+export default function OffersHistory({ onEdit, onDeal }) {
   const [offers, setOffers] = useState(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(null);
@@ -244,12 +257,31 @@ export default function OffersHistory({ onEdit }) {
       .catch((e) => setError(e.message));
   }, []);
 
-  async function remove(id) {
-    if (!window.confirm("Delete this offer record and its documents?")) return;
+  async function remove(o) {
+    const msg = o.deal
+      ? "This offer is an active deal — deleting removes the deal tracking too. Delete anyway?"
+      : "Delete this offer record and its documents?";
+    if (!window.confirm(msg)) return;
     try {
-      await deleteOffer(id);
-      setOffers((list) => list.filter((o) => o.id !== id));
+      await deleteOffer(o.id);
+      setOffers((list) => list.filter((x) => x.id !== o.id));
     } catch (e) { setError(e.message); }
+  }
+
+  // Promote an accepted offer into an active deal, then jump to the Deals tab.
+  const [promoting, setPromoting] = useState(null); // offer id in flight
+  async function promote(o) {
+    if (promoting) return;
+    setPromoting(o.id);
+    try {
+      const r = await promoteDeal(o.id);
+      setOffers((list) => (list || []).map((x) => (x.id === o.id ? r.offer : x)));
+      onDeal?.();
+    } catch (e) {
+      if (e.status === 409) onDeal?.(); // already a deal — just go there
+      else setError(e.message);
+    }
+    setPromoting(null);
   }
 
   // A live send appends to offer.sends — refresh every copy of the row we hold.
@@ -435,6 +467,18 @@ export default function OffersHistory({ onEdit }) {
                   <SentBadge offer={o} />
                 </td>
                 <td className="sticky right-0 whitespace-nowrap bg-white px-4 py-2.5 text-right group-hover:bg-gray-50" onClick={(e) => e.stopPropagation()}>
+                  {o.status !== "draft" && !o.deal && (
+                    <button type="button" onClick={() => promote(o)} disabled={promoting === o.id}
+                      className="mr-1 inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+                      title="Accepted offer — start tracking it as an active deal">
+                      <Briefcase size={13} /> {promoting === o.id ? "…" : "Deal"}
+                    </button>
+                  )}
+                  {o.deal && (
+                    <button type="button" onClick={() => onDeal?.()} className="mr-1 align-middle" title="Open the Deals tab">
+                      <StagePill stage={o.deal.stage} small />
+                    </button>
+                  )}
                   {o.status !== "draft" && o.contactId && (
                     <button type="button" onClick={() => setSending(o)}
                       className="mr-1 inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
@@ -447,7 +491,7 @@ export default function OffersHistory({ onEdit }) {
                     title={o.status === "draft" ? "Continue editing draft" : "Reopen as a new working copy"}>
                     <Pencil size={13} /> Edit
                   </button>
-                  <button type="button" onClick={() => remove(o.id)}
+                  <button type="button" onClick={() => remove(o)}
                     className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Delete">
                     <Trash2 size={15} />
                   </button>
@@ -465,7 +509,9 @@ export default function OffersHistory({ onEdit }) {
         onEdit={(o) => { setSelected(null); onEdit?.(o); }}
         onSend={(o) => setSending(o)}
         onContract={openContract}
-        onAssignment={openAssignment} />}
+        onAssignment={openAssignment}
+        onPromote={(o) => { setSelected(null); promote(o); }}
+        onDealNav={onDeal} />}
       {sending && <SendModal offer={sending} onClose={() => setSending(null)} onSent={handleSent} />}
       {contracting && <ContractModal offer={contracting} settings={settings}
         onClose={() => setContracting(null)} onGenerated={handleContractGenerated} />}

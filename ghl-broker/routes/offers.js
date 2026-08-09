@@ -17,6 +17,13 @@
 //   GET    /api/offers/:id/contract.pdf
 //   POST   /api/offers/:id/assignment        render the assignment of contract PDF (dispositions)
 //   GET    /api/offers/:id/assignment.pdf
+//   GET    /api/offers/deals                  offers promoted to active deals
+//   POST   /api/offers/:id/deal               promote an offer to a deal (under contract)
+//   PATCH  /api/offers/:id/deal               update stage / terms
+//   DELETE /api/offers/:id/deal               un-promote (mistake correction)
+//   POST   /api/offers/:id/deal/investors     link a disposition investor (GHL contact)
+//   PATCH  /api/offers/:id/deal/investors/:contactId    evaluation status
+//   DELETE /api/offers/:id/deal/investors/:contactId    unlink
 
 import express from "express";
 import crypto from "node:crypto";
@@ -42,6 +49,13 @@ import {
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
 const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
 const OFFER_TAG = process.env.OFFER_TAG || "offer-created";
+const DEAL_TAG = process.env.DEAL_TAG || "under-contract";
+
+// Active-deal tracking (offers under signed contract). Transitions are
+// deliberately permissive (any stage to any stage) so mistakes are correctable;
+// stageHistory records the true sequence for KPI math.
+const DEAL_STAGES = ["under_contract", "buyer_found", "assigned", "closed", "fell_through"];
+const INVESTOR_STATUSES = ["sent", "evaluating", "passed", "committed"];
 const APP_ORIGIN = (process.env.APP_ORIGIN || "").replace(/\/$/, "");
 
 // Per-location access keys (enforced in broker.js resolveLocation) — deep
@@ -1079,6 +1093,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   });
 
   /* ---------- list / read / delete ---------- */
+  // All active deals for the location (offers with a `deal` object), newest
+  // first. MUST stay registered before GET /:id or "deals" is captured as :id.
+  router.get("/deals", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const limit = Math.min(500, parseInt(req.query.limit, 10) || 200);
+      const deals = await store.listDeals(locationId, { limit });
+      // The Deals tab needs none of the fat calc/snapshot blobs.
+      res.json({ deals: deals.map(({ snapshot, calc, ...rest }) => rest) });
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -1296,6 +1322,215 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       offer.assignment = { fields, generatedAt: new Date().toISOString() };
       offer.assignmentPdfUrl = url;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- active deals (offers under signed contract) ---------- */
+  // A deal is an offer whose doc carries a `deal` object: stage + terms on the
+  // acquisitions side (the agent contact already on the offer) plus the
+  // disposition investors (existing GHL contacts) evaluating the property.
+
+  const dealStr = (v, max = 200) => String(v ?? "").trim().slice(0, max);
+  const dealMoney = (v) => {
+    const n = Number(String(v ?? "").replace(/[$,\s]/g, ""));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+
+  // Shared loader: offer must exist, belong to the location, and (unless
+  // promoting) already be a deal. Writes the error response itself.
+  async function loadDealOffer(req, res, { requireDeal = true } = {}) {
+    const { locationId, client } = resolveLocation(req);
+    const offer = await store.getOffer(req.params.id);
+    if (!offer || offer.locationId !== locationId) {
+      res.status(404).json({ error: "offer not found" });
+      return null;
+    }
+    if (requireDeal && !offer.deal) {
+      res.status(404).json({ error: "offer is not a deal" });
+      return null;
+    }
+    return { locationId, client, offer };
+  }
+
+  // Promote an offer to an active deal. Body (all optional): { contractPrice,
+  // assignmentFee, closingDate } — defaults come from the generated contract,
+  // the cash offer, and settings.wholesaleFee.
+  router.post("/:id/deal", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { locationId, client, offer } = ctx;
+      if (offer.status === "draft") {
+        return res.status(400).json({ error: "drafts can't be promoted — create the offer first" });
+      }
+      if (offer.deal) return res.status(409).json({ error: "already a deal", offer });
+
+      const settings = effectiveSettings(await store.getOfferSettings(locationId));
+      const ts = new Date().toISOString();
+      const contractPrice = dealMoney(req.body?.contractPrice)
+        ?? dealMoney(offer.contract?.fields?.price)
+        ?? dealMoney(offer.cashAmount);
+      const assignmentFee = dealMoney(req.body?.assignmentFee) ?? dealMoney(settings.wholesaleFee);
+      offer.deal = {
+        stage: "under_contract",
+        createdAt: ts,
+        updatedAt: ts,
+        stageHistory: [{ stage: "under_contract", ts }],
+        contractPrice,
+        assignmentFee,
+        closingDate: dealStr(req.body?.closingDate, 40) || dealStr(offer.contract?.fields?.closingDate, 40),
+        notes: "",
+        fellThroughReason: "",
+        investors: [],
+        ghl: { tag: false, note: false },
+      };
+
+      // Mark the agent contact in GHL — best-effort, never fails the promote.
+      const warnings = [];
+      const noteFailure = (step, e) => {
+        console.error(`offers: deal attach failed [${step}] contact=${offer.contactId}:`, e?.message);
+        warnings.push(`${step}: ${e.message}`);
+      };
+      if (offer.contactId) {
+        try {
+          await addContactTags(client, offer.contactId, [DEAL_TAG]);
+          offer.deal.ghl.tag = true;
+        } catch (e) { noteFailure("deal tag", e); }
+        try {
+          await createContactNote(client, offer.contactId, {
+            body: `UNDER CONTRACT — ${offer.address || "property"} (${dateLabel()})` +
+              (contractPrice ? `\nContract price: ${fmtMoney(contractPrice)}` : "") +
+              `\nTracked in the offer app (Deals tab).`,
+          });
+          offer.deal.ghl.note = true;
+        } catch (e) { noteFailure("deal note", e); }
+      }
+      if (warnings.length) offer.warnings = [...(offer.warnings || []), ...warnings];
+
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer, warnings });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Update deal terms / stage. Body: any of { stage, contractPrice,
+  // assignmentFee, closingDate, notes, fellThroughReason }.
+  router.patch("/:id/deal", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { offer } = ctx;
+      const deal = offer.deal;
+      const b = req.body || {};
+      if (b.stage !== undefined) {
+        if (!DEAL_STAGES.includes(b.stage)) {
+          return res.status(400).json({ error: `stage must be one of: ${DEAL_STAGES.join(", ")}` });
+        }
+        if (b.stage !== deal.stage) {
+          deal.stage = b.stage;
+          deal.stageHistory.push({ stage: b.stage, ts: new Date().toISOString() });
+        }
+      }
+      if (b.contractPrice !== undefined) deal.contractPrice = dealMoney(b.contractPrice);
+      if (b.assignmentFee !== undefined) deal.assignmentFee = dealMoney(b.assignmentFee);
+      if (b.closingDate !== undefined) deal.closingDate = dealStr(b.closingDate, 40);
+      if (b.notes !== undefined) deal.notes = dealStr(b.notes, 4000);
+      if (b.fellThroughReason !== undefined) deal.fellThroughReason = dealStr(b.fellThroughReason, 200);
+      deal.updatedAt = new Date().toISOString();
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Un-promote (mistake correction) — removes deal tracking, keeps the offer.
+  // The best-effort GHL tag isn't reversed.
+  router.delete("/:id/deal", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      delete ctx.offer.deal;
+      await store.updateOffer(ctx.offer.id, ctx.offer);
+      res.json({ ok: true, offer: ctx.offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Link a disposition investor (an existing GHL contact) to the deal.
+  // Idempotent on contactId. Body: { contactId, name? }.
+  router.post("/:id/deal/investors", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { client, offer } = ctx;
+      const contactId = dealStr(req.body?.contactId, 64);
+      if (!contactId) return res.status(400).json({ error: "contactId required" });
+      if (offer.deal.investors.some((i) => i.contactId === contactId)) {
+        return res.json({ ok: true, offer, duplicate: true });
+      }
+      let name = dealStr(req.body?.name, 120);
+      if (!name) {
+        try { name = contactName(await getContact(client, contactId)) || contactId; }
+        catch { name = contactId; }
+      }
+      const ts = new Date().toISOString();
+      offer.deal.investors.push({ contactId, name, status: "sent", addedAt: ts, updatedAt: ts });
+      offer.deal.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Per-investor evaluation status. "committed" marks the buyer: notes the
+  // investor's GHL contact and advances an under_contract deal to buyer_found.
+  // Other investors are left as they are.
+  router.patch("/:id/deal/investors/:contactId", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { client, offer } = ctx;
+      const status = dealStr(req.body?.status, 40);
+      if (!INVESTOR_STATUSES.includes(status)) {
+        return res.status(400).json({ error: `status must be one of: ${INVESTOR_STATUSES.join(", ")}` });
+      }
+      const inv = offer.deal.investors.find((i) => i.contactId === req.params.contactId);
+      if (!inv) return res.status(404).json({ error: "investor not linked to this deal" });
+      const ts = new Date().toISOString();
+      inv.status = status;
+      inv.updatedAt = ts;
+      const warnings = [];
+      if (status === "committed") {
+        if (offer.deal.stage === "under_contract") {
+          offer.deal.stage = "buyer_found";
+          offer.deal.stageHistory.push({ stage: "buyer_found", ts });
+        }
+        try {
+          await createContactNote(client, inv.contactId, {
+            body: `COMMITTED BUYER — ${offer.address || "property"} (${dateLabel()})` +
+              (offer.deal.assignmentFee ? `\nAssignment fee: ${fmtMoney(offer.deal.assignmentFee)}` : ""),
+          });
+        } catch (e) {
+          console.error(`offers: investor note failed contact=${inv.contactId}:`, e?.message);
+          warnings.push(`investor note: ${e.message}`);
+        }
+      }
+      offer.deal.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer, warnings });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Unlink an investor from the deal.
+  router.delete("/:id/deal/investors/:contactId", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { offer } = ctx;
+      const before = offer.deal.investors.length;
+      offer.deal.investors = offer.deal.investors.filter((i) => i.contactId !== req.params.contactId);
+      if (offer.deal.investors.length === before) {
+        return res.status(404).json({ error: "investor not linked to this deal" });
+      }
+      offer.deal.updatedAt = new Date().toISOString();
       await store.updateOffer(offer.id, offer);
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }

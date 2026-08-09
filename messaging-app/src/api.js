@@ -132,6 +132,22 @@ export const generateContract = (id, fields) =>
 export const generateAssignment = (id, fields) =>
   post(`/api/offers/${encodeURIComponent(id)}/assignment`, { fields });
 
+/* ---------- active deals ---------- */
+export const listDeals = () =>
+  fetch(`${API_BASE}/api/offers/deals?${locq()}`).then(j).then((r) => r.deals);
+export const promoteDeal = (id, fields = {}) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal`, fields);
+export const updateDeal = (id, patch) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal`, patch, "PATCH");
+export const removeDeal = (id) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal?${locq()}`, { method: "DELETE" }).then(j);
+export const addDealInvestor = (id, { contactId, name }) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal/investors`, { contactId, name });
+export const updateDealInvestor = (id, contactId, status) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal/investors/${encodeURIComponent(contactId)}`, { status }, "PATCH");
+export const removeDealInvestor = (id, contactId) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/investors/${encodeURIComponent(contactId)}?${locq()}`, { method: "DELETE" }).then(j);
+
 /* ---------- dashboard ---------- */
 // tz_offset lets the broker bucket daily metrics to the viewer's local day;
 // end ("YYYY-MM-DD") makes the window finish on a past day (the date picker).

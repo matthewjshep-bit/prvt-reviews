@@ -1,12 +1,14 @@
-// OfferApp.jsx — the offer generator shell. Three views:
+// OfferApp.jsx — the offer generator shell. Four views:
 //   New Offer — pick a contact, enter property numbers, get three offers,
 //               generate the document, attach it to the contact record.
-//   History   — every offer created for this location.
+//   History   — every offer created for this location, grouped by agent.
+//   Deals     — offers under signed contract, tracked through disposition.
 //   Settings  — calculation defaults + company info printed on the document.
 
 import React, { useEffect, useState } from "react";
 import NewOffer from "./NewOffer.jsx";
 import OffersHistory from "./OffersHistory.jsx";
+import DealsView from "./DealsView.jsx";
 import AgentOutreach from "./AgentOutreach.jsx";
 import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
@@ -39,6 +41,7 @@ const NAV =
     : [
         { view: "new", label: "New Offer" },
         { view: "history", label: "History" },
+        { view: "deals", label: "Deals" },
         { view: "settings", label: "Settings" },
       ];
 
@@ -134,8 +137,10 @@ export default function OfferApp() {
           />
         )}
         {view === "history" && (
-          <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }} />
+          <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }}
+            onDeal={() => setView("deals")} />
         )}
+        {view === "deals" && <DealsView settings={settings} />}
         {view === "outreach" && <AgentOutreach settings={settings} />}
         {view === "dashboard" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
         {view === "settings" && (

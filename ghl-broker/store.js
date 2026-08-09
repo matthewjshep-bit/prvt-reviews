@@ -64,6 +64,15 @@ const pgStore = {
         );
     return rows.map((r) => r.doc);
   },
+  // Offers promoted to deals (doc has a `deal` key), newest deal first.
+  async listDeals(locationId, { limit = 200 } = {}) {
+    const { rows } = await query(
+      `select doc from offers where location_id = $1 and doc ? 'deal'
+       order by doc->'deal'->>'createdAt' desc limit $2`,
+      [locationId, limit]
+    );
+    return rows.map((r) => r.doc);
+  },
   // Lean offer rows since a timestamp for dashboard aggregation — enough for
   // daily buckets without the fat doc (snapshot etc.). Ascending by creation.
   async listOffersSince(locationId, sinceIso) {
@@ -386,6 +395,13 @@ const fileStore = (() => {
         .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit);
     },
+    async listDeals(locationId, { limit = 200 } = {}) {
+      ensure();
+      return Object.values(data.offers)
+        .filter((o) => o.locationId === locationId && o.deal)
+        .sort((a, b) => (b.deal.createdAt || "").localeCompare(a.deal.createdAt || ""))
+        .slice(0, limit);
+    },
     async listOffersSince(locationId, sinceIso) {
       ensure();
       return Object.values(data.offers)
@@ -414,7 +430,7 @@ const fileStore = (() => {
       ensure();
       if (!data.offers[id]) return false;
       delete data.offers[id];
-      for (const kind of ["pdf", "image", "scopepdf", "compspdf", "contractpdf"]) {
+      for (const kind of ["pdf", "image", "scopepdf", "compspdf", "contractpdf", "assignmentpdf"]) {
         fs.rmSync(path.join(DATA_DIR, "docs", `${id}.${kind}`), { force: true });
         fs.rmSync(path.join(DATA_DIR, "docs", `${id}.${kind}.meta`), { force: true });
       }
