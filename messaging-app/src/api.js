@@ -165,6 +165,8 @@ export const updateDealInvestor = (id, contactId, status) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/investors/${encodeURIComponent(contactId)}`, { status }, "PATCH");
 export const removeDealInvestor = (id, contactId) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/investors/${encodeURIComponent(contactId)}?${locq()}`, { method: "DELETE" }).then(j);
+export const suggestInvestors = (id) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal/suggest-investors`, {});
 
 /* ---------- dashboard ---------- */
 // tz_offset lets the broker bucket daily metrics to the viewer's local day;

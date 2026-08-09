@@ -28,6 +28,7 @@
 //   PATCH  /api/offers/:id/deal               update stage / terms
 //   DELETE /api/offers/:id/deal               un-promote (mistake correction)
 //   POST   /api/offers/:id/deal/investors     link a disposition investor (GHL contact)
+//   POST   /api/offers/:id/deal/suggest-investors   AI-suggest investors from conversation history
 //   PATCH  /api/offers/:id/deal/investors/:contactId    evaluation status
 //   DELETE /api/offers/:id/deal/investors/:contactId    unlink
 
@@ -50,10 +51,11 @@ import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
   customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField, getContactNotes,
+  searchContactsByTag,
 } from "../ghl.js";
 import {
   enrichFieldDefs, enrichTagVocab, ENRICH_TAG_GROUPS, inferContactType,
-  buildTranscript, runEnrichment,
+  buildTranscript, runEnrichment, suggestDealInvestors,
 } from "../enrich.js";
 import { OFFER_FIELDS, APP_FIELD_REGISTRY, registryByKey } from "../field-registry.js";
 
@@ -1851,6 +1853,82 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       offer.deal.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
       res.json({ ok: true, offer, warnings });
+    } catch (err) { fail(res, err); }
+  });
+
+  // AI-suggest disposition investors for this deal from conversation history.
+  // Candidates = investors linked on OTHER deals + contacts carrying an
+  // investor tag (minus anyone already on this deal). Each gets a small
+  // recent-conversation snippet; one Claude call decides who shows evidence
+  // of interest in THIS property. Preview only — the UI links via the normal
+  // investor endpoints.
+  router.post("/:id/deal/suggest-investors", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { locationId, client, offer } = ctx;
+      const saved = await store.getOfferSettings(locationId);
+      const aiApiKey = String(saved?.aiApiKey || "").trim();
+      if (!aiApiKey) return res.status(400).json({ error: "Anthropic API key required — add it in Settings → AI features" });
+
+      const linkedHere = new Set(offer.deal.investors.map((i) => i.contactId));
+      const byId = new Map();
+      for (const o of await store.listDeals(locationId)) {
+        for (const i of o.deal?.investors || []) {
+          if (!linkedHere.has(i.contactId) && !byId.has(i.contactId)) {
+            byId.set(i.contactId, { contactId: i.contactId, name: i.name });
+          }
+        }
+      }
+      for (const tag of ["investor-active", "investor-stale", "investor"]) {
+        try {
+          for (const c of await searchContactsByTag(client, locationId, tag)) {
+            if (!linkedHere.has(c.id) && !byId.has(c.id)) {
+              byId.set(c.id, { contactId: c.id, name: contactName(c) || c.id });
+            }
+          }
+        } catch { /* best-effort — tag may not exist */ }
+      }
+      const candidates = [...byId.values()].slice(0, 20);
+      if (!candidates.length) {
+        return res.json({ ok: false, empty: true, reason: "No investor candidates found — link investors on a deal or tag contacts (investor / investor-active)." });
+      }
+
+      // Cheap per-candidate snippets: recent conversations only, no call
+      // transcription fetches (that's 20 candidates, not one contact).
+      let scopeMissing = false;
+      await mapPool(candidates, 3, async (c) => {
+        try {
+          const t = await buildTranscript(client, locationId, c.contactId, {
+            maxConversations: 3, maxPagesPerConvo: 1, maxMessages: 80, maxChars: 6000, maxCallTranscripts: 0,
+          });
+          c.snippet = t.text;
+        } catch (e) {
+          if (e?.status === 401 || e?.status === 403) scopeMissing = true;
+          c.snippet = "";
+        }
+      });
+      if (scopeMissing) return res.json({ ok: false, scopeMissing: true });
+      const withText = candidates.filter((c) => c.snippet);
+      if (!withText.length) {
+        return res.json({ ok: false, empty: true, reason: "No recent conversations found with any investor candidate." });
+      }
+
+      let raw;
+      try {
+        raw = await suggestDealInvestors({
+          deal: { address: offer.address, ...offer.deal },
+          candidates: withText,
+          aiApiKey,
+          extraInstructions: String(saved?.enrichExtraInstructions || "").trim(),
+        });
+      } catch (e) { throw anthropicErrorToHttp(e); }
+
+      const nameOf = new Map(withText.map((c) => [c.contactId, c.name]));
+      const suggestions = (raw.suggestions || [])
+        .filter((s) => s.include && nameOf.has(s.contactId))
+        .map((s) => ({ contactId: s.contactId, name: nameOf.get(s.contactId), status: s.status, reason: String(s.reason || "") }));
+      res.json({ ok: true, suggestions, scanned: withText.length });
     } catch (err) { fail(res, err); }
   });
 

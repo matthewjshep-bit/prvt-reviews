@@ -9,7 +9,7 @@ import { ExternalLink, FileText, Loader2, Pencil, Sparkles, Trash2, X } from "lu
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
   addDealInvestor, getOffer, ghlContactUrl, listDeals, removeDeal, removeDealInvestor,
-  searchContacts, updateDeal, updateDealInvestor, zillowUrl,
+  searchContacts, suggestInvestors, updateDeal, updateDealInvestor, zillowUrl,
 } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
@@ -150,6 +150,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [suggest, setSuggest] = useState(null); // null | {busy} | suggest-investors response | {error}
   const termsDirty =
     String(terms.contractPrice) !== String(deal.contractPrice ?? "") ||
     String(terms.assignmentFee) !== String(deal.assignmentFee ?? "") ||
@@ -190,6 +191,24 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   };
 
   const investorIds = new Set((deal.investors || []).map((i) => i.contactId));
+
+  async function runSuggest() {
+    setSuggest({ busy: true });
+    try {
+      setSuggest(await suggestInvestors(offer.id));
+    } catch (e) {
+      setSuggest({ error: e.message });
+    }
+  }
+
+  // Link a suggested investor, then set their AI-suggested status ("committed"
+  // auto-advances the stage server-side, same as a manual status change).
+  async function addSuggested(s) {
+    const r = await run(() => addDealInvestor(offer.id, { contactId: s.contactId, name: s.name }));
+    if (!r?.ok) return;
+    if (s.status && s.status !== "sent") await run(() => updateDealInvestor(offer.id, s.contactId, s.status));
+    setSuggest((v) => (v?.suggestions ? { ...v, suggestions: v.suggestions.filter((x) => x.contactId !== s.contactId) } : v));
+  }
   const inputCls = "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
   const labelCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500";
 
@@ -324,6 +343,59 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               <div className="mt-1 text-[11px] text-gray-400">
                 Set an investor to <span className="font-semibold">committed</span> when they take the deal —
                 the stage advances to Buyer found automatically.
+              </div>
+
+              {/* AI: who's already talking about this property? */}
+              <div className="mt-2">
+                <button type="button" disabled={busy || suggest?.busy} onClick={runSuggest}
+                  className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+                  title="Scan investor conversations for interest in this property">
+                  {suggest?.busy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                  Suggest from conversations
+                </button>
+                {suggest?.busy && (
+                  <div className="mt-1.5 text-[11px] text-gray-400">
+                    Scanning investor conversations for this property — 30–90 seconds…
+                  </div>
+                )}
+                {suggest?.error && (
+                  <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">{suggest.error}</div>
+                )}
+                {suggest?.scopeMissing && (
+                  <div className="mt-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
+                    Needs the <span className="font-semibold">conversations.readonly</span> scope on the GHL private integration.
+                  </div>
+                )}
+                {suggest?.empty && (
+                  <div className="mt-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-600">{suggest.reason}</div>
+                )}
+                {suggest?.ok && suggest.suggestions.length === 0 && (
+                  <div className="mt-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-600">
+                    Scanned {suggest.scanned} investor conversation{suggest.scanned === 1 ? "" : "s"} — no one is talking about this property yet.
+                  </div>
+                )}
+                {suggest?.ok && suggest.suggestions.length > 0 && (
+                  <div className="mt-1.5 space-y-1.5">
+                    {suggest.suggestions.map((s) => (
+                      <div key={s.contactId} className="rounded-lg border border-amber-200 bg-amber-50/60 px-2.5 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <a href={ghlContactUrl(s.contactId)} target="_blank" rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-sm font-semibold underline decoration-amber-300 underline-offset-2">
+                            {s.name} <ExternalLink size={11} className="text-gray-400" />
+                          </a>
+                          <span className="flex items-center gap-1.5">
+                            <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-gray-600">{s.status}</span>
+                            <button type="button" disabled={busy} onClick={() => addSuggested(s)}
+                              className="rounded-lg bg-gray-900 px-2.5 py-1 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60">
+                              Add
+                            </button>
+                          </span>
+                        </div>
+                        {s.reason && <div className="mt-1 text-[11px] leading-tight text-gray-500">{s.reason}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

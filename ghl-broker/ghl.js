@@ -213,6 +213,20 @@ export async function removeContactTags(client, contactId, tags) {
   return data.tags || data;
 }
 
+// One page of contacts carrying a tag. Returns raw contact objects (id,
+// firstName/lastName, phone, email, tags, ...).
+export async function searchContactsByTag(client, locationId, tag, { pageLimit = 50 } = {}) {
+  const data = await client.call(`/contacts/search`, {
+    method: "POST",
+    body: {
+      locationId,
+      pageLimit,
+      filters: [{ field: "tags", operator: "contains", value: [tag] }],
+    },
+  });
+  return data.contacts || [];
+}
+
 // Count of contacts carrying a tag, via the filtered contact search. Cheapest
 // possible query: one result page of 1, read the total. Throws on GHL errors
 // (err.status set) — callers should treat 401/403 as "scope not granted".

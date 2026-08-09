@@ -133,8 +133,15 @@ const channelOf = (m) => {
 // Full conversation history for one contact, normalized to a chronological
 // text transcript with hard caps (message count, age, characters). Throws GHL
 // errors through — callers treat 401/403 as the conversations.readonly scope
-// missing.
-export async function buildTranscript(client, locationId, contactId) {
+// missing. opts override the caps for cheaper scans (e.g. the per-candidate
+// snippets in deal investor suggestions: fewer pages, no call transcripts).
+export async function buildTranscript(client, locationId, contactId, opts = {}) {
+  const maxConversations = opts.maxConversations ?? MAX_CONVERSATIONS;
+  const maxPagesPerConvo = opts.maxPagesPerConvo ?? MAX_PAGES_PER_CONVO;
+  const maxMessages = opts.maxMessages ?? MAX_MESSAGES;
+  const maxChars = opts.maxChars ?? MAX_CHARS;
+  const maxCallTranscripts = opts.maxCallTranscripts ?? MAX_CALL_TRANSCRIPTS;
+
   const { conversations } = await searchConversations(client, locationId, {
     contactId,
     limit: 20,
@@ -144,10 +151,10 @@ export async function buildTranscript(client, locationId, contactId) {
   const entries = []; // { ts, line }
   let sawConversations = 0;
 
-  for (const convo of conversations.slice(0, MAX_CONVERSATIONS)) {
+  for (const convo of conversations.slice(0, maxConversations)) {
     sawConversations++;
     let lastMessageId;
-    for (let page = 0; page < MAX_PAGES_PER_CONVO; page++) {
+    for (let page = 0; page < maxPagesPerConvo; page++) {
       const r = await listConversationMessages(client, convo.id, { lastMessageId, limit: 100 });
       for (const m of r.messages) {
         const ts = new Date(m.dateAdded || 0).getTime();
@@ -177,9 +184,9 @@ export async function buildTranscript(client, locationId, contactId) {
   }
 
   entries.sort((a, b) => a.ts - b.ts);
-  let truncated = conversations.length > MAX_CONVERSATIONS;
-  if (entries.length > MAX_MESSAGES) {
-    entries.splice(0, entries.length - MAX_MESSAGES);
+  let truncated = conversations.length > maxConversations;
+  if (entries.length > maxMessages) {
+    entries.splice(0, entries.length - maxMessages);
     truncated = true;
   }
 
@@ -190,7 +197,7 @@ export async function buildTranscript(client, locationId, contactId) {
   const callEntries = entries.filter((e) => e.call);
   let callsTranscribed = 0;
   let callTranscriptsUnavailable = false;
-  for (const e of callEntries.slice(-MAX_CALL_TRANSCRIPTS).reverse()) {
+  for (const e of maxCallTranscripts > 0 ? callEntries.slice(-maxCallTranscripts).reverse() : []) {
     try {
       const sentences = (await getMessageTranscription(client, locationId, e.call.id))
         .slice()
@@ -224,7 +231,7 @@ export async function buildTranscript(client, locationId, contactId) {
   // Character budget: drop oldest lines until the transcript fits (call
   // transcripts count toward the budget too).
   let total = entries.reduce((s, e) => s + e.line.length + 1, 0);
-  while (entries.length && total > MAX_CHARS) {
+  while (entries.length && total > maxChars) {
     total -= entries[0].line.length + 1;
     entries.shift();
     truncated = true;
@@ -365,6 +372,92 @@ export async function runEnrichment({ contact, currentFields, currentTags, trans
   }
   if (response.stop_reason === "refusal") {
     throw Object.assign(new Error("AI enrichment was declined"), { http: 502 });
+  }
+  const text = response.content.find((b) => b.type === "text")?.text || "{}";
+  return JSON.parse(text);
+}
+
+/* ---------- deal investor suggestions ---------- */
+
+// Same vocabulary as the deal endpoints (routes/offers.js) and DealsView.
+const DEAL_INVESTOR_STATUSES = ["sent", "evaluating", "passed", "committed"];
+
+// Given one deal and a set of investor candidates with recent-conversation
+// snippets, ask Claude which of them show evidence of interest in / active
+// work on THIS property. Returns { suggestions: [{contactId, include,
+// status, reason}] } (contactIds restricted to the candidates via schema).
+export async function suggestDealInvestors({ deal, candidates, aiApiKey, extraInstructions }) {
+  const anthropic = new Anthropic({ apiKey: aiApiKey, timeout: 120_000 });
+  const ids = candidates.map((c) => c.contactId);
+
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["suggestions"],
+    properties: {
+      suggestions: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["contactId", "include", "status", "reason"],
+          properties: {
+            contactId: { type: "string", enum: ids },
+            include: { type: "boolean" },
+            status: { type: "string", enum: DEAL_INVESTOR_STATUSES },
+            reason: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+
+  const dealDesc = [
+    `Property: ${deal.address || "(address unknown)"}`,
+    deal.contractPrice ? `Contract price: $${Number(deal.contractPrice).toLocaleString()}` : null,
+    deal.assignmentFee ? `Assignment fee: $${Number(deal.assignmentFee).toLocaleString()}` : null,
+    deal.closingDate ? `Closing date: ${deal.closingDate}` : null,
+    `Stage: ${deal.stage}`,
+  ].filter(Boolean).join("\n");
+
+  const body = candidates
+    .map((c) => `### ${c.name} (id: ${c.contactId})\n${c.snippet || "(no recent messages)"}`)
+    .join("\n\n");
+
+  const system =
+    "You are a dispositions analyst for a real-estate wholesaling operation ('The Agent Method'): properties " +
+    "under contract get assigned to cash-buyer investors for a fee. You are deciding which investor contacts " +
+    "show evidence of interest in, or active engagement with, ONE specific property deal, based on recent " +
+    "conversation snippets.\n\n" +
+    "Rules: include=true ONLY when the conversation shows the investor engaging with this specific property — " +
+    "the address (or an unmistakable reference to it), its numbers, photos, a walkthrough, or an explicit ask " +
+    "for exactly this kind of deal in this area. General chattiness or unrelated deals do not count. When in " +
+    "doubt, include=false.\n" +
+    "Status meanings: sent = we sent them this deal but no meaningful reply yet; evaluating = actively " +
+    "reviewing or asking questions about it; passed = looked and declined; committed = agreed to take it. " +
+    "Every reason must cite the message that supports it." +
+    (extraInstructions ? `\n\nAdditional instructions from the team:\n${extraInstructions}` : "");
+
+  const response = await anthropic.messages.create({
+    model: ENRICH_MODEL,
+    max_tokens: 4000,
+    thinking: { type: "adaptive" },
+    system,
+    output_config: { format: { type: "json_schema", schema } },
+    messages: [{
+      role: "user",
+      content:
+        `THE DEAL\n${dealDesc}\n\n` +
+        `INVESTOR CANDIDATES (recent conversation snippets; US = our team, THEM = the investor)\n\n${body}\n\n` +
+        `Which of these investors are interested in or actively working this deal?`,
+    }],
+  });
+
+  if (response.stop_reason === "max_tokens") {
+    throw Object.assign(new Error("AI suggestion output truncated — try again"), { http: 502 });
+  }
+  if (response.stop_reason === "refusal") {
+    throw Object.assign(new Error("AI suggestion was declined"), { http: 502 });
   }
   const text = response.content.find((b) => b.type === "text")?.text || "{}";
   return JSON.parse(text);
