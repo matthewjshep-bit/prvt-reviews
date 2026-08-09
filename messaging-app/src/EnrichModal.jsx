@@ -167,11 +167,18 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
               {stats && (
                 <span>
                   {stats.conversations} conversation{stats.conversations === 1 ? "" : "s"} · {stats.messages} message{stats.messages === 1 ? "" : "s"}
+                  {stats.calls > 0 && ` · ${stats.callsTranscribed}/${stats.calls} call${stats.calls === 1 ? "" : "s"} transcribed`}
                   {stats.firstAt && ` · ${stats.firstAt.slice(0, 10)} → ${(stats.lastAt || "").slice(0, 10)}`}
                   {stats.truncated && " · truncated"}
                 </span>
               )}
             </div>
+            {stats?.callTranscriptsUnavailable && (
+              <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Call transcripts were skipped — add the <span className="font-semibold">conversations/message.readonly</span> scope
+                to the GHL private integration to include what was said on calls.
+              </div>
+            )}
 
             {/* Field diff */}
             <div className="mb-4 overflow-x-auto rounded-xl border border-gray-200">

@@ -6,7 +6,7 @@
 // in routes/offers.js own all writes.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { searchConversations, listConversationMessages } from "./ghl.js";
+import { searchConversations, listConversationMessages, getMessageTranscription } from "./ghl.js";
 
 export const ENRICH_MODEL = "claude-opus-4-8";
 
@@ -44,14 +44,14 @@ export const AGENT_ENRICH_FIELDS = [
     values: ["shares_them", "open_to_it", "no_signal"],
     hint: "shares_them = has mentioned off-market or pocket inventory; open_to_it = hinted willingness; no_signal = nothing in the conversation" },
   { key: "agent_market_area", name: "Agent Market Area", dataType: "TEXT",
-    hint: "cities/neighborhoods the agent works, as mentioned in the conversation" },
+    hint: "cities, neighborhoods, or zip codes the agent works in, from texts or call transcripts — output a comma-separated list of place names as stated, e.g. 'Kent, Auburn, Federal Way' or zips; empty if none mentioned" },
   { key: "properties_discussed", name: "Properties Discussed", dataType: "TEXT",
     hint: "property addresses discussed, comma-separated" },
 ];
 
 export const INVESTOR_ENRICH_FIELDS = [
   { key: "buybox_areas", name: "Buy Box: Areas", dataType: "TEXT",
-    hint: "areas/zips/cities the investor buys in, comma-separated" },
+    hint: "areas the investor buys in (cities, neighborhoods, or zips), from texts or call transcripts — output a comma-separated list of place names as stated, e.g. 'Tacoma, Spanaway, 98444'; empty if none mentioned" },
   { key: "buybox_price_min", name: "Buy Box: Price Min", dataType: "NUMERICAL",
     hint: "lowest purchase price mentioned, dollars" },
   { key: "buybox_price_max", name: "Buy Box: Price Max", dataType: "NUMERICAL",
@@ -112,6 +112,8 @@ const MAX_MESSAGES = 400;
 const MAX_AGE_DAYS = 180;
 const MAX_CHARS = 60000;
 const MAX_BODY_CHARS = 1500;
+const MAX_CALL_TRANSCRIPTS = 10; // one extra GHL request per transcribed call
+const MAX_CALL_CHARS = 4000;
 
 // Email bodies arrive as HTML; the model doesn't need the markup.
 const stripHtml = (s) =>
@@ -158,7 +160,12 @@ export async function buildTranscript(client, locationId, contactId) {
         if (body.length > MAX_BODY_CHARS) body = `${body.slice(0, MAX_BODY_CHARS)}…`;
         const stamp = new Date(ts).toISOString().slice(0, 16).replace("T", " ");
         if (channel === "call" || channel === "voicemail") {
-          entries.push({ ts, line: `[${stamp}] ${dir} ${channel}${body ? `: ${body}` : ""}` });
+          const callId = m.id || m.messageId || null;
+          entries.push({
+            ts,
+            line: `[${stamp}] ${dir} ${channel}${body ? `: ${body}` : ""}`,
+            call: callId ? { id: callId, dir, channel, stamp } : null,
+          });
         } else {
           if (!body) continue;
           entries.push({ ts, line: `[${stamp}] ${dir} ${channel}: ${body}` });
@@ -175,7 +182,47 @@ export async function buildTranscript(client, locationId, contactId) {
     entries.splice(0, entries.length - MAX_MESSAGES);
     truncated = true;
   }
-  // Character budget: drop oldest lines until the transcript fits.
+
+  // Pull sentence-level transcriptions for the most recent calls so what was
+  // said on the phone (areas worked, buy box, temperature) reaches the model.
+  // 404 = no transcription for that call (keep the bare marker); 401/403 = the
+  // conversations/message.readonly scope is missing — flag it and stop trying.
+  const callEntries = entries.filter((e) => e.call);
+  let callsTranscribed = 0;
+  let callTranscriptsUnavailable = false;
+  for (const e of callEntries.slice(-MAX_CALL_TRANSCRIPTS).reverse()) {
+    try {
+      const sentences = (await getMessageTranscription(client, locationId, e.call.id))
+        .slice()
+        .sort((a, b) => (a.sentenceIndex || 0) - (b.sentenceIndex || 0));
+      const parts = [];
+      let curChannel = null;
+      for (const s of sentences) {
+        const t = String(s.transcript || "").trim();
+        if (!t) continue;
+        if (s.mediaChannel !== curChannel) {
+          curChannel = s.mediaChannel;
+          parts.push(`\nSpeaker ${curChannel}: ${t}`);
+        } else {
+          parts.push(t);
+        }
+      }
+      let text = parts.join(" ").trim();
+      if (!text) continue;
+      if (text.length > MAX_CALL_CHARS) text = `${text.slice(0, MAX_CALL_CHARS)}…`;
+      e.line = `[${e.call.stamp}] ${e.call.dir} ${e.call.channel} TRANSCRIPT:\n${text}`;
+      callsTranscribed++;
+    } catch (err) {
+      if (err?.status === 401 || err?.status === 403) {
+        callTranscriptsUnavailable = true;
+        break;
+      }
+      // 404 / transient — this call stays a bare [call] marker.
+    }
+  }
+
+  // Character budget: drop oldest lines until the transcript fits (call
+  // transcripts count toward the budget too).
   let total = entries.reduce((s, e) => s + e.line.length + 1, 0);
   while (entries.length && total > MAX_CHARS) {
     total -= entries[0].line.length + 1;
@@ -189,6 +236,9 @@ export async function buildTranscript(client, locationId, contactId) {
     stats: {
       conversations: sawConversations,
       messages: entries.length,
+      calls: callEntries.length,
+      callsTranscribed,
+      callTranscriptsUnavailable,
       firstAt: entries.length ? new Date(entries[0].ts).toISOString() : null,
       lastAt: entries.length ? new Date(entries[entries.length - 1].ts).toISOString() : null,
       truncated,
@@ -260,7 +310,9 @@ function systemPrompt(type, extraInstructions) {
     "string / null for free-text and numeric fields) when the conversation does not establish a value — never " +
     "guess. Every reason must point at the specific message or behavior that supports the value (quote or " +
     "paraphrase it). Response patterns (speed, channel, who initiates) are evidence too, not just message " +
-    "content. If the transcript is marked truncated, treat older behavior as possibly stale. Tags: only " +
+    "content. Call transcripts carry the same evidentiary weight as messages; their speaker labels " +
+    "(Speaker 1/2) are positional, not identified — attribute statements by content, not label. " +
+    "If the transcript is marked truncated, treat older behavior as possibly stale. Tags: only " +
     "suggest adding a tag when the evidence is clear; suggest removing a tag only when it contradicts the " +
     "current evidence." +
     (extraInstructions ? `\n\nAdditional instructions from the team:\n${extraInstructions}` : "")
@@ -287,6 +339,7 @@ export async function runEnrichment({ contact, currentFields, currentTags, trans
   const s = transcript.stats;
   const statsLine =
     `${s.conversations} conversation(s), ${s.messages} message(s), ` +
+    (s.calls ? `${s.callsTranscribed}/${s.calls} call(s) transcribed, ` : "") +
     `${s.firstAt ? s.firstAt.slice(0, 10) : "?"} → ${s.lastAt ? s.lastAt.slice(0, 10) : "?"}` +
     (s.truncated ? " (TRUNCATED — older history omitted)" : "");
 

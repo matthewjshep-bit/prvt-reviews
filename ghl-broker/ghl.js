@@ -294,6 +294,23 @@ export async function listConversationMessages(client, conversationId, { lastMes
   };
 }
 
+// Sentence-level transcription of a recorded call message. Returns an array
+// of { mediaChannel, sentenceIndex, startTime, endTime, transcript,
+// confidence } (order not guaranteed — sort by sentenceIndex). Throws on GHL
+// errors: 404 = the call has no transcription (recording/transcription not
+// enabled, or still processing); 401/403 = the conversations/message.readonly
+// scope is missing.
+export async function getMessageTranscription(client, locationId, messageId) {
+  const data = await client.call(
+    `/conversations/locations/${encodeURIComponent(locationId)}/messages/${encodeURIComponent(messageId)}/transcription`,
+    { version: V_CONVERSATIONS }
+  );
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.transcriptions)) return data.transcriptions;
+  if (Array.isArray(data?.transcription)) return data.transcription;
+  return [];
+}
+
 // Most recent message activity for a contact (any channel). Returns
 // { at: ISO, direction, type } or null. Needs the conversations.readonly
 // scope — callers should treat 401/403 as "scope not granted".
