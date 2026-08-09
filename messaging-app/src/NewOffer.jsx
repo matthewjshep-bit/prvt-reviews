@@ -65,14 +65,14 @@ function AddressInput({ value, onChange, placeholder }) {
         autoComplete="off"
       />
       {open && options.length > 0 && (
-        <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
+        <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
           {options.map((o) => (
             <button
               key={o}
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => { skipNext.current = true; onChange(o); setOptions([]); setOpen(false); }}
-              className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+              className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-50"
             >
               {o}
             </button>
@@ -84,8 +84,8 @@ function AddressInput({ value, onChange, placeholder }) {
 }
 
 const INPUT_CLS =
-  "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
-const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500";
+  "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
+const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
 function Field({ label, children }) {
   return (
@@ -121,7 +121,7 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
   }, [query]);
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-4">
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="flex items-center gap-2 text-sm font-bold"><StepBadge n={1} /> Seller contact</h2>
         <div className="flex gap-1 text-xs">
@@ -131,7 +131,7 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
               type="button"
               onClick={() => setMode(m)}
               className={`rounded-full px-2.5 py-1 font-medium ${
-                mode === m ? "bg-gray-900 text-white" : "text-gray-500 hover:bg-gray-100"
+                mode === m ? "bg-blue-600 text-white" : "text-slate-500 hover:bg-slate-100"
               }`}
             >
               {m === "existing" ? "Existing" : "New contact"}
@@ -143,29 +143,29 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
       {mode === "existing" ? (
         selected ? (
           <>
-            <div className="flex items-center justify-between rounded-lg bg-gray-100 px-3 py-2">
+            <div className="flex items-center justify-between rounded-lg bg-slate-100 px-3 py-2">
               <a href={ghlContactUrl(selected.id)} target="_blank" rel="noreferrer" title="Open contact in GHL"
-                className="group -mx-1 rounded px-1 hover:bg-gray-200">
+                className="group -mx-1 rounded px-1 hover:bg-slate-200">
                 <div className="inline-flex items-center gap-1 text-sm font-semibold group-hover:underline">
-                  {selected.name || "(no name)"} <ExternalLink size={12} className="text-gray-400" />
+                  {selected.name || "(no name)"} <ExternalLink size={12} className="text-slate-400" />
                 </div>
-                <div className="text-xs text-gray-500">{[selected.phone, selected.email].filter(Boolean).join(" · ")}</div>
+                <div className="text-xs text-slate-500">{[selected.phone, selected.email].filter(Boolean).join(" · ")}</div>
               </a>
-              <button type="button" onClick={() => onSelect(null)} className="rounded p-1 text-gray-400 hover:bg-gray-200">
+              <button type="button" onClick={() => onSelect(null)} className="rounded p-1 text-slate-400 hover:bg-slate-200">
                 <X size={16} />
               </button>
             </div>
             {notes.length > 0 && (
               // Small screens only — on xl+ the sticky NotesPanel rail takes over.
-              <details className="mt-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 xl:hidden">
-                <summary className="cursor-pointer select-none text-xs font-semibold text-gray-600">
+              <details className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 xl:hidden">
+                <summary className="cursor-pointer select-none text-xs font-semibold text-slate-600">
                   Recent notes on this contact ({notes.length})
                 </summary>
                 <div className="mt-2 max-h-48 space-y-2 overflow-y-auto">
                   {notes.map((n, i) => (
-                    <div key={i} className="rounded-md bg-white px-2.5 py-2 text-xs text-gray-700">
+                    <div key={i} className="rounded-md bg-white px-2.5 py-2 text-xs text-slate-700">
                       {n.dateAdded && (
-                        <div className="mb-0.5 text-[10px] font-medium text-gray-400">
+                        <div className="mb-0.5 text-[10px] font-medium text-slate-400">
                           {new Date(n.dateAdded).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                         </div>
                       )}
@@ -178,27 +178,27 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
           </>
         ) : (
           <div className="relative">
-            <div className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2">
-              <Search size={15} className="text-gray-400" />
+            <div className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2">
+              <Search size={15} className="text-slate-400" />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search contacts by name, phone, or email…"
                 className="w-full text-sm focus:outline-none"
               />
-              {searching && <Loader2 size={15} className="animate-spin text-gray-400" />}
+              {searching && <Loader2 size={15} className="animate-spin text-slate-400" />}
             </div>
             {results.length > 0 && (
-              <div className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+              <div className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
                 {results.map((c) => (
                   <button
                     key={c.id}
                     type="button"
                     onClick={() => { onSelect(c); setQuery(""); setResults([]); }}
-                    className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                    className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-50"
                   >
                     <span className="font-medium">{c.name || "(no name)"}</span>
-                    <span className="ml-2 text-xs text-gray-500">{[c.phone, c.email].filter(Boolean).join(" · ")}</span>
+                    <span className="ml-2 text-xs text-slate-500">{[c.phone, c.email].filter(Boolean).join(" · ")}</span>
                   </button>
                 ))}
               </div>
@@ -224,7 +224,7 @@ function ContactPicker({ selected, onSelect, newContact, setNewContact, mode, se
 // Numbered section badge — the New Offer page reads top-to-bottom as steps.
 export function StepBadge({ n }) {
   return (
-    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-900 text-[11px] font-bold leading-none text-white">
+    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-600 text-[11px] font-bold leading-none text-white">
       {n}
     </span>
   );
@@ -234,10 +234,10 @@ export function StepBadge({ n }) {
 
 function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, setPriceOverride, feeOverride, setFeeOverride, fmtTyped }) {
   const modeToggle = (
-    <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5 text-xs font-semibold">
+    <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 text-xs font-semibold">
       {UNDERWRITE_MODES.map((m) => (
         <button key={m.key} type="button" onClick={() => setUnderwriteMode(m.key)} title={m.hint}
-          className={`rounded-md px-3 py-1.5 ${underwriteMode === m.key ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"}`}>
+          className={`rounded-md px-3 py-1.5 ${underwriteMode === m.key ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
           {m.label}
         </button>
       ))}
@@ -245,7 +245,7 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
   );
   if (!calc) {
     return (
-      <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-400">
+      <div className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-400">
         <div className="mb-3">{modeToggle}</div>
         Enter an ARV (or use the comps below) to see the cash offer.
       </div>
@@ -254,35 +254,35 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
   const { cash } = calc.offers;
   const Row = ({ label, value }) => (
     <div className="flex justify-between gap-4 text-sm">
-      <span className="text-gray-500">{label}</span>
+      <span className="text-slate-500">{label}</span>
       <span className="font-medium tabular-nums">{value}</span>
     </div>
   );
   return (
     <div className="rounded-xl border border-amber-400 bg-amber-50 p-5">
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-gray-500"><StepBadge n={5} /> All-cash offer</div>
+        <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-500"><StepBadge n={5} /> All-cash offer</div>
         {modeToggle}
       </div>
       <div className="sm:flex sm:items-center sm:justify-between sm:gap-8">
         <div>
           <div className="mt-1 text-4xl font-black tracking-tight">{fmtMoney(cash.amount)}</div>
           {cash.overridden ? (
-            <div className="mt-1 text-xs text-gray-500">
+            <div className="mt-1 text-xs text-slate-500">
               manually set — system: {fmtMoney(cash.systemAmount)}{" "}
-              <button type="button" onClick={() => setPriceOverride("")} className="font-semibold underline hover:text-gray-700">
+              <button type="button" onClick={() => setPriceOverride("")} className="font-semibold underline hover:text-slate-700">
                 use calculated
               </button>
             </div>
           ) : (
-            <div className="mt-1 text-xs text-gray-500">
+            <div className="mt-1 text-xs text-slate-500">
               {cash.pctOfAsking != null ? `≈ ${cash.pctOfAsking}% of asking · ` : ""}as-is
             </div>
           )}
-          <label className="mt-3 flex items-center gap-2 text-xs text-gray-500">
+          <label className="mt-3 flex items-center gap-2 text-xs text-slate-500">
             Offer amount on letter $
             <input
-              className="w-32 rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-sm font-semibold tabular-nums focus:border-gray-900 focus:outline-none"
+              className="w-32 rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-sm font-semibold tabular-nums focus:border-blue-500 focus:outline-none"
               inputMode="numeric" placeholder="auto"
               value={priceOverride}
               onChange={(e) => setPriceOverride(fmtTyped(e.target.value))}
@@ -293,11 +293,11 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
           <Row label={`~${cash.pctOfArv}% of ARV`} value={fmtMoney(cash.base)} />
           <Row label={cash.mode === "mao" ? "Repairs" : "Repair adjustment"} value={`− ${fmtMoney(cash.repairAdjustment)}`} />
           <div className="flex items-center justify-between gap-4 text-sm">
-            <span className="text-gray-500">Fee / spread</span>
+            <span className="text-slate-500">Fee / spread</span>
             <span className="flex items-center gap-1 font-medium tabular-nums">
               − $
               <input
-                className="w-20 rounded-lg border border-amber-300 bg-white px-1.5 py-0.5 text-right text-sm focus:border-gray-900 focus:outline-none"
+                className="w-20 rounded-lg border border-amber-300 bg-white px-1.5 py-0.5 text-right text-sm focus:border-blue-500 focus:outline-none"
                 inputMode="numeric"
                 placeholder={fmtTyped(String(cash.wholesaleFee))}
                 value={feeOverride}
@@ -636,54 +636,54 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <img src={offer.imageUrl} alt="Offer document" className="w-full rounded-xl border border-gray-200 shadow-sm" />
+          <img src={offer.imageUrl} alt="Offer document" className="w-full rounded-xl border border-slate-200 shadow-sm" />
           <div className="space-y-3">
             <a href={offer.pdfUrl} target="_blank" rel="noreferrer"
-              className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800">
+              className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
               <FileText size={16} /> Open PDF document
             </a>
             {offer.scopePdfUrl && (
               <a href={offer.scopePdfUrl} target="_blank" rel="noreferrer"
-                className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+                className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
                 <FileText size={16} /> Open Rehab Scope of Work (PDF)
               </a>
             )}
             {offer.compsPdfUrl && (
               <a href={offer.compsPdfUrl} target="_blank" rel="noreferrer"
-                className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+                className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
                 <FileText size={16} /> Open Comps / ARV Analysis (PDF)
               </a>
             )}
             <a href={offer.imageUrl} target="_blank" rel="noreferrer"
-              className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+              className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
               <FileText size={16} /> Open image version
             </a>
             {offer.contractPdfUrl && (
               <a href={offer.contractPdfUrl} target="_blank" rel="noreferrer"
-                className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+                className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
                 <FileText size={16} /> Open Purchase Contract (PDF)
               </a>
             )}
             <button type="button" onClick={() => setContractOpen(true)}
-              className="flex w-full items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+              className="flex w-full items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
               <FileText size={16} /> {offer.contractPdfUrl ? "Update purchase contract" : "Generate purchase contract"}
             </button>
             <button type="button" onClick={() => setSendOpen(true)}
-              className="flex w-full items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+              className="flex w-full items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
               <Send size={16} /> Send to the contact — text or email
             </button>
             <div className="pt-1">
-              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-gray-500">
+              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
                 Dispositions — for the end buyer, not the seller
               </div>
               {offer.assignmentPdfUrl && (
                 <a href={offer.assignmentPdfUrl} target="_blank" rel="noreferrer"
-                  className="mb-3 flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+                  className="mb-3 flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
                   <FileText size={16} /> Open Assignment Contract (PDF)
                 </a>
               )}
               <button type="button" onClick={() => setAssignmentOpen(true)}
-                className="flex w-full items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+                className="flex w-full items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
                 <FileText size={16} /> {offer.assignmentPdfUrl ? "Update assignment contract" : "Generate assignment contract"}
               </button>
             </div>
@@ -695,11 +695,11 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
             {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
             <div className="flex flex-wrap gap-4">
               <button type="button" onClick={() => (onReset ? onReset() : (setResult(null), setLastSend(null), setError("")))}
-                className="text-sm font-medium text-gray-500 underline hover:text-gray-800">
+                className="text-sm font-medium text-slate-500 underline hover:text-slate-800">
                 Start another offer
               </button>
               <button type="button" onClick={() => { setResult(null); setLastSend(null); setError(""); }}
-                className="text-sm font-medium text-gray-500 underline hover:text-gray-800">
+                className="text-sm font-medium text-slate-500 underline hover:text-slate-800">
                 Back to this offer's form
               </button>
             </div>
@@ -741,7 +741,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
           <h1 className="text-lg font-bold tracking-tight">
             {restore ? (restore.status === "draft" ? "Editing draft" : "Editing offer") : "New cash offer"}
           </h1>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-slate-500">
             {restore
               ? `${restore.address || "restored from History"} — clearing starts a fresh offer`
               : "Work top to bottom: contact → property → comps → rehab → offer."}
@@ -749,7 +749,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         </div>
         <button type="button"
           onClick={() => { if (window.confirm("Clear the whole form and start a fresh offer?")) onReset?.(); }}
-          className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900">
+          className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900">
           <RotateCcw size={14} /> Clear form
         </button>
       </div>
@@ -761,7 +761,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         notes={contactNotes}
       />
 
-      <div className="rounded-xl border border-gray-200 bg-white p-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 flex items-center gap-2 text-sm font-bold"><StepBadge n={2} /> Property</h2>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
@@ -819,21 +819,21 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
         feeOverride={feeOverride} setFeeOverride={setFeeOverride} fmtTyped={fmtTyped} />
 
-      <div className="rounded-xl border border-gray-200 bg-white p-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-bold">Letter terms</h2>
-          <label className="flex items-center gap-1.5 text-xs text-gray-500">
+          <label className="flex items-center gap-1.5 text-xs text-slate-500">
             Offer expires
             <input
               type="date"
-              className="rounded-lg border border-gray-300 px-2 py-1 text-sm focus:border-gray-900 focus:outline-none"
+              className="rounded-lg border border-slate-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
               value={offerExpires || expiryDefault}
               min={todayIso}
               onChange={(e) => setOfferExpires(e.target.value)}
             />
           </label>
         </div>
-        <p className="mb-3 text-xs text-gray-500">
+        <p className="mb-3 text-xs text-slate-500">
           The "Tentative terms" printed on the offer letter — edit any label or text, remove, reorder, or add rows.
           "Purchase Price" always prints first. The date above prints as the offer's valid-through date.
         </p>
@@ -842,16 +842,16 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
             <div key={row.id} className="flex items-center gap-2">
               <div className="flex shrink-0 flex-col">
                 <button type="button" onClick={() => moveTerm(row.id, -1)} disabled={i === 0}
-                  className="rounded p-0.5 text-gray-400 hover:text-gray-700 disabled:opacity-30" title="Move up">
+                  className="rounded p-0.5 text-slate-400 hover:text-slate-700 disabled:opacity-30" title="Move up">
                   <ChevronUp size={13} />
                 </button>
                 <button type="button" onClick={() => moveTerm(row.id, 1)} disabled={i === letterTerms.length - 1}
-                  className="rounded p-0.5 text-gray-400 hover:text-gray-700 disabled:opacity-30" title="Move down">
+                  className="rounded p-0.5 text-slate-400 hover:text-slate-700 disabled:opacity-30" title="Move down">
                   <ChevronDown size={13} />
                 </button>
               </div>
               <input
-                className="w-36 shrink-0 rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold focus:border-gray-900 focus:outline-none sm:w-44"
+                className="w-36 shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold focus:border-blue-500 focus:outline-none sm:w-44"
                 value={row.label} placeholder="Label"
                 onChange={(e) => patchTerm(row.id, { label: e.target.value })}
               />
@@ -860,13 +860,13 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
                 onChange={(e) => patchTerm(row.id, { value: e.target.value })}
               />
               <button type="button" onClick={() => removeTerm(row.id)}
-                className="shrink-0 rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Remove this term">
+                className="shrink-0 rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600" title="Remove this term">
                 <Trash2 size={14} />
               </button>
             </div>
           ))}
           {letterTerms.length === 0 && (
-            <p className="rounded-lg border border-dashed border-gray-300 px-3 py-2 text-xs text-gray-400">
+            <p className="rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs text-slate-400">
               No term rows — the letter will show only the purchase price. Add rows below.
             </p>
           )}
@@ -874,20 +874,20 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
           {letterTerms.length < 7 ? (
             <button type="button" onClick={addTerm}
-              className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50">
+              className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
               <Plus size={13} /> Add term (e.g. Inspection)
             </button>
           ) : (
-            <p className="text-xs text-gray-400">Seven rows max — the letter runs out of room after that.</p>
+            <p className="text-xs text-slate-400">Seven rows max — the letter runs out of room after that.</p>
           )}
           <div className="flex items-center gap-2">
             <button type="button" onClick={resetTermsToTemplate}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100"
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100"
               title="Revert this offer's rows to your saved template (or the built-in defaults)">
               <RotateCcw size={12} /> Reset to template
             </button>
             <button type="button" onClick={saveTermsTemplate} disabled={tplSaving || !settings}
-              className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+              className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
               title="Save these rows as the default template every new offer starts from">
               {tplSaving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
               {tplSaved ? "Template saved ✓" : "Save as default template"}
@@ -898,50 +898,50 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
 
       {/* Sticky action bar: the live number + actions stay in reach while
           scrolling through comps and rehab above. */}
-      <div className="sticky bottom-0 z-20 -mx-4 border-t border-gray-200 bg-white/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+      <div className="sticky bottom-0 z-20 -mx-4 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
         <div className="flex flex-wrap items-center gap-3">
           <div className="mr-auto min-w-0">
             {calc ? (
               <>
-                <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">Cash offer</div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Cash offer</div>
                 <div className="truncate text-lg font-black leading-tight tracking-tight">{fmtMoney(calc.offers.cash.amount)}</div>
               </>
             ) : (
-              <span className="text-xs text-gray-400">Enter an ARV (or use comps) to see the offer.</span>
+              <span className="text-xs text-slate-400">Enter an ARV (or use comps) to see the offer.</span>
             )}
           </div>
           <button type="button" disabled={!calc || previewing} onClick={doPreview}
-            className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-gray-50">
+            className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">
             {previewing ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
             Preview document
           </button>
           <button type="button" disabled={savingDraft} onClick={doSaveDraft}
-            className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-gray-50">
+            className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">
             {savingDraft ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
             {draftSaved ? "Draft saved ✓" : draftId ? "Update draft" : "Save draft"}
           </button>
           <button type="button" disabled={!canCreate || creating} onClick={doCreate}
-            className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-gray-800">
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-blue-700">
             {creating ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
             Create offer & attach to contact
           </button>
         </div>
         {!canCreate && calc && (
-          <div className="mt-1 text-right text-xs text-gray-400">Pick a contact in step 1 (or enter a phone) to create the offer.</div>
+          <div className="mt-1 text-right text-xs text-slate-400">Pick a contact in step 1 (or enter a phone) to create the offer.</div>
         )}
       </div>
 
       {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
 
       {preview && (
-        <div className="rounded-xl border border-gray-200 bg-white p-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-sm font-bold">Document preview</h2>
-            <button type="button" onClick={() => setPreview(null)} className="rounded p-1 text-gray-400 hover:bg-gray-100">
+            <button type="button" onClick={() => setPreview(null)} className="rounded p-1 text-slate-400 hover:bg-slate-100">
               <X size={16} />
             </button>
           </div>
-          <img src={preview} alt="Offer document preview" className="mx-auto w-full max-w-lg rounded-lg border border-gray-200 shadow" />
+          <img src={preview} alt="Offer document preview" className="mx-auto w-full max-w-lg rounded-lg border border-slate-200 shadow" />
         </div>
       )}
     </div>

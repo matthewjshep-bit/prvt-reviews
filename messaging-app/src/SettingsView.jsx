@@ -12,7 +12,7 @@ import { saveSettings } from "./api.js";
 import FieldsManager from "./FieldsManager.jsx";
 
 const INPUT_CLS =
-  "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
+  "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
 
 // Thousands separators as you type (dollar fields only — save() strips them).
 const fmtTyped = (v) => {
@@ -23,7 +23,7 @@ const fmtTyped = (v) => {
 function Num({ label, value, onChange, suffix, money }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">
+      <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
         {label}{suffix ? ` (${suffix})` : ""}
       </span>
       <input className={INPUT_CLS} inputMode={money ? "numeric" : "decimal"}
@@ -36,7 +36,7 @@ function Num({ label, value, onChange, suffix, money }) {
 function Txt({ label, value, onChange, placeholder }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</span>
+      <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>
       <input className={INPUT_CLS} value={value} placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)} />
     </label>
@@ -64,27 +64,27 @@ function ClauseEditor({ value, defaults, tokens, onChange }) {
     <>
       <div className="mb-3 flex flex-wrap gap-1.5">
         {tokens.map((t) => (
-          <span key={t.key} className="rounded-full bg-gray-100 px-2 py-0.5 font-mono text-[11px] text-gray-600"
+          <span key={t.key} className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-600"
             title={`${t.label} — filled from the contract form; empty prints a blank line`}>
             {`{{${t.key}}}`}
           </span>
         ))}
       </div>
       {list.map((c, i) => (
-        <div key={c.id || i} className="mb-2 rounded-lg border border-gray-200 p-2.5">
+        <div key={c.id || i} className="mb-2 rounded-lg border border-slate-200 p-2.5">
           <div className="mb-2 flex items-center gap-2">
-            <span className="w-6 shrink-0 text-right text-xs font-bold text-gray-400">{i + 1}.</span>
+            <span className="w-6 shrink-0 text-right text-xs font-bold text-slate-400">{i + 1}.</span>
             <input className={INPUT_CLS} value={c.title} onChange={patchClause(i, "title")} placeholder="Clause title" />
             <button type="button" onClick={() => moveClause(i, -1)} disabled={i === 0}
-              className="rounded p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30" title="Move up">
+              className="rounded p-1 text-slate-400 hover:bg-slate-100 disabled:opacity-30" title="Move up">
               <ChevronUp size={15} />
             </button>
             <button type="button" onClick={() => moveClause(i, 1)} disabled={i === list.length - 1}
-              className="rounded p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30" title="Move down">
+              className="rounded p-1 text-slate-400 hover:bg-slate-100 disabled:opacity-30" title="Move down">
               <ChevronDown size={15} />
             </button>
             <button type="button" onClick={() => removeClause(i)}
-              className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Remove clause">
+              className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" title="Remove clause">
               <Trash2 size={15} />
             </button>
           </div>
@@ -94,11 +94,11 @@ function ClauseEditor({ value, defaults, tokens, onChange }) {
       ))}
       <div className="mt-2 flex flex-wrap gap-2">
         <button type="button" onClick={addClause}
-          className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50">
+          className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50">
           <Plus size={14} /> Add clause
         </button>
         <button type="button" onClick={() => onChange(null)} disabled={isDefault}
-          className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50 disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50 disabled:opacity-40"
           title="Discard edits and go back to the built-in wholesale-friendly language">
           <RotateCcw size={14} /> Reset to default language
         </button>
@@ -152,9 +152,9 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   return (
     <div className="max-w-2xl space-y-5">
       {mode === "offers" && (<>
-      <section className="rounded-xl border border-gray-200 bg-white p-4">
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Cash offer</h2>
-        <p className="mb-3 text-xs text-gray-500">
+        <p className="mb-3 text-xs text-slate-500">
           offer = %ARV − repair adjustment − fee. Repairs under the buffer cost repairs+buffer;
           normal repairs are multiplied; the portion above the heavy threshold uses the heavy multiplier.
         </p>
@@ -168,32 +168,32 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <Num label="Offer valid for" suffix="days" value={form.validityDays} onChange={set("validityDays")} />
           <Num label="Earnest money" suffix="$" money value={form.earnestMoney} onChange={set("earnestMoney")} />
         </div>
-        <label className="mt-3 flex items-center gap-2 text-sm text-gray-700">
+        <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
           <input type="checkbox" checked={Boolean(form.precisionJitter)}
             onChange={(e) => { setSaved(false); setForm((f) => ({ ...f, precisionJitter: e.target.checked })); }} />
           Precision jitter — non-round offer amounts (e.g. $161,847.23) for lowball anchoring
         </label>
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-4">
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Comps map (RealEstateAPI.com)</h2>
-        <p className="mb-3 text-xs text-gray-500">
+        <p className="mb-3 text-xs text-slate-500">
           Powers the sold-comps map on the New Offer page (closed sales, same beds/baths/county, similar
           sqft). Sign up at realestateapi.com for a trial key. Leave blank to use manual comps only.
         </p>
         <Txt label="RealEstateAPI key" value={form.compsApiKey || ""} onChange={set("compsApiKey")} placeholder="APIKEY-..." />
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-4">
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">AI features (Anthropic)</h2>
-        <p className="mb-3 text-xs text-gray-500">
+        <p className="mb-3 text-xs text-slate-500">
           Powers "AI scan listing photos" in the rehab estimator and the ✨ contact enrichment
           (conversation summary → CRM fields). Get a key at console.anthropic.com → API Keys.
           Photo scans cost roughly $0.15–0.50 each; enrichments roughly $0.10–0.20.
         </p>
         <Txt label="Anthropic API key" value={form.aiApiKey || ""} onChange={set("aiApiKey")} placeholder="sk-ant-..." />
         <div className="mt-3">
-          <p className="mb-2 text-xs text-gray-500">
+          <p className="mb-2 text-xs text-slate-500">
             Automatic listing photos for the scan via Apify's Zillow scraper (~$0.002 per lookup,
             $5/month free credits): apify.com → sign up → Settings → API tokens → copy. Unofficial
             scraper — can break if Zillow changes defenses; uploading photos always works as the fallback.
@@ -201,36 +201,36 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <Txt label="Apify API token" value={form.apifyToken || ""} onChange={set("apifyToken")} placeholder="apify_api_..." />
         </div>
         <div className="mt-3">
-          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">
+          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
             Extra enrichment instructions (optional)
           </label>
           <textarea rows={3} value={form.enrichExtraInstructions || ""}
             onChange={(e) => set("enrichExtraInstructions")(e.target.value)}
             placeholder="e.g. local market vocabulary, what 'hot' means for our team, agents to treat differently…"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none" />
-          <p className="mt-1 text-xs text-gray-400">
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none" />
+          <p className="mt-1 text-xs text-slate-400">
             Appended to the AI's instructions when it analyzes a contact's conversation history.
           </p>
         </div>
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-4">
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">CRM fields</h2>
-        <p className="mb-3 text-xs text-gray-500">
+        <p className="mb-3 text-xs text-slate-500">
           Every contact custom field in one place — the fields this app manages (offers, outreach, AI
           enrichment), anything else in your GHL location, and a live contact preview where you can
           see and edit all of a contact's values.
         </p>
         <button type="button" onClick={() => setShowFields(true)}
-          className="rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold hover:bg-gray-50">
+          className="rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50">
           Open fields manager
         </button>
       </section>
       </>)}
 
-      <section className="rounded-xl border border-gray-200 bg-white p-4">
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Agent Outreach (RentCast)</h2>
-        <p className="mb-3 text-xs text-gray-500">
+        <p className="mb-3 text-xs text-slate-500">
           Powers the Agent Outreach page — active MLS listings with listing-agent contact info.
           Sign up at rentcast.io/api (free Developer tier: 50 requests/month, each returns up to
           500 listings). The zips/city here prefill the pull form.
@@ -247,7 +247,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       </section>
 
       {mode === "offers" && (<>
-      <section className="rounded-xl border border-gray-200 bg-white p-4">
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Company (printed on the document)</h2>
         <div className="grid grid-cols-2 gap-3">
           <Txt label="Company name" value={form.company.name} onChange={setCo("name")} placeholder="PRVT MKT" />
@@ -258,9 +258,9 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         </div>
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-4">
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-1 text-sm font-bold">Purchase &amp; sale contract</h2>
-        <p className="mb-3 text-xs text-gray-500">
+        <p className="mb-3 text-xs text-slate-500">
           Clause language for the generated contract (New Offer → result → Generate purchase contract).
           Clauses are numbered by their position here, so reference other clauses by name ("under the
           Inspection Period paragraph"), never by number. Not legal advice — have your attorney review
@@ -270,9 +270,9 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           tokens={CONTRACT_TOKENS} onChange={setTemplate("contractTemplate")} />
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-4">
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-1 text-sm font-bold">Assignment contract (dispositions)</h2>
-        <p className="mb-3 text-xs text-gray-500">
+        <p className="mb-3 text-xs text-slate-500">
           Clause language for the Assignment of Contract agreement — the document your dispositions
           side sends to the END BUYER (assignee), never the seller. Generated from an offer's result
           page or History → Generate assignment. Clauses are numbered by their position here, so
@@ -286,7 +286,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
 
       <div className="flex items-center gap-3">
         <button type="button" disabled={saving} onClick={save}
-          className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-gray-800">
+          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-blue-700">
           {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
           Save settings
         </button>

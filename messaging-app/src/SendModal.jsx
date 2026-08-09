@@ -9,8 +9,8 @@ import { fmtMoney } from "@shared/offer-calc.js";
 import { getContactDetail, sendOffer } from "./api.js";
 
 const INPUT_CLS =
-  "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
-const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500";
+  "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
+const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
 const DOC_OPTIONS = [
   { key: "pdf", label: "Offer letter (PDF)", urlKey: "pdfUrl" },
@@ -29,17 +29,17 @@ function ChannelChip({ icon: Icon, label, detail, active, disabled, onClick }) {
       disabled={disabled}
       className={`flex-1 rounded-xl border px-3 py-2.5 text-left transition ${
         disabled
-          ? "cursor-not-allowed border-gray-200 opacity-50"
+          ? "cursor-not-allowed border-slate-200 opacity-50"
           : active
-          ? "border-gray-900 bg-gray-900 text-white"
-          : "border-gray-300 hover:bg-gray-50"
+          ? "border-blue-600 bg-blue-600 text-white"
+          : "border-slate-300 hover:bg-slate-50"
       }`}
     >
       <span className="flex items-center gap-2 text-sm font-semibold">
         <Icon size={15} /> {label}
         {active && !disabled && <Check size={14} className="ml-auto" />}
       </span>
-      <span className={`mt-0.5 block truncate text-xs ${active && !disabled ? "text-gray-300" : "text-gray-500"}`}>
+      <span className={`mt-0.5 block truncate text-xs ${active && !disabled ? "text-slate-300" : "text-slate-500"}`}>
         {detail}
       </span>
     </button>
@@ -128,11 +128,11 @@ export default function SendModal({ offer, onClose, onSent }) {
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <div className="text-lg font-bold">Send offer documents</div>
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-slate-500">
               {offer.address || "Offer"} · {offer.contactName || offer.contactId} · {fmtMoney(offer.cashAmount)}
             </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded p-1.5 text-gray-400 hover:bg-gray-100">
+          <button type="button" onClick={onClose} className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
             <X size={18} />
           </button>
         </div>
@@ -149,7 +149,7 @@ export default function SendModal({ offer, onClose, onSent }) {
             <div>
               <span className={LABEL_CLS}>Send via</span>
               {contactLoading ? (
-                <div className="flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-3 text-sm text-gray-500">
+                <div className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-500">
                   <Loader2 size={15} className="animate-spin" /> Loading contact…
                 </div>
               ) : (
@@ -176,26 +176,26 @@ export default function SendModal({ offer, onClose, onSent }) {
 
             <div>
               <span className={LABEL_CLS}>Documents</span>
-              <div className="space-y-1.5 rounded-xl border border-gray-200 p-3">
+              <div className="space-y-1.5 rounded-xl border border-slate-200 p-3">
                 {available.map((d) => (
                   <label key={d.key} className="flex cursor-pointer items-start gap-2.5 text-sm">
                     <input
                       type="checkbox"
                       checked={docs.has(d.key)}
                       onChange={() => toggleDoc(d.key)}
-                      className="mt-0.5 h-4 w-4 accent-gray-900"
+                      className="mt-0.5 h-4 w-4 accent-blue-600"
                     />
                     <span>
                       <span className="font-medium">{d.label}</span>
                       {d.key === "image" && channels.sms && (
-                        <span className="block text-xs text-gray-500">{d.caption}</span>
+                        <span className="block text-xs text-slate-500">{d.caption}</span>
                       )}
                     </span>
                   </label>
                 ))}
               </div>
               {channels.sms && [...docs].some((k) => k !== "image") && (
-                <p className="mt-1 text-xs text-gray-500">
+                <p className="mt-1 text-xs text-slate-500">
                   PDFs go out on email only — the text sends just the message{docs.has("image") ? " and the offer image" : ""}.
                 </p>
               )}
@@ -218,7 +218,7 @@ export default function SendModal({ offer, onClose, onSent }) {
                 type="button"
                 onClick={doPreview}
                 disabled={!canPreview}
-                className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Preview
               </button>
@@ -240,10 +240,10 @@ export default function SendModal({ offer, onClose, onSent }) {
             )}
 
             {preview.previews?.sms && (
-              <div className="rounded-xl border border-gray-200 p-3">
-                <div className="mb-1.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+              <div className="rounded-xl border border-slate-200 p-3">
+                <div className="mb-1.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-500">
                   <MessageSquare size={13} /> Text
-                  <span className="font-medium normal-case tracking-normal text-gray-400">
+                  <span className="font-medium normal-case tracking-normal text-slate-400">
                     to {preview.previews.sms.to || "—"}
                   </span>
                 </div>
@@ -251,9 +251,9 @@ export default function SendModal({ offer, onClose, onSent }) {
                   <div className="text-sm text-red-600">{preview.previews.sms.error}</div>
                 ) : (
                   <>
-                    <p className="whitespace-pre-wrap rounded-lg bg-gray-50 p-2.5 text-sm">{preview.previews.sms.message}</p>
+                    <p className="whitespace-pre-wrap rounded-lg bg-slate-50 p-2.5 text-sm">{preview.previews.sms.message}</p>
                     {(preview.previews.sms.attachments || []).length > 0 && (
-                      <p className="mt-1.5 flex items-center gap-1.5 text-xs text-gray-500">
+                      <p className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500">
                         <FileText size={12} /> Offer image attached as the picture
                       </p>
                     )}
@@ -263,10 +263,10 @@ export default function SendModal({ offer, onClose, onSent }) {
             )}
 
             {preview.previews?.email && (
-              <div className="rounded-xl border border-gray-200 p-3">
-                <div className="mb-1.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+              <div className="rounded-xl border border-slate-200 p-3">
+                <div className="mb-1.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-500">
                   <Mail size={13} /> Email
-                  <span className="font-medium normal-case tracking-normal text-gray-400">
+                  <span className="font-medium normal-case tracking-normal text-slate-400">
                     to {preview.previews.email.to || "—"}
                   </span>
                 </div>
@@ -274,16 +274,16 @@ export default function SendModal({ offer, onClose, onSent }) {
                   <div className="text-sm text-red-600">{preview.previews.email.error}</div>
                 ) : (
                   <>
-                    <div className="mb-1.5 text-sm"><span className="text-gray-500">Subject:</span>{" "}
+                    <div className="mb-1.5 text-sm"><span className="text-slate-500">Subject:</span>{" "}
                       <span className="font-medium">{preview.previews.email.subject}</span>
                     </div>
                     <div
-                      className="rounded-lg border border-gray-100 bg-gray-50 p-2.5 text-sm [&_ul]:list-inside [&_ul]:list-disc"
+                      className="rounded-lg border border-slate-100 bg-slate-50 p-2.5 text-sm [&_ul]:list-inside [&_ul]:list-disc"
                       /* HTML is composed server-side from escaped values — safe to render */
                       dangerouslySetInnerHTML={{ __html: preview.previews.email.html }}
                     />
                     {(preview.previews.email.docs || []).length > 0 && (
-                      <p className="mt-1.5 flex items-center gap-1.5 text-xs text-gray-500">
+                      <p className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500">
                         <FileText size={12} /> Attached: {preview.previews.email.docs.map((d) => d.label).join(", ")}
                       </p>
                     )}
@@ -294,14 +294,14 @@ export default function SendModal({ offer, onClose, onSent }) {
 
             <div className="flex items-center justify-between">
               <button type="button" onClick={() => { setStep("compose"); setError(""); }}
-                className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold hover:bg-gray-50">
+                className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:bg-slate-50">
                 <ArrowLeft size={14} /> Edit
               </button>
               <button
                 type="button"
                 onClick={doConfirm}
                 disabled={busy || previewBlocked}
-                className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
                 Send {activeChannels.map((c) => CHANNEL_LABELS[c]).join(" + ")} now
@@ -322,7 +322,7 @@ export default function SendModal({ offer, onClose, onSent }) {
             ))}
             <div className="flex justify-end">
               <button type="button" onClick={onClose}
-                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold hover:bg-gray-50">
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold hover:bg-slate-50">
                 Close
               </button>
             </div>

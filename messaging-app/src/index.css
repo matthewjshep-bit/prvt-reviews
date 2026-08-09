@@ -2,3 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 html, body, #root { height: 100%; margin: 0; }
+/* Swiss-minimal base (design-system/offer-generator/MASTER.md) */
+body { @apply font-sans text-slate-900 antialiased; }
+::selection { @apply bg-blue-100; }
+/* Pre-delivery checklist: smooth hover transitions + visible keyboard focus */
+button, a, select { @apply transition-colors duration-200; }
+:focus-visible { @apply outline-none ring-2 ring-blue-500/60 ring-offset-1; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

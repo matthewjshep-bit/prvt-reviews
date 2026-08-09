@@ -19,21 +19,21 @@ export const DEAL_STAGES = [
   { key: "buyer_found", label: "Buyer found", cls: "bg-blue-100 text-blue-800" },
   { key: "assigned", label: "Assigned", cls: "bg-violet-100 text-violet-800" },
   { key: "closed", label: "Closed", cls: "bg-emerald-100 text-emerald-800" },
-  { key: "fell_through", label: "Fell through", cls: "bg-gray-200 text-gray-600" },
+  { key: "fell_through", label: "Fell through", cls: "bg-slate-200 text-slate-600" },
 ];
 export const STAGE = Object.fromEntries(DEAL_STAGES.map((s) => [s.key, s]));
 const TERMINAL = new Set(["closed", "fell_through"]);
 
 const INVESTOR_STATUSES = ["sent", "evaluating", "passed", "committed"];
 const STATUS_DOT = {
-  sent: "bg-gray-400",
+  sent: "bg-slate-400",
   evaluating: "bg-blue-500",
   passed: "bg-red-400",
   committed: "bg-emerald-500",
 };
 
 export function StagePill({ stage, small }) {
-  const s = STAGE[stage] || { label: stage, cls: "bg-gray-100 text-gray-600" };
+  const s = STAGE[stage] || { label: stage, cls: "bg-slate-100 text-slate-600" };
   return (
     <span className={`rounded-full font-semibold ${s.cls} ${small ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs"}`}>
       {s.label}
@@ -64,15 +64,15 @@ const shortDate = (iso) =>
 
 function InvestorChips({ deal }) {
   const inv = deal.investors || [];
-  if (!inv.length) return <span className="text-xs text-gray-400">none yet</span>;
+  if (!inv.length) return <span className="text-xs text-slate-400">none yet</span>;
   return (
     <span className="flex flex-wrap gap-1">
       {inv.map((i) => (
         <span key={i.contactId} title={`${i.name} — ${i.status}`}
           className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-            i.status === "committed" ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-700"
+            i.status === "committed" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-700"
           }`}>
-          <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[i.status] || "bg-gray-400"}`} />
+          <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[i.status] || "bg-slate-400"}`} />
           {i.name}
         </span>
       ))}
@@ -114,23 +114,23 @@ function InvestorPicker({ existingIds, onPick, busy }) {
         onBlur={() => setTimeout(() => setOpen(false), 150)}
         placeholder="Add investor — search your GHL contacts…"
         disabled={busy}
-        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none disabled:opacity-60"
+        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:opacity-60"
       />
-      {searching && <Loader2 size={14} className="absolute right-3 top-3 animate-spin text-gray-400" />}
+      {searching && <Loader2 size={14} className="absolute right-3 top-3 animate-spin text-slate-400" />}
       {open && results.length > 0 && (
-        <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+        <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
           {results.map((c) => {
             const linked = existingIds.has(c.id);
             return (
               <button key={c.id} type="button" disabled={linked}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => { onPick(c); setQuery(""); setResults([]); setOpen(false); }}
-                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-gray-50 disabled:opacity-50">
+                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:opacity-50">
                 <span>
                   <span className="font-medium">{c.name || "(no name)"}</span>
-                  <span className="ml-2 text-xs text-gray-500">{[c.phone, c.email].filter(Boolean).join(" · ")}</span>
+                  <span className="ml-2 text-xs text-slate-500">{[c.phone, c.email].filter(Boolean).join(" · ")}</span>
                 </span>
-                {linked && <span className="text-[11px] text-gray-400">linked</span>}
+                {linked && <span className="text-[11px] text-slate-400">linked</span>}
               </button>
             );
           })}
@@ -209,8 +209,8 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
     if (s.status && s.status !== "sent") await run(() => updateDealInvestor(offer.id, s.contactId, s.status));
     setSuggest((v) => (v?.suggestions ? { ...v, suggestions: v.suggestions.filter((x) => x.contactId !== s.contactId) } : v));
   }
-  const inputCls = "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
-  const labelCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500";
+  const inputCls = "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
+  const labelCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
   return (
     <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={onClose}>
@@ -226,11 +226,11 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 </a>
               )}
             </div>
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-slate-500">
               Agent:{" "}
               {offer.contactId ? (
                 <a href={ghlContactUrl(offer.contactId)} target="_blank" rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-gray-700 underline hover:text-gray-900">
+                  className="inline-flex items-center gap-1 text-slate-700 underline hover:text-slate-900">
                   {offer.contactName || offer.contactId} <ExternalLink size={12} />
                 </a>
               ) : (
@@ -240,13 +240,13 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {busy && <Loader2 size={16} className="animate-spin text-gray-400" />}
+            {busy && <Loader2 size={16} className="animate-spin text-slate-400" />}
             <button type="button" onClick={() => onEdit?.(offer)}
-              className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50"
+              className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50"
               title="Open this offer in the editor — rehab scope, comps, document">
               <Pencil size={14} /> Open offer
             </button>
-            <button type="button" onClick={onClose} className="rounded p-1.5 text-gray-400 hover:bg-gray-100">
+            <button type="button" onClick={onClose} className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
               <X size={18} />
             </button>
           </div>
@@ -261,14 +261,14 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             {DEAL_STAGES.map((s) => (
               <button key={s.key} type="button" disabled={busy} onClick={() => setStage(s.key)}
                 className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                  deal.stage === s.key ? s.cls + " ring-2 ring-gray-900/20" : "bg-gray-50 text-gray-500 hover:bg-gray-100"
+                  deal.stage === s.key ? s.cls + " ring-2 ring-blue-600/25" : "bg-slate-50 text-slate-500 hover:bg-slate-100"
                 }`}>
                 {s.label}
               </button>
             ))}
           </div>
           {deal.stage === "fell_through" && deal.fellThroughReason && (
-            <div className="mt-1.5 text-xs text-gray-500">Reason: {deal.fellThroughReason}</div>
+            <div className="mt-1.5 text-xs text-slate-500">Reason: {deal.fellThroughReason}</div>
           )}
         </div>
 
@@ -297,7 +297,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             </div>
             {termsDirty && (
               <button type="button" onClick={saveTerms} disabled={busy}
-                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-60">
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
                 Save terms
               </button>
             )}
@@ -309,16 +309,16 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               <span className={labelCls}>Disposition investors</span>
               <div className="space-y-1.5">
                 {(deal.investors || []).map((i) => (
-                  <div key={i.contactId} className="flex items-center justify-between gap-2 rounded-lg bg-gray-50 px-2.5 py-1.5">
+                  <div key={i.contactId} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5">
                     <a href={ghlContactUrl(i.contactId)} target="_blank" rel="noreferrer"
-                      className="inline-flex min-w-0 items-center gap-1 text-sm font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-900">
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[i.status] || "bg-gray-400"}`} />
-                      <span className="truncate">{i.name}</span> <ExternalLink size={11} className="shrink-0 text-gray-400" />
+                      className="inline-flex min-w-0 items-center gap-1 text-sm font-medium underline decoration-slate-300 underline-offset-2 hover:text-slate-900">
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[i.status] || "bg-slate-400"}`} />
+                      <span className="truncate">{i.name}</span> <ExternalLink size={11} className="shrink-0 text-slate-400" />
                     </a>
                     <span className="flex shrink-0 items-center gap-1">
                       <select value={i.status} disabled={busy}
                         onChange={(e) => run(() => updateDealInvestor(offer.id, i.contactId, e.target.value))}
-                        className="rounded-md border border-gray-300 px-1.5 py-1 text-xs focus:border-gray-900 focus:outline-none">
+                        className="rounded-md border border-slate-300 px-1.5 py-1 text-xs focus:border-blue-500 focus:outline-none">
                         {INVESTOR_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                       </select>
                       <button type="button" disabled={busy}
@@ -329,7 +329,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                       </button>
                       <button type="button" disabled={busy} title="Unlink investor"
                         onClick={() => run(() => removeDealInvestor(offer.id, i.contactId))}
-                        className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600">
+                        className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600">
                         <X size={14} />
                       </button>
                     </span>
@@ -340,7 +340,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 <InvestorPicker existingIds={investorIds} busy={busy}
                   onPick={(c) => run(() => addDealInvestor(offer.id, { contactId: c.id, name: c.name }))} />
               </div>
-              <div className="mt-1 text-[11px] text-gray-400">
+              <div className="mt-1 text-[11px] text-slate-400">
                 Set an investor to <span className="font-semibold">committed</span> when they take the deal —
                 the stage advances to Buyer found automatically.
               </div>
@@ -354,7 +354,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   Suggest from conversations
                 </button>
                 {suggest?.busy && (
-                  <div className="mt-1.5 text-[11px] text-gray-400">
+                  <div className="mt-1.5 text-[11px] text-slate-400">
                     Scanning investor conversations for this property — 30–90 seconds…
                   </div>
                 )}
@@ -367,10 +367,10 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   </div>
                 )}
                 {suggest?.empty && (
-                  <div className="mt-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-600">{suggest.reason}</div>
+                  <div className="mt-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600">{suggest.reason}</div>
                 )}
                 {suggest?.ok && suggest.suggestions.length === 0 && (
-                  <div className="mt-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-600">
+                  <div className="mt-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600">
                     Scanned {suggest.scanned} investor conversation{suggest.scanned === 1 ? "" : "s"} — no one is talking about this property yet.
                   </div>
                 )}
@@ -381,17 +381,17 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                         <div className="flex items-center justify-between gap-2">
                           <a href={ghlContactUrl(s.contactId)} target="_blank" rel="noreferrer"
                             className="inline-flex items-center gap-1 text-sm font-semibold underline decoration-amber-300 underline-offset-2">
-                            {s.name} <ExternalLink size={11} className="text-gray-400" />
+                            {s.name} <ExternalLink size={11} className="text-slate-400" />
                           </a>
                           <span className="flex items-center gap-1.5">
-                            <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-gray-600">{s.status}</span>
+                            <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">{s.status}</span>
                             <button type="button" disabled={busy} onClick={() => addSuggested(s)}
-                              className="rounded-lg bg-gray-900 px-2.5 py-1 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60">
+                              className="rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
                               Add
                             </button>
                           </span>
                         </div>
-                        {s.reason && <div className="mt-1 text-[11px] leading-tight text-gray-500">{s.reason}</div>}
+                        {s.reason && <div className="mt-1 text-[11px] leading-tight text-slate-500">{s.reason}</div>}
                       </div>
                     ))}
                   </div>
@@ -401,11 +401,11 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
 
             <div>
               <span className={labelCls}>Timeline</span>
-              <div className="space-y-0.5 text-xs text-gray-600">
+              <div className="space-y-0.5 text-xs text-slate-600">
                 {(deal.stageHistory || []).map((h, idx) => (
                   <div key={idx} className="flex justify-between gap-3">
                     <span>{STAGE[h.stage]?.label || h.stage}</span>
-                    <span className="text-gray-400">{shortDate(h.ts)}</span>
+                    <span className="text-slate-400">{shortDate(h.ts)}</span>
                   </div>
                 ))}
               </div>
@@ -414,25 +414,25 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             <div className="flex flex-wrap gap-2">
               {offer.contractPdfUrl && (
                 <a href={offer.contractPdfUrl} target="_blank" rel="noreferrer"
-                  className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold hover:bg-gray-50">
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold hover:bg-slate-50">
                   <FileText size={13} /> Contract PDF
                 </a>
               )}
               {offer.assignmentPdfUrl && (
                 <a href={offer.assignmentPdfUrl} target="_blank" rel="noreferrer"
-                  className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold hover:bg-gray-50">
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold hover:bg-slate-50">
                   <FileText size={13} /> Assignment PDF
                 </a>
               )}
               <button type="button" onClick={() => onAssignment(offer)}
-                className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold hover:bg-gray-50"
+                className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
                 title="Generate or update the assignment of contract for the committed buyer">
                 <FileText size={13} /> {offer.assignmentPdfUrl ? "Update assignment" : "Generate assignment"}
               </button>
             </div>
 
             <button type="button" onClick={removeThisDeal} disabled={busy}
-              className="flex items-center gap-1.5 text-xs font-medium text-gray-400 hover:text-red-600">
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-red-600">
               <Trash2 size={13} /> Remove deal tracking (keeps the offer)
             </button>
           </div>
@@ -472,7 +472,7 @@ export default function DealsView({ settings, onEdit }) {
   };
 
   if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
-  if (!deals) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-gray-400" /></div>;
+  if (!deals) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400" /></div>;
 
   const active = deals.filter((o) => !TERMINAL.has(o.deal.stage));
   const closed = deals.filter((o) => o.deal.stage === "closed");
@@ -493,24 +493,24 @@ export default function DealsView({ settings, onEdit }) {
     <>
       <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         {kpis.map((k) => (
-          <div key={k.label} className="rounded-xl border border-gray-200 bg-white px-3 py-2">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{k.label}</div>
+          <div key={k.label} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{k.label}</div>
             <div className="text-lg font-bold">{k.value}</div>
           </div>
         ))}
       </div>
 
       {deals.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-gray-300 p-10 text-center text-sm text-gray-400">
+        <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
           No deals yet — when an offer gets an accepted contract, open History and hit
-          <span className="mx-1 font-semibold text-gray-500">Mark under contract</span>.
+          <span className="mx-1 font-semibold text-slate-500">Mark under contract</span>.
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
+                <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
                   <th className="px-4 py-2.5">Property</th>
                   <th className="px-4 py-2.5">Agent</th>
                   <th className="px-4 py-2.5">Stage</th>
@@ -529,15 +529,15 @@ export default function DealsView({ settings, onEdit }) {
                   const lastTs = d.stageHistory?.[d.stageHistory.length - 1]?.ts || d.createdAt;
                   return (
                     <tr key={o.id} onClick={() => setSelectedId(o.id)}
-                      className="group cursor-pointer border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                      className="group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50">
                       <td className="max-w-[14rem] truncate px-4 py-2.5 font-medium">{o.address || "—"}</td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         {o.contactId ? (
                           <a href={ghlContactUrl(o.contactId)} target="_blank" rel="noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center gap-1 underline decoration-gray-300 underline-offset-2 hover:text-gray-900"
+                            className="inline-flex items-center gap-1 underline decoration-slate-300 underline-offset-2 hover:text-slate-900"
                             title="Open contact in GHL">
-                            {o.contactName || o.contactId} <ExternalLink size={12} className="text-gray-400" />
+                            {o.contactName || o.contactId} <ExternalLink size={12} className="text-slate-400" />
                           </a>
                         ) : (o.contactName || "—")}
                       </td>
@@ -553,16 +553,16 @@ export default function DealsView({ settings, onEdit }) {
                         {closing ? (
                           <span className={closing.overdue && !TERMINAL.has(d.stage) ? "font-semibold text-red-600" : ""}>
                             {closing.label}
-                            <span className="ml-1 text-xs text-gray-400">{TERMINAL.has(d.stage) ? "" : closing.sub}</span>
+                            <span className="ml-1 text-xs text-slate-400">{TERMINAL.has(d.stage) ? "" : closing.sub}</span>
                           </span>
-                        ) : <span className="text-gray-400">—</span>}
+                        ) : <span className="text-slate-400">—</span>}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right text-gray-500">
+                      <td className="whitespace-nowrap px-4 py-2.5 text-right text-slate-500">
                         {daysSince(lastTs)}d
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                         <button type="button" onClick={() => setSelectedId(o.id)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-semibold text-gray-700 opacity-0 hover:bg-gray-50 group-hover:opacity-100">
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 opacity-0 hover:bg-slate-50 group-hover:opacity-100">
                           <Pencil size={13} /> Manage
                         </button>
                       </td>
@@ -574,7 +574,7 @@ export default function DealsView({ settings, onEdit }) {
           </div>
           {(closed.length > 0 || fell.length > 0) && (
             <button type="button" onClick={() => setShowTerminal((v) => !v)}
-              className="mt-2 text-xs font-medium text-gray-500 underline decoration-gray-300 underline-offset-2 hover:text-gray-900">
+              className="mt-2 text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-900">
               {showTerminal ? "Hide" : "Show"} closed & fell-through ({closed.length + fell.length})
             </button>
           )}

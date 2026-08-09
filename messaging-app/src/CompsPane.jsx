@@ -12,7 +12,7 @@ import { fmtMoney } from "@shared/offer-calc.js";
 import { geocode, getComps, gradeComps, zillowUrl } from "./api.js";
 
 const INPUT_CLS =
-  "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
+  "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
 
 const median = (xs) => {
   if (!xs.length) return 0;
@@ -30,8 +30,8 @@ const COND_CLS = {
   updated: "bg-blue-100 text-blue-800",
   dated: "bg-amber-100 text-amber-800",
   distressed: "bg-red-100 text-red-700",
-  unknown: "bg-gray-100 text-gray-500",
-  "": "bg-gray-50 text-gray-400",
+  unknown: "bg-slate-100 text-slate-500",
+  "": "bg-slate-50 text-slate-400",
 };
 
 // Location/site detractors that discount the subject relative to the comps
@@ -286,45 +286,45 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   }
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-4">
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 text-sm font-bold">
-          <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-900 text-[11px] font-bold leading-none text-white">3</span>
+          <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-600 text-[11px] font-bold leading-none text-white">3</span>
           Comps &amp; ARV
         </h2>
         <div className="flex items-center gap-2">
           <select value={months} onChange={(e) => setMonths(Number(e.target.value))}
-            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none">
+            className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none">
             <option value={6}>Sold ≤ 6 mo</option>
             <option value={9}>Sold ≤ 9 mo</option>
             <option value={12}>Sold ≤ 12 mo</option>
           </select>
           <input
-            className="w-16 rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+            className="w-16 rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
             inputMode="numeric" placeholder="Beds" title="Subject beds — corrects the record and filters comps"
             value={beds}
             onChange={(e) => editSubjectFacts(e.target.value.replace(/[^\d]/g, ""), baths)}
           />
           <input
-            className="w-16 rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+            className="w-16 rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
             inputMode="decimal" placeholder="Baths" title="Subject baths — corrects the record and filters comps"
             value={baths}
             onChange={(e) => editSubjectFacts(beds, e.target.value.replace(/[^\d.]/g, ""))}
           />
           <input
-            className="w-32 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+            className="w-32 rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
             inputMode="numeric" placeholder="Subject sqft"
             value={subjectSqft}
             onChange={(e) => setSubjectSqft(e.target.value.replace(/[^\d,]/g, ""))}
           />
           <button type="button" onClick={load} disabled={loading}
-            className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3.5 py-1.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-gray-800">
+            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-blue-700">
             {loading ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />} Load comps
           </button>
         </div>
       </div>
       {state?.info && (state.info.beds != null || state.info.sqft || state.info.lastSalePrice) && (
-        <div className="mb-2 text-xs text-gray-500">
+        <div className="mb-2 text-xs text-slate-500">
           Subject record: {[
             state.info.beds != null ? `${state.info.beds} bd` : "",
             state.info.baths != null ? `${state.info.baths} ba` : "",
@@ -346,7 +346,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
 
       {state && (
         <div className="grid gap-4 lg:grid-cols-2">
-          <div className="overflow-hidden rounded-lg border border-gray-200">
+          <div className="overflow-hidden rounded-lg border border-slate-200">
             <MapContainer
               key={`${state.subject.lat},${state.subject.lng}`}
               center={[state.subject.lat, state.subject.lng]}
@@ -406,7 +406,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
               </div>
             )}
             {state.estimate && (
-              <div className="mb-2 rounded-lg bg-gray-100 px-3 py-2 text-xs text-gray-700">
+              <div className="mb-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-700">
                 AVM estimate: <b>{fmtMoney(state.estimate.price)}</b>
                 {state.estimate.low ? <> (range {fmtMoney(state.estimate.low)} – {fmtMoney(state.estimate.high)})</> : null}
               </div>
@@ -420,16 +420,16 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                     ? <><Loader2 size={13} className="animate-spin" /> Grading {grading.done}/{grading.total}…</>
                     : <><Sparkles size={13} /> Grade condition (AI)</>}
                 </button>
-                <span className="text-[11px] text-gray-400">ARV uses renovated/updated comps once graded</span>
+                <span className="text-[11px] text-slate-400">ARV uses renovated/updated comps once graded</span>
               </div>
             )}
             <div className="max-h-56 flex-1 space-y-1 overflow-y-auto pr-1">
               {(state.comps || []).map((c) => (
-                <div key={c.id} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm hover:bg-gray-50">
+                <div key={c.id} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50">
                   <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
                     <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
                     <span className="min-w-0 flex-1 truncate">{c.address}</span>
-                    <span className="whitespace-nowrap text-xs text-gray-500"
+                    <span className="whitespace-nowrap text-xs text-slate-500"
                       title={c.yearBuilt ? `Built ${c.yearBuilt}` : undefined}>
                       {[
                         c.beds != null ? `${c.beds}/${c.baths ?? "?"}` : "",
@@ -453,7 +453,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                     {CONDITIONS.map((k) => <option key={k} value={k}>{COND_LABELS[k]}</option>)}
                   </select>
                   <a href={zillowUrl(c.address)} target="_blank" rel="noreferrer" title="Open on Zillow (photos)"
-                    className="shrink-0 rounded p-1 text-gray-400 hover:bg-blue-50 hover:text-blue-700">
+                    className="shrink-0 rounded p-1 text-slate-400 hover:bg-blue-50 hover:text-blue-700">
                     <ExternalLink size={14} />
                   </a>
                 </div>
@@ -461,7 +461,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
               {manual.map((c) => (
                 <div key={c.id} className="flex items-center gap-2 rounded-lg bg-blue-50/60 px-2 py-1.5 text-sm">
                   <span className="min-w-0 flex-1 truncate">{c.address}</span>
-                  <span className="whitespace-nowrap text-xs text-gray-500">{c.sqft ? `${c.sqft.toLocaleString()} sf · ` : ""}manual</span>
+                  <span className="whitespace-nowrap text-xs text-slate-500">{c.sqft ? `${c.sqft.toLocaleString()} sf · ` : ""}manual</span>
                   <span className="whitespace-nowrap font-semibold tabular-nums">{fmtMoney(c.price)}</span>
                   <select
                     value={condOf(c)}
@@ -471,7 +471,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                     {CONDITIONS.map((k) => <option key={k} value={k}>{COND_LABELS[k]}</option>)}
                   </select>
                   <button type="button" onClick={() => setManual((m) => m.filter((x) => x.id !== c.id))}
-                    className="rounded p-0.5 text-gray-400 hover:text-red-600"><X size={13} /></button>
+                    className="rounded p-0.5 text-slate-400 hover:text-red-600"><X size={13} /></button>
                 </div>
               ))}
             </div>
@@ -479,21 +479,21 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             <div className="mt-2 flex items-center gap-2">
               <input className={INPUT_CLS} placeholder="Comp label (optional)" value={draft.label}
                 onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
-              <input className="w-28 rounded-lg border border-gray-300 px-2 py-2 text-sm focus:outline-none" placeholder="Price"
+              <input className="w-28 rounded-lg border border-slate-300 px-2 py-2 text-sm focus:outline-none" placeholder="Price"
                 inputMode="numeric" value={draft.price} onChange={(e) => setDraft({ ...draft, price: e.target.value })} />
-              <input className="w-20 rounded-lg border border-gray-300 px-2 py-2 text-sm focus:outline-none" placeholder="Sqft"
+              <input className="w-20 rounded-lg border border-slate-300 px-2 py-2 text-sm focus:outline-none" placeholder="Sqft"
                 inputMode="numeric" value={draft.sqft} onChange={(e) => setDraft({ ...draft, sqft: e.target.value })} />
               <button type="button" onClick={addManual}
-                className="rounded-lg border border-gray-300 p-2 text-gray-600 hover:bg-gray-50" title="Add manual comp">
+                className="rounded-lg border border-slate-300 p-2 text-slate-600 hover:bg-slate-50" title="Add manual comp">
                 <Plus size={15} />
               </button>
             </div>
 
             {suggestion && (
-              <div className="mt-3 rounded-lg border border-gray-200 p-2.5">
+              <div className="mt-3 rounded-lg border border-slate-200 p-2.5">
                 <div className="mb-1.5 flex items-baseline justify-between">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500">ARV adjustments</span>
-                  <span className="text-[11px] text-gray-400">site/location detractors — % of base ARV</span>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">ARV adjustments</span>
+                  <span className="text-[11px] text-slate-400">site/location detractors — % of base ARV</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {ADJ_PRESETS.map((p) => {
@@ -501,7 +501,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                     return (
                       <button key={p.key} type="button" onClick={() => toggleAdjustment(p)}
                         className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
-                          active ? "bg-gray-900 text-white" : "border border-gray-300 text-gray-600 hover:bg-gray-100"
+                          active ? "bg-blue-600 text-white" : "border border-slate-300 text-slate-600 hover:bg-slate-100"
                         }`}>
                         {p.label} {p.pct}%
                       </button>
@@ -512,28 +512,28 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                   <div className="mt-2 space-y-1">
                     {adjustments.map((a) => (
                       <div key={a.key} className="flex items-center gap-2 text-xs">
-                        <span className="min-w-0 flex-1 truncate text-gray-700">{a.label}</span>
+                        <span className="min-w-0 flex-1 truncate text-slate-700">{a.label}</span>
                         <input
-                          className="w-14 rounded border border-gray-300 px-1.5 py-0.5 text-right text-xs tabular-nums focus:border-gray-900 focus:outline-none"
+                          className="w-14 rounded border border-slate-300 px-1.5 py-0.5 text-right text-xs tabular-nums focus:border-blue-500 focus:outline-none"
                           inputMode="decimal" value={a.pct}
                           onChange={(e) => setAdjPct(a.key, e.target.value.replace(/[^\d.+-]/g, ""))}
                         />
-                        <span className="text-gray-500">%</span>
+                        <span className="text-slate-500">%</span>
                         <button type="button" onClick={() => removeAdjustment(a.key)}
-                          className="rounded p-0.5 text-gray-400 hover:text-red-600"><X size={12} /></button>
+                          className="rounded p-0.5 text-slate-400 hover:text-red-600"><X size={12} /></button>
                       </div>
                     ))}
                   </div>
                 )}
                 <div className="mt-2 flex items-center gap-2">
-                  <input className="min-w-0 flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-gray-900 focus:outline-none"
+                  <input className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none"
                     placeholder="Custom (e.g. Territorial view)" value={adjDraft.label}
                     onChange={(e) => setAdjDraft({ ...adjDraft, label: e.target.value })} />
-                  <input className="w-16 rounded-lg border border-gray-300 px-2 py-1.5 text-right text-xs focus:border-gray-900 focus:outline-none"
+                  <input className="w-16 rounded-lg border border-slate-300 px-2 py-1.5 text-right text-xs focus:border-blue-500 focus:outline-none"
                     placeholder="+/−%" inputMode="decimal" value={adjDraft.pct}
                     onChange={(e) => setAdjDraft({ ...adjDraft, pct: e.target.value.replace(/[^\d.+-]/g, "") })} />
                   <button type="button" onClick={addCustomAdjustment}
-                    className="rounded-lg border border-gray-300 p-1.5 text-gray-600 hover:bg-gray-50" title="Add custom adjustment">
+                    className="rounded-lg border border-slate-300 p-1.5 text-slate-600 hover:bg-slate-50" title="Add custom adjustment">
                     <Plus size={13} />
                   </button>
                 </div>
@@ -552,7 +552,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                       const amt = Math.round((suggestion.base * a.pct) / 100);
                       return (
                         <div key={a.key} className="flex justify-between">
-                          <span className="text-gray-600">{a.label} ({a.pct > 0 ? "+" : "−"}{Math.abs(a.pct)}%)</span>
+                          <span className="text-slate-600">{a.label} ({a.pct > 0 ? "+" : "−"}{Math.abs(a.pct)}%)</span>
                           <span className={`font-medium tabular-nums ${amt < 0 ? "text-red-600" : "text-emerald-700"}`}>
                             {amt < 0 ? "−" : "+"}{fmtMoney(Math.abs(amt))}
                           </span>
@@ -582,7 +582,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       )}
 
       {!state && !error && (
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-slate-400">
           Enter the property address above, then load comps to see closed sales around the subject on a map
           (same beds/baths/county, similar sqft) and derive the ARV. Automatic comps use RealEstateAPI.com
           (key in Settings); manual comps always work.

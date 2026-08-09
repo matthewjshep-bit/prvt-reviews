@@ -20,8 +20,8 @@ import {
 const PROPERTY_TYPES = ["Single Family", "Condo", "Townhouse", "Multi-Family", "Manufactured", "Land"];
 
 const INPUT_CLS =
-  "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
-const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500";
+  "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
+const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
 const fmtPrice = (n) =>
   n != null && n !== "" ? `$${Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "—";
@@ -38,7 +38,7 @@ function ZLink({ address, className = "" }) {
   if (!url) return <span className={className}>{address || "—"}</span>;
   return (
     <a href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
-      className={`underline decoration-gray-300 underline-offset-2 hover:text-gray-900 ${className}`}
+      className={`underline decoration-slate-300 underline-offset-2 hover:text-slate-900 ${className}`}
       title="Open on Zillow">
       {address}
     </a>
@@ -78,7 +78,7 @@ function StatusBadge({ agent }) {
       </span>
     );
   if (agent.status === "skipped")
-    return <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-400">Skipped</span>;
+    return <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-400">Skipped</span>;
   if (agent.ghl?.contactId)
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">
@@ -88,7 +88,7 @@ function StatusBadge({ agent }) {
         </a>
       </span>
     );
-  return <span className="rounded-full bg-gray-900/5 px-2 py-0.5 text-xs font-semibold text-gray-700">New</span>;
+  return <span className="rounded-full bg-slate-900/5 px-2 py-0.5 text-xs font-semibold text-slate-700">New</span>;
 }
 
 // Expanded row: the agent's listings ranked by fixer score.
@@ -99,7 +99,7 @@ function AgentListings({ agentKey, batchId }) {
     getAgentListings(agentKey, batchId).then(setListings).catch((e) => setError(e.message));
   }, [agentKey, batchId]);
   if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
-  if (!listings) return <div className="flex justify-center p-4"><Loader2 size={18} className="animate-spin text-gray-400" /></div>;
+  if (!listings) return <div className="flex justify-center p-4"><Loader2 size={18} className="animate-spin text-slate-400" /></div>;
   return (
     <div className="space-y-1.5">
       {listings.map((l) => (
@@ -107,7 +107,7 @@ function AgentListings({ agentKey, batchId }) {
           className={`flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-sm ${l.qualifies === false ? "opacity-60" : ""}`}>
           <div className="min-w-0">
             <div className="truncate font-medium"><ZLink address={l.address} /></div>
-            <div className="text-xs text-gray-500">
+            <div className="text-xs text-slate-500">
               {fmtPrice(l.price)} · {l.daysOnMarket != null ? `${l.daysOnMarket} DOM` : "DOM —"}
               {l.propertyType ? ` · ${l.propertyType}` : ""}
               {l.yearBuilt ? ` · built ${l.yearBuilt}` : ""}
@@ -415,7 +415,7 @@ export default function AgentOutreach({ settings }) {
   };
 
   if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
-  if (!data) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-gray-400" /></div>;
+  if (!data) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400" /></div>;
 
   const usage = data.usage || {};
   const meterAmber = (usage.requestsThisMonth || 0) >= 40;
@@ -423,17 +423,17 @@ export default function AgentOutreach({ settings }) {
   return (
     <div className="space-y-4">
       {/* ---- pull controls ---- */}
-      <div className="rounded-xl border border-gray-200 bg-white p-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="mb-3 flex items-center justify-between">
           <div className="text-sm font-bold">Pull listings</div>
-          <div className={`text-xs ${meterAmber ? "font-semibold text-amber-600" : "text-gray-400"}`}>
+          <div className={`text-xs ${meterAmber ? "font-semibold text-amber-600" : "text-slate-400"}`}>
             {usage.requestsThisMonth || 0} / 50 RentCast requests this month
           </div>
         </div>
 
         {/* ---- batch picker ---- */}
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Batch</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Batch</span>
           {renaming ? (
             <input autoFocus value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -441,11 +441,11 @@ export default function AgentOutreach({ settings }) {
                 if (e.key === "Escape") setRenaming(false);
               }}
               onBlur={doRenameBatch}
-              className="w-64 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-gray-900 focus:outline-none" />
+              className="w-64 rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none" />
           ) : (
             <select value={batchId} onChange={(e) => setBatchId(e.target.value)}
               disabled={batchBusy || !batches?.length}
-              className="max-w-[24rem] rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none">
+              className="max-w-[24rem] rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none">
               {(batches || []).map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name} — {b.agentCount} agent{b.agentCount === 1 ? "" : "s"} ({b.importedCount} imported)
@@ -455,32 +455,32 @@ export default function AgentOutreach({ settings }) {
             </select>
           )}
           <button type="button" onClick={doNewBatch} disabled={batchBusy}
-            className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40">
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">
             <Plus size={13} /> New batch
           </button>
           {activeBatch && !renaming && (
             <button type="button" disabled={batchBusy}
               onClick={() => { setRenameDraft(activeBatch.name); setRenaming(true); }}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40">
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">
               <Pencil size={13} /> Rename
             </button>
           )}
           {activeBatch && (
             <button type="button" onClick={doDeleteBatch} disabled={batchBusy}
               title="Delete this batch and its agents (imported GHL contacts are unaffected)"
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-40">
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-40">
               {batchBusy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Delete
             </button>
           )}
           {data.batch?.tag && (
-            <span className="text-xs text-gray-400" title="GHL tag applied to every contact imported from this batch">
+            <span className="text-xs text-slate-400" title="GHL tag applied to every contact imported from this batch">
               Import tag: {data.batch.tag}
             </span>
           )}
         </div>
 
         {!data.enabled ? (
-          <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-400">
+          <div className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-400">
             Add your RentCast API key in Settings to enable Agent Outreach.
           </div>
         ) : (
@@ -534,7 +534,7 @@ export default function AgentOutreach({ settings }) {
                 </select>
               </div>
               <div className="col-span-2 flex items-end pb-2 sm:col-span-3">
-                <label className="flex items-center gap-1.5 text-sm text-gray-700"
+                <label className="flex items-center gap-1.5 text-sm text-slate-700"
                   title="Keep only listings with at least one distress signal: stale (see days input), a price-cut history, or priced ≤90% of the area's median $/sqft. Agents keep their full listing count either way.">
                   <input type="checkbox" checked={distressOnly} onChange={(e) => setDistressOnly(e.target.checked)} />
                   Distress signals only (stale, price-cut, or cheap $/sqft)
@@ -543,19 +543,19 @@ export default function AgentOutreach({ settings }) {
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <button type="button" onClick={doPull} disabled={pulling || clearing}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-40">
+                className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40">
                 {pulling ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
                 Pull listings
               </button>
               {agents.length > 0 && (
                 <button type="button" onClick={doClear} disabled={pulling || clearing}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
                   title="Remove this batch's non-imported agents so a re-filtered pull starts fresh (imported agents are kept)">
                   {clearing ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                   Clear non-imported
                 </button>
               )}
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-slate-400">
                 Pulls add to the selected batch — create a New batch for a fresh list.
                 Zips are used when set; else county + state; else city + state. Same-filter re-pulls are cached 24h.
               </span>
@@ -578,34 +578,34 @@ export default function AgentOutreach({ settings }) {
               ["imported", "Imported"], ["skipped", "Skipped"],
             ].map(([key, label]) => (
               <button key={key} type="button" onClick={() => setFilter(key)}
-                className={`rounded-full px-3 py-1 text-xs font-medium ${filter === key ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-100"}`}>
+                className={`rounded-full px-3 py-1 text-xs font-medium ${filter === key ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-100"}`}>
                 {label}
               </button>
             ))}
             <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}
-              className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs font-medium text-gray-700 focus:border-gray-900 focus:outline-none"
+              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 focus:border-blue-500 focus:outline-none"
               title="Classified by RentCast's property type plus address suffix (Apt/Unit/#)">
               <option value="all">All types</option>
               <option value="house">Houses only</option>
               <option value="condo">Condos &amp; apts only</option>
             </select>
             <select value={minActive} onChange={(e) => setMinActive(e.target.value)}
-              className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs font-medium text-gray-700 focus:border-gray-900 focus:outline-none"
+              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 focus:border-blue-500 focus:outline-none"
               title="Filter by how many active listings the agent has in this market (from the full pull)">
               <option value="0">Any activity</option>
               <option value="2">2+ listings</option>
               <option value="3">3+ listings</option>
             </select>
             <input value={priceMin} onChange={(e) => setPriceMin(e.target.value)} placeholder="Min $" inputMode="numeric"
-              className="w-24 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs focus:border-gray-900 focus:outline-none" />
+              className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
             <input value={priceMax} onChange={(e) => setPriceMax(e.target.value)} placeholder="Max $" inputMode="numeric"
-              className="w-24 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs focus:border-gray-900 focus:outline-none" />
-            <div className="ml-auto flex min-w-[14rem] items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5">
-              <Search size={14} className="text-gray-400" />
+              className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
+            <div className="ml-auto flex min-w-[14rem] items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5">
+              <Search size={14} className="text-slate-400" />
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agents…"
                 className="w-full text-sm focus:outline-none" />
               {q && (
-                <button type="button" onClick={() => setQ("")} className="rounded p-0.5 text-gray-400 hover:bg-gray-100">
+                <button type="button" onClick={() => setQ("")} className="rounded p-0.5 text-slate-400 hover:bg-slate-100">
                   <X size={13} />
                 </button>
               )}
@@ -614,34 +614,34 @@ export default function AgentOutreach({ settings }) {
 
           {/* ---- import bar ---- */}
           {selected.size > 0 && (
-            <div className="sticky top-14 z-20 rounded-xl border border-gray-300 bg-white p-3 shadow-sm">
+            <div className="sticky top-14 z-20 rounded-xl border border-slate-300 bg-white p-3 shadow-sm">
               <div className="flex flex-wrap items-center gap-3">
                 <span className="text-sm font-semibold">{selected.size} selected</span>
-                <label className="flex items-center gap-1.5 text-sm text-gray-700">
+                <label className="flex items-center gap-1.5 text-sm text-slate-700">
                   <input type="checkbox" checked={applyTag} onChange={(e) => setApplyTag(e.target.checked)} />
                   Apply "{data.tag}" tag (starts the outreach texts)
                 </label>
-                <label className="flex items-center gap-1.5 text-xs text-gray-500"
+                <label className="flex items-center gap-1.5 text-xs text-slate-500"
                   title="This import session's tag = batch tag + this suffix, so same-day imports stay individually filterable in GHL. Clear it to apply only the batch tag.">
                   Import tag:
-                  <span className="text-gray-400">{data.batch?.tag}-</span>
+                  <span className="text-slate-400">{data.batch?.tag}-</span>
                   <input value={sessionTag} onChange={(e) => setSessionTag(e.target.value)}
-                    className="w-28 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-xs focus:border-gray-900 focus:outline-none" />
+                    className="w-28 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs focus:border-blue-500 focus:outline-none" />
                 </label>
                 <div className="ml-auto flex gap-2">
                   <button type="button" onClick={doPreview} disabled={previewing || importing}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40">
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3.5 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">
                     {previewing ? <Loader2 size={14} className="animate-spin" /> : null} Preview import
                   </button>
                   <button type="button" onClick={doImport} disabled={importing || previewing}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-3.5 py-1.5 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-40">
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40">
                     {importing ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                     Import {selected.size} to GoHighLevel
                   </button>
                 </div>
               </div>
               {preview && (
-                <div className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
                   {preview.error ? (
                     <span className="text-red-700">{preview.error}</span>
                   ) : (
@@ -659,7 +659,7 @@ export default function AgentOutreach({ settings }) {
                 </div>
               )}
               {importResult && (
-                <div className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-sm">
+                <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
                   {importResult.error ? (
                     <span className="text-red-700">{importResult.error}</span>
                   ) : (
@@ -681,14 +681,14 @@ export default function AgentOutreach({ settings }) {
 
           {/* ---- agent table ---- */}
           {shown.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-gray-300 p-10 text-center text-sm text-gray-400">
+            <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
               No agents match.
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
+                  <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
                     <th className="px-3 py-2.5">
                       <input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all shown" />
                     </th>
@@ -702,7 +702,7 @@ export default function AgentOutreach({ settings }) {
                 <tbody>
                   {shown.map((a) => (
                     <React.Fragment key={a.agentKey}>
-                      <tr className="group border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                      <tr className="group border-b border-slate-100 last:border-0 hover:bg-slate-50">
                         <td className="px-3 py-2.5">
                           <input type="checkbox" checked={selected.has(a.agentKey)}
                             disabled={a.status === "imported" || a.status === "skipped"}
@@ -712,11 +712,11 @@ export default function AgentOutreach({ settings }) {
                           <div className="flex items-center gap-2 font-medium">
                             {a.name || "—"} <StatusBadge agent={a} />
                           </div>
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs text-slate-500">
                             {[a.phone, a.email].filter(Boolean).join(" · ") || "no contact info"}
                           </div>
                           {a.ghl?.lastMessageAt && (
-                            <div className="text-xs text-gray-400" title={new Date(a.ghl.lastMessageAt).toLocaleString()}>
+                            <div className="text-xs text-slate-400" title={new Date(a.ghl.lastMessageAt).toLocaleString()}>
                               last messaged {fmtAgo(a.ghl.lastMessageAt)}
                             </div>
                           )}
@@ -731,8 +731,8 @@ export default function AgentOutreach({ settings }) {
                             </div>
                           ))}
                         </td>
-                        <td className="max-w-[10rem] truncate px-4 py-2.5 text-gray-600">{a.brokerage || "—"}</td>
-                        <td className="px-4 py-2.5 text-center text-gray-600">
+                        <td className="max-w-[10rem] truncate px-4 py-2.5 text-slate-600">{a.brokerage || "—"}</td>
+                        <td className="px-4 py-2.5 text-center text-slate-600">
                           {a.listingCount}
                           {a.distressedCount != null && (
                             <div className="text-[11px] text-amber-600">{a.distressedCount} distressed</div>
@@ -740,21 +740,21 @@ export default function AgentOutreach({ settings }) {
                         </td>
                         <td className="max-w-[16rem] px-4 py-2.5">
                           <div className="truncate"><ZLink address={a.hook?.address} /></div>
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs text-slate-500">
                             {fmtPrice(a.hook?.price)} · {a.hook?.dom != null ? `${a.hook.dom} DOM` : "DOM —"}
                             {a.hook?.propertyType ? ` · ${a.hook.propertyType}` : ""}
                           </div>
                         </td>
-                        <td className="sticky right-0 whitespace-nowrap bg-white px-3 py-2.5 text-right group-hover:bg-gray-50">
+                        <td className="sticky right-0 whitespace-nowrap bg-white px-3 py-2.5 text-right group-hover:bg-slate-50">
                           <button type="button"
                             onClick={() => setExpanded(expanded === a.agentKey ? "" : a.agentKey)}
-                            className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                            className="rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                             title="Show this agent's listings">
                             {expanded === a.agentKey ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
                           </button>
                           {a.status !== "imported" && (
                             <button type="button" onClick={() => skip(a, a.status === "skipped")}
-                              className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                              className="rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                               title={a.status === "skipped" ? "Unskip" : "Skip this agent"}>
                               {a.status === "skipped" ? <RotateCcw size={15} /> : <EyeOff size={15} />}
                             </button>
@@ -762,7 +762,7 @@ export default function AgentOutreach({ settings }) {
                         </td>
                       </tr>
                       {expanded === a.agentKey && (
-                        <tr className="border-b border-gray-100 bg-gray-50">
+                        <tr className="border-b border-slate-100 bg-slate-50">
                           <td colSpan={6} className="px-6 py-3">
                             <AgentListings agentKey={a.agentKey} batchId={batchId} />
                           </td>
@@ -778,7 +778,7 @@ export default function AgentOutreach({ settings }) {
       )}
 
       {data.enabled && agents.length === 0 && (
-        <div className="rounded-xl border border-dashed border-gray-300 p-10 text-center text-sm text-gray-400">
+        <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
           {activeBatch ? `No agents in "${activeBatch.name}" yet — pull listings above.` : "No agents yet — pull listings above to get started."}
         </div>
       )}

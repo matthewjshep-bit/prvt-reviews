@@ -15,7 +15,7 @@ const TYPES = [
 const CONF_CLS = {
   high: "bg-emerald-100 text-emerald-800",
   medium: "bg-amber-100 text-amber-800",
-  low: "bg-gray-200 text-gray-600",
+  low: "bg-slate-200 text-slate-600",
 };
 
 const prettyEnum = (v) => String(v || "").replace(/_/g, " ");
@@ -94,7 +94,7 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
   const tagCount = tagState
     ? Object.values(tagState.add).filter(Boolean).length + Object.values(tagState.remove).filter(Boolean).length
     : 0;
-  const inputCls = "w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-gray-900 focus:outline-none";
+  const inputCls = "w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none";
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={onClose}>
@@ -104,11 +104,11 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
             <div className="flex items-center gap-2 text-lg font-bold">
               <Sparkles size={18} className="text-amber-500" /> AI enrichment
             </div>
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-slate-500">
               {contactName || contactId} — summarize the conversation and fill in CRM fields. Nothing is written until you apply.
             </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded p-1.5 text-gray-400 hover:bg-gray-100">
+          <button type="button" onClick={onClose} className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
             <X size={18} />
           </button>
         </div>
@@ -117,25 +117,25 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
 
         {/* Type picker + analyze */}
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Contact type</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Contact type</span>
           {TYPES.map((t) => (
             <button key={t.key} type="button" disabled={busy}
               onClick={() => setType(t.key)}
               className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                type === t.key ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                type === t.key ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
               }`}>
               {t.label}
             </button>
           ))}
           <button type="button" disabled={busy || !type} onClick={() => analyze()}
-            className="ml-auto flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-60">
+            className="ml-auto flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
             {busy && !rows ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
             {rows ? "Re-analyze" : "Analyze conversation"}
           </button>
         </div>
 
         {busy && !rows && (
-          <div className="rounded-xl border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">
+          <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
             Reading the conversation history and analyzing — this can take 30–90 seconds…
           </div>
         )}
@@ -152,7 +152,7 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
           </div>
         )}
         {result?.empty && (
-          <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-600">
+          <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
             No conversation history found on this contact (last 180 days) — nothing to analyze.
           </div>
         )}
@@ -160,7 +160,7 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
         {rows && (
           <>
             {/* Stats + confidence */}
-            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
               <span className={`rounded-full px-2 py-0.5 font-semibold ${CONF_CLS[result.proposal.confidence] || CONF_CLS.low}`}>
                 {result.proposal.confidence} confidence
               </span>
@@ -181,10 +181,10 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
             )}
 
             {/* Field diff */}
-            <div className="mb-4 overflow-x-auto rounded-xl border border-gray-200">
+            <div className="mb-4 overflow-x-auto rounded-xl border border-slate-200">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
+                  <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
                     <th className="w-8 px-3 py-2" />
                     <th className="px-3 py-2">Field</th>
                     <th className="px-3 py-2">Current</th>
@@ -193,16 +193,16 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
                 </thead>
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={r.key} className={`border-b border-gray-100 last:border-0 ${r.checked ? "" : "opacity-50"}`}>
+                    <tr key={r.key} className={`border-b border-slate-100 last:border-0 ${r.checked ? "" : "opacity-50"}`}>
                       <td className="px-3 py-2">
                         <input type="checkbox" checked={r.checked}
                           onChange={(e) => patchRow(r.key, { checked: e.target.checked })} />
                       </td>
                       <td className="px-3 py-2">
                         <div className="font-medium">{r.name}</div>
-                        {r.reason && <div className="mt-0.5 max-w-[16rem] text-[11px] leading-tight text-gray-400">{r.reason}</div>}
+                        {r.reason && <div className="mt-0.5 max-w-[16rem] text-[11px] leading-tight text-slate-400">{r.reason}</div>}
                       </td>
-                      <td className="px-3 py-2 text-gray-500">{r.current ? prettyEnum(r.current) : "—"}</td>
+                      <td className="px-3 py-2 text-slate-500">{r.current ? prettyEnum(r.current) : "—"}</td>
                       <td className="px-3 py-2">
                         {r.values && !r.multi ? (
                           <select className={inputCls} value={r.proposed}
@@ -227,13 +227,13 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
             {/* Tags */}
             {(Object.keys(tagState.add).length > 0 || Object.keys(tagState.remove).length > 0) && (
               <div className="mb-4">
-                <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Tag changes (click to toggle)</div>
+                <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Tag changes (click to toggle)</div>
                 <div className="flex flex-wrap gap-1.5">
                   {Object.entries(tagState.add).map(([t, on]) => (
                     <button key={`a-${t}`} type="button"
                       onClick={() => setTagState((s) => ({ ...s, add: { ...s.add, [t]: !on } }))}
                       className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                        on ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-400 line-through"
+                        on ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-400 line-through"
                       }`}>
                       + {t}
                     </button>
@@ -242,7 +242,7 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
                     <button key={`r-${t}`} type="button"
                       onClick={() => setTagState((s) => ({ ...s, remove: { ...s.remove, [t]: !on } }))}
                       className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                        on ? "bg-red-100 text-red-800" : "bg-gray-100 text-gray-400 line-through"
+                        on ? "bg-red-100 text-red-800" : "bg-slate-100 text-slate-400 line-through"
                       }`}>
                       − {t}
                     </button>
@@ -253,10 +253,10 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
 
             {/* Summary */}
             <div className="mb-4">
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Relationship summary</div>
+              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Relationship summary</div>
               <textarea rows={3} value={summary} onChange={(e) => setSummary(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none" />
-              <label className="mt-1 flex items-center gap-2 text-xs text-gray-600">
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none" />
+              <label className="mt-1 flex items-center gap-2 text-xs text-slate-600">
                 <input type="checkbox" checked={saveNote} onChange={(e) => setSaveNote(e.target.checked)} />
                 Save the summary as a note on the contact
               </label>
@@ -279,7 +279,7 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
             ) : (
               <button type="button" disabled={busy || (checkedCount === 0 && tagCount === 0 && !(saveNote && summary.trim()))}
                 onClick={apply}
-                className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-60">
+                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
                 {busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
                 Apply {checkedCount} field{checkedCount === 1 ? "" : "s"}{tagCount ? ` + ${tagCount} tag${tagCount === 1 ? "" : "s"}` : ""}
               </button>

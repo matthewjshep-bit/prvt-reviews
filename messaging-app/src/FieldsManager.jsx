@@ -31,7 +31,7 @@ const Chip = ({ cls, children }) => (
   <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${cls}`}>{children}</span>
 );
 
-const INPUT_CLS = "w-full rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-gray-900 focus:outline-none";
+const INPUT_CLS = "w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none";
 
 /* ---------- definitions pane ---------- */
 
@@ -51,7 +51,7 @@ function DefinitionsPane() {
   useEffect(() => { load(); }, []);
 
   if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
-  if (!ghlFields || !registry) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-gray-400" /></div>;
+  if (!ghlFields || !registry) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400" /></div>;
 
   // Join GHL definitions against the app registry — same rule the broker
   // uses when creating (match by key, else by name).
@@ -127,26 +127,26 @@ function DefinitionsPane() {
       && !(reg.dataType === "TEXT" && !def.dataType);
     return (
       <React.Fragment key={reg?.key || def.id}>
-        <tr className="border-b border-gray-100 last:border-0">
+        <tr className="border-b border-slate-100 last:border-0">
           <td className="px-3 py-2">
             <div className="font-medium">{reg?.name || def.name}</div>
             {reg?.values && (
-              <div className="mt-0.5 max-w-[22rem] text-[11px] leading-tight text-gray-400">
+              <div className="mt-0.5 max-w-[22rem] text-[11px] leading-tight text-slate-400">
                 {reg.values.map(prettyEnum).join(" · ")}
               </div>
             )}
           </td>
-          <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-gray-500">
+          <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-slate-500">
             {def ? def.fieldKey || key : `contact.${reg.key}`}
           </td>
-          <td className="whitespace-nowrap px-3 py-2 text-xs text-gray-600">
+          <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-600">
             {(def?.dataType || reg?.dataType || "TEXT")}
             {typeMismatch && <span className="ml-1 text-amber-600">(app expects {reg.dataType})</span>}
           </td>
           <td className="whitespace-nowrap px-3 py-2">
             {def ? <Chip cls="bg-emerald-100 text-emerald-800">in GHL</Chip>
                  : <Chip cls="bg-amber-100 text-amber-800">not created</Chip>}
-            {reg?.serverSet && <Chip cls="ml-1 bg-gray-200 text-gray-600">auto</Chip>}
+            {reg?.serverSet && <Chip cls="ml-1 bg-slate-200 text-slate-600">auto</Chip>}
             {reg && def && reg.key !== stripPrefix(def.fieldKey) && (
               <Chip cls="ml-1 bg-amber-100 text-amber-800" title="Matched by name; the GHL key differs from the app's key">key differs</Chip>
             )}
@@ -154,21 +154,21 @@ function DefinitionsPane() {
           <td className="whitespace-nowrap px-3 py-2 text-right">
             {!def && (
               <button type="button" disabled={Boolean(busy)} onClick={() => createOne(reg)}
-                className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-semibold hover:bg-gray-50 disabled:opacity-50">
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50">
                 {busy === reg.key ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} Create
               </button>
             )}
             {def && (
               <button type="button" disabled={Boolean(busy)}
                 onClick={() => setConfirmDelete(confirmDelete === def.id ? null : def.id)}
-                className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600" title="Delete field">
+                className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600" title="Delete field">
                 <Trash2 size={14} />
               </button>
             )}
           </td>
         </tr>
         {def && confirmDelete === def.id && (
-          <tr className="border-b border-gray-100 bg-red-50">
+          <tr className="border-b border-slate-100 bg-red-50">
             <td colSpan={5} className="px-3 py-2 text-xs text-red-800">
               Permanently deletes this field <span className="font-bold">and erases its values on every contact</span>.
               {isApp && " The app will recreate the definition (empty) on its next write."}
@@ -200,26 +200,26 @@ function DefinitionsPane() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
-        <div className="text-sm text-gray-600">
+        <div className="text-sm text-slate-600">
           {contactDefs.length} field{contactDefs.length === 1 ? "" : "s"} in GHL · {missing.length} app field{missing.length === 1 ? "" : "s"} not created yet
         </div>
         {missing.length > 0 && (
           <button type="button" disabled={Boolean(busy)} onClick={createAllMissing}
-            className="ml-auto flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60">
+            className="ml-auto flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
             {busy === "bulk" ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
             Create all {missing.length} missing
           </button>
         )}
       </div>
-      {progress && <div className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">{progress}</div>}
+      {progress && <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{progress}</div>}
 
       {groups.map((g) => (
         <div key={g.source}>
-          <div className="mb-1.5 text-xs font-bold uppercase tracking-wide text-gray-500">{SOURCE_LABELS[g.source]}</div>
-          <div className="overflow-x-auto rounded-xl border border-gray-200">
+          <div className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">{SOURCE_LABELS[g.source]}</div>
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-400">
+                <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-400">
                   <th className="px-3 py-2">Field</th>
                   <th className="px-3 py-2">Key</th>
                   <th className="px-3 py-2">Type</th>
@@ -233,20 +233,20 @@ function DefinitionsPane() {
         </div>
       ))}
 
-      <div className="rounded-xl border border-dashed border-gray-300 p-3">
-        <div className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">New custom field</div>
+      <div className="rounded-xl border border-dashed border-slate-300 p-3">
+        <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">New custom field</div>
         <div className="flex flex-wrap items-center gap-2">
-          <input className="min-w-[16rem] flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+          <input className="min-w-[16rem] flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
             placeholder="Field name, e.g. Preferred Lender"
             value={newField.name} onChange={(e) => setNewField((f) => ({ ...f, name: e.target.value }))} />
-          <select className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-900 focus:outline-none"
+          <select className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
             value={newField.dataType} onChange={(e) => setNewField((f) => ({ ...f, dataType: e.target.value }))}>
             <option value="TEXT">Text</option>
             <option value="NUMERICAL">Number</option>
             <option value="DATE">Date</option>
           </select>
           <button type="button" disabled={Boolean(busy) || !newField.name.trim()} onClick={createNew}
-            className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50">
+            className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50">
             {busy === "new" ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Create
           </button>
         </div>
@@ -355,7 +355,7 @@ function PreviewPane() {
           value={v} placeholder="—"
           onChange={(e) => setField(f.id, e.target.value)} />
         {f.multi && f.values && (
-          <div className="mt-0.5 text-[10px] text-gray-400">comma-separate: {f.values.join(", ")}</div>
+          <div className="mt-0.5 text-[10px] text-slate-400">comma-separate: {f.values.join(", ")}</div>
         )}
       </div>
     );
@@ -371,16 +371,16 @@ function PreviewPane() {
           onFocus={() => setOpen(true)}
           onBlur={() => setTimeout(() => setOpen(false), 150)}
           placeholder="Search a contact to preview…"
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none"
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
         />
-        {searching && <Loader2 size={14} className="absolute right-3 top-3 animate-spin text-gray-400" />}
+        {searching && <Loader2 size={14} className="absolute right-3 top-3 animate-spin text-slate-400" />}
         {open && results.length > 0 && (
-          <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+          <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
             {results.map((c) => (
               <button key={c.id} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => pick(c)}
-                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-gray-50">
+                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50">
                 <span className="font-medium">{c.name || "(no name)"}</span>
-                <span className="text-xs text-gray-500">{[c.phone, c.email].filter(Boolean).join(" · ")}</span>
+                <span className="text-xs text-slate-500">{[c.phone, c.email].filter(Boolean).join(" · ")}</span>
               </button>
             ))}
           </div>
@@ -388,10 +388,10 @@ function PreviewPane() {
       </div>
 
       {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-      {loading && <div className="flex justify-center p-8"><Loader2 className="animate-spin text-gray-400" /></div>}
+      {loading && <div className="flex justify-center p-8"><Loader2 className="animate-spin text-slate-400" /></div>}
 
       {!record && !loading && (
-        <div className="rounded-xl border border-dashed border-gray-300 p-10 text-center text-sm text-gray-400">
+        <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
           Pick a contact to see every field on their record.
         </div>
       )}
@@ -399,14 +399,14 @@ function PreviewPane() {
       {record && draft && !loading && (
         <>
           {/* standard fields */}
-          <div className="rounded-xl border border-gray-200 p-4">
+          <div className="rounded-xl border border-slate-200 p-4">
             <div className="mb-2 flex items-center gap-2">
               <span className="text-sm font-bold">{record.contact.name || "(no name)"}</span>
               <a href={ghlContactUrl(record.contact.id)} target="_blank" rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-gray-500 underline hover:text-gray-900">
+                className="inline-flex items-center gap-1 text-xs text-slate-500 underline hover:text-slate-900">
                 Open in GHL <ExternalLink size={11} />
               </a>
-              <span className="ml-auto text-xs text-gray-400">
+              <span className="ml-auto text-xs text-slate-400">
                 {record.contact.dateAdded && `added ${String(record.contact.dateAdded).slice(0, 10)}`}
                 {record.contact.source && ` · source: ${record.contact.source}`}
               </span>
@@ -414,17 +414,17 @@ function PreviewPane() {
             <div className="grid gap-2 sm:grid-cols-4">
               {[["firstName", "First name"], ["lastName", "Last name"], ["phone", "Phone"], ["email", "Email"]].map(([k, label]) => (
                 <div key={k}>
-                  <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">{label}</div>
+                  <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
                   <input className={INPUT_CLS} value={draft.standard[k] ?? ""} onChange={(e) => setStd(k, e.target.value)} />
                 </div>
               ))}
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
               {(record.contact.tags || []).map((t) => (
-                <span key={t} className="rounded-full bg-gray-100 px-2 py-0.5 font-medium text-gray-600">{t}</span>
+                <span key={t} className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-600">{t}</span>
               ))}
               {[record.contact.address1, record.contact.city, record.contact.state].filter(Boolean).length > 0 && (
-                <span className="ml-auto text-gray-400">
+                <span className="ml-auto text-slate-400">
                   {[record.contact.address1, record.contact.city, record.contact.state, record.contact.postalCode].filter(Boolean).join(", ")}
                 </span>
               )}
@@ -437,19 +437,19 @@ function PreviewPane() {
             if (!rows.length) return null;
             return (
               <div key={source}>
-                <div className="mb-1.5 text-xs font-bold uppercase tracking-wide text-gray-500">{SOURCE_LABELS[source]}</div>
-                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                <div className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">{SOURCE_LABELS[source]}</div>
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
                   <table className="w-full text-sm">
                     <tbody>
                       {rows.map((f) => (
-                        <tr key={f.id} className="border-b border-gray-100 last:border-0">
+                        <tr key={f.id} className="border-b border-slate-100 last:border-0">
                           <td className="w-64 px-3 py-2">
                             <div className="font-medium">{f.name}</div>
-                            <div className="font-mono text-[10px] text-gray-400">{f.fieldKey || f.key}</div>
+                            <div className="font-mono text-[10px] text-slate-400">{f.fieldKey || f.key}</div>
                           </td>
                           <td className="px-3 py-2">{valueEditor(f)}</td>
                           <td className="w-20 whitespace-nowrap px-3 py-2 text-right">
-                            {f.serverSet && <Chip cls="bg-gray-200 text-gray-600">auto</Chip>}
+                            {f.serverSet && <Chip cls="bg-slate-200 text-slate-600">auto</Chip>}
                           </td>
                         </tr>
                       ))}
@@ -463,18 +463,18 @@ function PreviewPane() {
           {/* app deals */}
           {record.deals.length > 0 && (
             <div>
-              <div className="mb-1.5 text-xs font-bold uppercase tracking-wide text-gray-500">
+              <div className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
                 Deals (manage in the Deals tab)
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 {record.deals.map((d, i) => (
-                  <div key={`${d.id}-${d.role}-${i}`} className="rounded-xl border border-gray-200 p-3 text-sm">
+                  <div key={`${d.id}-${d.role}-${i}`} className="rounded-xl border border-slate-200 p-3 text-sm">
                     <div className="flex items-center justify-between gap-2">
                       <span className="truncate font-medium">{d.address || "—"}</span>
                       <StagePill stage={d.stage} small />
                     </div>
-                    <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-gray-500">
-                      <span className="font-semibold uppercase text-gray-400">{d.role}{d.investorStatus ? ` · ${d.investorStatus}` : ""}</span>
+                    <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-slate-500">
+                      <span className="font-semibold uppercase text-slate-400">{d.role}{d.investorStatus ? ` · ${d.investorStatus}` : ""}</span>
                       {d.contractPrice && <span>{fmtMoney(d.contractPrice)}</span>}
                       {d.assignmentFee && <span className="text-emerald-700">fee {fmtMoney(d.assignmentFee)}</span>}
                       {d.closingDate && <span>closes {d.closingDate}</span>}
@@ -486,9 +486,9 @@ function PreviewPane() {
           )}
 
           {/* save bar */}
-          <div className="sticky bottom-0 -mx-1 flex items-center gap-3 rounded-xl border border-gray-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur">
+          <div className="sticky bottom-0 -mx-1 flex items-center gap-3 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur">
             <button type="button" disabled={saving || changeCount === 0} onClick={save}
-              className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50">
+              className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
               Save {changeCount || ""} change{changeCount === 1 ? "" : "s"}
             </button>
@@ -501,7 +501,7 @@ function PreviewPane() {
                   },
                   fields: Object.fromEntries(record.fields.map((f) => [f.id, f.value])),
                 })}
-                className="text-sm font-medium text-gray-500 hover:text-gray-900">
+                className="text-sm font-medium text-slate-500 hover:text-slate-900">
                 Discard
               </button>
             )}
@@ -523,11 +523,11 @@ export default function FieldsManager({ onClose }) {
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <div className="text-lg font-bold">CRM fields</div>
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-slate-500">
               Every contact field in one place — what the app manages, what else is in GHL, and a live contact preview.
             </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded p-1.5 text-gray-400 hover:bg-gray-100">
+          <button type="button" onClick={onClose} className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
             <X size={18} />
           </button>
         </div>
@@ -535,7 +535,7 @@ export default function FieldsManager({ onClose }) {
           {[["definitions", "Field definitions"], ["preview", "Contact preview"]].map(([k, label]) => (
             <button key={k} type="button" onClick={() => setPane(k)}
               className={`rounded-full px-3.5 py-1.5 text-sm font-medium ${
-                pane === k ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
+                pane === k ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"
               }`}>
               {label}
             </button>

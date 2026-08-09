@@ -158,15 +158,15 @@ function DailyBars({ data, series, mode = "stack", height = 150, valueFmt = (v) 
       </svg>
       {hoverBand && (
         <div
-          className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs shadow-md"
+          className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs shadow-md"
           style={{ left: `${((M.left + (hover + 0.5) * band) / W) * 100}%` }}
         >
-          <div className="mb-0.5 font-semibold text-gray-500">{hoverBand.date}</div>
+          <div className="mb-0.5 font-semibold text-slate-500">{hoverBand.date}</div>
           {series.map((s, si) => (
             <div key={s.label} className="flex items-center gap-1.5 whitespace-nowrap">
               <span className="inline-block h-0.5 w-3 rounded" style={{ background: s.color }} />
-              <span className="font-semibold tabular-nums text-gray-900">{valueFmt(hoverBand.values[si])}</span>
-              <span className="text-gray-500">{s.label}</span>
+              <span className="font-semibold tabular-nums text-slate-900">{valueFmt(hoverBand.values[si])}</span>
+              <span className="text-slate-500">{s.label}</span>
             </div>
           ))}
         </div>
@@ -177,7 +177,7 @@ function DailyBars({ data, series, mode = "stack", height = 150, valueFmt = (v) 
 
 function Legend({ series }) {
   return (
-    <div className="mt-2 flex flex-wrap gap-3 text-xs text-gray-600">
+    <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-600">
       {series.map((s) => (
         <span key={s.label} className="inline-flex items-center gap-1.5">
           <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: s.color }} />
@@ -190,10 +190,10 @@ function Legend({ series }) {
 
 function KpiTile({ label, value, sub }) {
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-3.5">
-      <div className="text-xs font-medium text-gray-500">{label}</div>
-      <div className="mt-0.5 text-2xl font-semibold text-gray-900">{value}</div>
-      {sub && <div className="mt-0.5 text-xs text-gray-500">{sub}</div>}
+    <div className="rounded-xl border border-slate-200 bg-white p-3.5">
+      <div className="text-xs font-medium text-slate-500">{label}</div>
+      <div className="mt-0.5 text-2xl font-semibold text-slate-900">{value}</div>
+      {sub && <div className="mt-0.5 text-xs text-slate-500">{sub}</div>}
     </div>
   );
 }
@@ -213,7 +213,7 @@ function Meter({ value, max }) {
 
 function Card({ title, children, right }) {
   return (
-    <section className="rounded-xl border border-gray-200 bg-white p-4">
+    <section className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
         <h2 className="text-sm font-bold">{title}</h2>
         {right}
@@ -245,18 +245,18 @@ function ErrorNote({ message, onRetry }) {
 }
 
 const Empty = ({ children }) => (
-  <div className="py-6 text-center text-sm text-gray-400">{children}</div>
+  <div className="py-6 text-center text-sm text-slate-400">{children}</div>
 );
 
 // One row of a "Today" card: label (with an optional series swatch) + number.
 function TodayStat({ label, value, swatch }) {
   return (
     <div className="flex items-baseline justify-between py-1.5">
-      <span className="flex items-center gap-2 text-sm text-gray-600">
+      <span className="flex items-center gap-2 text-sm text-slate-600">
         {swatch && <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: swatch }} />}
         {label}
       </span>
-      <span className="text-xl font-semibold tabular-nums text-gray-900">{value}</span>
+      <span className="text-xl font-semibold tabular-nums text-slate-900">{value}</span>
     </div>
   );
 }
@@ -462,7 +462,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
         {RANGES.map((r) => (
           <button key={r.days} type="button" onClick={() => { setDays(r.days); setEndDate(""); }}
             className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
-              days === r.days && !endDate ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-100 border border-gray-200"
+              days === r.days && !endDate ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
             }`}>
             {r.label}
           </button>
@@ -474,10 +474,10 @@ export default function Dashboard({ settings, onSettingsSaved }) {
             setEndDate(v && v !== localDayKey() ? v : "");
           }}
           className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-            endDate ? "border-gray-900 text-gray-900 font-medium" : "border-gray-200 bg-white text-gray-500"
+            endDate ? "border-blue-600 text-slate-900 font-medium" : "border-slate-200 bg-white text-slate-500"
           }`}
           title="Show a specific day's activity" />
-        {summaryLoading && <Loader2 size={15} className="animate-spin text-gray-400" />}
+        {summaryLoading && <Loader2 size={15} className="animate-spin text-slate-400" />}
       </div>
 
       {summaryError && <ErrorNote message={summaryError} onRetry={loadSummary} />}
@@ -493,11 +493,11 @@ export default function Dashboard({ settings, onSettingsSaved }) {
             sub="added to GHL" />
           <KpiTile label="Texts sent" value={textsKpi.value} sub={textsKpi.sub} />
           <KpiTile label="Emails sent" value={emailsKpi.value} sub={emailsKpi.sub} />
-          <div className="rounded-xl border border-gray-200 bg-white p-3.5">
-            <div className="text-xs font-medium text-gray-500">RentCast requests</div>
-            <div className="mt-0.5 text-2xl font-semibold text-gray-900">
+          <div className="rounded-xl border border-slate-200 bg-white p-3.5">
+            <div className="text-xs font-medium text-slate-500">RentCast requests</div>
+            <div className="mt-0.5 text-2xl font-semibold text-slate-900">
               {usage?.requestsThisMonth ?? 0}
-              <span className="text-sm font-normal text-gray-400"> / {usage?.limit ?? 50}</span>
+              <span className="text-sm font-normal text-slate-400"> / {usage?.limit ?? 50}</span>
             </div>
             <div className="mt-2"><Meter value={usage?.requestsThisMonth ?? 0} max={usage?.limit ?? 50} /></div>
           </div>
@@ -509,7 +509,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
         <Card
           title={endDate ? `GHL activity — ${dayLabel}` : "GHL activity today"}
           right={ghlMsgs?.cachedAt && !msgsLoading ? (
-            <span className="text-[11px] text-gray-400">
+            <span className="text-[11px] text-slate-400">
               as of {new Date(ghlMsgs.cachedAt).toLocaleTimeString()}
             </span>
           ) : null}
@@ -526,7 +526,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
               <TodayStat label="Texts (outbound)" swatch={C_TEXTS} value={ghlTotals.sms} />
               <TodayStat label="Emails (outbound)" swatch={C_EMAIL} value={ghlTotals.email} />
               {ghlMsgs?.approx?.capped && (
-                <div className="mt-1 text-[11px] text-gray-400">
+                <div className="mt-1 text-[11px] text-slate-400">
                   Partial scan — some of today's activity may be missing.
                 </div>
               )}
@@ -576,7 +576,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
         <Card
           title="Contacts created per day — live from GHL"
           right={ghlContacts?.cachedAt && !contactsLoading ? (
-            <span className="text-[11px] text-gray-400">
+            <span className="text-[11px] text-slate-400">
               as of {new Date(ghlContacts.cachedAt).toLocaleTimeString()}
             </span>
           ) : null}
@@ -593,7 +593,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
             <div className={dim(contactsLoading, ghlContacts)}>
               <DailyBars data={contactsData} series={contactsSeries} />
               {ghlContacts.approx?.capped && (
-                <div className="mt-2 text-[11px] text-gray-400">
+                <div className="mt-2 text-[11px] text-slate-400">
                   Daily bars cover the {ghlContacts.approx.contactsScanned.toLocaleString("en-US")} newest
                   of {ghlContacts.total.toLocaleString("en-US")} contacts created in this window — older
                   days may be undercounted (the total above is exact).
@@ -621,7 +621,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
         <Card
           title="GHL activity per day — calls, texts, emails"
           right={ghlMsgs?.cachedAt && !msgsLoading ? (
-            <span className="text-[11px] text-gray-400">
+            <span className="text-[11px] text-slate-400">
               as of {new Date(ghlMsgs.cachedAt).toLocaleTimeString()}
             </span>
           ) : null}
@@ -645,7 +645,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
                   <Legend series={ghlSeries} />
                 </>
               )}
-              <div className="mt-2 text-[11px] text-gray-400">
+              <div className="mt-2 text-[11px] text-slate-400">
                 Calls count both directions; texts and emails count outbound only.
                 {ghlMsgs.approx?.capped && (
                   <> Showing the {ghlMsgs.approx.conversationsScanned} most recently active
@@ -664,7 +664,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
               <div className={dim(summaryLoading, summary)}>
                 <DailyBars data={funnelData} series={funnelSeries} mode="group" />
                 <Legend series={funnelSeries} />
-                <div className="mt-2 text-[11px] text-gray-400">
+                <div className="mt-2 text-[11px] text-slate-400">
                   {agentsImported} agent{agentsImported === 1 ? "" : "s"} imported in this window
                   {usage?.lastPullAt && <> · last pull {new Date(usage.lastPullAt).toLocaleDateString()}</>}
                 </div>
@@ -682,7 +682,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
         right={!editingTags ? (
           <button type="button"
             onClick={() => { setTagDraft(tags.join(", ")); setEditingTags(true); }}
-            className="rounded p-1 text-gray-400 hover:bg-gray-100" title="Edit the tag list">
+            className="rounded p-1 text-slate-400 hover:bg-slate-100" title="Edit the tag list">
             <Pencil size={14} />
           </button>
         ) : null}
@@ -692,13 +692,13 @@ export default function Dashboard({ settings, onSettingsSaved }) {
             <input ref={editRef} value={tagDraft} onChange={(e) => setTagDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") saveTags(); if (e.key === "Escape") setEditingTags(false); }}
               placeholder="offer-created, agent-outreach"
-              className="w-full max-w-md rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-gray-900 focus:outline-none" />
+              className="w-full max-w-md rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none" />
             <button type="button" onClick={saveTags} disabled={tagSaving}
-              className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
+              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
               {tagSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Save
             </button>
             <button type="button" onClick={() => setEditingTags(false)}
-              className="rounded p-1.5 text-gray-400 hover:bg-gray-100"><X size={16} /></button>
+              className="rounded p-1.5 text-slate-400 hover:bg-slate-100"><X size={16} /></button>
           </div>
         )}
         {tagsScopeMissing ? (
@@ -713,9 +713,9 @@ export default function Dashboard({ settings, onSettingsSaved }) {
           <div className={`flex flex-wrap gap-2 ${dim(tagsLoading, tagCounts)}`}>
             {(tagCounts || []).map((t) => (
               <span key={t.tag}
-                className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm">
-                <span className="font-mono text-xs text-gray-600">{t.tag}</span>
-                <span className="font-semibold text-gray-900">{t.count.toLocaleString("en-US")}</span>
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm">
+                <span className="font-mono text-xs text-slate-600">{t.tag}</span>
+                <span className="font-semibold text-slate-900">{t.count.toLocaleString("en-US")}</span>
               </span>
             ))}
           </div>

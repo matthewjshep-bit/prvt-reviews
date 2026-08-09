@@ -90,9 +90,9 @@ export default function OfferApp() {
 
   if (!getLocationId()) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50 p-6 text-center text-gray-600">
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6 text-center text-slate-600">
         <div>
-          <div className="text-lg font-semibold text-gray-900">Missing location</div>
+          <div className="text-lg font-semibold text-slate-900">Missing location</div>
           <p className="mt-1 text-sm">Open this page from its GHL menu link so ?location_id= is set.</p>
         </div>
       </div>
@@ -100,8 +100,8 @@ export default function OfferApp() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900">
-      <header className="sticky top-0 z-30 border-b border-gray-200 bg-white/90 backdrop-blur">
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-2.5 sm:px-6">
           <div className="mr-2 text-sm font-bold tracking-tight">
             {APP_MODE === "outreach" ? "Agent Outreach" : APP_MODE === "dashboard" ? "Dashboard" : "Offer Generator"}
@@ -112,7 +112,7 @@ export default function OfferApp() {
               type="button"
               onClick={() => { if (n.view === "new") setEditing(null); setView(n.view); }}
               className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
-                n.view === view ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
+                n.view === view ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"
               }`}
             >
               {n.label}

@@ -9,8 +9,8 @@ import { FileText, Loader2, X } from "lucide-react";
 import { generateAssignment } from "./api.js";
 
 const INPUT_CLS =
-  "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none";
-const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500";
+  "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
+const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
 const ymd = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -72,11 +72,11 @@ export default function AssignmentModal({ offer, settings, onClose, onGenerated 
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <div className="text-lg font-bold">Assignment of contract</div>
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-slate-500">
               {offer.address || "Offer"} · for the end buyer (dispositions) — not the seller
             </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded p-1.5 text-gray-400 hover:bg-gray-100">
+          <button type="button" onClick={onClose} className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
             <X size={18} />
           </button>
         </div>
@@ -97,20 +97,20 @@ export default function AssignmentModal({ offer, settings, onClose, onGenerated 
           <Field label="Closing on or before" type="date" value={fields.closingDate} onChange={patch("closingDate")} />
         </div>
 
-        <div className="mt-2 text-xs text-gray-500">
+        <div className="mt-2 text-xs text-slate-500">
           The total price includes the original contract price plus your assignment fee. Empty fields print
           as blank lines to fill in by hand. Clause wording is edited in Settings → Assignment contract.
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <button type="button" onClick={doGenerate} disabled={busy}
-            className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-60">
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
             {busy ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
             {pdfUrl ? "Regenerate assignment" : "Generate assignment"}
           </button>
           {pdfUrl && !busy && (
             <a href={pdfUrl} target="_blank" rel="noreferrer"
-              className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+              className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
               <FileText size={16} /> Open assignment PDF
             </a>
           )}
