@@ -2,7 +2,7 @@
 // disposition. Acquisition side = the agent contact already on the offer;
 // disposition side = one or more investor contacts (existing GHL contacts)
 // evaluating the property until one commits. Stage and investor changes save
-// immediately; terms (price / fee / closing / notes) save via the modal.
+// immediately; terms (price / fee / inspection / closing / notes) save via the modal.
 
 import React, { useEffect, useRef, useState } from "react";
 import { ExternalLink, FileText, Loader2, Pencil, Sparkles, Trash2, X } from "lucide-react";
@@ -41,12 +41,9 @@ export function StagePill({ stage, small }) {
   );
 }
 
-const daysSince = (iso) =>
-  iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)) : null;
-
 // yyyy-mm-dd parsed as a LOCAL date (same convention as the contract PDFs) so
 // the countdown never drifts a day across timezones.
-function closingInfo(ymdStr) {
+function dateInfo(ymdStr) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymdStr || "").trim());
   if (!m) return null;
   const target = new Date(+m[1], +m[2] - 1, +m[3]);
@@ -54,10 +51,16 @@ function closingInfo(ymdStr) {
   today.setHours(0, 0, 0, 0);
   const days = Math.round((target - today) / 86400000);
   const label = target.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  if (days > 0) return { label, sub: `in ${days}d`, overdue: false };
-  if (days === 0) return { label, sub: "today", overdue: false };
-  return { label, sub: `${-days}d overdue`, overdue: true };
+  return { label, days };
 }
+
+// A closing date in the past is a problem; an inspection date in the past just
+// means the contingency has expired.
+const closingSub = (days) => (days > 0 ? `in ${days}d` : days === 0 ? "today" : `${-days}d overdue`);
+const inspectionSub = (days) => (days > 0 ? `in ${days}d` : days === 0 ? "today" : "ended");
+
+const num = (v) => Number(String(v ?? "").replace(/[$,\s]/g, "")) || 0;
+const assignmentTotal = (contractPrice, assignmentFee) => num(contractPrice) + num(assignmentFee);
 
 const shortDate = (iso) =>
   iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
@@ -146,6 +149,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
     contractPrice: deal.contractPrice ?? "",
     assignmentFee: deal.assignmentFee ?? "",
     closingDate: deal.closingDate || "",
+    inspectionDate: deal.inspectionDate || "",
     notes: deal.notes || "",
   }));
   const [busy, setBusy] = useState(false);
@@ -155,6 +159,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
     String(terms.contractPrice) !== String(deal.contractPrice ?? "") ||
     String(terms.assignmentFee) !== String(deal.assignmentFee ?? "") ||
     terms.closingDate !== (deal.closingDate || "") ||
+    terms.inspectionDate !== (deal.inspectionDate || "") ||
     terms.notes !== (deal.notes || "");
 
   async function run(fn) {
@@ -285,10 +290,26 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               <input className={inputCls} value={terms.assignmentFee} placeholder={`$ — e.g. ${fmtMoney(settings?.wholesaleFee || 15000)}`}
                 onChange={(e) => setTerms((t) => ({ ...t, assignmentFee: e.target.value }))} />
             </div>
-            <div>
-              <span className={labelCls}>Closing date</span>
-              <input type="date" className={inputCls} value={terms.closingDate}
-                onChange={(e) => setTerms((t) => ({ ...t, closingDate: e.target.value }))} />
+            <div className="rounded-lg bg-slate-50 px-3 py-2">
+              <span className={labelCls}>Assignment contract</span>
+              <div className="font-semibold tabular-nums">
+                {assignmentTotal(terms.contractPrice, terms.assignmentFee)
+                  ? fmtMoney(assignmentTotal(terms.contractPrice, terms.assignmentFee))
+                  : "—"}
+              </div>
+              <div className="text-xs text-slate-500">Contract price + fee — what the end buyer pays.</div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <span className={labelCls}>Inspection ends</span>
+                <input type="date" className={inputCls} value={terms.inspectionDate}
+                  onChange={(e) => setTerms((t) => ({ ...t, inspectionDate: e.target.value }))} />
+              </div>
+              <div>
+                <span className={labelCls}>Closing date</span>
+                <input type="date" className={inputCls} value={terms.closingDate}
+                  onChange={(e) => setTerms((t) => ({ ...t, closingDate: e.target.value }))} />
+              </div>
             </div>
             <div>
               <span className={labelCls}>Notes</span>
@@ -477,21 +498,19 @@ export default function DealsView({ settings, onEdit }) {
   const active = deals.filter((o) => !TERMINAL.has(o.deal.stage));
   const closed = deals.filter((o) => o.deal.stage === "closed");
   const fell = deals.filter((o) => o.deal.stage === "fell_through");
-  const feesCollected = closed.reduce((s, o) => s + (Number(o.deal.assignmentFee) || 0), 0);
-  const decided = closed.length + fell.length;
+  const potentialFees = active.reduce((s, o) => s + (Number(o.deal.assignmentFee) || 0), 0);
   const shown = showTerminal ? deals : active;
   const selected = selectedId ? deals.find((o) => o.id === selectedId) : null;
 
   const kpis = [
     { label: "Active deals", value: active.length },
+    { label: "Potential assignment fees", value: potentialFees ? fmtMoney(potentialFees) : "—" },
     { label: "Closed", value: closed.length },
-    { label: "Fees collected", value: feesCollected ? fmtMoney(feesCollected) : "—" },
-    { label: "Fall-through", value: decided ? `${Math.round((fell.length / decided) * 100)}%` : "—" },
   ];
 
   return (
     <>
-      <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
         {kpis.map((k) => (
           <div key={k.label} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{k.label}</div>
@@ -517,16 +536,18 @@ export default function DealsView({ settings, onEdit }) {
                   <th className="px-4 py-2.5">Investors</th>
                   <th className="px-4 py-2.5 text-right">Contract</th>
                   <th className="px-4 py-2.5 text-right">Fee</th>
+                  <th className="px-4 py-2.5 text-right">Assignment</th>
+                  <th className="px-4 py-2.5">Inspection</th>
                   <th className="px-4 py-2.5">Closing</th>
-                  <th className="px-4 py-2.5 text-right">In stage</th>
                   <th className="px-4 py-2.5" />
                 </tr>
               </thead>
               <tbody>
                 {shown.map((o) => {
                   const d = o.deal;
-                  const closing = closingInfo(d.closingDate);
-                  const lastTs = d.stageHistory?.[d.stageHistory.length - 1]?.ts || d.createdAt;
+                  const closing = dateInfo(d.closingDate);
+                  const inspection = dateInfo(d.inspectionDate);
+                  const assignment = assignmentTotal(d.contractPrice, d.assignmentFee);
                   return (
                     <tr key={o.id} onClick={() => setSelectedId(o.id)}
                       className="group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50">
@@ -549,16 +570,24 @@ export default function DealsView({ settings, onEdit }) {
                       <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums text-emerald-700">
                         {d.assignmentFee ? fmtMoney(d.assignmentFee) : "—"}
                       </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
+                        {assignment ? fmtMoney(assignment) : "—"}
+                      </td>
                       <td className="whitespace-nowrap px-4 py-2.5">
-                        {closing ? (
-                          <span className={closing.overdue && !TERMINAL.has(d.stage) ? "font-semibold text-red-600" : ""}>
-                            {closing.label}
-                            <span className="ml-1 text-xs text-slate-400">{TERMINAL.has(d.stage) ? "" : closing.sub}</span>
+                        {inspection ? (
+                          <span className={inspection.days < 0 ? "text-slate-400" : ""}>
+                            {inspection.label}
+                            <span className="ml-1 text-xs text-slate-400">{TERMINAL.has(d.stage) ? "" : inspectionSub(inspection.days)}</span>
                           </span>
                         ) : <span className="text-slate-400">—</span>}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right text-slate-500">
-                        {daysSince(lastTs)}d
+                      <td className="whitespace-nowrap px-4 py-2.5">
+                        {closing ? (
+                          <span className={closing.days < 0 && !TERMINAL.has(d.stage) ? "font-semibold text-red-600" : ""}>
+                            {closing.label}
+                            <span className="ml-1 text-xs text-slate-400">{TERMINAL.has(d.stage) ? "" : closingSub(closing.days)}</span>
+                          </span>
+                        ) : <span className="text-slate-400">—</span>}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                         <button type="button" onClick={() => setSelectedId(o.id)}

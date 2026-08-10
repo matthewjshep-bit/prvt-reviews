@@ -1746,8 +1746,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   }
 
   // Promote an offer to an active deal. Body (all optional): { contractPrice,
-  // assignmentFee, closingDate } — defaults come from the generated contract,
-  // the cash offer, and settings.wholesaleFee.
+  // assignmentFee, closingDate, inspectionDate } — defaults come from the
+  // generated contract, the cash offer, and settings.wholesaleFee.
   router.post("/:id/deal", async (req, res) => {
     try {
       const ctx = await loadDealOffer(req, res, { requireDeal: false });
@@ -1764,6 +1764,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ?? dealMoney(offer.contract?.fields?.price)
         ?? dealMoney(offer.cashAmount);
       const assignmentFee = dealMoney(req.body?.assignmentFee) ?? dealMoney(settings.wholesaleFee);
+      // Inspection contingency deadline: today + the contract's inspection
+      // period (local date, same yyyy-mm-dd convention as closingDate).
+      const parsedDays = parseInt(offer.contract?.fields?.inspectionDays, 10);
+      const inspEnd = new Date();
+      inspEnd.setDate(inspEnd.getDate() + (Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 10));
+      const inspectionDefault = `${inspEnd.getFullYear()}-${String(inspEnd.getMonth() + 1).padStart(2, "0")}-${String(inspEnd.getDate()).padStart(2, "0")}`;
       offer.deal = {
         stage: "under_contract",
         createdAt: ts,
@@ -1772,6 +1778,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         contractPrice,
         assignmentFee,
         closingDate: dealStr(req.body?.closingDate, 40) || dealStr(offer.contract?.fields?.closingDate, 40),
+        inspectionDate: dealStr(req.body?.inspectionDate, 40) || inspectionDefault,
         notes: "",
         fellThroughReason: "",
         investors: [],
@@ -1806,7 +1813,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   });
 
   // Update deal terms / stage. Body: any of { stage, contractPrice,
-  // assignmentFee, closingDate, notes, fellThroughReason }.
+  // assignmentFee, closingDate, inspectionDate, notes, fellThroughReason }.
   router.patch("/:id/deal", async (req, res) => {
     try {
       const ctx = await loadDealOffer(req, res);
@@ -1826,6 +1833,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (b.contractPrice !== undefined) deal.contractPrice = dealMoney(b.contractPrice);
       if (b.assignmentFee !== undefined) deal.assignmentFee = dealMoney(b.assignmentFee);
       if (b.closingDate !== undefined) deal.closingDate = dealStr(b.closingDate, 40);
+      if (b.inspectionDate !== undefined) deal.inspectionDate = dealStr(b.inspectionDate, 40);
       if (b.notes !== undefined) deal.notes = dealStr(b.notes, 4000);
       if (b.fellThroughReason !== undefined) deal.fellThroughReason = dealStr(b.fellThroughReason, 200);
       deal.updatedAt = new Date().toISOString();
