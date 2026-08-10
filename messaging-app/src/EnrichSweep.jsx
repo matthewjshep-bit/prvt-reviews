@@ -12,6 +12,8 @@ const WINDOWS = [
   { key: "today", label: "Today" },
   { key: "24h", label: "Last 24 hours" },
   { key: "7d", label: "Last 7 days" },
+  { key: "14d", label: "Last 14 days" },
+  { key: "21d", label: "Last 21 days" },
   { key: "30d", label: "Last 30 days" },
 ];
 
@@ -21,7 +23,7 @@ function sinceFor(key) {
     d.setHours(0, 0, 0, 0);
     return d.toISOString();
   }
-  const hours = { "24h": 24, "7d": 24 * 7, "30d": 24 * 30 }[key] || 24;
+  const hours = { "24h": 24, "7d": 24 * 7, "14d": 24 * 14, "21d": 24 * 21, "30d": 24 * 30 }[key] || 24;
   return new Date(Date.now() - hours * 3600000).toISOString();
 }
 
