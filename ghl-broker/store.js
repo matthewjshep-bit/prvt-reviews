@@ -430,7 +430,7 @@ const fileStore = (() => {
       ensure();
       if (!data.offers[id]) return false;
       delete data.offers[id];
-      for (const kind of ["pdf", "image", "scopepdf", "compspdf", "contractpdf", "assignmentpdf"]) {
+      for (const kind of ["pdf", "image", "scopepdf", "compspdf", "contractpdf", "assignmentpdf", "netsheetpdf"]) {
         fs.rmSync(path.join(DATA_DIR, "docs", `${id}.${kind}`), { force: true });
         fs.rmSync(path.join(DATA_DIR, "docs", `${id}.${kind}.meta`), { force: true });
       }

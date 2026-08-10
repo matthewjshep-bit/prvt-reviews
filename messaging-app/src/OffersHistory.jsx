@@ -10,6 +10,7 @@ import { deleteOffer, getSettings, ghlContactUrl, listOffers, promoteDeal, zillo
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
 import AssignmentModal from "./AssignmentModal.jsx";
+import NetSheetModal from "./NetSheetModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 import { StagePill } from "./DealsView.jsx";
 
@@ -50,7 +51,7 @@ function SentBadge({ offer }) {
   );
 }
 
-function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment, onPromote, onDealNav }) {
+function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment, onNetSheet, onPromote, onDealNav }) {
   const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
   const Row = ({ label, value }) => (
     <div className="flex justify-between gap-4 text-sm">
@@ -205,6 +206,13 @@ function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment,
                   <FileText size={15} /> {offer.contractPdfUrl ? "Update contract" : "Generate contract"}
                 </button>
               )}
+              {offer.status !== "draft" && (
+                <button type="button" onClick={() => onNetSheet?.(offer)}
+                  className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50"
+                  title="One-pager: our offer with no buyer's commission vs. the list price needed to net the same">
+                  <FileText size={15} /> Net comparison
+                </button>
+              )}
             </div>
             {offer.status !== "draft" && (
               <div className="rounded-xl border border-slate-200 p-3">
@@ -240,6 +248,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
   const [sending, setSending] = useState(null);
   const [contracting, setContracting] = useState(null); // offer open in ContractModal
   const [assigning, setAssigning] = useState(null); // offer open in AssignmentModal
+  const [netSheeting, setNetSheeting] = useState(null); // offer open in NetSheetModal
   const [enriching, setEnriching] = useState(null); // { contactId, contactName } in EnrichModal
   const [settings, setSettings] = useState(null); // fetched lazily for contract prefills
   const [q, setQ] = useState("");
@@ -306,13 +315,20 @@ export default function OffersHistory({ onEdit, onDeal }) {
     if (!settings) getSettings().then(setSettings).catch(() => {});
   }
 
-  // Contract/assignment generation updates the whole offer (pdf URLs + fields).
+  function openNetSheet(offer) {
+    setNetSheeting(offer);
+    // Commission-% prefills come from settings; fetch once, best-effort.
+    if (!settings) getSettings().then(setSettings).catch(() => {});
+  }
+
+  // Contract/assignment/net-sheet generation updates the whole offer (pdf URLs + fields).
   function handleContractGenerated(updated) {
     const patch = (o) => (o && o.id === updated.id ? updated : o);
     setOffers((list) => (list || []).map(patch));
     setSelected(patch);
     setContracting(patch);
     setAssigning(patch);
+    setNetSheeting(patch);
   }
 
   if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
@@ -523,6 +539,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
         onSend={(o) => setSending(o)}
         onContract={openContract}
         onAssignment={openAssignment}
+        onNetSheet={openNetSheet}
         onPromote={(o) => { setSelected(null); promote(o); }}
         onDealNav={onDeal} />}
       {sending && <SendModal offer={sending} onClose={() => setSending(null)} onSent={handleSent} />}
@@ -532,6 +549,8 @@ export default function OffersHistory({ onEdit, onDeal }) {
         onClose={() => setContracting(null)} onGenerated={handleContractGenerated} />}
       {assigning && <AssignmentModal offer={assigning} settings={settings}
         onClose={() => setAssigning(null)} onGenerated={handleContractGenerated} />}
+      {netSheeting && <NetSheetModal offer={netSheeting} settings={settings}
+        onClose={() => setNetSheeting(null)} onGenerated={handleContractGenerated} />}
     </>
   );
 }

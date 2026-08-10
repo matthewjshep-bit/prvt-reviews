@@ -16,6 +16,7 @@ const DOC_OPTIONS = [
   { key: "pdf", label: "Offer letter (PDF)", urlKey: "pdfUrl" },
   { key: "scope", label: "Rehab scope of work", urlKey: "scopePdfUrl" },
   { key: "comps", label: "Comparable sales analysis", urlKey: "compsPdfUrl" },
+  { key: "netsheet", label: "Seller net comparison", urlKey: "netSheetPdfUrl" },
   { key: "image", label: "Offer letter (image)", urlKey: "imageUrl", caption: "goes out as the picture in the text" },
 ];
 

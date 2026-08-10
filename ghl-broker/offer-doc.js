@@ -563,3 +563,98 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
     layers,
   };
 }
+
+// Seller Net Comparison — the "no buyer's commission" pitch as a one-pager,
+// sent separately from the offer letter. Two side-by-side scenarios that land
+// on the SAME seller net: our cash offer (listing side only) vs. the list
+// price a traditional sale (paying both agents) needs to gross to match.
+// net: the object returned by netComparison() in shared/offer-calc.js.
+export function buildNetSheetDocument({ net, address = "", meta = {}, company = {}, locationId = "" }) {
+  if (!net) return null;
+  const layers = [];
+  const money = (v) => fmtMoney(Math.round(v));
+  const CARD_A = "rgba(165,128,42,0.08)";   // gold tint — our side
+  const CARD_B = "rgba(100,116,139,0.08)";  // slate tint — traditional listing
+
+  /* ---- letterhead ---- */
+  layers.push({ id: uid("bar"), type: "shape", shape: "rect", x: 0, y: 0, width: 100, height: 0.55, fill: GOLD, visible: true });
+  if (company.name) {
+    layers.push(text(8, 3.6, 56, 3.6, sp(company.name), { font: "Source Serif", weight: "bold", size: 40, color: DARK, autoFit: true, maxLines: 1 }));
+  }
+  if (company.tagline) {
+    layers.push(text(8, 7.3, 56, 2.2, sp(company.tagline), { size: 17, color: GOLD, weight: "bold", autoFit: true, maxLines: 1 }));
+  }
+  if (meta.dateLabel) {
+    layers.push(text(56, 3.6, 36, 3, meta.dateLabel, { size: 20, color: MUTED, align: "right" }));
+  }
+  layers.push(rule(11));
+
+  /* ---- title + property ---- */
+  layers.push(text(8, 13.6, 84, 3, sp("Seller Net Comparison"), { font: "Source Serif", weight: "bold", size: 34, color: DARK, align: "center", autoFit: true, maxLines: 1 }));
+  layers.push(text(8, 17.2, 84, 2.6, address || "Subject property", { size: 26, weight: "bold", color: INK, align: "center", autoFit: true, maxLines: 1 }));
+  layers.push(text(8, 20, 84, 2, sp("Our cash offer vs. a traditional listing"), { size: 16, color: MUTED, align: "center" }));
+
+  /* ---- two scenario cards landing on the same net ---- */
+  const cardY = 25;
+  const cardH = 34;
+  const card = (x, fill, heading, headColor, priceLabel, price, rows, footnote) => {
+    layers.push({ id: uid("card"), type: "shape", shape: "rect", x, y: cardY, width: 41, height: cardH, fill, visible: true });
+    const cx = x + 3;
+    const cw = 35;
+    let y = cardY + 2.4;
+    layers.push(text(cx, y, cw, 2.2, sp(heading), { size: 17, color: headColor, weight: "bold", autoFit: true, maxLines: 1 }));
+    y += 3.2;
+    layers.push(text(cx, y, cw, 2, priceLabel, { size: 17, color: MUTED }));
+    y += 2.2;
+    layers.push(text(cx, y, cw, 4, money(price), { font: "Source Serif", weight: "bold", size: 46, color: DARK, autoFit: true, maxLines: 1 }));
+    y += 5.4;
+    for (const [label, value, color] of rows) {
+      layers.push(text(cx, y, cw - 12, 2.1, label, { size: 18, color: INK, autoFit: true, maxLines: 1 }));
+      layers.push(text(cx + cw - 12, y, 12, 2.1, value, { size: 18, weight: "bold", color: color || DARK, align: "right", autoFit: true, maxLines: 1 }));
+      y += 2.7;
+    }
+    layers.push({ id: uid("nr"), type: "shape", shape: "rect", x: cx, y: y + 0.2, width: cw, height: 0.16, fill: RULE, visible: true });
+    y += 1.5;
+    layers.push(text(cx, y, cw - 14, 2.4, sp("Your net"), { size: 17, color: GOLD, weight: "bold" }));
+    layers.push(text(cx + cw - 16, y - 0.5, 16, 3.2, money(net.netA), { font: "Source Serif", weight: "bold", size: 34, color: DARK, align: "right", autoFit: true, maxLines: 1 }));
+    y += 3.4;
+    if (footnote) {
+      layers.push(text(cx, y, cw, 3.6, footnote, { size: 14.5, color: MUTED, lineHeight: 1.35, maxLines: 3 }));
+    }
+  };
+
+  card(8, CARD_A, "Our cash offer", GOLD, "Purchase price", net.offer, [
+    [`Seller's agent (${net.sellerPct}%)`, `− ${money(net.sellerCommissionA)}`],
+    ["Buyer's agent", "$0", "#047857"],
+  ], "We buy directly — no buyer's-agent commission comes off the top. As-is, on your timeline.");
+
+  card(51, CARD_B, "Traditional listing", MUTED, "List price you'd need", net.listPrice, [
+    [`Seller's agent (${net.sellerPct}%)`, `− ${money(net.sellerCommissionB)}`],
+    [`Buyer's agent (${net.buyerPct}%)`, `− ${money(net.buyerCommissionB)}`, "#b91c1c"],
+  ], "What a sale paying both agents must gross for you to walk away with the same amount.");
+
+  /* ---- takeaway ---- */
+  let y = cardY + cardH + 3.5;
+  layers.push(text(8, y, 84, 2.6, sp("Same net to you"), { size: 18, color: GOLD, weight: "bold", align: "center" }));
+  y += 3;
+  layers.push(text(8, y, 84, 5.2,
+    `A traditional sale would need to close about ${money(net.listPrice - net.offer)} higher just to match this ` +
+    `offer's net — and that's before repairs, holding costs, or time on market.`,
+    { size: 22, color: INK, align: "center", lineHeight: 1.42, maxLines: 3 }));
+
+  /* ---- fine print ---- */
+  layers.push(rule(95.4));
+  layers.push(text(8, 96.4, 84, 3.4,
+    "Illustration for discussion purposes only. Commission rates are negotiable and vary by listing agreement; " +
+    "actual proceeds depend on closing costs, prorations, payoffs, and final terms determined in escrow.",
+    { size: 14, color: FAINT, lineHeight: 1.4, maxLines: 3 }));
+
+  return {
+    locationId,
+    name: `Net comparison — ${address || "property"}`.slice(0, 120),
+    canvas: LETTER,
+    background: { color: PAPER },
+    dataSources: [],
+    layers,
+  };
+}

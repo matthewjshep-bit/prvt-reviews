@@ -154,6 +154,8 @@ export const generateContract = (id, fields) =>
   post(`/api/offers/${encodeURIComponent(id)}/contract`, { fields });
 export const generateAssignment = (id, fields) =>
   post(`/api/offers/${encodeURIComponent(id)}/assignment`, { fields });
+export const generateNetSheet = (id, fields) =>
+  post(`/api/offers/${encodeURIComponent(id)}/netsheet`, { fields });
 
 /* ---------- active deals ---------- */
 export const listDeals = () =>

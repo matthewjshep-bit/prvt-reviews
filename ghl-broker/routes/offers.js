@@ -17,6 +17,8 @@
 //   GET    /api/offers/:id/contract.pdf
 //   POST   /api/offers/:id/assignment        render the assignment of contract PDF (dispositions)
 //   GET    /api/offers/:id/assignment.pdf
+//   POST   /api/offers/:id/netsheet          render the seller net comparison one-pager
+//   GET    /api/offers/:id/netsheet.pdf
 //   POST   /api/offers/contacts/:id/enrich    AI conversation summary → proposed fields/tags (preview)
 //   POST   /api/offers/contacts/:id/enrich/apply    write approved fields/tags/note to the contact
 //   POST   /api/offers/enrich/sweep           batch enrich: all contacts active in a window (auto-apply)
@@ -38,8 +40,8 @@
 import express from "express";
 import crypto from "node:crypto";
 import { store } from "../store.js";
-import { calculateOffers, effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
-import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, moneyInWords } from "../offer-doc.js";
+import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../shared/offer-calc.js";
+import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, buildNetSheetDocument, moneyInWords } from "../offer-doc.js";
 import { renderContractPdf } from "../contract-pdf.js";
 import {
   DEFAULT_CONTRACT_CLAUSES, DEFAULT_ASSIGNMENT_CLAUSES, ASSIGNMENT_TOKENS, ASSIGNMENT_PREAMBLE,
@@ -263,6 +265,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   router.get("/:id/comps.pdf", serveDoc("compspdf", "COMPS", "pdf"));
   router.get("/:id/contract.pdf", serveDoc("contractpdf", "CONTRACT", "pdf"));
   router.get("/:id/assignment.pdf", serveDoc("assignmentpdf", "ASSIGNMENT", "pdf"));
+  router.get("/:id/netsheet.pdf", serveDoc("netsheetpdf", "NET COMPARISON", "pdf"));
 
   // Render a companion PDF (Rehab SOW, Comps Analysis) through cardgen and
   // store it next to the offer documents. Accepts one template per page.
@@ -305,6 +308,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const template = buildCompsDocument({ ...doc, meta, company, locationId });
     if (!template) return null; // no priced comps selected — nothing to render
     return storeCompanionPdf({ offerId, locationId, templates: [template], kind: "comps", slug: "comps", docKind: "compspdf", address: doc.address, suffix: "COMPS" });
+  }
+
+  async function storeNetSheetDocument({ offerId, locationId, net, address, meta, company }) {
+    const template = buildNetSheetDocument({ net, address, meta, company, locationId });
+    if (!template) return null; // no positive offer amount — nothing to compare
+    return storeCompanionPdf({ offerId, locationId, templates: [template], kind: "netsheet", slug: "netsheet", docKind: "netsheetpdf", address, suffix: "NET COMPARISON" });
   }
 
   /* ---------- settings ---------- */
@@ -1406,6 +1415,23 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         }
       } catch (e) { compsWarning = `comps PDF: ${e.message}`; }
 
+      // Companion document: Seller Net Comparison (the "no buyer's commission"
+      // one-pager, sent separately from the offer letter).
+      let netSheetPdfUrl = null;
+      let netSheetWarning = null;
+      let netSheetFields = null;
+      try {
+        const net = netComparison(calc.offers.cash.amount, calc.settings);
+        if (net) {
+          netSheetFields = { sellerAgentPct: net.sellerPct, buyerAgentPct: net.buyerPct };
+          netSheetPdfUrl = await storeNetSheetDocument({
+            offerId, locationId, net,
+            address: calc.inputs.address,
+            meta, company: calc.settings.company || {},
+          });
+        }
+      } catch (e) { netSheetWarning = `net comparison: ${e.message}`; }
+
       // 4. Persist the offer.
       const offer = await store.createOffer({
         id: offerId,
@@ -1418,6 +1444,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         pdfUrl,
         scopePdfUrl,
         compsPdfUrl,
+        netSheetPdfUrl,
+        netSheet: netSheetPdfUrl ? { fields: netSheetFields, generatedAt: created.toISOString() } : null,
         dateLabel: meta.dateLabel,
         validLabel: meta.validLabel,
         scope,
@@ -1431,6 +1459,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const warnings = [];
       if (scopeWarning) warnings.push(scopeWarning);
       if (compsWarning) warnings.push(compsWarning);
+      if (netSheetWarning) warnings.push(netSheetWarning);
       const noteFailure = (step, e) => {
         const detail = e?.data ? `${e.message} :: ${JSON.stringify(e.data).slice(0, 200)}` : e?.message;
         console.error(`offers: GHL attach failed [${step}] contact=${contactId}:`, detail);
@@ -1713,6 +1742,44 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       offer.assignment = { fields, generatedAt: new Date().toISOString() };
       offer.assignmentPdfUrl = url;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- seller net comparison one-pager ---------- */
+  // (Re)render the Seller Net Comparison for an offer. Body (optional):
+  // { fields: { sellerAgentPct, buyerAgentPct } } — defaults come from the
+  // location settings; the fields used are saved on the offer for prefill.
+  router.post("/:id/netsheet", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const offer = await store.getOffer(req.params.id);
+      if (!offer || offer.locationId !== locationId) {
+        return res.status(404).json({ error: "offer not found" });
+      }
+      const settings = effectiveSettings(await store.getOfferSettings(locationId));
+      const pct = (v, fallback) => {
+        const n = Number(String(v ?? "").replace(/[%\s]/g, ""));
+        return Number.isFinite(n) && n >= 0 && n < 100 ? n : fallback;
+      };
+      const fields = {
+        sellerAgentPct: pct(req.body?.fields?.sellerAgentPct, settings.sellerAgentPct),
+        buyerAgentPct: pct(req.body?.fields?.buyerAgentPct, settings.buyerAgentPct),
+      };
+      const net = netComparison(offer.cashAmount, fields);
+      if (!net) {
+        return res.status(400).json({ error: "offer has no positive amount to compare (or commissions ≥ 100%)" });
+      }
+      const meta = { dateLabel: dateLabel() };
+      let url = await storeNetSheetDocument({
+        offerId: offer.id, locationId, net,
+        address: offer.address,
+        meta, company: settings.company || {},
+      });
+      url += `?v=${Date.now()}`; // doc routes serve immutable — cache-bust regenerations
+      offer.netSheet = { fields, generatedAt: new Date().toISOString() };
+      offer.netSheetPdfUrl = url;
       await store.updateOffer(offer.id, offer);
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
@@ -2036,6 +2103,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ["pdf", "Offer letter (PDF)", offer.pdfUrl],
         ["scope", "Rehab scope of work", offer.scopePdfUrl],
         ["comps", "Comparable sales analysis", offer.compsPdfUrl],
+        ["netsheet", "Seller net comparison", offer.netSheetPdfUrl],
         ["image", "Offer letter (image)", offer.imageUrl],
       ];
       const picked = DOC_DEFS.filter(([key, , url]) => docKeys.includes(key) && url);

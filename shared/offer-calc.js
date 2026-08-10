@@ -42,6 +42,8 @@ export const DEFAULT_OFFER_SETTINGS = {
                              // "Offer expires" date picker (offerExpires, a
                              // yyyy-mm-dd override that rides along per offer)
   earnestMoney: 2500,        // earnest-money deposit named in the letter
+  sellerAgentPct: 3,         // listing-side commission % (seller net comparison)
+  buyerAgentPct: 3,          // buyer-side commission % a traditional sale would add
   // "Tentative terms" lines printed on the letter. All overridable per offer
   // from the New Offer page.
   termFinancing: "Funded with cash or private loan",
@@ -102,6 +104,32 @@ export function repairsAdjustment(repairs, arv, s) {
   if (repairs < s.repairBuffer) return repairs + s.repairBuffer;
   if (repairs > heavy) return s.repairBaseMult * heavy + s.repairHeavyMult * (repairs - heavy);
   return s.repairBaseMult * repairs;
+}
+
+// Seller net comparison — the "no buyer's commission" pitch, net-to-net.
+// Side A: our cash offer, seller pays only the listing side → netA.
+// Side B: the list price a traditional sale (paying both sides) needs to
+// gross so the seller nets that same amount: netA / (1 − (s+b)/100).
+// Returns null when the offer is non-positive or commissions eat the price.
+export function netComparison(cashAmount, s = {}) {
+  const offer = num(cashAmount);
+  const sellerPct = Math.max(0, num(s.sellerAgentPct, 3));
+  const buyerPct = Math.max(0, num(s.buyerAgentPct, 3));
+  const totalPct = sellerPct + buyerPct;
+  if (offer <= 0 || totalPct >= 100) return null;
+  const sellerCommissionA = (sellerPct / 100) * offer;
+  const netA = offer - sellerCommissionA;
+  const listPrice = netA / (1 - totalPct / 100);
+  return {
+    offer,
+    sellerPct,
+    buyerPct,
+    sellerCommissionA,
+    netA,
+    listPrice,
+    sellerCommissionB: (sellerPct / 100) * listPrice,
+    buyerCommissionB: (buyerPct / 100) * listPrice,
+  };
 }
 
 // Merge partial settings over the defaults (one level deep + company).

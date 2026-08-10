@@ -13,6 +13,7 @@ import NotesPanel from "./NotesPanel.jsx";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
 import AssignmentModal from "./AssignmentModal.jsx";
+import NetSheetModal from "./NetSheetModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 
 // Pick the best address from a contact's custom fields: prefer a
@@ -458,6 +459,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const [sendOpen, setSendOpen] = useState(false); // SendModal (text and/or email via GHL)
   const [contractOpen, setContractOpen] = useState(false); // ContractModal (purchase & sale PDF)
   const [assignmentOpen, setAssignmentOpen] = useState(false); // AssignmentModal (dispositions PDF)
+  const [netSheetOpen, setNetSheetOpen] = useState(false); // NetSheetModal (seller net comparison)
   const [enrichOpen, setEnrichOpen] = useState(false); // EnrichModal (AI conversation → CRM fields)
   const [lastSend, setLastSend] = useState(null);  // most recent send record, for the ✓ banner
 
@@ -664,6 +666,11 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
                 <FileText size={16} /> Open Purchase Contract (PDF)
               </a>
             )}
+            <button type="button" onClick={() => setNetSheetOpen(true)}
+              className="flex w-full items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50"
+              title="One-pager: our offer with no buyer's commission vs. the list price needed to net the same">
+              <FileText size={16} /> {offer.netSheetPdfUrl ? "Seller net comparison" : "Generate seller net comparison"}
+            </button>
             <button type="button" onClick={() => setContractOpen(true)}
               className="flex w-full items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
               <FileText size={16} /> {offer.contractPdfUrl ? "Update purchase contract" : "Generate purchase contract"}
@@ -726,6 +733,14 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
             offer={offer}
             settings={effSettings}
             onClose={() => setAssignmentOpen(false)}
+            onGenerated={(o) => setResult((r) => ({ ...r, offer: o }))}
+          />
+        )}
+        {netSheetOpen && (
+          <NetSheetModal
+            offer={offer}
+            settings={effSettings}
+            onClose={() => setNetSheetOpen(false)}
             onGenerated={(o) => setResult((r) => ({ ...r, offer: o }))}
           />
         )}

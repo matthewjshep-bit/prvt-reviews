@@ -168,6 +168,8 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <Num label="Heavy-repair multiplier" suffix="×" value={form.repairHeavyMult} onChange={set("repairHeavyMult")} />
           <Num label="Offer valid for" suffix="days" value={form.validityDays} onChange={set("validityDays")} />
           <Num label="Earnest money" suffix="$" money value={form.earnestMoney} onChange={set("earnestMoney")} />
+          <Num label="Seller's agent commission" suffix="%" value={form.sellerAgentPct} onChange={set("sellerAgentPct")} />
+          <Num label="Buyer's agent commission" suffix="%" value={form.buyerAgentPct} onChange={set("buyerAgentPct")} />
         </div>
         <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
           <input type="checkbox" checked={Boolean(form.precisionJitter)}
