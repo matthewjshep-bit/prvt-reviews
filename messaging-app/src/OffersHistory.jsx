@@ -416,10 +416,11 @@ export default function OffersHistory({ onEdit, onDeal }) {
                     <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">
                       {(latest.createdAt || "").slice(0, 10)}
                     </td>
-                    <td className="max-w-[13rem] truncate px-4 py-2.5 text-slate-600">
+                    <td className="max-w-[22rem] truncate px-4 py-2.5 text-slate-600"
+                      title={addresses.length === 1 ? addresses[0] : undefined}>
                       {addresses.length === 1 ? addresses[0] : addresses.length ? `${addresses.length} properties` : "—"}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold">
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
                       {latest.cashAmount != null ? fmtMoney(latest.cashAmount) : "—"}
                     </td>
                     <td className="px-4 py-2.5" />
@@ -448,8 +449,8 @@ export default function OffersHistory({ onEdit, onDeal }) {
                 <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">
                   {(o.createdAt || "").slice(0, 10)}
                 </td>
-                <td className="max-w-[13rem] truncate px-4 py-2.5">{o.address || "—"}</td>
-                <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold">
+                <td className="max-w-[22rem] truncate px-4 py-2.5" title={o.address || undefined}>{o.address || "—"}</td>
+                <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
                   {o.cashAmount != null ? fmtMoney(o.cashAmount) : "—"}
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5" onClick={(e) => e.stopPropagation()}>

@@ -530,7 +530,7 @@ export default function DealsView({ settings, onEdit }) {
                   return (
                     <tr key={o.id} onClick={() => setSelectedId(o.id)}
                       className="group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                      <td className="max-w-[14rem] truncate px-4 py-2.5 font-medium">{o.address || "—"}</td>
+                      <td className="max-w-[24rem] truncate px-4 py-2.5 font-medium" title={o.address || undefined}>{o.address || "—"}</td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         {o.contactId ? (
                           <a href={ghlContactUrl(o.contactId)} target="_blank" rel="noreferrer"
@@ -543,10 +543,10 @@ export default function DealsView({ settings, onEdit }) {
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5"><StagePill stage={d.stage} /></td>
                       <td className="px-4 py-2.5"><InvestorChips deal={d} /></td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold">
+                      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
                         {d.contractPrice ? fmtMoney(d.contractPrice) : "—"}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold text-emerald-700">
+                      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums text-emerald-700">
                         {d.assignmentFee ? fmtMoney(d.assignmentFee) : "—"}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5">

@@ -233,7 +233,7 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
                     <button key={`a-${t}`} type="button"
                       onClick={() => setTagState((s) => ({ ...s, add: { ...s.add, [t]: !on } }))}
                       className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                        on ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-400 line-through"
+                        on ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500 line-through"
                       }`}>
                       + {t}
                     </button>
@@ -242,7 +242,7 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
                     <button key={`r-${t}`} type="button"
                       onClick={() => setTagState((s) => ({ ...s, remove: { ...s.remove, [t]: !on } }))}
                       className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                        on ? "bg-red-100 text-red-800" : "bg-slate-100 text-slate-400 line-through"
+                        on ? "bg-red-100 text-red-800" : "bg-slate-100 text-slate-500 line-through"
                       }`}>
                       − {t}
                     </button>

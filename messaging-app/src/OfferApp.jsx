@@ -111,10 +111,15 @@ export default function OfferApp() {
     );
   }
 
+  // New Offer keeps a centered cap (the form reads better constrained); the
+  // table-heavy views run full-bleed to use the GHL iframe's width. Header and
+  // content share the class so their edges always align.
+  const containerWidth = view === "new" ? "mx-auto max-w-7xl" : "";
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-2.5 sm:px-6">
+        <div className={`flex items-center gap-3 px-4 py-2.5 sm:px-6 lg:px-8 ${containerWidth}`}>
           <div className="mr-2 text-sm font-bold tracking-tight">
             {APP_MODE === "outreach" ? "Agent Outreach" : APP_MODE === "dashboard" ? "Dashboard"
               : APP_MODE === "deals" ? "Deals" : "Offer Generator"}
@@ -133,7 +138,7 @@ export default function OfferApp() {
           ))}
         </div>
       </header>
-      <div className={`mx-auto px-4 py-6 sm:px-6 ${view === "new" ? "max-w-7xl" : "max-w-5xl"}`}>
+      <div className={`px-4 py-6 sm:px-6 lg:px-8 ${containerWidth}`}>
         {settingsError && (
           <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
             Couldn't load saved settings ({settingsError}) — using defaults.
