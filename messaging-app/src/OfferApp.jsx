@@ -12,18 +12,28 @@ import DealsView from "./DealsView.jsx";
 import AgentOutreach from "./AgentOutreach.jsx";
 import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
-import { getLocationId, getOffer, getSettings } from "./api.js";
+import { getLocationId, getLocationKey, getOffer, getSettings } from "./api.js";
 
-// Which product this page is. One deploy serves all three: /agents (any depth)
-// is the Agent Outreach app, /dashboard is the analytics Dashboard, everything
-// else is the offer generator. The Netlify SPA redirect sends every path to
-// this same bundle; VITE_APP_MODE still forces a mode for a dedicated-domain
-// deploy.
+// The offer editor lives in the main app — from the standalone Deals page,
+// "Edit offer" opens it in a new tab deep-linked via the ?offer_id= flow.
+function offerEditorUrl(offerId) {
+  const p = new URLSearchParams({ location_id: getLocationId(), offer_id: offerId });
+  const key = getLocationKey();
+  if (key) p.set("key", key);
+  return `/?${p}`;
+}
+
+// Which product this page is. One deploy serves all four: /agents (any depth)
+// is the Agent Outreach app, /dashboard is the analytics Dashboard, /deals is
+// the standalone Deals board, everything else is the offer generator. The
+// Netlify SPA redirect sends every path to this same bundle; VITE_APP_MODE
+// still forces a mode for a dedicated-domain deploy.
 const APP_MODE = (() => {
   try {
     if (import.meta.env.VITE_APP_MODE === "outreach") return "outreach";
     if (import.meta.env.VITE_APP_MODE === "dashboard") return "dashboard";
     if (/^\/dashboard(\/|$)/.test(window.location.pathname)) return "dashboard";
+    if (/^\/deals(\/|$)/.test(window.location.pathname)) return "deals";
     return /^\/agents(\/|$)/.test(window.location.pathname) ? "outreach" : "offers";
   } catch {
     return "offers";
@@ -38,6 +48,8 @@ const NAV =
       ]
     : APP_MODE === "dashboard"
     ? [{ view: "dashboard", label: "Dashboard" }]
+    : APP_MODE === "deals"
+    ? [{ view: "deals", label: "Deals" }]
     : [
         { view: "new", label: "New Offer" },
         { view: "history", label: "History" },
@@ -104,7 +116,8 @@ export default function OfferApp() {
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-2.5 sm:px-6">
           <div className="mr-2 text-sm font-bold tracking-tight">
-            {APP_MODE === "outreach" ? "Agent Outreach" : APP_MODE === "dashboard" ? "Dashboard" : "Offer Generator"}
+            {APP_MODE === "outreach" ? "Agent Outreach" : APP_MODE === "dashboard" ? "Dashboard"
+              : APP_MODE === "deals" ? "Deals" : "Offer Generator"}
           </div>
           {NAV.length > 1 && NAV.map((n) => (
             <button
@@ -141,7 +154,10 @@ export default function OfferApp() {
             onDeal={() => setView("deals")} />
         )}
         {view === "deals" && (
-          <DealsView settings={settings} onEdit={(o) => { setEditing(o); setView("new"); }} />
+          <DealsView settings={settings}
+            onEdit={APP_MODE === "deals"
+              ? (o) => window.open(offerEditorUrl(o.id), "_blank")
+              : (o) => { setEditing(o); setView("new"); }} />
         )}
         {view === "outreach" && <AgentOutreach settings={settings} />}
         {view === "dashboard" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
