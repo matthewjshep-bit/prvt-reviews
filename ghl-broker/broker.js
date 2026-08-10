@@ -133,7 +133,7 @@ setInterval(async () => {
       if (!token) continue;
       const saved = await store.getOfferSettings(locationId);
       const started = maybeStartNightlySweep({
-        client: makeClient(token), locationId, saved, utcHour: SWEEP_UTC_HOUR,
+        client: makeClient(token), locationId, saved, store, utcHour: SWEEP_UTC_HOUR,
       });
       if (started) console.log(`nightly enrich sweep started for ${locationId}`);
     } catch (e) {

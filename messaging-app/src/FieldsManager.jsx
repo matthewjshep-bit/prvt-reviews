@@ -348,6 +348,14 @@ function PreviewPane() {
         </select>
       );
     }
+    // History ledgers (deal/property history) are multi-line — a one-line
+    // input would hide everything but the first event.
+    if (f.append) {
+      return (
+        <textarea rows={4} className={INPUT_CLS} value={v} placeholder="—"
+          onChange={(e) => setField(f.id, e.target.value)} />
+      );
+    }
     return (
       <div>
         <input className={INPUT_CLS}

@@ -60,7 +60,7 @@ import {
 } from "../ghl.js";
 import {
   enrichFieldDefs, enrichTagVocab, ENRICH_TAG_GROUPS, inferContactType,
-  buildTranscript, runEnrichment, suggestDealInvestors,
+  buildTranscript, runEnrichment, suggestDealInvestors, mergeHistory, historyLine,
 } from "../enrich.js";
 import { OFFER_FIELDS, APP_FIELD_REGISTRY, registryByKey } from "../field-registry.js";
 import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
@@ -462,11 +462,38 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       if (!transcript.stats.messages) return res.json({ ok: false, empty: true, typeInferred });
 
+      // App-side ground truth for the deal-history ledger: deals this contact
+      // is on, plus (agents) every offer we've sent them. Best-effort.
+      const authLines = [];
+      try {
+        for (const o of await store.listDeals(locationId, { limit: 500 })) {
+          const d = o.deal || {};
+          if (type === "agent" && o.contactId === req.params.id) {
+            authLines.push(historyLine(
+              d.updatedAt || d.createdAt, o.address,
+              String(d.stage || "").replace(/_/g, " "),
+              d.stage === "fell_through" ? d.fellThroughReason || "" : ""
+            ));
+          }
+          if (type === "investor") {
+            const inv = (d.investors || []).find((i) => i.contactId === req.params.id);
+            if (inv) authLines.push(historyLine(inv.updatedAt || inv.addedAt, o.address, inv.status || "sent"));
+          }
+        }
+        if (type === "agent") {
+          for (const o of await store.listOffers(locationId, { contactId: req.params.id, limit: 50 })) {
+            if (o.status === "draft") continue;
+            authLines.push(historyLine(o.createdAt, o.address, `we offered ${fmtMoney(o.cashAmount)}`));
+          }
+        }
+      } catch (e) { console.error("enrich: deal history lookup failed:", e?.message); }
+
       let raw;
       try {
         raw = await runEnrichment({
           contact, currentFields, currentTags, transcript, type,
           extraInstructions: String(saved?.enrichExtraInstructions || "").trim(),
+          dealContext: authLines.length ? authLines.join("\n") : null,
           aiApiKey,
         });
       } catch (e) { throw anthropicErrorToHttp(e); }
@@ -483,6 +510,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             proposed = transcript.lastMessageAt.slice(0, 10);
             reason = "date of the newest message";
           }
+        } else if (def.append) {
+          // History ledger: propose the full server-merged value (existing +
+          // app records + AI's new events) so the diff shows the real result.
+          const entry = raw.fields?.[def.key];
+          const delta = String(entry?.value ?? "").trim();
+          const merged = mergeHistory(currentFields[def.key], [...authLines, delta === "unknown" ? "" : delta]);
+          if (merged && merged !== String(currentFields[def.key] ?? "").trim()) proposed = merged;
+          reason = String(entry?.reason || "") || (authLines.length ? "from app deal records" : "");
         } else {
           const entry = raw.fields?.[def.key];
           const v = entry?.value;
@@ -495,7 +530,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         const current = String(currentFields[def.key] ?? "").trim() || null;
         rows.push({
           key: def.key, name: def.name, dataType: def.dataType,
-          values: def.values || null, multi: Boolean(def.multi),
+          values: def.values || null, multi: Boolean(def.multi), append: Boolean(def.append),
           current, proposed, reason,
         });
       }
@@ -561,6 +596,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             return res.status(400).json({ error: `invalid value for ${k}: ${sv}` });
           }
           writes[k] = parts.join(", ");
+        } else if (def.append) {
+          // History ledger: the UI sends the user-approved merged value.
+          // Normalize/dedupe and cap by dropping the OLDEST lines (a plain
+          // tail-slice would delete the newest events).
+          writes[k] = mergeHistory(sv, []);
         } else {
           writes[k] = sv.slice(0, 2000);
         }
@@ -637,7 +677,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const maxContacts = Math.min(Math.max(Number(req.body?.maxContacts) || 50, 1), 150);
 
       const job = startSweep({
-        client, locationId, saved,
+        client, locationId, saved, store,
         sinceIso: new Date(sinceMs).toISOString(),
         windowLabel: String(req.body?.windowLabel || "").slice(0, 60),
         types, maxContacts,
@@ -698,6 +738,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           values: reg?.values || null,
           multi: Boolean(reg?.multi),
           serverSet: Boolean(reg?.serverSet),
+          append: Boolean(reg?.append),
           keyMismatch: Boolean(reg && reg.key !== key),
         });
       }
@@ -1493,6 +1534,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         await addContactTags(client, contactId, [OFFER_TAG]);
         ghl.tag = true;
       } catch (e) { noteFailure("tag", e); }
+      if (calc.offers.cash.amount > 0) {
+        await appendDealHistory(client, locationId, contactId, "agent_deal_history",
+          historyLine(created.toISOString(), calc.inputs.address, `we offered ${fmtMoney(calc.offers.cash.amount)}`));
+      }
 
       // Persist the attach outcome on the offer so History can show it.
       offer.ghl = ghl;
@@ -1812,6 +1857,30 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     return { locationId, client, offer };
   }
 
+  // Best-effort: append one dated line to a contact's deal-history ledger
+  // (agent_deal_history / investor_deal_history) so the CRM stays current
+  // even when the contact never messages (the sweep would skip them). Reads
+  // the current value, merges, and writes back; never throws — the ledger is
+  // a convenience mirror, not critical state.
+  async function appendDealHistory(client, locationId, contactId, fieldKey, line) {
+    if (!contactId || !line) return;
+    try {
+      const type = fieldKey === "agent_deal_history" ? "agent" : "investor";
+      const def = enrichFieldDefs(type).find((f) => f.key === fieldKey);
+      const id = await findOrCreateCustomFieldByKey(client, locationId, fieldKey, def.name, def.dataType);
+      if (!id) return;
+      const contact = await getContact(client, contactId);
+      const idKeyMap = await customFieldIdKeyMap(client, locationId);
+      const current = contactCustomRecord(contact, idKeyMap)[fieldKey] || "";
+      const merged = mergeHistory(current, [line]);
+      if (merged && merged !== String(current).trim()) {
+        await updateContact(client, contactId, { customFields: [{ id, value: merged }] });
+      }
+    } catch (e) {
+      console.error(`offers: deal history append failed contact=${contactId}:`, e?.message);
+    }
+  }
+
   // Promote an offer to an active deal. Body (all optional): { contractPrice,
   // assignmentFee, closingDate, inspectionDate } — defaults come from the
   // generated contract, the cash offer, and settings.wholesaleFee.
@@ -1873,6 +1942,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         } catch (e) { noteFailure("deal note", e); }
       }
       if (warnings.length) offer.warnings = [...(offer.warnings || []), ...warnings];
+      await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
+        historyLine(ts, offer.address, "under contract"));
 
       await store.updateOffer(offer.id, offer);
       res.json({ ok: true, offer, warnings });
@@ -1885,9 +1956,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const ctx = await loadDealOffer(req, res);
       if (!ctx) return;
-      const { offer } = ctx;
+      const { locationId, client, offer } = ctx;
       const deal = offer.deal;
       const b = req.body || {};
+      let stageChanged = false;
       if (b.stage !== undefined) {
         if (!DEAL_STAGES.includes(b.stage)) {
           return res.status(400).json({ error: `stage must be one of: ${DEAL_STAGES.join(", ")}` });
@@ -1895,6 +1967,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         if (b.stage !== deal.stage) {
           deal.stage = b.stage;
           deal.stageHistory.push({ stage: b.stage, ts: new Date().toISOString() });
+          stageChanged = true;
         }
       }
       if (b.contractPrice !== undefined) deal.contractPrice = dealMoney(b.contractPrice);
@@ -1905,6 +1978,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (b.fellThroughReason !== undefined) deal.fellThroughReason = dealStr(b.fellThroughReason, 200);
       deal.updatedAt = new Date().toISOString();
       await store.updateOffer(offer.id, offer);
+      if (stageChanged) {
+        await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
+          historyLine(deal.updatedAt, offer.address, deal.stage.replace(/_/g, " "),
+            deal.stage === "fell_through" ? deal.fellThroughReason : ""));
+      }
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
   });
@@ -1927,7 +2005,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const ctx = await loadDealOffer(req, res);
       if (!ctx) return;
-      const { client, offer } = ctx;
+      const { locationId, client, offer } = ctx;
       const contactId = dealStr(req.body?.contactId, 64);
       if (!contactId) return res.status(400).json({ error: "contactId required" });
       if (offer.deal.investors.some((i) => i.contactId === contactId)) {
@@ -1942,6 +2020,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       offer.deal.investors.push({ contactId, name, status: "sent", addedAt: ts, updatedAt: ts });
       offer.deal.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
+      await appendDealHistory(client, locationId, contactId, "investor_deal_history",
+        historyLine(ts, offer.address, "sent"));
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
   });
@@ -1953,7 +2033,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const ctx = await loadDealOffer(req, res);
       if (!ctx) return;
-      const { client, offer } = ctx;
+      const { locationId, client, offer } = ctx;
       const status = dealStr(req.body?.status, 40);
       if (!INVESTOR_STATUSES.includes(status)) {
         return res.status(400).json({ error: `status must be one of: ${INVESTOR_STATUSES.join(", ")}` });
@@ -1981,6 +2061,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       offer.deal.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
+      await appendDealHistory(client, locationId, inv.contactId, "investor_deal_history",
+        historyLine(ts, offer.address, status));
       res.json({ ok: true, offer, warnings });
     } catch (err) { fail(res, err); }
   });

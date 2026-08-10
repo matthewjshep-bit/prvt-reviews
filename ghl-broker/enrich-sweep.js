@@ -10,8 +10,9 @@
 
 import {
   buildTranscript, runEnrichment, inferContactType, enrichFieldDefs,
-  enrichTagVocab, ENRICH_TAG_GROUPS,
+  enrichTagVocab, ENRICH_TAG_GROUPS, mergeHistory, historyLine,
 } from "./enrich.js";
+import { fmtMoney } from "./shared/offer-calc.js";
 import {
   searchConversations, getContact, updateContact, addContactTags,
   removeContactTags, createContactNote, findOrCreateCustomFieldByKey,
@@ -59,7 +60,7 @@ export function publicSweepJob(job) {
 
 // Kicks off a sweep in the background and returns the job immediately.
 // Throws { http: 409 } if one is already running for the location.
-export function startSweep({ client, locationId, saved, sinceIso, windowLabel, types, maxContacts, repliesOnly, trigger }) {
+export function startSweep({ client, locationId, saved, store, sinceIso, windowLabel, types, maxContacts, repliesOnly, trigger }) {
   const existing = jobs.get(locationId);
   if (existing?.status === "running") {
     throw Object.assign(new Error("a sweep is already running for this location"), { http: 409 });
@@ -86,7 +87,7 @@ export function startSweep({ client, locationId, saved, sinceIso, windowLabel, t
     cancelRequested: false,
   };
   jobs.set(locationId, job);
-  runSweep(job, { client, locationId, saved }).catch((e) => {
+  runSweep(job, { client, locationId, saved, store }).catch((e) => {
     job.status = "error";
     job.error = String(e?.message || e).slice(0, 300);
     job.finishedAt = new Date().toISOString();
@@ -152,7 +153,7 @@ function normalizeProposed(def, v) {
   return sv.slice(0, 2000);
 }
 
-async function runSweep(job, { client, locationId, saved }) {
+async function runSweep(job, { client, locationId, saved, store }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   const extraInstructions = String(saved?.enrichExtraInstructions || "").trim();
   const sinceMs = new Date(job.sinceIso).getTime();
@@ -177,6 +178,37 @@ async function runSweep(job, { client, locationId, saved }) {
     await sleep(PACE_MS);
   }
   const idKeyMap = await customFieldIdKeyMap(client, locationId);
+
+  // App-side deal records, indexed once per sweep (listDeals scans the whole
+  // location). Ground truth for the deal-history ledgers: the AI reconciles
+  // against these instead of inventing properties.
+  const dealsByContact = new Map();
+  if (store) {
+    try {
+      const push = (cid, ev) => {
+        if (!cid) return;
+        const arr = dealsByContact.get(cid) || [];
+        arr.push(ev);
+        dealsByContact.set(cid, arr);
+      };
+      for (const o of await store.listDeals(locationId, { limit: 500 })) {
+        const d = o.deal || {};
+        push(o.contactId, {
+          role: "agent", address: o.address,
+          event: String(d.stage || "").replace(/_/g, " "),
+          note: d.stage === "fell_through" ? d.fellThroughReason || "" : "",
+          date: d.updatedAt || d.createdAt || "",
+        });
+        for (const inv of d.investors || []) {
+          push(inv.contactId, {
+            role: "investor", address: o.address,
+            event: inv.status || "sent", note: "",
+            date: inv.updatedAt || inv.addedAt || "",
+          });
+        }
+      }
+    } catch (e) { console.error("sweep: deal index failed:", e?.message); }
+  }
 
   const pushResult = (row) => {
     if (row.status === "error") job.counts.errors++;
@@ -242,8 +274,24 @@ async function runSweep(job, { client, locationId, saved }) {
         }
       }
 
+      // Authoritative history lines from the app's own records: deals this
+      // contact is on, plus (agents) every offer we've sent them.
+      const authLines = (dealsByContact.get(contactId) || [])
+        .filter((e) => e.role === type)
+        .map((e) => historyLine(e.date, e.address, e.event, e.note));
+      if (type === "agent" && store) {
+        try {
+          for (const o of await store.listOffers(locationId, { contactId, limit: 50 })) {
+            if (o.status === "draft") continue;
+            authLines.push(historyLine(o.createdAt, o.address, `we offered ${fmtMoney(o.cashAmount)}`));
+          }
+        } catch (e) { console.error("sweep: offer history failed:", e?.message); }
+      }
+
       const raw = await runEnrichment({
-        contact, currentFields, currentTags: tags, transcript, type, extraInstructions, aiApiKey,
+        contact, currentFields, currentTags: tags, transcript, type, extraInstructions,
+        dealContext: authLines.length ? authLines.join("\n") : null,
+        aiApiKey,
       });
 
       // Field writes: evidence-backed proposals that differ from the current
@@ -255,6 +303,13 @@ async function runSweep(job, { client, locationId, saved }) {
         let value = null;
         if (def.key === "enrich_last_run") value = today;
         else if (def.key === "last_convo_date") value = transcript.lastMessageAt ? transcript.lastMessageAt.slice(0, 10) : null;
+        else if (def.append) {
+          // History ledger: merge app-side truth + the AI's new events into
+          // the existing value server-side — never a wholesale overwrite.
+          const delta = normalizeProposed(def, raw.fields?.[def.key]?.value) || "";
+          const merged = mergeHistory(currentFields[def.key], [...authLines, delta]);
+          value = merged || null;
+        }
         else value = normalizeProposed(def, raw.fields?.[def.key]?.value);
         if (value === null) continue;
         const current = String(currentFields[def.key] ?? "").trim();
@@ -328,7 +383,7 @@ const NIGHTLY_MIN_GAP_MS = 20 * 3600 * 1000;
 // Called on a timer by broker.js for each known location. Runs at most one
 // nightly sweep per ~day per location; skips quietly when the toggle or the
 // AI key is missing, or when any sweep ran recently.
-export function maybeStartNightlySweep({ client, locationId, saved, utcHour }) {
+export function maybeStartNightlySweep({ client, locationId, saved, store, utcHour }) {
   if (new Date().getUTCHours() !== utcHour) return false;
   if (!saved?.enrichSweepNightly) return false;
   if (!String(saved?.aiApiKey || "").trim()) return false;
@@ -337,7 +392,7 @@ export function maybeStartNightlySweep({ client, locationId, saved, utcHour }) {
     return false;
   }
   startSweep({
-    client, locationId, saved,
+    client, locationId, saved, store,
     sinceIso: new Date(Date.now() - NIGHTLY_WINDOW_MS).toISOString(),
     windowLabel: "nightly · last 26h",
     types: ["agent", "investor"],

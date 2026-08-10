@@ -202,7 +202,7 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
                         <div className="font-medium">{r.name}</div>
                         {r.reason && <div className="mt-0.5 max-w-[16rem] text-[11px] leading-tight text-slate-400">{r.reason}</div>}
                       </td>
-                      <td className="px-3 py-2 text-slate-500">{r.current ? prettyEnum(r.current) : "—"}</td>
+                      <td className={`px-3 py-2 text-slate-500 ${r.append ? "whitespace-pre-line" : ""}`}>{r.current ? (r.append ? r.current : prettyEnum(r.current)) : "—"}</td>
                       <td className="px-3 py-2">
                         {r.values && !r.multi ? (
                           <select className={inputCls} value={r.proposed}
@@ -210,6 +210,11 @@ export default function EnrichModal({ contactId, contactName, defaultType, onClo
                             <option value="">—</option>
                             {r.values.map((v) => <option key={v} value={v}>{prettyEnum(v)}</option>)}
                           </select>
+                        ) : r.append ? (
+                          <textarea rows={4} className={inputCls}
+                            value={r.proposed}
+                            placeholder="—"
+                            onChange={(e) => patchRow(r.key, { proposed: e.target.value, checked: Boolean(e.target.value.trim()) })} />
                         ) : (
                           <input className={inputCls}
                             type={r.dataType === "NUMERICAL" ? "number" : "text"}

@@ -13,9 +13,15 @@ import { searchConversations, listConversationMessages, getMessageTranscription 
 export const ENRICH_MODEL = "claude-sonnet-5";
 
 /* ---------- field schemas ---------- */
-// { key, name, dataType, values?, hint?, serverSet? } — values = closed vocab
-// (enforced in the AI schema and re-validated on apply; stored as TEXT in
-// GHL). serverSet fields are computed by the server, never by the AI.
+// { key, name, dataType, values?, hint?, serverSet?, append? } — values =
+// closed vocab (enforced in the AI schema and re-validated on apply; stored as
+// TEXT in GHL). serverSet fields are computed by the server, never by the AI.
+// append fields are running ledgers: the AI emits ONLY new event lines and the
+// server merges them into the existing value (mergeHistory below) — they are
+// never overwritten wholesale.
+
+const HISTORY_LINE_FORMAT =
+  "one event per line, format 'YYYY-MM-DD | property address | event — short note'";
 
 export const SHARED_ENRICH_FIELDS = [
   { key: "last_convo_summary", name: "Last Conversation Summary", dataType: "TEXT",
@@ -31,6 +37,11 @@ export const SHARED_ENRICH_FIELDS = [
 export const AGENT_ENRICH_FIELDS = [
   { key: "agent_market_area", name: "Areas Served", dataType: "TEXT",
     hint: "cities, neighborhoods, or zip codes the agent works in, from texts or call transcripts — output a comma-separated list of place names as stated, e.g. 'Kent, Auburn, Federal Way' or zips; empty if none mentioned" },
+  { key: "agent_deal_history", name: "Deal History", dataType: "TEXT", append: true,
+    hint: `deals discussed with this agent that are NOT already in the existing history or app records — ${HISTORY_LINE_FORMAT}, ` +
+      "e.g. '2026-08-10 | 7130 Bentley Rd E | sent us the listing — motivated seller, vacant'. " +
+      "Events: sent us a deal, we offered, countered, under contract, closed, fell through, declined. " +
+      "Existing history is preserved automatically — NEVER restate lines already shown; empty string when nothing new" },
 ];
 
 export const INVESTOR_ENRICH_FIELDS = [
@@ -50,6 +61,11 @@ export const INVESTOR_ENRICH_FIELDS = [
   { key: "rehab_appetite", name: "Buy Box: Rehab Appetite", dataType: "TEXT",
     values: ["cosmetic_only", "moderate", "heavy", "full_gut"],
     hint: "how much rehab they'll take on" },
+  { key: "investor_deal_history", name: "Property History", dataType: "TEXT", append: true,
+    hint: `properties this investor reviewed with their reaction/sentiment, NOT already in the existing history or app records — ${HISTORY_LINE_FORMAT}, ` +
+      "e.g. '2026-08-10 | 2010 NE 54th St | passed — too much foundation work' or '… | evaluating — wants interior photos'. " +
+      "Events: sent, evaluating, passed, committed, closed (use these words when they fit; add the stated reason after the dash). " +
+      "Existing history is preserved automatically — NEVER restate lines already shown; empty string when nothing new" },
 ];
 
 // Mutually exclusive tag groups per contact type. The AI may only suggest
@@ -65,6 +81,44 @@ export const enrichFieldDefs = (type) => [
 ];
 const aiFieldDefs = (type) => enrichFieldDefs(type).filter((f) => !f.serverSet);
 export const enrichTagVocab = (type) => (ENRICH_TAG_GROUPS[type] || []).flat();
+
+/* ---------- history ledgers (append fields) ---------- */
+
+export const HISTORY_MAX_CHARS = 2000;
+
+// Merge new event lines into an existing history ledger. Lines are
+// 'YYYY-MM-DD | address | event — note'. Dedupe on normalized address+event
+// (existing lines win, so a model restating an old event is a no-op), keep
+// chronological order by the date prefix, and when over budget drop the
+// OLDEST lines — the opposite of the tail-truncation used for normal TEXT
+// fields, which would silently delete the newest events.
+export function mergeHistory(existing, additions, maxChars = HISTORY_MAX_CHARS) {
+  const parse = (v) => String(v || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const dedupeKey = (line) => {
+    const parts = line.split("|").map((p) => p.trim());
+    const addr = (parts[1] || parts[0] || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const event = (parts[2] || "").toLowerCase().split(/[—–-]/)[0].trim();
+    return `${addr}|${event}`;
+  };
+  const dateOf = (line) => (/^\d{4}-\d{2}-\d{2}/.exec(line)?.[0]) || "";
+  const seen = new Set();
+  const out = [];
+  const lists = Array.isArray(additions) ? additions : [additions];
+  for (const line of [...parse(existing), ...lists.flatMap(parse)]) {
+    const k = dedupeKey(line);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(line);
+  }
+  out.sort((a, b) => dateOf(a).localeCompare(dateOf(b))); // stable: undated lines keep order
+  while (out.length > 1 && out.join("\n").length > maxChars) out.shift();
+  return out.join("\n").slice(0, maxChars);
+}
+
+// One authoritative ledger line from an app-side record.
+export const historyLine = (dateIso, address, event, note = "") =>
+  `${String(dateIso || "").slice(0, 10) || "????-??-??"} | ${String(address || "unknown property").trim()} | ` +
+  `${event}${note ? ` — ${String(note).trim()}` : ""}`;
 
 // "agent" | "investor" | null from the contact's tags. Ambiguous (both kinds
 // of tags, or neither) → null and the UI asks.
@@ -307,7 +361,7 @@ function systemPrompt(type, extraInstructions) {
 
 // settings must carry aiApiKey. Returns the parsed structured output:
 // { summary, confidence, fields: {key: {value, reason}}, tags: {add, remove} }.
-export async function runEnrichment({ contact, currentFields, currentTags, transcript, type, extraInstructions, aiApiKey }) {
+export async function runEnrichment({ contact, currentFields, currentTags, transcript, type, extraInstructions, dealContext, aiApiKey }) {
   const anthropic = new Anthropic({ apiKey: aiApiKey, timeout: 120_000 });
 
   const profile = [
@@ -317,10 +371,18 @@ export async function runEnrichment({ contact, currentFields, currentTags, trans
     currentTags?.length ? `Current tags: ${currentTags.join(", ")}` : "Current tags: (none)",
   ].filter(Boolean).join("\n");
 
+  // History ledgers are rendered in their own block (untruncated tail) so the
+  // model can see what NOT to restate; everything else gets the 300-char cap.
+  const appendKeys = new Set(enrichFieldDefs(type).filter((f) => f.append).map((f) => f.key));
   const currentValues = Object.entries(currentFields || {})
-    .filter(([, v]) => String(v ?? "").trim())
+    .filter(([k, v]) => !appendKeys.has(k) && String(v ?? "").trim())
     .map(([k, v]) => `- ${k}: ${String(v).slice(0, 300)}`)
     .join("\n") || "(none set)";
+  const historyBlock = [...appendKeys]
+    .map((k) => [k, String(currentFields?.[k] ?? "").trim()])
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}:\n${v.slice(-1200)}`)
+    .join("\n\n");
 
   const s = transcript.stats;
   const statsLine =
@@ -340,6 +402,12 @@ export async function runEnrichment({ contact, currentFields, currentTags, trans
       content:
         `CONTACT PROFILE\n${profile}\n\n` +
         `CURRENT CUSTOM FIELD VALUES\n${currentValues}\n\n` +
+        (historyBlock
+          ? `EXISTING DEAL HISTORY (preserved automatically — emit ONLY new events not already listed)\n${historyBlock}\n\n`
+          : "") +
+        (dealContext
+          ? `APP DEAL RECORDS (authoritative — reconcile conversation mentions to these, don't invent deals)\n${dealContext}\n\n`
+          : "") +
         `CONVERSATION TRANSCRIPT (${statsLine})\n` +
         `US = our team, THEM = the contact.\n\n${transcript.text}\n\n` +
         `Propose updated field values and tag changes for this ${TYPE_LABEL[type]}.`,
