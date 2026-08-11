@@ -676,9 +676,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const types = ["agent", "investor"].filter((t) =>
         Array.isArray(req.body?.types) ? req.body.types.includes(t) : true);
       if (!types.length) return res.status(400).json({ error: "types must include agent and/or investor" });
-      // Generous ceiling: the already-enriched skip + replied-only filter do
-      // the real cost control, so wide windows don't need a tight cap.
-      const maxContacts = Math.min(Math.max(Number(req.body?.maxContacts) || 300, 1), 1000);
+      // No cap by default (0 = unlimited): the already-enriched skip +
+      // replied-only filter are the real cost control, and collection is
+      // naturally bounded by the conversation scan (MAX_PAGES in enrich-sweep).
+      const maxContacts = Math.max(0, Number(req.body?.maxContacts) || 0);
 
       const job = startSweep({
         client, locationId, saved, store,

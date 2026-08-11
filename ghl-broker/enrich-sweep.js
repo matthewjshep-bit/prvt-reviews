@@ -161,7 +161,7 @@ async function runSweep(job, { client, locationId, saved, store }) {
   const sinceMs = new Date(job.sinceIso).getTime();
 
   const active = await collectActiveContacts(client, locationId, sinceMs);
-  const targets = active.slice(0, job.maxContacts);
+  const targets = job.maxContacts > 0 ? active.slice(0, job.maxContacts) : active;
   job.overCap = active.length - targets.length;
   job.total = targets.length;
   job.phase = "enriching";
@@ -411,7 +411,7 @@ export function maybeStartNightlySweep({ client, locationId, saved, store, utcHo
     sinceIso: new Date(Date.now() - NIGHTLY_WINDOW_MS).toISOString(),
     windowLabel: "nightly · last 26h",
     types: ["agent", "investor"],
-    maxContacts: 60,
+    maxContacts: 0, // uncapped — the already-enriched skip keeps nightly cost flat
     repliesOnly: true,
     trigger: "nightly",
   });
