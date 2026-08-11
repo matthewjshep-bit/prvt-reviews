@@ -222,7 +222,8 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         <p className="mb-3 text-xs text-slate-500">
           Scans every agent/investor contact with conversation activity in the window and auto-fills
           their CRM fields from what was said — buy box for investors, areas served for agents,
-          personal details for both — leaving an audit note on each updated contact. Skips DND
+          personal details for both — leaving an audit note on each updated contact. Skips contacts
+          already enriched since their last message, DND
           contacts and (by default) anyone who didn't reply in the window. Uses the Anthropic key
           above (~$0.02–0.05 per contact scanned).
         </p>

@@ -82,7 +82,12 @@ export default function EnrichSweep() {
   }
 
   async function cancel() {
-    try { await cancelEnrichSweep(); } catch { /* next poll shows the truth */ }
+    try {
+      await cancelEnrichSweep();
+      // Refresh immediately so the button flips to "Stopping…" without
+      // waiting for the next poll tick.
+      setJob(await getEnrichSweep());
+    } catch { /* next poll shows the truth */ }
   }
 
   const toggleType = (t) => setTypes((s) => {
@@ -121,9 +126,11 @@ export default function EnrichSweep() {
             Scan conversations
           </button>
         ) : (
-          <button type="button" onClick={cancel}
-            className="ml-auto flex items-center gap-1.5 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-            <Square size={13} /> Stop
+          <button type="button" onClick={cancel} disabled={job?.stopping}
+            className="ml-auto flex items-center gap-1.5 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            title={job?.stopping ? "Finishing the contact currently being enriched, then stopping" : "Stop after the current contact"}>
+            {job?.stopping ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}
+            {job?.stopping ? "Stopping…" : "Stop"}
           </button>
         )}
       </div>

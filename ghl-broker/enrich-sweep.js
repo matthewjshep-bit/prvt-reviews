@@ -53,6 +53,8 @@ export function cancelSweepJob(locationId) {
 export function publicSweepJob(job) {
   if (!job) return null;
   const { cancelRequested, ...rest } = job;
+  // Surface "stop requested, finishing the in-flight contact" to the UI.
+  rest.stopping = Boolean(cancelRequested && job.status === "running");
   return rest;
 }
 
@@ -240,12 +242,15 @@ async function runSweep(job, { client, locationId, saved, store }) {
 
       const currentFields = contactCustomRecord(contact, idKeyMap);
 
-      // Already enriched on a later day than their newest message — nothing
-      // new to read. (Date-only stamp, so same-day activity always re-runs.)
-      const lastRun = String(currentFields.enrich_last_run || "").slice(0, 10);
-      const lastMsgDay = new Date(lastMessageMs).toISOString().slice(0, 10);
-      if (lastRun && lastRun > lastMsgDay) {
-        pushResult({ contactId, name, type, status: "skipped", reason: `enriched ${lastRun}, no messages since` });
+      // Already enriched since their newest message — nothing new to read.
+      // The stamp is a full ISO timestamp (legacy date-only values parse as
+      // UTC midnight and just re-run once before converging).
+      const lastRunMs = new Date(currentFields.enrich_last_run || 0).getTime();
+      if (Number.isFinite(lastRunMs) && lastRunMs > 0 && lastRunMs >= lastMessageMs) {
+        pushResult({
+          contactId, name, type, status: "skipped",
+          reason: `already enriched ${String(currentFields.enrich_last_run).slice(0, 10)}, no messages since`,
+        });
         continue;
       }
 
@@ -272,6 +277,14 @@ async function runSweep(job, { client, locationId, saved, store }) {
           pushResult({ contactId, name, type, status: "skipped", reason: "no reply in window (outbound only)" });
           continue;
         }
+      }
+
+      // Second cancel check: the top-of-loop one only catches between
+      // contacts, and the AI call below is the long/expensive part.
+      if (job.cancelRequested) {
+        job.status = "canceled";
+        job.finishedAt = new Date().toISOString();
+        return;
       }
 
       // Authoritative history lines from the app's own records: deals this
@@ -301,7 +314,9 @@ async function runSweep(job, { client, locationId, saved, store }) {
       const fieldWrites = [];
       for (const def of enrichFieldDefs(type)) {
         let value = null;
-        if (def.key === "enrich_last_run") value = today;
+        // Full ISO stamp — the already-enriched skip compares it against the
+        // contact's newest-message timestamp.
+        if (def.key === "enrich_last_run") value = new Date().toISOString();
         else if (def.key === "last_convo_date") value = transcript.lastMessageAt ? transcript.lastMessageAt.slice(0, 10) : null;
         else if (def.append) {
           // History ledger: merge app-side truth + the AI's new events into

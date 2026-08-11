@@ -608,7 +608,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!Object.keys(writes).length && !tagsAdd.length && !tagsRemove.length && !note) {
         return res.status(400).json({ error: "nothing to apply" });
       }
-      writes.enrich_last_run = new Date().toISOString().slice(0, 10);
+      // Full timestamp (not date-only) so the sweep's already-enriched skip
+      // can compare against the contact's newest message precisely.
+      writes.enrich_last_run = new Date().toISOString();
 
       // Each GHL write is independent; failures become warnings, not errors.
       const warnings = [];
@@ -674,7 +676,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const types = ["agent", "investor"].filter((t) =>
         Array.isArray(req.body?.types) ? req.body.types.includes(t) : true);
       if (!types.length) return res.status(400).json({ error: "types must include agent and/or investor" });
-      const maxContacts = Math.min(Math.max(Number(req.body?.maxContacts) || 50, 1), 150);
+      // Generous ceiling: the already-enriched skip + replied-only filter do
+      // the real cost control, so wide windows don't need a tight cap.
+      const maxContacts = Math.min(Math.max(Number(req.body?.maxContacts) || 300, 1), 1000);
 
       const job = startSweep({
         client, locationId, saved, store,
