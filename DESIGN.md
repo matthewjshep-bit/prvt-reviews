@@ -33,6 +33,15 @@ typography:
     fontSize: "0.75rem"
     fontWeight: 600
     letterSpacing: "0.025em"
+  meta:
+    fontFamily: "Plus Jakarta Sans, system-ui, sans-serif"
+    fontSize: "0.6875rem"
+    fontWeight: 500
+  micro:
+    fontFamily: "Plus Jakarta Sans, system-ui, sans-serif"
+    fontSize: "0.625rem"
+    fontWeight: 600
+    letterSpacing: "0.02em"
 rounded:
   sm: "6px"
   md: "8px"
@@ -60,6 +69,19 @@ components:
   card:
     backgroundColor: "{colors.surface}"
     rounded: "{rounded.lg}"
+surfaces:
+  console:
+    description: "Operator app inside the GHL iframe. Dense, desktop-first."
+    typeScale: ["18px", "14px", "12px", "11px", "10px"]
+  investor-document:
+    description: >
+      Public pages the broker serves at /d/<token> — the deal package and the
+      all-deals portfolio. Read on a phone by someone outside the business, so
+      it trades density for legibility: larger headings, larger money figures,
+      13px body instead of 14px dense rows.
+    typeScale: ["24px", "21px", "20px", "15px", "13px", "12px", "11px", "10px"]
+    rounded: ["{rounded.md}", "{rounded.lg}", "{rounded.pill}"]
+    palette: "same tokens as the console — no separate colors"
 ---
 
 # Design System: Offer Generator
@@ -72,9 +94,30 @@ A flat, Swiss-minimal operator console: white working surfaces on a cool paper b
 
 **Key Characteristics:**
 - Flat surfaces, hairline borders, near-zero shadow use (modals only)
-- Dense text scale: 14px body, 12px labels, uppercase-tracked table headers
+- Dense text scale: 18px headline, 14px body, 12px labels, uppercase-tracked table headers,
+  plus 11px `meta` (row subtext, chips, timestamps) and 10px `micro` (status pills) — the
+  console leans on those last two heavily, so they are part of the ramp, not exceptions
 - Blue = act, green = money in, amber = attention, red = risk
 - Table-heavy views run full-bleed inside the iframe; forms stay capped and centered
+
+## Two surfaces
+
+The system covers two audiences, and they are not the same design problem.
+
+**Console** (`messaging-app/`) — the operator app inside the GHL iframe. Everything
+above describes it: dense, desktop-first, worked dozens of times a day.
+
+**Investor document** (`ghl-broker/dataroom.js`) — the public pages served at
+`/d/<token>`: a deal package and the all-deals portfolio. Same palette, same
+typeface, same flat/hairline construction, but a **larger type scale** (24/21/20
+display, 15 headings, 13 body) because it is read once, on a phone, by someone
+outside the business who is deciding whether to spend money. Density is the wrong
+goal there; legibility and confidence are. Radii stay on the shared `md`/`lg`/`pill`
+steps, and it introduces no colors of its own.
+
+Deliberately not shared: the console's 14px body and 11/10px metadata steps. If
+you find yourself reaching for those on an investor page, that page is probably
+trying to be a table when it should be a document.
 
 ## Colors
 

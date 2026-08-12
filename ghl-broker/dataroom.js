@@ -191,7 +191,7 @@ p{margin:0 0 10px}
 /* Flex, not grid: a grid minmax() track can't shrink below its content, so a
    long money figure would widen the whole page on a phone. */
 .figs{display:flex;flex-wrap:wrap;gap:1px;background:#E2E8F0;
-  border:1px solid #E2E8F0;border-radius:10px;overflow:hidden}
+  border:1px solid #E2E8F0;border-radius:8px;overflow:hidden}
 .fig{background:#fff;padding:14px 16px;flex:1 1 150px;min-width:0}
 .fig .k{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748B;margin-bottom:4px}
 .fig .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
@@ -200,7 +200,7 @@ p{margin:0 0 10px}
 .fig.hero .v{color:#fff;font-size:24px}
 .fig.good .v{color:#047857}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#94A3B8;
+th{text-align:left;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#94A3B8;
   padding:0 8px 8px 0;border-bottom:1px solid #E2E8F0;white-space:nowrap}
 td{padding:9px 8px 9px 0;border-bottom:1px solid #F1F5F9;vertical-align:top}
 th.r,td.r{text-align:right;padding:9px 0 9px 14px;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -211,7 +211,7 @@ tr:last-child td{border-bottom:0}
    width and scroll inside the card rather than crushing every column. */
 .scroll.wide table{min-width:500px}
 .scroll.wide td:first-child{min-width:150px}
-.hint{display:none;font-size:11.5px;color:#94A3B8;margin:8px 0 0}
+.hint{display:none;font-size:12px;color:#94A3B8;margin:8px 0 0}
 @media(max-width:600px){.hint{display:block}}
 .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:9999px;
   background:#F1F5F9;color:#475569;white-space:nowrap}
@@ -220,8 +220,8 @@ tr:last-child td{border-bottom:0}
 .btn{display:inline-block;background:#2563EB;color:#fff;text-decoration:none;font-size:13px;font-weight:600;
   padding:9px 16px;border-radius:8px;border:0;cursor:pointer;font-family:inherit}
 .btn.ghost{background:#fff;color:#0F172A;border:1px solid #E2E8F0}
-.foot{font-size:11.5px;color:#94A3B8;text-align:center;line-height:1.6;padding:0 8px}
-.stamp{font-size:11.5px;color:#64748B;border-top:1px dashed #E2E8F0;margin-top:16px;padding-top:12px}
+.foot{font-size:12px;color:#94A3B8;text-align:center;line-height:1.6;padding:0 8px}
+.stamp{font-size:12px;color:#64748B;border-top:1px dashed #E2E8F0;margin-top:16px;padding-top:12px}
 .wm{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;
   display:flex;flex-wrap:wrap;align-content:flex-start;gap:0;opacity:.05}
 /* min-width:0 matters: without it a flex item refuses to shrink below its
@@ -229,7 +229,7 @@ tr:last-child td{border-bottom:0}
 .wm span{flex:0 0 50%;min-width:0;overflow:hidden;transform:rotate(-24deg);
   font-size:13px;font-weight:700;color:#0F172A;padding:30px 0;text-align:center;white-space:nowrap}
 .wrap{position:relative;z-index:1}
-@media(max-width:520px){.wrap{padding:14px 12px 56px}.card{padding:16px;border-radius:10px}h1{font-size:19px}}
+@media(max-width:520px){.wrap{padding:14px 12px 56px}.card{padding:16px}}
 `;
 
 function page({ title, css = "", body, watermark = "" }) {
@@ -309,7 +309,7 @@ export function renderPortfolio({ rooms = [], company = {} }) {
       .deal{display:block;text-decoration:none;color:inherit;background:#fff;border:1px solid #E2E8F0;
         border-radius:12px;padding:16px;margin:0 0 12px}
       .dealhead{margin-bottom:12px}
-      .dealaddr{font-size:16px;font-weight:700;letter-spacing:-.01em;line-height:1.3}
+      .dealaddr{font-size:15px;font-weight:700;letter-spacing:-.01em;line-height:1.3}
       .pfigs{display:flex;flex-wrap:wrap;gap:1px;background:#E2E8F0;border:1px solid #E2E8F0;
         border-radius:8px;overflow:hidden}
       .pfig{background:#fff;padding:9px 12px;flex:1 1 88px;min-width:0}
@@ -319,7 +319,7 @@ export function renderPortfolio({ rooms = [], company = {} }) {
       .pfig.hero .k{color:#94A3B8}
       .pfig.hero .v{color:#fff}
       .pfig.good .v{color:#047857}
-      .more{font-size:12.5px;font-weight:600;color:#2563EB;margin-top:10px}
+      .more{font-size:13px;font-weight:600;color:#2563EB;margin-top:10px}
     `,
     body: `
       <div class="card">
@@ -371,7 +371,7 @@ function compsSection(snap) {
     ].filter(Boolean).join(" · ");
     return `<tr>
       <td><div style="font-weight:600">${esc(c.address)}</div>
-        ${bits ? `<div class="muted" style="font-size:11.5px">${esc(bits)}</div>` : ""}</td>
+        ${bits ? `<div class="muted" style="font-size:12px">${esc(bits)}</div>` : ""}</td>
       ${hasCond ? `<td>${c.condition ? `<span class="pill">${esc(CONDITION_LABEL[c.condition] || c.condition)}</span>` : ""}</td>` : ""}
       <td class="r">${c.sqft ? c.sqft.toLocaleString() : "—"}</td>
       <td class="r">${c.saleDate ? esc(c.saleDate.slice(0, 7)) : "—"}</td>
@@ -421,7 +421,7 @@ function documentsSection(snap, token) {
   return `<div class="card">
     <h2>Documents</h2>
     ${docs.map((d) => `<div class="doc">
-      <div><div style="font-weight:600;font-size:14px">${esc(d.label)}</div>
+      <div><div style="font-weight:600;font-size:13px">${esc(d.label)}</div>
         <div class="muted" style="font-size:12px">PDF</div></div>
       <a class="btn ghost" href="/d/${encodeURIComponent(token)}/file/${encodeURIComponent(d.key)}"
         target="_blank" rel="noopener noreferrer">Open</a>
