@@ -301,7 +301,122 @@ const pgStore = {
     );
     return rows;
   },
+
+  /* ---- investor datarooms ---- */
+  async createDataroom(doc) {
+    const id = doc.id || uuid();
+    const ts = nowIso();
+    const full = { ...doc, id, createdAt: ts, updatedAt: ts, status: doc.status || "active" };
+    await query(
+      `insert into datarooms (id, location_id, offer_id, address, status, doc, created_at, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$7)`,
+      [id, full.locationId, full.offerId || null, full.address || null, full.status, full, ts]
+    );
+    return full;
+  },
+  async getDataroom(id) {
+    const { rows } = await query(`select doc from datarooms where id = $1`, [id]);
+    return rows[0]?.doc || null;
+  },
+  async listDatarooms(locationId, { offerId = null, limit = 200 } = {}) {
+    const { rows } = offerId
+      ? await query(
+          `select doc from datarooms where location_id = $1 and offer_id = $2 order by created_at desc limit $3`,
+          [locationId, offerId, limit]
+        )
+      : await query(
+          `select doc from datarooms where location_id = $1 order by created_at desc limit $2`,
+          [locationId, limit]
+        );
+    return rows.map((r) => r.doc);
+  },
+  async updateDataroom(id, doc) {
+    const full = { ...doc, updatedAt: nowIso() };
+    const { rowCount } = await query(
+      `update datarooms set doc = $2, status = $3, updated_at = $4 where id = $1`,
+      [id, full, full.status || "active", full.updatedAt]
+    );
+    return rowCount > 0 ? full : null;
+  },
+  async deleteDataroom(id) {
+    await query(`delete from dataroom_events where dataroom_id = $1`, [id]).catch(() => {});
+    await query(`delete from dataroom_invites where dataroom_id = $1`, [id]).catch(() => {});
+    const { rowCount } = await query(`delete from datarooms where id = $1`, [id]);
+    return rowCount > 0;
+  },
+
+  // Invites. Columns (not doc) carry everything the token lookup and the
+  // lockout counter touch, so a hot path is one indexed read/write.
+  async createDataroomInvite(row) {
+    const id = row.id || uuid();
+    await query(
+      `insert into dataroom_invites
+         (id, dataroom_id, location_id, token_hash, contact_id, name, phone, status, expires_at, doc)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [id, row.dataroomId, row.locationId, row.tokenHash,
+       row.contactId || null, row.name || null, row.phone || null, row.status || "active",
+       row.expiresAt || null, row.doc || {}]
+    );
+    return this.getDataroomInvite(id);
+  },
+  async getDataroomInvite(id) {
+    const { rows } = await query(`${INVITE_SELECT} where id = $1`, [id]);
+    return rows[0] || null;
+  },
+  async getDataroomInviteByTokenHash(tokenHash) {
+    const { rows } = await query(`${INVITE_SELECT} where token_hash = $1`, [tokenHash]);
+    return rows[0] || null;
+  },
+  async listDataroomInvites(dataroomId) {
+    const { rows } = await query(`${INVITE_SELECT} where dataroom_id = $1 order by created_at`, [dataroomId]);
+    return rows;
+  },
+  // Partial update by column name (camelCase keys map to the snake_case
+  // columns in INVITE_COLUMNS). Unknown keys are ignored.
+  async updateDataroomInvite(id, patch) {
+    const sets = [];
+    const vals = [id];
+    for (const [k, v] of Object.entries(patch || {})) {
+      const col = INVITE_COLUMNS[k];
+      if (!col) continue;
+      vals.push(v);
+      sets.push(`${col} = $${vals.length}`);
+    }
+    if (!sets.length) return this.getDataroomInvite(id);
+    await query(`update dataroom_invites set ${sets.join(", ")} where id = $1`, vals);
+    return this.getDataroomInvite(id);
+  },
+
+  async logDataroomEvent(dataroomId, inviteId, kind, detail = {}) {
+    await query(
+      `insert into dataroom_events (id, dataroom_id, invite_id, kind, detail) values ($1,$2,$3,$4,$5)`,
+      [uuid(), dataroomId, inviteId || null, kind, detail]
+    );
+  },
+  async listDataroomEvents(dataroomId, { limit = 200 } = {}) {
+    const { rows } = await query(
+      `select id, invite_id as "inviteId", kind, detail, created_at as "createdAt"
+       from dataroom_events where dataroom_id = $1 order by created_at desc limit $2`,
+      [dataroomId, limit]
+    );
+    return rows;
+  },
 };
+
+// Columns the invite row exposes to callers, and the camelCase→column map
+// updateDataroomInvite patches through.
+const INVITE_COLUMNS = {
+  status: "status", expiresAt: "expires_at",
+  firstViewedAt: "first_viewed_at", lastViewedAt: "last_viewed_at", viewCount: "view_count",
+  sentAt: "sent_at", name: "name", phone: "phone", contactId: "contact_id",
+  tokenHash: "token_hash", doc: "doc",
+};
+const INVITE_SELECT = `select id, dataroom_id as "dataroomId", location_id as "locationId",
+    token_hash as "tokenHash", contact_id as "contactId", name, phone, status,
+    expires_at as "expiresAt", first_viewed_at as "firstViewedAt",
+    last_viewed_at as "lastViewedAt", view_count as "viewCount", sent_at as "sentAt",
+    created_at as "createdAt", doc
+  from dataroom_invites`;
 
 /* ============================================================= *
  * JSON-file fallback backend
@@ -331,6 +446,9 @@ const fileStore = (() => {
       data.outreachListings = data.outreachListings || {};
       data.outreachPulls = data.outreachPulls || [];
       data.outreachBatches = data.outreachBatches || {};
+      data.datarooms = data.datarooms || {};
+      data.dataroomInvites = data.dataroomInvites || {};
+      data.dataroomEvents = data.dataroomEvents || [];
       adoptLegacyOutreachRows();
     }
     return data;
@@ -632,6 +750,108 @@ const fileStore = (() => {
       ensure();
       return data.outreachPulls
         .filter((p) => p.locationId === locationId)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .slice(0, limit);
+    },
+
+    /* ---- investor datarooms ---- */
+    async createDataroom(doc) {
+      ensure();
+      const id = doc.id || uuid();
+      const ts = nowIso();
+      const full = { ...doc, id, createdAt: ts, updatedAt: ts, status: doc.status || "active" };
+      data.datarooms[id] = full;
+      persist();
+      return full;
+    },
+    async getDataroom(id) {
+      ensure();
+      return data.datarooms[id] || null;
+    },
+    async listDatarooms(locationId, { offerId = null, limit = 200 } = {}) {
+      ensure();
+      return Object.values(data.datarooms)
+        .filter((d) => d.locationId === locationId && (!offerId || d.offerId === offerId))
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .slice(0, limit);
+    },
+    async updateDataroom(id, doc) {
+      ensure();
+      if (!data.datarooms[id]) return null;
+      const full = { ...doc, updatedAt: nowIso() };
+      data.datarooms[id] = full;
+      persist();
+      return full;
+    },
+    async deleteDataroom(id) {
+      ensure();
+      if (!data.datarooms[id]) return false;
+      delete data.datarooms[id];
+      for (const [k, v] of Object.entries(data.dataroomInvites)) {
+        if (v.dataroomId === id) delete data.dataroomInvites[k];
+      }
+      data.dataroomEvents = data.dataroomEvents.filter((e) => e.dataroomId !== id);
+      persist();
+      return true;
+    },
+
+    async createDataroomInvite(row) {
+      ensure();
+      const id = row.id || uuid();
+      const full = {
+        id,
+        dataroomId: row.dataroomId,
+        locationId: row.locationId,
+        tokenHash: row.tokenHash,
+        contactId: row.contactId || null,
+        name: row.name || null,
+        phone: row.phone || null,
+        status: row.status || "active",
+        expiresAt: row.expiresAt || null,
+        firstViewedAt: null,
+        lastViewedAt: null,
+        viewCount: 0,
+        sentAt: null,
+        createdAt: nowIso(),
+        doc: row.doc || {},
+      };
+      data.dataroomInvites[id] = full;
+      persist();
+      return full;
+    },
+    async getDataroomInvite(id) {
+      ensure();
+      return data.dataroomInvites[id] || null;
+    },
+    async getDataroomInviteByTokenHash(tokenHash) {
+      ensure();
+      return Object.values(data.dataroomInvites).find((i) => i.tokenHash === tokenHash) || null;
+    },
+    async listDataroomInvites(dataroomId) {
+      ensure();
+      return Object.values(data.dataroomInvites)
+        .filter((i) => i.dataroomId === dataroomId)
+        .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+    },
+    async updateDataroomInvite(id, patch) {
+      ensure();
+      const row = data.dataroomInvites[id];
+      if (!row) return null;
+      Object.assign(row, patch);
+      persist();
+      return row;
+    },
+
+    async logDataroomEvent(dataroomId, inviteId, kind, detail = {}) {
+      ensure();
+      data.dataroomEvents.push({ id: uuid(), dataroomId, inviteId: inviteId || null, kind, detail, createdAt: nowIso() });
+      if (data.dataroomEvents.length > 5000) data.dataroomEvents = data.dataroomEvents.slice(-5000);
+      persist();
+    },
+    async listDataroomEvents(dataroomId, { limit = 200 } = {}) {
+      ensure();
+      return data.dataroomEvents
+        .filter((e) => e.dataroomId === dataroomId)
         .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit);
     },

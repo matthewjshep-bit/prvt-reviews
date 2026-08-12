@@ -175,6 +175,41 @@ export const removeDealInvestor = (id, contactId) =>
 export const suggestInvestors = (id) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/suggest-investors`, {});
 
+/* ---------- investor datarooms ---------- */
+// A dataroom is a frozen, investor-facing package built from one offer. Each
+// investor gets their own secret link, which comes back ONLY from
+// createDataroomInvite/reissueDataroomInvite and is never retrievable
+// afterwards, so the UI must send or copy it right away.
+export const listDatarooms = (offerId = "") => {
+  const p = new URLSearchParams(locq());
+  if (offerId) p.set("offer_id", offerId);
+  return fetch(`${API_BASE}/api/datarooms?${p}`).then(j).then((r) => r.datarooms);
+};
+export const getDataroom = (id) =>
+  fetch(`${API_BASE}/api/datarooms/${encodeURIComponent(id)}?${locq()}`).then(j);
+export const createDataroom = ({ offerId, sections, headline, notes, expiryDays }) =>
+  post(`/api/datarooms`, { offerId, sections, headline, notes, expiryDays }).then((r) => r.dataroom);
+export const updateDataroom = (id, patch) =>
+  post(`/api/datarooms/${encodeURIComponent(id)}`, patch, "PUT").then((r) => r.dataroom);
+export const revokeDataroom = (id, revoked = true) =>
+  post(`/api/datarooms/${encodeURIComponent(id)}/revoke`, { revoked }).then((r) => r.dataroom);
+export const deleteDataroom = (id) =>
+  fetch(`${API_BASE}/api/datarooms/${encodeURIComponent(id)}?${locq()}`, { method: "DELETE" }).then(j);
+export const createDataroomInvite = (id, { contactId, name, phone, expiryDays, send, dryRun, message }) =>
+  post(`/api/datarooms/${encodeURIComponent(id)}/invites`, {
+    contactId, name, phone, expiryDays, send, dryRun, message,
+  });
+// `token` is the link handed back at creation — the server keeps only its hash,
+// so the caller must pass it back to send it again.
+export const sendDataroomInvite = (id, inviteId, { token, message, dryRun }) =>
+  post(`/api/datarooms/${encodeURIComponent(id)}/invites/${encodeURIComponent(inviteId)}/send`, {
+    token, message, dryRun,
+  });
+export const revokeDataroomInvite = (id, inviteId, revoked = true) =>
+  post(`/api/datarooms/${encodeURIComponent(id)}/invites/${encodeURIComponent(inviteId)}/revoke`, { revoked });
+export const reissueDataroomInvite = (id, inviteId, opts = {}) =>
+  post(`/api/datarooms/${encodeURIComponent(id)}/invites/${encodeURIComponent(inviteId)}/reissue`, opts);
+
 /* ---------- dashboard ---------- */
 // tz_offset lets the broker bucket daily metrics to the viewer's local day;
 // end ("YYYY-MM-DD") makes the window finish on a past day (the date picker).

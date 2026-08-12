@@ -106,6 +106,58 @@ create unique index if not exists outreach_listings_batch_listing_uniq
 create index if not exists outreach_agents_batch_idx on outreach_agents (location_id, batch_id, last_seen desc);
 create index if not exists outreach_listings_batch_idx2 on outreach_listings (location_id, batch_id, agent_key);
 
+-- Investor datarooms: a curated, investor-facing package for one deal
+-- (address, numbers, comps, scope, documents). `doc` holds the snapshot taken
+-- at build time plus the section toggles, so editing the offer afterwards
+-- never silently changes what an investor already opened.
+create table if not exists datarooms (
+  id           uuid primary key,
+  location_id  text not null,
+  offer_id     uuid,
+  address      text,
+  status       text not null default 'active',   -- 'active' | 'revoked'
+  doc          jsonb not null,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+create index if not exists datarooms_loc_idx on datarooms (location_id, created_at desc);
+create index if not exists datarooms_offer_idx on datarooms (location_id, offer_id);
+
+-- One invite per investor. The link token is NEVER stored — only its SHA-256,
+-- so a database leak yields no working links. The token alone opens the room;
+-- expiry and revocation are what bound it.
+create table if not exists dataroom_invites (
+  id              uuid primary key,
+  dataroom_id     uuid not null,
+  location_id     text not null,
+  token_hash      text not null unique,
+  contact_id      text,
+  name            text,
+  phone           text,
+  status          text not null default 'active',   -- 'active' | 'revoked'
+  expires_at      timestamptz,
+  first_viewed_at timestamptz,
+  last_viewed_at  timestamptz,
+  view_count      int not null default 0,
+  sent_at         timestamptz,
+  created_at      timestamptz not null default now(),
+  doc             jsonb not null default '{}'::jsonb
+);
+create index if not exists dataroom_invites_room_idx on dataroom_invites (dataroom_id, created_at);
+create index if not exists dataroom_invites_loc_idx on dataroom_invites (location_id, created_at desc);
+
+-- Access log: who opened what, when. Powers the "who's actually looking"
+-- column the operator sees next to each investor.
+create table if not exists dataroom_events (
+  id           uuid primary key,
+  dataroom_id  uuid not null,
+  invite_id    uuid,
+  kind         text not null,   -- 'view' | 'download' | 'sent' | 'reissued' | 'revoked'
+  detail       jsonb not null default '{}'::jsonb,
+  created_at   timestamptz not null default now()
+);
+create index if not exists dataroom_events_room_idx on dataroom_events (dataroom_id, created_at desc);
+
 -- The pre-overhaul Card Studio / Home tables (templates, template_versions,
 -- renders, assets, connections, home_sends, campaigns, journeys,
 -- journey_enrollments, data_source_tests) are no longer used. They are left

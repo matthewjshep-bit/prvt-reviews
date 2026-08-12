@@ -1,0 +1,546 @@
+// DataroomModal.jsx — the secure investor dataroom for one deal. The operator
+// builds a package from the offer, then issues one personal link per investor
+// and texts it through GHL.
+//
+// The thing to understand about this screen: a link's token exists only in the
+// response that mints it. The server keeps a hash, so nothing here can show a
+// link again later — if it scrolls away, reissue it (which also kills the old
+// one). That's why freshly-minted links get pinned to the top with a copy
+// button until dismissed.
+//
+// The deal strip along the top lets the operator move between active deals (and
+// see where investors are actually looking) without closing back to the board.
+
+import React, { useEffect, useRef, useState } from "react";
+import {
+  ArrowLeft, Check, Copy, Eye, Loader2, Lock, RefreshCw, Send, ShieldOff, Trash2, X,
+} from "lucide-react";
+import { fmtMoney } from "@shared/offer-calc.js";
+import {
+  createDataroom, createDataroomInvite, getDataroom, listDatarooms, reissueDataroomInvite,
+  revokeDataroom, revokeDataroomInvite, searchContacts, sendDataroomInvite, updateDataroom,
+} from "./api.js";
+
+const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
+const INPUT_CLS =
+  "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:opacity-60";
+const BTN_CLS =
+  "flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50";
+
+// Order here is the order the toggles appear. feeBreakdown is last and framed
+// as a warning — it shows the investor our contract price and our fee.
+const SECTIONS = [
+  ["summary", "Headline numbers", "Purchase price, ARV, rehab"],
+  ["property", "Property details", "Beds, baths, sqft, year"],
+  ["equity", "Spread at ARV", "ARV minus price and rehab"],
+  ["comps", "Comparable sales", "The comps behind the ARV"],
+  ["scope", "Rehab scope of work", "Line-item budget"],
+  ["terms", "Terms", "Closing and inspection dates"],
+  ["documents", "Documents", "Comps + scope PDFs"],
+  ["feeBreakdown", "Price breakdown", "Reveals your contract price and fee"],
+];
+
+const shortDateTime = (iso) =>
+  iso ? new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+const shortDate = (iso) =>
+  iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+// Street line only — the deal strip has no room for city/state/zip.
+const shortAddress = (a) => String(a || "Deal").split(",")[0].trim() || "Deal";
+
+function CopyButton({ value, label = "Copy link", className = BTN_CLS }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button type="button" className={className}
+      onClick={() => {
+        navigator.clipboard?.writeText(value).then(() => {
+          setDone(true);
+          setTimeout(() => setDone(false), 1500);
+        }).catch(() => {});
+      }}>
+      {done ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+      {done ? "Copied" : label}
+    </button>
+  );
+}
+
+// Typeahead over GHL contacts — same debounced shape as DealsView's picker.
+function ContactPicker({ existingIds, onPick, busy }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [open, setOpen] = useState(false);
+  const timer = useRef(null);
+
+  useEffect(() => {
+    clearTimeout(timer.current);
+    if (query.trim().length < 2) { setResults([]); return; }
+    timer.current = setTimeout(() => {
+      setSearching(true);
+      searchContacts(query.trim()).then(setResults).catch(() => setResults([])).finally(() => setSearching(false));
+    }, 300);
+    return () => clearTimeout(timer.current);
+  }, [query]);
+
+  return (
+    <div className="relative">
+      <input value={query} disabled={busy} className={INPUT_CLS}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder="Invite an investor — search your GHL contacts…" />
+      {searching && <Loader2 size={14} className="absolute right-3 top-3 animate-spin text-slate-400" />}
+      {open && results.length > 0 && (
+        <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+          {results.map((c) => (
+            <button key={c.id} type="button" disabled={existingIds.has(c.id)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { onPick(c); setQuery(""); setResults([]); setOpen(false); }}
+              className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:opacity-50">
+              <span className="font-medium">{c.name || "(no name)"}</span>
+              <span className="text-xs text-slate-500">{[c.phone, c.email].filter(Boolean).join(" · ")}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A link that was just minted. Shown once — dismissing it is the only way to
+// clear it, and after that only a reissue can produce a working link.
+function FreshLink({ item, onSend, onDismiss, busy }) {
+  return (
+    <div className="mb-3 rounded-xl border border-emerald-300 bg-emerald-50 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="text-sm font-semibold text-emerald-900">
+          Link for {item.name || "this investor"} — shown once
+        </div>
+        <button type="button" onClick={onDismiss} className="rounded p-1 text-emerald-700 hover:bg-emerald-100">
+          <X size={14} />
+        </button>
+      </div>
+      <p className="mt-0.5 text-xs text-emerald-800">
+        We store only a hash of this link, so it can't be shown again. Text it now, or copy it somewhere safe.
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        <input readOnly value={item.link} className="w-full rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 font-mono text-xs" />
+        <CopyButton value={item.link} className={`${BTN_CLS} shrink-0 border-emerald-300 bg-white`} />
+      </div>
+      {item.sendResult?.dryRun && (
+        <div className="mt-2 rounded-lg bg-white/70 p-2 text-xs text-emerald-900">
+          <div className="font-semibold">Test mode — nothing was texted.</div>
+          <div className="mt-1 whitespace-pre-wrap text-slate-600">{item.sendResult.preview?.message}</div>
+        </div>
+      )}
+      {item.sendResult?.sent && <div className="mt-2 text-xs font-semibold text-emerald-800">Texted to {item.phone}.</div>}
+      {item.sendResult?.results?.link?.error && (
+        <div className="mt-2 text-xs font-semibold text-red-700">Text failed: {item.sendResult.results.link.error}</div>
+      )}
+      {!item.sendResult && item.phone && (
+        <button type="button" disabled={busy} onClick={onSend}
+          className="mt-2 flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
+          <Send size={13} /> Text it to {item.name?.split(" ")[0] || "them"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDeals, onClose }) {
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [room, setRoom] = useState(null);       // full room incl. snapshot + invites
+  const [events, setEvents] = useState([]);
+  const [fresh, setFresh] = useState([]);       // just-minted links, newest first
+  const [draft, setDraft] = useState({ headline: "", notes: "", expiryDays: 14, sections: null });
+  const [liveSend, setLiveSend] = useState(false);
+  const [roomsByOffer, setRoomsByOffer] = useState({}); // offerId -> summary, for the deal strip
+
+  const dealInvestors = offer.deal?.investors || [];
+
+  // Load the newest room for this offer, if one exists. Re-runs when the
+  // operator switches deals from the strip, so every switch starts clean.
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setRoom(null);
+    setEvents([]);
+    setFresh([]);
+    setError("");
+    (async () => {
+      try {
+        const rooms = await listDatarooms(offer.id);
+        if (cancelled) return;
+        if (rooms.length) {
+          const full = await getDataroom(rooms[0].id);
+          if (cancelled) return;
+          setRoom(full.dataroom);
+          setEvents(full.events || []);
+        }
+      } catch (e) { if (!cancelled) setError(e.message); }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [offer.id]);
+
+  // Every dataroom in the location, so the strip can show which other deals
+  // have packages out and where investors are actually looking.
+  const refreshStrip = async () => {
+    try {
+      const all = await listDatarooms();
+      setRoomsByOffer(Object.fromEntries(all.map((r) => [r.offerId, r])));
+    } catch { /* the strip is a convenience — never block the screen on it */ }
+  };
+  useEffect(() => { refreshStrip(); }, [offer.id]);
+
+  const run = async (fn) => {
+    setError(""); setBusy(true);
+    try { return await fn(); }
+    catch (e) { setError(e.message); return null; }
+    finally { setBusy(false); }
+  };
+
+  const reload = async () => {
+    const full = await getDataroom(room.id);
+    setRoom(full.dataroom);
+    setEvents(full.events || []);
+    refreshStrip();
+  };
+
+  async function build() {
+    await run(async () => {
+      const created = await createDataroom({
+        offerId: offer.id,
+        headline: draft.headline,
+        notes: draft.notes,
+        expiryDays: draft.expiryDays,
+      });
+      const full = await getDataroom(created.id);
+      setRoom(full.dataroom);
+      setEvents(full.events || []);
+      refreshStrip();
+    });
+  }
+
+  const sections = room?.snapshot?.sections || {};
+
+  async function toggleSection(key) {
+    await run(async () => {
+      const next = { ...sections, [key]: !sections[key] };
+      setRoom((r) => ({ ...r, snapshot: { ...r.snapshot, sections: next } }));
+      await updateDataroom(room.id, { sections: next });
+    });
+  }
+
+  async function saveText(patch) {
+    await run(async () => {
+      const saved = await updateDataroom(room.id, patch);
+      setRoom((r) => ({ ...saved, invites: r.invites }));
+    });
+  }
+
+  async function invite(contact) {
+    await run(async () => {
+      const r = await createDataroomInvite(room.id, {
+        contactId: contact.id, name: contact.name, phone: contact.phone,
+        send: Boolean(contact.phone), dryRun: !liveSend,
+      });
+      setFresh((f) => [{
+        inviteId: r.invite.id, link: r.link,
+        name: r.invite.name, phone: r.invite.phone, sendResult: r.send,
+      }, ...f]);
+      await reload();
+    });
+  }
+
+  async function sendFresh(item) {
+    await run(async () => {
+      const r = await sendDataroomInvite(room.id, item.inviteId, {
+        token: item.link.split("/d/")[1], dryRun: !liveSend,
+      });
+      setFresh((f) => f.map((x) => (x.inviteId === item.inviteId ? { ...x, sendResult: r.send } : x)));
+      await reload();
+    });
+  }
+
+  async function reissue(inv) {
+    await run(async () => {
+      const r = await reissueDataroomInvite(room.id, inv.id, { send: Boolean(inv.phone), dryRun: !liveSend });
+      setFresh((f) => [{
+        inviteId: inv.id, link: r.link,
+        name: r.invite.name, phone: r.invite.phone, sendResult: r.send,
+      }, ...f.filter((x) => x.inviteId !== inv.id)]);
+      await reload();
+    });
+  }
+
+  const invites = room?.invites || [];
+  const existingIds = new Set(invites.filter((i) => i.status === "active").map((i) => i.contactId));
+  const n = room?.snapshot?.numbers || {};
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={onClose}>
+      <div className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-3 flex items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-lg font-bold">
+              <Lock size={17} className="text-slate-400" /> Investor dataroom
+            </div>
+            <div className="text-sm text-slate-500">
+              {offer.address || "Deal"}
+              {room && n.investorPrice > 0 ? ` · ${fmtMoney(n.investorPrice)} to the investor` : ""}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {onBackToDeals && (
+              <button type="button" onClick={onBackToDeals} className={BTN_CLS} title="Close and go back to the deals board">
+                <ArrowLeft size={13} /> All deals
+              </button>
+            )}
+            <button type="button" onClick={onClose} className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Every active deal, with where its investors are looking — switching
+            here keeps the operator inside the dataroom instead of bouncing out. */}
+        {deals.length > 1 && (
+          <div className="mb-4 flex gap-1.5 overflow-x-auto pb-1">
+            {deals.map((d) => {
+              const s = roomsByOffer[d.id];
+              const current = d.id === offer.id;
+              return (
+                <button key={d.id} type="button" disabled={busy || current}
+                  onClick={() => onSwitch?.(d)}
+                  title={d.address || "Deal"}
+                  className={`shrink-0 rounded-lg border px-2.5 py-1.5 text-left text-xs disabled:cursor-default ${
+                    current ? "border-blue-600 bg-blue-50" : "border-slate-200 hover:bg-slate-50"
+                  }`}>
+                  <span className={`block max-w-[170px] truncate font-semibold ${current ? "text-blue-800" : ""}`}>
+                    {shortAddress(d.address)}
+                  </span>
+                  <span className="block text-[11px] text-slate-500">
+                    {!s ? "no package yet"
+                      : s.status === "revoked" ? "switched off"
+                      : s.viewCount > 0 ? `${s.inviteCount} invited · ${s.viewCount} views`
+                      : `${s.inviteCount} invited · not opened`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {error && <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+
+        {loading ? (
+          <div className="flex items-center gap-2 py-10 text-sm text-slate-500">
+            <Loader2 size={16} className="animate-spin" /> Loading…
+          </div>
+        ) : !room ? (
+          /* ---------- build the package ---------- */
+          <div>
+            <p className="mb-4 text-sm text-slate-600">
+              Build a private web page from this deal — the numbers, the comps, the scope, and the PDFs.
+              Each investor gets their own secret link, texted from your GHL number. You can see who opened
+              it, and kill any link instantly.
+            </p>
+            <div className="mb-3">
+              <span className={LABEL_CLS}>Headline (optional)</span>
+              <input className={INPUT_CLS} value={draft.headline} maxLength={120}
+                onChange={(e) => setDraft((d) => ({ ...d, headline: e.target.value }))}
+                placeholder="4/2.5 in Sumner — assignable, inspection done" />
+            </div>
+            <div className="mb-3">
+              <span className={LABEL_CLS}>Deal notes for investors (optional)</span>
+              <textarea rows={3} className={INPUT_CLS} value={draft.notes} maxLength={2000}
+                onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
+                placeholder="Seller is relocating and wants a fast close. Vacant at closing." />
+            </div>
+            <div className="mb-4 max-w-xs">
+              <span className={LABEL_CLS}>Links expire after</span>
+              <select className={INPUT_CLS} value={draft.expiryDays}
+                onChange={(e) => setDraft((d) => ({ ...d, expiryDays: Number(e.target.value) }))}>
+                {[3, 7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
+              </select>
+            </div>
+            <button type="button" onClick={build} disabled={busy}
+              className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
+              {busy ? <Loader2 size={16} className="animate-spin" /> : <Lock size={16} />} Build the dataroom
+            </button>
+          </div>
+        ) : (
+          /* ---------- manage ---------- */
+          <div>
+            {room.status === "revoked" && (
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <span>Every link to this dataroom is switched off.</span>
+                <button type="button" disabled={busy} className={BTN_CLS}
+                  onClick={() => run(async () => { await revokeDataroom(room.id, false); await reload(); })}>
+                  Turn back on
+                </button>
+              </div>
+            )}
+
+            {fresh.map((item) => (
+              <FreshLink key={item.inviteId + item.link} item={item} busy={busy}
+                onSend={() => sendFresh(item)}
+                onDismiss={() => setFresh((f) => f.filter((x) => x.inviteId !== item.inviteId))} />
+            ))}
+
+            {/* --- invites --- */}
+            <div className="mb-2 flex items-center justify-between">
+              <span className={`${LABEL_CLS} mb-0`}>Investors with access</span>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                <input type="checkbox" checked={liveSend} className="h-3.5 w-3.5"
+                  onChange={(e) => setLiveSend(e.target.checked)} />
+                Actually send texts
+              </label>
+            </div>
+
+            {invites.length === 0 ? (
+              <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2.5 text-sm text-slate-500">
+                No one has been invited yet.
+              </p>
+            ) : (
+              <div className="mb-3 divide-y divide-slate-100 rounded-xl border border-slate-200">
+                {invites.map((i) => {
+                  const dead = i.status === "revoked" || i.expired;
+                  return (
+                    <div key={i.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                          <span className={dead ? "text-slate-400 line-through" : ""}>{i.name || i.contactId}</span>
+                          {i.status === "revoked" && <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">revoked</span>}
+                          {i.expired && i.status !== "revoked" && <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">expired</span>}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {i.viewCount > 0
+                            ? <span className="font-medium text-emerald-700">
+                                <Eye size={11} className="mr-1 inline" />
+                                opened {i.viewCount}× · last {shortDateTime(i.lastViewedAt)}
+                              </span>
+                            : i.sentAt ? `texted ${shortDateTime(i.sentAt)} · not opened yet` : "not sent yet"}
+                          {i.expiresAt && !i.expired ? ` · expires ${shortDate(i.expiresAt)}` : ""}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 gap-1.5">
+                        <button type="button" disabled={busy} className={BTN_CLS} onClick={() => reissue(i)}
+                          title="Issue a fresh link — the old one stops working immediately">
+                          <RefreshCw size={12} /> Reissue
+                        </button>
+                        <button type="button" disabled={busy} className={`${BTN_CLS} ${i.status === "revoked" ? "" : "text-red-700"}`}
+                          onClick={() => run(async () => { await revokeDataroomInvite(room.id, i.id, i.status !== "revoked"); await reload(); })}
+                          title={i.status === "revoked" ? "Restore this link" : "Kill this link now"}>
+                          <ShieldOff size={12} /> {i.status === "revoked" ? "Restore" : "Revoke"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {room.status !== "revoked" && (
+              <div className="mb-1">
+                <ContactPicker existingIds={existingIds} busy={busy} onPick={invite} />
+              </div>
+            )}
+            {dealInvestors.length > 0 && room.status !== "revoked" && (
+              <div className="mb-4 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                <span>On this deal:</span>
+                {dealInvestors.filter((d) => !existingIds.has(d.contactId)).map((d) => (
+                  <button key={d.contactId} type="button" disabled={busy}
+                    className="rounded-full border border-slate-300 px-2 py-0.5 font-medium hover:bg-slate-50 disabled:opacity-50"
+                    onClick={() => invite({ id: d.contactId, name: d.name })}>
+                    + {d.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {!liveSend && (
+              <p className="mb-4 text-xs text-slate-500">
+                Texts are in test mode — you'll see the message without sending it. Tick “Actually send texts” to go live.
+              </p>
+            )}
+
+            {/* --- what's in the package --- */}
+            <div className="mb-4 rounded-xl border border-slate-200 p-3">
+              <span className={LABEL_CLS}>What investors see</span>
+              <div className="grid gap-1.5 sm:grid-cols-2">
+                {SECTIONS.map(([key, label, hint]) => (
+                  <label key={key} className="flex items-start gap-2 text-sm">
+                    <input type="checkbox" checked={Boolean(sections[key])} disabled={busy} className="mt-0.5 h-4 w-4"
+                      onChange={() => toggleSection(key)} />
+                    <span>
+                      <span className={key === "feeBreakdown" && sections[key] ? "font-semibold text-amber-700" : ""}>{label}</span>
+                      <span className="block text-xs text-slate-500">{hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {sections.feeBreakdown && (
+                <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
+                  Investors will see your contract price and assignment fee.
+                </p>
+              )}
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <span className={LABEL_CLS}>Headline</span>
+                  <input className={INPUT_CLS} defaultValue={room.snapshot?.headline || ""} maxLength={120}
+                    onBlur={(e) => e.target.value !== (room.snapshot?.headline || "") && saveText({ headline: e.target.value })} />
+                </div>
+                <div>
+                  <span className={LABEL_CLS}>Deal notes</span>
+                  <textarea rows={2} className={INPUT_CLS} defaultValue={room.snapshot?.notes || ""} maxLength={2000}
+                    onBlur={(e) => e.target.value !== (room.snapshot?.notes || "") && saveText({ notes: e.target.value })} />
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button type="button" disabled={busy} className={BTN_CLS}
+                  onClick={() => run(async () => { await updateDataroom(room.id, { refresh: true }); await reload(); })}
+                  title="Re-read the offer so everyone holding a live link sees the current numbers">
+                  <RefreshCw size={12} /> Refresh from the offer
+                </button>
+                <span className="text-xs text-slate-500">
+                  Built {shortDateTime(room.snapshot?.builtAt)} — edits to the offer don't reach investors until you refresh.
+                </span>
+              </div>
+            </div>
+
+            {/* --- access log --- */}
+            {events.length > 0 && (
+              <details className="mb-4">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Access log ({events.length})
+                </summary>
+                <div className="mt-2 max-h-52 overflow-y-auto rounded-lg border border-slate-200 text-xs">
+                  {events.map((e) => (
+                    <div key={e.id} className="flex justify-between gap-3 border-b border-slate-100 px-2.5 py-1.5 last:border-0">
+                      <span>
+                        <span className="font-semibold">{e.kind}</span>
+                        {e.detail?.name ? ` · ${e.detail.name}` : ""}
+                        {e.detail?.kind ? ` · ${e.detail.kind}` : ""}
+                      </span>
+                      <span className="shrink-0 text-slate-500">{shortDateTime(e.createdAt)}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+
+            {room.status !== "revoked" && (
+              <button type="button" disabled={busy}
+                className="flex items-center gap-1.5 text-xs font-semibold text-red-700 hover:underline disabled:opacity-50"
+                onClick={() => run(async () => { await revokeDataroom(room.id, true); await reload(); })}>
+                <Trash2 size={12} /> Switch off every link to this dataroom
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

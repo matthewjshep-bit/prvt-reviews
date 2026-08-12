@@ -1,0 +1,217 @@
+// dataroom.test.mjs — end-to-end checks for the secure investor dataroom.
+// Run with:  npm run test:dataroom
+//
+// These assert the security properties the feature exists for: link tokens are
+// never stored in the clear, a token opens only its own room's documents, and
+// revoke / reissue / expiry kill access immediately.
+// Runs against the JSON file backend in a throwaway temp directory.
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "dataroom-test-"));
+process.env.DATAROOM_SECRET = "test-secret-abc";
+process.env.CARD_SENDS_ENABLED = "false";
+
+const { default: express } = await import("express");
+const { store } = await import("./store.js");
+const { createDataroomRouter, createDataroomPublicRouter } = await import("./routes/dataroom.js");
+
+const LOC = "loc-test-1";
+const resolveLocation = (req) => {
+  const loc = req.query.location_id || req.body?.location_id || "";
+  if (loc !== LOC) { const e = new Error("bad location"); e.http = 403; throw e; }
+  return { locationId: LOC, client: { call: async () => ({}) } };
+};
+
+const app = express();
+app.use(express.json({ limit: "5mb" }));
+app.use("/api/datarooms", createDataroomRouter({ resolveLocation, publicBaseUrl: "http://127.0.0.1:4999" }));
+app.use("/d", createDataroomPublicRouter());
+const server = app.listen(4999);
+await store.init();
+
+const B = "http://127.0.0.1:4999";
+let pass = 0, fail = 0;
+const ok = (label, cond, extra = "") => {
+  if (cond) { pass++; console.log(`  ok   ${label}`); }
+  else { fail++; console.log(`  FAIL ${label} ${extra}`); }
+};
+const jget = (u, opts) => fetch(u, opts).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null), res: r }));
+
+// --- seed an offer that looks like a real one ---
+const offer = await store.createOffer({
+  locationId: LOC,
+  contactId: "contact-agent-1",
+  contactName: "Dana Reyes",
+  address: "7316 166th Avenue East, Sumner, WA 98390",
+  cashAmount: 310000,
+  compsPdfUrl: "http://example.invalid/comps.pdf",
+  scopePdfUrl: "http://example.invalid/scope.pdf",
+  scope: [{ label: "Kitchen refresh", cost: 18000 }, { label: "Roof", cost: 14500 }],
+  calc: {
+    inputs: { address: "7316 166th Avenue East, Sumner, WA 98390", arv: 520000, repairs: 62000 },
+    settings: { company: { name: "Prvt Capital", tagline: "Cash offers, closed fast", signer: "Matt Shepherd", phone: "(253) 555-0143", email: "matt@example.com" } },
+  },
+  snapshot: {
+    subjectSqft: 1840,
+    comps: {
+      months: 6, arvBasis: "median $/sqft of 4 comps", arvBase: 515000,
+      adjustments: [{ label: "Corner lot", pct: 2 }],
+      selected: ["c1", "c2"],
+      grades: { c1: { condition: "renovated" }, c2: { condition: "dated" } },
+      result: {
+        info: { beds: 4, baths: 2.5, sqft: 1840, yearBuilt: 1996 },
+        comps: [
+          { id: "c1", address: "7402 168th Ave E", price: 540000, sqft: 1900, beds: 4, baths: 2.5, saleDate: "2026-05-14", yearBuilt: 1998 },
+          { id: "c2", address: "16510 74th St E", price: 498000, sqft: 1780, beds: 3, baths: 2, saleDate: "2026-04-02", yearBuilt: 1994 },
+          { id: "c3", address: "not selected", price: 999999, sqft: 1000 },
+        ],
+      },
+      manual: [{ id: "m1", address: "7101 170th Ave E (manual)", price: 525000, sqft: 1860, manual: true }],
+    },
+    rehab: { aiResult: { summary: "Original kitchen and baths; roof at end of life. Structure sound." } },
+  },
+  deal: {
+    stage: "under_contract", contractPrice: 312000, assignmentFee: 15000,
+    closingDate: "2026-09-15", inspectionDate: "2026-08-25", investors: [],
+  },
+});
+await store.saveOfferDoc(offer.id, "compspdf", Buffer.from("%PDF-1.4 fake comps"), "application/pdf");
+
+console.log("\n== operator: create room ==");
+let r = await jget(`${B}/api/datarooms`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, offerId: offer.id, headline: "Sumner 4/2.5 — assignable", notes: "Seller motivated." }),
+});
+ok("creates a room", r.status === 200 && r.body?.dataroom?.id, JSON.stringify(r.body).slice(0, 200));
+const room = r.body.dataroom;
+ok("investor price = contract + fee", room.snapshot.numbers.investorPrice === 327000, room.snapshot.numbers.investorPrice);
+ok("keeps only selected comps + manual", room.snapshot.comps.items.length === 3, room.snapshot.comps.items.map((c) => c.address).join("|"));
+ok("fee breakdown off by default", room.snapshot.sections.feeBreakdown === false);
+ok("lists both documents", room.snapshot.documents.length === 2);
+
+console.log("\n== operator: wrong location is refused ==");
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=someone-else`);
+ok("403 on a foreign location", r.status === 403, r.status);
+
+console.log("\n== operator: issue an invite ==");
+r = await jget(`${B}/api/datarooms/${room.id}/invites`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, contactId: "contact-inv-1", name: "Priya Raman", phone: "+12065550187" }),
+});
+ok("issues a link", r.status === 200 && /\/d\/[A-Za-z0-9_-]{20,}/.test(r.body?.link || ""), JSON.stringify(r.body).slice(0, 200));
+ok("issues no access code", !r.body?.pin);
+const link = r.body.link, inviteId = r.body.invite.id;
+const token = link.split("/d/")[1];
+
+console.log("\n== storage: no plaintext token at rest ==");
+const raw = await store.getDataroomInvite(inviteId);
+ok("token is not stored", !JSON.stringify(raw).includes(token));
+ok("token hash is stored", typeof raw.tokenHash === "string" && raw.tokenHash.length === 64);
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+ok("token hash never leaves the server", !JSON.stringify(r.body).includes(raw.tokenHash));
+
+console.log("\n== viewer: the link opens the package directly ==");
+let v = await fetch(link, { redirect: "manual" });
+let html = await v.text();
+ok("package renders with no code prompt", v.status === 200 && html.includes("Sumner") && !html.includes("access code"), v.status);
+ok("noindex header set", (v.headers.get("x-robots-tag") || "").includes("noindex"));
+ok("no-store header set", (v.headers.get("cache-control") || "").includes("no-store"));
+ok("framing denied", v.headers.get("x-frame-options") === "DENY");
+ok("sets no cookie", !v.headers.get("set-cookie"));
+ok("shows the investor price", html.includes("$327,000"));
+ok("hides our contract price by default", !html.includes("$312,000") && !html.includes("$15,000"));
+ok("shows comps", html.includes("7402 168th Ave E") && html.includes("7101 170th Ave E"));
+ok("excludes unselected comps", !html.includes("not selected"));
+ok("shows the scope", html.includes("Kitchen refresh") && html.includes("$32,500"));
+ok("watermarks with the recipient", html.includes("Priya Raman · CONFIDENTIAL"));
+ok("spread computed", html.includes("Spread at ARV") && html.includes("$131,000"));
+ok("warns against forwarding", html.includes("yours alone"));
+
+console.log("\n== viewer: each invite is watermarked to its own recipient ==");
+r = await jget(`${B}/api/datarooms/${room.id}/invites`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, contactId: "contact-inv-2", name: "Sam Cole", phone: "+12065550188" }),
+});
+const link2 = r.body.link;
+v = await fetch(link2, { redirect: "manual" });
+html = await v.text();
+ok("second invite names its own recipient", html.includes("Sam Cole · CONFIDENTIAL") && !html.includes("Priya Raman"));
+
+console.log("\n== viewer: documents ==");
+v = await fetch(`${link}/file/comps`, { redirect: "manual" });
+ok("serves a document behind a live token", v.status === 200 && (await v.text()).startsWith("%PDF"), v.status);
+v = await fetch(`${link}/file/contract`, { redirect: "manual" });
+ok("undeclared document kind refused", v.status === 404, v.status);
+
+console.log("\n== operator: revoke one invite ==");
+r = await jget(`${B}/api/datarooms/${room.id}/invites/${inviteId}/revoke`, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location_id: LOC }),
+});
+ok("revoke succeeds", r.status === 200 && r.body.invite.status === "revoked");
+v = await fetch(link, { redirect: "manual" });
+html = await v.text();
+ok("revoked link dies immediately", v.status === 404 && html.includes("isn&#39;t available"), v.status);
+v = await fetch(`${link}/file/comps`, { redirect: "manual" });
+ok("revoked link can't fetch documents", v.status === 404, v.status);
+
+console.log("\n== operator: reissue ==");
+r = await jget(`${B}/api/datarooms/${room.id}/invites/${inviteId}/reissue`, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location_id: LOC }),
+});
+ok("reissue returns a new link", r.status === 200 && r.body.link !== link, r.status);
+const link3 = r.body.link;
+v = await fetch(link, { redirect: "manual" });
+ok("the old link is dead", v.status === 404 && (await v.text()).includes("isn&#39;t available"), v.status);
+v = await fetch(link3, { redirect: "manual" });
+ok("the new link opens", v.status === 200 && (await v.text()).includes("Sumner"), v.status);
+
+console.log("\n== operator: expiry ==");
+await store.updateDataroomInvite(inviteId, { expiresAt: new Date(Date.now() - 1000).toISOString() });
+v = await fetch(link3, { redirect: "manual" });
+ok("expired link is gone", v.status === 404 && (await v.text()).includes("isn&#39;t available"), v.status);
+
+console.log("\n== operator: whole-room revoke ==");
+await store.updateDataroomInvite(inviteId, { expiresAt: new Date(Date.now() + 86400000).toISOString() });
+r = await jget(`${B}/api/datarooms/${room.id}/revoke`, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location_id: LOC }),
+});
+ok("room revoke succeeds", r.status === 200);
+v = await fetch(link3, { redirect: "manual" });
+ok("every link dies with the room", v.status === 404 && (await v.text()).includes("isn&#39;t available"), v.status);
+r = await jget(`${B}/api/datarooms/${room.id}/revoke`, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location_id: LOC, revoked: false }),
+});
+v = await fetch(link3, { redirect: "manual" });
+ok("restore brings them back", v.status === 200 && (await v.text()).includes("Sumner"), v.status);
+
+console.log("\n== operator: garbage tokens ==");
+for (const bad of ["short", "../../etc/passwd", "A".repeat(200), "%00"]) {
+  v = await fetch(`${B}/d/${encodeURIComponent(bad)}`, { redirect: "manual" });
+  ok(`rejects "${bad.slice(0, 18)}"`, v.status === 404, v.status);
+}
+
+console.log("\n== operator: access log ==");
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+const kinds = (r.body.events || []).map((e) => e.kind);
+ok("logs views", kinds.includes("view"));
+ok("logs downloads", kinds.includes("download"));
+ok("logs revocations", kinds.includes("revoked"));
+ok("logs reissues", kinds.includes("reissued"));
+ok("reports view counts", r.body.dataroom.invites.some((i) => i.viewCount > 0));
+
+console.log("\n== operator: send (dry run) ==");
+r = await jget(`${B}/api/datarooms/${room.id}/invites`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, contactId: "contact-inv-3", name: "Ali Novak", phone: "+12065550190", send: true }),
+});
+ok("dry run previews the text", r.body?.send?.dryRun === true && r.body.send.preview.message.includes("/d/"), JSON.stringify(r.body?.send || {}).slice(0, 300));
+ok("dry run sends nothing", r.body.send.sent === undefined);
+ok("text warns against forwarding", /don't forward/.test(r.body.send.preview.message));
+
+console.log(`\n${pass} passed, ${fail} failed`);
+server.close();
+fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+process.exit(fail ? 1 : 0);

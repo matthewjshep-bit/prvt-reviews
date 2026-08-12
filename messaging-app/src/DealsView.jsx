@@ -5,13 +5,14 @@
 // immediately; terms (price / fee / inspection / closing / notes) save via the modal.
 
 import React, { useEffect, useRef, useState } from "react";
-import { ExternalLink, FileText, Loader2, Pencil, Sparkles, Trash2, X } from "lucide-react";
+import { ExternalLink, FileText, Loader2, Lock, Pencil, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
   addDealInvestor, getOffer, ghlContactUrl, listDeals, removeDeal, removeDealInvestor,
   searchContacts, suggestInvestors, updateDeal, updateDealInvestor, zillowUrl,
 } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
+import DataroomModal from "./DataroomModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 
 export const DEAL_STAGES = [
@@ -143,7 +144,7 @@ function InvestorPicker({ existingIds, onPick, busy }) {
   );
 }
 
-function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onEdit, onEnrich }) {
+function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onDataroom, onEdit, onEnrich }) {
   const deal = offer.deal;
   const [terms, setTerms] = useState(() => ({
     contractPrice: deal.contractPrice ?? "",
@@ -450,6 +451,11 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 title="Generate or update the assignment of contract for the committed buyer">
                 <FileText size={13} /> {offer.assignmentPdfUrl ? "Update assignment" : "Generate assignment"}
               </button>
+              <button type="button" onClick={() => onDataroom(offer)}
+                className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
+                title="Build a secure investor package and text personal links to your buyers">
+                <Lock size={13} /> Investor dataroom
+              </button>
             </div>
 
             <button type="button" onClick={removeThisDeal} disabled={busy}
@@ -469,6 +475,7 @@ export default function DealsView({ settings, onEdit }) {
   const [selectedId, setSelectedId] = useState(null);
   const [showTerminal, setShowTerminal] = useState(false);
   const [assigning, setAssigning] = useState(null);
+  const [dataroom, setDataroom] = useState(null); // offer whose investor dataroom is open
   const [enriching, setEnriching] = useState(null); // { contactId, name } investor in EnrichModal
 
   useEffect(() => {
@@ -616,8 +623,16 @@ export default function DealsView({ settings, onEdit }) {
           onUpdated={patchDeal}
           onRemoved={dropDeal}
           onAssignment={(o) => setAssigning(o)}
+          onDataroom={(o) => setDataroom(o)}
           onEdit={openOffer}
           onEnrich={(inv) => setEnriching(inv)} />
+      )}
+      {dataroom && (
+        <DataroomModal offer={dataroom}
+          deals={(deals || []).filter((d) => !TERMINAL.has(d.deal?.stage))}
+          onSwitch={(d) => { setDataroom(d); setSelectedId(d.id); }}
+          onBackToDeals={() => { setDataroom(null); setSelectedId(null); }}
+          onClose={() => setDataroom(null)} />
       )}
       {enriching && (
         <EnrichModal contactId={enriching.contactId} contactName={enriching.name}

@@ -8,7 +8,8 @@
     "node": ">=18"
   },
   "scripts": {
-    "start": "node broker.js"
+    "start": "node broker.js",
+    "test:dataroom": "node dataroom.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
