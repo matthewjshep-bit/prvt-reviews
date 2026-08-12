@@ -1,22 +1,157 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-09T19:30:00-07:00",
+  "generatedAt": "2026-08-12T12:45:00-07:00",
   "title": "Design System: Offer Generator",
   "extensions": {
     "colorMeta": {
-      "action-blue": { "role": "primary", "displayName": "Action Blue", "canonical": "#2563EB", "tonalRamp": ["#172554", "#1E3A8A", "#1D4ED8", "#2563EB", "#3B82F6", "#93C5FD", "#DBEAFE", "#EFF6FF"] },
-      "deal-green": { "role": "secondary", "displayName": "Deal Green", "canonical": "#059669", "tonalRamp": ["#022C22", "#064E3B", "#047857", "#059669", "#10B981", "#6EE7B7", "#D1FAE5", "#ECFDF5"] },
-      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#0F172A", "tonalRamp": ["#0F172A", "#1E293B", "#334155", "#475569", "#64748B", "#94A3B8", "#E2E8F0", "#F8FAFC"] }
+      "action-blue": {
+        "role": "primary",
+        "displayName": "Action Blue",
+        "canonical": "#2563EB",
+        "tonalRamp": [
+          "#172554",
+          "#1E3A8A",
+          "#1D4ED8",
+          "#2563EB",
+          "#3B82F6",
+          "#93C5FD",
+          "#DBEAFE",
+          "#EFF6FF"
+        ]
+      },
+      "deal-green": {
+        "role": "secondary",
+        "displayName": "Deal Green",
+        "canonical": "#059669",
+        "tonalRamp": [
+          "#022C22",
+          "#064E3B",
+          "#047857",
+          "#059669",
+          "#10B981",
+          "#6EE7B7",
+          "#D1FAE5",
+          "#ECFDF5"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#0F172A",
+        "tonalRamp": [
+          "#0F172A",
+          "#1E293B",
+          "#334155",
+          "#475569",
+          "#64748B",
+          "#94A3B8",
+          "#E2E8F0",
+          "#F8FAFC"
+        ]
+      }
     },
     "shadows": [
-      { "name": "modal", "value": "0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1)", "purpose": "Overlays only; in-page surfaces are flat." }
+      {
+        "name": "modal",
+        "value": "0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1)",
+        "purpose": "Overlays only; in-page surfaces are flat."
+      }
     ],
     "motion": [
-      { "name": "ease-standard", "value": "cubic-bezier(0.4, 0, 0.2, 1) 150-250ms", "purpose": "Hover/focus tint transitions; no transforms." }
+      {
+        "name": "ease-standard",
+        "value": "cubic-bezier(0.4, 0, 0.2, 1) 150-250ms",
+        "purpose": "Hover/focus tint transitions; no transforms."
+      }
     ],
     "breakpoints": [
-      { "name": "sm", "value": "640px" },
-      { "name": "lg", "value": "1024px" }
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      }
+    ],
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Console section and modal titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Console body copy and table cells."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Uppercase field labels and table headers."
+      },
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "Console row subtext, chips, timestamps. Used heavily across the app."
+      },
+      "micro": {
+        "displayName": "Micro",
+        "purpose": "Console status pills only."
+      },
+      "doc-display": {
+        "displayName": "Document Display",
+        "purpose": "Investor pages: the hero money figure. Never in the console."
+      },
+      "doc-title": {
+        "displayName": "Document Title",
+        "purpose": "Investor pages: page h1 (the property address)."
+      },
+      "doc-figure": {
+        "displayName": "Document Figure",
+        "purpose": "Investor pages: supporting money figures (ARV, rehab, spread)."
+      },
+      "doc-heading": {
+        "displayName": "Document Heading",
+        "purpose": "Investor pages: card headings and portfolio card addresses."
+      },
+      "doc-body": {
+        "displayName": "Document Body",
+        "purpose": "Investor pages: body copy and tables. Looser than the console's 14px body."
+      }
+    },
+    "surfaces": [
+      {
+        "name": "console",
+        "root": "messaging-app/",
+        "mode": "Operate",
+        "description": "Operator app inside the GoHighLevel iframe. Dense, desktop-first, worked dozens of times a day.",
+        "typeScale": [
+          "headline",
+          "body",
+          "label",
+          "meta",
+          "micro"
+        ]
+      },
+      {
+        "name": "investor-document",
+        "root": "ghl-broker/dataroom.js",
+        "mode": "Persuade",
+        "description": "Public pages served at /d/<token>: the deal package and the all-deals portfolio. Read once, on a phone, by someone outside the business deciding whether to spend money.",
+        "typeScale": [
+          "doc-display",
+          "doc-title",
+          "doc-figure",
+          "doc-heading",
+          "doc-body",
+          "label",
+          "meta",
+          "micro"
+        ],
+        "rounded": [
+          "md",
+          "lg",
+          "pill"
+        ],
+        "notes": "Shares the console palette and typeface exactly; introduces no colors or radii of its own."
+      }
     ]
   },
   "components": [
@@ -64,13 +199,13 @@
       "name": "Text Input",
       "kind": "input",
       "description": "Standard field with blue focus ring.",
-      "html": "<input class=\"ds-input\" placeholder=\"Search by contact, address, amount…\" />",
+      "html": "<input class=\"ds-input\" placeholder=\"Search by contact, address, amount\u2026\" />",
       "css": ".ds-input { background: #fff; color: #0F172A; padding: 10px 14px; border: 1px solid #CBD5E1; border-radius: 8px; font: 400 14px 'Plus Jakarta Sans', system-ui, sans-serif; width: 100%; box-sizing: border-box; transition: border-color 200ms, box-shadow 200ms; } .ds-input:focus { outline: none; border-color: #2563EB; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12); } .ds-input::placeholder { color: #94A3B8; }"
     }
   ],
   "narrative": {
     "northStar": "The Deal Desk",
-    "overview": "A flat, Swiss-minimal operator console: white working surfaces on cool paper, hairline borders instead of shadows, one decisive blue for actions and one green reserved for money moving the operator's way. Dense by design — the user works it dozens of times a day inside a GoHighLevel iframe, so scanability and speed outrank expression.",
+    "overview": "A flat, Swiss-minimal operator console: white working surfaces on cool paper, hairline borders instead of shadows, one decisive blue for actions and one green reserved for money moving the operator's way. Dense by design \u2014 the user works it dozens of times a day inside a GoHighLevel iframe, so scanability and speed outrank expression.",
     "keyCharacteristics": [
       "Flat surfaces, hairline borders, shadows on overlays only",
       "Dense 14px/12px text scale with uppercase tracked labels",
@@ -78,20 +213,37 @@
       "Full-bleed tables, capped forms"
     ],
     "rules": [
-      { "name": "The Two-Accent Rule", "body": "Blue acts, green counts money. No other saturated color except amber/red status semantics.", "section": "colors" },
-      { "name": "The Gray-Ladder Rule", "body": "Text de-emphasis walks slate 900→700→500→400 and never drops below slate-500 for text a user must read.", "section": "colors" },
-      { "name": "The 12px Floor Rule", "body": "No functional text below 12px; legacy 11px chips are the floor exception and stay bold + high-contrast.", "section": "typography" }
+      {
+        "name": "The Two-Accent Rule",
+        "body": "Blue acts, green counts money. No other saturated color except amber/red status semantics.",
+        "section": "colors"
+      },
+      {
+        "name": "The Gray-Ladder Rule",
+        "body": "Text de-emphasis walks slate 900\u2192700\u2192500\u2192400 and never drops below slate-500 for text a user must read.",
+        "section": "colors"
+      },
+      {
+        "name": "The 12px Floor Rule",
+        "body": "No functional text below 12px; legacy 11px chips are the floor exception and stay bold + high-contrast.",
+        "section": "typography"
+      },
+      {
+        "name": "Two Surfaces, One Palette",
+        "body": "The console and the investor document share colors, typeface and flat/hairline construction, but not the type scale. The console optimizes for density; the investor document optimizes for legibility and confidence on a phone. Reaching for the console's 14px body on an investor page means that page is trying to be a table when it should be a document.",
+        "section": "typography"
+      }
     ],
     "dos": [
       "Do right-align and embolden every money figure; Deal Green only when money flows to the operator.",
       "Do keep table-heavy views full-bleed and forms capped; header gutters match content gutters.",
       "Do use hairline borders for structure and background steps for depth.",
-      "Do keep transitions 150–250ms and respect prefers-reduced-motion."
+      "Do keep transitions 150\u2013250ms and respect prefers-reduced-motion."
     ],
     "donts": [
       "Don't add shadows to in-page cards, gradients anywhere, or a third accent hue.",
       "Don't use text lighter than slate-500 for content, or functional text under 12px.",
-      "Don't use emojis as icons — Lucide SVGs only.",
+      "Don't use emojis as icons \u2014 Lucide SVGs only.",
       "Don't use scale/translate hovers that shift layout."
     ]
   }

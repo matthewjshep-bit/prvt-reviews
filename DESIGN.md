@@ -42,6 +42,32 @@ typography:
     fontSize: "0.625rem"
     fontWeight: 600
     letterSpacing: "0.02em"
+  doc-display:
+    fontFamily: "Plus Jakarta Sans, system-ui, sans-serif"
+    fontSize: "1.5rem"
+    fontWeight: 700
+    letterSpacing: "-0.02em"
+  doc-title:
+    fontFamily: "Plus Jakarta Sans, system-ui, sans-serif"
+    fontSize: "1.3125rem"
+    fontWeight: 700
+    letterSpacing: "-0.01em"
+    lineHeight: 1.25
+  doc-figure:
+    fontFamily: "Plus Jakarta Sans, system-ui, sans-serif"
+    fontSize: "1.25rem"
+    fontWeight: 700
+    letterSpacing: "-0.02em"
+  doc-heading:
+    fontFamily: "Plus Jakarta Sans, system-ui, sans-serif"
+    fontSize: "0.9375rem"
+    fontWeight: 700
+    letterSpacing: "-0.005em"
+  doc-body:
+    fontFamily: "Plus Jakarta Sans, system-ui, sans-serif"
+    fontSize: "0.8125rem"
+    fontWeight: 400
+    lineHeight: 1.5
 rounded:
   sm: "6px"
   md: "8px"
@@ -69,19 +95,6 @@ components:
   card:
     backgroundColor: "{colors.surface}"
     rounded: "{rounded.lg}"
-surfaces:
-  console:
-    description: "Operator app inside the GHL iframe. Dense, desktop-first."
-    typeScale: ["18px", "14px", "12px", "11px", "10px"]
-  investor-document:
-    description: >
-      Public pages the broker serves at /d/<token> — the deal package and the
-      all-deals portfolio. Read on a phone by someone outside the business, so
-      it trades density for legibility: larger headings, larger money figures,
-      13px body instead of 14px dense rows.
-    typeScale: ["24px", "21px", "20px", "15px", "13px", "12px", "11px", "10px"]
-    rounded: ["{rounded.md}", "{rounded.lg}", "{rounded.pill}"]
-    palette: "same tokens as the console — no separate colors"
 ---
 
 # Design System: Offer Generator
@@ -109,15 +122,17 @@ above describes it: dense, desktop-first, worked dozens of times a day.
 
 **Investor document** (`ghl-broker/dataroom.js`) — the public pages served at
 `/d/<token>`: a deal package and the all-deals portfolio. Same palette, same
-typeface, same flat/hairline construction, but a **larger type scale** (24/21/20
-display, 15 headings, 13 body) because it is read once, on a phone, by someone
-outside the business who is deciding whether to spend money. Density is the wrong
-goal there; legibility and confidence are. Radii stay on the shared `md`/`lg`/`pill`
-steps, and it introduces no colors of its own.
+typeface, same flat/hairline construction, but it uses the `doc-*` type steps
+(`doc-display` 24, `doc-title` 21, `doc-figure` 20, `doc-heading` 15, `doc-body`
+13) because it is read once, on a phone, by someone outside the business who is
+deciding whether to spend money. Density is the wrong goal there; legibility and
+confidence are. Radii stay on the shared `md`/`lg`/`pill` steps, and it
+introduces no colors of its own.
 
-Deliberately not shared: the console's 14px body and 11/10px metadata steps. If
-you find yourself reaching for those on an investor page, that page is probably
-trying to be a table when it should be a document.
+The two scales share only their small end — `label`, `meta`, `micro` — for
+eyebrows, table headers and fine print. Reach for the console's 14px `body` on an
+investor page and that page is probably trying to be a table when it should be a
+document.
 
 ## Colors
 
