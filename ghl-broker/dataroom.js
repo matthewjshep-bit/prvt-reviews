@@ -299,8 +299,12 @@ export function renderPortfolio({ rooms = [], company = {} }) {
   };
 
   const contactBits = [company.phone, company.email].filter(Boolean);
+  // Company name is often left blank in settings, so fall back through the
+  // other identifying fields before landing on something generic — this title
+  // is what shows in a browser tab and in a shared-link preview.
+  const brand = company.name || company.tagline || company.signer || "";
   return page({
-    title: `${company.name || "Investment"} — current deals`,
+    title: brand ? `${brand} — current deals` : "Current deals",
     css: `
       .deal{display:block;text-decoration:none;color:inherit;background:#fff;border:1px solid #E2E8F0;
         border-radius:12px;padding:16px;margin:0 0 12px}
