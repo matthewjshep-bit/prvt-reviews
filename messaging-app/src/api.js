@@ -183,6 +183,11 @@ export const suggestInvestors = (id) =>
 // extra: those come back ONLY from createDataroomInvite/reissueDataroomInvite
 // and are never retrievable afterwards, so the UI must send or copy them
 // right away.
+// One link for every listed deal at once — the page buyers land on, with each
+// deal linking through to its own package. Resolved live, so adding a deal
+// updates it without resending anything.
+export const getDataroomPortfolio = () =>
+  fetch(`${API_BASE}/api/datarooms/portfolio?${locq()}`).then(j);
 export const listDatarooms = (offerId = "") => {
   const p = new URLSearchParams(locq());
   if (offerId) p.set("offer_id", offerId);

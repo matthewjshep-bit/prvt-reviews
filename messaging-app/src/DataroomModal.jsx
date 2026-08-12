@@ -17,9 +17,9 @@ import {
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
-  createDataroom, createDataroomInvite, getDataroom, listDatarooms, reissueDataroomInvite,
-  revokeDataroom, revokeDataroomInvite, rotateDataroomShareLink, searchContacts,
-  sendDataroomInvite, updateDataroom,
+  createDataroom, createDataroomInvite, getDataroom, getDataroomPortfolio, listDatarooms,
+  reissueDataroomInvite, revokeDataroom, revokeDataroomInvite, rotateDataroomShareLink,
+  searchContacts, sendDataroomInvite, updateDataroom,
 } from "./api.js";
 
 const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
@@ -157,6 +157,7 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
   const [draft, setDraft] = useState({ headline: "", notes: "", expiryDays: 14, sections: null });
   const [liveSend, setLiveSend] = useState(false);
   const [roomsByOffer, setRoomsByOffer] = useState({}); // offerId -> summary, for the deal strip
+  const [portfolio, setPortfolio] = useState(null);     // { shareLink, listedCount, views }
 
   const dealInvestors = offer.deal?.investors || [];
 
@@ -192,6 +193,9 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
       const all = await listDatarooms();
       setRoomsByOffer(Object.fromEntries(all.map((r) => [r.offerId, r])));
     } catch { /* the strip is a convenience — never block the screen on it */ }
+    try {
+      setPortfolio(await getDataroomPortfolio());
+    } catch { /* likewise the portfolio summary */ }
   };
   useEffect(() => { refreshStrip(); }, [offer.id]);
 
@@ -388,7 +392,32 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
               </div>
             )}
 
-            {/* --- the shareable link: the main event --- */}
+            {/* --- one link for every deal at once --- */}
+            {portfolio?.shareLink && (
+              <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50/50 p-3">
+                <div className="mb-1.5 flex items-center justify-between gap-3">
+                  <span className={`${LABEL_CLS} mb-0 text-blue-800`}>All deals — one link for your buyer list</span>
+                  <span className="text-xs text-blue-800">
+                    {portfolio.listedCount} listed{portfolio.views > 0 ? ` · ${portfolio.views} views` : ""}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input readOnly value={portfolio.shareLink} onFocus={(e) => e.target.select()}
+                    className="w-full rounded-lg border border-blue-200 bg-white px-2.5 py-2 font-mono text-xs" />
+                  <CopyButton value={portfolio.shareLink} className={`${BTN_CLS} shrink-0 border-blue-300 bg-white`} />
+                  <a href={portfolio.shareLink} target="_blank" rel="noreferrer"
+                    className={`${BTN_CLS} shrink-0 border-blue-300 bg-white`}>
+                    <Eye size={13} /> View
+                  </a>
+                </div>
+                <p className="mt-2 text-xs text-blue-800">
+                  Every listed deal on one page, each linking to its full package. It updates itself as you
+                  add or remove deals — send this once and it stays current.
+                </p>
+              </div>
+            )}
+
+            {/* --- this deal's own link --- */}
             <div className="mb-4 rounded-xl border border-slate-200 p-3">
               <div className="mb-1.5 flex items-center justify-between gap-3">
                 <span className={`${LABEL_CLS} mb-0`}>Deal link — send this to your buyers</span>
@@ -419,6 +448,19 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
                   Anyone with this link can open the package — share it freely, rotate it to kill it.
                 </span>
               </div>
+              <label className="mt-2 flex items-start gap-2 border-t border-slate-100 pt-2 text-xs">
+                <input type="checkbox" checked={!room.unlisted} disabled={busy} className="mt-0.5 h-3.5 w-3.5"
+                  onChange={(e) => run(async () => {
+                    await updateDataroom(room.id, { unlisted: !e.target.checked });
+                    await reload();
+                  })} />
+                <span>
+                  Show this deal on the all-deals page
+                  <span className="block text-slate-500">
+                    Untick to keep it off the public list — its own link above keeps working either way.
+                  </span>
+                </span>
+              </label>
             </div>
 
             {fresh.map((item) => (

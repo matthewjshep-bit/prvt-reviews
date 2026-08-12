@@ -262,6 +262,84 @@ export function renderNotice({ title, message, detail = "" }) {
   });
 }
 
+/* ---------- the portfolio: every live deal on one page ---------- */
+
+// One link for the whole buyer list. Each card is a deal, linking through to
+// its full package; the package pages link back here. `rooms` arrive already
+// filtered to what should be public and in the order they should appear.
+export function renderPortfolio({ rooms = [], company = {} }) {
+  const card = (r) => {
+    const n = r.snapshot?.numbers || {};
+    const p = r.snapshot?.property || {};
+    const spread = num(n.arv) - num(n.investorPrice) - num(n.repairs);
+    const bits = [
+      p.beds != null ? `${p.beds} bd` : "",
+      p.baths != null ? `${p.baths} ba` : "",
+      p.sqft ? `${p.sqft.toLocaleString()} sqft` : "",
+      p.yearBuilt ? `built ${p.yearBuilt}` : "",
+    ].filter(Boolean).join(" · ");
+    const figure = (k, v, cls = "") =>
+      `<div class="pfig ${cls}"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`;
+    return `<a class="deal" href="/d/${encodeURIComponent(r.shareToken)}">
+      <div class="dealhead">
+        <div>
+          <div class="dealaddr">${esc(p.address || r.address || "Investment opportunity")}</div>
+          ${bits ? `<div class="muted" style="font-size:12px">${esc(bits)}</div>` : ""}
+          ${r.snapshot?.headline ? `<div style="font-size:13px;font-weight:600;margin-top:4px">${esc(r.snapshot.headline)}</div>` : ""}
+        </div>
+      </div>
+      <div class="pfigs">
+        ${figure("Price", money(n.investorPrice), "hero")}
+        ${num(n.arv) > 0 ? figure("ARV", money(n.arv)) : ""}
+        ${num(n.repairs) > 0 ? figure("Rehab", money(n.repairs)) : ""}
+        ${spread > 0 ? figure("Spread", money(spread), "good") : ""}
+      </div>
+      <div class="more">See the comps, scope and numbers →</div>
+    </a>`;
+  };
+
+  const contactBits = [company.phone, company.email].filter(Boolean);
+  return page({
+    title: `${company.name || "Investment"} — current deals`,
+    css: `
+      .deal{display:block;text-decoration:none;color:inherit;background:#fff;border:1px solid #E2E8F0;
+        border-radius:12px;padding:16px;margin:0 0 12px}
+      .dealhead{margin-bottom:12px}
+      .dealaddr{font-size:16px;font-weight:700;letter-spacing:-.01em;line-height:1.3}
+      .pfigs{display:flex;flex-wrap:wrap;gap:1px;background:#E2E8F0;border:1px solid #E2E8F0;
+        border-radius:8px;overflow:hidden}
+      .pfig{background:#fff;padding:9px 12px;flex:1 1 88px;min-width:0}
+      .pfig .k{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748B}
+      .pfig .v{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em;margin-top:1px}
+      .pfig.hero{background:#0F172A}
+      .pfig.hero .k{color:#94A3B8}
+      .pfig.hero .v{color:#fff}
+      .pfig.good .v{color:#047857}
+      .more{font-size:12.5px;font-weight:600;color:#2563EB;margin-top:10px}
+    `,
+    body: `
+      <div class="card">
+        <p class="eyebrow">${esc(company.name || "Current deals")}${company.tagline ? ` · ${esc(company.tagline)}` : ""}</p>
+        <h1>Current deals</h1>
+        <p class="muted" style="margin:4px 0 0">
+          ${rooms.length ? `${rooms.length} propert${rooms.length === 1 ? "y" : "ies"} available now — tap any one for the full package.`
+            : "No properties are available right now. Check back shortly."}</p>
+      </div>
+      ${rooms.map(card).join("")}
+      ${contactBits.length ? `<div class="card">
+        <h2>Want one of these?</h2>
+        <p class="muted" style="margin-bottom:12px">First to commit takes it. Call or text
+          ${esc(company.signer || company.name || "us")}.</p>
+        <p style="margin:0">${contactBits.map((c) =>
+          `<a href="${c.includes("@") ? `mailto:${esc(c)}` : `tel:${esc(String(c).replace(/[^\d+]/g, ""))}`}"
+            style="font-weight:600">${esc(c)}</a>`).join(" &nbsp;·&nbsp; ")}</p>
+      </div>` : ""}
+      <p class="foot">Figures are estimates for underwriting, not an appraisal or a guarantee of value —
+        verify independently during your inspection period.</p>`,
+    watermark: company.name || "",
+  });
+}
+
 /* ---------- the package itself ---------- */
 
 const dateLabel = (iso) => {
@@ -351,7 +429,7 @@ function documentsSection(snap, token) {
 // recipient's name in the watermark and the access stamp. The shared marketing
 // link has no name, so it falls back to the company's own mark: there's no
 // individual to attribute a view to, and pretending otherwise would be a lie.
-export function renderRoom({ snap, token, invite, viewCount = 1 }) {
+export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "" }) {
   const s = snap.sections || DEFAULT_SECTIONS;
   const n = snap.numbers || {};
   const p = snap.property || {};
@@ -391,6 +469,8 @@ export function renderRoom({ snap, token, invite, viewCount = 1 }) {
   const contactBits = [company.phone, company.email].filter(Boolean);
 
   const body = `
+    ${backLink ? `<p style="margin:0 0 12px"><a href="${esc(backLink)}"
+      style="font-size:13px;font-weight:600;text-decoration:none">← All current deals</a></p>` : ""}
     <div class="card">
       <p class="eyebrow">${esc(company.name || "Investor package")}${company.tagline ? ` · ${esc(company.tagline)}` : ""}</p>
       <h1>${esc(p.address || "Investment opportunity")}</h1>
@@ -432,6 +512,9 @@ export function renderRoom({ snap, token, invite, viewCount = 1 }) {
              ${invite?.expiresAt ? `<br>This link expires ${esc(dateLabel(invite.expiresAt))}.` : ""}`}
       </div>
     </div>
+
+    ${backLink ? `<p style="text-align:center;margin:0 0 18px"><a href="${esc(backLink)}"
+      style="font-size:13px;font-weight:600;text-decoration:none">← See every current deal</a></p>` : ""}
 
     <p class="foot">${recipient
       ? `Confidential. This package was issued to ${esc(recipient)} and every view is logged. `

@@ -118,6 +118,63 @@ ok("the rotated-away link is dead", sv.status === 404, sv.status);
 sv = await fetch(r.body.shareLink, { redirect: "manual" });
 ok("the new share link works", sv.status === 200, sv.status);
 
+console.log("\n== portfolio: one link for every deal ==");
+// A second deal, so the portfolio has something to list alongside the first.
+const offer2 = await store.createOffer({
+  locationId: LOC, contactId: "contact-agent-2", contactName: "Lee Ash",
+  address: "900 Vashon Hwy SW, Vashon, WA 98070", cashAmount: 250000,
+  calc: { inputs: { address: "900 Vashon Hwy SW, Vashon, WA 98070", arv: 600000, repairs: 90000 },
+          settings: { company: { name: "Prvt Capital" } } },
+  deal: { stage: "under_contract", contractPrice: 250000, assignmentFee: 20000, investors: [] },
+});
+r = await jget(`${B}/api/datarooms`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, offerId: offer2.id }),
+});
+const room2 = r.body.dataroom;
+
+r = await jget(`${B}/api/datarooms/portfolio?location_id=${LOC}`);
+ok("portfolio link is issued", r.status === 200 && /\/d\/[A-Za-z0-9_-]{20,}/.test(r.body?.shareLink || ""), JSON.stringify(r.body).slice(0, 160));
+const portfolioLink = r.body.shareLink;
+ok("portfolio counts both deals", r.body.listedCount === 2, r.body.listedCount);
+ok("portfolio link is stable",
+  (await jget(`${B}/api/datarooms/portfolio?location_id=${LOC}`)).body.shareLink === portfolioLink);
+
+let pv = await fetch(portfolioLink, { redirect: "manual" });
+let ph = await pv.text();
+ok("portfolio page renders", pv.status === 200 && ph.includes("Current deals"), pv.status);
+ok("lists both addresses", ph.includes("Sumner") && ph.includes("Vashon"));
+ok("shows highlights", ph.includes("$327,000") && ph.includes("$270,000"));
+ok("links through to each deal", (ph.match(/href="\/d\//g) || []).length >= 2);
+
+// The portfolio isn't a deal, so it must not appear in the operator's deal list.
+r = await jget(`${B}/api/datarooms?location_id=${LOC}`);
+ok("portfolio is not listed as a deal", r.body.datarooms.length === 2, r.body.datarooms.length);
+
+console.log("\n== portfolio: back link on a deal page ==");
+r = await jget(`${B}/api/datarooms/${room2.id}?location_id=${LOC}`);
+let dv = await fetch(r.body.dataroom.shareLink, { redirect: "manual" });
+let dh = await dv.text();
+ok("deal page offers a way back", dh.includes("All current deals"));
+ok("back link points at the portfolio", dh.includes(`/d/${portfolioLink.split("/d/")[1]}`));
+
+console.log("\n== portfolio: unlisting a deal ==");
+await jget(`${B}/api/datarooms/${room2.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, unlisted: true }),
+});
+pv = await fetch(portfolioLink, { redirect: "manual" });
+ph = await pv.text();
+ok("unlisted deal drops off the page", !ph.includes("Vashon") && ph.includes("Sumner"));
+r = await jget(`${B}/api/datarooms/${room2.id}?location_id=${LOC}`);
+dv = await fetch(r.body.dataroom.shareLink, { redirect: "manual" });
+ok("its own link still works", dv.status === 200, dv.status);
+ok("but offers no back link", !(await dv.text()).includes("All current deals"));
+await jget(`${B}/api/datarooms/${room2.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, unlisted: false }),
+});
+
 console.log("\n== operator: wrong location is refused ==");
 r = await jget(`${B}/api/datarooms/${room.id}?location_id=someone-else`);
 ok("403 on a foreign location", r.status === 403, r.status);

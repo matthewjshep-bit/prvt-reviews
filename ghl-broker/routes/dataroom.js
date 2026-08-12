@@ -27,8 +27,45 @@ import { effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { getContact, sendSms } from "../ghl.js";
 import {
   DEFAULT_EXPIRY_DAYS, buildSnapshot, hashToken, newToken, normalizeSections,
-  renderNotice, renderRoom, secureHeaders,
+  renderNotice, renderPortfolio, renderRoom, secureHeaders,
 } from "../dataroom.js";
+
+// A location's portfolio is itself a dataroom row — offerId null, kind
+// "portfolio" — so it inherits the share token, revocation and view counting
+// that deal rooms already have. Its contents are resolved at render time from
+// whichever deal rooms are currently active and listed.
+const isPortfolio = (room) => room?.kind === "portfolio";
+const listedInPortfolio = (room) =>
+  !isPortfolio(room) && room?.status === "active" && !room?.unlisted;
+
+// The shareable marketing link — one per room, no expiry, no recipient.
+//
+// Its token is deliberately stored in the clear (unlike personal invites,
+// which keep only a hash). The operator has to be able to re-copy this link
+// whenever they want to post it somewhere, and a link they can't retrieve is
+// useless for marketing. The tradeoff is explicit: this one is meant to be
+// forwarded, so rotation — not secrecy — is what controls it.
+//
+// Idempotent, and shared by both routers: the portfolio has to be able to mint
+// links for rooms nobody has opened yet, or a freshly built deal would be
+// missing from the very page meant to advertise it.
+async function ensureShareLink(room) {
+  if (room.shareToken) return room;
+  const token = newToken();
+  await store.createDataroomInvite({
+    dataroomId: room.id,
+    locationId: room.locationId,
+    tokenHash: hashToken(token),
+    contactId: null,
+    name: null,
+    phone: null,
+    expiresAt: null,       // marketing links shouldn't die on a timer
+    doc: { share: true },
+  });
+  room.shareToken = token;
+  await store.updateDataroom(room.id, room);
+  return room;
+}
 
 const SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
 
@@ -90,33 +127,41 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
     return { locationId, client, room };
   }
 
-  // The shareable marketing link — one per room, no expiry, no recipient.
-  //
-  // Its token is deliberately stored in the clear (unlike personal invites,
-  // which keep only a hash). The operator has to be able to re-copy this link
-  // whenever they want to post it somewhere, and a link they can't retrieve is
-  // useless for marketing. The tradeoff is explicit: this one is meant to be
-  // forwarded, so rotation — not secrecy — is what controls it.
-  //
-  // Created on demand, so rooms built before share links existed get one the
-  // first time they're opened.
-  async function ensureShareLink(room) {
-    if (room.shareToken) return room;
-    const token = newToken();
-    await store.createDataroomInvite({
-      dataroomId: room.id,
-      locationId: room.locationId,
-      tokenHash: hashToken(token),
-      contactId: null,
-      name: null,
-      phone: null,
-      expiresAt: null,       // marketing links shouldn't die on a timer
-      doc: { share: true },
+  // The location's portfolio room, created on first use.
+  async function ensurePortfolio(locationId) {
+    const rooms = await store.listDatarooms(locationId, { limit: 500 });
+    const existing = rooms.find(isPortfolio);
+    if (existing) return ensureShareLink(existing);
+    const created = await store.createDataroom({
+      locationId,
+      offerId: null,
+      address: null,
+      status: "active",
+      kind: "portfolio",
+      snapshot: null,
     });
-    room.shareToken = token;
-    await store.updateDataroom(room.id, room);
-    return room;
+    return ensureShareLink(created);
   }
+
+  // One link for the whole buyer list: every listed deal on a single page.
+  // MUST stay registered before GET /:id or "portfolio" is captured as :id.
+  router.get("/portfolio", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const portfolio = await ensurePortfolio(locationId);
+      const rooms = await store.listDatarooms(locationId, { limit: 500 });
+      const listed = rooms.filter(listedInPortfolio);
+      const invites = await store.listDataroomInvites(portfolio.id);
+      const share = invites.find((i) => i.doc?.share && i.status === "active");
+      res.json({
+        shareLink: roomLink(portfolio.shareToken),
+        status: portfolio.status,
+        listedCount: listed.length,
+        views: share?.viewCount || 0,
+        lastViewedAt: share?.lastViewedAt || null,
+      });
+    } catch (err) { fail(res, err); }
+  });
 
   // Build a room from one offer. The snapshot is frozen here on purpose.
   router.post("/", async (req, res) => {
@@ -143,7 +188,10 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
         snapshot,
         defaultExpiryDays: Math.min(365, Math.max(1, parseInt(req.body?.expiryDays, 10) || DEFAULT_EXPIRY_DAYS)),
       });
-      res.json({ ok: true, dataroom: { ...room, invites: [] } });
+      // Mint the share link now rather than on first open, so the deal is
+      // linkable — and shows up on the portfolio — the moment it's built.
+      await ensureShareLink(room);
+      res.json({ ok: true, dataroom: { ...room, shareLink: roomLink(room.shareToken), invites: [] } });
     } catch (err) { fail(res, err); }
   });
 
@@ -151,7 +199,8 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
     try {
       const { locationId } = resolveLocation(req);
       const offerId = str(req.query.offer_id, 64);
-      const rooms = await store.listDatarooms(locationId, { offerId: offerId || null });
+      const all = await store.listDatarooms(locationId, { offerId: offerId || null });
+      const rooms = all.filter((r) => !isPortfolio(r)); // the portfolio isn't a deal
       const withCounts = await Promise.all(rooms.map(async (r) => {
         const invites = await store.listDataroomInvites(r.id);
         return {
@@ -237,6 +286,8 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
         if (b.headline !== undefined) room.snapshot.headline = str(b.headline, 120);
         if (b.notes !== undefined) room.snapshot.notes = str(b.notes, 2000);
       }
+      // Hide a deal from the public list without touching its own link.
+      if (b.unlisted !== undefined) room.unlisted = Boolean(b.unlisted);
       if (b.expiryDays !== undefined) {
         room.defaultExpiryDays = Math.min(365, Math.max(1, parseInt(b.expiryDays, 10) || DEFAULT_EXPIRY_DAYS));
       }
@@ -471,7 +522,24 @@ export function createDataroomPublicRouter() {
     return { token, invite, room };
   }
 
-  /* ---- the package ---- */
+  // Company branding for pages that aren't built from one offer.
+  async function companyFor(locationId) {
+    const saved = await store.getOfferSettings(locationId).catch(() => null);
+    return saved?.company || {};
+  }
+
+  // The location's portfolio link, so every deal page can offer a way back to
+  // the full list. Absent (or unlisted) → no back link rather than a dead one.
+  async function portfolioLinkFor(room) {
+    if (room.unlisted) return "";
+    const rooms = await store.listDatarooms(room.locationId, { limit: 500 }).catch(() => []);
+    const portfolio = rooms.find(isPortfolio);
+    return portfolio?.shareToken && portfolio.status === "active"
+      ? `/d/${encodeURIComponent(portfolio.shareToken)}`
+      : "";
+  }
+
+  /* ---- the package, or the portfolio of every live deal ---- */
   router.get("/:token", async (req, res) => {
     try {
       const ctx = await resolveInvite(req, res);
@@ -488,7 +556,24 @@ export function createDataroomPublicRouter() {
       await store.logDataroomEvent(room.id, invite.id, "view", {
         ip: clientIp(req), ua: String(req.headers["user-agent"] || "").slice(0, 200), name: invite.name,
       });
-      res.type("html").send(renderRoom({ snap: room.snapshot, token, invite, viewCount }));
+
+      if (isPortfolio(room)) {
+        // Resolved live, so a deal added or pulled today is reflected without
+        // anyone having to rebuild or resend the portfolio link.
+        const listed = (await store.listDatarooms(room.locationId, { limit: 500 }))
+          .filter((r) => listedInPortfolio(r) && r.snapshot);
+        // Rooms built before share links existed (or never opened) get one now,
+        // rather than being silently dropped from the list.
+        for (const r of listed) await ensureShareLink(r);
+        return res.type("html").send(renderPortfolio({
+          rooms: listed, company: await companyFor(room.locationId),
+        }));
+      }
+
+      res.type("html").send(renderRoom({
+        snap: room.snapshot, token, invite, viewCount,
+        backLink: await portfolioLinkFor(room),
+      }));
     } catch (err) {
       console.error("dataroom view failed:", err.message);
       notice(res, 500, { title: "Something went wrong", message: "Please try that link again in a moment." });
