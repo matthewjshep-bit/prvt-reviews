@@ -322,8 +322,8 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
                   <span className={`block max-w-[170px] truncate font-semibold ${current ? "text-blue-800" : ""}`}>
                     {shortAddress(d.address)}
                   </span>
-                  <span className="block text-[11px] text-slate-500">
-                    {!s ? "no package yet"
+                  <span className={`block text-[11px] ${!s && !current ? "font-semibold text-blue-700" : "text-slate-500"}`}>
+                    {!s ? (current ? "no package yet" : "tap to build a link")
                       : s.status === "revoked" ? "switched off"
                       : s.viewCount > 0 ? `${s.viewCount} view${s.viewCount === 1 ? "" : "s"}`
                       : "not opened yet"}
