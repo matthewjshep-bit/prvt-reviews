@@ -262,15 +262,15 @@ tr:last-child td{border-bottom:0}
   padding:5px 11px;border-radius:8px;margin:0 0 10px;font-variant-numeric:tabular-nums}
 .shots{display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;
   scroll-snap-type:x mandatory;padding:2px 0 6px;margin:0 -2px}
-.shots a{flex:0 0 auto;scroll-snap-align:start;border-radius:10px;overflow:hidden;
+.shots a{flex:0 0 auto;scroll-snap-align:start;border-radius:8px;overflow:hidden;
   border:1px solid #E2E8F0;background:#F1F5F9;line-height:0}
 .shots img{display:block;width:164px;height:116px;object-fit:cover}
 @media(max-width:520px){.shots img{width:140px;height:100px}}
-.noshot{aspect-ratio:3/2;display:flex;align-items:center;justify-content:center;
-  background:#F1F5F9;color:#94A3B8;font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.noshot{padding:16px;text-align:center;background:#F1F5F9;color:#94A3B8;
+  font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
 
 @media(max-width:520px){.wrap{padding:14px 12px 56px}.card{padding:16px}
-  .hero .addr{font-size:19px}.hero .scrim{padding:48px 16px 15px}}
+  .hero .scrim{padding:48px 16px 15px}}
 `;
 
 function page({ title, css = "", body, watermark = "" }) {
@@ -325,16 +325,20 @@ export function renderPortfolio({ rooms = [], company = {} }) {
     // portfolio's — the portfolio room has no offer of its own and so can't
     // authorize a photo. A revoked deal drops off this list entirely, so its
     // thumbnail dies with it.
-    const shot = r.heroPhoto
-      ? `<img src="/d/${encodeURIComponent(r.shareToken)}/photo/${encodeURIComponent(r.heroPhoto.id)}/thumb"
-           alt="" loading="lazy">`
-      : `<div class="noshot">Photos coming soon</div>`;
+    // A card with no photo gets a slim band rather than a full-height empty
+    // frame — otherwise a portfolio of unphotographed deals is mostly grey.
+    // Its price moves inline instead of being badged over nothing.
+    const priceTag = num(n.investorPrice) > 0 ? esc(money(n.investorPrice)) : "";
     return `<a class="deal" href="/d/${encodeURIComponent(r.shareToken)}">
-      <div class="shot">
-        ${shot}
-        ${num(n.investorPrice) > 0 ? `<span class="price">${esc(money(n.investorPrice))}</span>` : ""}
-      </div>
+      ${r.heroPhoto
+        ? `<div class="shot">
+             <img src="/d/${encodeURIComponent(r.shareToken)}/photo/${encodeURIComponent(r.heroPhoto.id)}/thumb"
+               alt="" loading="lazy">
+             ${priceTag ? `<span class="price">${priceTag}</span>` : ""}
+           </div>`
+        : `<div class="noshot">Photos coming soon</div>`}
       <div class="dealbody">
+        ${!r.heroPhoto && priceTag ? `<div class="inprice">${priceTag}</div>` : ""}
         <div class="dealaddr">${esc(p.address || r.address || "Investment opportunity")}</div>
         ${bits ? `<div class="muted" style="font-size:12px;margin-top:2px">${esc(bits)}</div>` : ""}
         ${r.snapshot?.headline ? `<div style="font-size:13px;font-weight:600;margin-top:6px">${esc(r.snapshot.headline)}</div>` : ""}
@@ -373,6 +377,9 @@ export function renderPortfolio({ rooms = [], company = {} }) {
       .pfig .k{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748B}
       .pfig .v{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em;margin-top:1px}
       .pfig.good .v{color:#047857}
+      .inprice{display:inline-block;background:#0F172A;color:#fff;font-size:15px;font-weight:800;
+        letter-spacing:-.01em;padding:5px 10px;border-radius:8px;margin:0 0 8px;
+        font-variant-numeric:tabular-nums;line-height:1.2}
       .more{font-size:13px;font-weight:600;color:#2563EB;margin-top:12px}
     `,
     body: `
