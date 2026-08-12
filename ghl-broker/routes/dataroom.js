@@ -522,10 +522,15 @@ export function createDataroomPublicRouter() {
     return { token, invite, room };
   }
 
-  // Company branding for pages that aren't built from one offer.
-  async function companyFor(locationId) {
+  // Company branding for pages that aren't built from one offer. Location
+  // settings are the source of truth, but they're often blank because the
+  // company block is filled in per-offer — so fall back to what the deals
+  // themselves are already branded with rather than showing a nameless page.
+  async function companyFor(locationId, rooms = []) {
     const saved = await store.getOfferSettings(locationId).catch(() => null);
-    return saved?.company || {};
+    if (saved?.company?.name) return saved.company;
+    const fromRoom = rooms.map((r) => r.snapshot?.company).find((c) => c?.name);
+    return fromRoom || saved?.company || {};
   }
 
   // The location's portfolio link, so every deal page can offer a way back to
@@ -566,7 +571,7 @@ export function createDataroomPublicRouter() {
         // rather than being silently dropped from the list.
         for (const r of listed) await ensureShareLink(r);
         return res.type("html").send(renderPortfolio({
-          rooms: listed, company: await companyFor(room.locationId),
+          rooms: listed, company: await companyFor(room.locationId, listed),
         }));
       }
 

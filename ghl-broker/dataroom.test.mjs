@@ -146,6 +146,7 @@ ok("portfolio page renders", pv.status === 200 && ph.includes("Current deals"), 
 ok("lists both addresses", ph.includes("Sumner") && ph.includes("Vashon"));
 ok("shows highlights", ph.includes("$327,000") && ph.includes("$270,000"));
 ok("links through to each deal", (ph.match(/href="\/d\//g) || []).length >= 2);
+ok("brands the page from the deals when settings are blank", ph.includes("Prvt Capital"));
 
 // The portfolio isn't a deal, so it must not appear in the operator's deal list.
 r = await jget(`${B}/api/datarooms?location_id=${LOC}`);
