@@ -36,6 +36,7 @@
 //   POST   /api/offers/:id/deal/suggest-investors   AI-suggest investors from conversation history
 //   PATCH  /api/offers/:id/deal/investors/:contactId    evaluation status
 //   DELETE /api/offers/:id/deal/investors/:contactId    unlink
+//   POST   /api/offers/deals/sync-investor-tags   backfill the on-deal GHL tag for all deal investors
 
 import express from "express";
 import crypto from "node:crypto";
@@ -69,11 +70,13 @@ const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "")
 const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
 const OFFER_TAG = process.env.OFFER_TAG || "offer-created";
 const DEAL_TAG = process.env.DEAL_TAG || "under-contract";
+const INVESTOR_DEAL_TAG = process.env.INVESTOR_DEAL_TAG || "on-deal";
 
 // Active-deal tracking (offers under signed contract). Transitions are
 // deliberately permissive (any stage to any stage) so mistakes are correctable;
 // stageHistory records the true sequence for KPI math.
 const DEAL_STAGES = ["under_contract", "buyer_found", "assigned", "closed", "fell_through"];
+const LIVE_DEAL_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
 const INVESTOR_STATUSES = ["sent", "evaluating", "passed", "committed"];
 const APP_ORIGIN = (process.env.APP_ORIGIN || "").replace(/\/$/, "");
 
@@ -1998,6 +2001,25 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     }
   }
 
+  // Best-effort: keep the INVESTOR_DEAL_TAG GHL tag in sync for one contact.
+  // The tag means "linked as a disposition investor on at least one live deal"
+  // (under_contract / buyer_found / assigned), so GHL contact filters can
+  // include or exclude investors who are currently working a property. The
+  // membership check spans ALL the location's deals — a contact on two deals
+  // keeps the tag until the last one closes or unlinks. Never throws.
+  async function syncInvestorDealTag(client, locationId, contactId) {
+    if (!contactId) return;
+    try {
+      const onLiveDeal = (await store.listDeals(locationId)).some((o) =>
+        LIVE_DEAL_STAGES.has(o.deal?.stage) &&
+        (o.deal?.investors || []).some((i) => i.contactId === contactId));
+      if (onLiveDeal) await addContactTags(client, contactId, [INVESTOR_DEAL_TAG]);
+      else await removeContactTags(client, contactId, [INVESTOR_DEAL_TAG]);
+    } catch (e) {
+      console.error(`offers: investor deal tag sync failed contact=${contactId}:`, e?.message);
+    }
+  }
+
   // Promote an offer to an active deal. Body (all optional): { contractPrice,
   // assignmentFee, closingDate, inspectionDate } — defaults come from the
   // generated contract, the cash offer, and settings.wholesaleFee.
@@ -2099,6 +2121,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
           historyLine(deal.updatedAt, offer.address, deal.stage.replace(/_/g, " "),
             deal.stage === "fell_through" ? deal.fellThroughReason : ""));
+        // A move into/out of closed|fell_through flips whether this deal keeps
+        // its investors tagged as on a live deal.
+        for (const inv of deal.investors) {
+          await syncInvestorDealTag(client, locationId, inv.contactId);
+        }
       }
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
@@ -2110,9 +2137,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const ctx = await loadDealOffer(req, res);
       if (!ctx) return;
-      delete ctx.offer.deal;
-      await store.updateOffer(ctx.offer.id, ctx.offer);
-      res.json({ ok: true, offer: ctx.offer });
+      const { locationId, client, offer } = ctx;
+      const investors = offer.deal.investors || [];
+      delete offer.deal;
+      await store.updateOffer(offer.id, offer);
+      for (const inv of investors) {
+        await syncInvestorDealTag(client, locationId, inv.contactId);
+      }
+      res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
   });
 
@@ -2139,6 +2171,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await store.updateOffer(offer.id, offer);
       await appendDealHistory(client, locationId, contactId, "investor_deal_history",
         historyLine(ts, offer.address, "sent"));
+      await syncInvestorDealTag(client, locationId, contactId);
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
   });
@@ -2265,7 +2298,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const ctx = await loadDealOffer(req, res);
       if (!ctx) return;
-      const { offer } = ctx;
+      const { locationId, client, offer } = ctx;
       const before = offer.deal.investors.length;
       offer.deal.investors = offer.deal.investors.filter((i) => i.contactId !== req.params.contactId);
       if (offer.deal.investors.length === before) {
@@ -2273,7 +2306,26 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       offer.deal.updatedAt = new Date().toISOString();
       await store.updateOffer(offer.id, offer);
+      await syncInvestorDealTag(client, locationId, req.params.contactId);
       res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  // One-time backfill: recompute the INVESTOR_DEAL_TAG for every contact that
+  // appears as an investor on any of the location's deals (live or dead).
+  // Investors linked before tag sync existed have no tag; running this once
+  // brings GHL in line. Idempotent — safe to re-run.
+  router.post("/deals/sync-investor-tags", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactIds = new Set();
+      for (const o of await store.listDeals(locationId)) {
+        for (const i of o.deal?.investors || []) contactIds.add(i.contactId);
+      }
+      for (const contactId of contactIds) {
+        await syncInvestorDealTag(client, locationId, contactId);
+      }
+      res.json({ ok: true, synced: contactIds.size });
     } catch (err) { fail(res, err); }
   });
 

@@ -33,6 +33,14 @@ const STATUS_DOT = {
   committed: "bg-emerald-500",
 };
 
+// Display order everywhere investors are listed: hottest first, passed last,
+// alphabetical within a status so the list is stable as statuses change.
+const STATUS_ORDER = { committed: 0, evaluating: 1, sent: 2, passed: 3 };
+const sortInvestors = (list) =>
+  [...(list || [])].sort((a, b) =>
+    (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) ||
+    String(a.name || "").localeCompare(String(b.name || "")));
+
 export function StagePill({ stage, small }) {
   const s = STAGE[stage] || { label: stage, cls: "bg-slate-100 text-slate-600" };
   return (
@@ -67,7 +75,7 @@ const shortDate = (iso) =>
   iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
 
 function InvestorChips({ deal }) {
-  const inv = deal.investors || [];
+  const inv = sortInvestors(deal.investors);
   if (!inv.length) return <span className="text-xs text-slate-400">none yet</span>;
   return (
     <span className="flex flex-wrap gap-1">
@@ -220,7 +228,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
 
   return (
     <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={onClose}>
-      <div className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-5xl rounded-2xl bg-white p-5 sm:p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <div className="text-lg font-bold">
@@ -278,7 +286,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
           )}
         </div>
 
-        <div className="grid gap-5 sm:grid-cols-2">
+        <div className="grid gap-6 sm:grid-cols-[1fr_1.3fr]">
           {/* Terms */}
           <div className="space-y-3">
             <div>
@@ -330,7 +338,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             <div>
               <span className={labelCls}>Disposition investors</span>
               <div className="space-y-1.5">
-                {(deal.investors || []).map((i) => (
+                {sortInvestors(deal.investors).map((i) => (
                   <div key={i.contactId} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5">
                     <a href={ghlContactUrl(i.contactId)} target="_blank" rel="noreferrer"
                       className="inline-flex min-w-0 items-center gap-1 text-sm font-medium underline decoration-slate-300 underline-offset-2 hover:text-slate-900">
