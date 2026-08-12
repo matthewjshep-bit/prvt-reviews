@@ -37,6 +37,40 @@ create table if not exists offer_documents (
   primary key (offer_id, kind)
 );
 
+-- Property photos the operator uploaded, shown in the investor dataroom. Split
+-- metadata from bytes so listing photos for a page never drags megabytes into
+-- Node — `select * from offer_photos` is safe by construction.
+--
+-- Hero is simply sort = 0; there is deliberately no is_hero flag, because two
+-- sources of truth for "which comes first" drift apart. `sort` is a plain int
+-- with NO unique constraint: uniqueness would turn every reorder into a
+-- constraint-violation shuffle through temporary values. Reads must always
+-- `order by sort, created_at, id` so ties can't flip between page loads.
+create table if not exists offer_photos (
+  id            uuid primary key,
+  offer_id      uuid not null,
+  location_id   text not null,
+  source        text not null default 'upload',
+  caption       text,
+  sort          int not null default 0,
+  width         int,
+  height        int,
+  created_at    timestamptz not null default now()
+);
+create index if not exists offer_photos_offer_idx on offer_photos (offer_id, sort);
+
+-- One row per (photo, size). `variant` is 'full' | 'thumb'; adding a card size
+-- later is an insert, not a migration. storage_key is the seam for moving bytes
+-- to R2 without changing any URL the investor sees.
+create table if not exists offer_photo_bytes (
+  photo_id      uuid not null references offer_photos (id) on delete cascade,
+  variant       text not null,
+  content_type  text not null,
+  bytes         bytea,
+  storage_key   text,
+  primary key (photo_id, variant)
+);
+
 -- Agent Outreach: listing agents discovered from RentCast pulls.
 -- agent_key encodes the dedupe identity: "e:<email>" else "p:<10-digit phone>"
 -- else "n:<name-slug>|<office-slug>". Lifecycle lives in columns (not doc) so

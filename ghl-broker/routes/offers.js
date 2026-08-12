@@ -267,6 +267,118 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   router.get("/:id/assignment.pdf", serveDoc("assignmentpdf", "ASSIGNMENT", "pdf"));
   router.get("/:id/netsheet.pdf", serveDoc("netsheetpdf", "NET COMPARISON", "pdf"));
 
+  /* ---- property photos ----------------------------------------------------
+   * Uploaded by the operator, shown in the investor dataroom. Photos belong to
+   * the offer (not to a dataroom), so a rebuilt or re-sent package keeps them.
+   * The investor-facing read path lives in routes/dataroom.js behind a link
+   * token; everything here is location-gated like the rest of this router.
+   * ------------------------------------------------------------------------ */
+
+  // A photo arrives as two data URIs the browser already downscaled: `full`
+  // (~1600px) for the lightbox and `thumb` (~400px) for grids. Doing it client
+  // side avoids an image library on a server that has none.
+  const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
+
+  function decodeDataUri(value, label) {
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/.exec(String(value || ""));
+    if (!m) throw Object.assign(new Error(`${label} must be a base64 image data URI`), { http: 400 });
+    const bytes = Buffer.from(m[2], "base64");
+    if (!bytes.length) throw Object.assign(new Error(`${label} is empty`), { http: 400 });
+    if (bytes.length > MAX_PHOTO_BYTES) {
+      throw Object.assign(new Error(`${label} is too large (max 2MB after downscaling)`), { http: 413 });
+    }
+    // Trust the bytes, not the declared type: check the actual magic number.
+    const sniffed =
+      bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff ? "image/jpeg"
+      : bytes.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? "image/png"
+      : bytes.slice(0, 4).toString("ascii") === "RIFF" && bytes.slice(8, 12).toString("ascii") === "WEBP" ? "image/webp"
+      : null;
+    if (!sniffed) throw Object.assign(new Error(`${label} isn't a JPEG, PNG or WebP`), { http: 400 });
+    return { bytes, contentType: sniffed };
+  }
+
+  // Prove the offer is the caller's before touching its photos.
+  async function loadOwnOffer(req, res) {
+    const { locationId } = resolveLocation(req);
+    const offer = await store.getOffer(req.params.id);
+    if (!offer || offer.locationId !== locationId) {
+      res.status(404).json({ error: "offer not found" });
+      return null;
+    }
+    return { locationId, offer };
+  }
+
+  router.get("/:id/photos", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      res.json({ photos: await store.listOfferPhotos(ctx.offer.id) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // One photo per request. A 20-photo batch would be ~7MB of base64 to
+  // JSON.parse on a single-threaded process; the client uploads a few at a time
+  // instead, so one failure doesn't lose the batch.
+  router.post("/:id/photos", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const full = decodeDataUri(req.body?.full, "full");
+      const thumb = decodeDataUri(req.body?.thumb, "thumb");
+      const photo = await store.saveOfferPhoto(ctx.offer.id, ctx.locationId, {
+        variants: { full, thumb },
+        width: parseInt(req.body?.width, 10) || null,
+        height: parseInt(req.body?.height, 10) || null,
+      });
+      res.json({ ok: true, photo });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Rewrites the whole order; "make this the hero" is just moving it to index 0.
+  router.post("/:id/photos/reorder", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
+        .filter((v) => typeof v === "string" && /^[0-9a-f-]{36}$/i.test(v))
+        .slice(0, 200);
+      await store.reorderOfferPhotos(ctx.offer.id, ids);
+      res.json({ ok: true, photos: await store.listOfferPhotos(ctx.offer.id) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The operator's own view of a photo. The investor route in routes/dataroom.js
+  // is gated by a link token, which the console doesn't have — this one is
+  // gated by the location like the rest of this router. Same membership rule:
+  // the photo must belong to this offer, never looked up by id alone.
+  router.get("/:id/photos/:photoId/:variant", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const variant = req.params.variant === "thumb" ? "thumb" : "full";
+      const photos = await store.listOfferPhotos(ctx.offer.id);
+      if (!photos.some((p) => p.id === req.params.photoId)) {
+        return res.status(404).type("text/plain").send("not found");
+      }
+      const stored = await store.readPhotoBytes(req.params.photoId, variant);
+      if (!stored?.bytes) return res.status(404).type("text/plain").send("not found");
+      res.set("Content-Type", stored.contentType || "image/jpeg");
+      res.set("Cache-Control", "private, max-age=86400");
+      res.set("ETag", `"${req.params.photoId}-${variant}"`);
+      res.send(stored.bytes);
+    } catch (err) { fail(res, err); }
+  });
+
+  router.delete("/:id/photos/:photoId", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const ok = await store.deleteOfferPhoto(ctx.offer.id, req.params.photoId);
+      if (!ok) return res.status(404).json({ error: "photo not found" });
+      res.json({ ok: true, photos: await store.listOfferPhotos(ctx.offer.id) });
+    } catch (err) { fail(res, err); }
+  });
+
   // Render a companion PDF (Rehab SOW, Comps Analysis) through cardgen and
   // store it next to the offer documents. Accepts one template per page.
   // Best-effort at every call site: a failure never blocks the offer itself.

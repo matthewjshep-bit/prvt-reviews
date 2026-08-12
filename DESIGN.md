@@ -121,8 +121,8 @@ The system covers two audiences, and they are not the same design problem.
 above describes it: dense, desktop-first, worked dozens of times a day.
 
 **Investor document** (`ghl-broker/dataroom.js`) — the public pages served at
-`/d/<token>`: a deal package and the all-deals portfolio. Same palette, same
-typeface, same flat/hairline construction, but it uses the `doc-*` type steps
+`/d/<token>`: a deal package and the all-deals portfolio. Same palette and the
+same flat/hairline construction, but it uses the `doc-*` type steps
 (`doc-display` 24, `doc-title` 21, `doc-figure` 20, `doc-heading` 15, `doc-body`
 13) because it is read once, on a phone, by someone outside the business who is
 deciding whether to spend money. Density is the wrong goal there; legibility and
@@ -133,6 +133,28 @@ The two scales share only their small end — `label`, `meta`, `micro` — for
 eyebrows, table headers and fine print. Reach for the console's 14px `body` on an
 investor page and that page is probably trying to be a table when it should be a
 document.
+
+Two things about the investor document are worth knowing before designing for it,
+because both are enforced by its Content-Security-Policy (`default-src 'none'`)
+rather than by convention:
+
+- **It renders in system fonts, not Plus Jakarta Sans.** There is no `font-src`,
+  so a webfont cannot load; the stack falls through to SF Pro on iPhones and
+  Roboto on Android. Weight and size contrast, not typeface, are what make these
+  pages feel designed. Embedding a subset as a `data:` URI is possible but has
+  been judged not worth the first-paint cost on cell service.
+- **It runs no JavaScript at all** — there is no `script-src`. Every interaction
+  must be pure CSS. Hence the photo gallery is a `scroll-snap` strip with photos
+  opening full-size in a new tab, rather than a carousel or lightbox.
+
+**Photography.** The investor document is the only surface with photographs. A
+deal page leads with a 3:2 hero (the operator's first photo) carrying the address
+and price over a scrim; remaining photos sit in a horizontal strip. Portfolio
+cards lead with the same photo as a 3:2 thumbnail with the price badged over its
+lower-left. Deals without photos get a flat `#F1F5F9` placeholder reading "Photos
+coming soon" — never a broken image, and never a stretched one: every photo is
+`object-fit: cover` at a fixed aspect ratio so mixed portrait/landscape uploads
+still tile evenly.
 
 ## Colors
 
@@ -153,7 +175,7 @@ A restrained slate-neutral system with two working accents.
 - **Amber family** (bg #FFFBEB, text #92400E): warnings and "waiting on someone" states. **Red** (#DC2626): destructive and overdue.
 
 ### Named Rules
-**The Two-Accent Rule.** Blue acts, green counts money. No other saturated color appears except amber/red status semantics. Never introduce purple, teal, or gradients.
+**The Two-Accent Rule.** Blue acts, green counts money. No other saturated color appears except amber/red status semantics. Never introduce purple, teal, or gradients — with one carve-out: the **photo scrim** on the investor document (a top-to-bottom ink fade behind the address overlaid on a hero photograph). That is a legibility device, not decoration — white type has to sit on an arbitrary photograph — and it is the only gradient in the system. It never appears on the console, and it never carries color, only `#0F172A` at varying alpha.
 **The Gray-Ladder Rule.** Text de-emphasis walks the slate ladder (900 → 700 → 500 → 400) and never drops below slate-500 (#64748B) for text a user must read.
 
 ## Typography

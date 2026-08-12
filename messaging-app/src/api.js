@@ -136,6 +136,23 @@ export const previewDocument = (inputs, settings, contactName) =>
 export const createOffer = ({ contactId, newContact, inputs, settings, scope, draftId, snapshot }) =>
   post(`/api/offers`, { contactId, newContact, inputs, settings, scope, draftId, snapshot });
 export const saveDraft = (id, draft) => post(`/api/offers/draft`, { id, draft });
+// Property photos hang off the offer, so they outlive any one dataroom. Upload
+// is one photo per call: a whole batch in a single JSON body would be several
+// MB of base64 for the broker to parse in one blocking go.
+export const listOfferPhotos = (offerId) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(offerId)}/photos?${locq()}`).then(j).then((r) => r.photos);
+export const uploadOfferPhoto = (offerId, { full, thumb, width, height }) =>
+  post(`/api/offers/${encodeURIComponent(offerId)}/photos`, { full, thumb, width, height }).then((r) => r.photo);
+export const reorderOfferPhotos = (offerId, ids) =>
+  post(`/api/offers/${encodeURIComponent(offerId)}/photos/reorder`, { ids }).then((r) => r.photos);
+// The console's own <img src>. The investor-facing photo URL needs a link
+// token, which the operator doesn't have — this one rides the location gate.
+export const offerPhotoUrl = (offerId, photoId, variant = "thumb") =>
+  `${API_BASE}/api/offers/${encodeURIComponent(offerId)}/photos/${encodeURIComponent(photoId)}/${variant}?${locq()}`;
+export const deleteOfferPhoto = (offerId, photoId) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(offerId)}/photos/${encodeURIComponent(photoId)}?${locq()}`,
+    { method: "DELETE" }).then(j).then((r) => r.photos);
+
 export const scanRehab = (address, { beds, baths, sqft, yearBuilt, images } = {}) =>
   post(`/api/offers/scan-rehab`, { address, beds, baths, sqft, yearBuilt, images });
 export const gradeComps = (address, comps) =>

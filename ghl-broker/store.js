@@ -95,6 +95,8 @@ const pgStore = {
   },
   async deleteOffer(id) {
     await query(`delete from offer_documents where offer_id = $1`, [id]).catch(() => {});
+    // offer_photo_bytes cascades from offer_photos.
+    await query(`delete from offer_photos where offer_id = $1`, [id]).catch(() => {});
     const { rowCount } = await query(`delete from offers where id = $1`, [id]);
     return rowCount > 0;
   },
@@ -114,6 +116,71 @@ const pgStore = {
       [offerId, kind]
     );
     return rows[0] || null;
+  },
+
+  /* ---- property photos ---- */
+
+  // Metadata only, never bytes — this is called on every dataroom render.
+  async listOfferPhotos(offerId) {
+    const { rows } = await query(
+      `select id, offer_id as "offerId", location_id as "locationId", source, caption,
+              sort, width, height, created_at as "createdAt"
+         from offer_photos where offer_id = $1
+        order by sort, created_at, id`,
+      [offerId]
+    );
+    return rows;
+  },
+  async saveOfferPhoto(offerId, locationId, { variants, width, height, caption = null, source = "upload" }) {
+    const id = crypto.randomUUID();
+    // Sort is computed server-side; two parallel uploads racing on max()+1 land
+    // on the same slot, which the created_at/id tiebreaker resolves cosmetically.
+    // Not worth a lock.
+    await query(
+      `insert into offer_photos (id, offer_id, location_id, source, caption, sort, width, height)
+       values ($1,$2,$3,$4,$5,(select coalesce(max(sort),-1)+1 from offer_photos where offer_id = $2),$6,$7)`,
+      [id, offerId, locationId, source, caption, width || null, height || null]
+    );
+    for (const [variant, v] of Object.entries(variants)) {
+      await query(
+        `insert into offer_photo_bytes (photo_id, variant, content_type, bytes) values ($1,$2,$3,$4)`,
+        [id, variant, v.contentType, v.bytes]
+      );
+    }
+    const { rows } = await query(
+      `select id, offer_id as "offerId", location_id as "locationId", source, caption,
+              sort, width, height, created_at as "createdAt" from offer_photos where id = $1`,
+      [id]
+    );
+    return rows[0];
+  },
+  // The single chokepoint for photo bytes — swapping to R2 means branching on
+  // storage_key here and nowhere else.
+  async readPhotoBytes(photoId, variant) {
+    const { rows } = await query(
+      `select content_type as "contentType", bytes, storage_key as "storageKey"
+         from offer_photo_bytes where photo_id = $1 and variant = $2`,
+      [photoId, variant]
+    );
+    return rows[0] || null;
+  },
+  // Rewrites the whole order in one statement. offer_id in the WHERE means a
+  // caller can't reorder photos belonging to someone else's deal by id-stuffing.
+  async reorderOfferPhotos(offerId, ids) {
+    if (!ids.length) return true;
+    await query(
+      `update offer_photos p set sort = d.ord
+         from (select * from unnest($2::uuid[]) with ordinality as t(id, ord)) d
+        where p.id = d.id and p.offer_id = $1`,
+      [offerId, ids]
+    );
+    return true;
+  },
+  async deleteOfferPhoto(offerId, photoId) {
+    const { rowCount } = await query(
+      `delete from offer_photos where id = $1 and offer_id = $2`, [photoId, offerId]
+    );
+    return rowCount > 0;
   },
 
   /* ---- offer settings (one row per location) ---- */
@@ -449,6 +516,7 @@ const fileStore = (() => {
       data.datarooms = data.datarooms || {};
       data.dataroomInvites = data.dataroomInvites || {};
       data.dataroomEvents = data.dataroomEvents || [];
+      data.offerPhotos = data.offerPhotos || {};
       adoptLegacyOutreachRows();
     }
     return data;
@@ -552,6 +620,8 @@ const fileStore = (() => {
         fs.rmSync(path.join(DATA_DIR, "docs", `${id}.${kind}`), { force: true });
         fs.rmSync(path.join(DATA_DIR, "docs", `${id}.${kind}.meta`), { force: true });
       }
+      for (const p of Object.values(data.offerPhotos)) if (p.offerId === id) delete data.offerPhotos[p.id];
+      fs.rmSync(path.join(DATA_DIR, "photos", id), { recursive: true, force: true });
       persist();
       return true;
     },
@@ -576,6 +646,78 @@ const fileStore = (() => {
       } catch {
         return null;
       }
+    },
+
+    /* ---- property photos ---- */
+    // Metadata lives in store.json; BYTES DO NOT. persist() rewrites the whole
+    // JSON file on every write, so a single photo in there would re-serialize
+    // megabytes on every subsequent dataroom event.
+    async listOfferPhotos(offerId) {
+      ensure();
+      return Object.values(data.offerPhotos)
+        .filter((p) => p.offerId === offerId)
+        .sort((a, b) =>
+          a.sort - b.sort ||
+          String(a.createdAt).localeCompare(String(b.createdAt)) ||
+          a.id.localeCompare(b.id));
+    },
+    async saveOfferPhoto(offerId, locationId, { variants, width, height, caption = null, source = "upload" }) {
+      ensure();
+      const id = crypto.randomUUID();
+      const dir = path.join(DATA_DIR, "photos", offerId);
+      fs.mkdirSync(dir, { recursive: true });
+      for (const [variant, v] of Object.entries(variants)) {
+        fs.writeFileSync(path.join(dir, `${id}.${variant}`), v.bytes);
+        fs.writeFileSync(path.join(dir, `${id}.${variant}.meta`), v.contentType);
+      }
+      const maxSort = Object.values(data.offerPhotos)
+        .filter((p) => p.offerId === offerId)
+        .reduce((m, p) => Math.max(m, p.sort), -1);
+      const row = {
+        id, offerId, locationId, source, caption,
+        sort: maxSort + 1,
+        width: width || null, height: height || null,
+        createdAt: new Date().toISOString(),
+      };
+      data.offerPhotos[id] = row;
+      persist();
+      return row;
+    },
+    async readPhotoBytes(photoId, variant) {
+      ensure();
+      const row = data.offerPhotos[photoId];
+      if (!row) return null;
+      try {
+        const dir = path.join(DATA_DIR, "photos", row.offerId);
+        return {
+          bytes: fs.readFileSync(path.join(dir, `${photoId}.${variant}`)),
+          contentType: fs.readFileSync(path.join(dir, `${photoId}.${variant}.meta`), "utf8"),
+        };
+      } catch {
+        return null;
+      }
+    },
+    async reorderOfferPhotos(offerId, ids) {
+      ensure();
+      ids.forEach((id, i) => {
+        const row = data.offerPhotos[id];
+        if (row && row.offerId === offerId) row.sort = i;
+      });
+      persist();
+      return true;
+    },
+    async deleteOfferPhoto(offerId, photoId) {
+      ensure();
+      const row = data.offerPhotos[photoId];
+      if (!row || row.offerId !== offerId) return false;
+      delete data.offerPhotos[photoId];
+      const dir = path.join(DATA_DIR, "photos", offerId);
+      for (const variant of ["full", "thumb"]) {
+        fs.rmSync(path.join(dir, `${photoId}.${variant}`), { force: true });
+        fs.rmSync(path.join(dir, `${photoId}.${variant}.meta`), { force: true });
+      }
+      persist();
+      return true;
     },
 
     async getOfferSettings(locationId) {

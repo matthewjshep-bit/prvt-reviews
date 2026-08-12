@@ -176,6 +176,87 @@ await jget(`${B}/api/datarooms/${room2.id}`, {
   body: JSON.stringify({ location_id: LOC, unlisted: false }),
 });
 
+console.log("\n== photos: serving and isolation ==");
+// Seeded through the store: this suite mounts only the dataroom routers, and
+// the operator upload API lives on the offers router. What matters here is the
+// investor-facing read path, which is where the authorization lives.
+const JPEG = Buffer.from("/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAj/2Q==", "base64");
+const seedPhoto = (offerId) => store.saveOfferPhoto(offerId, LOC, {
+  variants: { full: { bytes: JPEG, contentType: "image/jpeg" },
+              thumb: { bytes: JPEG, contentType: "image/jpeg" } },
+  width: 1600, height: 1067,
+});
+
+const photoA1 = (await seedPhoto(offer.id)).id;
+const photoA2 = (await seedPhoto(offer.id)).id;
+const photoB1 = (await seedPhoto(offer2.id)).id;
+
+let list = await store.listOfferPhotos(offer.id);
+ok("photos come back in sort order", list.map((p) => p.id).join() === `${photoA1},${photoA2}`);
+ok("second photo sorted after the first", list[1].sort === 1, list[1].sort);
+ok("metadata carries no bytes", !JSON.stringify(list).includes("/9j/"));
+
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+const dealShare = r.body.dataroom.shareLink;
+r = await jget(`${B}/api/datarooms/${room2.id}?location_id=${LOC}`);
+const otherShare = r.body.dataroom.shareLink;
+
+let iv = await fetch(`${dealShare}/photo/${photoA1}/thumb`, { redirect: "manual" });
+ok("serves a photo behind the deal's token", iv.status === 200 && iv.headers.get("content-type") === "image/jpeg", iv.status);
+ok("cacheable but private", (iv.headers.get("cache-control") || "").includes("private"));
+ok("not indexable", (iv.headers.get("x-robots-tag") || "").includes("noindex"));
+const etag = iv.headers.get("etag");
+ok("carries an etag", Boolean(etag));
+iv = await fetch(`${dealShare}/photo/${photoA1}/thumb`, { headers: { "if-none-match": etag }, redirect: "manual" });
+ok("repeat view is a 304", iv.status === 304, iv.status);
+iv = await fetch(`${dealShare}/photo/${photoA1}/bogus`, { redirect: "manual" });
+ok("unknown variant refused", iv.status === 404, iv.status);
+
+// The one that matters: a token must only serve photos from its OWN deal.
+iv = await fetch(`${otherShare}/photo/${photoA1}/thumb`, { redirect: "manual" });
+ok("another deal's token can't fetch this photo", iv.status === 404, iv.status);
+iv = await fetch(`${dealShare}/photo/${photoB1}/thumb`, { redirect: "manual" });
+ok("and the reverse is refused too", iv.status === 404, iv.status);
+iv = await fetch(`${portfolioLink}/photo/${photoA1}/thumb`, { redirect: "manual" });
+ok("the portfolio token can't fetch any photo", iv.status === 404, iv.status);
+
+console.log("\n== photos: on the investor pages ==");
+let pgh = await (await fetch(dealShare, { redirect: "manual" })).text();
+ok("hero photo renders", pgh.includes(`/photo/${photoA1}/full`));
+ok("the rest go in the strip", pgh.includes(`/photo/${photoA2}/thumb`));
+ok("hero carries explicit dimensions", /width="1600" height="1067"/.test(pgh));
+ph = await (await fetch(portfolioLink, { redirect: "manual" })).text();
+ok("portfolio card shows a thumbnail", ph.includes(`/photo/${photoA1}/thumb`));
+ok("portfolio thumb is served under the deal's own token",
+  ph.includes(`/d/${dealShare.split("/d/")[1]}/photo/${photoA1}/thumb`));
+
+console.log("\n== photos: reorder and delete ==");
+await store.reorderOfferPhotos(offer.id, [photoA2, photoA1]);
+pgh = await (await fetch(dealShare, { redirect: "manual" })).text();
+ok("promoting a photo changes the hero", pgh.includes(`/photo/${photoA2}/full`));
+ok("reorder can't touch another deal's photos",
+  !(await store.listOfferPhotos(offer2.id)).some((p) => p.id === photoA1));
+await store.reorderOfferPhotos(offer.id, [photoB1]);
+ok("id-stuffing another deal's photo is ignored",
+  (await store.listOfferPhotos(offer.id)).length === 2);
+
+ok("delete is scoped to its own offer", (await store.deleteOfferPhoto(offer2.id, photoA1)) === false);
+ok("delete succeeds for the right offer", (await store.deleteOfferPhoto(offer.id, photoA1)) === true);
+iv = await fetch(`${dealShare}/photo/${photoA1}/thumb`, { redirect: "manual" });
+ok("a deleted photo dies on every live link immediately", iv.status === 404, iv.status);
+
+console.log("\n== photos: revocation ==");
+await jget(`${B}/api/datarooms/${room.id}/revoke`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, revoked: true }),
+});
+iv = await fetch(`${dealShare}/photo/${photoA2}/thumb`, { redirect: "manual" });
+ok("a revoked room serves no photos", iv.status === 404, iv.status);
+await jget(`${B}/api/datarooms/${room.id}/revoke`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, revoked: false }),
+});
+
 console.log("\n== operator: wrong location is refused ==");
 r = await jget(`${B}/api/datarooms/${room.id}?location_id=someone-else`);
 ok("403 on a foreign location", r.status === 403, r.status);

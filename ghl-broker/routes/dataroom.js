@@ -27,7 +27,7 @@ import { effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { getContact, sendSms } from "../ghl.js";
 import {
   DEFAULT_EXPIRY_DAYS, buildSnapshot, hashToken, newToken, normalizeSections,
-  renderNotice, renderPortfolio, renderRoom, secureHeaders,
+  photoHeaders, renderNotice, renderPortfolio, renderRoom, secureHeaders,
 } from "../dataroom.js";
 
 // A location's portfolio is itself a dataroom row — offerId null, kind
@@ -568,20 +568,78 @@ export function createDataroomPublicRouter() {
         const listed = (await store.listDatarooms(room.locationId, { limit: 500 }))
           .filter((r) => listedInPortfolio(r) && r.snapshot);
         // Rooms built before share links existed (or never opened) get one now,
-        // rather than being silently dropped from the list.
-        for (const r of listed) await ensureShareLink(r);
+        // rather than being silently dropped from the list. The hero photo is
+        // fetched in the same pass, and served under each deal's OWN token —
+        // the portfolio token can't authorize another room's photo.
+        for (const r of listed) {
+          await ensureShareLink(r);
+          const photos = r.offerId ? await store.listOfferPhotos(r.offerId) : [];
+          r.heroPhoto = photos[0] || null;
+        }
         return res.type("html").send(renderPortfolio({
           rooms: listed, company: await companyFor(room.locationId, listed),
         }));
       }
 
+      // Photos resolve live rather than being frozen into the snapshot: the
+      // snapshot exists so an investor's NUMBERS can't shift under them, but a
+      // photo pulled for cause (wrong house, a face in a window) has to
+      // disappear everywhere at once. Whether the room shows photos at all IS
+      // frozen — that's the operator's presentation choice, in snapshot.sections.
       res.type("html").send(renderRoom({
         snap: room.snapshot, token, invite, viewCount,
+        photos: room.snapshot?.sections?.photos === false || !room.offerId
+          ? [] : await store.listOfferPhotos(room.offerId),
         backLink: await portfolioLinkFor(room),
       }));
     } catch (err) {
       console.error("dataroom view failed:", err.message);
       notice(res, 500, { title: "Something went wrong", message: "Please try that link again in a moment." });
+    }
+  });
+
+  /* ---- property photos, behind the same token ---- */
+  //
+  // SECURITY: the photo id comes from the client, so it must never be trusted
+  // as a lookup key on its own. Every photo served here is proved to belong to
+  // THIS room's offer first — otherwise any valid token anywhere would serve
+  // any photo in the system. The PDF route above is safe for the same reason:
+  // its content is derived from room.offerId, not from user input.
+  const PHOTO_VARIANTS = new Set(["full", "thumb"]);
+
+  router.get("/:token/photo/:photoId/:variant?", async (req, res) => {
+    try {
+      const ctx = await resolveInvite(req, res);
+      if (!ctx) return;
+      const { room } = ctx;
+      // The portfolio room has no offer of its own, so it can't authorize a
+      // photo. Its cards link to each deal's own token instead.
+      if (isPortfolio(room) || !room.offerId) return gone(res);
+
+      const variant = req.params.variant || "full";
+      if (!PHOTO_VARIANTS.has(variant)) return gone(res);
+
+      const photos = await store.listOfferPhotos(room.offerId);
+      if (!photos.some((p) => p.id === req.params.photoId)) return gone(res);
+
+      // Immutable per (id, variant) — answer repeat views without touching the DB.
+      const etag = `"${req.params.photoId}-${variant}"`;
+      if (req.headers["if-none-match"] === etag) {
+        photoHeaders(res, etag);
+        return res.status(304).end();
+      }
+
+      const stored = await store.readPhotoBytes(req.params.photoId, variant);
+      if (!stored?.bytes) return gone(res);
+      photoHeaders(res, etag);
+      res.set("Content-Type", stored.contentType || "image/jpeg");
+      res.send(stored.bytes);
+      // Deliberately NOT logged: a 20-image gallery would write 20 rows per
+      // view and bury the access log the operator actually reads. The page
+      // `view` event already records that someone opened this.
+    } catch (err) {
+      console.error("dataroom photo failed:", err.message);
+      gone(res);
     }
   });
 

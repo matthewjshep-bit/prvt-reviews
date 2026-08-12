@@ -37,9 +37,9 @@ export const hashToken = (token) => crypto.createHash("sha256").update(String(to
 // What the operator can choose to include. `feeBreakdown` is off by default:
 // it exposes our contract price and assignment fee, which is negotiating
 // leverage, not investor information.
-export const SECTION_KEYS = ["summary", "property", "equity", "comps", "scope", "terms", "documents", "feeBreakdown"];
+export const SECTION_KEYS = ["summary", "property", "equity", "photos", "comps", "scope", "terms", "documents", "feeBreakdown"];
 export const DEFAULT_SECTIONS = {
-  summary: true, property: true, equity: true, comps: true,
+  summary: true, property: true, equity: true, photos: true, comps: true,
   scope: true, terms: true, documents: true, feeBreakdown: false,
 };
 
@@ -174,6 +174,19 @@ export function secureHeaders(res) {
   );
 }
 
+// Photos, unlike the HTML, are safe to cache: content is immutable per photo id
+// (an edit mints a new id), so a strong ETag turns repeat gallery views into
+// 304s. That matters — the DB pool is 8 connections and a gallery fires every
+// image at once. `private` keeps bytes out of shared caches and the 24h cap
+// bounds how long a revoked invite's images linger in one browser.
+export function photoHeaders(res, etag) {
+  res.set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
+  res.set("Referrer-Policy", "no-referrer");
+  res.set("X-Content-Type-Options", "nosniff");
+  res.set("Cache-Control", "private, max-age=86400");
+  if (etag) res.set("ETag", etag);
+}
+
 const FONT = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Plus Jakarta Sans", system-ui, sans-serif`;
 
 const BASE_CSS = `
@@ -229,7 +242,35 @@ tr:last-child td{border-bottom:0}
 .wm span{flex:0 0 50%;min-width:0;overflow:hidden;transform:rotate(-24deg);
   font-size:13px;font-weight:700;color:#0F172A;padding:30px 0;text-align:center;white-space:nowrap}
 .wrap{position:relative;z-index:1}
-@media(max-width:520px){.wrap{padding:14px 12px 56px}.card{padding:16px}}
+
+/* ---- photography ----
+   A hero photo carries an arbitrary image behind white type, so it needs a
+   scrim to stay legible. That is the one gradient in the system and it is a
+   legibility device, not decoration (see DESIGN.md). Everything here is pure
+   CSS: the investor pages have no script-src, so no carousel or JS lightbox is
+   possible — the gallery is a scroll-snap strip and photos open full-size in a
+   new tab. */
+.hero{position:relative;border-radius:12px;overflow:hidden;margin:0 0 16px;background:#0F172A;
+  border:1px solid #E2E8F0}
+.hero img{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover}
+.hero .scrim{position:absolute;inset:auto 0 0 0;padding:56px 20px 18px;color:#fff;
+  background:linear-gradient(to top,rgba(15,23,42,.92) 0%,rgba(15,23,42,.72) 42%,rgba(15,23,42,0) 100%)}
+.hero .addr{font-size:21px;font-weight:800;letter-spacing:-.02em;line-height:1.2;margin:0;
+  text-shadow:0 1px 12px rgba(15,23,42,.5)}
+.hero .sub{font-size:13px;color:#CBD5E1;margin:5px 0 0}
+.hero .tag{display:inline-block;background:#fff;color:#0F172A;font-size:13px;font-weight:800;
+  padding:5px 11px;border-radius:8px;margin:0 0 10px;font-variant-numeric:tabular-nums}
+.shots{display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;
+  scroll-snap-type:x mandatory;padding:2px 0 6px;margin:0 -2px}
+.shots a{flex:0 0 auto;scroll-snap-align:start;border-radius:10px;overflow:hidden;
+  border:1px solid #E2E8F0;background:#F1F5F9;line-height:0}
+.shots img{display:block;width:164px;height:116px;object-fit:cover}
+@media(max-width:520px){.shots img{width:140px;height:100px}}
+.noshot{aspect-ratio:3/2;display:flex;align-items:center;justify-content:center;
+  background:#F1F5F9;color:#94A3B8;font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+
+@media(max-width:520px){.wrap{padding:14px 12px 56px}.card{padding:16px}
+  .hero .addr{font-size:19px}.hero .scrim{padding:48px 16px 15px}}
 `;
 
 function page({ title, css = "", body, watermark = "" }) {
@@ -280,21 +321,30 @@ export function renderPortfolio({ rooms = [], company = {} }) {
     ].filter(Boolean).join(" · ");
     const figure = (k, v, cls = "") =>
       `<div class="pfig ${cls}"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`;
+    // The thumbnail is served under THIS deal's own share token, not the
+    // portfolio's — the portfolio room has no offer of its own and so can't
+    // authorize a photo. A revoked deal drops off this list entirely, so its
+    // thumbnail dies with it.
+    const shot = r.heroPhoto
+      ? `<img src="/d/${encodeURIComponent(r.shareToken)}/photo/${encodeURIComponent(r.heroPhoto.id)}/thumb"
+           alt="" loading="lazy">`
+      : `<div class="noshot">Photos coming soon</div>`;
     return `<a class="deal" href="/d/${encodeURIComponent(r.shareToken)}">
-      <div class="dealhead">
-        <div>
-          <div class="dealaddr">${esc(p.address || r.address || "Investment opportunity")}</div>
-          ${bits ? `<div class="muted" style="font-size:12px">${esc(bits)}</div>` : ""}
-          ${r.snapshot?.headline ? `<div style="font-size:13px;font-weight:600;margin-top:4px">${esc(r.snapshot.headline)}</div>` : ""}
+      <div class="shot">
+        ${shot}
+        ${num(n.investorPrice) > 0 ? `<span class="price">${esc(money(n.investorPrice))}</span>` : ""}
+      </div>
+      <div class="dealbody">
+        <div class="dealaddr">${esc(p.address || r.address || "Investment opportunity")}</div>
+        ${bits ? `<div class="muted" style="font-size:12px;margin-top:2px">${esc(bits)}</div>` : ""}
+        ${r.snapshot?.headline ? `<div style="font-size:13px;font-weight:600;margin-top:6px">${esc(r.snapshot.headline)}</div>` : ""}
+        <div class="pfigs">
+          ${num(n.arv) > 0 ? figure("ARV", money(n.arv)) : ""}
+          ${num(n.repairs) > 0 ? figure("Rehab", money(n.repairs)) : ""}
+          ${spread > 0 ? figure("Spread", money(spread), "good") : ""}
         </div>
+        <div class="more">See the photos, comps and numbers →</div>
       </div>
-      <div class="pfigs">
-        ${figure("Price", money(n.investorPrice), "hero")}
-        ${num(n.arv) > 0 ? figure("ARV", money(n.arv)) : ""}
-        ${num(n.repairs) > 0 ? figure("Rehab", money(n.repairs)) : ""}
-        ${spread > 0 ? figure("Spread", money(spread), "good") : ""}
-      </div>
-      <div class="more">See the comps, scope and numbers →</div>
     </a>`;
   };
 
@@ -306,20 +356,24 @@ export function renderPortfolio({ rooms = [], company = {} }) {
   return page({
     title: brand ? `${brand} — current deals` : "Current deals",
     css: `
+      .grid{display:grid;grid-template-columns:1fr;gap:12px}
+      @media(min-width:680px){.grid{grid-template-columns:1fr 1fr}}
       .deal{display:block;text-decoration:none;color:inherit;background:#fff;border:1px solid #E2E8F0;
-        border-radius:12px;padding:16px;margin:0 0 12px}
-      .dealhead{margin-bottom:12px}
-      .dealaddr{font-size:15px;font-weight:700;letter-spacing:-.01em;line-height:1.3}
+        border-radius:12px;overflow:hidden}
+      .deal .shot{position:relative;background:#F1F5F9;line-height:0}
+      .deal .shot img{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover}
+      .deal .price{position:absolute;left:10px;bottom:10px;background:#0F172A;color:#fff;
+        font-size:15px;font-weight:800;letter-spacing:-.01em;padding:6px 11px;border-radius:8px;
+        font-variant-numeric:tabular-nums;line-height:1.2}
+      .dealbody{padding:14px 16px 16px}
+      .dealaddr{font-size:15px;font-weight:700;letter-spacing:-.015em;line-height:1.3}
       .pfigs{display:flex;flex-wrap:wrap;gap:1px;background:#E2E8F0;border:1px solid #E2E8F0;
-        border-radius:8px;overflow:hidden}
+        border-radius:8px;overflow:hidden;margin-top:12px}
       .pfig{background:#fff;padding:9px 12px;flex:1 1 88px;min-width:0}
       .pfig .k{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748B}
       .pfig .v{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em;margin-top:1px}
-      .pfig.hero{background:#0F172A}
-      .pfig.hero .k{color:#94A3B8}
-      .pfig.hero .v{color:#fff}
       .pfig.good .v{color:#047857}
-      .more{font-size:13px;font-weight:600;color:#2563EB;margin-top:10px}
+      .more{font-size:13px;font-weight:600;color:#2563EB;margin-top:12px}
     `,
     body: `
       <div class="card">
@@ -329,7 +383,7 @@ export function renderPortfolio({ rooms = [], company = {} }) {
           ${rooms.length ? `${rooms.length} propert${rooms.length === 1 ? "y" : "ies"} available now — tap any one for the full package.`
             : "No properties are available right now. Check back shortly."}</p>
       </div>
-      ${rooms.map(card).join("")}
+      <div class="grid">${rooms.map(card).join("")}</div>
       ${contactBits.length ? `<div class="card">
         <h2>Want one of these?</h2>
         <p class="muted" style="margin-bottom:12px">First to commit takes it. Call or text
@@ -429,11 +483,32 @@ function documentsSection(snap, token) {
   </div>`;
 }
 
+const photoUrl = (token, photo, variant) =>
+  `/d/${encodeURIComponent(token)}/photo/${encodeURIComponent(photo.id)}/${variant}`;
+
+// The rest of the photos, after the hero. A scroll-snap strip rather than a
+// grid so it stays one gesture on a phone; each opens full-size in a new tab,
+// which beats a :target lightbox on a page we can't debug in the wild.
+function photosSection(photos, token) {
+  const rest = photos.slice(1);
+  if (!rest.length) return "";
+  return `<div class="card">
+    <h2>Photos</h2>
+    <div class="shots">
+      ${rest.map((p) => `<a href="${photoUrl(token, p, "full")}" target="_blank" rel="noopener noreferrer">
+        <img src="${photoUrl(token, p, "thumb")}" alt="" loading="lazy"
+          ${p.width && p.height ? `width="${p.width}" height="${p.height}"` : ""}></a>`).join("")}
+    </div>
+    <p class="muted" style="margin:8px 0 0;font-size:12px">
+      ${rest.length + 1} photo${rest.length ? "s" : ""} · tap any one to see it full size.</p>
+  </div>`;
+}
+
 // The full package. A named `invite` is a personal link — it gets the
 // recipient's name in the watermark and the access stamp. The shared marketing
 // link has no name, so it falls back to the company's own mark: there's no
 // individual to attribute a view to, and pretending otherwise would be a lie.
-export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "" }) {
+export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", photos = [] }) {
   const s = snap.sections || DEFAULT_SECTIONS;
   const n = snap.numbers || {};
   const p = snap.property || {};
@@ -471,19 +546,37 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "" }
     : "";
 
   const contactBits = [company.phone, company.email].filter(Boolean);
+  // Hero is the first photo by sort order; the operator promotes one by moving
+  // it to the front rather than by flagging it.
+  const hero = s.photos !== false ? photos[0] : null;
 
   const body = `
     ${backLink ? `<p style="margin:0 0 12px"><a href="${esc(backLink)}"
       style="font-size:13px;font-weight:600;text-decoration:none">← All current deals</a></p>` : ""}
-    <div class="card">
+    ${hero ? `<div class="hero">
+      <img src="${photoUrl(token, hero, "full")}" alt="${esc(p.address || "The property")}"
+        ${hero.width && hero.height ? `width="${hero.width}" height="${hero.height}"` : ""}>
+      <div class="scrim">
+        ${num(n.investorPrice) > 0 ? `<div class="tag">${esc(money(n.investorPrice))}</div>` : ""}
+        <p class="addr">${esc(p.address || "Investment opportunity")}</p>
+        ${propBits ? `<p class="sub">${esc(propBits)}</p>` : ""}
+      </div>
+    </div>
+    ${snap.headline || p.zillow ? `<div class="card">
+      <p class="eyebrow">${esc(company.name || "Investor package")}${company.tagline ? ` · ${esc(company.tagline)}` : ""}</p>
+      ${snap.headline ? `<p style="margin:0;font-weight:600">${esc(snap.headline)}</p>` : ""}
+      ${p.zillow ? `<p style="margin:8px 0 0"><a href="${esc(p.zillow)}" target="_blank" rel="noopener noreferrer nofollow" style="font-size:13px">View the property on Zillow →</a></p>` : ""}
+    </div>` : ""}`
+    : `<div class="card">
       <p class="eyebrow">${esc(company.name || "Investor package")}${company.tagline ? ` · ${esc(company.tagline)}` : ""}</p>
       <h1>${esc(p.address || "Investment opportunity")}</h1>
       ${propBits ? `<p class="muted" style="margin-bottom:2px">${esc(propBits)}</p>` : ""}
       ${snap.headline ? `<p style="margin-top:10px;font-weight:600">${esc(snap.headline)}</p>` : ""}
       ${p.zillow ? `<p style="margin:8px 0 0"><a href="${esc(p.zillow)}" target="_blank" rel="noopener noreferrer nofollow" style="font-size:13px">View the property on Zillow →</a></p>` : ""}
-    </div>
+    </div>`}
 
     ${s.summary ? `<div class="figs" style="margin-bottom:16px">${figs}</div>` : ""}
+    ${s.photos !== false ? photosSection(photos, token) : ""}
     ${feeRows}
 
     ${snap.notes ? `<div class="card"><h2>Deal notes</h2><p class="muted" style="white-space:pre-wrap;margin:0">${esc(snap.notes)}</p></div>` : ""}

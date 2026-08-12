@@ -14,6 +14,7 @@ import {
   BATH_TIERS as BATH_TIERS_SHARED, ALL_REHAB_ITEMS,
 } from "@shared/rehab-catalog.js";
 import { scanRehab } from "./api.js";
+import { downscale } from "./image.js";
 
 const CATALOG = CATALOG_SHARED;
 const BED_TIERS = BED_TIERS_SHARED;
@@ -23,16 +24,9 @@ const ALL_ITEMS = ALL_REHAB_ITEMS;
 const parse = (v) => Number(String(v).replace(/[^\d.]/g, "")) || 0;
 
 // Downscale an uploaded photo client-side (max 1400px, JPEG) so a batch of
-// listing photos stays a few MB.
-async function fileToDataUrl(file, maxDim = 1400) {
-  const img = await createImageBitmap(file);
-  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(img.width * scale));
-  canvas.height = Math.max(1, Math.round(img.height * scale));
-  canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/jpeg", 0.8);
-}
+// listing photos stays a few MB. Shared with the dataroom's photo upload.
+const fileToDataUrl = async (file, maxDim = 1400) =>
+  (await downscale(file, maxDim, 0.8)).dataUrl;
 
 const resizeRooms = (rooms, n) => {
   const next = rooms.slice(0, n);

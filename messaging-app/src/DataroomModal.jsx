@@ -13,14 +13,17 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ArrowLeft, Check, Copy, Eye, Loader2, Lock, RefreshCw, Send, ShieldOff, Trash2, X,
+  ArrowLeft, Check, Copy, Eye, ImagePlus, Loader2, Lock, RefreshCw, Send, ShieldOff,
+  Star, Trash2, X,
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
-  createDataroom, createDataroomInvite, getDataroom, getDataroomPortfolio, listDatarooms,
-  reissueDataroomInvite, revokeDataroom, revokeDataroomInvite, rotateDataroomShareLink,
-  searchContacts, sendDataroomInvite, updateDataroom,
+  createDataroom, createDataroomInvite, deleteOfferPhoto, getDataroom, getDataroomPortfolio,
+  listDatarooms, listOfferPhotos, offerPhotoUrl, reissueDataroomInvite, reorderOfferPhotos,
+  revokeDataroom, revokeDataroomInvite, rotateDataroomShareLink, searchContacts,
+  sendDataroomInvite, updateDataroom, uploadOfferPhoto,
 } from "./api.js";
+import { propertyPhotoVariants } from "./image.js";
 
 const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 const INPUT_CLS =
@@ -142,6 +145,127 @@ function FreshLink({ item, onSend, onDismiss, busy }) {
           className="mt-2 flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
           <Send size={13} /> Text it to {item.name?.split(" ")[0] || "them"}
         </button>
+      )}
+    </div>
+  );
+}
+
+// Photos for one deal. They belong to the OFFER, so they survive rebuilding or
+// re-sending the package — and the investor page reads them live, which is why
+// a delete here disappears from every link immediately.
+//
+// Order is the whole interface: photo #1 is the hero on the deal page and the
+// thumbnail on the all-deals page. There's no separate "hero" flag to drift.
+function PhotosPane({ offerId, busy, setBusy, onError }) {
+  const [photos, setPhotos] = useState(null);
+  const [uploading, setUploading] = useState(null); // {done, total}
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPhotos(null);
+    listOfferPhotos(offerId)
+      .then((p) => { if (!cancelled) setPhotos(p); })
+      .catch(() => { if (!cancelled) setPhotos([]); });
+    return () => { cancelled = true; };
+  }, [offerId]);
+
+  const guard = async (fn) => {
+    setBusy(true);
+    onError("");
+    try { setPhotos(await fn()); } catch (e) { onError(e.message); } finally { setBusy(false); }
+  };
+
+  async function addFiles(files) {
+    const list = [...files].filter((f) => f.type.startsWith("image/")).slice(0, 40);
+    if (!list.length) return;
+    setBusy(true);
+    onError("");
+    setUploading({ done: 0, total: list.length });
+    const failures = [];
+    // Sequential: each photo is its own request, and a phone photo set is big
+    // enough that firing them all at once just makes the broker queue anyway.
+    for (const [i, file] of list.entries()) {
+      try {
+        await uploadOfferPhoto(offerId, await propertyPhotoVariants(file));
+      } catch (e) {
+        failures.push(`${file.name}: ${e.message}`);
+      }
+      setUploading({ done: i + 1, total: list.length });
+    }
+    try { setPhotos(await listOfferPhotos(offerId)); } catch { /* keep what we have */ }
+    setUploading(null);
+    setBusy(false);
+    if (failures.length) onError(`${failures.length} photo(s) failed — ${failures[0]}`);
+  }
+
+  const move = (id, delta) => guard(() => {
+    const ids = photos.map((p) => p.id);
+    const i = ids.indexOf(id);
+    const to = i + delta;
+    if (i < 0 || to < 0 || to >= ids.length) return Promise.resolve(photos);
+    ids.splice(to, 0, ids.splice(i, 1)[0]);
+    return reorderOfferPhotos(offerId, ids);
+  });
+  const makeHero = (id) => guard(() =>
+    reorderOfferPhotos(offerId, [id, ...photos.map((p) => p.id).filter((x) => x !== id)]));
+
+  return (
+    <div className="mb-4 rounded-xl border border-slate-200 p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className={`${LABEL_CLS} mb-0`}>Property photos</span>
+        <span className="text-xs text-slate-500">
+          {uploading ? `Uploading ${uploading.done}/${uploading.total}…`
+            : photos?.length ? `${photos.length} photo${photos.length === 1 ? "" : "s"} · first one is the cover`
+            : ""}
+        </span>
+      </div>
+
+      {photos === null ? (
+        <div className="flex justify-center py-4"><Loader2 size={16} className="animate-spin text-slate-400" /></div>
+      ) : (
+        <>
+          {photos.length > 0 && (
+            <div className="mb-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
+              {photos.map((p, i) => (
+                <div key={p.id} className="group relative overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+                  <img src={offerPhotoUrl(offerId, p.id, "thumb")} alt="" loading="lazy"
+                    className="block aspect-[3/2] w-full object-cover" />
+                  {i === 0 && (
+                    <span className="absolute left-1 top-1 rounded bg-slate-900/85 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                      COVER
+                    </span>
+                  )}
+                  <div className="absolute inset-x-0 bottom-0 flex justify-center gap-0.5 bg-slate-900/70 p-1 opacity-0 transition group-hover:opacity-100">
+                    <button type="button" disabled={busy || i === 0} title="Move earlier"
+                      onClick={() => move(p.id, -1)}
+                      className="rounded px-1.5 text-xs font-bold text-white hover:bg-white/20 disabled:opacity-30">←</button>
+                    <button type="button" disabled={busy || i === 0} title="Make this the cover"
+                      onClick={() => makeHero(p.id)}
+                      className="rounded px-1 text-white hover:bg-white/20 disabled:opacity-30"><Star size={12} /></button>
+                    <button type="button" disabled={busy || i === photos.length - 1} title="Move later"
+                      onClick={() => move(p.id, 1)}
+                      className="rounded px-1.5 text-xs font-bold text-white hover:bg-white/20 disabled:opacity-30">→</button>
+                    <button type="button" disabled={busy} title="Delete this photo"
+                      onClick={() => guard(() => deleteOfferPhoto(offerId, p.id))}
+                      className="rounded px-1 text-white hover:bg-red-500/70 disabled:opacity-30"><Trash2 size={12} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button type="button" disabled={busy} className={BTN_CLS} onClick={() => fileRef.current?.click()}>
+            {uploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
+            {photos.length ? "Add more photos" : "Add photos"}
+          </button>
+          <input ref={fileRef} type="file" accept="image/*" multiple className="hidden"
+            onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+          <p className="mt-2 text-xs text-slate-500">
+            Your own photos only — listing photos from Zillow or the MLS are the photographer's copyright,
+            not yours to republish. Resized in your browser before upload.
+          </p>
+        </>
       )}
     </div>
   );
@@ -462,6 +586,8 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
                 </span>
               </label>
             </div>
+
+            <PhotosPane offerId={offer.id} busy={busy} setBusy={setBusy} onError={setError} />
 
             {fresh.map((item) => (
               <FreshLink key={item.inviteId + item.link} item={item} busy={busy}
