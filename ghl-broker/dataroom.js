@@ -1,18 +1,20 @@
 // dataroom.js — the secure investor dataroom: link crypto, the snapshot taken
 // from an offer, and the HTML the investor actually sees.
 //
-// Security model (the whole point of this module):
-//   • The link IS the credential: a 256-bit random token, unguessable at any
-//     realistic request rate. Only its SHA-256 is stored, so a database leak
-//     yields no working links. This is the same capability-URL model the offer
-//     PDFs already use, with revocation and logging added on top.
-//   • Every invite is personal, expires, and can be revoked instantly — so a
-//     link that gets forwarded can be killed the moment it shows up somewhere
-//     it shouldn't, without disturbing the other investors.
-//   • Documents are streamed through the broker, never as R2 URLs, so a copied
-//     PDF link dies with the invite.
-//   • Every page is watermarked with the recipient's name and stamped in the
-//     access log, so a leaked screenshot points back at who leaked it.
+// There are two kinds of link, because a deal package does two jobs:
+//   • The SHARE link — one per dataroom, for blasting to a buyer list. It's
+//     marketing: meant to be forwarded, so its token is stored in the clear so
+//     the operator can re-copy it any time. Rotating it kills the old one.
+//   • A PERSONAL link — optional, one per investor, when the operator wants to
+//     know who actually looked. Only its SHA-256 is stored, so a database leak
+//     yields no working personal links, and each page is watermarked with the
+//     recipient's name.
+//
+// Both are capability URLs: a 256-bit random token, unguessable at any
+// realistic request rate — the same model the offer PDFs already use. What
+// bounds them is revocation, expiry, and the access log. Documents stream
+// through the broker rather than as R2 URLs, so a copied PDF link dies with
+// the link that served it.
 
 import crypto from "node:crypto";
 import { fmtMoney } from "./shared/offer-calc.js";
@@ -87,11 +89,14 @@ export function buildSnapshot({ offer, settings = {}, sections, headline = "", n
   const snap = offer?.snapshot || null;
   const company = offer?.calc?.settings?.company || settings?.company || {};
 
-  const contractPrice = num(deal?.contractPrice) || num(offer?.cashAmount);
-  const assignmentFee = deal ? num(deal.assignmentFee) : num(settings?.wholesaleFee);
+  // Whole dollars throughout. The offer calc deliberately jitters cents onto
+  // the cash offer so it reads as calculated rather than round, but those cents
+  // ride through into contractPrice and read as sloppiness on a deal package.
+  const contractPrice = Math.round(num(deal?.contractPrice) || num(offer?.cashAmount));
+  const assignmentFee = Math.round(deal ? num(deal.assignmentFee) : num(settings?.wholesaleFee));
   const investorPrice = contractPrice + assignmentFee;
-  const arv = num(inputs.arv);
-  const repairs = num(inputs.repairs) || (offer?.scope || []).reduce((t, s) => t + num(s.cost), 0);
+  const arv = Math.round(num(inputs.arv));
+  const repairs = Math.round(num(inputs.repairs) || (offer?.scope || []).reduce((t, s) => t + num(s.cost), 0));
 
   const subject = snap?.comps?.result?.info || snap?.subjectInfo || null;
 
@@ -342,13 +347,16 @@ function documentsSection(snap, token) {
   </div>`;
 }
 
-// The full package. `invite` supplies the watermark + access stamp.
+// The full package. A named `invite` is a personal link — it gets the
+// recipient's name in the watermark and the access stamp. The shared marketing
+// link has no name, so it falls back to the company's own mark: there's no
+// individual to attribute a view to, and pretending otherwise would be a lie.
 export function renderRoom({ snap, token, invite, viewCount = 1 }) {
   const s = snap.sections || DEFAULT_SECTIONS;
   const n = snap.numbers || {};
   const p = snap.property || {};
   const company = snap.company || {};
-  const recipient = invite?.name || "Investor";
+  const recipient = clean(invite?.name, 80);
   const equity = num(n.arv) - num(n.investorPrice) - num(n.repairs);
 
   const propBits = [
@@ -406,27 +414,35 @@ export function renderRoom({ snap, token, invite, viewCount = 1 }) {
 
     <div class="card">
       <h2>Take the deal</h2>
-      <p class="muted" style="margin-bottom:14px">Reply to the text you received, or reach
-        ${esc(company.signer || company.name || "us")} directly.</p>
+      <p class="muted" style="margin-bottom:14px">
+        ${recipient ? "Reply to the text you received, or reach" : "First to commit takes it. Call or text"}
+        ${esc(company.signer || company.name || "us")}${recipient ? " directly" : ""}.</p>
       ${contactBits.length ? `<p style="margin:0">${contactBits.map((c) =>
         `<a href="${c.includes("@") ? `mailto:${esc(c)}` : `tel:${esc(String(c).replace(/[^\d+]/g, ""))}`}"
           style="font-weight:600">${esc(c)}</a>`).join(" &nbsp;·&nbsp; ")}</p>` : ""}
       <div class="stamp">
-        Prepared for <strong>${esc(recipient)}</strong>${invite?.phone ? ` (…${esc(String(invite.phone).slice(-4))})` : ""}
-        · opened ${viewCount} time${viewCount === 1 ? "" : "s"}
-        · ${esc(new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }))}
-        ${invite?.expiresAt ? `<br>This link expires ${esc(dateLabel(invite.expiresAt))}.` : ""}
-        <br>This link is yours alone — please don't forward it.
+        ${recipient
+          ? `Prepared for <strong>${esc(recipient)}</strong>${invite?.phone ? ` (…${esc(String(invite.phone).slice(-4))})` : ""}
+             · opened ${viewCount} time${viewCount === 1 ? "" : "s"}
+             · ${esc(new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }))}
+             ${invite?.expiresAt ? `<br>This link expires ${esc(dateLabel(invite.expiresAt))}.` : ""}
+             <br>This link is yours alone — please don't forward it.`
+          : `Prepared by <strong>${esc(company.name || company.signer || "us")}</strong>
+             · ${esc(new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }))}
+             ${invite?.expiresAt ? `<br>This link expires ${esc(dateLabel(invite.expiresAt))}.` : ""}`}
       </div>
     </div>
 
-    <p class="foot">Confidential. This package was issued to ${esc(recipient)} and every view is logged.
-      Figures are estimates for underwriting, not an appraisal or a guarantee of value —
+    <p class="foot">${recipient
+      ? `Confidential. This package was issued to ${esc(recipient)} and every view is logged. `
+      : ""}Figures are estimates for underwriting, not an appraisal or a guarantee of value —
       verify independently during your inspection period.</p>`;
 
   return page({
     title: `${p.address || "Investment opportunity"} — investor package`,
     body,
-    watermark: `${recipient} · CONFIDENTIAL`,
+    // A personal link is marked confidential to its recipient. The shared link
+    // is meant to circulate, so it carries the company's mark instead.
+    watermark: recipient ? `${recipient} · CONFIDENTIAL` : (company.name || "CONFIDENTIAL"),
   });
 }

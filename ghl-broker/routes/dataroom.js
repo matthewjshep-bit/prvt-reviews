@@ -33,7 +33,10 @@ import {
 const SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
 
 const str = (v, max = 200) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+// null/"" must come back as "no timestamp", NOT as epoch 0 — `new Date(null)`
+// is 1970, which would make every never-expiring link read as long expired.
 const ms = (v) => {
+  if (v == null || v === "") return null;
   const t = new Date(v).getTime();
   return Number.isNaN(t) ? null : t;
 };
@@ -87,6 +90,34 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
     return { locationId, client, room };
   }
 
+  // The shareable marketing link — one per room, no expiry, no recipient.
+  //
+  // Its token is deliberately stored in the clear (unlike personal invites,
+  // which keep only a hash). The operator has to be able to re-copy this link
+  // whenever they want to post it somewhere, and a link they can't retrieve is
+  // useless for marketing. The tradeoff is explicit: this one is meant to be
+  // forwarded, so rotation — not secrecy — is what controls it.
+  //
+  // Created on demand, so rooms built before share links existed get one the
+  // first time they're opened.
+  async function ensureShareLink(room) {
+    if (room.shareToken) return room;
+    const token = newToken();
+    await store.createDataroomInvite({
+      dataroomId: room.id,
+      locationId: room.locationId,
+      tokenHash: hashToken(token),
+      contactId: null,
+      name: null,
+      phone: null,
+      expiresAt: null,       // marketing links shouldn't die on a timer
+      doc: { share: true },
+    });
+    room.shareToken = token;
+    await store.updateDataroom(room.id, room);
+    return room;
+  }
+
   // Build a room from one offer. The snapshot is frozen here on purpose.
   router.post("/", async (req, res) => {
     try {
@@ -126,7 +157,9 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
         return {
           id: r.id, offerId: r.offerId, address: r.address, status: r.status,
           createdAt: r.createdAt, updatedAt: r.updatedAt,
-          inviteCount: invites.filter((i) => i.status === "active").length,
+          // Personal invites only; the shared link isn't someone we "invited".
+          inviteCount: invites.filter((i) => i.status === "active" && !i.doc?.share).length,
+          // Views across both kinds of link — the honest "is anyone looking" number.
           viewCount: invites.reduce((t, i) => t + (i.viewCount || 0), 0),
           lastViewedAt: invites.map((i) => i.lastViewedAt).filter(Boolean)
             .sort((a, b) => new Date(b) - new Date(a))[0] || null,
@@ -140,9 +173,41 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
     try {
       const ctx = await loadRoom(req, res);
       if (!ctx) return;
-      const invites = await store.listDataroomInvites(ctx.room.id);
-      const events = await store.listDataroomEvents(ctx.room.id, { limit: 100 });
-      res.json({ dataroom: { ...ctx.room, invites: invites.map(publicInvite) }, events });
+      const room = await ensureShareLink(ctx.room);
+      const invites = await store.listDataroomInvites(room.id);
+      const events = await store.listDataroomEvents(room.id, { limit: 100 });
+      const share = invites.find((i) => i.doc?.share && i.status === "active");
+      res.json({
+        dataroom: {
+          ...room,
+          shareLink: roomLink(room.shareToken),
+          shareViews: share?.viewCount || 0,
+          shareLastViewedAt: share?.lastViewedAt || null,
+          // Personal invites only — the share link is presented on its own.
+          invites: invites.filter((i) => !i.doc?.share).map(publicInvite),
+        },
+        events,
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Rotate the shared link: the old URL dies immediately, a new one takes its
+  // place. The move for a link that's been posted somewhere it shouldn't.
+  router.post("/:id/share/rotate", async (req, res) => {
+    try {
+      const ctx = await loadRoom(req, res);
+      if (!ctx) return;
+      const { room } = ctx;
+      for (const old of await store.listDataroomInvites(room.id)) {
+        if (old.doc?.share && old.status === "active") {
+          await store.updateDataroomInvite(old.id, { status: "revoked" });
+        }
+      }
+      delete room.shareToken;
+      await store.updateDataroom(room.id, room);
+      const fresh = await ensureShareLink(await store.getDataroom(room.id));
+      await store.logDataroomEvent(room.id, null, "share_rotated", {});
+      res.json({ ok: true, shareLink: roomLink(fresh.shareToken) });
     } catch (err) { fail(res, err); }
   });
 

@@ -92,6 +92,32 @@ ok("keeps only selected comps + manual", room.snapshot.comps.items.length === 3,
 ok("fee breakdown off by default", room.snapshot.sections.feeBreakdown === false);
 ok("lists both documents", room.snapshot.documents.length === 2);
 
+console.log("\n== operator: the shared deal link ==");
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+ok("share link is returned", /\/d\/[A-Za-z0-9_-]{20,}/.test(r.body?.dataroom?.shareLink || ""), r.body?.dataroom?.shareLink);
+const shareLink = r.body.dataroom.shareLink;
+ok("share link is stable across reads",
+  (await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`)).body.dataroom.shareLink === shareLink);
+ok("share link is not listed as an investor", (r.body.dataroom.invites || []).length === 0);
+
+let sv = await fetch(shareLink, { redirect: "manual" });
+let sh = await sv.text();
+ok("share link opens the package", sv.status === 200 && sh.includes("Sumner"), sv.status);
+ok("no personal watermark on the shared link", !sh.includes("Prepared for"));
+ok("shared link is not told it's theirs alone", !sh.includes("yours alone"));
+ok("prices are whole dollars", sh.includes("$327,000") && !/\$327,000\.\d/.test(sh));
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+ok("share views are counted", r.body.dataroom.shareViews === 1, r.body.dataroom.shareViews);
+
+r = await jget(`${B}/api/datarooms/${room.id}/share/rotate`, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location_id: LOC }),
+});
+ok("rotate returns a new link", r.status === 200 && r.body.shareLink && r.body.shareLink !== shareLink, r.status);
+sv = await fetch(shareLink, { redirect: "manual" });
+ok("the rotated-away link is dead", sv.status === 404, sv.status);
+sv = await fetch(r.body.shareLink, { redirect: "manual" });
+ok("the new share link works", sv.status === 200, sv.status);
+
 console.log("\n== operator: wrong location is refused ==");
 r = await jget(`${B}/api/datarooms/${room.id}?location_id=someone-else`);
 ok("403 on a foreign location", r.status === 403, r.status);

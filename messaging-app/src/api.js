@@ -176,10 +176,13 @@ export const suggestInvestors = (id) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/suggest-investors`, {});
 
 /* ---------- investor datarooms ---------- */
-// A dataroom is a frozen, investor-facing package built from one offer. Each
-// investor gets their own secret link, which comes back ONLY from
-// createDataroomInvite/reissueDataroomInvite and is never retrievable
-// afterwards, so the UI must send or copy it right away.
+// A dataroom is a frozen, investor-facing package built from one offer.
+//
+// getDataroom returns `shareLink` — one link per deal, meant to be blasted to a
+// buyer list and re-copied any time. Personal per-investor links are optional
+// extra: those come back ONLY from createDataroomInvite/reissueDataroomInvite
+// and are never retrievable afterwards, so the UI must send or copy them
+// right away.
 export const listDatarooms = (offerId = "") => {
   const p = new URLSearchParams(locq());
   if (offerId) p.set("offer_id", offerId);
@@ -191,6 +194,8 @@ export const createDataroom = ({ offerId, sections, headline, notes, expiryDays 
   post(`/api/datarooms`, { offerId, sections, headline, notes, expiryDays }).then((r) => r.dataroom);
 export const updateDataroom = (id, patch) =>
   post(`/api/datarooms/${encodeURIComponent(id)}`, patch, "PUT").then((r) => r.dataroom);
+export const rotateDataroomShareLink = (id) =>
+  post(`/api/datarooms/${encodeURIComponent(id)}/share/rotate`, {}).then((r) => r.shareLink);
 export const revokeDataroom = (id, revoked = true) =>
   post(`/api/datarooms/${encodeURIComponent(id)}/revoke`, { revoked }).then((r) => r.dataroom);
 export const deleteDataroom = (id) =>

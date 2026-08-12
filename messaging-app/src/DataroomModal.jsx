@@ -18,7 +18,8 @@ import {
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
   createDataroom, createDataroomInvite, getDataroom, listDatarooms, reissueDataroomInvite,
-  revokeDataroom, revokeDataroomInvite, searchContacts, sendDataroomInvite, updateDataroom,
+  revokeDataroom, revokeDataroomInvite, rotateDataroomShareLink, searchContacts,
+  sendDataroomInvite, updateDataroom,
 } from "./api.js";
 
 const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
@@ -324,8 +325,8 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
                   <span className="block text-[11px] text-slate-500">
                     {!s ? "no package yet"
                       : s.status === "revoked" ? "switched off"
-                      : s.viewCount > 0 ? `${s.inviteCount} invited · ${s.viewCount} views`
-                      : `${s.inviteCount} invited · not opened`}
+                      : s.viewCount > 0 ? `${s.viewCount} view${s.viewCount === 1 ? "" : "s"}`
+                      : "not opened yet"}
                   </span>
                 </button>
               );
@@ -343,9 +344,9 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
           /* ---------- build the package ---------- */
           <div>
             <p className="mb-4 text-sm text-slate-600">
-              Build a private web page from this deal — the numbers, the comps, the scope, and the PDFs.
-              Each investor gets their own secret link, texted from your GHL number. You can see who opened
-              it, and kill any link instantly.
+              Build a web page from this deal — the numbers, the comps, the scope, and the PDFs — and get one
+              link to send your whole buyer list. It's unlisted and unguessable, you can see how many times
+              it's been opened, and you can kill it any time.
             </p>
             <div className="mb-3">
               <span className={LABEL_CLS}>Headline (optional)</span>
@@ -360,11 +361,14 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
                 placeholder="Seller is relocating and wants a fast close. Vacant at closing." />
             </div>
             <div className="mb-4 max-w-xs">
-              <span className={LABEL_CLS}>Links expire after</span>
+              <span className={LABEL_CLS}>Tracked investor links expire after</span>
               <select className={INPUT_CLS} value={draft.expiryDays}
                 onChange={(e) => setDraft((d) => ({ ...d, expiryDays: Number(e.target.value) }))}>
                 {[3, 7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
               </select>
+              <p className="mt-1 text-xs text-slate-500">
+                The shared deal link doesn't expire — rotate it when you want it dead.
+              </p>
             </div>
             <button type="button" onClick={build} disabled={busy}
               className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
@@ -384,15 +388,48 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
               </div>
             )}
 
+            {/* --- the shareable link: the main event --- */}
+            <div className="mb-4 rounded-xl border border-slate-200 p-3">
+              <div className="mb-1.5 flex items-center justify-between gap-3">
+                <span className={`${LABEL_CLS} mb-0`}>Deal link — send this to your buyers</span>
+                <span className="text-xs text-slate-500">
+                  {room.shareViews > 0
+                    ? `${room.shareViews} view${room.shareViews === 1 ? "" : "s"}${
+                        room.shareLastViewedAt ? ` · last ${shortDateTime(room.shareLastViewedAt)}` : ""}`
+                    : "not opened yet"}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <input readOnly value={room.shareLink || ""}
+                  onFocus={(e) => e.target.select()}
+                  className="w-full rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-2 font-mono text-xs" />
+                <CopyButton value={room.shareLink || ""} className={`${BTN_CLS} shrink-0 bg-white`} />
+                <a href={room.shareLink || "#"} target="_blank" rel="noreferrer"
+                  className={`${BTN_CLS} shrink-0 bg-white`} title="Open it the way a buyer will see it">
+                  <Eye size={13} /> View
+                </a>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                <button type="button" disabled={busy} className="text-xs font-semibold text-slate-500 hover:text-slate-800 disabled:opacity-50"
+                  onClick={() => run(async () => { await rotateDataroomShareLink(room.id); await reload(); })}
+                  title="Kill this URL and generate a new one">
+                  Rotate link
+                </button>
+                <span className="text-xs text-slate-500">
+                  Anyone with this link can open the package — share it freely, rotate it to kill it.
+                </span>
+              </div>
+            </div>
+
             {fresh.map((item) => (
               <FreshLink key={item.inviteId + item.link} item={item} busy={busy}
                 onSend={() => sendFresh(item)}
                 onDismiss={() => setFresh((f) => f.filter((x) => x.inviteId !== item.inviteId))} />
             ))}
 
-            {/* --- invites --- */}
+            {/* --- optional per-investor links, for attribution --- */}
             <div className="mb-2 flex items-center justify-between">
-              <span className={`${LABEL_CLS} mb-0`}>Investors with access</span>
+              <span className={`${LABEL_CLS} mb-0`}>Tracked links (optional)</span>
               <label className="flex items-center gap-1.5 text-xs text-slate-500">
                 <input type="checkbox" checked={liveSend} className="h-3.5 w-3.5"
                   onChange={(e) => setLiveSend(e.target.checked)} />
@@ -402,7 +439,8 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
 
             {invites.length === 0 ? (
               <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2.5 text-sm text-slate-500">
-                No one has been invited yet.
+                Want to know exactly who's looking? Give a specific buyer their own link below — it's
+                watermarked with their name and tracked separately from the deal link.
               </p>
             ) : (
               <div className="mb-3 divide-y divide-slate-100 rounded-xl border border-slate-200">
