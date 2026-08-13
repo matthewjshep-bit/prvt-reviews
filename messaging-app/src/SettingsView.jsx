@@ -381,7 +381,13 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           ranking and reasons.
         </p>
         <Txt label="Investor tags" value={form.dispoTags || ""} onChange={set("dispoTags")}
-          placeholder="investor, investor-active, investor-stale, on-deal" />
+          placeholder="investor, investor-active, investor-stale, on-deal, disposition-*" />
+        <p className="mt-1 text-xs text-slate-500">
+          Comma separated. A trailing <span className="font-mono">*</span> matches a family of tags —
+          <span className="font-mono"> disposition-*</span> picks up every market you blast to, including
+          ones you add later, without editing this again. Leave blank for the defaults
+          (<span className="font-mono">investor, investor-active, investor-stale, on-deal</span>).
+        </p>
         <div className="mt-3">
           <Txt label="Blast tag prefix" value={form.dispoBlastTagPrefix || ""} onChange={set("dispoBlastTagPrefix")}
             placeholder="dispo" />

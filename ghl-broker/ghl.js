@@ -250,6 +250,17 @@ export async function searchContactsByTag(client, locationId, tag, { pageLimit =
   return data.contacts || [];
 }
 
+// Every tag defined on the location, lowercased. Needed because GHL's contact
+// search matches tags EXACTLY — filtering on "disposition" returns nothing
+// even when "disposition-seatac" exists — so a prefix has to be expanded to
+// concrete tag names on our side before the search can use it.
+export async function listLocationTags(client, locationId) {
+  const data = await client.call(`/locations/${encodeURIComponent(locationId)}/tags`);
+  return (data.tags || data.data || [])
+    .map((t) => String(t?.name ?? t ?? "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
 // EVERY contact carrying ANY of `tags`, paged to exhaustion. The one-page
 // searchContactsByTag above is fine for "give me a sample of investors" but
 // silently truncates at its page size, which is wrong for the dispositions
@@ -260,7 +271,7 @@ export async function searchContactsByTag(client, locationId, tag, { pageLimit =
 // contact can carry several of the tags. `truncated` is true when maxPages ran
 // out with more results waiting — the caller must NOT prune on a truncated
 // sync or it deletes the tail of the book.
-export async function searchAllContactsByTags(client, locationId, tags, { pageLimit = 100, maxPages = 30 } = {}) {
+export async function searchAllContactsByTags(client, locationId, tags, { pageLimit = 100, maxPages = 100 } = {}) {
   const value = [...new Set((tags || []).map((t) => String(t).trim()).filter(Boolean))];
   if (!value.length) return { contacts: [], total: 0, truncated: false };
 

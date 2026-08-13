@@ -58,7 +58,6 @@ function FitBadge({ fit, score }) {
 // GHL — the enrichment sweep's other findings are never clobbered.
 function BuyboxEditor({ investor, onSaved, onCancel }) {
   const b = investor.buybox || {};
-  const c = investor.custom || {};
   const [form, setForm] = useState({
     buybox_areas: b.areasRaw || "",
     buybox_price_min: b.priceMin ?? "",
@@ -158,8 +157,10 @@ function BuyboxEditor({ investor, onSaved, onCancel }) {
           className="rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
           Cancel
         </button>
-        {c.enrich_last_run && (
-          <span className="text-xs text-slate-500">AI last enriched this contact {c.enrich_last_run.slice(0, 10)}</span>
+        {investor.enrichLastRun && (
+          <span className="text-xs text-slate-500">
+            AI last enriched this contact {String(investor.enrichLastRun).slice(0, 10)}
+          </span>
         )}
       </div>
     </div>
@@ -173,22 +174,27 @@ function InvestorDetail({ investor, onSaved }) {
   // Which of OUR deals this investor is actually on — a different thing from
   // the AI-written property history below, which records what they said about
   // properties whether or not it ever became a deal.
-  const [deals, setDeals] = useState(null);
+  // The table row is trimmed to keep a few-thousand-investor book loadable, so
+  // the conversation summary and property history come from this one fetch
+  // rather than riding along on every row.
+  const [detail, setDetail] = useState(null);
   useEffect(() => {
     let live = true;
     getInvestor(investor.contactId)
-      .then((r) => { if (live) setDeals(r.deals || []); })
-      .catch(() => { if (live) setDeals([]); });
+      .then((r) => { if (live) setDetail(r); })
+      .catch(() => { if (live) setDetail({ deals: [] }); });
     return () => { live = false; };
   }, [investor.contactId]);
 
-  const b = investor.buybox || {};
-  const history = String(investor.dealHistory || "").split(/\r?\n/).filter(Boolean).slice(-8).reverse();
+  const full = { ...investor, ...(detail?.investor || {}) };
+  const deals = detail?.deals || null;
+  const b = full.buybox || investor.buybox || {};
+  const history = String(full.dealHistory || "").split(/\r?\n/).filter(Boolean).slice(-8).reverse();
 
   if (editing) {
     return (
       <BuyboxEditor
-        investor={investor}
+        investor={full}
         onCancel={() => setEditing(false)}
         onSaved={(next, changed) => { setEditing(false); onSaved(next, changed); }}
       />
@@ -229,10 +235,10 @@ function InvestorDetail({ investor, onSaved }) {
             ))}
           </dl>
         )}
-        {investor.lastConvoSummary && (
+        {full.lastConvoSummary && (
           <p className="mt-3 text-sm text-slate-600">
             <span className="font-semibold text-slate-700">Last conversation</span>
-            {investor.lastConvoDate ? ` (${String(investor.lastConvoDate).slice(0, 10)})` : ""}: {investor.lastConvoSummary}
+            {full.lastConvoDate ? ` (${String(full.lastConvoDate).slice(0, 10)})` : ""}: {full.lastConvoSummary}
           </p>
         )}
       </div>
@@ -268,6 +274,7 @@ function InvestorDetail({ investor, onSaved }) {
           {investor.lastBlastAt && (
             <span className="text-xs text-slate-500">Last blasted {fmtAgo(investor.lastBlastAt)}</span>
           )}
+          {!detail && <Loader2 size={12} className="animate-spin text-slate-300" />}
         </div>
       </div>
     </div>
@@ -794,6 +801,12 @@ export default function Dispositions() {
                         {buyboxIsEmpty(b) && (
                           <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">
                             no buy box
+                          </span>
+                        )}
+                        {inv.onLiveDeal && (
+                          <span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] font-semibold text-blue-800"
+                            title="Already linked to a deal that's still in flight">
+                            on a deal
                           </span>
                         )}
                         {inv.reason && <div className="mt-0.5 text-xs text-slate-600">{inv.reason}</div>}

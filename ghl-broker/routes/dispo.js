@@ -21,7 +21,7 @@ import express from "express";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
 import {
-  searchAllContactsByTags, getContact, updateContact,
+  searchAllContactsByTags, getContact, updateContact, listLocationTags,
   findOrCreateCustomFieldByKey, customFieldIdKeyMapForDefs, contactCustomRecord,
   addContactTags,
 } from "../ghl.js";
@@ -64,6 +64,8 @@ const contactName = (c) =>
 
 // GHL tags are lowercase, hyphenated, and punctuation-free. Anything else
 // silently becomes a DIFFERENT tag on their side, which would strand the blast.
+const escapeRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const sanitizeTag = (s) =>
   String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
 
@@ -78,11 +80,52 @@ export default function createDispoRouter({ resolveLocation }) {
 
   const getSettings = async (locationId) => (await store.getOfferSettings(locationId)) || {};
 
-  const dispoTags = (saved) => {
+  // The tag patterns as configured — may contain wildcards.
+  const dispoTagPatterns = (saved) => {
     const configured = String(saved?.dispoTags || "")
-      .split(",").map((t) => t.trim()).filter(Boolean);
+      .split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
     return configured.length ? configured : DEFAULT_DISPO_TAGS;
   };
+
+  // Expand those patterns into concrete tag names GHL will actually match.
+  //
+  // GHL's contact search compares tags EXACTLY — filtering on "disposition"
+  // returns nothing even though "disposition-seatac" exists — so a wildcard
+  // has to be resolved against the location's real tag list before the search.
+  // That also means a new market ("disposition-vashon") is picked up the next
+  // time you sync, without anyone editing Settings.
+  async function resolveTags(client, locationId, saved) {
+    const patterns = dispoTagPatterns(saved);
+    const wildcards = patterns.filter((p) => p.includes("*"));
+    if (!wildcards.length) return { tags: patterns, patterns, expanded: {} };
+
+    let all = [];
+    try {
+      all = await listLocationTags(client, locationId);
+    } catch (e) {
+      // No tag-list scope: fall back to the literal patterns minus the
+      // wildcards, so a sync still runs rather than failing outright.
+      return {
+        tags: patterns.filter((p) => !p.includes("*")),
+        patterns,
+        expanded: {},
+        warning: `Couldn't read the location's tag list (${e.message}) — wildcard tags were skipped.`,
+      };
+    }
+
+    const expanded = {};
+    const out = new Set();
+    for (const p of patterns) {
+      if (!p.includes("*")) { out.add(p); continue; }
+      // Only `*` is special, and only as a simple glob — these are tag names,
+      // not a place anyone should be writing regular expressions.
+      const rx = new RegExp(`^${p.split("*").map(escapeRx).join(".*")}$`);
+      const hits = all.filter((t) => rx.test(t));
+      expanded[p] = hits;
+      for (const h of hits) out.add(h);
+    }
+    return { tags: [...out], patterns, expanded };
+  }
 
   // The Anthropic key lives in per-location settings, not env — same message
   // as the deal investor suggestions so the operator learns one fix.
@@ -107,6 +150,26 @@ export default function createDispoRouter({ resolveLocation }) {
     lastBlastAt: row.lastBlastAt,
     ...row.doc,
     buybox: normalizeBuybox(row.doc?.custom || {}),
+  });
+
+  // What the table needs, and nothing else. The full doc carries the flattened
+  // custom-field record, the ranking profile, the conversation summary and the
+  // whole property-history ledger — fine for one investor, several megabytes
+  // across a book of a few thousand. The expanded row fetches the full record
+  // for the one investor it opens.
+  const slim = (i) => ({
+    contactId: i.contactId,
+    name: i.name,
+    status: i.status,
+    buybox: i.buybox,
+    onLiveDeal: i.onLiveDeal,
+    lastBlastAt: i.lastBlastAt,
+    syncedAt: i.syncedAt,
+    tags: i.tags || [],
+    email: i.email || "",
+    phone: i.phone || "",
+    lastConvoDate: i.lastConvoDate || "",
+    enrichLastRun: i.enrichLastRun || "",
   });
 
   // Every deal this contact is linked to, newest first — the join the UI
@@ -169,7 +232,7 @@ export default function createDispoRouter({ resolveLocation }) {
       });
       res.json({
         ok: true,
-        investors,
+        investors: investors.map(slim),
         counts: {
           total: investors.length,
           active: investors.filter((i) => i.status !== "archived").length,
@@ -181,7 +244,7 @@ export default function createDispoRouter({ resolveLocation }) {
           (max, i) => (String(i.syncedAt || "") > String(max || "") ? i.syncedAt : max),
           null
         ),
-        tags: dispoTags(await getSettings(locationId)),
+        tags: dispoTagPatterns(await getSettings(locationId)),
       });
     } catch (err) { fail(res, err); }
   });
@@ -207,8 +270,13 @@ export default function createDispoRouter({ resolveLocation }) {
     try {
       const { locationId, client } = resolveLocation(req);
       const saved = await getSettings(locationId);
-      const tags = dispoTags(saved);
-      const warnings = [];
+      const { tags, patterns, expanded, warning } = await resolveTags(client, locationId, saved);
+      const warnings = warning ? [warning] : [];
+      if (!tags.length) {
+        return res.status(400).json({
+          error: `No investor tags matched. Configured: ${patterns.join(", ")}. Check Settings → Dispositions.`,
+        });
+      }
 
       const { contacts, truncated } = await searchAllContactsByTags(client, locationId, tags);
       // One field-definition fetch for the whole book, not one per contact.
@@ -253,7 +321,10 @@ export default function createDispoRouter({ resolveLocation }) {
         removed = await store.deleteMissingInvestors(locationId, rows.map((r) => r.contactId));
       }
 
-      res.json({ ok: true, synced: rows.length, created, updated, removed, truncated, tags, warnings });
+      res.json({
+        ok: true, synced: rows.length, created, updated, removed, truncated,
+        tags, patterns, expanded, warnings,
+      });
     } catch (err) { fail(res, err); }
   });
 
@@ -369,8 +440,12 @@ export default function createDispoRouter({ resolveLocation }) {
     // Book-level filters, applied before the buy-box match. These are about
     // WHO to consider at all (already working this deal, never documented,
     // just blasted) rather than whether their buy box fits.
-    const onDeal = filters.excludeOnDeal ? await liveDealContactIds(locationId) : null;
-    if (onDeal) pool = pool.filter((i) => !onDeal.has(i.contactId));
+    // Computed either way: when excluding it does the filtering, and when not
+    // it still stamps each result so the UI can flag "already on a live deal"
+    // rather than letting you blast someone mid-deal by accident.
+    const onDeal = await liveDealContactIds(locationId);
+    pool = pool.map((i) => ({ ...i, onLiveDeal: onDeal.has(i.contactId) }));
+    if (filters.excludeOnDeal) pool = pool.filter((i) => !i.onLiveDeal);
     if (filters.buyboxStatus === "documented") pool = pool.filter((i) => !buyboxIsEmpty(i.buybox));
     if (filters.buyboxStatus === "missing") pool = pool.filter((i) => buyboxIsEmpty(i.buybox));
     if (filters.notBlastedDays > 0) {
@@ -413,8 +488,8 @@ export default function createDispoRouter({ resolveLocation }) {
           contactId: c.contactId,
           name: c.name,
           buybox: c.buybox,
-          buyboxText: c.buyboxText,
           lastBlastAt: c.lastBlastAt,
+          onLiveDeal: c.onLiveDeal,
           match: c.match,
           // No ranking (no key, or the call failed) → fall back to the
           // filter's own score, banded the same way the ranker bands its
