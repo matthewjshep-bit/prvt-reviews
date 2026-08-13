@@ -37,29 +37,37 @@ const fmtAgo = (iso) => {
   return `${Math.floor(hrs / 24)}d ago`;
 };
 
-// Mirrors the server's replyState(): based on the LAST message, not "ever
-// replied" — someone who answered in March and ignored four blasts since is
-// not a warm buyer.
+// Mirrors the server's replyState(): has this person EVER answered us, not who
+// happened to send the last message. One bulk send makes "we spoke last" true
+// for the entire book on the same day, which says nothing about who is engaged.
 const replyState = (i) => {
-  if (!i?.lastMessageAt) return "never";
-  return String(i.lastMessageDirection || "").toLowerCase() === "inbound" ? "replied" : "awaiting";
+  if (i?.lastRepliedAt) return "replied";
+  return i?.lastMessageAt ? "awaiting" : "never";
 };
 
 const REPLY_META = {
-  replied: { label: "Replied", cls: "bg-emerald-100 text-emerald-800", hint: "They messaged last — your move" },
-  awaiting: { label: "No reply", cls: "bg-amber-100 text-amber-800", hint: "We messaged last and they haven't answered" },
-  never: { label: "Never contacted", cls: "bg-slate-100 text-slate-600", hint: "No conversation on record" },
+  replied: { label: "Replied", cls: "bg-emerald-100 text-emerald-800" },
+  awaiting: { label: "No reply", cls: "bg-amber-100 text-amber-800" },
+  never: { label: "Never contacted", cls: "bg-slate-100 text-slate-600" },
 };
 
+// The badge answers "have they engaged"; the timestamp answers "when", and the
+// two are different clocks — last reply for someone who has answered, last
+// touch for someone who hasn't.
 function ReplyBadge({ investor }) {
   const state = replyState(investor);
   const m = REPLY_META[state];
+  const stamp = state === "replied" ? investor.lastRepliedAt : investor.lastMessageAt;
+  const hint = state === "replied"
+    ? `Last replied ${fmtAgo(investor.lastRepliedAt)}` +
+      (investor.lastMessageAt ? ` · you messaged ${fmtAgo(investor.lastMessageAt)}` : "")
+    : state === "awaiting"
+      ? `You messaged ${fmtAgo(investor.lastMessageAt)} — never answered`
+      : "No conversation on record";
   return (
-    <span className="inline-flex items-center gap-1.5" title={m.hint}>
+    <span className="inline-flex items-center gap-1.5" title={hint}>
       <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${m.cls}`}>{m.label}</span>
-      {investor.lastMessageAt && (
-        <span className="text-xs text-slate-500">{fmtAgo(investor.lastMessageAt)}</span>
-      )}
+      {stamp && <span className="text-xs text-slate-500">{fmtAgo(stamp)}</span>}
     </span>
   );
 }
@@ -681,8 +689,8 @@ export default function Dispositions() {
           <div className="flex overflow-hidden rounded-lg border border-slate-300">
             {[
               ["all", "Any reply state"],
-              ["replied", `Replied${data?.counts.replied != null ? ` (${data.counts.replied})` : ""}`],
-              ["awaiting", `No reply${data?.counts.awaiting != null ? ` (${data.counts.awaiting})` : ""}`],
+              ["replied", `Ever replied${data?.counts.replied != null ? ` (${data.counts.replied})` : ""}`],
+              ["awaiting", `Never replied${data?.counts.awaiting != null ? ` (${data.counts.awaiting})` : ""}`],
               ["never", `Never contacted${data?.counts.neverContacted != null ? ` (${data.counts.neverContacted})` : ""}`],
             ].map(([key, label]) => (
               <button key={key} type="button" onClick={() => setBookFilter({ replyStatus: key })}

@@ -346,8 +346,14 @@ export async function scanConversationsByContact(client, locationId, { maxPages 
           at: new Date(ms).toISOString(),
           direction: c.lastMessageDirection || null,
           type: c.lastMessageType || null,
+          conversationIds: [],
         });
       }
+      // Keep the ids so a caller can look inside the conversation. Capped:
+      // "has this person ever answered" is settled by their few most recent
+      // threads, and an unbounded list would make the message scan unbounded.
+      const entry = byContact.get(cid);
+      if (entry.conversationIds.length < 3) entry.conversationIds.push(c.id);
     }
 
     // Every conversation on this page was already seen, or none carried a
@@ -359,6 +365,60 @@ export async function scanConversationsByContact(client, locationId, { maxPages 
   }
 
   return { byContact, truncated, scanned: seen.size, total };
+}
+
+// Given the map from scanConversationsByContact, find each contact's most
+// recent INBOUND message — i.e. the last time they actually answered us.
+//
+// This needs message-level detail because a conversation only exposes its LAST
+// message. After a bulk send that is our own outbound blast for everybody, so
+// conversation-level direction answers "who spoke last", which is a different
+// and much less useful question than "has this person ever engaged".
+//
+// One request per conversation, so it is the expensive half of a sync — hence
+// the concurrency pool, the 3-conversation cap per contact upstream, and
+// `maxPagesPerConvo`: the most recent page settles it for all but the longest
+// threads, and a thread that is 100+ messages of pure outbound is not a reply
+// we are missing.
+export async function lastInboundByContact(client, byContact, { concurrency = 8, maxPagesPerConvo = 2 } = {}) {
+  const jobs = [];
+  for (const [contactId, info] of byContact) {
+    for (const conversationId of info.conversationIds || []) jobs.push({ contactId, conversationId });
+  }
+
+  const lastInbound = new Map();
+  let failures = 0;
+  let cursor = 0;
+
+  const worker = async () => {
+    while (cursor < jobs.length) {
+      const { contactId, conversationId } = jobs[cursor++];
+      try {
+        let lastMessageId;
+        for (let page = 0; page < maxPagesPerConvo; page++) {
+          const { messages, lastMessageId: next, nextPage } =
+            await listConversationMessages(client, conversationId, { lastMessageId, limit: 100 });
+          for (const m of messages) {
+            if (String(m.direction || "").toLowerCase() !== "inbound") continue;
+            const ms = Number(m.dateAdded) || new Date(m.dateAdded).getTime();
+            if (!Number.isFinite(ms) || ms <= 0) continue;
+            const iso = new Date(ms).toISOString();
+            const prev = lastInbound.get(contactId);
+            if (!prev || iso > prev) lastInbound.set(contactId, iso);
+          }
+          // Found one on the newest page: any older inbound is by definition
+          // not their LAST reply, so there is nothing left to look for.
+          if (lastInbound.has(contactId) || !nextPage || !next) break;
+          lastMessageId = next;
+        }
+      } catch {
+        failures++;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
+
+  return { lastInbound, scanned: jobs.length, failures };
 }
 
 // Count of contacts carrying a tag, via the filtered contact search. Cheapest

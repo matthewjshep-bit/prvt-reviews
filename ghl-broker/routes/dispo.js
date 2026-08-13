@@ -23,7 +23,7 @@ import { mapPool } from "../map-pool.js";
 import {
   searchAllContactsByTags, getContact, updateContact, listLocationTags,
   findOrCreateCustomFieldByKey, customFieldIdKeyMapForDefs, contactCustomRecord,
-  addContactTags, scanConversationsByContact,
+  addContactTags, scanConversationsByContact, lastInboundByContact,
 } from "../ghl.js";
 import { anthropicErrorToHttp } from "../rehab-scan.js";
 import {
@@ -58,16 +58,20 @@ async function withRetry(fn) {
   }
 }
 
-// Where a contact stands in the conversation:
-//   replied  — the last message came FROM them; the ball is in our court
-//   awaiting — we spoke last and they haven't answered
+// Where a contact stands:
+//   replied  — they have answered us at least once (lastRepliedAt holds when)
+//   awaiting — we have messaged them and they have never answered
 //   never    — no conversation on record at all
-// Deliberately based on the LAST message rather than "have they ever replied":
-// someone who answered in March and has ignored four blasts since is not a warm
-// buyer, and a list that says otherwise is worse than no list.
+//
+// Keyed on EVER having replied, not on who sent the last message. The first
+// version used last-message direction and it was wrong in the way that matters:
+// one bulk send re-stamps every contact as "we spoke last", so 1,267 investors
+// read "No reply" on the same day — including people whose buy box exists only
+// because they told us what they buy. Who spoke last is still worth showing
+// (lastMessageAt / lastMessageDirection), it just isn't the state.
 const replyState = (i) => {
-  if (!i.lastMessageAt) return "never";
-  return String(i.lastMessageDirection || "").toLowerCase() === "inbound" ? "replied" : "awaiting";
+  if (i.lastRepliedAt) return "replied";
+  return i.lastMessageAt ? "awaiting" : "never";
 };
 
 const contactName = (c) =>
@@ -184,6 +188,7 @@ export default function createDispoRouter({ resolveLocation }) {
     enrichLastRun: i.enrichLastRun || "",
     lastMessageAt: i.lastMessageAt || "",
     lastMessageDirection: i.lastMessageDirection || "",
+    lastRepliedAt: i.lastRepliedAt || "",
   });
 
   // Every deal this contact is linked to, newest first — the join the UI
@@ -302,9 +307,26 @@ export default function createDispoRouter({ resolveLocation }) {
       // conversations.readonly scope the book still syncs, it just can't tell
       // "replied" from "we spoke last".
       let replies = new Map();
+      let inbound = new Map();
       try {
         const scan = await scanConversationsByContact(client, locationId);
         replies = scan.byContact;
+
+        // Who has ever ANSWERED, which is the question people actually ask of
+        // a buyer list. Scoped to the investors being synced — scanning every
+        // conversation in the location would multiply the cost for contacts
+        // this page will never show.
+        const mine = new Map();
+        for (const c of contacts) {
+          const hit = replies.get(c.id);
+          if (hit) mine.set(c.id, hit);
+        }
+        const inb = await lastInboundByContact(client, mine);
+        inbound = inb.lastInbound;
+        if (inb.failures) {
+          warnings.push(`${inb.failures} conversation${inb.failures === 1 ? "" : "s"} couldn't be read — a few reply dates may be missing.`);
+        }
+
         if (scan.truncated) {
           warnings.push(
             `Only the ${scan.scanned.toLocaleString()} most recent conversations of ${scan.total.toLocaleString()} ` +
@@ -326,6 +348,7 @@ export default function createDispoRouter({ resolveLocation }) {
       const rows = contacts.map((c) => {
         const custom = contactCustomRecord(c, idKeyMap);
         const reply = replies.get(c.id) || null;
+        const repliedAt = inbound.get(c.id) || "";
         const doc = {
           name: contactName(c),
           email: c.email || "",
@@ -335,6 +358,7 @@ export default function createDispoRouter({ resolveLocation }) {
           lastMessageAt: reply?.at || "",
           lastMessageDirection: reply?.direction || "",
           lastMessageType: reply?.type || "",
+          lastRepliedAt: repliedAt,
           lastConvoSummary: custom.last_convo_summary || "",
           lastConvoDate: custom.last_convo_date || "",
           dealHistory: custom.investor_deal_history || "",
