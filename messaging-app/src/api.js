@@ -329,10 +329,12 @@ export const setInvestorStatus = (contactId, status) =>
   post(`/api/dispo/investors/${encodeURIComponent(contactId)}/status`, { status });
 
 // Pass `query` for free text, or `parsed` to re-filter without another AI call.
-export const searchInvestors = ({ query, parsed, strict = false }) =>
-  post(`/api/dispo/search`, { ...(parsed ? { parsed } : { query }), strict });
-export const matchInvestorsToDeal = (offerId, { strict = false } = {}) =>
-  post(`/api/dispo/match`, { offerId, strict });
+// `filters` are book-level (who to consider at all), distinct from the buy-box
+// criteria in `parsed` (whether their buy box fits).
+export const searchInvestors = ({ query, parsed, strict = false, filters = {} }) =>
+  post(`/api/dispo/search`, { ...(parsed ? { parsed } : { query }), strict, ...filters });
+export const matchInvestorsToDeal = (offerId, { strict = false, filters = {} } = {}) =>
+  post(`/api/dispo/match`, { offerId, strict, ...filters });
 export const blastInvestors = ({ contactIds, label, applyTag = true, dryRun = true }) =>
   post(`/api/dispo/blast`, { contactIds, applyTag, dryRun, ...(label ? { label } : {}) });
 

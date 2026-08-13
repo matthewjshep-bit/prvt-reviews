@@ -289,6 +289,13 @@ export default function Dispositions() {
   const [search, setSearch] = useState(null); // null | {busy} | search response
   const [nameFilter, setNameFilter] = useState("");
 
+  // Book-level filters: WHO to consider at all. Distinct from the buy-box
+  // criteria in `query`, which decide whether their buy box fits.
+  const [excludeOnDeal, setExcludeOnDeal] = useState(false);
+  const [buyboxStatus, setBuyboxStatus] = useState("all"); // all | documented | missing
+  const [areaText, setAreaText] = useState("");
+  const [priceText, setPriceText] = useState("");
+
   const [selected, setSelected] = useState(() => new Set());
   const [expanded, setExpanded] = useState("");
 
@@ -329,11 +336,15 @@ export default function Dispositions() {
 
   // One entry point for every search: free text parses first, a parsed query
   // re-filters locally. Both land in the same place.
-  const runSearch = async ({ text, parsed }) => {
+  const runSearch = async ({ text, parsed, over = {} }) => {
     setSearch({ busy: true });
     setSelected(new Set());
+    const filters = {
+      excludeOnDeal, buyboxStatus,
+      ...over, // a control that just changed hasn't re-rendered its state yet
+    };
     try {
-      const r = await searchInvestors({ query: text, parsed, strict });
+      const r = await searchInvestors({ query: text, parsed, strict, filters });
       setSearch(r);
       setQuery(r.parsed);
     } catch (e) {
@@ -345,7 +356,38 @@ export default function Dispositions() {
     setSearch(null);
     setQuery(null);
     setQuestion("");
+    setAreaText("");
+    setPriceText("");
     setSelected(new Set());
+  };
+
+  // Book-level filters apply in browse mode too, so flipping one re-runs an
+  // active search and otherwise just re-filters the table client-side.
+  const setBookFilter = (over) => {
+    if (over.excludeOnDeal !== undefined) setExcludeOnDeal(over.excludeOnDeal);
+    if (over.buyboxStatus !== undefined) setBuyboxStatus(over.buyboxStatus);
+    if (query) runSearch({ parsed: query, over });
+  };
+
+  // Areas and price are buy-box CRITERIA, so they edit the query itself —
+  // same object the AI fills in and the chips display.
+  const applyAreas = (text) => {
+    const areas = text.split(",").map((a) => a.trim()).filter(Boolean);
+    editQuery({ ...(query || {}), areas });
+  };
+  const applyPrice = (text) => {
+    // "400k" / "250-400k" / "400000" — one box instead of two, because a deal
+    // is a price point far more often than a range.
+    const nums = text.match(/[\d.]+\s*[kKmM]?/g) || [];
+    const parse = (t) => {
+      const n = parseFloat(t);
+      if (!Number.isFinite(n)) return null;
+      return /[kK]/.test(t) ? n * 1e3 : /[mM]/.test(t) ? n * 1e6 : n;
+    };
+    const vals = nums.map(parse).filter((n) => n != null);
+    if (!vals.length) return editQuery({ ...(query || {}), priceMin: null, priceMax: null });
+    if (vals.length === 1) return editQuery({ ...(query || {}), priceMin: null, priceMax: vals[0] });
+    editQuery({ ...(query || {}), priceMin: Math.min(...vals), priceMax: Math.max(...vals) });
   };
 
   // Editing a chip or a filter control mutates the query and re-filters —
@@ -363,16 +405,24 @@ export default function Dispositions() {
   );
 
   // What the table shows: search results when a search is live, else the book.
+  // The book-level filters are applied server-side during a search and here
+  // when browsing, so the two views agree about who's in scope.
   const rows = useMemo(() => {
-    const base = search?.results
-      ? search.results.map((r) => ({ ...byId.get(r.contactId), ...r }))
-      : investors.filter((i) => i.status !== "archived");
+    let base;
+    if (search?.results) {
+      base = search.results.map((r) => ({ ...byId.get(r.contactId), ...r }));
+    } else {
+      base = investors.filter((i) => i.status !== "archived");
+      if (excludeOnDeal) base = base.filter((i) => !i.onLiveDeal);
+      if (buyboxStatus === "documented") base = base.filter((i) => !buyboxIsEmpty(i.buybox));
+      if (buyboxStatus === "missing") base = base.filter((i) => buyboxIsEmpty(i.buybox));
+    }
     const needle = nameFilter.trim().toLowerCase();
     if (!needle) return base;
     return base.filter((i) =>
       `${i.name || ""} ${i.buybox?.areasRaw || ""}`.toLowerCase().includes(needle)
     );
-  }, [search, investors, byId, nameFilter]);
+  }, [search, investors, byId, nameFilter, excludeOnDeal, buyboxStatus]);
 
   const chips = query ? queryChips(query) : [];
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.contactId));
@@ -519,8 +569,27 @@ export default function Dispositions() {
           </div>
         )}
 
-        {/* structured filters — always available, and no AI key needed */}
-        <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-3">
+        {/* buy-box criteria you can set by hand — no AI key needed */}
+        <div className="mt-3 grid gap-2 border-t border-slate-100 pt-3 sm:grid-cols-2">
+          <div>
+            <label className={LABEL_CLS}>Areas they buy in</label>
+            <input className={INPUT_CLS} value={areaText}
+              onChange={(e) => setAreaText(e.target.value)}
+              onBlur={(e) => applyAreas(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyAreas(e.target.value); } }}
+              placeholder="Tacoma, 98444 — matches their buy box areas" />
+          </div>
+          <div>
+            <label className={LABEL_CLS}>Deal price</label>
+            <input className={INPUT_CLS} value={priceText}
+              onChange={(e) => setPriceText(e.target.value)}
+              onBlur={(e) => applyPrice(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyPrice(e.target.value); } }}
+              placeholder="400k, or 250-400k — overlaps their price band" />
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-slate-500">Or filter:</span>
           {PROPERTY_TYPES.map((t) => {
             const on = query?.propertyTypes?.includes(t);
@@ -556,16 +625,45 @@ export default function Dispositions() {
           </label>
         </div>
 
+        {/* who to consider at all — separate from whether their buy box fits */}
+        <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3">
+          <span className="text-xs text-slate-500">Who to include:</span>
+          <div className="flex overflow-hidden rounded-lg border border-slate-300">
+            {[
+              ["all", `Everyone${data ? ` (${data.counts.active})` : ""}`],
+              ["documented", `Has a buy box${data ? ` (${data.counts.documented ?? 0})` : ""}`],
+              ["missing", `Needs one${data ? ` (${data.counts.needsBuybox})` : ""}`],
+            ].map(([key, label]) => (
+              <button key={key} type="button" onClick={() => setBookFilter({ buyboxStatus: key })}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  buyboxStatus === key ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center gap-1.5 text-xs text-slate-600"
+            title="Hides investors already linked to a deal that is still live. Someone who passed on a deal stays in — they're free for the next one.">
+            <input type="checkbox" checked={excludeOnDeal}
+              onChange={(e) => setBookFilter({ excludeOnDeal: e.target.checked })} />
+            Not already on a live deal{data?.counts.onLiveDeal ? ` (${data.counts.onLiveDeal} are)` : ""}
+          </label>
+        </div>
+
         {search?.error && (
           <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{search.error}</div>
         )}
         {search?.results && (
           <p className="mt-3 text-xs text-slate-500">
-            {search.filtered} of {search.scanned} investors fit
+            <span className="font-semibold text-slate-700">{search.documented}</span> documented fit
+            {search.documented === 1 ? "" : "s"} out of {search.scanned} considered
             {search.rankedByAi > 0
-              ? ` — ranked by AI.`
-              : ` — ordered by how many criteria matched (add an Anthropic key in Settings for AI ranking and reasons).`}
+              ? " — ranked by AI."
+              : " — ordered by how many criteria matched (add an Anthropic key in Settings for AI ranking and reasons)."}
             {search.truncated && ` Showing the top ${search.shortlisted}.`}
+            {search.undocumented > 0 && (
+              <> {search.undocumented} more have no buy box on file and sit at the bottom —
+                they aren't ruled out, nobody has asked them yet.</>
+            )}
             {(search.warnings || []).map((w, i) => (
               <span key={i} className="ml-1 text-amber-800">{w}</span>
             ))}

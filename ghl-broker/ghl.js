@@ -93,6 +93,29 @@ export async function customFieldIdKeyMap(client, locationId) {
   return map;
 }
 
+// Same map, but keyed by OUR canonical field keys wherever we recognize the
+// field, falling back to GHL's own key for everything else.
+//
+// This exists because GHL derives `fieldKey` from the field's display NAME at
+// creation time, not from anything we send: a field we created as
+// `buybox_areas` with name "Buy Box: Areas" comes back as `buy_box_areas`, and
+// "Buy Box: Must-Haves / Exclusions" as `buy_box_musthaves__exclusions`. Writes
+// never noticed because findOrCreateCustomFieldByKey also matches on name and
+// then writes by id — but anything READING by our key silently saw nothing.
+//
+// Matching mirrors findOrCreateCustomFieldByKey exactly (fieldKey OR name), so
+// a field found for writing is the same field found for reading.
+export async function customFieldIdKeyMapForDefs(client, locationId, defs) {
+  const fields = await listCustomFields(client, locationId);
+  const map = new Map();
+  for (const f of fields) {
+    const ghlKey = String(f.fieldKey || f.key || "").replace(/^contact\./, "");
+    const def = (defs || []).find((d) => d.key === ghlKey || d.name === f.name);
+    map.set(f.id, def ? def.key : ghlKey);
+  }
+  return map;
+}
+
 // Flatten a contact's customFields array into a { logicalKey: value } record.
 // Tolerates both GHL shapes (customFields / customField, value / fieldValue).
 export function contactCustomRecord(contact, idKeyMap) {

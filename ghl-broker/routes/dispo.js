@@ -22,12 +22,12 @@ import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
 import {
   searchAllContactsByTags, getContact, updateContact,
-  findOrCreateCustomFieldByKey, customFieldIdKeyMap, contactCustomRecord,
+  findOrCreateCustomFieldByKey, customFieldIdKeyMapForDefs, contactCustomRecord,
   addContactTags,
 } from "../ghl.js";
 import { anthropicErrorToHttp } from "../rehab-scan.js";
 import {
-  BUYBOX_FIELDS, RANK_LIMIT, buildBuyboxProfile, dealToQuery,
+  BUYBOX_FIELDS, INVESTOR_FIELD_DEFS, RANK_LIMIT, buildBuyboxProfile, dealToQuery,
   parseBuyboxQuery, rankInvestors,
 } from "../dispo.js";
 import {
@@ -128,6 +128,29 @@ export default function createDispoRouter({ resolveLocation }) {
     return out.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   }
 
+  // Contacts linked to a deal that is still live (not closed or dead). The
+  // point of excluding them is "who ELSE can buy something" — a buyer already
+  // working one of your contracts is not available for the next one.
+  async function liveDealContactIds(locationId) {
+    const LIVE = new Set(["under_contract", "buyer_found", "assigned"]);
+    const ids = new Set();
+    for (const offer of await store.listDeals(locationId)) {
+      if (!LIVE.has(offer.deal?.stage)) continue;
+      for (const i of offer.deal.investors || []) {
+        // Someone who already passed on this deal is free for the next one.
+        if (i.status !== "passed") ids.add(i.contactId);
+      }
+    }
+    return ids;
+  }
+
+  // Book-level filter params, shared by /search and /match.
+  const readFilters = (body = {}) => ({
+    excludeOnDeal: body.excludeOnDeal === true,
+    buyboxStatus: ["documented", "missing"].includes(body.buyboxStatus) ? body.buyboxStatus : "all",
+    notBlastedDays: Number(body.notBlastedDays) > 0 ? Number(body.notBlastedDays) : 0,
+  });
+
   /* ---------- read ---------- */
 
   router.get("/investors", async (req, res) => {
@@ -136,14 +159,23 @@ export default function createDispoRouter({ resolveLocation }) {
       const rows = await store.listInvestors(locationId, {
         status: req.query.status || null,
       });
-      const investors = rows.map(hydrate);
+      // Stamped per investor rather than left to the client: only the server
+      // can see the deals, and the browse table filters on it without a
+      // second round trip.
+      const onDeal = await liveDealContactIds(locationId);
+      const investors = rows.map((r) => {
+        const i = hydrate(r);
+        return { ...i, onLiveDeal: onDeal.has(i.contactId) };
+      });
       res.json({
         ok: true,
         investors,
         counts: {
           total: investors.length,
           active: investors.filter((i) => i.status !== "archived").length,
+          documented: investors.filter((i) => !buyboxIsEmpty(i.buybox)).length,
           needsBuybox: investors.filter((i) => buyboxIsEmpty(i.buybox)).length,
+          onLiveDeal: investors.filter((i) => i.onLiveDeal).length,
         },
         syncedAt: investors.reduce(
           (max, i) => (String(i.syncedAt || "") > String(max || "") ? i.syncedAt : max),
@@ -180,7 +212,9 @@ export default function createDispoRouter({ resolveLocation }) {
 
       const { contacts, truncated } = await searchAllContactsByTags(client, locationId, tags);
       // One field-definition fetch for the whole book, not one per contact.
-      const idKeyMap = await customFieldIdKeyMap(client, locationId);
+      // Keyed by OUR field keys — GHL's own fieldKey is derived from the
+      // display name and does not match what the registry calls the field.
+      const idKeyMap = await customFieldIdKeyMapForDefs(client, locationId, INVESTOR_FIELD_DEFS);
 
       const rows = contacts.map((c) => {
         const custom = contactCustomRecord(c, idKeyMap);
@@ -326,13 +360,32 @@ export default function createDispoRouter({ resolveLocation }) {
   // Shared tail of both search paths: filter locally, rank what survives.
   // `parsed` is an already-normalized query; `target` is what the ranker is
   // told we're placing.
-  async function shortlist({ locationId, parsed, target, aiApiKey, extraInstructions, strict, excludeIds }) {
+  async function shortlist({
+    locationId, parsed, target, aiApiKey, extraInstructions, strict, excludeIds, filters = {},
+  }) {
     const rows = await store.listInvestors(locationId, { status: "active" });
-    const pool = rows.map(hydrate).filter((i) => !excludeIds?.has(i.contactId));
+    let pool = rows.map(hydrate).filter((i) => !excludeIds?.has(i.contactId));
+
+    // Book-level filters, applied before the buy-box match. These are about
+    // WHO to consider at all (already working this deal, never documented,
+    // just blasted) rather than whether their buy box fits.
+    const onDeal = filters.excludeOnDeal ? await liveDealContactIds(locationId) : null;
+    if (onDeal) pool = pool.filter((i) => !onDeal.has(i.contactId));
+    if (filters.buyboxStatus === "documented") pool = pool.filter((i) => !buyboxIsEmpty(i.buybox));
+    if (filters.buyboxStatus === "missing") pool = pool.filter((i) => buyboxIsEmpty(i.buybox));
+    if (filters.notBlastedDays > 0) {
+      const cutoff = Date.now() - filters.notBlastedDays * 86400000;
+      pool = pool.filter((i) => !i.lastBlastAt || new Date(i.lastBlastAt).getTime() < cutoff);
+    }
+
     const survivors = applyBuyboxFilters(pool, parsed, { strict });
 
-    // Deterministic order already; the model only re-ranks what fits in one call.
-    const candidates = survivors.slice(0, RANK_LIMIT);
+    // Only investors with something on file are worth paying to rank. Sending
+    // the blanks too costs real money to be told "no buy box" once per row,
+    // and buries the documented fits under a wall of identical weak reasons.
+    const rankable = survivors.filter((i) => !buyboxIsEmpty(i.buybox));
+    const undocumented = survivors.filter((i) => buyboxIsEmpty(i.buybox));
+    const candidates = rankable.slice(0, RANK_LIMIT);
     let rankings = [];
     let rankWarning = null;
     // No key means filter-only: the structured filters still work, they just
@@ -349,7 +402,10 @@ export default function createDispoRouter({ resolveLocation }) {
     }
 
     const byId = new Map(rankings.map((r) => [r.contactId, r]));
-    const results = candidates
+    // Ranked (or at least documented) fits first; the undocumented tail keeps
+    // its place at the bottom so the book stays complete without pretending
+    // a blank buy box is a match.
+    const results = [...candidates, ...undocumented]
       .map((c) => {
         const r = byId.get(c.contactId);
         const score = r?.score ?? c.match.score;
@@ -376,9 +432,11 @@ export default function createDispoRouter({ resolveLocation }) {
       results,
       scanned: pool.length,
       filtered: survivors.length,
+      documented: rankable.length,
+      undocumented: undocumented.length,
       shortlisted: candidates.length,
       rankedByAi: rankings.length,
-      truncated: survivors.length > candidates.length,
+      truncated: rankable.length > candidates.length,
       warnings: rankWarning ? [rankWarning] : [],
     };
   }
@@ -418,6 +476,7 @@ export default function createDispoRouter({ resolveLocation }) {
         locationId, parsed,
         target: { question: question || null, query: parsed },
         aiApiKey, extraInstructions, strict,
+        filters: readFilters(req.body),
       });
       res.json({ ok: true, parsed, ...out });
     } catch (err) { fail(res, err); }
@@ -450,6 +509,7 @@ export default function createDispoRouter({ resolveLocation }) {
         extraInstructions: String(saved?.enrichExtraInstructions || "").trim(),
         strict: req.body?.strict === true,
         excludeIds: new Set(linked.map((i) => i.contactId)),
+        filters: readFilters(req.body),
       });
 
       res.json({

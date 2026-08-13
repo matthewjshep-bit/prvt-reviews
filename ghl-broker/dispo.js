@@ -24,7 +24,7 @@
 // This module only READS. Every write to GHL lives in routes/dispo.js.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { ENRICH_MODEL, INVESTOR_ENRICH_FIELDS } from "./enrich.js";
+import { ENRICH_MODEL, INVESTOR_ENRICH_FIELDS, enrichFieldDefs } from "./enrich.js";
 import { normalizeUsAddress } from "./shared/us-address.js";
 import {
   PROPERTY_TYPES, REHAB_APPETITES, PROPERTY_TYPE_LABELS, REHAB_APPETITE_LABELS,
@@ -40,6 +40,11 @@ export const DISPO_MODEL = ENRICH_MODEL;
 // The buy-box field defs live in enrich.js (they're what the AI sweep writes);
 // re-exported here so routes/dispo.js validates edits against one vocabulary.
 export const BUYBOX_FIELDS = INVESTOR_ENRICH_FIELDS;
+
+// Every field an enriched investor can carry (buy box + the shared summary /
+// history / last-run fields). Used to translate GHL's name-derived fieldKeys
+// back to the keys this code actually reads — see customFieldIdKeyMapForDefs.
+export const INVESTOR_FIELD_DEFS = enrichFieldDefs("investor");
 
 export { buildBuyboxProfile };
 
