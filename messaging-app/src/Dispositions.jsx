@@ -37,6 +37,33 @@ const fmtAgo = (iso) => {
   return `${Math.floor(hrs / 24)}d ago`;
 };
 
+// Mirrors the server's replyState(): based on the LAST message, not "ever
+// replied" — someone who answered in March and ignored four blasts since is
+// not a warm buyer.
+const replyState = (i) => {
+  if (!i?.lastMessageAt) return "never";
+  return String(i.lastMessageDirection || "").toLowerCase() === "inbound" ? "replied" : "awaiting";
+};
+
+const REPLY_META = {
+  replied: { label: "Replied", cls: "bg-emerald-100 text-emerald-800", hint: "They messaged last — your move" },
+  awaiting: { label: "No reply", cls: "bg-amber-100 text-amber-800", hint: "We messaged last and they haven't answered" },
+  never: { label: "Never contacted", cls: "bg-slate-100 text-slate-600", hint: "No conversation on record" },
+};
+
+function ReplyBadge({ investor }) {
+  const state = replyState(investor);
+  const m = REPLY_META[state];
+  return (
+    <span className="inline-flex items-center gap-1.5" title={m.hint}>
+      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${m.cls}`}>{m.label}</span>
+      {investor.lastMessageAt && (
+        <span className="text-xs text-slate-500">{fmtAgo(investor.lastMessageAt)}</span>
+      )}
+    </span>
+  );
+}
+
 const FIT_CLS = {
   strong: "bg-emerald-100 text-emerald-800",
   possible: "bg-slate-100 text-slate-700",
@@ -300,6 +327,7 @@ export default function Dispositions() {
   // criteria in `query`, which decide whether their buy box fits.
   const [excludeOnDeal, setExcludeOnDeal] = useState(false);
   const [buyboxStatus, setBuyboxStatus] = useState("all"); // all | documented | missing
+  const [replyStatus, setReplyStatus] = useState("all");   // all | replied | awaiting | never
   const [areaText, setAreaText] = useState("");
   const [priceText, setPriceText] = useState("");
 
@@ -347,7 +375,7 @@ export default function Dispositions() {
     setSearch({ busy: true });
     setSelected(new Set());
     const filters = {
-      excludeOnDeal, buyboxStatus,
+      excludeOnDeal, buyboxStatus, replyStatus,
       ...over, // a control that just changed hasn't re-rendered its state yet
     };
     try {
@@ -373,6 +401,7 @@ export default function Dispositions() {
   const setBookFilter = (over) => {
     if (over.excludeOnDeal !== undefined) setExcludeOnDeal(over.excludeOnDeal);
     if (over.buyboxStatus !== undefined) setBuyboxStatus(over.buyboxStatus);
+    if (over.replyStatus !== undefined) setReplyStatus(over.replyStatus);
     if (query) runSearch({ parsed: query, over });
   };
 
@@ -423,13 +452,14 @@ export default function Dispositions() {
       if (excludeOnDeal) base = base.filter((i) => !i.onLiveDeal);
       if (buyboxStatus === "documented") base = base.filter((i) => !buyboxIsEmpty(i.buybox));
       if (buyboxStatus === "missing") base = base.filter((i) => buyboxIsEmpty(i.buybox));
+      if (replyStatus !== "all") base = base.filter((i) => replyState(i) === replyStatus);
     }
     const needle = nameFilter.trim().toLowerCase();
     if (!needle) return base;
     return base.filter((i) =>
       `${i.name || ""} ${i.buybox?.areasRaw || ""}`.toLowerCase().includes(needle)
     );
-  }, [search, investors, byId, nameFilter, excludeOnDeal, buyboxStatus]);
+  }, [search, investors, byId, nameFilter, excludeOnDeal, buyboxStatus, replyStatus]);
 
   const chips = query ? queryChips(query) : [];
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.contactId));
@@ -648,6 +678,20 @@ export default function Dispositions() {
               </button>
             ))}
           </div>
+          <div className="flex overflow-hidden rounded-lg border border-slate-300">
+            {[
+              ["all", "Any reply state"],
+              ["replied", `Replied${data?.counts.replied != null ? ` (${data.counts.replied})` : ""}`],
+              ["awaiting", `No reply${data?.counts.awaiting != null ? ` (${data.counts.awaiting})` : ""}`],
+              ["never", `Never contacted${data?.counts.neverContacted != null ? ` (${data.counts.neverContacted})` : ""}`],
+            ].map(([key, label]) => (
+              <button key={key} type="button" onClick={() => setBookFilter({ replyStatus: key })}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  replyStatus === key ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
           <label className="flex items-center gap-1.5 text-xs text-slate-600"
             title="Hides investors already linked to a deal that is still live. Someone who passed on a deal stays in — they're free for the next one.">
             <input type="checkbox" checked={excludeOnDeal}
@@ -778,6 +822,7 @@ export default function Dispositions() {
                 <th className="px-4 py-2.5">Price band</th>
                 <th className="px-4 py-2.5">Types</th>
                 <th className="px-4 py-2.5">Rehab</th>
+                <th className="px-4 py-2.5">Response</th>
                 {search?.results && <th className="px-4 py-2.5">Fit</th>}
                 <th className="sticky right-0 bg-white px-4 py-2.5" />
               </tr>
@@ -821,6 +866,7 @@ export default function Dispositions() {
                       <td className="px-4 py-2.5 text-slate-700">
                         {b.rehabAppetite ? REHAB_APPETITE_LABELS[b.rehabAppetite] : "—"}
                       </td>
+                      <td className="px-4 py-2.5"><ReplyBadge investor={inv} /></td>
                       {search?.results && (
                         <td className="px-4 py-2.5"><FitBadge fit={inv.fit} score={inv.score} /></td>
                       )}
@@ -840,7 +886,7 @@ export default function Dispositions() {
                     </tr>
                     {open && (
                       <tr className="border-b border-slate-100 bg-slate-50 last:border-0">
-                        <td colSpan={search?.results ? 8 : 7} className="px-4 py-4">
+                        <td colSpan={search?.results ? 9 : 8} className="px-4 py-4">
                           <InvestorDetail investor={inv} onSaved={onBuyboxSaved} />
                           <button type="button" onClick={() => archive(inv)}
                             className="mt-3 text-xs font-semibold text-slate-500 hover:text-slate-700">

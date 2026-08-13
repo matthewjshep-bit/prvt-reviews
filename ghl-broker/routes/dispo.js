@@ -23,7 +23,7 @@ import { mapPool } from "../map-pool.js";
 import {
   searchAllContactsByTags, getContact, updateContact, listLocationTags,
   findOrCreateCustomFieldByKey, customFieldIdKeyMapForDefs, contactCustomRecord,
-  addContactTags,
+  addContactTags, scanConversationsByContact,
 } from "../ghl.js";
 import { anthropicErrorToHttp } from "../rehab-scan.js";
 import {
@@ -57,6 +57,18 @@ async function withRetry(fn) {
     }
   }
 }
+
+// Where a contact stands in the conversation:
+//   replied  — the last message came FROM them; the ball is in our court
+//   awaiting — we spoke last and they haven't answered
+//   never    — no conversation on record at all
+// Deliberately based on the LAST message rather than "have they ever replied":
+// someone who answered in March and has ignored four blasts since is not a warm
+// buyer, and a list that says otherwise is worse than no list.
+const replyState = (i) => {
+  if (!i.lastMessageAt) return "never";
+  return String(i.lastMessageDirection || "").toLowerCase() === "inbound" ? "replied" : "awaiting";
+};
 
 const contactName = (c) =>
   [c?.firstName, c?.lastName].filter(Boolean).join(" ").trim() ||
@@ -170,6 +182,8 @@ export default function createDispoRouter({ resolveLocation }) {
     phone: i.phone || "",
     lastConvoDate: i.lastConvoDate || "",
     enrichLastRun: i.enrichLastRun || "",
+    lastMessageAt: i.lastMessageAt || "",
+    lastMessageDirection: i.lastMessageDirection || "",
   });
 
   // Every deal this contact is linked to, newest first — the join the UI
@@ -211,6 +225,7 @@ export default function createDispoRouter({ resolveLocation }) {
   const readFilters = (body = {}) => ({
     excludeOnDeal: body.excludeOnDeal === true,
     buyboxStatus: ["documented", "missing"].includes(body.buyboxStatus) ? body.buyboxStatus : "all",
+    replyStatus: ["replied", "awaiting", "never"].includes(body.replyStatus) ? body.replyStatus : "all",
     notBlastedDays: Number(body.notBlastedDays) > 0 ? Number(body.notBlastedDays) : 0,
   });
 
@@ -239,6 +254,9 @@ export default function createDispoRouter({ resolveLocation }) {
           documented: investors.filter((i) => !buyboxIsEmpty(i.buybox)).length,
           needsBuybox: investors.filter((i) => buyboxIsEmpty(i.buybox)).length,
           onLiveDeal: investors.filter((i) => i.onLiveDeal).length,
+          replied: investors.filter((i) => replyState(i) === "replied").length,
+          awaiting: investors.filter((i) => replyState(i) === "awaiting").length,
+          neverContacted: investors.filter((i) => replyState(i) === "never").length,
         },
         syncedAt: investors.reduce(
           (max, i) => (String(i.syncedAt || "") > String(max || "") ? i.syncedAt : max),
@@ -279,6 +297,26 @@ export default function createDispoRouter({ resolveLocation }) {
       }
 
       const { contacts, truncated } = await searchAllContactsByTags(client, locationId, tags);
+
+      // Who has actually answered us. Best-effort: without the
+      // conversations.readonly scope the book still syncs, it just can't tell
+      // "replied" from "we spoke last".
+      let replies = new Map();
+      try {
+        const scan = await scanConversationsByContact(client, locationId);
+        replies = scan.byContact;
+        if (scan.truncated) {
+          warnings.push(
+            "Conversation history was longer than one scan — reply status may be missing on the oldest contacts."
+          );
+        }
+      } catch (e) {
+        warnings.push(
+          e.status === 401 || e.status === 403
+            ? "Reply status needs the conversations.readonly scope on the GHL private integration."
+            : `Couldn't read conversation history (${e.message}) — reply status not updated.`
+        );
+      }
       // One field-definition fetch for the whole book, not one per contact.
       // Keyed by OUR field keys — GHL's own fieldKey is derived from the
       // display name and does not match what the registry calls the field.
@@ -286,12 +324,16 @@ export default function createDispoRouter({ resolveLocation }) {
 
       const rows = contacts.map((c) => {
         const custom = contactCustomRecord(c, idKeyMap);
+        const reply = replies.get(c.id) || null;
         const doc = {
           name: contactName(c),
           email: c.email || "",
           phone: c.phone || "",
           tags: Array.isArray(c.tags) ? c.tags : [],
           custom,
+          lastMessageAt: reply?.at || "",
+          lastMessageDirection: reply?.direction || "",
+          lastMessageType: reply?.type || "",
           lastConvoSummary: custom.last_convo_summary || "",
           lastConvoDate: custom.last_convo_date || "",
           dealHistory: custom.investor_deal_history || "",
@@ -448,6 +490,7 @@ export default function createDispoRouter({ resolveLocation }) {
     if (filters.excludeOnDeal) pool = pool.filter((i) => !i.onLiveDeal);
     if (filters.buyboxStatus === "documented") pool = pool.filter((i) => !buyboxIsEmpty(i.buybox));
     if (filters.buyboxStatus === "missing") pool = pool.filter((i) => buyboxIsEmpty(i.buybox));
+    if (filters.replyStatus !== "all") pool = pool.filter((i) => replyState(i) === filters.replyStatus);
     if (filters.notBlastedDays > 0) {
       const cutoff = Date.now() - filters.notBlastedDays * 86400000;
       pool = pool.filter((i) => !i.lastBlastAt || new Date(i.lastBlastAt).getTime() < cutoff);

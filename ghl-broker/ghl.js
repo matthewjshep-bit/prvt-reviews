@@ -304,6 +304,60 @@ export async function searchAllContactsByTags(client, locationId, tags, { pageLi
   return { contacts: [...byId.values()], total, truncated };
 }
 
+// Last message per contact across the whole location, as a Map of
+// contactId -> { at, direction, type }. `direction` is the thing worth having:
+// "inbound" means they answered us, "outbound" means we spoke last.
+//
+// Location-wide rather than per-contact on purpose. getLastMessageDate is one
+// request per contact, which is fine for a few dozen agents and absurd for a
+// book of a few thousand investors; conversations sorted by last_message_date
+// cover everyone in one paginated walk (~20 requests for 2k conversations).
+//
+// Needs the conversations.readonly scope — callers should treat 401/403 as
+// "no reply data" and carry on, not as a failure.
+export async function scanConversationsByContact(client, locationId, { maxPages = 60, limit = 100 } = {}) {
+  const byContact = new Map();
+  const seen = new Set();
+  let cursor;
+  let truncated = false;
+
+  for (let page = 0; page < maxPages; page++) {
+    const { conversations } = await searchConversations(client, locationId, { limit, startAfterDate: cursor });
+    if (!conversations.length) break;
+
+    let oldest = null;
+    let fresh = 0;
+    for (const c of conversations) {
+      if (!c.id || seen.has(c.id)) continue;
+      seen.add(c.id);
+      fresh++;
+      const ms = Number(c.lastMessageDate) || new Date(c.lastMessageDate).getTime();
+      if (!Number.isFinite(ms) || ms <= 0) continue;
+      if (oldest === null || ms < oldest) oldest = ms;
+      const cid = c.contactId;
+      if (!cid) continue;
+      // Sorted newest-first, so the first sighting of a contact is their most
+      // recent conversation — later pages only carry older ones.
+      if (!byContact.has(cid)) {
+        byContact.set(cid, {
+          at: new Date(ms).toISOString(),
+          direction: c.lastMessageDirection || null,
+          type: c.lastMessageType || null,
+        });
+      }
+    }
+
+    // Every conversation on this page was already seen, or none carried a
+    // usable date — either way the cursor can't advance, so stop rather than
+    // spin on the same page.
+    if (!fresh || oldest === null) break;
+    cursor = oldest;
+    if (page === maxPages - 1) truncated = true;
+  }
+
+  return { byContact, truncated, scanned: seen.size };
+}
+
 // Count of contacts carrying a tag, via the filtered contact search. Cheapest
 // possible query: one result page of 1, read the total. Throws on GHL errors
 // (err.status set) — callers should treat 401/403 as "scope not granted".
