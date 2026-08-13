@@ -314,7 +314,15 @@ export default function createDispoRouter({ resolveLocation }) {
       const known = new Map(
         (await store.listInvestors(locationId)).map((r) => [
           r.contactId,
-          { lastMessageAt: r.doc?.lastMessageAt || "", lastRepliedAt: r.doc?.lastRepliedAt || "" },
+          {
+            lastMessageAt: r.doc?.lastMessageAt || "",
+            lastRepliedAt: r.doc?.lastRepliedAt || "",
+            // When we last established the answer. Without this an empty
+            // lastRepliedAt is ambiguous — "we looked and they never replied"
+            // and "we have never looked" are the same blank — and reusing it
+            // means the cache can never warm up.
+            scannedAt: r.doc?.inboundScannedAt || "",
+          },
         ])
       );
 
@@ -324,6 +332,8 @@ export default function createDispoRouter({ resolveLocation }) {
       let replies = new Map();
       let inbound = new Map();
       let scannedConversations = 0;
+      // Contacts whose reply state is authoritative after this run.
+      const settled = new Set();
       try {
         const scan = await scanConversationsByContact(client, locationId);
         replies = scan.byContact;
@@ -341,18 +351,21 @@ export default function createDispoRouter({ resolveLocation }) {
           // when, without opening the conversation at all.
           if (String(hit.direction || "").toLowerCase() === "inbound") {
             inbound.set(c.id, hit.at);
+            settled.add(c.id);
             continue;
           }
-          // Nothing has happened since the last sync, so the answer we already
-          // stored is still the answer.
-          if (prev && prev.lastMessageAt === hit.at) {
+          // Established before, and nothing has happened since — the stored
+          // answer still stands, including a stored "no, never replied".
+          if (prev?.scannedAt && prev.lastMessageAt === hit.at) {
             if (prev.lastRepliedAt) inbound.set(c.id, prev.lastRepliedAt);
+            settled.add(c.id);
             continue;
           }
           mine.set(c.id, hit);
         }
         const inb = await lastInboundByContact(client, mine);
         for (const [cid, at] of inb.lastInbound) inbound.set(cid, at);
+        for (const cid of mine.keys()) settled.add(cid);
         scannedConversations = inb.scanned;
         if (inb.failures) {
           warnings.push(`${inb.failures} conversation${inb.failures === 1 ? "" : "s"} couldn't be read — a few reply dates may be missing.`);
@@ -385,6 +398,7 @@ export default function createDispoRouter({ resolveLocation }) {
           lastMessageDirection: reply?.direction || "",
           lastMessageType: reply?.type || "",
           lastRepliedAt: repliedAt,
+          inboundScannedAt: settled.has(c.id) ? new Date().toISOString() : "",
           lastConvoSummary: custom.last_convo_summary || "",
           lastConvoDate: custom.last_convo_date || "",
           dealHistory: custom.investor_deal_history || "",
