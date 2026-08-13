@@ -26,6 +26,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ENRICH_MODEL, INVESTOR_ENRICH_FIELDS, enrichFieldDefs } from "./enrich.js";
 import { normalizeUsAddress } from "./shared/us-address.js";
+import { mapPool } from "./map-pool.js";
 import {
   PROPERTY_TYPES, REHAB_APPETITES, PROPERTY_TYPE_LABELS, REHAB_APPETITE_LABELS,
   buildBuyboxProfile, normalizeQuery, priceBandText,
@@ -164,37 +165,75 @@ const RANK_SYSTEM =
   "- score is 0-100 and must agree with fit (strong ≥ 70, possible 40-69, weak < 40).\n" +
   "- Include EVERY candidate exactly once, best first.";
 
+// Candidates per model call, and how many calls run at once. One call over the
+// whole shortlist took 3m37s for 45 investors on a live book — nearly all of it
+// thinking — which is not a search box, it's a batch job. Splitting the work
+// bounds each call's output and runs the batches concurrently, so wall clock
+// tracks the SLOWEST batch rather than the sum of all of them.
+//
+// Scores stay comparable across batches because the rubric is absolute (bands
+// tied to evidence, not "rank these against each other"), and the deterministic
+// filter score is the stable tiebreak underneath.
+const RANK_BATCH = 12;
+const RANK_CONCURRENCY = 4;
+
 // Rank pre-filtered candidates against a target. `candidates` are investor
 // records; profiles are built here so the ranking prompt and the stored
 // buybox_text can never drift apart.
 export async function rankInvestors({ target, candidates, aiApiKey, extraInstructions }) {
-  const ids = candidates.map((c) => c.contactId);
-  if (!ids.length) return [];
+  if (!candidates.length) return [];
 
-  const body = candidates
-    .map((c) => `### ${c.name || "Unnamed"} (id: ${c.contactId})\n${c.buyboxText || buildBuyboxProfile(c)}`)
-    .join("\n\n");
+  const batches = [];
+  for (let i = 0; i < candidates.length; i += RANK_BATCH) {
+    batches.push(candidates.slice(i, i + RANK_BATCH));
+  }
 
-  const response = await anthropicFor(aiApiKey).messages.create({
-    model: DISPO_MODEL,
-    // ~100 tokens of verdict per candidate, plus headroom for thinking.
-    max_tokens: 16_000,
-    thinking: { type: "adaptive" },
-    output_config: { format: { type: "json_schema", schema: rankingSchema(ids) } },
-    system: RANK_SYSTEM + (extraInstructions ? `\n\nAdditional instructions from the team:\n${extraInstructions}` : ""),
-    messages: [{
-      role: "user",
-      content:
-        `WHAT WE ARE PLACING\n${describeTarget(target)}\n\n` +
-        `INVESTOR CANDIDATES (buy box + recent history)\n\n${body}\n\n` +
-        `Rank these investors for this deal.`,
-    }],
+  const anthropic = anthropicFor(aiApiKey);
+  const system = RANK_SYSTEM +
+    (extraInstructions ? `\n\nAdditional instructions from the team:\n${extraInstructions}` : "");
+  const dealDesc = describeTarget(target);
+
+  const rankBatch = async (batch) => {
+    const ids = batch.map((c) => c.contactId);
+    const body = batch
+      .map((c) => `### ${c.name || "Unnamed"} (id: ${c.contactId})\n${c.buyboxText || buildBuyboxProfile(c)}`)
+      .join("\n\n");
+    const response = await anthropic.messages.create({
+      model: DISPO_MODEL,
+      // ~60 tokens of verdict per candidate; the rest is headroom for thinking.
+      max_tokens: 4000,
+      thinking: { type: "adaptive" },
+      // Low effort: the hard part (deciding who is even plausible) already
+      // happened in the filter. What is left is reading a short profile and
+      // scoring it against a stated rubric, and paying for deep deliberation
+      // on that bought minutes of latency without visibly better ordering.
+      output_config: { effort: "low", format: { type: "json_schema", schema: rankingSchema(ids) } },
+      system,
+      messages: [{
+        role: "user",
+        content:
+          `WHAT WE ARE PLACING\n${dealDesc}\n\n` +
+          `INVESTOR CANDIDATES (buy box + recent history)\n\n${body}\n\n` +
+          `Rank these investors for this deal.`,
+      }],
+    });
+    return readJson(response, "ranking").rankings || [];
+  };
+
+  // A failed batch loses its investors' reasons, not the whole search — they
+  // fall back to the filter score like any unranked row.
+  const settled = await mapPool(batches, RANK_CONCURRENCY, async (batch) => {
+    try {
+      return await rankBatch(batch);
+    } catch (e) {
+      console.error("dispo: ranking batch failed:", e.message);
+      return [];
+    }
   });
 
-  const raw = readJson(response, "ranking");
   const byId = new Map();
-  for (const r of raw.rankings || []) {
-    // Enum-pinned, but a duplicate id would still double-count a buyer.
+  for (const r of settled.flat()) {
+    // Enum-pinned per batch, but a duplicate id would still double-count.
     if (!byId.has(r.contactId)) byId.set(r.contactId, r);
   }
   return [...byId.values()].sort((a, b) => (b.score || 0) - (a.score || 0));
