@@ -315,14 +315,17 @@ export async function searchAllContactsByTags(client, locationId, tags, { pageLi
 //
 // Needs the conversations.readonly scope — callers should treat 401/403 as
 // "no reply data" and carry on, not as a failure.
-export async function scanConversationsByContact(client, locationId, { maxPages = 60, limit = 100 } = {}) {
+export async function scanConversationsByContact(client, locationId, { maxPages = 250, limit = 100 } = {}) {
   const byContact = new Map();
   const seen = new Set();
   let cursor;
   let truncated = false;
+  let total = 0;
 
   for (let page = 0; page < maxPages; page++) {
-    const { conversations } = await searchConversations(client, locationId, { limit, startAfterDate: cursor });
+    const res = await searchConversations(client, locationId, { limit, startAfterDate: cursor });
+    const { conversations } = res;
+    if (!total) total = res.total;
     if (!conversations.length) break;
 
     let oldest = null;
@@ -355,7 +358,7 @@ export async function scanConversationsByContact(client, locationId, { maxPages 
     if (page === maxPages - 1) truncated = true;
   }
 
-  return { byContact, truncated, scanned: seen.size };
+  return { byContact, truncated, scanned: seen.size, total };
 }
 
 // Count of contacts carrying a tag, via the filtered contact search. Cheapest

@@ -307,7 +307,8 @@ export default function createDispoRouter({ resolveLocation }) {
         replies = scan.byContact;
         if (scan.truncated) {
           warnings.push(
-            "Conversation history was longer than one scan — reply status may be missing on the oldest contacts."
+            `Only the ${scan.scanned.toLocaleString()} most recent conversations of ${scan.total.toLocaleString()} ` +
+            `were scanned — "never contacted" may include people whose last message is older than that.`
           );
         }
       } catch (e) {
