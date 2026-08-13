@@ -167,10 +167,13 @@ export const gradeComps = (address, comps) =>
 // Comps grabbed off Zillow land in a server-side inbox — the app runs in a GHL
 // iframe on a different origin from zillow.com, so the server is the only
 // channel between the two tabs.
-export const getCompInbox = () =>
-  fetch(`${API_BASE}/api/offers/comps/inbox?${locq()}`).then(j);
-export const clearCompInbox = (ids) =>
-  post(`/api/offers/comps/inbox`, { ids: ids || null }, "DELETE");
+// Tell the broker which property is on screen, so comps grabbed on Zillow are
+// stamped with it and come back to this offer rather than to a shared pile.
+export const setCaptureTarget = (address, lat, lng) =>
+  post(`/api/offers/comps/capture-target`, { address, lat, lng });
+// Take every capture belonging to this property (and clear them server-side).
+export const claimCompCaptures = (address) =>
+  post(`/api/offers/comps/claim`, { address }).then((r) => r.captures || []);
 export const getCompBookmarklet = () =>
   fetch(`${API_BASE}/api/offers/comps/bookmarklet?${locq()}`).then(j);
 export const regenerateCompToken = () =>

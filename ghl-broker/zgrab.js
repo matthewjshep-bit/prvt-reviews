@@ -98,10 +98,9 @@ function deepParse(v) {
   return v || null;
 }
 // The detail page's property object lives in a cache keyed by a GraphQL query
-// name that changes between page variants, so walk the values instead of
-// guessing the key.
-function detailProperty() {
-  var nd = nextData();
+// name that changes between page variants ("ForSaleShopperPlatformFullRender…",
+// "NotForSalePriorityQuery…"), so walk the values instead of guessing the key.
+function propertyFromNextData(nd) {
   var pp = nd && nd.props && nd.props.pageProps;
   var caches = [
     pp && pp.componentProps && pp.componentProps.gdpClientCache,
@@ -119,6 +118,46 @@ function detailProperty() {
     }
   }
   return null;
+}
+
+// The zpid in the address bar is the one thing that is ALWAYS right, including
+// inside the modal. Everything below treats it as the source of truth.
+function urlZpid() {
+  var m = location.pathname.match(/\\/(\\d+)_zpid/);
+  return m ? m[1] : null;
+}
+
+// The property embedded in THIS document — only if it's actually the property
+// the URL is pointing at.
+//
+// Why the check: clicking a card on a search page opens the listing as a modal
+// and soft-navigates the URL to /homedetails/…, but __NEXT_DATA__ is baked into
+// the HTML at first load and is NEVER rewritten on client-side navigation. So
+// the document still holds the SEARCH page's payload while the URL says detail.
+// Without this guard we'd either find nothing (and fall back to the URL slug,
+// which has no price) or — worse — read a different house's numbers.
+function localProperty() {
+  var p = propertyFromNextData(nextData());
+  if (!p) return null;
+  var want = urlZpid();
+  if (want && p.zpid != null && String(p.zpid) !== want) return null; // stale
+  return p;
+}
+
+// Re-request the page we're already on and read ITS server-rendered payload.
+// Same-origin, so no CORS and the browser sends the user's own cookies — this
+// is the same page they're looking at, fetched the way the browser would have
+// fetched it on a hard reload. Fixes the modal case completely.
+function fetchedProperty() {
+  return fetch(location.href, { credentials: "same-origin", headers: { Accept: "text/html" } })
+    .then(function (r) { return r.ok ? r.text() : null; })
+    .then(function (html) {
+      if (!html) return null;
+      var m = /<script id="__NEXT_DATA__"[^>]*>([\\s\\S]*?)<\\/script>/.exec(html);
+      if (!m) return null;
+      try { return propertyFromNextData(JSON.parse(m[1])); } catch (e) { return null; }
+    })
+    .catch(function () { return null; });
 }
 // Fallback 1: schema.org markup. Always has the address and usually the price.
 function jsonLd() {
@@ -154,8 +193,9 @@ function bestPhoto(p) {
 }
 
 /* ---------- normalize one detail page ---------- */
-function readDetail() {
-  var p = detailProperty();
+// Takes the property object (from this document or a refetch), or null to
+// fall back to schema.org markup and the URL slug.
+function buildDetailComp(p) {
   var ld = p ? null : jsonLd();
   var u = fromUrl();
   if (!p && !ld && !u) return null;
@@ -207,6 +247,21 @@ function readDetail() {
     photos: photos,
     description: (str(p && p.description) || "").slice(0, 1200) || null
   };
+}
+
+// Resolve the property for the current URL, refetching when the document's own
+// data is stale or missing. Returns a promise of the comp (or null).
+function readDetail() {
+  var local = localProperty();
+  if (local) return Promise.resolve(buildDetailComp(local));
+  toast("Reading the listing…", null);
+  return fetchedProperty().then(function (p) {
+    // p may still be null (Zillow shape change) — buildDetailComp then falls
+    // back to schema.org + the URL slug, which yields an address but no price,
+    // and the server will reject it with a clear message rather than store a
+    // priceless comp.
+    return buildDetailComp(p);
+  });
 }
 
 /* ---------- normalize a search-results page ---------- */
@@ -302,8 +357,11 @@ function send(comps) {
 /* ---------- go ---------- */
 try {
   if (/\\/homedetails\\//.test(location.pathname)) {
-    var one = readDetail();
-    send(one ? [one] : []);
+    readDetail().then(function (one) {
+      send(one ? [one] : []);
+    }).catch(function (e) {
+      toast("Couldn't read this listing: " + (e && e.message ? e.message : "unknown error"), false);
+    });
   } else {
     var many = readSearch();
     if (!many.length) {

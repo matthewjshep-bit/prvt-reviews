@@ -41,6 +41,28 @@ const norm = (v) => {
   return s.replace(/\b(div|division|subdivision|add|addition|phase|no|number)\b/g, "").replace(/\s+/g, " ").trim();
 };
 
+// Great-circle miles between two {lat, lng} points. Null unless both are real.
+//
+// This exists because a comp captured from Zillow arrives with coordinates but
+// no distance — the comps provider computes that field, a browser grab can't.
+// Without it the distance criterion scores `null` and drops out of the
+// denominator, which is exactly backwards: the captures are the comps most
+// likely to have been grabbed while looking at a different deal, and distance
+// is the check that would catch it.
+export function milesBetween(a, b) {
+  const lat1 = n(a && a.lat), lng1 = n(a && a.lng);
+  const lat2 = n(b && b.lat), lng2 = n(b && b.lng);
+  if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) return null;
+  const R = 3958.7613; // mean Earth radius, miles
+  const rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad;
+  const dLng = (lng2 - lng1) * rad;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
 // Months between an ISO-ish date string and now. Null when unparseable.
 function monthsSince(dateStr) {
   const t = Date.parse(String(dateStr || "").slice(0, 10));

@@ -72,6 +72,15 @@ export function normalizeUsAddress(raw) {
   return transform(raw, { suffixes: true });
 }
 
+// Comparison key for "is this the same property?" — USPS-normalized, then
+// stripped of case, punctuation and spacing. Used to bind comps captured from
+// Zillow to the offer they were captured for, where the two addresses come
+// from different sources ("741 N 128th St, Seattle, WA 98133" typed into the
+// offer vs "741 North 128th Street, Seattle, WA 98133" off a listing).
+export function addressKey(raw) {
+  return normalizeUsAddress(raw).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 // Ordered, de-duplicated ladder of address formats to try against picky
 // address matchers. Callers query each until one returns data.
 export function addressQueryVariants(raw) {

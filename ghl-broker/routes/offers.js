@@ -48,7 +48,7 @@ import {
   DEFAULT_CONTRACT_CLAUSES, DEFAULT_ASSIGNMENT_CLAUSES, ASSIGNMENT_TOKENS, ASSIGNMENT_PREAMBLE,
 } from "../shared/contract-template.js";
 import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
-import { addressQueryVariants, zillowUrl } from "../shared/us-address.js";
+import { addressKey, addressQueryVariants, zillowUrl } from "../shared/us-address.js";
 import { YEAR_BUILT_TOLERANCE } from "../shared/comp-match.js";
 import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
 import { fetchRemoteImage } from "../fetch-image.js";
@@ -1396,6 +1396,54 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // Which property the operator is currently working on. The Comps & ARV pane
+  // posts this whenever it has an address, and every capture that arrives
+  // afterwards is stamped with it — that's what lets a comp grabbed on Zillow
+  // land in the right offer without the operator sorting anything by hand.
+  //
+  // Kept on the location's settings blob rather than in a table: it's a single
+  // ephemeral "where am I pointed" value, not a record worth a row.
+  router.post("/comps/capture-target", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const address = String(req.body?.address || "").trim();
+      if (!address) return res.status(400).json({ error: "address required" });
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      await store.saveOfferSettings(locationId, {
+        ...saved,
+        captureTarget: {
+          address,
+          key: addressKey(address),
+          lat: Number(req.body?.lat) || null,
+          lng: Number(req.body?.lng) || null,
+          at: new Date().toISOString(),
+        },
+      });
+      res.json({ ok: true });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Hand over every capture belonging to this property and clear them in the
+  // same call. Read-and-delete together on purpose: the pane merges them into
+  // the offer it holds in memory, so a capture returned but not deleted would
+  // be added twice on the next refresh.
+  router.post("/comps/claim", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const address = String(req.body?.address || "").trim();
+      if (!address) return res.status(400).json({ error: "address required" });
+      const key = addressKey(address);
+      const all = await store.listCompCaptures(locationId);
+      // Untargeted captures (grabbed before any offer was open) are claimed by
+      // whatever property asks first — they were grabbed for *something*, and
+      // stranding them where nobody looks is worse than landing them somewhere
+      // visible, where the distance chip and the trash button sort it out.
+      const mine = all.filter((c) => !c.subjectKey || c.subjectKey === key);
+      if (mine.length) await store.deleteCompCaptures(locationId, mine.map((c) => c.id));
+      res.json({ captures: mine });
+    } catch (err) { fail(res, err); }
+  });
+
   // The bookmarklet href for the current location. Built server-side so the
   // loader URL has exactly one definition.
   router.get("/comps/bookmarklet", async (req, res) => {
@@ -1492,34 +1540,26 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!locationId) {
         return res.status(403).json({ error: "capture token not recognized — regenerate the bookmarklet in Settings" });
       }
+      // Stamp each capture with the property the operator is working on, so it
+      // surfaces in that offer rather than in a pile they have to sort.
+      const settings = await store.getOfferSettings(locationId);
+      const target = settings?.captureTarget || null;
       const comps = (Array.isArray(req.body?.comps) ? req.body.comps : [])
         .slice(0, 60)
         .map(normalizeCapture)
-        .filter(Boolean);
+        .filter(Boolean)
+        .map((c) => ({
+          ...c,
+          subjectKey: target?.key || null,
+          subjectAddress: target?.address || null,
+        }));
       if (!comps.length) return res.status(400).json({ error: "no usable comps on that page" });
       const saved = await store.addCompCaptures(locationId, comps);
-      res.json({ ok: true, added: saved.length });
+      res.json({ ok: true, added: saved.length, target: target?.address || null });
     } catch (err) { fail(res, err); }
   });
 
-  router.get("/comps/inbox", async (req, res) => {
-    try {
-      const { locationId } = resolveLocation(req);
-      const saved = await store.getOfferSettings(locationId);
-      res.json({
-        captures: await store.listCompCaptures(locationId),
-        hasToken: Boolean(String(saved?.captureToken || "").trim()),
-      });
-    } catch (err) { fail(res, err); }
-  });
 
-  router.delete("/comps/inbox", async (req, res) => {
-    try {
-      const { locationId } = resolveLocation(req);
-      const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : null;
-      res.json({ ok: true, deleted: await store.deleteCompCaptures(locationId, ids) });
-    } catch (err) { fail(res, err); }
-  });
 
   /* ---------- contact-link webhook (GHL workflow: stamp app + Zillow links) ---------- */
   // Wire a GHL workflow (e.g. trigger: Contact Created, or tag applied) to

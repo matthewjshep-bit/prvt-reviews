@@ -11,13 +11,13 @@
 // match first. The score never hides a comp: the person picking them can see
 // things the data can't.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { Download, ExternalLink, Loader2, MapPin, Plus, Sparkles, X } from "lucide-react";
+import { ExternalLink, Loader2, MapPin, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { compareByMatch, matchLabel, matchTone, scoreComp } from "@shared/comp-match.js";
-import { clearCompInbox, geocode, getComps, getCompInbox, gradeComps, zillowUrl } from "./api.js";
+import { compareByMatch, matchLabel, matchTone, milesBetween, scoreComp } from "@shared/comp-match.js";
+import { claimCompCaptures, geocode, getComps, gradeComps, setCaptureTarget, zillowUrl } from "./api.js";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -212,51 +212,81 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       return n;
     });
 
-  /* ---- Zillow inbox ---- */
-  // Comps grabbed with the bookmarklet wait server-side until they're pulled
-  // into an offer. Polled on mount and on demand rather than live — the whole
-  // point is that capturing happens in another tab, minutes earlier.
-  const [inbox, setInbox] = useState([]);
-  const [inboxOpen, setInboxOpen] = useState(false);
-  const [inboxBusy, setInboxBusy] = useState(false);
-  const [inboxPick, setInboxPick] = useState(() => new Set());
+  // Comps thrown out of this offer's list. Unticking only takes a comp out of
+  // the ARV; this takes it off the board, because a list you've already judged
+  // is easier to work than one you have to re-read every time. Persisted with
+  // the offer and survives a "Load comps" refresh — you dismissed it for a
+  // reason — but recoverable, since a trash with no undo in a list you rebuild
+  // by hand is a trap.
+  const [dismissed, setDismissed] = useState(() => new Set(initialState?.dismissed || []));
+  const dismiss = (c) => {
+    // A captured comp is dropped outright rather than remembered: it only
+    // exists because you put it there, so re-capturing is the way back.
+    if (c.source === "zillow") setCaptured((l) => l.filter((x) => x.id !== c.id));
+    else setDismissed((s) => new Set([...s, c.id]));
+    untick(c.id);
+  };
 
-  async function loadInbox({ open = false } = {}) {
-    setInboxBusy(true);
+  /* ---- Zillow captures ---- */
+  // There is deliberately no inbox to visit. Comps grabbed on Zillow are
+  // stamped server-side with the property that was on screen when you grabbed
+  // them, and this pane claims the ones for ITS address and merges them
+  // straight into the list below. You capture on Zillow, switch back, and
+  // they're already sitting with the pulled comps.
+  const [claiming, setClaiming] = useState(false);
+  const [justClaimed, setJustClaimed] = useState(0);
+
+  // Tell the broker which property is on screen, so captures that arrive while
+  // you're on Zillow know where to come back to. Re-sent when the address or
+  // the resolved coordinates change.
+  useEffect(() => {
+    const a = address?.trim();
+    if (!a) return;
+    const t = setTimeout(() => {
+      setCaptureTarget(a, state?.subject?.lat, state?.subject?.lng).catch(() => {});
+    }, 400); // debounce: the address field updates on every keystroke
+    return () => clearTimeout(t);
+  }, [address, state?.subject?.lat, state?.subject?.lng]);
+
+  // Claim this property's captures and drop them into the list. Read-and-delete
+  // happens in one server call, so nothing arrives twice.
+  const claimCaptures = async (a) => {
+    if (!a) return;
+    setClaiming(true);
     try {
-      const r = await getCompInbox();
-      const list = r.captures || [];
-      setInbox(list);
-      // Default to taking everything — you captured them on purpose.
-      setInboxPick(new Set(list.map((c) => c.id)));
-      if (open) setInboxOpen(true);
+      const incoming = await claimCompCaptures(a);
+      if (incoming.length) {
+        setCaptured((list) => {
+          const have = new Set(list.map((c) => c.id));
+          const fresh = incoming
+            .map((c) => ({ ...c, id: `z-${c.zpid || c.id}`, source: "zillow" }))
+            .filter((c) => !have.has(c.id) && !dismissed.has(c.id));
+          if (fresh.length) {
+            // Ticked on arrival — you hand-picked these on Zillow, which is a
+            // stronger signal than anything the provider's list gives us.
+            setSelected((s) => new Set([...s, ...fresh.map((c) => c.id)]));
+            setJustClaimed(fresh.length);
+            setTimeout(() => setJustClaimed(0), 6000);
+          }
+          return fresh.length ? [...list, ...fresh] : list;
+        });
+      }
     } catch (e) { setError(e.message); }
-    setInboxBusy(false);
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { loadInbox().catch(() => {}); }, []);
+    setClaiming(false);
+  };
 
-  // Pull the ticked captures onto the board and clear them from the inbox, so
-  // the badge count always means "waiting to be used".
-  async function pullFromInbox() {
-    const take = inbox.filter((c) => inboxPick.has(c.id));
-    if (!take.length) return;
-    const have = new Set([...(state?.comps || []), ...captured].map((c) => String(c.id)));
-    const incoming = take
-      .map((c) => ({ ...c, id: `z-${c.zpid || c.id}`, source: "zillow" }))
-      .filter((c) => !have.has(c.id));
-    setCaptured((list) => [...list, ...incoming]);
-    // Captured comps are ticked on arrival — hand-picked beats auto-selected.
-    setSelected((s) => new Set([...s, ...incoming.map((c) => c.id)]));
-    setInboxOpen(false);
-    try {
-      await clearCompInbox(take.map((c) => c.id));
-      setInbox((list) => list.filter((c) => !inboxPick.has(c.id)));
-    } catch (e) {
-      // The comps are already on the board; a failed cleanup is cosmetic.
-      setError(`Comps added, but clearing the inbox failed: ${e.message}`);
-    }
-  }
+  // On mount and whenever the window regains focus — that switch back from the
+  // Zillow tab is exactly when new captures exist. Polling would burn requests
+  // to learn nothing for the 99% of the time you aren't on Zillow.
+  const addressRef = useRef(address);
+  useEffect(() => { addressRef.current = address; }, [address]);
+  useEffect(() => {
+    const refresh = () => { claimCaptures(addressRef.current?.trim()).catch(() => {}); };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Manual comps default to renovated — the user picked them deliberately,
   // usually from vetted research — but the dropdown can demote them.
@@ -315,13 +345,21 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
 
   // Every comp on the board — pulled and captured — scored and ordered best
   // match first. Everything below reads this, never state.comps directly.
-  const allComps = useMemo(
-    () =>
-      [...(state?.comps || []), ...captured]
-        .map((c) => ({ ...c, match: scoreComp(subjectFacts, c) }))
-        .sort(compareByMatch),
-    [state, captured, subjectFacts]
-  );
+  const allComps = useMemo(() => {
+    const origin = state?.subject?.lat != null ? state.subject : null;
+    return [...(state?.comps || []), ...captured]
+      .filter((c) => !dismissed.has(c.id))
+      .map((c) => {
+        // Captured comps carry coordinates but no distance — the comps provider
+        // computes that, a Zillow grab can't. Fill it in so the score stops
+        // abstaining on the one criterion that catches a comp captured while
+        // looking at a different deal.
+        const miles = c.distance == null && origin ? milesBetween(origin, c) : null;
+        const withDist = miles == null ? c : { ...c, distance: Math.round(miles * 100) / 100 };
+        return { ...withDist, match: scoreComp(subjectFacts, withDist) };
+      })
+      .sort(compareByMatch);
+  }, [state, captured, subjectFacts, dismissed]);
 
   const picked = useMemo(() => {
     const auto = allComps.filter((c) => selected.has(c.id));
@@ -406,11 +444,12 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       // captures from pushing the offer snapshot past the broker's 400KB cap
       // — a snapshot over that is discarded WHOLE, losing comps and rehab too.
       captured: captured.map(({ photos, description, ...c }) => c),
+      dismissed: [...dismissed],
       months, beds, baths, grades,
       adjustments, arvBase: suggestion?.base ?? null, arvBasis: suggestion?.basis || "",
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, selected, manual, captured, months, beds, baths, grades, adjustments, suggestion]);
+  }, [state, selected, manual, captured, dismissed, months, beds, baths, grades, adjustments, suggestion]);
 
   function addManual() {
     const price = parse(draft.price);
@@ -453,14 +492,6 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             value={subjectSqft}
             onChange={(e) => setSubjectSqft(e.target.value.replace(/[^\d,]/g, ""))}
           />
-          {inbox.length > 0 && (
-            <button type="button" onClick={() => (inboxOpen ? setInboxOpen(false) : loadInbox({ open: true }))}
-              title="Comps you grabbed off Zillow with the bookmarklet"
-              className="flex items-center gap-1.5 rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-sm font-semibold text-violet-800 hover:bg-violet-100">
-              {inboxBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-              Zillow inbox ({inbox.length})
-            </button>
-          )}
           <button type="button" onClick={load} disabled={loading}
             className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-blue-700">
             {loading ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />} Load comps
@@ -468,55 +499,6 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
         </div>
       </div>
 
-      {inboxOpen && (
-        <div className="mb-3 rounded-lg border border-violet-200 bg-violet-50/60 p-3">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs font-bold uppercase tracking-wide text-violet-800">
-              Captured from Zillow
-            </span>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => setInboxPick(new Set(inbox.map((c) => c.id)))}
-                className="text-[11px] font-semibold text-violet-700 underline hover:text-violet-900">all</button>
-              <button type="button" onClick={() => setInboxPick(new Set())}
-                className="text-[11px] font-semibold text-violet-700 underline hover:text-violet-900">none</button>
-              <button type="button" onClick={() => setInboxOpen(false)}
-                className="rounded p-0.5 text-violet-400 hover:text-violet-700"><X size={14} /></button>
-            </div>
-          </div>
-          <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
-            {inbox.map((c) => (
-              <label key={c.id} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-white/70">
-                <input type="checkbox" checked={inboxPick.has(c.id)}
-                  onChange={() => setInboxPick((s) => {
-                    const n = new Set(s);
-                    if (n.has(c.id)) n.delete(c.id); else n.add(c.id);
-                    return n;
-                  })} />
-                <span className="min-w-0 flex-1 truncate">{c.address}</span>
-                <span className="whitespace-nowrap text-xs text-slate-600">
-                  {[
-                    c.beds != null ? `${c.beds}/${c.baths ?? "?"}` : "",
-                    c.sqft ? `${c.sqft.toLocaleString()} sf` : "",
-                    c.yearBuilt ? `'${String(c.yearBuilt).slice(2)}` : "",
-                    c.saleDate ? c.saleDate.slice(0, 7) : c.status ? String(c.status).toLowerCase().replace(/_/g, " ") : "",
-                    c.photos?.length ? `${c.photos.length} photos` : "",
-                  ].filter(Boolean).join(" · ")}
-                </span>
-                <span className="whitespace-nowrap font-semibold tabular-nums">{fmtMoney(c.price)}</span>
-              </label>
-            ))}
-          </div>
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <span className="text-[11px] text-slate-600">
-              Captured comps bring their photos, so AI grading costs no Apify credits.
-            </span>
-            <button type="button" onClick={pullFromInbox} disabled={!inboxPick.size}
-              className="rounded-lg bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-800 disabled:opacity-40">
-              Add {inboxPick.size} comp{inboxPick.size === 1 ? "" : "s"}
-            </button>
-          </div>
-        </div>
-      )}
       {state?.info && (state.info.beds != null || state.info.sqft || state.info.lastSalePrice) && (
         <div className="mb-2 text-xs text-slate-500">
           Subject record: {[
@@ -588,7 +570,9 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                 from Zillow or add them manually below.
               </div>
             )}
-            {state?.enabled && !allComps.length && (
+            {/* Not shown when the list is empty because you emptied it — the
+                "bring them back" row below says that instead. */}
+            {state?.enabled && !allComps.length && !dismissed.size && (
               <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 {state.info?.sqft || state.info?.beds != null || Number(beds) > 0 || Number(baths) > 0
                   ? <>No sold comps matched {[
@@ -632,7 +616,24 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                     ? <><Loader2 size={13} className="animate-spin" /> Grading {grading.done}/{grading.total}…</>
                     : <><Sparkles size={13} /> Grade condition (AI)</>}
                 </button>
-                <span className="text-[11px] text-slate-400">ARV uses renovated/updated comps once graded</span>
+                <span className="text-[11px] text-slate-500">ARV uses renovated/updated comps once graded</span>
+              </div>
+            )}
+            {/* Comps arriving on their own would otherwise be indistinguishable
+                from ones that were always there. Says so briefly, then gets
+                out of the way. */}
+            {justClaimed > 0 && (
+              <div className="mb-2 rounded-lg bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-800">
+                Added {justClaimed} comp{justClaimed === 1 ? "" : "s"} captured from Zillow for this property.
+              </div>
+            )}
+            {dismissed.size > 0 && (
+              <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                <span>{dismissed.size} comp{dismissed.size === 1 ? "" : "s"} removed from this offer</span>
+                <button type="button" onClick={() => setDismissed(new Set())}
+                  className="font-semibold text-blue-700 underline hover:text-blue-900">
+                  bring them back
+                </button>
               </div>
             )}
             <div className="max-h-56 flex-1 space-y-1 overflow-y-auto pr-1">
@@ -640,18 +641,24 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                 <div key={c.id} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50">
                   <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
                     <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
-                    <span className="min-w-0 flex-1 truncate">
+                    {/* Widths are deliberate. The meta and price are nowrap, so
+                        if the address were the only shrinkable cell it would be
+                        crushed to zero and every row would read anonymously.
+                        The address keeps a floor, the meta gives way first, and
+                        the price never shrinks — a clipped "$510," is worse
+                        than a clipped street name. */}
+                    <span className="min-w-[6.5rem] flex-[3] truncate" title={c.address || undefined}>
                       {c.source === "zillow" && (
                         <span className="mr-1 rounded bg-violet-100 px-1 py-px text-[10px] font-bold text-violet-700"
                           title="Captured from Zillow">Z</span>
                       )}
-                      {c.address}
+                      {c.address || <span className="text-slate-400">address not provided</span>}
                     </span>
                     <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${MATCH_CLS[matchTone(c.match)]}`}
                       title={matchTitle(c.match)}>
                       {matchLabel(c.match)}
                     </span>
-                    <span className="whitespace-nowrap text-xs text-slate-500"
+                    <span className="min-w-0 flex-1 truncate text-right text-xs text-slate-500"
                       title={c.yearBuilt ? `Built ${c.yearBuilt}` : undefined}>
                       {[
                         c.beds != null ? `${c.beds}/${c.baths ?? "?"}` : "",
@@ -661,7 +668,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                         c.distance != null ? `${c.distance} mi` : "",
                       ].filter(Boolean).join(" · ")}
                     </span>
-                    <span className="whitespace-nowrap font-semibold tabular-nums">{fmtMoney(c.price)}</span>
+                    <span className="shrink-0 whitespace-nowrap font-semibold tabular-nums">{fmtMoney(c.price)}</span>
                   </label>
                   <select
                     value={grades[c.id]?.condition || ""}
@@ -678,11 +685,11 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                     className="shrink-0 rounded p-1 text-slate-400 hover:bg-blue-50 hover:text-blue-700">
                     <ExternalLink size={14} />
                   </a>
-                  {c.source === "zillow" && (
-                    <button type="button" title="Remove this captured comp"
-                      onClick={() => { setCaptured((l) => l.filter((x) => x.id !== c.id)); untick(c.id); }}
-                      className="shrink-0 rounded p-0.5 text-slate-400 hover:text-red-600"><X size={13} /></button>
-                  )}
+                  <button type="button" title="Remove this comp from the list"
+                    onClick={() => dismiss(c)}
+                    className="shrink-0 rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600">
+                    <Trash2 size={13} />
+                  </button>
                 </div>
               ))}
               {manual.map((c) => (
@@ -697,8 +704,8 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                     className={`shrink-0 cursor-pointer appearance-none rounded-full border-0 px-2 py-0.5 text-[11px] font-semibold focus:outline-none ${COND_CLS[condOf(c)]}`}>
                     {CONDITIONS.map((k) => <option key={k} value={k}>{COND_LABELS[k]}</option>)}
                   </select>
-                  <button type="button" onClick={() => setManual((m) => m.filter((x) => x.id !== c.id))}
-                    className="rounded p-0.5 text-slate-400 hover:text-red-600"><X size={13} /></button>
+                  <button type="button" title="Remove this comp" onClick={() => { setManual((m) => m.filter((x) => x.id !== c.id)); untick(c.id); }}
+                    className="shrink-0 rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={13} /></button>
                 </div>
               ))}
             </div>
