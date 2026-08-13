@@ -110,6 +110,46 @@ switch between, rename, and delete from the batch picker (auto-named
    most recent batch (auto-creating one if none exists); pass `"batchId"` to
    target a specific batch.
 
+## Dispositions (investor book)
+
+**Separate app, same Netlify site**, at the `/dispo` path:
+`https://<site>/dispo?location_id=<LOCATION>`. Same deal as `/agents` — no extra
+deploy or env, the SPA redirect serves the same bundle. Add it to GHL as another
+Custom Menu Link pointing at `https://<site>/dispo?location_id={{location.id}}`.
+(Own domain later: a second Netlify site with `VITE_APP_MODE=dispo`, plus that
+origin in the broker's `APP_ORIGIN`.)
+
+The acquisitions side (`/agents` → offers → deals) finds properties; this is the
+other half — who buys them. It mirrors your investor contacts out of GHL, searches
+them by **buy box**, and hands a shortlist to a GHL workflow.
+
+1. **Sync** pulls every contact carrying an investor tag (default `investor`,
+   `investor-active`, `investor-stale`, `on-deal`; override in Settings →
+   "Dispositions"). Read-only against GHL, safe to run any time; it prunes
+   contacts that lost their tag. Re-run it after tagging new buyers.
+2. **Buy box** = the `buybox_*` / `rehab_appetite` contact custom fields the AI
+   enrichment sweep already writes from your conversations. Edit one inline on
+   the Investors page and only the fields you changed are written back to GHL —
+   the sweep's other findings are never clobbered.
+3. **Search** takes plain English ("cash buyers for a gut-job duplex in Tacoma
+   under 400k"). The AI turns it into criteria — shown as removable chips so you
+   can see and correct what it understood — then plain code drops the investors
+   whose buy box contradicts it, and the AI ranks the rest with a reason each.
+   A missing buy-box field never counts against an investor (nobody asked them
+   yet ≠ they said no); tick **Only documented fits** to reverse that.
+   Needs the Anthropic key in Settings → AI features. Without one the chips and
+   filters still work — you just lose the plain-English box and the reasons.
+4. **Find buyers** on a deal (Deals → open a deal) runs the same match from the
+   deal's own numbers: area from the address, the price the *investor* would pay
+   (contract + assignment fee), and rehab level from repairs ÷ ARV. Distinct
+   from **Suggest from conversations** beside it: that asks who is already
+   talking about this property, this asks whose buy box fits it.
+5. **Tag & blast** applies a per-blast tag (`<prefix>-<deal>`, prefix in
+   Settings) plus the `dispo-blast` trigger tag (`DISPO_TAG`). Build a GHL
+   workflow on the trigger tag to send the deal. Live tagging requires
+   `DISPO_BLASTS_ENABLED=true` on the broker; otherwise every blast is a
+   dry-run preview.
+
 ## Zillow comp capture (bookmarklet)
 
 For comps found by eye on Zillow rather than pulled from the comps API.
@@ -151,6 +191,9 @@ Notes for whoever maintains this:
   `CARD_SENDS_ENABLED=true`.
 - **Agent Outreach imports are dry-run by default** — same double gate via
   `OUTREACH_IMPORTS_ENABLED`.
+- **Dispositions blasts are dry-run by default** — same double gate via
+  `DISPO_BLASTS_ENABLED`. Syncing the investor book only reads from GHL, so it
+  is deliberately not gated; the buy-box editor writes only changed fields.
 - The broker rejects any `location_id` that doesn't match `GHL_LOCATION_ID`.
 - Generated documents are stored in Postgres and served at /api/offers/:id/doc.(pdf|jpg) — no storage config needed; links survive redeploys. Setting the R2_* vars switches storage to R2.
 - Offer creation degrades gracefully: if a GHL write fails (fields/note/tag),

@@ -279,14 +279,19 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         </p>
       </section>
 
+      </>)}
+
+      {(mode === "offers" || mode === "dispo") && (
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">AI features (Anthropic)</h2>
         <p className="mb-3 text-xs text-slate-500">
-          Powers "AI scan listing photos" in the rehab estimator and the ✨ contact enrichment
-          (conversation summary → CRM fields). Get a key at console.anthropic.com → API Keys.
-          Photo scans cost roughly $0.15–0.50 each; enrichments roughly $0.02–0.05.
+          Powers "AI scan listing photos" in the rehab estimator, the ✨ contact enrichment
+          (conversation summary → CRM fields), and plain-English buy-box search on the Investors
+          page. Get a key at console.anthropic.com → API Keys. Photo scans cost roughly $0.15–0.50
+          each; enrichments and buy-box searches roughly $0.02–0.05.
         </p>
         <Txt label="Anthropic API key" value={form.aiApiKey || ""} onChange={set("aiApiKey")} placeholder="sk-ant-..." />
+        {mode === "offers" && (<>
         <div className="mt-3">
           <p className="mb-2 text-xs text-slate-500">
             Automatic listing photos for the scan via Apify's Zillow scraper (~$0.002 per lookup,
@@ -304,10 +309,15 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             placeholder="e.g. local market vocabulary, what 'hot' means for our team, agents to treat differently…"
             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none" />
           <p className="mt-1 text-xs text-slate-400">
-            Appended to the AI's instructions when it analyzes a contact's conversation history.
+            Appended to the AI's instructions when it analyzes a contact's conversation history,
+            and when it reads a buy-box search.
           </p>
         </div>
+        </>)}
       </section>
+      )}
+
+      {mode === "offers" && (<>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">AI conversation sweep</h2>
@@ -341,6 +351,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       </section>
       </>)}
 
+      {(mode === "offers" || mode === "outreach") && (
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Agent Outreach (RentCast)</h2>
         <p className="mb-3 text-xs text-slate-500">
@@ -358,6 +369,29 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <Num label="Max listing age" suffix="days" value={form.outreachDaysOld} onChange={set("outreachDaysOld")} />
         </div>
       </section>
+      )}
+
+      {(mode === "offers" || mode === "dispo") && (
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Dispositions (investor book)</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Which GHL contacts count as cash buyers, and how a blast is tagged. Syncing pulls every
+          contact carrying one of these tags into the Investors page. Buy-box search uses the
+          Anthropic key above; without one the structured filters still work, just without AI
+          ranking and reasons.
+        </p>
+        <Txt label="Investor tags" value={form.dispoTags || ""} onChange={set("dispoTags")}
+          placeholder="investor, investor-active, investor-stale, on-deal" />
+        <div className="mt-3">
+          <Txt label="Blast tag prefix" value={form.dispoBlastTagPrefix || ""} onChange={set("dispoBlastTagPrefix")}
+            placeholder="dispo" />
+          <p className="mt-1 text-xs text-slate-500">
+            Each blast gets its own "&lt;prefix&gt;-&lt;deal&gt;" tag so you can target one blast in GHL later.
+            Live sends also need DISPO_BLASTS_ENABLED=true on the broker.
+          </p>
+        </div>
+      </section>
+      )}
 
       {mode === "offers" && (<>
       <section className="rounded-xl border border-slate-200 bg-white p-4">

@@ -311,4 +311,29 @@ export const setOutreachStatus = (agentKey, status, batchId) =>
   post(`/api/outreach/agents/${encodeURIComponent(agentKey)}/status`, { status, ...(batchId ? { batchId } : {}) });
 export const clearOutreach = (batchId) => post(`/api/outreach/clear`, batchId ? { batchId } : {});
 
+/* ---------- dispositions ---------- */
+// The investor book is a local mirror of the GHL contacts carrying the
+// configured investor tags — `syncInvestors` re-pulls it. Search takes either
+// free text (parsed by the AI) or an already-parsed query (chip edits and the
+// plain filters, which need no AI key).
+
+export const getInvestors = (status) =>
+  fetch(`${API_BASE}/api/dispo/investors?${locq()}${status ? `&status=${encodeURIComponent(status)}` : ""}`).then(j);
+export const getInvestor = (contactId) =>
+  fetch(`${API_BASE}/api/dispo/investors/${encodeURIComponent(contactId)}?${locq()}`).then(j);
+
+export const syncInvestors = () => post(`/api/dispo/sync`, {});
+export const saveBuybox = (contactId, buybox) =>
+  post(`/api/dispo/investors/${encodeURIComponent(contactId)}/buybox`, { buybox }, "PUT");
+export const setInvestorStatus = (contactId, status) =>
+  post(`/api/dispo/investors/${encodeURIComponent(contactId)}/status`, { status });
+
+// Pass `query` for free text, or `parsed` to re-filter without another AI call.
+export const searchInvestors = ({ query, parsed, strict = false }) =>
+  post(`/api/dispo/search`, { ...(parsed ? { parsed } : { query }), strict });
+export const matchInvestorsToDeal = (offerId, { strict = false } = {}) =>
+  post(`/api/dispo/match`, { offerId, strict });
+export const blastInvestors = ({ contactIds, label, applyTag = true, dryRun = true }) =>
+  post(`/api/dispo/blast`, { contactIds, applyTag, dryRun, ...(label ? { label } : {}) });
+
 export { API_BASE };

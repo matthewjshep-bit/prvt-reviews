@@ -13,6 +13,7 @@ import { maybeStartNightlySweep } from "./enrich-sweep.js";
 import createOffersRouter from "./routes/offers.js";
 import createOutreachRouter from "./routes/outreach.js";
 import createDashboardRouter from "./routes/dashboard.js";
+import createDispoRouter from "./routes/dispo.js";
 import { createDataroomRouter, createDataroomPublicRouter } from "./routes/dataroom.js";
 import { store } from "./store.js";
 
@@ -118,6 +119,7 @@ function resolveLocation(req) {
 app.use("/api/offers", createOffersRouter({ resolveLocation, uploadDir: UPLOAD_DIR, publicBaseUrl: PUBLIC_BASE_URL }));
 app.use("/api/outreach", createOutreachRouter({ resolveLocation }));
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
+app.use("/api/dispo", createDispoRouter({ resolveLocation }));
 app.use("/api/datarooms", createDataroomRouter({ resolveLocation, publicBaseUrl: PUBLIC_BASE_URL }));
 // Investor datarooms are opened by people outside the GHL account, so /d is
 // deliberately outside the location gate — the per-invite token is the

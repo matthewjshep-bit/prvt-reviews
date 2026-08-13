@@ -5,7 +5,7 @@
 // immediately; terms (price / fee / inspection / closing / notes) save via the modal.
 
 import React, { useEffect, useRef, useState } from "react";
-import { ExternalLink, FileText, Loader2, Lock, Pencil, Sparkles, Trash2, X } from "lucide-react";
+import { ExternalLink, FileText, Loader2, Lock, Pencil, Sparkles, Target, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
   addDealInvestor, getOffer, ghlContactUrl, listDeals, removeDeal, removeDealInvestor,
@@ -14,6 +14,7 @@ import {
 import AssignmentModal from "./AssignmentModal.jsx";
 import DataroomModal from "./DataroomModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
+import MatchInvestorsModal from "./MatchInvestorsModal.jsx";
 
 export const DEAL_STAGES = [
   { key: "under_contract", label: "Under contract", cls: "bg-amber-100 text-amber-800" },
@@ -164,6 +165,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [suggest, setSuggest] = useState(null); // null | {busy} | suggest-investors response | {error}
+  const [matching, setMatching] = useState(false); // buy-box match modal open
   const termsDirty =
     String(terms.contractPrice) !== String(deal.contractPrice ?? "") ||
     String(terms.assignmentFee) !== String(deal.assignmentFee ?? "") ||
@@ -375,14 +377,23 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 the stage advances to Buyer found automatically.
               </div>
 
-              {/* AI: who's already talking about this property? */}
-              <div className="mt-2">
+              {/* Two different questions, deliberately kept apart: whose buy
+                  box FITS this deal (including buyers who've never heard of
+                  it), and who is ALREADY talking about it. */}
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" disabled={busy} onClick={() => setMatching(true)}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  title="Rank your investor book by how well each buy box fits this property">
+                  <Target size={13} /> Find buyers
+                </button>
                 <button type="button" disabled={busy || suggest?.busy} onClick={runSuggest}
                   className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
                   title="Scan investor conversations for interest in this property">
                   {suggest?.busy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
                   Suggest from conversations
                 </button>
+              </div>
+              <div className="mt-2">
                 {suggest?.busy && (
                   <div className="mt-1.5 text-[11px] text-slate-400">
                     Scanning investor conversations for this property — 30–90 seconds…
@@ -473,6 +484,15 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
           </div>
         </div>
       </div>
+
+      {matching && (
+        <MatchInvestorsModal
+          offer={offer}
+          existingIds={investorIds}
+          onClose={() => setMatching(false)}
+          onLink={(investor) => run(() => addDealInvestor(offer.id, investor))}
+        />
+      )}
     </div>
   );
 }

@@ -369,6 +369,89 @@ const pgStore = {
     return rows;
   },
 
+  /* ---- dispositions (investor book) ---- */
+  // Sync-time upsert: replaces the mirrored GHL data but never the local
+  // lifecycle (status, last_blast_at) — same discipline as outreach agents.
+  async upsertInvestors(locationId, rows) {
+    let created = 0;
+    let updated = 0;
+    for (const r of rows) {
+      // `xmax = 0` distinguishes an INSERT from a DO UPDATE in one round trip:
+      // a freshly inserted tuple has no updating transaction stamped on it.
+      // The alternative is a select-then-write per row, which doubles the
+      // query count on a sync that already walks the whole book.
+      const { rows: out } = await query(
+        `insert into investors (id, location_id, contact_id, name, doc, buybox_text)
+         values ($1,$2,$3,$4,$5,$6)
+         on conflict (location_id, contact_id)
+         do update set name = excluded.name, doc = excluded.doc,
+                       buybox_text = excluded.buybox_text, synced_at = now()
+         returning (xmax = 0) as created`,
+        [uuid(), locationId, r.contactId, r.name || null, r.doc, r.buyboxText || null]
+      );
+      if (out[0]?.created) created++;
+      else updated++;
+    }
+    return { created, updated };
+  },
+  async listInvestors(locationId, { status = null, limit = 2000 } = {}) {
+    const { rows } = status
+      ? await query(
+          `select contact_id as "contactId", name, status, buybox_text as "buyboxText",
+                  doc, synced_at as "syncedAt", last_blast_at as "lastBlastAt"
+           from investors where location_id = $1 and status = $2
+           order by name nulls last limit $3`,
+          [locationId, status, limit]
+        )
+      : await query(
+          `select contact_id as "contactId", name, status, buybox_text as "buyboxText",
+                  doc, synced_at as "syncedAt", last_blast_at as "lastBlastAt"
+           from investors where location_id = $1
+           order by name nulls last limit $2`,
+          [locationId, limit]
+        );
+    return rows;
+  },
+  async getInvestor(locationId, contactId) {
+    const { rows } = await query(
+      `select contact_id as "contactId", name, status, buybox_text as "buyboxText",
+              doc, synced_at as "syncedAt", last_blast_at as "lastBlastAt"
+       from investors where location_id = $1 and contact_id = $2`,
+      [locationId, contactId]
+    );
+    return rows[0] || null;
+  },
+  async setInvestorStatus(locationId, contactId, { status, lastBlastAt } = {}) {
+    const { rowCount } = await query(
+      `update investors set status = coalesce($3, status), last_blast_at = coalesce($4, last_blast_at)
+       where location_id = $1 and contact_id = $2`,
+      [locationId, contactId, status || null, lastBlastAt || null]
+    );
+    return rowCount > 0;
+  },
+  // Write back a locally-edited buy box (the GHL write already succeeded).
+  async updateInvestorDoc(locationId, contactId, doc, buyboxText) {
+    const { rowCount } = await query(
+      `update investors set doc = $3, buybox_text = $4, synced_at = now()
+       where location_id = $1 and contact_id = $2`,
+      [locationId, contactId, doc, buyboxText || null]
+    );
+    return rowCount > 0;
+  },
+  // Drop investors who no longer carry any of the configured tags in GHL.
+  // Called only after a FULL, untruncated sync — a partial page would delete
+  // the tail of the book, so routes/dispo.js gates this on `truncated`.
+  async deleteMissingInvestors(locationId, keepContactIds) {
+    const keep = [...new Set(keepContactIds || [])];
+    // Explicit ::text[] cast — without it Postgres has to infer the array
+    // element type from an untyped parameter, which fails on an all-numeric
+    // set of contact ids.
+    const { rowCount } = keep.length
+      ? await query(`delete from investors where location_id = $1 and not (contact_id = any($2::text[]))`, [locationId, keep])
+      : await query(`delete from investors where location_id = $1`, [locationId]);
+    return rowCount;
+  },
+
   /* ---- Zillow comp inbox ---- */
   // Resolve a location from a capture token. The bookmarklet has no
   // location_id — the token IS the credential, so this is the one lookup that
@@ -567,6 +650,7 @@ const fileStore = (() => {
       data.dataroomEvents = data.dataroomEvents || [];
       data.offerPhotos = data.offerPhotos || {};
       data.compCaptures = data.compCaptures || {};
+      data.investors = data.investors || {};
       adoptLegacyOutreachRows();
     }
     return data;
@@ -944,6 +1028,75 @@ const fileStore = (() => {
         .filter((p) => p.locationId === locationId)
         .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit);
+    },
+
+    /* ---- dispositions (investor book) ---- */
+    async upsertInvestors(locationId, rows) {
+      ensure();
+      let created = 0;
+      let updated = 0;
+      for (const r of rows) {
+        const k = `${locationId}|${r.contactId}`;
+        const prev = data.investors[k];
+        data.investors[k] = {
+          // Lifecycle survives the sync; everything else is replaced.
+          status: prev?.status || "active",
+          lastBlastAt: prev?.lastBlastAt || null,
+          createdAt: prev?.createdAt || nowIso(),
+          locationId,
+          contactId: r.contactId,
+          name: r.name || null,
+          doc: r.doc,
+          buyboxText: r.buyboxText || null,
+          syncedAt: nowIso(),
+        };
+        if (prev) updated++;
+        else created++;
+      }
+      persist();
+      return { created, updated };
+    },
+    async listInvestors(locationId, { status = null, limit = 2000 } = {}) {
+      ensure();
+      return Object.values(data.investors)
+        .filter((i) => i.locationId === locationId && (!status || i.status === status))
+        .sort((a, b) => String(a.name || "￿").localeCompare(String(b.name || "￿")))
+        .slice(0, limit);
+    },
+    async getInvestor(locationId, contactId) {
+      ensure();
+      return data.investors[`${locationId}|${contactId}`] || null;
+    },
+    async setInvestorStatus(locationId, contactId, { status, lastBlastAt } = {}) {
+      ensure();
+      const row = data.investors[`${locationId}|${contactId}`];
+      if (!row) return false;
+      if (status) row.status = status;
+      if (lastBlastAt) row.lastBlastAt = lastBlastAt;
+      persist();
+      return true;
+    },
+    async updateInvestorDoc(locationId, contactId, doc, buyboxText) {
+      ensure();
+      const row = data.investors[`${locationId}|${contactId}`];
+      if (!row) return false;
+      row.doc = doc;
+      row.buyboxText = buyboxText || null;
+      row.syncedAt = nowIso();
+      persist();
+      return true;
+    },
+    async deleteMissingInvestors(locationId, keepContactIds) {
+      ensure();
+      const keep = new Set(keepContactIds || []);
+      let removed = 0;
+      for (const [k, i] of Object.entries(data.investors)) {
+        if (i.locationId !== locationId || keep.has(i.contactId)) continue;
+        delete data.investors[k];
+        removed++;
+      }
+      if (removed) persist();
+      return removed;
     },
 
     /* ---- Zillow comp inbox ---- */

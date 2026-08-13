@@ -227,6 +227,49 @@ export async function searchContactsByTag(client, locationId, tag, { pageLimit =
   return data.contacts || [];
 }
 
+// EVERY contact carrying ANY of `tags`, paged to exhaustion. The one-page
+// searchContactsByTag above is fine for "give me a sample of investors" but
+// silently truncates at its page size, which is wrong for the dispositions
+// sync — a buyer list that stops at 50 hides real buyers with no error.
+//
+// A `contains` filter with an array value is OR'd by GHL, so this is one query
+// per page rather than one per tag, and dedupe is only needed because the same
+// contact can carry several of the tags. `truncated` is true when maxPages ran
+// out with more results waiting — the caller must NOT prune on a truncated
+// sync or it deletes the tail of the book.
+export async function searchAllContactsByTags(client, locationId, tags, { pageLimit = 100, maxPages = 30 } = {}) {
+  const value = [...new Set((tags || []).map((t) => String(t).trim()).filter(Boolean))];
+  if (!value.length) return { contacts: [], total: 0, truncated: false };
+
+  const byId = new Map();
+  let searchAfter = null;
+  let total = 0;
+  let truncated = false;
+
+  for (let page = 0; page < maxPages; page++) {
+    const data = await client.call(`/contacts/search`, {
+      method: "POST",
+      body: {
+        locationId,
+        pageLimit,
+        filters: [{ field: "tags", operator: "contains", value }],
+        // A stable sort is what makes searchAfter a cursor rather than a
+        // suggestion; without it pages can repeat and drop rows.
+        sort: [{ field: "dateAdded", direction: "desc" }],
+        ...(searchAfter ? { searchAfter } : {}),
+      },
+    });
+    const contacts = data.contacts || [];
+    total = Number(data.total) || total;
+    for (const c of contacts) if (c?.id) byId.set(c.id, c);
+    searchAfter = contacts.length ? contacts[contacts.length - 1].searchAfter || null : null;
+    if (contacts.length < pageLimit || !searchAfter) break;
+    if (page === maxPages - 1) truncated = true;
+  }
+
+  return { contacts: [...byId.values()], total, truncated };
+}
+
 // Count of contacts carrying a tag, via the filtered contact search. Cheapest
 // possible query: one result page of 1, read the total. Throws on GHL errors
 // (err.status set) — callers should treat 401/403 as "scope not granted".

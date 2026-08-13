@@ -10,7 +10,7 @@
     "./offer-calc": "./offer-calc.js"
   },
   "scripts": {
-    "test": "node --test offer-calc.test.mjs comp-match.test.mjs rehab-catalog.test.mjs arv.test.mjs"
+    "test": "node --test offer-calc.test.mjs comp-match.test.mjs rehab-catalog.test.mjs arv.test.mjs buybox.test.mjs"
   },
   "dependencies": {
     "zod": "^3.24.1"

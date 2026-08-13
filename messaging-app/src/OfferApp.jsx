@@ -4,12 +4,14 @@
 //   History   — every offer created for this location, grouped by agent.
 //   Deals     — offers under signed contract, tracked through disposition.
 //   Settings  — calculation defaults + company info printed on the document.
+// Plus three sibling apps on their own paths: /agents, /dashboard, /dispo.
 
 import React, { useEffect, useState } from "react";
 import NewOffer from "./NewOffer.jsx";
 import OffersHistory from "./OffersHistory.jsx";
 import DealsView from "./DealsView.jsx";
 import AgentOutreach from "./AgentOutreach.jsx";
+import Dispositions from "./Dispositions.jsx";
 import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
 import { getLocationId, getLocationKey, getOffer, getSettings } from "./api.js";
@@ -23,17 +25,19 @@ function offerEditorUrl(offerId) {
   return `/?${p}`;
 }
 
-// Which product this page is. One deploy serves all four: /agents (any depth)
-// is the Agent Outreach app, /dashboard is the analytics Dashboard, /deals is
-// the standalone Deals board, everything else is the offer generator. The
-// Netlify SPA redirect sends every path to this same bundle; VITE_APP_MODE
-// still forces a mode for a dedicated-domain deploy.
+// Which product this page is. One deploy serves all five: /agents (any depth)
+// is the Agent Outreach app, /dispo is the investor book, /dashboard is the
+// analytics Dashboard, /deals is the standalone Deals board, everything else is
+// the offer generator. The Netlify SPA redirect sends every path to this same
+// bundle; VITE_APP_MODE still forces a mode for a dedicated-domain deploy.
 const APP_MODE = (() => {
   try {
     if (import.meta.env.VITE_APP_MODE === "outreach") return "outreach";
     if (import.meta.env.VITE_APP_MODE === "dashboard") return "dashboard";
+    if (import.meta.env.VITE_APP_MODE === "dispo") return "dispo";
     if (/^\/dashboard(\/|$)/.test(window.location.pathname)) return "dashboard";
     if (/^\/deals(\/|$)/.test(window.location.pathname)) return "deals";
+    if (/^\/dispo(\/|$)/.test(window.location.pathname)) return "dispo";
     return /^\/agents(\/|$)/.test(window.location.pathname) ? "outreach" : "offers";
   } catch {
     return "offers";
@@ -44,6 +48,11 @@ const NAV =
   APP_MODE === "outreach"
     ? [
         { view: "outreach", label: "Agents" },
+        { view: "settings", label: "Settings" },
+      ]
+    : APP_MODE === "dispo"
+    ? [
+        { view: "dispo", label: "Investors" },
         { view: "settings", label: "Settings" },
       ]
     : APP_MODE === "dashboard"
@@ -92,7 +101,7 @@ export default function OfferApp() {
   // Deep link from the GHL contact note: ?offer_id= reopens that offer in the
   // editor (same path as History → Edit) once it loads.
   useEffect(() => {
-    if (APP_MODE === "outreach") return; // offers-only deep link
+    if (APP_MODE === "outreach" || APP_MODE === "dispo") return; // offers-only deep link
     const offerId = readParam("offer_id");
     if (!offerId) return;
     getOffer(offerId)
@@ -122,7 +131,7 @@ export default function OfferApp() {
         <div className={`flex items-center gap-3 px-4 py-2.5 sm:px-6 lg:px-8 ${containerWidth}`}>
           <div className="mr-2 text-sm font-bold tracking-tight">
             {APP_MODE === "outreach" ? "Agent Outreach" : APP_MODE === "dashboard" ? "Dashboard"
-              : APP_MODE === "deals" ? "Deals" : "Offer Generator"}
+              : APP_MODE === "deals" ? "Deals" : APP_MODE === "dispo" ? "Dispositions" : "Offer Generator"}
           </div>
           {NAV.length > 1 && NAV.map((n) => (
             <button
@@ -165,6 +174,7 @@ export default function OfferApp() {
               : (o) => { setEditing(o); setView("new"); }} />
         )}
         {view === "outreach" && <AgentOutreach settings={settings} />}
+        {view === "dispo" && <Dispositions />}
         {view === "dashboard" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
         {view === "settings" && (
           <SettingsView settings={settings} onSaved={(s) => setSettings(s)} mode={APP_MODE} />

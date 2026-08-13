@@ -140,6 +140,36 @@ create unique index if not exists outreach_listings_batch_listing_uniq
 create index if not exists outreach_agents_batch_idx on outreach_agents (location_id, batch_id, last_seen desc);
 create index if not exists outreach_listings_batch_idx2 on outreach_listings (location_id, batch_id, agent_key);
 
+-- Dispositions: the cash-buyer list, mirrored out of GHL so the whole book can
+-- be filtered and ranked at once. GHL contacts stay the source of truth — this
+-- is a rebuildable search cache (drop it and the next Sync restores it), the
+-- same relationship outreach_agents has to RentCast.
+--
+-- Lifecycle columns (status, last_blast_at) live OUTSIDE `doc` for the same
+-- reason they do on outreach_agents: a re-sync replaces doc wholesale, and
+-- burying "we already blasted this buyer" in there would erase it every time
+-- someone clicks Sync.
+--
+-- buybox_text is the flattened profile paragraph (shared/buybox.js
+-- buildBuyboxProfile). It is denormalized out of doc deliberately: it's what
+-- the ranker reads and what a future keyword index would cover, and computing
+-- it per request for a few hundred investors is pure waste.
+create table if not exists investors (
+  id            uuid primary key,
+  location_id   text not null,
+  contact_id    text not null,
+  name          text,
+  status        text not null default 'active',   -- 'active' | 'archived'
+  buybox_text   text,
+  doc           jsonb not null,                   -- { name, email, phone, tags, buybox, lastConvoSummary, ... }
+  synced_at     timestamptz not null default now(),
+  last_blast_at timestamptz,
+  created_at    timestamptz not null default now()
+);
+create unique index if not exists investors_contact_uniq on investors (location_id, contact_id);
+create index if not exists investors_loc_idx on investors (location_id, synced_at desc);
+create index if not exists investors_status_idx on investors (location_id, status);
+
 -- Zillow comp inbox. The bookmarklet POSTs comps here from a Zillow tab; the
 -- Comps & ARV pane pulls them into an offer later. This table exists because
 -- the app runs in a GHL iframe on a different origin from zillow.com, so there
