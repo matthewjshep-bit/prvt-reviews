@@ -12,6 +12,7 @@ import { fmtMoney } from "@shared/offer-calc.js";
 import {
   REHAB_CATALOG as CATALOG_SHARED, BED_TIERS as BED_TIERS_SHARED,
   BATH_TIERS as BATH_TIERS_SHARED, ALL_REHAB_ITEMS,
+  lineCost as sharedLineCost, sizeFactor, rehabBand, bandMidpoint, REHAB_LEVELS,
 } from "@shared/rehab-catalog.js";
 import { scanRehab } from "./api.js";
 import { downscale } from "./image.js";
@@ -87,6 +88,10 @@ export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApp
   const [custom, setCustom] = useState(initialState?.custom || []);
   const [draft, setDraft] = useState({ label: "", cost: "" });
   const [contingency, setContingency] = useState(initialState?.contingency ?? "10");
+  // Quick-bucket override: a level id from the cheat sheet plus the dollar
+  // figure it seeded (editable). Null means the itemized total drives the offer.
+  const [bucket, setBucket] = useState(initialState?.bucket ?? null);
+  const [bucketAmount, setBucketAmount] = useState(initialState?.bucketAmount ?? "");
   const [applied, setApplied] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState("");
@@ -158,11 +163,12 @@ export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApp
 
   // Report state upward so drafts/offers can snapshot the whole scope.
   useEffect(() => {
-    onStateChange?.({ rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency, aiResult });
+    onStateChange?.({ rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency, bucket, bucketAmount, aiResult });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency, aiResult]);
+  }, [rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency, bucket, bucketAmount, aiResult]);
 
   const sqftNum = parse(sqft);
+  const fmtTyped = (v) => { const d = String(v).replace(/[^\d]/g, ""); return d ? Number(d).toLocaleString("en-US") : ""; };
 
   // Subject record from Load Comps drives the room counts (editable after).
   useEffect(() => {
@@ -179,11 +185,11 @@ export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApp
 
   const patch = (id, p) => { setApplied(false); setRows((r) => ({ ...r, [id]: { ...r[id], ...p } })); };
 
-  const lineCost = (item, row) => {
-    if (item.mode === "sqft") return row.unit * sqftNum;
-    if (item.mode === "qty") return row.unit * (parse(row.qty) || 1);
-    return row.unit;
-  };
+  // Shared with the catalog so the pane, the scope PDF and the AI prompt can't
+  // disagree. Flat costs are priced for a 1,500 sqft house and scaled from
+  // there — without that, a 770 sqft cottage was billed the full $6,000 to
+  // paint an exterior a third the size.
+  const lineCost = (item, row) => sharedLineCost(item, row, sqftNum);
 
   const { lines, subtotal, total } = useMemo(() => {
     const lines = [];
@@ -210,6 +216,23 @@ export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApp
     const total = Math.round((subtotal * (1 + (parse(contingency) || 0) / 100)) / 500) * 500;
     return { lines, subtotal, total };
   }, [rows, bedRooms, bathRooms, custom, contingency, sqftNum]);
+
+  // The cheat-sheet band for this house size (null when sqft is unknown — a
+  // guess would anchor the repair number on nothing).
+  const band = useMemo(() => rehabBand(sqftNum), [sqftNum]);
+
+  // Which number actually becomes the offer's repair figure.
+  const applyAmount = bucket ? (parse(bucketAmount) || 0) : total;
+
+  // Where the itemized total sits against the bands, so a scope that has run
+  // away from the cheat sheet says so instead of just looking authoritative.
+  const bandCheck = useMemo(() => {
+    if (!band || total <= 0) return null;
+    if (total <= band.light[1]) return { level: "light", over: false };
+    if (total <= band.medium[1]) return { level: "medium", over: false };
+    if (total <= band.heavy[1]) return { level: "heavy", over: false };
+    return { level: "heavy", over: true };
+  }, [band, total]);
 
   function addCustom() {
     const cost = parse(draft.cost);
@@ -365,19 +388,82 @@ export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApp
         ))}
       </div>
 
-      {lines.length > 0 && (
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
-          <div className="text-sm">
-            <span className="text-slate-600">{lines.length} item{lines.length > 1 ? "s" : ""} · subtotal {fmtMoney(subtotal)} +</span>{" "}
-            <input className="w-10 rounded border border-slate-300 px-1 py-0.5 text-center text-xs" value={contingency}
-              onChange={(e) => { setApplied(false); setContingency(e.target.value.replace(/[^\d]/g, "")); }} />
-            <span className="text-slate-600">% contingency =</span>{" "}
-            <span className="text-lg font-black">{fmtMoney(total)}</span>
+      {/* Quick buckets — the cheat-sheet ranges by house size, for when you
+          want a number now rather than a scope. Picking one doesn't disturb the
+          itemized work below; clicking it again hands control back. */}
+      {band && (
+        <div className="mt-3 rounded-lg border border-slate-200 p-2.5">
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              Quick estimate — {band.label}
+            </span>
+            <span className="text-[11px] text-slate-500">whole-project ranges from your cheat sheet</span>
           </div>
-          <button type="button" onClick={() => { onApply(total, lines); setApplied(true); }}
-            className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold text-white ${applied ? "bg-emerald-700" : "bg-blue-600 hover:bg-blue-700"}`}>
-            <Hammer size={14} /> {applied ? "Applied ✓" : "Use as repairs estimate"}
-          </button>
+          <div className="flex flex-wrap gap-1.5">
+            {REHAB_LEVELS.map((lv) => {
+              const [lo, hi] = band[lv.id];
+              const on = bucket === lv.id;
+              return (
+                <button key={lv.id} type="button"
+                  onClick={() => { setApplied(false); setBucket(on ? null : lv.id); setBucketAmount(on ? "" : String(bandMidpoint(sqftNum, lv.id))); }}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                    on ? "bg-blue-600 text-white" : "border border-slate-300 text-slate-700 hover:bg-slate-100"
+                  }`}>
+                  {lv.label} ${(lo / 1000).toFixed(0)}–{(hi / 1000).toFixed(0)}k{lv.id === "heavy" ? "+" : ""}
+                </button>
+              );
+            })}
+            {bucket && (
+              <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                <span>=</span> $
+                <input className="w-24 rounded border border-slate-300 px-1.5 py-1 text-right text-sm font-semibold tabular-nums focus:border-blue-500 focus:outline-none"
+                  inputMode="numeric" value={fmtTyped(bucketAmount)}
+                  onChange={(e) => { setApplied(false); setBucketAmount(e.target.value.replace(/[^\d]/g, "")); }} />
+              </label>
+            )}
+          </div>
+        </div>
+      )}
+
+      {(lines.length > 0 || bucket) && (
+        <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm">
+              {bucket ? (
+                <>
+                  <span className="text-slate-600">{REHAB_LEVELS.find((l) => l.id === bucket)?.label} rehab · {band.label} =</span>{" "}
+                  <span className="text-lg font-black">{fmtMoney(applyAmount)}</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-slate-600">{lines.length} item{lines.length > 1 ? "s" : ""} · subtotal {fmtMoney(subtotal)} +</span>{" "}
+                  <input className="w-10 rounded border border-slate-300 px-1 py-0.5 text-center text-xs" value={contingency}
+                    onChange={(e) => { setApplied(false); setContingency(e.target.value.replace(/[^\d]/g, "")); }} />
+                  <span className="text-slate-600">% contingency =</span>{" "}
+                  <span className="text-lg font-black">{fmtMoney(total)}</span>
+                </>
+              )}
+            </div>
+            <button type="button" onClick={() => { onApply(applyAmount, lines); setApplied(true); }}
+              className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold text-white ${applied ? "bg-emerald-700" : "bg-blue-600 hover:bg-blue-700"}`}>
+              <Hammer size={14} /> {applied ? "Applied ✓" : "Use as repairs estimate"}
+            </button>
+          </div>
+          {/* Whichever number isn't driving the offer still gets said out loud,
+              so the two can never quietly disagree. */}
+          {bucket && lines.length > 0 && (
+            <div className="mt-1.5 text-[11px] text-slate-600">
+              The itemized scope below totals {fmtMoney(total)} and still prints on the scope of work — only the
+              number above goes into the offer.
+            </div>
+          )}
+          {!bucket && bandCheck && (
+            <div className={`mt-1.5 text-[11px] ${bandCheck.over ? "font-semibold text-amber-800" : "text-slate-600"}`}>
+              {bandCheck.over
+                ? `Above your ${bandCheck.level} band for ${band.label} (${fmtMoney(band[bandCheck.level][0])}–${fmtMoney(band[bandCheck.level][1])}+) — fine for a true gut, worth a second look otherwise.`
+                : `Within your ${bandCheck.level} band for ${band.label}.`}
+            </div>
+          )}
         </div>
       )}
     </div>

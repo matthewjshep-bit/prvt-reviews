@@ -14,10 +14,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { ExternalLink, Loader2, MapPin, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { ExternalLink, Loader2, MapPin, Plus, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { compareByMatch, matchLabel, matchTone, milesBetween, scoreComp } from "@shared/comp-match.js";
-import { claimCompCaptures, geocode, getComps, gradeComps, setCaptureTarget, zillowUrl } from "./api.js";
+import { claimCompCaptures, geocode, getComps, setCaptureTarget, zillowUrl } from "./api.js";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -101,7 +101,6 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   // Condition per comp id: {condition, confidence?, note?, source: "ai"|"manual"}.
   // Manual settings always win over AI grading.
   const [grades, setGrades] = useState(initialState?.grades || {});
-  const [grading, setGrading] = useState(null); // {done, total} while the AI pass runs
   // ARV adjustments: [{key, label, pct}] — pct stays a string while editing.
   const [adjustments, setAdjustments] = useState(initialState?.adjustments || []);
   const [adjDraft, setAdjDraft] = useState({ label: "", pct: "" });
@@ -219,6 +218,24 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   // reason — but recoverable, since a trash with no undo in a list you rebuild
   // by hand is a trap.
   const [dismissed, setDismissed] = useState(() => new Set(initialState?.dismissed || []));
+  // Empty the board and start over. Provider comps are dismissed (recoverable
+  // via "bring them back"); captured and manual ones are genuinely deleted,
+  // since nothing on the server holds them any more — which is why this asks
+  // first.
+  const clearAllComps = () => {
+    const n = allComps.length + manual.length;
+    if (!n) return;
+    const losing = captured.length + manual.length;
+    const warning = losing
+      ? `\n\n${losing} of them (Zillow captures and manual entries) can't be restored.`
+      : "";
+    if (!window.confirm(`Clear all ${n} comps from this offer?${warning}`)) return;
+    setDismissed((s) => new Set([...s, ...(state?.comps || []).map((c) => c.id)]));
+    setCaptured([]);
+    setManual([]);
+    setSelected(new Set());
+  };
+
   const dismiss = (c) => {
     // A captured comp is dropped outright rather than remembered: it only
     // exists because you put it there, so re-capturing is the way back.
@@ -300,37 +317,6 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       }
       return { ...g, [id]: { ...(g[id] || {}), condition, source: "manual" } };
     });
-
-  // AI-grade the loaded comps in small chunks (each chunk = a few Zillow
-  // scrapes + one AI call server-side) so requests stay fast and progress is
-  // visible. Manual settings are never overwritten; partial results are kept.
-  async function gradeAll() {
-    const targets = allComps.filter((c) => grades[c.id]?.source !== "manual").slice(0, 12);
-    if (!targets.length) return;
-    setGrading({ done: 0, total: targets.length });
-    setError("");
-    try {
-      for (let i = 0; i < targets.length; i += 4) {
-        // Comps captured from Zillow already carry their listing photos and
-        // description — pass them through so the server can skip the scrape.
-        const chunk = targets.slice(i, i + 4)
-          .map(({ id, address: a, price, sqft, beds: b, baths: ba, saleDate, photos, description }) =>
-            ({ id, address: a, price, sqft, beds: b, baths: ba, saleDate, photos, description }));
-        const r = await gradeComps(address.trim(), chunk);
-        setGrades((g) => {
-          const next = { ...g };
-          for (const [id, gr] of Object.entries(r.grades || {})) {
-            if (next[id]?.source !== "manual") next[id] = { ...gr, source: "ai" };
-          }
-          return next;
-        });
-        setGrading((p) => (p ? { ...p, done: Math.min(p.total, i + chunk.length) } : p));
-      }
-    } catch (e) {
-      setError(`Grading stopped: ${e.message} — grades so far are kept.`);
-    }
-    setGrading(null);
-  }
 
   // The subject as the scorecard sees it: the provider's record, with the
   // user's own corrections winning wherever they typed one.
@@ -607,16 +593,17 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                 {state.estimate.low ? <> (range {fmtMoney(state.estimate.low)} – {fmtMoney(state.estimate.high)})</> : null}
               </div>
             )}
-            {state?.gradeEnabled && allComps.length > 0 && (
+            {(allComps.length > 0 || manual.length > 0) && (
               <div className="mb-2 flex items-center justify-between gap-2">
-                <button type="button" onClick={gradeAll} disabled={Boolean(grading)}
-                  className="flex items-center gap-1.5 rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-100 disabled:opacity-60"
-                  title="Pull each comp's sold-listing photos and grade its renovation condition — ARV should come from renovated comps">
-                  {grading
-                    ? <><Loader2 size={13} className="animate-spin" /> Grading {grading.done}/{grading.total}…</>
-                    : <><Sparkles size={13} /> Grade condition (AI)</>}
+                <span className="text-[11px] text-slate-500">
+                  {allComps.length + manual.length} comp{allComps.length + manual.length === 1 ? "" : "s"} ·
+                  {" "}{selected.size} in the ARV
+                </span>
+                <button type="button" onClick={clearAllComps}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:border-red-300 hover:bg-red-50 hover:text-red-700"
+                  title="Empty the comp list and start over">
+                  <Trash2 size={12} /> Clear all
                 </button>
-                <span className="text-[11px] text-slate-500">ARV uses renovated/updated comps once graded</span>
               </div>
             )}
             {/* Comps arriving on their own would otherwise be indistinguishable

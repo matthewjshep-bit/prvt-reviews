@@ -5,7 +5,7 @@
 //    RehabPane UI renders.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { ALL_REHAB_ITEMS, BATH_TIERS, BED_TIERS } from "./shared/rehab-catalog.js";
+import { ALL_REHAB_ITEMS, BATH_TIERS, BED_TIERS, lineCost, rehabBand } from "./shared/rehab-catalog.js";
 import { addressQueryVariants } from "./shared/us-address.js";
 
 const MAX_PHOTOS = 40;
@@ -252,14 +252,31 @@ const SYSTEM_PROMPT =
   "finishes in each. Explicitly flag any water staining, mold, or structural concerns you can see. Use the stated " +
   "square footage to size flooring and paint quantities. Cross-check listing-remark claims (e.g. 'updated 2023') " +
   "against what the photos actually show — the photos win. Be explicit in notes about what you could not see. " +
-  "Half bathrooms count as bathrooms — grade them with the appropriate (usually cheaper) tier.";
+  "Half bathrooms count as bathrooms — grade them with the appropriate (usually cheaper) tier. " +
+  // Size discipline: the model reliably scoped small houses as though they were
+  // 1,500 sqft, which is how a 770 sqft cottage came back at $91k.
+  "SIZE DISCIPLINE: scope the house in front of you, not a generic one. A small house has fewer rooms, fewer " +
+  "doors, fewer windows, less siding and a smaller roof, and its total should land well below the same scope on " +
+  "a large house. The operator's whole-project budget bands for this size are given below — treat them as the " +
+  "expected range. You may exceed the heavy band when the photos genuinely justify a gut, but say so explicitly " +
+  "in the summary and name what drives it. Do NOT pad a scope to reach a band, and do NOT trim real damage to " +
+  "stay inside one; the bands are a sanity check, not a target.";
 
 // Run the scan. settings must carry aiApiKey; subject: {beds, baths, sqft, yearBuilt}.
 export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }) {
   const client = new Anthropic({ apiKey: aiApiKey });
 
+  // Quote the catalog at THIS house's prices, not the 1,500 sqft baseline —
+  // otherwise the model reasons about totals the app will never compute.
+  const sqft = Number(subject?.sqft) || 0;
   const catalogText = ALL_REHAB_ITEMS
-    .map((i) => `- ${i.id}: ${i.label} (${i.mode === "sqft" ? `$${i.unit}/sqft` : i.mode === "qty" ? `$${i.unit} each` : `$${i.unit}`})`)
+    .map((i) => {
+      const cost = Math.round(lineCost(i, {}, sqft));
+      const price = i.mode === "sqft" ? `$${i.unit}/sqft${sqft ? ` = $${cost.toLocaleString()}` : ""}`
+        : i.mode === "qty" ? `$${i.unit} each`
+        : `$${cost.toLocaleString()}`;
+      return `- ${i.id}: ${i.label} (${price})`;
+    })
     .join("\n");
   const yearBuilt = Number(subject?.yearBuilt) || 0;
   const age = yearBuilt ? new Date().getFullYear() - yearBuilt : 0;
@@ -300,6 +317,14 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }
       : "",
     `Also grade each of these areas (one entry per area, in this order): ${SCAN_AREAS.join(", ")}. ` +
     `Use "not_visible" when the photos don't show it.`,
+    (() => {
+      const band = rehabBand(sqft);
+      if (!band) return "";
+      const r = (x) => `$${(x[0] / 1000).toFixed(0)}k–$${(x[1] / 1000).toFixed(0)}k`;
+      return `BUDGET BANDS for ${band.label} (whole project, all-in): light ${r(band.light)}, ` +
+        `medium ${r(band.medium)}, heavy ${r(band.heavy)}+. Pick the level the photos support and scope to it. ` +
+        `If your scope lands above the heavy band, justify it in the summary.`;
+    })(),
   ].filter(Boolean).join("\n");
 
   const content = [
