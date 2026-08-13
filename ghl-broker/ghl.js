@@ -380,7 +380,11 @@ export async function scanConversationsByContact(client, locationId, { maxPages 
 // `maxPagesPerConvo`: the most recent page settles it for all but the longest
 // threads, and a thread that is 100+ messages of pure outbound is not a reply
 // we are missing.
-export async function lastInboundByContact(client, byContact, { concurrency = 8, maxPagesPerConvo = 2 } = {}) {
+export async function lastInboundByContact(
+  client,
+  byContact,
+  { concurrency = 4, maxPagesPerConvo = 2, spacingMs = 120 } = {}
+) {
   const jobs = [];
   for (const [contactId, info] of byContact) {
     for (const conversationId of info.conversationIds || []) jobs.push({ contactId, conversationId });
@@ -390,14 +394,29 @@ export async function lastInboundByContact(client, byContact, { concurrency = 8,
   let failures = 0;
   let cursor = 0;
 
+  // GHL throttles per location, and this is the only place that issues
+  // thousands of requests in a row — a burst here doesn't just fail, it spends
+  // the budget the REST of the sync still needs. Pace it and back off on 429.
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  const call = async (conversationId, lastMessageId) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await listConversationMessages(client, conversationId, { lastMessageId, limit: 100 });
+      } catch (e) {
+        if (e.status !== 429 || attempt >= 3) throw e;
+        await pause(2000 * (attempt + 1));
+      }
+    }
+  };
+
   const worker = async () => {
     while (cursor < jobs.length) {
       const { contactId, conversationId } = jobs[cursor++];
       try {
         let lastMessageId;
         for (let page = 0; page < maxPagesPerConvo; page++) {
-          const { messages, lastMessageId: next, nextPage } =
-            await listConversationMessages(client, conversationId, { lastMessageId, limit: 100 });
+          await pause(spacingMs);
+          const { messages, lastMessageId: next, nextPage } = await call(conversationId, lastMessageId);
           for (const m of messages) {
             if (String(m.direction || "").toLowerCase() !== "inbound") continue;
             const ms = Number(m.dateAdded) || new Date(m.dateAdded).getTime();

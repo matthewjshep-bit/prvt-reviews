@@ -303,11 +303,27 @@ export default function createDispoRouter({ resolveLocation }) {
 
       const { contacts, truncated } = await searchAllContactsByTags(client, locationId, tags);
 
+      // Resolved before the conversation scans on purpose: those issue
+      // thousands of requests, and when GHL throttles, whatever runs after
+      // them pays for it. The field map is load-bearing for every row.
+      const idKeyMap = await customFieldIdKeyMapForDefs(client, locationId, INVESTOR_FIELD_DEFS);
+
+      // Reply state we already know. Scanning a contact's messages is the most
+      // expensive thing this endpoint does, so it is only done for contacts
+      // whose conversation actually moved since the last sync.
+      const known = new Map(
+        (await store.listInvestors(locationId)).map((r) => [
+          r.contactId,
+          { lastMessageAt: r.doc?.lastMessageAt || "", lastRepliedAt: r.doc?.lastRepliedAt || "" },
+        ])
+      );
+
       // Who has actually answered us. Best-effort: without the
       // conversations.readonly scope the book still syncs, it just can't tell
       // "replied" from "we spoke last".
       let replies = new Map();
       let inbound = new Map();
+      let scannedConversations = 0;
       try {
         const scan = await scanConversationsByContact(client, locationId);
         replies = scan.byContact;
@@ -319,10 +335,25 @@ export default function createDispoRouter({ resolveLocation }) {
         const mine = new Map();
         for (const c of contacts) {
           const hit = replies.get(c.id);
-          if (hit) mine.set(c.id, hit);
+          if (!hit) continue;
+          const prev = known.get(c.id);
+          // Their last message is inbound — they replied, and we know exactly
+          // when, without opening the conversation at all.
+          if (String(hit.direction || "").toLowerCase() === "inbound") {
+            inbound.set(c.id, hit.at);
+            continue;
+          }
+          // Nothing has happened since the last sync, so the answer we already
+          // stored is still the answer.
+          if (prev && prev.lastMessageAt === hit.at) {
+            if (prev.lastRepliedAt) inbound.set(c.id, prev.lastRepliedAt);
+            continue;
+          }
+          mine.set(c.id, hit);
         }
         const inb = await lastInboundByContact(client, mine);
-        inbound = inb.lastInbound;
+        for (const [cid, at] of inb.lastInbound) inbound.set(cid, at);
+        scannedConversations = inb.scanned;
         if (inb.failures) {
           warnings.push(`${inb.failures} conversation${inb.failures === 1 ? "" : "s"} couldn't be read — a few reply dates may be missing.`);
         }
@@ -340,11 +371,6 @@ export default function createDispoRouter({ resolveLocation }) {
             : `Couldn't read conversation history (${e.message}) — reply status not updated.`
         );
       }
-      // One field-definition fetch for the whole book, not one per contact.
-      // Keyed by OUR field keys — GHL's own fieldKey is derived from the
-      // display name and does not match what the registry calls the field.
-      const idKeyMap = await customFieldIdKeyMapForDefs(client, locationId, INVESTOR_FIELD_DEFS);
-
       const rows = contacts.map((c) => {
         const custom = contactCustomRecord(c, idKeyMap);
         const reply = replies.get(c.id) || null;
@@ -390,7 +416,7 @@ export default function createDispoRouter({ resolveLocation }) {
 
       res.json({
         ok: true, synced: rows.length, created, updated, removed, truncated,
-        tags, patterns, expanded, warnings,
+        tags, patterns, expanded, scannedConversations, warnings,
       });
     } catch (err) { fail(res, err); }
   });
