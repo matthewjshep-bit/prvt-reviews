@@ -14,6 +14,7 @@ colors:
   ink-faint: "#94A3B8"
   hairline: "#E2E8F0"
   hairline-soft: "#F1F5F9"
+  on-dark-secondary: "#CBD5E1"
   warn-bg: "#FFFBEB"
   warn-text: "#92400E"
   danger: "#DC2626"
@@ -172,6 +173,7 @@ A restrained slate-neutral system with two working accents.
 - **Ink** (#0F172A): headings and primary data.
 - **Ink Soft / Muted / Faint** (#334155 / #64748B / #94A3B8): body → secondary → disabled/placeholder text, in that order.
 - **Hairline** (#E2E8F0) and **Hairline Soft** (#F1F5F9): container borders and row dividers respectively.
+- **On-Dark Secondary** (#CBD5E1): secondary text sitting on Ink or the photo scrim (the hero's beds/baths subline, dark-panel captions). The Gray-Ladder Rule governs light surfaces; on a dark ground the ladder inverts, and slate-300 here carries the contrast slate-600 carries on white. Never used on a light background.
 - **Amber family** (bg #FFFBEB, text #92400E): warnings and "waiting on someone" states. **Red** (#DC2626): destructive and overdue.
 
 ### Named Rules
