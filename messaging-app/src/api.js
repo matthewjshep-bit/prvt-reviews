@@ -143,6 +143,11 @@ export const listOfferPhotos = (offerId) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(offerId)}/photos?${locq()}`).then(j).then((r) => r.photos);
 export const uploadOfferPhoto = (offerId, { full, thumb, width, height }) =>
   post(`/api/offers/${encodeURIComponent(offerId)}/photos`, { full, thumb, width, height }).then((r) => r.photo);
+// Pull a remote image through the broker (the browser can't fetch it directly
+// — CORS blocks every host worth dragging from). Returns a data URI that goes
+// through the same downscale + upload path as a picked file.
+export const fetchOfferPhotoFromUrl = (offerId, url) =>
+  post(`/api/offers/${encodeURIComponent(offerId)}/photos/from-url`, { url }).then((r) => r.dataUrl);
 export const reorderOfferPhotos = (offerId, ids) =>
   post(`/api/offers/${encodeURIComponent(offerId)}/photos/reorder`, { ids }).then((r) => r.photos);
 // The console's own <img src>. The investor-facing photo URL needs a link

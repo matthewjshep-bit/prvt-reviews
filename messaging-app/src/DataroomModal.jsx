@@ -18,7 +18,8 @@ import {
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
-  createDataroom, createDataroomInvite, deleteOfferPhoto, getDataroom, getDataroomPortfolio,
+  createDataroom, createDataroomInvite, deleteOfferPhoto, fetchOfferPhotoFromUrl, getDataroom,
+  getDataroomPortfolio,
   listDatarooms, listOfferPhotos, offerPhotoUrl, reissueDataroomInvite, reorderOfferPhotos,
   revokeDataroom, revokeDataroomInvite, rotateDataroomShareLink, searchContacts,
   sendDataroomInvite, updateDataroom, uploadOfferPhoto,
@@ -159,6 +160,8 @@ function FreshLink({ item, onSend, onDismiss, busy }) {
 function PhotosPane({ offerId, busy, setBusy, onError }) {
   const [photos, setPhotos] = useState(null);
   const [uploading, setUploading] = useState(null); // {done, total}
+  const [dragging, setDragging] = useState(false);
+  const [photoUrl, setPhotoUrl] = useState("");
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -197,6 +200,55 @@ function PhotosPane({ offerId, busy, setBusy, onError }) {
     setUploading(null);
     setBusy(false);
     if (failures.length) onError(`${failures.length} photo(s) failed — ${failures[0]}`);
+  }
+
+  // Images dragged in from another browser tab, or pasted as links. A
+  // cross-origin drag hands over a URL rather than the file, and the browser
+  // can't fetch that URL itself (CORS), so the broker pulls the bytes and we
+  // resize them through the very same path a picked file takes.
+  async function addUrls(urls) {
+    const list = [...new Set(urls.map((u) => u.trim()).filter(Boolean))].slice(0, 40);
+    if (!list.length) return;
+    setBusy(true);
+    onError("");
+    setUploading({ done: 0, total: list.length });
+    const failures = [];
+    for (const [i, url] of list.entries()) {
+      try {
+        const dataUrl = await fetchOfferPhotoFromUrl(offerId, url);
+        const blob = await (await fetch(dataUrl)).blob();
+        await uploadOfferPhoto(offerId, await propertyPhotoVariants(blob));
+      } catch (e) {
+        failures.push(e.message);
+      }
+      setUploading({ done: i + 1, total: list.length });
+    }
+    try { setPhotos(await listOfferPhotos(offerId)); } catch { /* keep what we have */ }
+    setUploading(null);
+    setBusy(false);
+    // One bad link is the common case (an album page, a private photo), so lead
+    // with why rather than a count.
+    if (failures.length) onError(failures.length === 1 ? failures[0] : `${failures.length} links failed — ${failures[0]}`);
+  }
+
+  // A drop can carry real files (from the desktop) or just a URL (from another
+  // tab). Prefer files; fall back to whatever URL the browser exposed.
+  function onDrop(e) {
+    e.preventDefault();
+    setDragging(false);
+    if (busy) return;
+    const dt = e.dataTransfer;
+    if (dt.files?.length) { addFiles(dt.files); return; }
+    const uriList = dt.getData("text/uri-list") || "";
+    const plain = dt.getData("text/plain") || "";
+    const fromHtml = [...(dt.getData("text/html") || "").matchAll(/<img[^>]+src=["']([^"']+)["']/gi)].map((m) => m[1]);
+    const urls = [
+      ...uriList.split(/\r?\n/).filter((l) => l && !l.startsWith("#")),
+      ...fromHtml,
+      ...(plain.startsWith("http") ? [plain] : []),
+    ];
+    if (urls.length) addUrls(urls);
+    else onError("That drop didn't carry an image or a link — try dragging the photo itself.");
   }
 
   const move = (id, delta) => guard(() => {
@@ -255,15 +307,58 @@ function PhotosPane({ offerId, busy, setBusy, onError }) {
             </div>
           )}
 
-          <button type="button" disabled={busy} className={BTN_CLS} onClick={() => fileRef.current?.click()}>
-            {uploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
-            {photos.length ? "Add more photos" : "Add photos"}
-          </button>
-          <input ref={fileRef} type="file" accept="image/*" multiple className="hidden"
-            onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" disabled={busy} className={BTN_CLS} onClick={() => fileRef.current?.click()}>
+              {uploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
+              {photos.length ? "Add more photos" : "Add photos"}
+            </button>
+            <input ref={fileRef} type="file" accept="image/*" multiple className="hidden"
+              onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+            <span className="text-xs text-slate-500">or drag one in from another tab</span>
+          </div>
+
+          {/* Drop target + link box. Paste works here too: an image on the
+              clipboard arrives as a file, a copied address as text. */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); if (!busy) setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+            onPaste={(e) => {
+              if (busy) return;
+              const files = [...(e.clipboardData?.files || [])];
+              if (files.length) { e.preventDefault(); addFiles(files); return; }
+              const text = e.clipboardData?.getData("text") || "";
+              if (/^https?:\/\/\S+$/i.test(text.trim())) { e.preventDefault(); addUrls([text]); }
+            }}
+            className={`mt-2 rounded-lg border border-dashed p-2.5 transition-colors ${
+              dragging ? "border-blue-500 bg-blue-50" : "border-slate-300"
+            }`}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+                placeholder={dragging ? "Drop it anywhere in this box" : "…or paste an image link"}
+                value={photoUrl} disabled={busy}
+                onChange={(e) => setPhotoUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" || !photoUrl.trim()) return;
+                  e.preventDefault();
+                  addUrls([photoUrl]);
+                  setPhotoUrl("");
+                }}
+              />
+              <button type="button" disabled={busy || !photoUrl.trim()} className={BTN_CLS}
+                onClick={() => { addUrls([photoUrl]); setPhotoUrl(""); }}>
+                Fetch
+              </button>
+            </div>
+          </div>
+
           <p className="mt-2 text-xs text-slate-500">
             Your own photos only — listing photos from Zillow or the MLS are the photographer's copyright,
-            not yours to republish. Resized in your browser before upload.
+            not yours to republish. Resized in your browser before upload. A link has to point at the image
+            itself, not at an album page — in Google Photos, open the photo, right-click it and copy the
+            image address.
           </p>
         </>
       )}

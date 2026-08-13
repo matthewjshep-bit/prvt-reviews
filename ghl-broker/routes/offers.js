@@ -51,6 +51,7 @@ import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, gradeCompCo
 import { addressQueryVariants, zillowUrl } from "../shared/us-address.js";
 import { YEAR_BUILT_TOLERANCE } from "../shared/comp-match.js";
 import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
+import { fetchRemoteImage } from "../fetch-image.js";
 export { zillowUrl };
 import { jpegToPdf, jpegsToPdf } from "../pdf.js";
 import { mapPool } from "../map-pool.js";
@@ -340,6 +341,25 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   });
 
   // Rewrites the whole order; "make this the hero" is just moving it to index 0.
+  // Fetch a remote image so the browser can downscale it through the normal
+  // path. Deliberately does NOT store anything: it returns the bytes as a data
+  // URI and the client then posts them to /photos like any other upload, so
+  // there is exactly one storage path and one place that decides sizes.
+  // See fetch-image.js for the SSRF guards — this endpoint hands a
+  // user-supplied URL to the server's network stack.
+  router.post("/:id/photos/from-url", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const { bytes, contentType } = await fetchRemoteImage(req.body?.url);
+      res.json({
+        ok: true,
+        contentType,
+        dataUrl: `data:${contentType};base64,${bytes.toString("base64")}`,
+      });
+    } catch (err) { fail(res, err); }
+  });
+
   router.post("/:id/photos/reorder", async (req, res) => {
     try {
       const ctx = await loadOwnOffer(req, res);
