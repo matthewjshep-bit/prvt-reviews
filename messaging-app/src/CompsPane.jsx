@@ -2,8 +2,8 @@
 // property (OSM/Leaflet), pulls nearby sold comps from RealEstateAPI when a key
 // is configured in Settings, accepts comps captured from Zillow with the
 // bookmarklet, lets the user tick the ones that are truly comparable (or add
-// manual ones), and turns the selection into a suggested ARV (avg $/sqft ×
-// subject sqft, else median price) with one click to apply.
+// manual ones), and turns the selection into a suggested ARV (see
+// shared/arv.js) with one click to apply.
 //
 // Comps are scored against the subject on the criteria that actually make a
 // comp defensible — beds, baths, size, era, stories, construction, subdivision,
@@ -17,6 +17,7 @@ import "leaflet/dist/leaflet.css";
 import { ExternalLink, Loader2, MapPin, Plus, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { compareByMatch, matchLabel, matchTone, milesBetween, scoreComp } from "@shared/comp-match.js";
+import { deriveArv } from "@shared/arv.js";
 import { claimCompCaptures, geocode, getComps, setCaptureTarget, zillowUrl } from "./api.js";
 
 const INPUT_CLS =
@@ -352,71 +353,15 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
     return [...auto, ...manual];
   }, [allComps, selected, manual]);
 
-  const suggestion = useMemo(() => {
-    if (!picked.length) return null;
-    const sqft = parse(subjectSqft);
-
-    // Base ARV from the comps (three paths, unchanged math), then subject
-    // detractor/premium adjustments applied on top.
-    let base = 0;
-    let baseBasis = "";
-    let ppsf = null;
-    let graded = false;
-
-    // Graded path: ARV from renovated/updated comps only — size-adjusted to
-    // the subject (marginal sqft ≈ half the average $/sqft, the standard
-    // appraiser rule) and outlier-trimmed, then the median. Dated/distressed
-    // comps stay visible but don't drag the after-repair value down.
-    const pool = picked.filter((c) => c.price > 0 && ["renovated", "updated"].includes(condOf(c)));
-    if (sqft > 0 && pool.length >= 2) {
-      const withSqft = pool.filter((c) => c.sqft > 0);
-      const avgPpsf = withSqft.length ? withSqft.reduce((t, c) => t + c.price / c.sqft, 0) / withSqft.length : 0;
-      let kept = pool;
-      let dropped = 0;
-      if (withSqft.length >= 5) {
-        const ps = withSqft.map((c) => c.price / c.sqft).sort((a, b) => a - b);
-        const q1 = ps[Math.floor(ps.length * 0.25)];
-        const q3 = ps[Math.floor(ps.length * 0.75)];
-        const iqr = q3 - q1;
-        const inRange = (c) => {
-          if (!(c.sqft > 0)) return true;
-          const p = c.price / c.sqft;
-          return p >= q1 - 1.5 * iqr && p <= q3 + 1.5 * iqr;
-        };
-        const trimmed = pool.filter(inRange);
-        if (trimmed.length >= 2) { dropped = pool.length - trimmed.length; kept = trimmed; }
-      }
-      const sizeAdj = kept.map((c) => (c.sqft > 0 && avgPpsf > 0 ? c.price + (sqft - c.sqft) * 0.5 * avgPpsf : c.price));
-      base = Math.round(median(sizeAdj) / 1000) * 1000;
-      graded = true;
-      baseBasis = `${kept.length} renovated/updated comps, size-adjusted${dropped ? `, ${dropped} outlier dropped` : ""}`;
-    } else {
-      const withSqft = picked.filter((c) => c.sqft > 0);
-      if (sqft > 0 && withSqft.length) {
-        const rawPpsf = withSqft.reduce((t, c) => t + c.price / c.sqft, 0) / withSqft.length;
-        base = Math.round((rawPpsf * sqft) / 1000) * 1000;
-        ppsf = Math.round(rawPpsf);
-        baseBasis = `${withSqft.length} comps × ${sqft.toLocaleString()} sqft`;
-      } else {
-        base = Math.round(median(picked.map((c) => c.price)) / 1000) * 1000;
-        baseBasis = `median of ${picked.length} comps`;
-      }
-    }
-
-    // Subject adjustments (busy road, power lines, …) — % of the base ARV.
-    const applied = adjustments
-      .map((a) => ({ key: a.key, label: a.label, pct: Number(a.pct) || 0 }))
-      .filter((a) => a.pct !== 0);
-    const totalPct = applied.reduce((t, a) => t + a.pct, 0);
-    const arv = applied.length ? Math.round((base * (1 + totalPct / 100)) / 1000) * 1000 : base;
-    const adjStr = applied.map((a) => `${a.label} ${a.pct > 0 ? "+" : "−"}${Math.abs(a.pct)}%`).join(", ");
-    return {
-      arv, base, ppsf, graded, totalPct,
-      adjustments: applied,
-      basis: applied.length ? `${baseBasis}; ${adjStr}` : baseBasis,
-    };
+  const suggestion = useMemo(
+    () => deriveArv({
+      comps: picked.map((c) => ({ ...c, condition: condOf(c) })),
+      subjectSqft: parse(subjectSqft),
+      adjustments,
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picked, subjectSqft, grades, adjustments]);
+    [picked, subjectSqft, grades, adjustments]
+  );
 
   // Report state upward so drafts/offers can snapshot the comps workspace
   // (grades + the ARV basis ride along for restore and the comps PDF).
@@ -796,6 +741,23 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                     Use as ARV
                   </button>
                 </div>
+                {/* A comp far off the subject's size is the single most common
+                    way this number goes wrong, and the size adjustment can only
+                    stretch so far. Name the offenders instead of quietly
+                    folding them in. */}
+                {suggestion.oversized?.length > 0 && (
+                  <div className="mt-2 border-t border-emerald-200 pt-1.5 text-[11px] text-amber-800">
+                    Size mismatch — {suggestion.oversized.map((o) => `${o.address} is ${o.ratio}× the subject`).join(", ")}.
+                    They're adjusted toward {parse(subjectSqft).toLocaleString()} sqft, but a comp that far off is
+                    weak evidence. Prefer closer sizes where you can.
+                  </div>
+                )}
+                {!suggestion.graded && (
+                  <div className="mt-1 text-[11px] text-emerald-800">
+                    None of these comps are marked renovated/updated, so this is a resale value, not strictly an
+                    after-repair one. Set condition on the comps to sharpen it.
+                  </div>
+                )}
               </div>
             )}
           </div>
