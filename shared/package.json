@@ -9,6 +9,9 @@
     "./bindings": "./bindings.js",
     "./offer-calc": "./offer-calc.js"
   },
+  "scripts": {
+    "test": "node --test offer-calc.test.mjs"
+  },
   "dependencies": {
     "zod": "^3.24.1"
   }

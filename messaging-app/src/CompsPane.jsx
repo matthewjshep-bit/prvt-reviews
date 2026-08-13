@@ -1,15 +1,23 @@
 // CompsPane.jsx — comps map for the New Offer page. Centers on the subject
-// property (OSM/Leaflet), pulls nearby comps from RentCast when an API key is
-// configured in Settings, lets the user tick the comps that are truly
-// comparable (or add manual ones), and turns the selection into a suggested
-// ARV (avg $/sqft × subject sqft, else median price) with one click to apply.
+// property (OSM/Leaflet), pulls nearby sold comps from RealEstateAPI when a key
+// is configured in Settings, accepts comps captured from Zillow with the
+// bookmarklet, lets the user tick the ones that are truly comparable (or add
+// manual ones), and turns the selection into a suggested ARV (avg $/sqft ×
+// subject sqft, else median price) with one click to apply.
+//
+// Comps are scored against the subject on the criteria that actually make a
+// comp defensible — beds, baths, size, era, stories, construction, subdivision,
+// distance, recency (see shared/comp-match.js) — and the list is ordered best
+// match first. The score never hides a comp: the person picking them can see
+// things the data can't.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { ExternalLink, Loader2, MapPin, Plus, Sparkles, X } from "lucide-react";
+import { Download, ExternalLink, Loader2, MapPin, Plus, Sparkles, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { geocode, getComps, gradeComps, zillowUrl } from "./api.js";
+import { compareByMatch, matchLabel, matchTone, scoreComp } from "@shared/comp-match.js";
+import { clearCompInbox, geocode, getComps, getCompInbox, gradeComps, zillowUrl } from "./api.js";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -34,6 +42,30 @@ const COND_CLS = {
   "": "bg-slate-50 text-slate-400",
 };
 
+// Match-score chip. Coarse bands on purpose — this is a glanceable "is this
+// apples-to-apples?" signal, not a number to optimize.
+const MATCH_CLS = {
+  strong: "bg-emerald-100 text-emerald-800",
+  fair: "bg-amber-100 text-amber-800",
+  weak: "bg-red-100 text-red-700",
+  unknown: "bg-slate-100 text-slate-500",
+};
+
+// Tooltip listing what matched and what didn't, so the chip is auditable
+// rather than a black box.
+const matchTitle = (m) => {
+  if (!m || !m.max) return "Not enough data on this comp to score it";
+  const line = (c) => `${c.ok ? "✓" : "✗"} ${c.label}${c.detail ? ` — ${c.detail}` : ""}`;
+  const known = m.checks.filter((c) => c.ok !== null);
+  const unknown = m.checks.filter((c) => c.ok === null);
+  return [
+    `Matches ${m.score} of ${m.max} knowable criteria`,
+    "",
+    ...known.map(line),
+    ...(unknown.length ? ["", `Not knowable: ${unknown.map((c) => c.label).join(", ")}`] : []),
+  ].join("\n");
+};
+
 // Location/site detractors that discount the subject relative to the comps
 // (external obsolescence). Percent of base ARV; defaults from published
 // study ranges, editable per offer. Positive percentages work too (premiums).
@@ -54,8 +86,14 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(() => new Set(initialState?.selected || []));
   const [manual, setManual] = useState(initialState?.manual || []);
+  // Comps captured off Zillow with the bookmarklet. Held separately from
+  // `state` so that re-running "Load comps" — which replaces `state` wholesale
+  // — doesn't throw away hand-picked comps.
+  const [captured, setCaptured] = useState(initialState?.captured || []);
   const [draft, setDraft] = useState({ label: "", price: "", sqft: "" });
-  const [months, setMonths] = useState(initialState?.months || 12);
+  // Default 18 months: going back in time is the concession we prefer over
+  // widening the radius, so the default window is already generous.
+  const [months, setMonths] = useState(initialState?.months || 18);
   // User-corrected subject beds/baths — the provider's record is sometimes
   // wrong; these drive the comps filters and the rehab room counts.
   const [beds, setBeds] = useState(initialState?.beds || "");
@@ -135,13 +173,21 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       }
       if (!Number(beds) && comps.subject?.beds != null) setBeds(String(comps.subject.beds));
       if (!Number(baths) && comps.subject?.baths != null) setBaths(String(comps.subject.baths));
-      // Preselect the closest comps (max 6) — but not when the server relaxed
-      // the bed/bath match: those need a deliberate look before they count.
+      // Preselect the best-matching comps (max 6) — but not when the server
+      // relaxed the bed/bath match: those need a deliberate look before they
+      // count. Scored here against the response's own subject record rather
+      // than the memoized one, which hasn't recomputed yet.
+      const freshSubject = {
+        ...(comps.subject || {}),
+        ...(Number(beds) > 0 ? { beds: Number(beds) } : {}),
+        ...(Number(baths) > 0 ? { baths: Number(baths) } : {}),
+        ...(parse(subjectSqft) > 0 ? { sqft: parse(subjectSqft) } : {}),
+      };
       const pre = comps.bedBathRelaxed
         ? []
         : (comps.comps || [])
-            .slice()
-            .sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))
+            .map((c) => ({ ...c, match: scoreComp(freshSubject, c) }))
+            .sort(compareByMatch)
             .slice(0, 6)
             .map((c) => c.id);
       setSelected(new Set(pre));
@@ -155,6 +201,62 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       if (n.has(id)) n.delete(id); else n.add(id);
       return n;
     });
+
+  // Drop an id from the selection — used when a comp is removed outright, so a
+  // deleted comp can't linger in `selected` and skew the ARV.
+  const untick = (id) =>
+    setSelected((s) => {
+      if (!s.has(id)) return s;
+      const n = new Set(s);
+      n.delete(id);
+      return n;
+    });
+
+  /* ---- Zillow inbox ---- */
+  // Comps grabbed with the bookmarklet wait server-side until they're pulled
+  // into an offer. Polled on mount and on demand rather than live — the whole
+  // point is that capturing happens in another tab, minutes earlier.
+  const [inbox, setInbox] = useState([]);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [inboxBusy, setInboxBusy] = useState(false);
+  const [inboxPick, setInboxPick] = useState(() => new Set());
+
+  async function loadInbox({ open = false } = {}) {
+    setInboxBusy(true);
+    try {
+      const r = await getCompInbox();
+      const list = r.captures || [];
+      setInbox(list);
+      // Default to taking everything — you captured them on purpose.
+      setInboxPick(new Set(list.map((c) => c.id)));
+      if (open) setInboxOpen(true);
+    } catch (e) { setError(e.message); }
+    setInboxBusy(false);
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadInbox().catch(() => {}); }, []);
+
+  // Pull the ticked captures onto the board and clear them from the inbox, so
+  // the badge count always means "waiting to be used".
+  async function pullFromInbox() {
+    const take = inbox.filter((c) => inboxPick.has(c.id));
+    if (!take.length) return;
+    const have = new Set([...(state?.comps || []), ...captured].map((c) => String(c.id)));
+    const incoming = take
+      .map((c) => ({ ...c, id: `z-${c.zpid || c.id}`, source: "zillow" }))
+      .filter((c) => !have.has(c.id));
+    setCaptured((list) => [...list, ...incoming]);
+    // Captured comps are ticked on arrival — hand-picked beats auto-selected.
+    setSelected((s) => new Set([...s, ...incoming.map((c) => c.id)]));
+    setInboxOpen(false);
+    try {
+      await clearCompInbox(take.map((c) => c.id));
+      setInbox((list) => list.filter((c) => !inboxPick.has(c.id)));
+    } catch (e) {
+      // The comps are already on the board; a failed cleanup is cosmetic.
+      setError(`Comps added, but clearing the inbox failed: ${e.message}`);
+    }
+  }
 
   // Manual comps default to renovated — the user picked them deliberately,
   // usually from vetted research — but the dropdown can demote them.
@@ -173,14 +275,17 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   // scrapes + one AI call server-side) so requests stay fast and progress is
   // visible. Manual settings are never overwritten; partial results are kept.
   async function gradeAll() {
-    const targets = (state?.comps || []).filter((c) => grades[c.id]?.source !== "manual").slice(0, 12);
+    const targets = allComps.filter((c) => grades[c.id]?.source !== "manual").slice(0, 12);
     if (!targets.length) return;
     setGrading({ done: 0, total: targets.length });
     setError("");
     try {
       for (let i = 0; i < targets.length; i += 4) {
+        // Comps captured from Zillow already carry their listing photos and
+        // description — pass them through so the server can skip the scrape.
         const chunk = targets.slice(i, i + 4)
-          .map(({ id, address: a, price, sqft, beds: b, baths: ba, saleDate }) => ({ id, address: a, price, sqft, beds: b, baths: ba, saleDate }));
+          .map(({ id, address: a, price, sqft, beds: b, baths: ba, saleDate, photos, description }) =>
+            ({ id, address: a, price, sqft, beds: b, baths: ba, saleDate, photos, description }));
         const r = await gradeComps(address.trim(), chunk);
         setGrades((g) => {
           const next = { ...g };
@@ -197,10 +302,31 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
     setGrading(null);
   }
 
+  // The subject as the scorecard sees it: the provider's record, with the
+  // user's own corrections winning wherever they typed one.
+  const subjectFacts = useMemo(() => ({
+    ...(state?.info || {}),
+    ...(Number(beds) > 0 ? { beds: Number(beds) } : {}),
+    ...(Number(baths) > 0 ? { baths: Number(baths) } : {}),
+    ...(parse(subjectSqft) > 0 ? { sqft: parse(subjectSqft) } : {}),
+    // A comp is never scored against itself for distance/recency.
+    distance: undefined, saleDate: undefined,
+  }), [state, beds, baths, subjectSqft]);
+
+  // Every comp on the board — pulled and captured — scored and ordered best
+  // match first. Everything below reads this, never state.comps directly.
+  const allComps = useMemo(
+    () =>
+      [...(state?.comps || []), ...captured]
+        .map((c) => ({ ...c, match: scoreComp(subjectFacts, c) }))
+        .sort(compareByMatch),
+    [state, captured, subjectFacts]
+  );
+
   const picked = useMemo(() => {
-    const auto = (state?.comps || []).filter((c) => selected.has(c.id));
+    const auto = allComps.filter((c) => selected.has(c.id));
     return [...auto, ...manual];
-  }, [state, selected, manual]);
+  }, [allComps, selected, manual]);
 
   const suggestion = useMemo(() => {
     if (!picked.length) return null;
@@ -272,11 +398,19 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   // (grades + the ARV basis ride along for restore and the comps PDF).
   useEffect(() => {
     onStateChange?.({
-      result: state, selected: [...selected], manual, months, beds, baths, grades,
+      result: state,
+      selected: [...selected],
+      manual,
+      // Photo URLs and listing copy are only needed while grading, and the
+      // grade itself is what persists. Dropping them keeps a page full of
+      // captures from pushing the offer snapshot past the broker's 400KB cap
+      // — a snapshot over that is discarded WHOLE, losing comps and rehab too.
+      captured: captured.map(({ photos, description, ...c }) => c),
+      months, beds, baths, grades,
       adjustments, arvBase: suggestion?.base ?? null, arvBasis: suggestion?.basis || "",
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, selected, manual, months, beds, baths, grades, adjustments, suggestion]);
+  }, [state, selected, manual, captured, months, beds, baths, grades, adjustments, suggestion]);
 
   function addManual() {
     const price = parse(draft.price);
@@ -298,6 +432,8 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             <option value={6}>Sold ≤ 6 mo</option>
             <option value={9}>Sold ≤ 9 mo</option>
             <option value={12}>Sold ≤ 12 mo</option>
+            <option value={18}>Sold ≤ 18 mo</option>
+            <option value={24}>Sold ≤ 24 mo</option>
           </select>
           <input
             className="w-16 rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
@@ -317,12 +453,70 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             value={subjectSqft}
             onChange={(e) => setSubjectSqft(e.target.value.replace(/[^\d,]/g, ""))}
           />
+          {inbox.length > 0 && (
+            <button type="button" onClick={() => (inboxOpen ? setInboxOpen(false) : loadInbox({ open: true }))}
+              title="Comps you grabbed off Zillow with the bookmarklet"
+              className="flex items-center gap-1.5 rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-sm font-semibold text-violet-800 hover:bg-violet-100">
+              {inboxBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              Zillow inbox ({inbox.length})
+            </button>
+          )}
           <button type="button" onClick={load} disabled={loading}
             className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-blue-700">
             {loading ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />} Load comps
           </button>
         </div>
       </div>
+
+      {inboxOpen && (
+        <div className="mb-3 rounded-lg border border-violet-200 bg-violet-50/60 p-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-bold uppercase tracking-wide text-violet-800">
+              Captured from Zillow
+            </span>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setInboxPick(new Set(inbox.map((c) => c.id)))}
+                className="text-[11px] font-semibold text-violet-700 underline hover:text-violet-900">all</button>
+              <button type="button" onClick={() => setInboxPick(new Set())}
+                className="text-[11px] font-semibold text-violet-700 underline hover:text-violet-900">none</button>
+              <button type="button" onClick={() => setInboxOpen(false)}
+                className="rounded p-0.5 text-violet-400 hover:text-violet-700"><X size={14} /></button>
+            </div>
+          </div>
+          <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+            {inbox.map((c) => (
+              <label key={c.id} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-white/70">
+                <input type="checkbox" checked={inboxPick.has(c.id)}
+                  onChange={() => setInboxPick((s) => {
+                    const n = new Set(s);
+                    if (n.has(c.id)) n.delete(c.id); else n.add(c.id);
+                    return n;
+                  })} />
+                <span className="min-w-0 flex-1 truncate">{c.address}</span>
+                <span className="whitespace-nowrap text-xs text-slate-600">
+                  {[
+                    c.beds != null ? `${c.beds}/${c.baths ?? "?"}` : "",
+                    c.sqft ? `${c.sqft.toLocaleString()} sf` : "",
+                    c.yearBuilt ? `'${String(c.yearBuilt).slice(2)}` : "",
+                    c.saleDate ? c.saleDate.slice(0, 7) : c.status ? String(c.status).toLowerCase().replace(/_/g, " ") : "",
+                    c.photos?.length ? `${c.photos.length} photos` : "",
+                  ].filter(Boolean).join(" · ")}
+                </span>
+                <span className="whitespace-nowrap font-semibold tabular-nums">{fmtMoney(c.price)}</span>
+              </label>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <span className="text-[11px] text-slate-600">
+              Captured comps bring their photos, so AI grading costs no Apify credits.
+            </span>
+            <button type="button" onClick={pullFromInbox} disabled={!inboxPick.size}
+              className="rounded-lg bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-800 disabled:opacity-40">
+              Add {inboxPick.size} comp{inboxPick.size === 1 ? "" : "s"}
+            </button>
+          </div>
+        </div>
+      )}
       {state?.info && (state.info.beds != null || state.info.sqft || state.info.lastSalePrice) && (
         <div className="mb-2 text-xs text-slate-500">
           Subject record: {[
@@ -330,9 +524,11 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             state.info.baths != null ? `${state.info.baths} ba` : "",
             state.info.sqft ? `${state.info.sqft.toLocaleString()} sqft` : "",
             state.info.yearBuilt ? `built ${state.info.yearBuilt}` : "",
+            state.info.stories ? `${state.info.stories} story` : "",
+            state.info.subdivision ? state.info.subdivision : "",
             state.info.lastSalePrice ? `last sold ${fmtMoney(state.info.lastSalePrice)} (${(state.info.lastSaleDate || "").slice(0, 7)})` : "",
           ].filter(Boolean).join(" · ")}
-          {" — comps: same beds/baths/county, arms-length, ±20% sqft"}
+          {" — comps: same beds/baths/county, arms-length, ±20% sqft, ±10 yrs, within 1 mi"}
         </div>
       )}
 
@@ -344,8 +540,12 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
         </div>
       )}
 
-      {state && (
-        <div className="grid gap-4 lg:grid-cols-2">
+      {/* Captured comps stand on their own: you can build an ARV entirely from
+          Zillow grabs without ever loading the provider's comps (or having a
+          key for them), so the board renders whenever there's anything on it. */}
+      {(state || captured.length > 0) && (
+        <div className={`grid gap-4 ${state?.subject?.lat ? "lg:grid-cols-2" : ""}`}>
+          {state?.subject?.lat && (
           <div className="overflow-hidden rounded-lg border border-slate-200">
             <MapContainer
               key={`${state.subject.lat},${state.subject.lng}`}
@@ -359,30 +559,36 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                 pathOptions={{ color: "#b45309", fillColor: "#f59e0b", fillOpacity: 0.9, weight: 2 }}>
                 <Tooltip permanent direction="top" offset={[0, -10]}>Subject</Tooltip>
               </CircleMarker>
-              {(state.comps || []).map((c) => (
+              {allComps.filter((c) => c.lat && c.lng).map((c) => (
                 <CircleMarker key={c.id} center={[c.lat, c.lng]} radius={7}
                   eventHandlers={{ click: () => toggle(c.id) }}
                   pathOptions={{
-                    color: "#1d4ed8",
-                    fillColor: selected.has(c.id) ? "#3b82f6" : "#ffffff",
+                    // Captured-from-Zillow comps get the violet ring the AI
+                    // features use, so it's obvious on the map which pins you
+                    // put there yourself.
+                    color: c.source === "zillow" ? "#6d28d9" : "#1d4ed8",
+                    fillColor: selected.has(c.id) ? (c.source === "zillow" ? "#8b5cf6" : "#3b82f6") : "#ffffff",
                     fillOpacity: selected.has(c.id) ? 0.9 : 0.6,
                     weight: 2,
                   }}>
                   <Tooltip direction="top" offset={[0, -8]}>
-                    {fmtMoney(c.price)}{c.saleDate ? ` sold ${c.saleDate.slice(0, 7)}` : ""}{c.sqft ? ` · ${c.sqft.toLocaleString()} sqft` : ""} — click to {selected.has(c.id) ? "remove" : "include"}
+                    {fmtMoney(c.price)}{c.saleDate ? ` sold ${c.saleDate.slice(0, 7)}` : ""}{c.sqft ? ` · ${c.sqft.toLocaleString()} sqft` : ""}
+                    {c.match?.max ? ` · match ${matchLabel(c.match)}` : ""} — click to {selected.has(c.id) ? "remove" : "include"}
                   </Tooltip>
                 </CircleMarker>
               ))}
             </MapContainer>
           </div>
+          )}
 
           <div className="flex flex-col">
-            {!state.enabled && (
+            {state && !state.enabled && (
               <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Automatic sold comps are off — add your RealEstateAPI key in Settings. You can still add comps manually below.
+                Automatic sold comps are off — add your RealEstateAPI key in Settings. You can still capture comps
+                from Zillow or add them manually below.
               </div>
             )}
-            {state.enabled && !(state.comps || []).length && (
+            {state?.enabled && !allComps.length && (
               <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 {state.info?.sqft || state.info?.beds != null || Number(beds) > 0 || Number(baths) > 0
                   ? <>No sold comps matched {[
@@ -393,25 +599,31 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                   : <>No property record found for this address — automatic comps unavailable. Add comps manually below.</>}
               </div>
             )}
-            {state.enabled && state.widened && (state.comps || []).length > 0 && (
+            {state?.enabled && state.widened && allComps.length > 0 && (
               <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Not enough recent sales close by — the search was expanded to {state.widened}. Check each comp's
-                distance and sale date before ticking.
+                Not enough matching sales within a mile — the search was widened to <b>{state.widened}</b>. Time is
+                widened before distance, so check each comp's sale date before ticking.
               </div>
             )}
-            {state.enabled && state.bedBathRelaxed && (state.comps || []).length > 0 && (
+            {state?.enabled && state.yearRelaxed && allComps.length > 0 && (
+              <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                No sold comps were built within 10 years of the subject — showing other eras instead. The match
+                column flags which ones miss on age.
+              </div>
+            )}
+            {state?.enabled && state.bedBathRelaxed && allComps.length > 0 && (
               <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 No sold comps matched {[Number(beds) > 0 ? `${Number(beds)} bd` : "", Number(baths) > 0 ? `${Number(baths)} ba` : ""].filter(Boolean).join(" / ")} exactly —
                 showing other nearby similar-size sales instead. Tick only the ones that truly compare.
               </div>
             )}
-            {state.estimate && (
+            {state?.estimate && (
               <div className="mb-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-700">
                 AVM estimate: <b>{fmtMoney(state.estimate.price)}</b>
                 {state.estimate.low ? <> (range {fmtMoney(state.estimate.low)} – {fmtMoney(state.estimate.high)})</> : null}
               </div>
             )}
-            {state.gradeEnabled && (state.comps || []).length > 0 && (
+            {state?.gradeEnabled && allComps.length > 0 && (
               <div className="mb-2 flex items-center justify-between gap-2">
                 <button type="button" onClick={gradeAll} disabled={Boolean(grading)}
                   className="flex items-center gap-1.5 rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-100 disabled:opacity-60"
@@ -424,11 +636,21 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
               </div>
             )}
             <div className="max-h-56 flex-1 space-y-1 overflow-y-auto pr-1">
-              {(state.comps || []).map((c) => (
+              {allComps.map((c) => (
                 <div key={c.id} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50">
                   <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
                     <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
-                    <span className="min-w-0 flex-1 truncate">{c.address}</span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {c.source === "zillow" && (
+                        <span className="mr-1 rounded bg-violet-100 px-1 py-px text-[10px] font-bold text-violet-700"
+                          title="Captured from Zillow">Z</span>
+                      )}
+                      {c.address}
+                    </span>
+                    <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${MATCH_CLS[matchTone(c.match)]}`}
+                      title={matchTitle(c.match)}>
+                      {matchLabel(c.match)}
+                    </span>
                     <span className="whitespace-nowrap text-xs text-slate-500"
                       title={c.yearBuilt ? `Built ${c.yearBuilt}` : undefined}>
                       {[
@@ -452,10 +674,15 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                     <option value="">cond?</option>
                     {CONDITIONS.map((k) => <option key={k} value={k}>{COND_LABELS[k]}</option>)}
                   </select>
-                  <a href={zillowUrl(c.address)} target="_blank" rel="noreferrer" title="Open on Zillow (photos)"
+                  <a href={c.url || zillowUrl(c.address)} target="_blank" rel="noreferrer" title="Open on Zillow (photos)"
                     className="shrink-0 rounded p-1 text-slate-400 hover:bg-blue-50 hover:text-blue-700">
                     <ExternalLink size={14} />
                   </a>
+                  {c.source === "zillow" && (
+                    <button type="button" title="Remove this captured comp"
+                      onClick={() => { setCaptured((l) => l.filter((x) => x.id !== c.id)); untick(c.id); }}
+                      className="shrink-0 rounded p-0.5 text-slate-400 hover:text-red-600"><X size={13} /></button>
+                  )}
                 </div>
               ))}
               {manual.map((c) => (
@@ -581,11 +808,13 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
         </div>
       )}
 
-      {!state && !error && (
-        <p className="text-xs text-slate-400">
-          Enter the property address above, then load comps to see closed sales around the subject on a map
-          (same beds/baths/county, similar sqft) and derive the ARV. Automatic comps use RealEstateAPI.com
-          (key in Settings); manual comps always work.
+      {!state && !captured.length && !error && (
+        <p className="text-xs text-slate-500">
+          Enter the property address above, then load comps to see closed sales around the subject on a map —
+          same beds/baths/county, ±20% sqft, ±10 years, within a mile, widening the sold window before the
+          radius. Comps are ranked by how many of those criteria they actually match. Automatic comps use
+          RealEstateAPI.com (key in Settings); the Zillow bookmarklet (also in Settings) and manual entry
+          always work.
         </p>
       )}
     </div>

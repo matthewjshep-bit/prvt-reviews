@@ -49,6 +49,8 @@ import {
 } from "../shared/contract-template.js";
 import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
 import { addressQueryVariants, zillowUrl } from "../shared/us-address.js";
+import { YEAR_BUILT_TOLERANCE } from "../shared/comp-match.js";
+import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
 export { zillowUrl };
 import { jpegToPdf, jpegsToPdf } from "../pdf.js";
 import { mapPool } from "../map-pool.js";
@@ -1012,8 +1014,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
   /* ---------- comps (RealEstateAPI.com v3, key configured in Settings) ---------- */
   // TRUE closed sales: arms-length transactions within N months, same beds +
-  // baths + county, sqft within ±20% of the subject. Cached 24h per query to
-  // conserve API credits.
+  // baths + county, sqft within ±20% and year built within ±10 of the subject.
+  // Cached 24h per query to conserve API credits.
+  //
+  // Apples-to-apples beats recent: when the tight search comes up short we
+  // reach BACK IN TIME first (18 → 24 months) and only widen the radius as a
+  // last resort. A same-subdivision sale from 20 months ago is a better comp
+  // than a 5-mile-away sale from last month, and the UI names whichever
+  // relaxation actually fired so the number stays defensible.
   const compsCache = new Map();
   router.get("/comps", async (req, res) => {
     try {
@@ -1072,7 +1080,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // "not enough sales matched"; the relaxation ladder below distinguishes
       // the two.
       const noRecord = (x) => !x?.subject?.propertyInfo?.latitude && !(x?.comps || []).length;
-      const asRequested = { radiusMiles: 2, daysBack: monthsBack * 30, matchBedBath: true };
+      const asRequested = { radiusMiles: 1, daysBack: monthsBack * 30, matchBedBath: true };
       let j = null;
       let lastErr = null;
       // Phase A — resolve by address: the provider's address matcher is
@@ -1117,13 +1125,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       // Phase C — widen the search: still nothing means "fewer than 3 sales
       // matched", not "no such property" (rural areas rarely have 3 same-bed
-      // sales within 2 miles). Expand stepwise and tell the UI we did.
+      // sales within a mile). Expand stepwise and tell the UI we did.
+      //
+      // Order matters: TIME first, then distance. Going back another six
+      // months keeps the comps in the same subdivision and price stratum;
+      // going out another four miles doesn't. The radius only moves once the
+      // 24-month window has already failed.
       let widened = null;
       if (!j || noRecord(j)) {
         const ref = subjectRef || { address: addressQueryVariants(address)[0] };
+        const days = (months) => Math.max(monthsBack * 30, months * 30);
         const steps = [
-          { params: { radiusMiles: 5, daysBack: monthsBack * 30, matchBedBath: true }, label: "5 mi" },
-          { params: { radiusMiles: 5, daysBack: Math.max(monthsBack * 30, 730), matchBedBath: false }, label: "5 mi / 24 mo / any beds-baths" },
+          { params: { radiusMiles: 1, daysBack: days(18), matchBedBath: true }, label: "18 months" },
+          { params: { radiusMiles: 1, daysBack: days(24), matchBedBath: true }, label: "24 months" },
+          { params: { radiusMiles: 2, daysBack: days(24), matchBedBath: true }, label: "2 mi / 24 mo" },
+          { params: { radiusMiles: 5, daysBack: days(24), matchBedBath: true }, label: "5 mi / 24 mo" },
+          { params: { radiusMiles: 5, daysBack: days(24), matchBedBath: false }, label: "5 mi / 24 mo / any beds-baths" },
         ];
         for (const step of steps) {
           try {
@@ -1135,6 +1152,24 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!j) throw lastErr || Object.assign(new Error("comps lookup failed"), { http: 502 });
       const subjInfo = j.subject?.propertyInfo || {};
       const num = (v) => (v == null || v === "" ? null : Number(v) || null);
+      // Stories / construction / subdivision aren't in a documented, stable
+      // place in the v3 payload and vary by plan tier, so probe the plausible
+      // paths rather than assuming one. Everything downstream treats a null as
+      // "unknown" (the match scorecard skips unknown criteria), so a provider
+      // that returns none of these degrades quietly instead of scoring badly.
+      const firstOf = (...vals) => {
+        for (const v of vals) {
+          const s = v == null ? "" : String(v).trim();
+          if (s && s.toLowerCase() !== "null") return s;
+        }
+        return null;
+      };
+      const storiesOf = (o = {}) =>
+        num(o.stories ?? o.storiesCount ?? o.numberOfStories ?? o.propertyInfo?.stories);
+      const subdivisionOf = (o = {}) =>
+        firstOf(o.subdivision, o.lotInfo?.subdivision, o.address?.subdivision, o.propertyInfo?.subdivision);
+      const materialOf = (o = {}) =>
+        firstOf(o.construction, o.constructionType, o.exteriorWalls, o.propertyInfo?.construction, o.propertyInfo?.exteriorWalls);
       const data = {
         enabled: true,
         // AI condition grading needs both the Anthropic key and the Apify
@@ -1148,6 +1183,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           baths: num(subjInfo.bathrooms),
           sqft: num(subjInfo.livingSquareFeet),
           yearBuilt: num(subjInfo.yearBuilt),
+          stories: storiesOf(subjInfo),
+          subdivision: subdivisionOf({ ...j.subject, propertyInfo: subjInfo }),
+          material: materialOf(subjInfo),
           lastSalePrice: num(j.subject?.lastSalePrice),
           lastSaleDate: j.subject?.lastSaleDate || null,
         },
@@ -1167,6 +1205,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
               beds: c.bedrooms ?? null,
               baths: c.bathrooms ?? null,
               yearBuilt: num(c.yearBuilt),
+              stories: storiesOf(c),
+              subdivision: subdivisionOf(c),
+              material: materialOf(c),
               distance: c.distance != null ? Math.round(c.distance * 100) / 100 : null,
               lat: c.latitude,
               lng: c.longitude,
@@ -1197,6 +1238,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           data.comps = pool;
           data.bedBathRelaxed = true;
         }
+      }
+      // Era match: a 1962 rambler and a 2015 build are not the same product
+      // even at identical size. ±10 years, same defensive shape as the two
+      // filters above — comps with no year on record are kept, and if the
+      // filter would empty the pool we keep the pool and flag it rather than
+      // returning nothing.
+      const effYear = data.subject.yearBuilt || 0;
+      if (effYear > 0) {
+        const pool = data.comps;
+        const filtered = pool.filter((c) => !c.yearBuilt || Math.abs(c.yearBuilt - effYear) <= YEAR_BUILT_TOLERANCE);
+        if (filtered.length) data.comps = filtered;
+        else if (pool.length) data.yearRelaxed = true;
       }
       data.comps = data.comps.slice(0, 15);
       // Cache hits only — caching an empty result would pin a transient
@@ -1231,7 +1284,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const aiApiKey = String(saved?.aiApiKey || "").trim();
       const apifyToken = String(saved?.apifyToken || "").trim();
       if (!aiApiKey) return res.status(400).json({ error: "Anthropic API key required (Settings) for comp grading" });
-      if (!apifyToken) return res.status(400).json({ error: "Apify token required (Settings) for comp grading — it pulls the sold listings' photos" });
+      // Apify is only needed for comps we have to go scrape. Comps captured
+      // from Zillow already carry their photos, so grading those must not be
+      // gated behind a token the user may never have configured.
+      const needsScrape = comps.some((c) => !(Array.isArray(c.photos) && c.photos.length));
+      if (needsScrape && !apifyToken) {
+        return res.status(400).json({ error: "Apify token required (Settings) to pull sold-listing photos — or capture these comps from Zillow with the bookmarklet, which brings its own photos" });
+      }
 
       const cacheKey = (c) => String(c.address).trim().toLowerCase();
       const grades = {}; // id → {condition, confidence, note, cached}
@@ -1244,8 +1303,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         else uncached.push(c);
       }
 
-      // Pull each uncached comp's sold listing from Zillow (photos + description).
+      // Pull each uncached comp's sold listing from Zillow (photos +
+      // description) — unless the client already sent them. Comps captured
+      // with the bookmarklet arrive with their photos attached, so grading
+      // them costs one Claude call and zero Apify credits, and returns in
+      // seconds instead of ~90.
       const fetched = await mapPool(uncached, 3, async (c) => {
+        if (Array.isArray(c.photos) && c.photos.length) {
+          return { ...c, photos: c.photos.slice(0, 6), description: String(c.description || "").slice(0, 1500) };
+        }
         try {
           const z = await fetchZillowPhotos(c.address, apifyToken);
           if (!z.photos.length) throw new Error("no photos on the listing");
@@ -1278,6 +1344,160 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
 
       res.json({ ok: true, grades, failed });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- Zillow comp capture (bookmarklet) ---------- */
+  // The workflow this exists for: the operator finds his best comps by eye on
+  // Zillow, one click each drops them into a per-location inbox, and the Comps
+  // & ARV pane pulls them into an offer later. A server-side inbox is the only
+  // possible channel — the app runs in a GHL iframe on a different origin from
+  // zillow.com, so no browser storage is shared between the two tabs.
+
+  // Mint (or rotate) the capture token. Server-generated, never client-chosen.
+  // Rotating invalidates any bookmarklet built from the previous token, which
+  // is the revocation story for a credential that lives in a bookmark.
+  const brokerBase = () => publicBaseUrl.replace(/\/+$/, "");
+
+  router.post("/comps/capture-token", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const captureToken = crypto.randomBytes(24).toString("base64url");
+      await store.saveOfferSettings(locationId, { ...saved, captureToken });
+      // Return the token as well as the href: the Settings form folds it into
+      // its local state so that a later Save (built from a form loaded before
+      // the token existed) can't write the token straight back out again.
+      res.json({
+        ok: true,
+        captureToken,
+        bookmarklet: buildBookmarklet({ token: captureToken, brokerBase: brokerBase() }),
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The bookmarklet href for the current location. Built server-side so the
+  // loader URL has exactly one definition.
+  router.get("/comps/bookmarklet", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = await store.getOfferSettings(locationId);
+      const token = String(saved?.captureToken || "").trim();
+      res.json({
+        hasToken: Boolean(token),
+        bookmarklet: token ? buildBookmarklet({ token, brokerBase: brokerBase() }) : "",
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The capture script itself. Unauthenticated on purpose: it is inert code —
+  // the token only matters on the POST below — and serving it fresh on every
+  // click is what lets a Zillow page-shape change be fixed by a deploy.
+  router.get("/comps/zgrab.js", (req, res) => {
+    const token = String(req.query.t || "").trim();
+    res.type("application/javascript");
+    res.set("Cache-Control", "no-store");
+    res.send(buildZgrabScript({
+      token,
+      brokerBase: brokerBase(),
+      appOrigin: (APP_ORIGIN || publicBaseUrl).replace(/\/+$/, ""),
+    }));
+  });
+
+  // CORS for the capture POST only. The global middleware in broker.js sets
+  // headers exclusively for APP_ORIGINS and only short-circuits OPTIONS for
+  // those, so requests from zillow.com fall through to here untouched.
+  const CAPTURE_ORIGINS = ["https://www.zillow.com", "https://zillow.com"];
+  const captureCors = (req, res) => {
+    const origin = req.headers.origin;
+    if (origin && CAPTURE_ORIGINS.includes(origin)) {
+      res.header("Access-Control-Allow-Origin", origin);
+      res.header("Access-Control-Allow-Headers", "Content-Type");
+      res.header("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.header("Vary", "Origin");
+    }
+  };
+  router.options("/comps/capture", (req, res) => { captureCors(req, res); res.sendStatus(204); });
+
+  // Normalize whatever the page gave us into the comp shape the app already
+  // speaks, so captured comps flow through the map, the match scorecard, the
+  // ARV math and the comps PDF with no special-casing downstream.
+  const normalizeCapture = (raw) => {
+    const n = (v) => {
+      const x = Number(v);
+      return Number.isFinite(x) && x !== 0 ? x : null;
+    };
+    const s = (v, max = 200) => {
+      const t = String(v == null ? "" : v).trim();
+      return t ? t.slice(0, max) : null;
+    };
+    const address = s(raw?.address, 200);
+    const price = Math.round(Number(raw?.price) || 0);
+    if (!address || price <= 0) return null;
+    return {
+      zpid: s(raw?.zpid, 32),
+      address,
+      price,
+      beds: n(raw?.beds),
+      baths: n(raw?.baths),
+      sqft: Math.round(n(raw?.sqft) || 0) || 0,
+      yearBuilt: n(raw?.yearBuilt),
+      lat: n(raw?.lat),
+      lng: n(raw?.lng),
+      saleDate: /^\d{4}-\d{2}-\d{2}$/.test(String(raw?.saleDate || "")) ? String(raw.saleDate) : "",
+      status: s(raw?.status, 40),
+      stories: n(raw?.stories),
+      material: s(raw?.material, 120),
+      subdivision: s(raw?.subdivision, 120),
+      url: /^https:\/\/(www\.)?zillow\.com\//.test(String(raw?.url || "")) ? String(raw.url).slice(0, 500) : null,
+      // Photos ride along so AI condition grading costs one Claude call and no
+      // Apify credits. Capped hard — this lands in a jsonb column.
+      photos: (Array.isArray(raw?.photos) ? raw.photos : [])
+        .filter((p) => typeof p === "string" && /^https:\/\//.test(p))
+        .slice(0, 8)
+        .map((p) => p.slice(0, 500)),
+      description: s(raw?.description, 1200),
+    };
+  };
+
+  router.post("/comps/capture", async (req, res) => {
+    captureCors(req, res);
+    try {
+      // The token is the whole credential here — there is no location_id on a
+      // request coming from a Zillow tab. It is scoped to this one endpoint,
+      // appends to an inbox and nothing else, and is independently revocable.
+      const token = String(req.body?.token || "").trim();
+      if (!token) return res.status(400).json({ error: "capture token required" });
+      const locationId = await store.findLocationByCaptureToken(token);
+      if (!locationId) {
+        return res.status(403).json({ error: "capture token not recognized — regenerate the bookmarklet in Settings" });
+      }
+      const comps = (Array.isArray(req.body?.comps) ? req.body.comps : [])
+        .slice(0, 60)
+        .map(normalizeCapture)
+        .filter(Boolean);
+      if (!comps.length) return res.status(400).json({ error: "no usable comps on that page" });
+      const saved = await store.addCompCaptures(locationId, comps);
+      res.json({ ok: true, added: saved.length });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.get("/comps/inbox", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = await store.getOfferSettings(locationId);
+      res.json({
+        captures: await store.listCompCaptures(locationId),
+        hasToken: Boolean(String(saved?.captureToken || "").trim()),
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.delete("/comps/inbox", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : null;
+      res.json({ ok: true, deleted: await store.deleteCompCaptures(locationId, ids) });
     } catch (err) { fail(res, err); }
   });
 
@@ -1553,6 +1773,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         const withCondition = (c) => ({ ...c, condition: gr[c.id]?.condition || null });
         const picked = [
           ...(cs?.result?.comps || []).filter((c) => sel.has(c.id)).map(withCondition),
+          // Comps captured from Zillow are ticked the same way pulled ones are
+          // and must reach the PDF, or the analysis silently omits the comps
+          // the user hand-picked — the ones most likely to carry the ARV.
+          ...(Array.isArray(cs?.captured) ? cs.captured : []).filter((c) => sel.has(c.id)).map(withCondition),
           ...(Array.isArray(cs?.manual) ? cs.manual : []).map(withCondition),
         ];
         if (picked.length) {

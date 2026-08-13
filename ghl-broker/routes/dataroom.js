@@ -26,7 +26,7 @@ import { store } from "../store.js";
 import { effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { getContact, sendSms } from "../ghl.js";
 import {
-  DEFAULT_EXPIRY_DAYS, buildSnapshot, hashToken, newToken, normalizeSections,
+  DEFAULT_EXPIRY_DAYS, buildSnapshot, hashToken, newToken, normalizeLinks, normalizeSections,
   photoHeaders, renderNotice, renderPortfolio, renderRoom, secureHeaders,
 } from "../dataroom.js";
 
@@ -179,6 +179,7 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
         sections: req.body?.sections,
         headline: req.body?.headline,
         notes: req.body?.notes,
+        links: req.body?.links,
       });
       const room = await store.createDataroom({
         locationId,
@@ -279,12 +280,16 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
           sections: b.sections ?? room.snapshot?.sections,
           headline: b.headline ?? room.snapshot?.headline,
           notes: b.notes ?? room.snapshot?.notes,
+          // Links are the operator's, not the offer's — a refresh rebuilds
+          // everything else from the offer but must carry these across.
+          links: b.links ?? room.snapshot?.links,
         });
         room.address = offer.address || room.address;
       } else {
         if (b.sections) room.snapshot.sections = normalizeSections(b.sections);
         if (b.headline !== undefined) room.snapshot.headline = str(b.headline, 120);
         if (b.notes !== undefined) room.snapshot.notes = str(b.notes, 2000);
+        if (b.links !== undefined) room.snapshot.links = normalizeLinks(b.links);
       }
       // Hide a deal from the public list without touching its own link.
       if (b.unlisted !== undefined) room.unlisted = Boolean(b.unlisted);

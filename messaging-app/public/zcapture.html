@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>Capturing comp…</title>
+<!--
+  zcapture.html — fallback relay for the Zillow comp-capture bookmarklet.
+
+  The bookmarklet's first choice is to POST straight from the Zillow page to
+  the broker. Zillow serves a Content-Security-Policy, and if its connect-src
+  blocks our origin that fetch dies before it leaves the browser. So the
+  bookmarklet falls back to opening this page and handing the payload over in
+  the URL FRAGMENT — fragments are never sent to a server and never appear in a
+  Referer header, so the capture token doesn't leak in transit or in logs.
+
+  This page then makes the same POST from our own origin, which the broker
+  already allows, reports what happened, and closes itself.
+
+  Deliberately dependency-free and outside the React bundle: it has to work in
+  a 420px popup with no app state, no router and no build-time context.
+-->
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 24px; text-align: center;
+    font: 400 14px/1.5 "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+    background: #F8FAFC; color: #0F172A;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #0F172A; color: #F8FAFC; } }
+  .msg { font-weight: 600; font-size: 15px; }
+  .sub { margin-top: 8px; font-size: 13px; color: #64748B; }
+  .ok { color: #047857; }
+  .err { color: #DC2626; }
+</style>
+</head>
+<body>
+  <div>
+    <div class="msg" id="msg">Sending comp…</div>
+    <div class="sub" id="sub">One moment.</div>
+  </div>
+<script>
+(function () {
+  var msg = document.getElementById("msg");
+  var sub = document.getElementById("sub");
+  function show(text, detail, cls) {
+    msg.textContent = text;
+    msg.className = "msg" + (cls ? " " + cls : "");
+    sub.textContent = detail || "";
+  }
+
+  var raw = location.hash.replace(/^#/, "");
+  // Drop the payload out of the address bar immediately — it carries the
+  // capture token, and a popup URL can end up in history.
+  try { history.replaceState(null, "", location.pathname); } catch (e) {}
+
+  var payload;
+  try {
+    payload = JSON.parse(decodeURIComponent(raw));
+  } catch (e) {
+    show("Nothing to capture", "This page is opened by the Zillow bookmarklet.", "err");
+    return;
+  }
+  if (!payload || !payload.token || !payload.comps || !payload.comps.length) {
+    show("Nothing to capture", "This page is opened by the Zillow bookmarklet.", "err");
+    return;
+  }
+
+  // The broker origin is baked in at build time via VITE_API_BASE, but this
+  // file is static and never sees import.meta.env — so accept it on the
+  // payload (the bookmarklet knows it) and fall back to the production host.
+  var broker = payload.broker || "https://prvt-reviews-1.onrender.com";
+
+  fetch(broker + "/api/offers/comps/capture", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })
+    .then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; });
+    })
+    .then(function (x) {
+      if (!x.ok) {
+        show("Capture failed", x.j.error || "The broker rejected it.", "err");
+        return;
+      }
+      var n = x.j.added || payload.comps.length;
+      show("✓ " + n + " comp" + (n === 1 ? "" : "s") + " captured",
+           "Open Comps & ARV and pull them in. Closing…", "ok");
+      setTimeout(function () { window.close(); }, 1600);
+    })
+    .catch(function (e) {
+      show("Capture failed", (e && e.message) || "Network error.", "err");
+    });
+})();
+</script>
+</body>
+</html>

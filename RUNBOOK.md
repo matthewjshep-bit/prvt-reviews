@@ -110,6 +110,40 @@ switch between, rename, and delete from the batch picker (auto-named
    most recent batch (auto-creating one if none exists); pass `"batchId"` to
    target a specific batch.
 
+## Zillow comp capture (bookmarklet)
+
+For comps found by eye on Zillow rather than pulled from the comps API.
+
+1. Settings → **Zillow comp capture** → *Create the bookmarklet*. This mints a
+   per-location `captureToken` server-side and returns a `javascript:` href.
+2. **Drag** the "📍 Grab comp" button to the browser's bookmarks bar (clicking
+   it inside the app does nothing but show a hint — it only works on Zillow).
+3. On a Zillow property page it grabs that one comp; on a search-results page
+   it offers to grab every result. Captures land in a server-side inbox and
+   appear as **Zillow inbox (N)** on the Comps & ARV step.
+
+Notes for whoever maintains this:
+
+- The bookmarklet is only a **loader** — it fetches
+  `GET /api/offers/comps/zgrab.js` fresh on every click. When Zillow changes
+  its page structure, fix `ghl-broker/zgrab.js` and redeploy the broker; nobody
+  has to re-drag their bookmark.
+- The capture POST needs CORS for `zillow.com`, handled per-route in
+  `routes/offers.js` (the global middleware in `broker.js` only covers
+  `APP_ORIGIN`). If Zillow's CSP blocks the direct POST, the script falls back
+  to opening `messaging-app/public/zcapture.html`, which relays the payload
+  from our own origin. The payload travels in the URL fragment so the capture
+  token never reaches a server log or a Referer header.
+- `APP_ORIGIN` must be set on the broker for that fallback to have somewhere to
+  go — it's the origin baked into the served script.
+- **The bookmarklet can't be tested against localhost**: zillow.com is https,
+  so a request to `http://localhost:3000` is blocked as mixed content. Test
+  against the deployed broker or an https tunnel. To iterate on the extraction
+  logic alone, paste the body of the served script into devtools on a Zillow
+  page with the `fetch` call stubbed.
+- The token is scoped to appending to the comp inbox and nothing else.
+  *Regenerate* revokes it — the old bookmark 403s immediately.
+
 ## Safety rails
 
 - **SMS sends are dry-run by default.** `POST /api/offers/:id/send` returns a

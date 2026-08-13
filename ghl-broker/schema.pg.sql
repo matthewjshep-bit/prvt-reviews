@@ -140,6 +140,27 @@ create unique index if not exists outreach_listings_batch_listing_uniq
 create index if not exists outreach_agents_batch_idx on outreach_agents (location_id, batch_id, last_seen desc);
 create index if not exists outreach_listings_batch_idx2 on outreach_listings (location_id, batch_id, agent_key);
 
+-- Zillow comp inbox. The bookmarklet POSTs comps here from a Zillow tab; the
+-- Comps & ARV pane pulls them into an offer later. This table exists because
+-- the app runs in a GHL iframe on a different origin from zillow.com, so there
+-- is no localStorage or postMessage channel between the two tabs — the server
+-- is the only path between "I found a good comp" and "it's in my offer".
+--
+-- zpid is Zillow's own property id and is what dedupes a comp grabbed twice.
+-- It can be null (a search-result card without one), so uniqueness is a
+-- partial index rather than a column constraint.
+create table if not exists comp_captures (
+  id           uuid primary key,
+  location_id  text not null,
+  zpid         text,
+  address      text,
+  doc          jsonb not null,
+  created_at   timestamptz not null default now()
+);
+create index if not exists comp_captures_loc_idx on comp_captures (location_id, created_at desc);
+create unique index if not exists comp_captures_zpid_uniq
+  on comp_captures (location_id, zpid) where zpid is not null;
+
 -- Investor datarooms: a curated, investor-facing package for one deal
 -- (address, numbers, comps, scope, documents). `doc` holds the snapshot taken
 -- at build time plus the section toggles, so editing the offer afterwards

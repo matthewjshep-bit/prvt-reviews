@@ -369,6 +369,55 @@ const pgStore = {
     return rows;
   },
 
+  /* ---- Zillow comp inbox ---- */
+  // Resolve a location from a capture token. The bookmarklet has no
+  // location_id — the token IS the credential, so this is the one lookup that
+  // maps an opaque string back to a tenant. Kept to an exact match on the
+  // settings blob so a malformed token can't pattern-match its way in.
+  async findLocationByCaptureToken(token) {
+    const { rows } = await query(
+      `select location_id as "locationId" from offer_settings
+       where doc->>'captureToken' = $1 limit 1`,
+      [token]
+    );
+    return rows[0]?.locationId || null;
+  },
+  async addCompCaptures(locationId, items) {
+    const saved = [];
+    for (const item of items) {
+      const id = uuid();
+      const doc = { ...item, id, locationId, createdAt: nowIso() };
+      // Re-grabbing the same house refreshes it rather than stacking
+      // duplicates — you often revisit a comp after looking at more photos.
+      const { rows } = await query(
+        `insert into comp_captures (id, location_id, zpid, address, doc)
+         values ($1,$2,$3,$4,$5)
+         on conflict (location_id, zpid) where zpid is not null
+         do update set doc = $5, address = $4, created_at = now()
+         returning doc`,
+        [id, locationId, item.zpid || null, item.address || null, doc]
+      );
+      if (rows[0]) saved.push(rows[0].doc);
+    }
+    // Housekeeping on write: a stale comp is worse than no comp, and nobody
+    // will ever come here to clean up by hand.
+    await query(`delete from comp_captures where location_id = $1 and created_at < now() - interval '30 days'`, [locationId]);
+    return saved;
+  },
+  async listCompCaptures(locationId, { limit = 200 } = {}) {
+    const { rows } = await query(
+      `select doc from comp_captures where location_id = $1 order by created_at desc limit $2`,
+      [locationId, limit]
+    );
+    return rows.map((r) => r.doc);
+  },
+  async deleteCompCaptures(locationId, ids = null) {
+    const { rowCount } = ids?.length
+      ? await query(`delete from comp_captures where location_id = $1 and id = any($2::uuid[])`, [locationId, ids])
+      : await query(`delete from comp_captures where location_id = $1`, [locationId]);
+    return rowCount;
+  },
+
   /* ---- investor datarooms ---- */
   async createDataroom(doc) {
     const id = doc.id || uuid();
@@ -517,6 +566,7 @@ const fileStore = (() => {
       data.dataroomInvites = data.dataroomInvites || {};
       data.dataroomEvents = data.dataroomEvents || [];
       data.offerPhotos = data.offerPhotos || {};
+      data.compCaptures = data.compCaptures || {};
       adoptLegacyOutreachRows();
     }
     return data;
@@ -894,6 +944,56 @@ const fileStore = (() => {
         .filter((p) => p.locationId === locationId)
         .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit);
+    },
+
+    /* ---- Zillow comp inbox ---- */
+    async findLocationByCaptureToken(token) {
+      ensure();
+      for (const [locationId, doc] of Object.entries(data.offerSettings)) {
+        if (doc && doc.captureToken && doc.captureToken === token) return locationId;
+      }
+      return null;
+    },
+    async addCompCaptures(locationId, items) {
+      ensure();
+      const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
+      const saved = [];
+      for (const item of items) {
+        // Same dedupe rule as Postgres: a repeat grab of a known zpid updates
+        // in place instead of stacking a duplicate.
+        const existing = item.zpid
+          ? Object.values(data.compCaptures).find((c) => c.locationId === locationId && c.zpid === item.zpid)
+          : null;
+        const id = existing?.id || uuid();
+        const full = { ...item, id, locationId, createdAt: nowIso() };
+        data.compCaptures[id] = full;
+        saved.push(full);
+      }
+      for (const [id, c] of Object.entries(data.compCaptures)) {
+        if (c.locationId === locationId && Date.parse(c.createdAt || "") < cutoff) delete data.compCaptures[id];
+      }
+      persist();
+      return saved;
+    },
+    async listCompCaptures(locationId, { limit = 200 } = {}) {
+      ensure();
+      return Object.values(data.compCaptures)
+        .filter((c) => c.locationId === locationId)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .slice(0, limit);
+    },
+    async deleteCompCaptures(locationId, ids = null) {
+      ensure();
+      const drop = ids?.length ? new Set(ids) : null;
+      let n = 0;
+      for (const [id, c] of Object.entries(data.compCaptures)) {
+        if (c.locationId !== locationId) continue;
+        if (drop && !drop.has(id)) continue;
+        delete data.compCaptures[id];
+        n++;
+      }
+      persist();
+      return n;
     },
 
     /* ---- investor datarooms ---- */

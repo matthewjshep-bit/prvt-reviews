@@ -5,7 +5,16 @@
 // (document generation + persistence) and the frontend (live preview as the
 // user types). Pure functions, no I/O, no deps.
 //
-// The model is reverse engineered from lowballoffer.ai's shipped bundle
+// Three underwriting models (see UNDERWRITE_MODES), picked per offer:
+//
+//   backstack (default) — the real underwrite. Subtract every cost a flipper
+//     carries from the ARV: selling costs, their profit, repairs at face
+//     value, holding, and our assignment fee. This is the one you can defend
+//     line by line to a seller's agent.
+//   lowball  — the aggressive anchor, documented below.
+//   mao      — the classic 70% rule, minus the fee.
+//
+// The lowball model is reverse engineered from lowballoffer.ai's shipped bundle
 // (app/page-*.js, decoded 2026-07-26) — their "fix & flip" cash offer:
 //
 //   base    = ~90% of ARV  (they randomize among 90.0147/90.2987/89.661/89.479)
@@ -22,16 +31,26 @@
 //
 // All percentage settings are whole numbers (90 = 90%). Money in dollars.
 
-// How the cash number is underwritten. "lowball" is the reverse-engineered
+// How the cash number is underwritten.
+// "backstack" is the real underwrite (default): every cost a flipper actually
+// carries, stacked backwards off the ARV. "lowball" is the reverse-engineered
 // lowballoffer.ai model below; "mao" is the classic flipper 70% rule:
-// maoPctOfArv% of ARV minus repairs, no fee, no jitter.
+// maoPctOfArv% of ARV minus repairs, minus the fee, no jitter.
 export const UNDERWRITE_MODES = [
+  { key: "backstack", label: "Back-stack from ARV", hint: "ARV − selling costs − flip profit − repairs − holding − your fee" },
   { key: "lowball", label: "90% ARV − 2× rehab", hint: "aggressive spread + fee" },
   { key: "mao", label: "70% ARV − rehab", hint: "classic 70% rule, minus your fee/spread" },
 ];
 
 export const DEFAULT_OFFER_SETTINGS = {
-  underwriteMode: "lowball", // "lowball" (below) | "mao" (maoPctOfArv·ARV − repairs)
+  underwriteMode: "backstack", // "backstack" | "lowball" | "mao" — see UNDERWRITE_MODES
+  // Back-stack model. The full cost stack a flipper carries between buying the
+  // house and banking the profit, subtracted from the ARV:
+  //   MAO = ARV − selling costs − flip profit − repairs − holding − assignment fee
+  sellingCostPct: 7,         // 3% listing + 3% buyer agent + ~1% closing (his 6–7%)
+  flipProfitPct: 13,         // the flipper's margin on ARV (12–15% band, mid)
+  holdMonths: 5,             // months carried from purchase to resale
+  holdMonthlyCost: 1200,     // taxes + insurance + utilities + loan carry, per month
   maoPctOfArv: 70,           // % of ARV for the "mao" mode
   cashPctOfArv: 90,          // base % of ARV before deductions
   repairBuffer: 30000,       // small-repair floor: repairs < buffer → repairs + buffer
@@ -68,6 +87,11 @@ export const DEFAULT_OFFER_SETTINGS = {
   compsApiKey: "",           // enables the comps map + MLS photos (realestateapi.com API key)
   aiApiKey: "",              // enables the AI rehab photo scan (Anthropic API key)
   apifyToken: "",            // Zillow listing photos via Apify (zillow-detail-scraper)
+  // Credential for the Zillow comp-capture bookmarklet. Minted server-side by
+  // POST /api/offers/comps/capture-token; scoped to appending to the comp
+  // inbox and nothing else, because it lives in a browser bookmark. Rotating
+  // it kills every bookmarklet built from the old value.
+  captureToken: "",
   rentcastApiKey: "",        // enables the Agent Outreach page (rentcast.io API key)
   outreachZips: "",          // default pull market: comma-separated zips (wins over city/state)
   outreachCity: "",
@@ -165,7 +189,58 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
   };
 
   let cash;
-  if (s.underwriteMode === "mao") {
+  if (s.underwriteMode === "backstack") {
+    // The real underwrite: stack every cost backwards off the ARV.
+    //   ARV − selling costs − flip profit − repairs − holding − assignment fee
+    // Repairs enter at FACE VALUE here — repairsAdjustment()'s 2× multiplier is
+    // a negotiation anchor for the lowball model, and applying it on top of an
+    // explicit profit margin would double-count the same cushion.
+    // No jitter either: this is a number you have to be able to defend.
+    const sellingCostPct = Math.max(0, num(s.sellingCostPct, 7));
+    const flipProfitPct = Math.max(0, num(s.flipProfitPct, 13));
+    const holdMonths = Math.max(0, num(s.holdMonths, 5));
+    const holdMonthlyCost = Math.max(0, num(s.holdMonthlyCost, 1200));
+    const wholesaleFee = num(s.wholesaleFee);
+
+    const sellingCosts = (sellingCostPct / 100) * arv;
+    const flipProfit = (flipProfitPct / 100) * arv;
+    const holding = holdMonths * holdMonthlyCost;
+    const cashRaw = arv - sellingCosts - flipProfit - repairs - holding - wholesaleFee;
+
+    cash = {
+      key: "cash",
+      label: "Cash",
+      mode: "backstack",
+      amount: cashRaw > 0 ? Math.round(cashRaw) : 0,
+      // The share of ARV left after the two percentage costs — the "~80% line"
+      // this model lands on before repairs, holding and the fee come out.
+      base: Math.round(arv),
+      pctOfArv: Math.round((100 - sellingCostPct - flipProfitPct) * 100) / 100,
+      pctUsed: Math.round((100 - sellingCostPct - flipProfitPct) * 100) / 100,
+      repairs,
+      repairAdjustment: repairs,
+      sellingCostPct, flipProfitPct, holdMonths, holdMonthlyCost,
+      sellingCosts: Math.round(sellingCosts),
+      flipProfit: Math.round(flipProfit),
+      holding: Math.round(holding),
+      wholesaleFee,
+      // A negative stack means repairs + profit exceed the ARV. The amount
+      // clamps to 0 like the other modes, but that reads as a bug unless the
+      // UI can say why — so flag it rather than silently showing $0.
+      underwater: cashRaw <= 0,
+      // Generic rows so the card (and any future doc) can render the stack
+      // without knowing the model.
+      breakdown: [
+        { key: "arv", label: "ARV", amount: Math.round(arv), sign: "+" },
+        { key: "selling", label: `Selling costs (${sellingCostPct}%)`, amount: Math.round(sellingCosts), sign: "−" },
+        { key: "profit", label: `Flip profit (${flipProfitPct}%)`, amount: Math.round(flipProfit), sign: "−" },
+        { key: "repairs", label: "Repairs", amount: Math.round(repairs), sign: "−" },
+        { key: "holding", label: `Holding (${holdMonths} × ${fmtMoney(holdMonthlyCost)})`, amount: Math.round(holding), sign: "−" },
+        { key: "fee", label: "Assignment fee", amount: Math.round(wholesaleFee), sign: "−" },
+      ],
+      pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : null,
+    };
+  } else if (s.underwriteMode === "mao") {
     // Classic 70% rule: maoPctOfArv% of ARV minus repairs at face value,
     // minus the fee/spread. No jitter — a clean underwriting number.
     const base = (num(s.maoPctOfArv, 70) / 100) * arv;

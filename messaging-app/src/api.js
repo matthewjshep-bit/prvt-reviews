@@ -157,6 +157,19 @@ export const scanRehab = (address, { beds, baths, sqft, yearBuilt, images } = {}
   post(`/api/offers/scan-rehab`, { address, beds, baths, sqft, yearBuilt, images });
 export const gradeComps = (address, comps) =>
   post(`/api/offers/comps/grade`, { address, comps });
+
+/* ---------- Zillow comp capture (bookmarklet inbox) ---------- */
+// Comps grabbed off Zillow land in a server-side inbox — the app runs in a GHL
+// iframe on a different origin from zillow.com, so the server is the only
+// channel between the two tabs.
+export const getCompInbox = () =>
+  fetch(`${API_BASE}/api/offers/comps/inbox?${locq()}`).then(j);
+export const clearCompInbox = (ids) =>
+  post(`/api/offers/comps/inbox`, { ids: ids || null }, "DELETE");
+export const getCompBookmarklet = () =>
+  fetch(`${API_BASE}/api/offers/comps/bookmarklet?${locq()}`).then(j);
+export const regenerateCompToken = () =>
+  post(`/api/offers/comps/capture-token`, {});
 export const listOffers = ({ contactId = "", limit = 50 } = {}) => {
   const p = new URLSearchParams(locq());
   p.set("limit", limit);

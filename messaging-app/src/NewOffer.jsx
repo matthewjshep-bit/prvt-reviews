@@ -3,7 +3,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, ExternalLink, FileText, Loader2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
-import { calculateOffers, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
+import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
   addContactNote, createOffer, getContactDetail, getContactNotes, ghlContactUrl, previewDocument, saveDraft, saveSettings, searchContacts, suggestAddresses, zillowUrl,
 } from "./api.js";
@@ -233,9 +233,9 @@ export function StepBadge({ n }) {
 
 /* ---------------- the cash offer card ---------------- */
 
-function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, setPriceOverride, feeOverride, setFeeOverride, fmtTyped }) {
+function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, setPriceOverride, feeOverride, setFeeOverride, uwOverrides, setUw, settings, fmtTyped }) {
   const modeToggle = (
-    <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 text-xs font-semibold">
+    <div className="inline-flex flex-wrap rounded-lg border border-slate-300 bg-white p-0.5 text-xs font-semibold">
       {UNDERWRITE_MODES.map((m) => (
         <button key={m.key} type="button" onClick={() => setUnderwriteMode(m.key)} title={m.hint}
           className={`rounded-md px-3 py-1.5 ${underwriteMode === m.key ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
@@ -255,32 +255,71 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
   const { cash } = calc.offers;
   const Row = ({ label, value }) => (
     <div className="flex justify-between gap-4 text-sm">
-      <span className="text-slate-500">{label}</span>
+      <span className="text-slate-600">{label}</span>
       <span className="font-medium tabular-nums">{value}</span>
     </div>
+  );
+  // The editable fee row is shared by every mode — it's the one deduction the
+  // user reaches for on almost every deal.
+  const feeRow = (
+    <div className="flex items-center justify-between gap-4 text-sm">
+      <span className="text-slate-600">{cash.mode === "backstack" ? "Assignment fee" : "Fee / spread"}</span>
+      <span className="flex items-center gap-1 font-medium tabular-nums">
+        − $
+        <input
+          className="w-20 rounded-lg border border-amber-300 bg-white px-1.5 py-0.5 text-right text-sm focus:border-blue-500 focus:outline-none"
+          inputMode="numeric"
+          placeholder={fmtTyped(String(cash.wholesaleFee))}
+          value={feeOverride}
+          onChange={(e) => setFeeOverride(fmtTyped(e.target.value))}
+        />
+      </span>
+    </div>
+  );
+  // A percent/number input that shows the saved setting as its placeholder, so
+  // an empty field visibly means "use the default" rather than "zero".
+  // Deliberately a function returning JSX, NOT a component: a component
+  // declared inside a render is a new type every keystroke, so React would
+  // remount the input and the field would lose focus after each character.
+  const uwInput = (k, width = "w-12") => (
+    <input
+      key={k}
+      className={`${width} rounded border border-amber-300 bg-white px-1 py-0.5 text-right text-xs tabular-nums focus:border-blue-500 focus:outline-none`}
+      inputMode="decimal"
+      title={`Per-offer override — blank uses the saved default (${settings?.[k] ?? DEFAULT_OFFER_SETTINGS[k] ?? ""})`}
+      placeholder={String(settings?.[k] ?? DEFAULT_OFFER_SETTINGS[k] ?? "")}
+      value={uwOverrides?.[k] ?? ""}
+      onChange={setUw(k)}
+    />
   );
   return (
     <div className="rounded-xl border border-amber-400 bg-amber-50 p-5">
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-500"><StepBadge n={5} /> All-cash offer</div>
+        <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-600"><StepBadge n={5} /> All-cash offer</div>
         {modeToggle}
       </div>
+      {cash.underwater && (
+        <div className="mb-3 mt-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+          The stack is underwater — repairs, profit and costs exceed the ARV. There's no offer to make here at this
+          repair number.
+        </div>
+      )}
       <div className="sm:flex sm:items-center sm:justify-between sm:gap-8">
         <div>
           <div className="mt-1 text-4xl font-black tracking-tight">{fmtMoney(cash.amount)}</div>
           {cash.overridden ? (
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-slate-600">
               manually set — system: {fmtMoney(cash.systemAmount)}{" "}
-              <button type="button" onClick={() => setPriceOverride("")} className="font-semibold underline hover:text-slate-700">
+              <button type="button" onClick={() => setPriceOverride("")} className="font-semibold underline hover:text-slate-800">
                 use calculated
               </button>
             </div>
           ) : (
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-slate-600">
               {cash.pctOfAsking != null ? `≈ ${cash.pctOfAsking}% of asking · ` : ""}as-is
             </div>
           )}
-          <label className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+          <label className="mt-3 flex items-center gap-2 text-xs text-slate-600">
             Offer amount on letter $
             <input
               className="w-32 rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-right text-sm font-semibold tabular-nums focus:border-blue-500 focus:outline-none"
@@ -290,22 +329,40 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
             />
           </label>
         </div>
-        <div className="mt-4 w-full max-w-xs space-y-1 border-t border-amber-200 pt-3 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
-          <Row label={`~${cash.pctOfArv}% of ARV`} value={fmtMoney(cash.base)} />
-          <Row label={cash.mode === "mao" ? "Repairs" : "Repair adjustment"} value={`− ${fmtMoney(cash.repairAdjustment)}`} />
-          <div className="flex items-center justify-between gap-4 text-sm">
-            <span className="text-slate-500">Fee / spread</span>
-            <span className="flex items-center gap-1 font-medium tabular-nums">
-              − $
-              <input
-                className="w-20 rounded-lg border border-amber-300 bg-white px-1.5 py-0.5 text-right text-sm focus:border-blue-500 focus:outline-none"
-                inputMode="numeric"
-                placeholder={fmtTyped(String(cash.wholesaleFee))}
-                value={feeOverride}
-                onChange={(e) => setFeeOverride(fmtTyped(e.target.value))}
-              />
-            </span>
-          </div>
+        <div className="mt-4 w-full max-w-sm space-y-1 border-t border-amber-200 pt-3 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
+          {cash.breakdown ? (
+            <>
+              {/* The back-stack: every cost between the ARV and the offer, in
+                  the order they come out. The percentages and the carry are
+                  editable inline because they move deal to deal. */}
+              <Row label="ARV" value={fmtMoney(cash.base)} />
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <span className="flex items-center gap-1 text-slate-600">Selling costs {uwInput("sellingCostPct")}%</span>
+                <span className="font-medium tabular-nums">− {fmtMoney(cash.sellingCosts)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <span className="flex items-center gap-1 text-slate-600">Flip profit {uwInput("flipProfitPct")}%</span>
+                <span className="font-medium tabular-nums">− {fmtMoney(cash.flipProfit)}</span>
+              </div>
+              <Row label="Repairs" value={`− ${fmtMoney(cash.repairs)}`} />
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <span className="flex items-center gap-1 text-slate-600">
+                  Holding {uwInput("holdMonths", "w-9")}mo × ${uwInput("holdMonthlyCost", "w-14")}
+                </span>
+                <span className="font-medium tabular-nums">− {fmtMoney(cash.holding)}</span>
+              </div>
+              {feeRow}
+              <div className="!mt-2 border-t border-amber-200 pt-2 text-[11px] text-slate-600">
+                lands at ≈{cash.pctOfArv}% of ARV before repairs, holding and fee
+              </div>
+            </>
+          ) : (
+            <>
+              <Row label={`~${cash.pctOfArv}% of ARV`} value={fmtMoney(cash.base)} />
+              <Row label={cash.mode === "mao" ? "Repairs" : "Repair adjustment"} value={`− ${fmtMoney(cash.repairAdjustment)}`} />
+              {feeRow}
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -435,8 +492,18 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   };
   const [contactNotes, setContactNotes] = useState([]); // recent GHL notes on the selected contact
   const [underwriteMode, setUnderwriteMode] = useState(
-    snap?.underwriteMode || fromOffer?.calc?.settings?.underwriteMode || settings?.underwriteMode || "lowball"
+    snap?.underwriteMode ||
+    fromOffer?.calc?.settings?.underwriteMode ||
+    settings?.underwriteMode ||
+    DEFAULT_OFFER_SETTINGS.underwriteMode
   );
+  // Per-offer back-stack overrides ("" → fall through to the saved setting).
+  // Profit expectations and carry vary deal to deal — a rural flip carried
+  // through winter isn't the same underwrite as a 60-day suburban cosmetic.
+  const BLANK_UW = { sellingCostPct: "", flipProfitPct: "", holdMonths: "", holdMonthlyCost: "" };
+  const [uwOverrides, setUwOverrides] = useState({ ...BLANK_UW, ...(snap?.uwOverrides || {}) });
+  const setUw = (k) => (e) =>
+    setUwOverrides((s) => ({ ...s, [k]: e.target.value.replace(/[^\d.]/g, "") }));
   const [subjectSqft, setSubjectSqft] = useState(snap?.subjectSqft || ""); // shared: comps $/sqft + rehab per-sqft items
   const [subjectInfo, setSubjectInfo] = useState(snap?.subjectInfo || null); // beds/baths from the comps subject record
   const [scope, setScope] = useState(snap?.scope || fromOffer?.scope || []); // applied rehab line items
@@ -532,6 +599,9 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     if (String(feeOverride).trim() !== "") {
       s.wholesaleFee = Number(String(feeOverride).replace(/[^\d]/g, "")) || 0;
     }
+    for (const [k, v] of Object.entries(uwOverrides)) {
+      if (String(v).trim() !== "") s[k] = Number(v) || 0;
+    }
     if (offerExpires) s.offerExpires = offerExpires;
     // The letter prints exactly these rows (after Purchase Price) — an empty
     // list is honored, so deleted rows stay deleted.
@@ -573,7 +643,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         draftId,
         // Full form snapshot so History → Edit restores comps + rehab intact.
         snapshot: {
-          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, letterTerms, offerExpires,
+          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, uwOverrides, letterTerms, offerExpires,
           rehab: rehabStateRef.current,
           comps: compsStateRef.current,
         },
@@ -589,7 +659,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     setError(""); setSavingDraft(true);
     try {
       const r = await saveDraft(draftId, {
-        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, letterTerms, offerExpires,
+        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, uwOverrides, letterTerms, offerExpires,
         rehab: rehabStateRef.current,
         comps: compsStateRef.current,
         cashPreview: calc?.offers?.cash?.amount ?? null,
@@ -832,7 +902,8 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
 
       <OfferCards calc={calc} underwriteMode={underwriteMode} setUnderwriteMode={setUnderwriteMode}
         priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
-        feeOverride={feeOverride} setFeeOverride={setFeeOverride} fmtTyped={fmtTyped} />
+        feeOverride={feeOverride} setFeeOverride={setFeeOverride}
+        uwOverrides={uwOverrides} setUw={setUw} settings={settings} fmtTyped={fmtTyped} />
 
       <div className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="mb-1 flex flex-wrap items-center justify-between gap-2">

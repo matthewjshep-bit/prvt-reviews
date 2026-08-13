@@ -311,6 +311,55 @@ ok("serves a document behind a live token", v.status === 200 && (await v.text())
 v = await fetch(`${link}/file/contract`, { redirect: "manual" });
 ok("undeclared document kind refused", v.status === 404, v.status);
 
+console.log("\n== operator: external links for investors ==");
+r = await jget(`${B}/api/datarooms/${room.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    location_id: LOC,
+    links: [
+      { label: "3D walkthrough", url: "https://my.matterport.com/show/?m=abc123" },
+      { label: "", url: "https://www.kingcounty.gov/parcel/9876" },
+      // Everything below must be dropped before it can reach an href.
+      { label: "xss", url: "javascript:alert(document.cookie)" },
+      { label: "xss mixed", url: "JaVaScRiPt:alert(1)" },
+      { label: "data uri", url: "data:text/html,<script>alert(1)</script>" },
+      { label: "local file", url: "file:///etc/passwd" },
+      { label: "nonsense", url: "not a url at all" },
+      { label: "dupe", url: "https://my.matterport.com/show/?m=abc123" },
+    ],
+  }),
+});
+let saved = r.body?.dataroom?.snapshot?.links || [];
+ok("keeps only the http(s) links", saved.length === 2, JSON.stringify(saved.map((l) => l.url)));
+ok("drops javascript: urls", !saved.some((l) => /^javascript:/i.test(l.url)));
+ok("drops data: and file: urls", !saved.some((l) => /^(data|file):/i.test(l.url)));
+ok("dedupes the same url twice", saved.filter((l) => l.url.includes("matterport")).length === 1);
+ok("falls back to the host when unlabelled", saved.some((l) => l.label === "kingcounty.gov"));
+
+v = await fetch(link, { redirect: "manual" });
+html = await v.text();
+ok("links render for the investor", html.includes("3D walkthrough") && html.includes("my.matterport.com"));
+ok("links sit in the documents card", html.includes("Documents &amp; links"));
+ok("no javascript: href reaches the page", !/href="javascript:/i.test(html));
+ok("no inline script reaches the page", !/<script/i.test(html));
+
+// The whole point of storing links on the room rather than the offer.
+r = await jget(`${B}/api/datarooms/${room.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, refresh: true }),
+});
+ok("survive a refresh from the offer", (r.body?.dataroom?.snapshot?.links || []).length === 2,
+  JSON.stringify(r.body?.dataroom?.snapshot?.links || []));
+
+r = await jget(`${B}/api/datarooms/${room.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, links: [] }),
+});
+ok("can be cleared", (r.body?.dataroom?.snapshot?.links || []).length === 0);
+v = await fetch(link, { redirect: "manual" });
+html = await v.text();
+ok("cleared links leave no empty card", !html.includes("Documents &amp; links"));
+
 console.log("\n== operator: revoke one invite ==");
 r = await jget(`${B}/api/datarooms/${room.id}/invites/${inviteId}/revoke`, {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location_id: LOC }),

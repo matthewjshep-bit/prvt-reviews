@@ -8,7 +8,7 @@ import {
   CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
-import { saveSettings } from "./api.js";
+import { getCompBookmarklet, regenerateCompToken, saveSettings } from "./api.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
 
@@ -122,6 +122,29 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
     if (settings) setForm(effectiveSettings(settings));
   }, [settings]);
 
+  // Zillow capture bookmarklet. The href is built server-side (one definition
+  // of the loader URL) and fetched rather than derived from the settings blob.
+  const [bookmarklet, setBookmarklet] = useState("");
+  const [bmBusy, setBmBusy] = useState(false);
+  const [bmError, setBmError] = useState("");
+  const [bmHint, setBmHint] = useState(false);
+  useEffect(() => {
+    if (mode !== "offers") return;
+    getCompBookmarklet().then((r) => setBookmarklet(r.bookmarklet || "")).catch(() => {});
+  }, [mode]);
+  async function makeBookmarklet() {
+    setBmBusy(true); setBmError("");
+    try {
+      const r = await regenerateCompToken();
+      setBookmarklet(r.bookmarklet || "");
+      // Fold the new token into the form so a Save built from a pre-token load
+      // can't write the old (empty) value straight back over it.
+      setForm((f) => ({ ...f, captureToken: r.captureToken }));
+      setBmHint(false);
+    } catch (e) { setBmError(e.message); }
+    setBmBusy(false);
+  }
+
   const set = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, [k]: v })); };
   const setCo = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, company: { ...f.company, [k]: v } })); };
 
@@ -154,22 +177,39 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
     <div className="max-w-2xl space-y-5">
       {mode === "offers" && (<>
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-bold">Cash offer</h2>
+        <h2 className="mb-3 text-sm font-bold">Underwriting — back-stack from ARV</h2>
         <p className="mb-3 text-xs text-slate-500">
-          offer = %ARV − repair adjustment − fee. Repairs under the buffer cost repairs+buffer;
-          normal repairs are multiplied; the portion above the heavy threshold uses the heavy multiplier.
+          The default model, and the one that survives scrutiny: every cost between the ARV and your
+          offer, stacked backwards. <b>MAO = ARV − selling costs − flip profit − repairs − holding − assignment
+          fee.</b> Each figure is overridable per offer from the New Offer page.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <Num label="Selling costs" suffix="% of ARV" value={form.sellingCostPct} onChange={set("sellingCostPct")} />
+          <Num label="Flipper profit" suffix="% of ARV" value={form.flipProfitPct} onChange={set("flipProfitPct")} />
+          <Num label="Holding period" suffix="months" value={form.holdMonths} onChange={set("holdMonths")} />
+          <Num label="Holding cost" suffix="$ / month" money value={form.holdMonthlyCost} onChange={set("holdMonthlyCost")} />
+          <Num label="Assignment fee / spread" suffix="$" money value={form.wholesaleFee} onChange={set("wholesaleFee")} />
+          <Num label="Classic 70% rule" suffix="% of ARV" value={form.maoPctOfArv} onChange={set("maoPctOfArv")} />
+        </div>
+        <p className="mt-3 text-xs text-slate-500">
+          Selling costs default to 7% — 3% listing + 3% buyer agent + ~1% closing. Holding covers taxes,
+          insurance, utilities and loan carry. "Classic 70% rule" only applies to the 70%-ARV mode.
+        </p>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Lowball anchoring model</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          The aggressive alternative mode: offer = %ARV − repair adjustment − fee. Repairs under the buffer
+          cost repairs+buffer; normal repairs are multiplied; the portion above the heavy threshold uses the
+          heavy multiplier. Not used by the back-stack model.
         </p>
         <div className="grid grid-cols-2 gap-3">
           <Num label="Percent of ARV" suffix="%" value={form.cashPctOfArv} onChange={set("cashPctOfArv")} />
-          <Num label="Assignment fee / spread" suffix="$" money value={form.wholesaleFee} onChange={set("wholesaleFee")} />
           <Num label="Small-repair buffer" suffix="$" money value={form.repairBuffer} onChange={set("repairBuffer")} />
           <Num label="Repair multiplier" suffix="×" value={form.repairBaseMult} onChange={set("repairBaseMult")} />
           <Num label="Heavy-repair threshold" suffix="% of ARV" value={form.repairHeavyPctOfArv} onChange={set("repairHeavyPctOfArv")} />
           <Num label="Heavy-repair multiplier" suffix="×" value={form.repairHeavyMult} onChange={set("repairHeavyMult")} />
-          <Num label="Offer valid for" suffix="days" value={form.validityDays} onChange={set("validityDays")} />
-          <Num label="Earnest money" suffix="$" money value={form.earnestMoney} onChange={set("earnestMoney")} />
-          <Num label="Seller's agent commission" suffix="%" value={form.sellerAgentPct} onChange={set("sellerAgentPct")} />
-          <Num label="Buyer's agent commission" suffix="%" value={form.buyerAgentPct} onChange={set("buyerAgentPct")} />
         </div>
         <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
           <input type="checkbox" checked={Boolean(form.precisionJitter)}
@@ -179,12 +219,64 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Letter &amp; seller net</h2>
+        <div className="grid grid-cols-2 gap-3">
+          <Num label="Offer valid for" suffix="days" value={form.validityDays} onChange={set("validityDays")} />
+          <Num label="Earnest money" suffix="$" money value={form.earnestMoney} onChange={set("earnestMoney")} />
+          <Num label="Seller's agent commission" suffix="%" value={form.sellerAgentPct} onChange={set("sellerAgentPct")} />
+          <Num label="Buyer's agent commission" suffix="%" value={form.buyerAgentPct} onChange={set("buyerAgentPct")} />
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Comps map (RealEstateAPI.com)</h2>
         <p className="mb-3 text-xs text-slate-500">
           Powers the sold-comps map on the New Offer page (closed sales, same beds/baths/county, similar
           sqft). Sign up at realestateapi.com for a trial key. Leave blank to use manual comps only.
         </p>
         <Txt label="RealEstateAPI key" value={form.compsApiKey || ""} onChange={set("compsApiKey")} placeholder="APIKEY-..." />
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Zillow comp capture</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          For the comps you find by eye. Drag the button below to your bookmarks bar, then on any Zillow page
+          click it: on a property page it grabs that one comp, on a search-results page it offers to grab every
+          result. They land in the <b>Zillow inbox</b> on the Comps &amp; ARV step, with photos, year built,
+          stories, construction and subdivision attached — the facts the match score needs and the comps API
+          often doesn't have. Because the photos come along, AI condition grading costs no Apify credits.
+        </p>
+        {bmError && <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{bmError}</div>}
+        {bookmarklet ? (
+          <div className="flex flex-wrap items-center gap-3">
+            {/* eslint-disable-next-line jsx-a11y/anchor-is-valid */}
+            <a href={bookmarklet}
+              onClick={(e) => { e.preventDefault(); setBmHint(true); }}
+              title="Drag me to your bookmarks bar"
+              className="cursor-grab rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+              📍 Grab comp
+            </a>
+            <button type="button" onClick={makeBookmarklet} disabled={bmBusy}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+              {bmBusy ? <Loader2 size={13} className="inline animate-spin" /> : null} Regenerate
+            </button>
+            {bmHint && (
+              <span className="text-xs text-amber-700">
+                Don't click it here — <b>drag</b> it onto your bookmarks bar, then click it while you're on Zillow.
+              </span>
+            )}
+          </div>
+        ) : (
+          <button type="button" onClick={makeBookmarklet} disabled={bmBusy}
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
+            {bmBusy ? <Loader2 size={14} className="animate-spin" /> : null} Create the bookmarklet
+          </button>
+        )}
+        <p className="mt-3 text-xs text-slate-500">
+          The bookmarklet carries a capture key that can only add comps to your inbox — nothing else, and it
+          can't read anything back out. <b>Regenerate</b> revokes it: the old bookmark stops working and you
+          drag the new one over.
+        </p>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">

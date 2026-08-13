@@ -54,6 +54,47 @@ export function normalizeSections(input) {
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const clean = (v, max = 200) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
+export const MAX_LINKS = 12;
+
+// Operator-curated external links shown in the investor package — a Matterport
+// tour, a Drive folder of inspection reports, a county parcel page.
+//
+// These become href attributes on a page we serve to people outside the
+// account, so the scheme allowlist is the whole security story: `javascript:`
+// and `data:` URLs are script-execution vectors dressed as links, and the
+// page's CSP can't stop a navigation. Parse with URL() and accept nothing but
+// http/https — no regex, no "starts with http" check that `https:evil` would
+// slip past.
+export function normalizeLinks(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const raw of input.slice(0, MAX_LINKS * 2)) {
+    const href = clean(raw?.url, 600);
+    if (!href) continue;
+    let parsed;
+    try {
+      parsed = new URL(href);
+    } catch {
+      continue; // not a URL at all
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
+    const url = parsed.toString();
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push({
+      id: clean(raw?.id, 40) || `lnk-${out.length + 1}-${url.length}`,
+      // An unlabelled link still needs something clickable; the host is the
+      // most honest fallback ("matterport.com" tells you more than "Link 3").
+      label: clean(raw?.label, 80) || parsed.hostname.replace(/^www\./, ""),
+      url,
+      host: parsed.hostname.replace(/^www\./, ""),
+    });
+    if (out.length >= MAX_LINKS) break;
+  }
+  return out;
+}
+
 // Comps the operator actually selected, plus any added by hand — the same
 // selection the Comparable Sales Analysis PDF prints.
 function pickedComps(snapshot) {
@@ -76,6 +117,10 @@ function pickedComps(snapshot) {
   });
   return [
     ...(cs.result?.comps || []).filter((c) => sel.has(c.id)).map(withCondition),
+    // Comps captured from Zillow are ticked like pulled ones and belong in the
+    // investor package too — leaving them out would show a different comp set
+    // than the ARV was actually built from.
+    ...(Array.isArray(cs.captured) ? cs.captured : []).filter((c) => sel.has(c.id)).map(withCondition),
     ...(Array.isArray(cs.manual) ? cs.manual : []).map(withCondition),
   ].filter((c) => c.price > 0).slice(0, 24);
 }
@@ -83,7 +128,10 @@ function pickedComps(snapshot) {
 // Build the frozen investor package from an offer. Taken once at creation so
 // later edits to the offer never change what an investor already opened;
 // the operator refreshes deliberately via PUT /api/datarooms/:id.
-export function buildSnapshot({ offer, settings = {}, sections, headline = "", notes = "" }) {
+// `links` is operator-authored, not derived from the offer — like headline and
+// notes, it must be passed back in on a refresh or rebuilding from the offer
+// would silently drop it.
+export function buildSnapshot({ offer, settings = {}, sections, headline = "", notes = "", links = [] }) {
   const inputs = offer?.calc?.inputs || {};
   const deal = offer?.deal || null;
   const snap = offer?.snapshot || null;
@@ -105,6 +153,7 @@ export function buildSnapshot({ offer, settings = {}, sections, headline = "", n
     sections: normalizeSections(sections),
     headline: clean(headline, 120),
     notes: clean(notes, 2000),
+    links: normalizeLinks(links),
     company: {
       name: clean(company.name, 80),
       tagline: clean(company.tagline, 120),
@@ -476,17 +525,27 @@ function scopeSection(snap) {
   </div>`;
 }
 
+// Generated PDFs and operator-added links share one card: from an investor's
+// side they're the same thing — material to open — and splitting them into two
+// stacks would just make them hunt twice.
+//
+// The link href is escaped like any other attribute, and normalizeLinks has
+// already guaranteed the scheme is http/https. `rel="noopener noreferrer"`
+// plus the page-wide `Referrer-Policy: no-referrer` means clicking out never
+// hands the destination the tokenized room URL.
 function documentsSection(snap, token) {
   const docs = snap.documents || [];
-  if (!docs.length) return "";
+  const links = Array.isArray(snap.links) ? snap.links : [];
+  if (!docs.length && !links.length) return "";
+  const row = (label, kind, href) => `<div class="doc">
+      <div><div style="font-weight:600;font-size:13px">${esc(label)}</div>
+        <div class="muted" style="font-size:12px">${esc(kind)}</div></div>
+      <a class="btn ghost" href="${esc(href)}" target="_blank" rel="noopener noreferrer">Open</a>
+    </div>`;
   return `<div class="card">
-    <h2>Documents</h2>
-    ${docs.map((d) => `<div class="doc">
-      <div><div style="font-weight:600;font-size:13px">${esc(d.label)}</div>
-        <div class="muted" style="font-size:12px">PDF</div></div>
-      <a class="btn ghost" href="/d/${encodeURIComponent(token)}/file/${encodeURIComponent(d.key)}"
-        target="_blank" rel="noopener noreferrer">Open</a>
-    </div>`).join("")}
+    <h2>Documents${links.length ? " &amp; links" : ""}</h2>
+    ${docs.map((d) => row(d.label, "PDF", `/d/${encodeURIComponent(token)}/file/${encodeURIComponent(d.key)}`)).join("")}
+    ${links.map((l) => row(l.label, l.host || "Link", l.url)).join("")}
   </div>`;
 }
 

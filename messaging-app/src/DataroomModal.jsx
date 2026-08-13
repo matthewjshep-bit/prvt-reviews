@@ -13,7 +13,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ArrowLeft, Check, Copy, Eye, ImagePlus, Loader2, Lock, RefreshCw, Send, ShieldOff,
+  ArrowLeft, Check, Copy, Eye, ImagePlus, Loader2, Lock, Plus, RefreshCw, Send, ShieldOff,
   Star, Trash2, X,
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
@@ -369,6 +369,30 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
     });
   }
 
+  /* ---- external links shown to investors ---- */
+  // A tour, a Drive folder of inspection reports, a county parcel page. Stored
+  // on the room (not the offer), so "Refresh from the offer" leaves them alone.
+  const links = Array.isArray(room?.snapshot?.links) ? room.snapshot.links : [];
+  const [linkDraft, setLinkDraft] = useState({ label: "", url: "" });
+
+  async function addLink() {
+    const url = linkDraft.url.trim();
+    if (!url) return;
+    // Prepend https:// when the operator pastes a bare host — the server only
+    // accepts http/https and would otherwise reject "matterport.com/foo".
+    const href = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url) ? url : `https://${url}`;
+    try {
+      const u = new URL(href);
+      if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("bad scheme");
+    } catch {
+      setError("That doesn't look like a web address — links must start with http:// or https://");
+      return;
+    }
+    await saveText({ links: [...links, { label: linkDraft.label.trim(), url: href }] });
+    setLinkDraft({ label: "", url: "" });
+  }
+  const removeLink = (id) => saveText({ links: links.filter((l) => l.id !== id) });
+
   async function invite(contact) {
     await run(async () => {
       const r = await createDataroomInvite(room.id, {
@@ -704,6 +728,42 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
                     onBlur={(e) => e.target.value !== (room.snapshot?.notes || "") && saveText({ notes: e.target.value })} />
                 </div>
               </div>
+              <div className="mt-3">
+                <span className={LABEL_CLS}>Links for investors</span>
+                <p className="mb-2 text-xs text-slate-500">
+                  Anything that lives elsewhere — a 3D tour, a Drive folder of inspection reports, the county
+                  parcel page. They show up next to the PDFs in the investor's Documents card.
+                </p>
+                {links.length > 0 && (
+                  <div className="mb-2 space-y-1">
+                    {links.map((l) => (
+                      <div key={l.id} className="flex items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm">
+                        <span className="min-w-0 flex-1 truncate font-medium">{l.label}</span>
+                        <a href={l.url} target="_blank" rel="noreferrer"
+                          className="min-w-0 max-w-[45%] truncate text-xs text-blue-700 hover:underline" title={l.url}>
+                          {l.host || l.url}
+                        </a>
+                        <button type="button" disabled={busy} onClick={() => removeLink(l.id)}
+                          className="shrink-0 rounded p-0.5 text-slate-400 hover:text-red-600" title="Remove this link">
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <input className={`${INPUT_CLS} w-40 flex-none`} placeholder="Label" maxLength={80}
+                    value={linkDraft.label} onChange={(e) => setLinkDraft((d) => ({ ...d, label: e.target.value }))} />
+                  <input className={`${INPUT_CLS} min-w-0 flex-1`} placeholder="https://…" maxLength={600}
+                    value={linkDraft.url} onChange={(e) => setLinkDraft((d) => ({ ...d, url: e.target.value }))}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addLink(); } }} />
+                  <button type="button" onClick={addLink} disabled={busy || !linkDraft.url.trim() || links.length >= 12}
+                    className={BTN_CLS} title={links.length >= 12 ? "12 links is the limit" : "Add this link"}>
+                    <Plus size={12} /> Add
+                  </button>
+                </div>
+              </div>
+
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button type="button" disabled={busy} className={BTN_CLS}
                   onClick={() => run(async () => { await updateDataroom(room.id, { refresh: true }); await reload(); })}
