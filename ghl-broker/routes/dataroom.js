@@ -32,8 +32,8 @@ import { store } from "../store.js";
 import { effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { getContact, sendSms } from "../ghl.js";
 import {
-  DEFAULT_EXPIRY_DAYS, buildSnapshot, dealCard, feedHeaders, hashToken, newToken,
-  normalizeLinks, normalizePublicSections, normalizeSections, photoHeaders,
+  DEFAULT_EXPIRY_DAYS, brandFrom, buildSnapshot, dealCard, feedHeaders, hashToken,
+  newToken, normalizeLinks, normalizePublicSections, normalizeSections, photoHeaders,
   renderNotice, renderPortfolio, renderRoom, secureHeaders, teaserSections,
 } from "../dataroom.js";
 
@@ -802,6 +802,9 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
         teaser: true,
         publicPath: `/d/deal/${encodeURIComponent(room.id)}`,
         photos: mask.photos && room.offerId ? await store.listOfferPhotos(room.offerId) : [],
+        // Live settings, not the frozen snapshot: a rebrand reaches every
+        // page at once without rebuilding rooms.
+        brand: brandFrom(await companyFor(room.locationId, [room])),
       }));
     } catch (err) {
       console.error("dataroom teaser failed:", err.message);
@@ -873,6 +876,7 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
         photos: room.snapshot?.sections?.photos === false || !room.offerId
           ? [] : await store.listOfferPhotos(room.offerId),
         backLink: await portfolioLinkFor(room),
+        brand: brandFrom(await companyFor(room.locationId, [room])),
       }));
     } catch (err) {
       console.error("dataroom view failed:", err.message);

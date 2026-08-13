@@ -394,6 +394,28 @@ ok("teaser shows the buy-side numbers", thtml.includes("$327,000"));
 ok("teaser is noindex", (tv.headers.get("x-robots-tag") || "").includes("noindex"));
 ok("teaser carries no watermark", !thtml.includes("CONFIDENTIAL"));
 ok("teaser sells the full package instead of assuming it", thtml.includes("Get the full package"));
+ok("teaser wears the brand header", thtml.includes('class="bmark"') && thtml.includes("Prvt Capital"));
+const pfh = await (await fetch(portfolioLink, { redirect: "manual" })).text();
+ok("portfolio wears the brand header too", pfh.includes('class="bmark"'));
+
+// Header nav from settings: first link is the wordmark's home, the rest render
+// as nav, cta gets the button — and only http(s) URLs survive.
+await store.saveOfferSettings(LOC, { company: {
+  name: "Prvt Capital", wordmark: "Prvt·Capital", tagline: "Test Cap",
+  brandLinks: [
+    { label: "Home", url: "https://example.com/" },
+    { label: "Investors", url: "https://example.com/investors" },
+    { label: "Join the list", url: "https://example.com/#join", cta: true },
+    { label: "Evil", url: "javascript:alert(1)" },
+  ],
+} });
+thtml = await (await fetch(TEASER, { redirect: "manual" })).text();
+ok("header nav renders from settings", thtml.includes('class="bnav"') && thtml.includes(">Investors</a>"));
+ok("the wordmark links home", thtml.includes('class="bhome" href="https://example.com/"'));
+ok("the cta link gets the button", thtml.includes('class="bcta"') && thtml.includes("Join the list"));
+ok("a javascript: url never renders", !thtml.includes("javascript:"));
+ok("accent middle-dot renders in the wordmark", thtml.includes("Prvt<span"));
+await store.saveOfferSettings(LOC, {});
 ok("teaser hides comps by default", !thtml.includes("Comparable sales"));
 ok("teaser hides the scope by default", !thtml.includes("Rehab scope of work"));
 ok("teaser hides documents", !thtml.includes(">Documents"));
@@ -500,6 +522,7 @@ ok("no-store header set", (v.headers.get("cache-control") || "").includes("no-st
 ok("framing denied", v.headers.get("x-frame-options") === "DENY");
 ok("sets no cookie", !v.headers.get("set-cookie"));
 ok("shows the investor price", html.includes("$327,000"));
+ok("wears the brand header", html.includes('class="bmark"'));
 ok("hides our contract price by default", !html.includes("$312,000") && !html.includes("$15,000"));
 ok("shows comps", html.includes("7402 168th Ave E") && html.includes("7101 170th Ave E"));
 ok("excludes unselected comps", !html.includes("not selected"));

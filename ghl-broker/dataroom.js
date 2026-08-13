@@ -380,9 +380,79 @@ tr:last-child td{border-bottom:0}
 
 @media(max-width:520px){.wrap{padding:14px 12px 56px}.card{padding:16px}
   .hero .scrim{padding:48px 16px 15px}}
+
+/* ---- brand header ----
+   The operator's wordmark across the top of every investor-facing page, in the
+   style of their marketing site: letterspaced uppercase mark, accent-colored
+   middle dots, small-caps tagline. Colors arrive per-location (settings →
+   company.brandPrimary/brandAccent), so they ride inline on the elements
+   rather than living in this static sheet. */
+.bbar{background:#fff;border-bottom:1px solid #E2E8F0;position:relative;z-index:1}
+.bwrap{max-width:760px;margin:0 auto;padding:14px 16px 12px;
+  display:flex;align-items:center;justify-content:space-between;gap:16px}
+.bmark{font-size:18px;font-weight:700;letter-spacing:.17em;line-height:1.1;text-transform:uppercase}
+a.bhome{text-decoration:none}
+.bsub{font-size:10px;font-weight:600;letter-spacing:.17em;text-transform:uppercase;color:#64748B;margin-top:4px}
+.bnav{display:flex;align-items:center;gap:18px;flex-wrap:wrap;justify-content:flex-end}
+.bnav a{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  color:#334155;text-decoration:none}
+.bnav a.bcta{color:#fff;padding:9px 14px;border-radius:8px}
+/* Texted links open on phones: the plain nav links yield, the CTA stays. */
+@media(max-width:640px){.bnav a:not(.bcta){display:none}}
 `;
 
-function page({ title, css = "", body, watermark = "" }) {
+// Header branding from a location's company settings. `wordmark` may carry
+// middle dots ("Shep·Flips") — each one renders in the accent color, the way
+// the operator's own site sets its wordmark. Colors are validated as hex so a
+// settings value can style the header but never break out of the attribute,
+// and nav links must be http(s) so a stored value can't smuggle javascript:.
+const HEX_RE = /^#[0-9a-fA-F]{3,8}$/;
+const httpUrl = (v) => {
+  const s = String(v || "").trim();
+  return /^https?:\/\//i.test(s) ? s.slice(0, 300) : "";
+};
+
+export function brandFrom(company = {}) {
+  const wordmark = clean(company.wordmark || company.name, 60);
+  if (!wordmark) return null;
+  const links = (Array.isArray(company.brandLinks) ? company.brandLinks : [])
+    .map((l) => ({ label: clean(l?.label, 40), url: httpUrl(l?.url), cta: Boolean(l?.cta) }))
+    .filter((l) => l.label && l.url)
+    .slice(0, 6);
+  return {
+    wordmark,
+    tagline: clean(company.tagline, 80),
+    primary: HEX_RE.test(String(company.brandPrimary || "")) ? company.brandPrimary : "#0F172A",
+    accent: HEX_RE.test(String(company.brandAccent || "")) ? company.brandAccent : "#2563EB",
+    links,
+  };
+}
+
+function brandHeader(brand) {
+  if (!brand?.wordmark) return "";
+  const mark = esc(brand.wordmark)
+    .split("·")
+    .join(`<span style="color:${brand.accent}">·</span>`);
+  const home = brand.links?.[0]?.url || "";
+  const lockup = `<div>
+      <div class="bmark" style="color:${brand.primary}">${mark}</div>
+      ${brand.tagline ? `<div class="bsub">${esc(brand.tagline)}</div>` : ""}
+    </div>`;
+  const nav = brand.links?.length
+    ? `<nav class="bnav">${brand.links
+        .slice(1)
+        .map((l) => l.cta
+          ? `<a class="bcta" style="background:${brand.primary}" href="${esc(l.url)}">${esc(l.label)}</a>`
+          : `<a href="${esc(l.url)}">${esc(l.label)}</a>`)
+        .join("")}</nav>`
+    : "";
+  return `<header class="bbar"><div class="bwrap">
+    ${home ? `<a class="bhome" href="${esc(home)}">${lockup}</a>` : lockup}
+    ${nav}
+  </div></header>`;
+}
+
+function page({ title, css = "", body, watermark = "", brand = null }) {
   const tiles = watermark
     ? `<div class="wm" aria-hidden="true">${Array.from({ length: 24 }, () => `<span>${esc(watermark)}</span>`).join("")}</div>`
     : "";
@@ -394,7 +464,7 @@ function page({ title, css = "", body, watermark = "" }) {
 <meta name="referrer" content="no-referrer">
 <title>${esc(title)}</title>
 <style>${BASE_CSS}${css}</style>
-</head><body>${tiles}<div class="wrap">${body}</div></body></html>`;
+</head><body>${brandHeader(brand)}${tiles}<div class="wrap">${body}</div></body></html>`;
 }
 
 // Standalone notice — bad link, expired, revoked, locked out. Deliberately
@@ -545,6 +615,7 @@ export function renderPortfolio({ rooms = [], company = {} }) {
       </div>` : ""}
       <p class="foot">Figures are estimates for underwriting, not an appraisal or a guarantee of value —
         verify independently during your inspection period.</p>`,
+    brand: brandFrom(company),
     watermark: company.name || "",
   });
 }
@@ -677,7 +748,7 @@ function photosSection(photos, base) {
 // hands in a snapshot whose sections are already masked (teaserSections),
 // photo URLs resolve through the tokenless publicPath, and the closing card
 // sells the full package instead of assuming the reader already holds it.
-export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", photos = [], teaser = false, publicPath = "" }) {
+export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", photos = [], teaser = false, publicPath = "", brand = null }) {
   const s = snap.sections || DEFAULT_SECTIONS;
   const base = teaser ? publicPath : `/d/${encodeURIComponent(token)}`;
   const n = snap.numbers || {};
@@ -804,6 +875,9 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
   return page({
     title: `${p.address || "Investment opportunity"} — ${teaser ? "off-market deal" : "investor package"}`,
     body,
+    // Live-resolved brand from the route when it has one; the snapshot's own
+    // company block as the fallback, so a page never renders nameless.
+    brand: brand || brandFrom(company),
     // A personal link is marked confidential to its recipient. The shared link
     // is meant to circulate, so it carries the company's mark instead. The
     // public teaser is deliberately unmarked — nothing on it is confidential.
