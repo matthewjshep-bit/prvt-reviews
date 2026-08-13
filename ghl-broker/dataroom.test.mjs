@@ -13,6 +13,15 @@ import path from "node:path";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "dataroom-test-"));
 process.env.DATAROOM_SECRET = "test-secret-abc";
 process.env.CARD_SENDS_ENABLED = "false";
+// Must match LOC below, and must be set before routes/dataroom.js is imported —
+// the allowlist is read once at module load. A second location is created later
+// WITHOUT being listed here, to prove other tenants stay unpublished.
+process.env.DATAROOM_FEED_LOCATIONS = "loc-test-1";
+// Memo off. With it warm, "unlist a deal and check it disappears" would fail
+// for a minute and read like a real bug. The browser-facing max-age is a
+// separate number and stays on, so the cacheability assertion still means
+// something.
+process.env.DATAROOM_FEED_TTL_MS = "0";
 
 const { default: express } = await import("express");
 const { store } = await import("./store.js");
@@ -28,7 +37,7 @@ const resolveLocation = (req) => {
 const app = express();
 app.use(express.json({ limit: "5mb" }));
 app.use("/api/datarooms", createDataroomRouter({ resolveLocation, publicBaseUrl: "http://127.0.0.1:4999" }));
-app.use("/d", createDataroomPublicRouter());
+app.use("/d", createDataroomPublicRouter({ publicBaseUrl: "http://127.0.0.1:4999" }));
 const server = app.listen(4999);
 await store.init();
 
@@ -256,6 +265,210 @@ await jget(`${B}/api/datarooms/${room.id}/revoke`, {
   method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ location_id: LOC, revoked: false }),
 });
+
+console.log("\n== portfolio: the public json feed ==");
+// The board as JSON, so an external marketing site can render it in its own
+// brand instead of iframing ours. Keyed on location_id and gated by
+// DATAROOM_FEED_LOCATIONS (set at the top of this file), not by a share token.
+//
+// The memo cache is deliberately not tested: it's a pure performance detail
+// with no behavioural contract, and this suite runs with it switched off.
+const FEED = `${B}/d/deals.json?location_id=${LOC}`;
+
+let fv = await fetch(FEED, { redirect: "manual" });
+let fraw = await fv.text();
+let feed = JSON.parse(fraw);
+ok("feed serves the location's board", fv.status === 200 && feed.deals.length === 2, `${fv.status} ${feed?.deals?.length}`);
+// If /deals.json is ever registered after /:token it gets captured as a token
+// and answered with the HTML "this link isn't available" notice instead.
+ok("feed is json, not the html notice",
+  (fv.headers.get("content-type") || "").includes("application/json") && !fraw.includes("isn&#39;t available"),
+  fv.headers.get("content-type"));
+ok("feed is open to any origin", fv.headers.get("access-control-allow-origin") === "*",
+  fv.headers.get("access-control-allow-origin"));
+ok("feed is cacheable by the browser",
+  /max-age=[1-9]/.test(fv.headers.get("cache-control") || "") && !(fv.headers.get("cache-control") || "").includes("no-store"),
+  fv.headers.get("cache-control"));
+
+const sumner = feed.deals.find((d) => (d.address || "").includes("Sumner"));
+const vashon = feed.deals.find((d) => (d.address || "").includes("Vashon"));
+ok("both deals are present", Boolean(sumner && vashon));
+// The feed is world-readable, so its links must be the tokenless teaser pages
+// — a share token in this JSON would hand the full package to every visitor.
+ok("each card links to its public teaser, never a token",
+  sumner.url !== vashon.url && sumner.url === `${B}/d/deal/${room.id}` && /\/d\/deal\/[A-Za-z0-9_-]+$/.test(vashon.url),
+  `${sumner?.url} ${vashon?.url}`);
+ok("links are absolute, so they resolve off-site", sumner.url.startsWith(B), sumner.url);
+ok("hero photo streams through the teaser path, not a token",
+  (sumner.photo?.url || "") === `${B}/d/deal/${room.id}/photo/${photoA2}/thumb`,
+  sumner.photo?.url);
+ok("photo carries the original's dimensions", sumner.photo?.width === 1600 && sumner.photo?.height === 1067);
+// The one derived figure, pinned so the HTML board and the marketing site can
+// never disagree about it.
+ok("spread is computed server-side", sumner.spread === 520000 - 327000 - 62000, sumner.spread);
+ok("money is raw integers, not formatted strings",
+  sumner.price === 327000 && typeof sumner.price === "number", sumner.price);
+ok("carries the property basics",
+  sumner.beds === 4 && sumner.baths === 2.5 && sumner.sqft === 1840 && sumner.yearBuilt === 1996);
+ok("a deal with no subject info still lists", vashon.beds === null && vashon.price === 270000,
+  `${vashon.beds} ${vashon.price}`);
+ok("brands from the deals when settings are blank", feed.company.name === "Prvt Capital", feed.company.name);
+
+// The one that matters most here. The snapshot carries plenty this must never
+// publish, so the feed is an explicit projection and never a spread of it.
+ok("feed leaks nothing private",
+  !fraw.includes("Seller motivated")
+  && !/conditionSummary|"comps"|"scope"|tokenHash|contractPrice|assignmentFee/.test(fraw),
+  fraw.slice(0, 160));
+ok("feed carries no share tokens at all",
+  !fraw.includes(dealShare.split("/d/")[1]) && !fraw.includes(portfolioLink.split("/d/")[1]));
+
+// Reading the board must not look like an investor opening a deal — otherwise
+// every homepage visitor and every crawler buries the access log.
+r = await jget(`${B}/api/datarooms/portfolio?location_id=${LOC}`);
+const viewsBefore = r.body.views;
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+const eventsBefore = (r.body.events || []).length;
+await fetch(FEED); await fetch(FEED); await fetch(FEED);
+r = await jget(`${B}/api/datarooms/portfolio?location_id=${LOC}`);
+ok("the feed counts no views", r.body.views === viewsBefore, `${viewsBefore} -> ${r.body.views}`);
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+ok("the feed writes no access-log events", (r.body.events || []).length === eventsBefore,
+  `${eventsBefore} -> ${(r.body.events || []).length}`);
+
+// The operator's existing switches keep working, unchanged.
+await jget(`${B}/api/datarooms/${room2.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, unlisted: true }),
+});
+feed = await (await fetch(FEED)).json();
+ok("unlisting a deal drops it from the feed",
+  feed.deals.length === 1 && feed.deals[0].address.includes("Sumner"), feed.deals.length);
+await jget(`${B}/api/datarooms/${room2.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, unlisted: false }),
+});
+
+// Revoking the portfolio room is the publish switch: the site degrades to its
+// link-out rather than showing a stale board.
+const portfolioRoom = (await store.listDatarooms(LOC, { limit: 500 })).find((d) => d.kind === "portfolio");
+await jget(`${B}/api/datarooms/${portfolioRoom.id}/revoke`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, revoked: true }),
+});
+fv = await fetch(FEED, { redirect: "manual" });
+ok("revoking the portfolio unpublishes the feed", fv.status === 404, fv.status);
+ok("and refuses in json, not html", (await fv.json())?.error === "not found");
+await jget(`${B}/api/datarooms/${portfolioRoom.id}/revoke`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, revoked: false }),
+});
+ok("restoring it republishes the feed", (await fetch(FEED, { redirect: "manual" })).status === 200);
+
+// Multi-tenancy: this broker serves many locations, and the feed is keyed on a
+// location id rather than a 256-bit token. Publication has to be opt-in or
+// every other tenant's board would be readable by anyone who learns their id.
+const otherLoc = "loc-test-2";
+await store.createDataroom({
+  locationId: otherLoc, offerId: null, address: null, status: "active", kind: "portfolio", snapshot: null,
+});
+fv = await fetch(`${B}/d/deals.json?location_id=${otherLoc}`, { redirect: "manual" });
+ok("another tenant's board stays unpublished without opting in", fv.status === 404, fv.status);
+
+fv = await fetch(`${B}/d/deals.json`, { redirect: "manual" });
+ok("missing location_id is a 400", fv.status === 400, fv.status);
+ok("errors are json too", (fv.headers.get("content-type") || "").includes("application/json"));
+ok("errors are not cached", (fv.headers.get("cache-control") || "").includes("no-store"),
+  fv.headers.get("cache-control"));
+for (const bad of ["short", "../../etc/passwd", "A".repeat(500), "%00"]) {
+  const bv = await fetch(`${B}/d/deals.json?location_id=${encodeURIComponent(bad)}`, { redirect: "manual" });
+  ok(`garbage location_id "${bad.slice(0, 16)}" is refused, not a 500`, bv.status === 404, bv.status);
+}
+
+console.log("\n== public teaser: the tokenless deal page ==");
+const TEASER = `${B}/d/deal/${room.id}`;
+let tv = await fetch(TEASER, { redirect: "manual" });
+let thtml = await tv.text();
+ok("teaser renders without any token", tv.status === 200 && thtml.includes("Sumner"), tv.status);
+ok("teaser shows the buy-side numbers", thtml.includes("$327,000"));
+ok("teaser is noindex", (tv.headers.get("x-robots-tag") || "").includes("noindex"));
+ok("teaser carries no watermark", !thtml.includes("CONFIDENTIAL"));
+ok("teaser sells the full package instead of assuming it", thtml.includes("Get the full package"));
+ok("teaser hides comps by default", !thtml.includes("Comparable sales"));
+ok("teaser hides the scope by default", !thtml.includes("Rehab scope of work"));
+ok("teaser hides documents", !thtml.includes(">Documents"));
+ok("teaser hides deal notes", !thtml.includes("Seller motivated"));
+ok("teaser hides the contract price and fee", !thtml.includes("$312,000") && !thtml.includes("Assignment fee"));
+
+tv = await fetch(`${TEASER}/photo/${photoA2}/thumb`, { redirect: "manual" });
+ok("teaser serves its own photos", tv.status === 200, tv.status);
+tv = await fetch(`${TEASER}/photo/${photoB1}/thumb`, { redirect: "manual" });
+ok("another deal's photo is refused on the teaser path", tv.status === 404, tv.status);
+
+// The operator's toggles: opening a section up, and closing one down.
+await jget(`${B}/api/datarooms/${room.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, publicSections: { comps: true, photos: false } }),
+});
+thtml = await (await fetch(TEASER, { redirect: "manual" })).text();
+ok("toggling comps public reveals them", thtml.includes("Comparable sales"));
+tv = await fetch(`${TEASER}/photo/${photoA2}/thumb`, { redirect: "manual" });
+ok("toggling photos off kills the public photo route", tv.status === 404, tv.status);
+feed = await (await fetch(FEED)).json();
+ok("and the feed stops advertising the photo",
+  feed.deals.find((d) => d.address.includes("Sumner"))?.photo === null);
+
+// The locked keys stay locked no matter what the operator sends.
+await jget(`${B}/api/datarooms/${room.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, publicSections: { documents: true, feeBreakdown: true, photos: true, comps: false } }),
+});
+thtml = await (await fetch(TEASER, { redirect: "manual" })).text();
+ok("documents stay locked off the teaser", !thtml.includes(">Documents"));
+ok("the fee breakdown stays locked off the teaser", !thtml.includes("$312,000"));
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+ok("operator payload reports the teaser link",
+  (r.body.dataroom.teaserLink || "").endsWith(`/d/deal/${room.id}`), r.body.dataroom.teaserLink);
+ok("operator payload reports locked keys as off",
+  r.body.dataroom.publicSections.documents === false && r.body.dataroom.publicSections.feeBreakdown === false);
+
+// The teaser can only narrow the package: a section the room itself hides
+// stays hidden even when toggled public.
+await jget(`${B}/api/datarooms/${room.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, sections: { comps: false }, publicSections: { comps: true } }),
+});
+thtml = await (await fetch(TEASER, { redirect: "manual" })).text();
+ok("teaser can't reveal what the package hides", !thtml.includes("Comparable sales"));
+await jget(`${B}/api/datarooms/${room.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, sections: { comps: true }, publicSections: {} }),
+});
+
+// The same publish gates as the feed.
+await jget(`${B}/api/datarooms/${room.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, unlisted: true }),
+});
+tv = await fetch(TEASER, { redirect: "manual" });
+ok("unlisting a deal kills its teaser", tv.status === 404, tv.status);
+await jget(`${B}/api/datarooms/${room.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, unlisted: false }),
+});
+await jget(`${B}/api/datarooms/${portfolioRoom.id}/revoke`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, revoked: true }),
+});
+tv = await fetch(TEASER, { redirect: "manual" });
+ok("revoking the portfolio kills every teaser", tv.status === 404, tv.status);
+await jget(`${B}/api/datarooms/${portfolioRoom.id}/revoke`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, revoked: false }),
+});
+ok("restoring it revives the teaser", (await fetch(TEASER, { redirect: "manual" })).status === 200);
+tv = await fetch(`${B}/d/deal/nope-not-a-room`, { redirect: "manual" });
+ok("a bogus room id is the same 404 notice", tv.status === 404, tv.status);
 
 console.log("\n== operator: wrong location is refused ==");
 r = await jget(`${B}/api/datarooms/${room.id}?location_id=someone-else`);

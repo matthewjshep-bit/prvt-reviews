@@ -51,6 +51,39 @@ export function normalizeSections(input) {
   return out;
 }
 
+/* ---- the public teaser: what a cold website visitor may see ---- */
+//
+// A second, stricter section mask for the tokenless teaser page the marketing
+// site links to. Two keys are locked off no matter what the operator toggles:
+// documents stream through invite-authorized routes (a public page has no
+// invite to authorize with), and feeBreakdown is negotiating leverage that has
+// no business in front of an anonymous visitor. The teaser a visitor sees is
+// publicSections ∩ the room's own sections — the teaser can only ever narrow
+// the package, never reveal something the package itself hides.
+export const TEASER_LOCKED = ["documents", "feeBreakdown"];
+export const DEFAULT_PUBLIC_SECTIONS = {
+  summary: true, property: true, equity: true, photos: true, comps: false,
+  scope: false, terms: false, documents: false, feeBreakdown: false,
+};
+
+export function normalizePublicSections(input) {
+  const out = { ...DEFAULT_PUBLIC_SECTIONS };
+  for (const k of SECTION_KEYS) {
+    if (input && typeof input[k] === "boolean") out[k] = input[k];
+  }
+  for (const k of TEASER_LOCKED) out[k] = false;
+  return out;
+}
+
+// The section mask a teaser page renders with.
+export function teaserSections(room) {
+  const own = room?.snapshot?.sections || DEFAULT_SECTIONS;
+  const pub = normalizePublicSections(room?.publicSections);
+  const out = {};
+  for (const k of SECTION_KEYS) out[k] = Boolean(own[k] !== false && pub[k]);
+  return out;
+}
+
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const clean = (v, max = 200) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
@@ -236,6 +269,33 @@ export function photoHeaders(res, etag) {
   if (etag) res.set("ETag", etag);
 }
 
+// The public deals feed is the one dataroom response meant to be read by
+// another origin and cached, so secureHeaders is wrong for it in every
+// particular: `no-store` would put the whole board through the database on
+// every homepage view, and framing rules say nothing about a JSON body.
+//
+// `maxAge` governs the BROWSER's copy and is a product decision — how stale a
+// homepage's deal list may be. It is deliberately separate from the server-side
+// memo TTL, which protects the database and is tuned (and switched off in
+// tests) independently. Pass 0 for errors, which must never be cached.
+//
+// No OPTIONS handler accompanies this route: a plain GET with no custom request
+// headers is a CORS "simple request" and triggers no preflight. Sending any
+// custom header from the client would silently start needing one.
+export function feedHeaders(res, maxAge = 60) {
+  // Open to any origin. The board is published deliberately, and there are no
+  // cookies and no auth here, so an allowlist would buy nothing while breaking
+  // Netlify's randomly-named deploy previews. WHICH locations publish at all is
+  // decided by DATAROOM_FEED_LOCATIONS, not by who is asking.
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Cache-Control", maxAge > 0
+    ? `public, max-age=${maxAge}, stale-while-revalidate=300`
+    : "no-store");
+  res.set("X-Content-Type-Options", "nosniff");
+  // The site embedding this is what should rank; the raw feed shouldn't.
+  res.set("X-Robots-Tag", "noindex");
+}
+
 const FONT = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Plus Jakarta Sans", system-ui, sans-serif`;
 
 const BASE_CSS = `
@@ -354,19 +414,54 @@ export function renderNotice({ title, message, detail = "" }) {
 
 /* ---------- the portfolio: every live deal on one page ---------- */
 
+// One deal reduced to what a card needs, and the single source of truth behind
+// both the portfolio HTML below and the public JSON feed the marketing site
+// renders (GET /d/deals.json). The two must never disagree — above all about
+// `spread`, which is derived rather than stored and would be the embarrassing
+// one to get different in two places.
+//
+// Everything here is safe to publish. The snapshot also carries `notes`,
+// `comps`, `scope` and `conditionSummary`; leaving them out is the point, so
+// this is an explicit projection and never a spread of the snapshot.
+export function dealCard(room) {
+  const n = room?.snapshot?.numbers || {};
+  const p = room?.snapshot?.property || {};
+  const price = Math.round(num(n.investorPrice));
+  const arv = Math.round(num(n.arv));
+  const rehab = Math.round(num(n.repairs));
+  // A non-positive spread reads as a broken deal rather than an honest one, so
+  // it comes back as 0 and every surface hides it on the same rule.
+  const spread = Math.max(0, arv - price - rehab);
+  const photo = room?.heroPhoto || null;
+  return {
+    id: room?.id || "",
+    shareToken: room?.shareToken || "",
+    address: p.address || room?.address || "",
+    headline: room?.snapshot?.headline || "",
+    beds: p.beds ?? null,
+    baths: p.baths ?? null,
+    sqft: p.sqft || null,
+    yearBuilt: p.yearBuilt || null,
+    price, arv, rehab, spread,
+    // Dimensions are the ORIGINAL's, not the thumbnail's. The downscale keeps
+    // the aspect ratio, which is all a client needs to reserve the right box
+    // and avoid layout shift.
+    photo: photo ? { id: photo.id, width: photo.width || null, height: photo.height || null } : null,
+    addedAt: room?.createdAt || null,
+  };
+}
+
 // One link for the whole buyer list. Each card is a deal, linking through to
 // its full package; the package pages link back here. `rooms` arrive already
 // filtered to what should be public and in the order they should appear.
 export function renderPortfolio({ rooms = [], company = {} }) {
   const card = (r) => {
-    const n = r.snapshot?.numbers || {};
-    const p = r.snapshot?.property || {};
-    const spread = num(n.arv) - num(n.investorPrice) - num(n.repairs);
+    const d = dealCard(r);
     const bits = [
-      p.beds != null ? `${p.beds} bd` : "",
-      p.baths != null ? `${p.baths} ba` : "",
-      p.sqft ? `${p.sqft.toLocaleString()} sqft` : "",
-      p.yearBuilt ? `built ${p.yearBuilt}` : "",
+      d.beds != null ? `${d.beds} bd` : "",
+      d.baths != null ? `${d.baths} ba` : "",
+      d.sqft ? `${d.sqft.toLocaleString()} sqft` : "",
+      d.yearBuilt ? `built ${d.yearBuilt}` : "",
     ].filter(Boolean).join(" · ");
     const figure = (k, v, cls = "") =>
       `<div class="pfig ${cls}"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`;
@@ -377,24 +472,24 @@ export function renderPortfolio({ rooms = [], company = {} }) {
     // A card with no photo gets a slim band rather than a full-height empty
     // frame — otherwise a portfolio of unphotographed deals is mostly grey.
     // Its price moves inline instead of being badged over nothing.
-    const priceTag = num(n.investorPrice) > 0 ? esc(money(n.investorPrice)) : "";
-    return `<a class="deal" href="/d/${encodeURIComponent(r.shareToken)}">
-      ${r.heroPhoto
+    const priceTag = d.price > 0 ? esc(money(d.price)) : "";
+    return `<a class="deal" href="/d/${encodeURIComponent(d.shareToken)}">
+      ${d.photo
         ? `<div class="shot">
-             <img src="/d/${encodeURIComponent(r.shareToken)}/photo/${encodeURIComponent(r.heroPhoto.id)}/thumb"
+             <img src="/d/${encodeURIComponent(d.shareToken)}/photo/${encodeURIComponent(d.photo.id)}/thumb"
                alt="" loading="lazy">
              ${priceTag ? `<span class="price">${priceTag}</span>` : ""}
            </div>`
         : `<div class="noshot">Photos coming soon</div>`}
       <div class="dealbody">
-        ${!r.heroPhoto && priceTag ? `<div class="inprice">${priceTag}</div>` : ""}
-        <div class="dealaddr">${esc(p.address || r.address || "Investment opportunity")}</div>
+        ${!d.photo && priceTag ? `<div class="inprice">${priceTag}</div>` : ""}
+        <div class="dealaddr">${esc(d.address || "Investment opportunity")}</div>
         ${bits ? `<div class="muted" style="font-size:12px;margin-top:2px">${esc(bits)}</div>` : ""}
-        ${r.snapshot?.headline ? `<div style="font-size:13px;font-weight:600;margin-top:6px">${esc(r.snapshot.headline)}</div>` : ""}
+        ${d.headline ? `<div style="font-size:13px;font-weight:600;margin-top:6px">${esc(d.headline)}</div>` : ""}
         <div class="pfigs">
-          ${num(n.arv) > 0 ? figure("ARV", money(n.arv)) : ""}
-          ${num(n.repairs) > 0 ? figure("Rehab", money(n.repairs)) : ""}
-          ${spread > 0 ? figure("Spread", money(spread), "good") : ""}
+          ${d.arv > 0 ? figure("ARV", money(d.arv)) : ""}
+          ${d.rehab > 0 ? figure("Rehab", money(d.rehab)) : ""}
+          ${d.spread > 0 ? figure("Spread", money(d.spread), "good") : ""}
         </div>
         <div class="more">See the photos, comps and numbers →</div>
       </div>
@@ -533,7 +628,7 @@ function scopeSection(snap) {
 // already guaranteed the scheme is http/https. `rel="noopener noreferrer"`
 // plus the page-wide `Referrer-Policy: no-referrer` means clicking out never
 // hands the destination the tokenized room URL.
-function documentsSection(snap, token) {
+function documentsSection(snap, base) {
   const docs = snap.documents || [];
   const links = Array.isArray(snap.links) ? snap.links : [];
   if (!docs.length && !links.length) return "";
@@ -544,25 +639,28 @@ function documentsSection(snap, token) {
     </div>`;
   return `<div class="card">
     <h2>Documents${links.length ? " &amp; links" : ""}</h2>
-    ${docs.map((d) => row(d.label, "PDF", `/d/${encodeURIComponent(token)}/file/${encodeURIComponent(d.key)}`)).join("")}
+    ${docs.map((d) => row(d.label, "PDF", `${base}/file/${encodeURIComponent(d.key)}`)).join("")}
     ${links.map((l) => row(l.label, l.host || "Link", l.url)).join("")}
   </div>`;
 }
 
-const photoUrl = (token, photo, variant) =>
-  `/d/${encodeURIComponent(token)}/photo/${encodeURIComponent(photo.id)}/${variant}`;
+// `base` is the page's own URL root — /d/<token> for an invite-authorized
+// package, /d/deal/<id> for the public teaser — so photos and files always
+// resolve through the same authorization the page itself passed.
+const photoUrl = (base, photo, variant) =>
+  `${base}/photo/${encodeURIComponent(photo.id)}/${variant}`;
 
 // The rest of the photos, after the hero. A scroll-snap strip rather than a
 // grid so it stays one gesture on a phone; each opens full-size in a new tab,
 // which beats a :target lightbox on a page we can't debug in the wild.
-function photosSection(photos, token) {
+function photosSection(photos, base) {
   const rest = photos.slice(1);
   if (!rest.length) return "";
   return `<div class="card">
     <h2>Photos</h2>
     <div class="shots">
-      ${rest.map((p) => `<a href="${photoUrl(token, p, "full")}" target="_blank" rel="noopener noreferrer">
-        <img src="${photoUrl(token, p, "thumb")}" alt="" loading="lazy"
+      ${rest.map((p) => `<a href="${photoUrl(base, p, "full")}" target="_blank" rel="noopener noreferrer">
+        <img src="${photoUrl(base, p, "thumb")}" alt="" loading="lazy"
           ${p.width && p.height ? `width="${p.width}" height="${p.height}"` : ""}></a>`).join("")}
     </div>
     <p class="muted" style="margin:8px 0 0;font-size:12px">
@@ -574,8 +672,14 @@ function photosSection(photos, token) {
 // recipient's name in the watermark and the access stamp. The shared marketing
 // link has no name, so it falls back to the company's own mark: there's no
 // individual to attribute a view to, and pretending otherwise would be a lie.
-export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", photos = [] }) {
+//
+// `teaser` mode is the public flavor the marketing site links to: the caller
+// hands in a snapshot whose sections are already masked (teaserSections),
+// photo URLs resolve through the tokenless publicPath, and the closing card
+// sells the full package instead of assuming the reader already holds it.
+export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", photos = [], teaser = false, publicPath = "" }) {
   const s = snap.sections || DEFAULT_SECTIONS;
+  const base = teaser ? publicPath : `/d/${encodeURIComponent(token)}`;
   const n = snap.numbers || {};
   const p = snap.property || {};
   const company = snap.company || {};
@@ -620,7 +724,7 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
     ${backLink ? `<p style="margin:0 0 12px"><a href="${esc(backLink)}"
       style="font-size:13px;font-weight:600;text-decoration:none">← All current deals</a></p>` : ""}
     ${hero ? `<div class="hero">
-      <img src="${photoUrl(token, hero, "full")}" alt="${esc(p.address || "The property")}"
+      <img src="${photoUrl(base, hero, "full")}" alt="${esc(p.address || "The property")}"
         ${hero.width && hero.height ? `width="${hero.width}" height="${hero.height}"` : ""}>
       <div class="scrim">
         ${num(n.investorPrice) > 0 ? `<div class="tag">${esc(money(n.investorPrice))}</div>` : ""}
@@ -642,10 +746,10 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
     </div>`}
 
     ${s.summary ? `<div class="figs" style="margin-bottom:16px">${figs}</div>` : ""}
-    ${s.photos !== false ? photosSection(photos, token) : ""}
+    ${s.photos !== false ? photosSection(photos, base) : ""}
     ${feeRows}
 
-    ${snap.notes ? `<div class="card"><h2>Deal notes</h2><p class="muted" style="white-space:pre-wrap;margin:0">${esc(snap.notes)}</p></div>` : ""}
+    ${snap.notes && !teaser ? `<div class="card"><h2>Deal notes</h2><p class="muted" style="white-space:pre-wrap;margin:0">${esc(snap.notes)}</p></div>` : ""}
 
     ${s.terms && terms.length ? `<div class="card"><h2>Terms</h2><table><tbody>
       ${terms.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="r" style="font-weight:600">${esc(v)}</td></tr>`).join("")}
@@ -653,9 +757,22 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
 
     ${s.comps ? compsSection(snap) : ""}
     ${s.scope ? scopeSection(snap) : ""}
-    ${s.documents ? documentsSection(snap, token) : ""}
+    ${s.documents ? documentsSection(snap, base) : ""}
 
-    <div class="card">
+    ${teaser
+      ? `<div class="card">
+      <h2>Get the full package</h2>
+      <p class="muted" style="margin-bottom:14px">
+        The complete investor package — every photo, the comparable-sales analysis, the full rehab
+        scope and the documents — goes out by personal link. ${contactBits.length ? "Call or text" : "Reach"}
+        ${esc(company.signer || company.name || "us")} and we'll send yours.</p>
+      ${contactBits.length ? `<p style="margin:0">${contactBits.map((c) =>
+        `<a href="${c.includes("@") ? `mailto:${esc(c)}` : `tel:${esc(String(c).replace(/[^\d+]/g, ""))}`}"
+          style="font-weight:600">${esc(c)}</a>`).join(" &nbsp;·&nbsp; ")}</p>` : ""}
+      <div class="stamp">Listed by <strong>${esc(company.name || company.signer || "us")}</strong>
+        · ${esc(new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }))}</div>
+    </div>`
+      : `<div class="card">
       <h2>Take the deal</h2>
       <p class="muted" style="margin-bottom:14px">
         ${recipient ? "Reply to the text you received, or reach" : "First to commit takes it. Call or text"}
@@ -674,7 +791,7 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
              · ${esc(new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }))}
              ${invite?.expiresAt ? `<br>This link expires ${esc(dateLabel(invite.expiresAt))}.` : ""}`}
       </div>
-    </div>
+    </div>`}
 
     ${backLink ? `<p style="text-align:center;margin:0 0 18px"><a href="${esc(backLink)}"
       style="font-size:13px;font-weight:600;text-decoration:none">← See every current deal</a></p>` : ""}
@@ -685,10 +802,11 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
       verify independently during your inspection period.</p>`;
 
   return page({
-    title: `${p.address || "Investment opportunity"} — investor package`,
+    title: `${p.address || "Investment opportunity"} — ${teaser ? "off-market deal" : "investor package"}`,
     body,
     // A personal link is marked confidential to its recipient. The shared link
-    // is meant to circulate, so it carries the company's mark instead.
-    watermark: recipient ? `${recipient} · CONFIDENTIAL` : (company.name || "CONFIDENTIAL"),
+    // is meant to circulate, so it carries the company's mark instead. The
+    // public teaser is deliberately unmarked — nothing on it is confidential.
+    watermark: teaser ? "" : recipient ? `${recipient} · CONFIDENTIAL` : (company.name || "CONFIDENTIAL"),
   });
 }

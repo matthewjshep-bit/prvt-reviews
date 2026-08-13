@@ -17,6 +17,12 @@
 //   GET    /d/:token                the package
 //   GET    /d/:token/file/:kind     stream a document
 //
+// The one exception to "the token is the credential" is the public deals feed,
+// which an external marketing site renders in its own brand:
+//   GET    /d/deals.json?location_id=
+// It carries no token, so it is gated instead by an explicit env allowlist of
+// locations that have chosen to publish. See FEED_LOCATIONS below.
+//
 // The plaintext link token exists only in the response that creates it. Only
 // its hash is stored, so neither this server nor a database dump can rebuild a
 // working link — if the operator loses it, they reissue.
@@ -26,8 +32,9 @@ import { store } from "../store.js";
 import { effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { getContact, sendSms } from "../ghl.js";
 import {
-  DEFAULT_EXPIRY_DAYS, buildSnapshot, hashToken, newToken, normalizeLinks, normalizeSections,
-  photoHeaders, renderNotice, renderPortfolio, renderRoom, secureHeaders,
+  DEFAULT_EXPIRY_DAYS, buildSnapshot, dealCard, feedHeaders, hashToken, newToken,
+  normalizeLinks, normalizePublicSections, normalizeSections, photoHeaders,
+  renderNotice, renderPortfolio, renderRoom, secureHeaders, teaserSections,
 } from "../dataroom.js";
 
 // A location's portfolio is itself a dataroom row — offerId null, kind
@@ -65,6 +72,84 @@ async function ensureShareLink(room) {
   room.shareToken = token;
   await store.updateDataroom(room.id, room);
   return room;
+}
+
+// Every deal that belongs on the public board, newest first, each carrying a
+// live share token and its hero photo. The one loader behind both the portfolio
+// HTML page and the public JSON feed, so the two can never drift.
+//
+// Returns COPIES, deliberately. The JSON-file backend hands back live
+// references to its in-memory documents, so hanging heroPhoto off the room
+// object itself would ride into store.json on the next unrelated persist().
+async function loadBoardDeals(locationId) {
+  const listed = (await store.listDatarooms(locationId, { limit: 500 }))
+    .filter((r) => listedInPortfolio(r) && r.snapshot);
+  const out = [];
+  // Sequential on purpose: the pool is 8 connections, so firing every room's
+  // photo query at once would only queue them.
+  for (const r of listed) {
+    // Rooms built before share links existed (or never opened) get one now,
+    // rather than being silently dropped from the list. This MUST stay ahead of
+    // the photo attach below — ensureShareLink ends in updateDataroom(room.id,
+    // room), so minting a token afterwards would persist heroPhoto into the
+    // datarooms doc JSONB for real.
+    await ensureShareLink(r);
+    // Served under each deal's OWN token: the portfolio token can't authorize
+    // another room's photo.
+    const photos = r.offerId ? await store.listOfferPhotos(r.offerId) : [];
+    out.push({ ...r, heroPhoto: photos[0] || null });
+  }
+  return out;
+}
+
+/* ---- public deals feed config ---- */
+
+// Which locations may publish their board as a public JSON feed. Opt-in by
+// design: this broker is multi-tenant (GHL_TOKENS is a map of locations), and
+// the feed is keyed on a location id rather than on a share token, so without
+// this gate every other tenant's board would drop from being protected by a
+// 256-bit token to being protected by a guessable identifier.
+const FEED_LOCATIONS = new Set(
+  (process.env.DATAROOM_FEED_LOCATIONS || "").split(",").map((s) => s.trim()).filter(Boolean)
+);
+
+// How long a built board stays memoized in this process. Configurable chiefly
+// so the tests can switch it off — with a warm cache, "unlist a deal and check
+// it disappears" would fail for a minute and look like a real bug.
+const FEED_TTL_MS = (() => {
+  const raw = process.env.DATAROOM_FEED_TTL_MS;
+  const n = Number(raw);
+  return raw && Number.isFinite(n) && n >= 0 ? n : 60_000;
+})();
+
+// What the BROWSER may cache, in seconds. Separate from the memo above on
+// purpose: that one protects the database, this one protects the network.
+const FEED_MAX_AGE = 60;
+
+// Building the board is expensive — listDatarooms pulls the full doc JSONB for
+// every room and each doc carries a whole snapshot (up to 24 comps, 60 scope
+// lines) — and this endpoint is about to be hit by every homepage visitor and
+// every crawler. Memoize the finished JSON string: that skips re-serializing
+// and structurally guarantees no live file-backend document is held here.
+const feedCache = new Map();
+
+function feedCacheGet(locationId) {
+  if (FEED_TTL_MS <= 0) return null;
+  const hit = feedCache.get(locationId);
+  if (!hit) return null;
+  if (Date.now() >= hit.expires) { feedCache.delete(locationId); return null; }
+  return hit;
+}
+
+function feedCacheSet(locationId, status, body) {
+  if (FEED_TTL_MS <= 0) return;
+  // Bounded the way the bad-token throttle below is, so probing many location
+  // ids can't grow the map without limit.
+  if (feedCache.size > 500) {
+    const now = Date.now();
+    for (const [k, v] of feedCache) if (now >= v.expires) feedCache.delete(k);
+  }
+  feedCache.set(locationId, { status, body, expires: Date.now() + FEED_TTL_MS });
 }
 
 const SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
@@ -233,6 +318,11 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
           shareLink: roomLink(room.shareToken),
           shareViews: share?.viewCount || 0,
           shareLastViewedAt: share?.lastViewedAt || null,
+          // The tokenless public page the marketing site links to, and the
+          // normalized view of what it shows — locked keys always come back
+          // false, so the UI can render the truth rather than the stored doc.
+          teaserLink: `${publicBaseUrl}/d/deal/${encodeURIComponent(room.id)}`,
+          publicSections: normalizePublicSections(room.publicSections),
           // Personal invites only — the share link is presented on its own.
           invites: invites.filter((i) => !i.doc?.share).map(publicInvite),
         },
@@ -291,6 +381,9 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
         if (b.notes !== undefined) room.snapshot.notes = str(b.notes, 2000);
         if (b.links !== undefined) room.snapshot.links = normalizeLinks(b.links);
       }
+      // What the tokenless public teaser page may show (documents and the fee
+      // breakdown are locked off inside normalizePublicSections).
+      if (b.publicSections) room.publicSections = normalizePublicSections(b.publicSections);
       // Hide a deal from the public list without touching its own link.
       if (b.unlisted !== undefined) room.unlisted = Boolean(b.unlisted);
       if (b.expiryDays !== undefined) {
@@ -491,8 +584,13 @@ function tooManyBadHits(ip) {
   return rec.count > 40;
 }
 
-export function createDataroomPublicRouter() {
+export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
   const router = express.Router();
+
+  // The feed emits absolute URLs, because a relative "/d/…" in a JSON body gets
+  // resolved against the marketing site and 404s into broken images. Falls back
+  // to relative when unset so dev and the tests keep working.
+  const feedBase = String(publicBaseUrl || "").replace(/\/+$/, "");
 
   const clientIp = (req) =>
     String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
@@ -549,6 +647,195 @@ export function createDataroomPublicRouter() {
       : "";
   }
 
+  /* ---- the board as JSON, for a marketing site to render in its own brand ---- */
+  //
+  // MUST stay registered before GET /:token, or "deals.json" is captured as a
+  // token. If it ever gets reordered the failure is benign — resolveInvite's
+  // token regex rejects both the dot and the length — but it's a dead feed, so
+  // the test suite pins the ordering.
+  //
+  // Keyed on location_id, NOT on the portfolio's share token. That keeps the
+  // site decoupled from POST /api/datarooms/:id/share/rotate, which would
+  // otherwise blank the homepage with no signal, and it avoids reaching into
+  // resolveInvite — which renders-and-returns-null and is relied on by every
+  // other route here.
+  //
+  // Deliberately writes nothing: no viewCount, no dataroom_events row. Every
+  // homepage visitor and every crawler hitting this would bury the access log
+  // the operator actually reads, and a cache hit isn't a person. The signal
+  // that matters survives — clicking into a deal still logs a real view below.
+  router.get("/deals.json", async (req, res) => {
+    const locationId = String(req.query.location_id || "").slice(0, 64);
+    if (!locationId) {
+      feedHeaders(res, 0);
+      return res.status(400).json({ error: "location_id required" });
+    }
+
+    const cached = feedCacheGet(locationId);
+    if (cached) {
+      feedHeaders(res, FEED_MAX_AGE);
+      return res.status(cached.status).type("json").send(cached.body);
+    }
+
+    try {
+      // Two gates, both required. The env allowlist is what keeps other
+      // tenants' boards private; the portfolio room's status is the operator's
+      // existing publish switch, so revoking it takes the site's deal section
+      // down to its link-out. Both failures answer identically, so a location
+      // that hasn't opted in is indistinguishable from one that doesn't exist.
+      const rooms = FEED_LOCATIONS.has(locationId)
+        ? await store.listDatarooms(locationId, { limit: 500 })
+        : [];
+      const portfolio = rooms.find((r) => isPortfolio(r) && r.status === "active");
+      if (!portfolio) {
+        // Negative-cached too, or probing location ids walks straight past the
+        // cache into the database.
+        const body = JSON.stringify({ error: "not found" });
+        feedCacheSet(locationId, 404, body);
+        feedHeaders(res, FEED_MAX_AGE);
+        return res.status(404).type("json").send(body);
+      }
+
+      const listed = await loadBoardDeals(locationId);
+      const company = await companyFor(locationId, listed);
+      const body = JSON.stringify({
+        // Build time, not request time — so it doubles as the cache's age when
+        // something on the site looks stale.
+        generatedAt: new Date().toISOString(),
+        company: {
+          name: company.name || "",
+          tagline: company.tagline || "",
+          signer: company.signer || "",
+          phone: company.phone || "",
+          email: company.email || "",
+        },
+        count: listed.length,
+        // Raw integers, never formatted strings: money formatting on a
+        // marketing card is the site's presentation choice, and shipping both
+        // would only guarantee they drift. `spread` is the exception and comes
+        // from dealCard, so this and the HTML board can't disagree about it.
+        deals: listed.map((r) => {
+          const d = dealCard(r);
+          // The TEASER url, never the share token: this JSON is world-readable,
+          // and the share link is the full package. A visitor who wants more
+          // than the teaser asks, and gets a link that's theirs.
+          const base = `${feedBase}/d/deal/${encodeURIComponent(d.id)}`;
+          // A photo the teaser wouldn't serve isn't advertised either, or the
+          // site would render cards with broken images.
+          const photo = teaserSections(r).photos ? d.photo : null;
+          return {
+            id: d.id,
+            url: base,
+            address: d.address,
+            headline: d.headline,
+            beds: d.beds,
+            baths: d.baths,
+            sqft: d.sqft,
+            yearBuilt: d.yearBuilt,
+            price: d.price,
+            arv: d.arv,
+            rehab: d.rehab,
+            spread: d.spread,
+            photo: photo
+              ? {
+                  url: `${base}/photo/${encodeURIComponent(photo.id)}/thumb`,
+                  width: photo.width,
+                  height: photo.height,
+                }
+              : null,
+            addedAt: d.addedAt,
+          };
+        }),
+      });
+      feedCacheSet(locationId, 200, body);
+      feedHeaders(res, FEED_MAX_AGE);
+      res.type("json").send(body);
+    } catch (err) {
+      console.error("dataroom feed failed:", err.message);
+      // Never cached: a transient database blip shouldn't take the board off
+      // the site for a full TTL.
+      feedHeaders(res, 0);
+      res.status(500).json({ error: "unavailable" });
+    }
+  });
+
+  /* ---- the public teaser: what a cold website visitor may see ---- */
+  //
+  // Tokenless by design — the marketing site links here, and public means
+  // public. What bounds it instead: the same env allowlist as the feed, the
+  // room's own listed/active state, and the portfolio master switch. The page
+  // renders the snapshot through teaserSections, so it can only ever show a
+  // subset of what the operator already toggled into the package, minus the
+  // permanently-locked keys (documents, fee breakdown).
+  //
+  // Registered before GET /:token so the literal "deal" segment wins; if it
+  // ever gets reordered the failure is benign — "deal" is shorter than any
+  // token — but the teaser dies, so the tests pin this too.
+  async function resolveTeaser(req, res) {
+    const id = String(req.params.roomId || "");
+    if (!/^[A-Za-z0-9_-]{4,80}$/.test(id)) { gone(res); return null; }
+    const room = await store.getDataroom(id).catch(() => null);
+    if (!room || !FEED_LOCATIONS.has(room.locationId) || !listedInPortfolio(room) || !room.snapshot) {
+      gone(res);
+      return null;
+    }
+    const rooms = await store.listDatarooms(room.locationId, { limit: 500 });
+    if (!rooms.some((r) => isPortfolio(r) && r.status === "active")) { gone(res); return null; }
+    return room;
+  }
+
+  router.get("/deal/:roomId", async (req, res) => {
+    try {
+      const room = await resolveTeaser(req, res);
+      if (!room) return;
+      secureHeaders(res);
+      // The marketing site embedding the feed is what should rank, not the
+      // broker's bare teaser page.
+      res.set("X-Robots-Tag", "noindex");
+      const mask = teaserSections(room);
+      // Deliberately unlogged (unlike token views): this URL is public, so
+      // crawlers would bury the access log the operator actually reads. Real
+      // interest shows up when someone asks for their personal link.
+      res.type("html").send(renderRoom({
+        snap: { ...room.snapshot, sections: mask },
+        token: "",
+        teaser: true,
+        publicPath: `/d/deal/${encodeURIComponent(room.id)}`,
+        photos: mask.photos && room.offerId ? await store.listOfferPhotos(room.offerId) : [],
+      }));
+    } catch (err) {
+      console.error("dataroom teaser failed:", err.message);
+      notice(res, 500, { title: "Something went wrong", message: "Please try that link again in a moment." });
+    }
+  });
+
+  router.get("/deal/:roomId/photo/:photoId/:variant?", async (req, res) => {
+    try {
+      const room = await resolveTeaser(req, res);
+      if (!room) return;
+      if (!teaserSections(room).photos || !room.offerId) return gone(res);
+      const variant = req.params.variant || "full";
+      if (!PHOTO_VARIANTS.has(variant)) return gone(res);
+      // Same proof as the token photo route: the id must belong to THIS room's
+      // offer, or any listed deal would serve any photo in the system.
+      const photos = await store.listOfferPhotos(room.offerId);
+      if (!photos.some((p) => p.id === req.params.photoId)) return gone(res);
+      const etag = `"${req.params.photoId}-${variant}"`;
+      if (req.headers["if-none-match"] === etag) {
+        photoHeaders(res, etag);
+        return res.status(304).end();
+      }
+      const stored = await store.readPhotoBytes(req.params.photoId, variant);
+      if (!stored?.bytes) return gone(res);
+      photoHeaders(res, etag);
+      res.set("Content-Type", stored.contentType || "image/jpeg");
+      res.send(stored.bytes);
+    } catch (err) {
+      console.error("dataroom teaser photo failed:", err.message);
+      gone(res);
+    }
+  });
+
   /* ---- the package, or the portfolio of every live deal ---- */
   router.get("/:token", async (req, res) => {
     try {
@@ -570,17 +857,7 @@ export function createDataroomPublicRouter() {
       if (isPortfolio(room)) {
         // Resolved live, so a deal added or pulled today is reflected without
         // anyone having to rebuild or resend the portfolio link.
-        const listed = (await store.listDatarooms(room.locationId, { limit: 500 }))
-          .filter((r) => listedInPortfolio(r) && r.snapshot);
-        // Rooms built before share links existed (or never opened) get one now,
-        // rather than being silently dropped from the list. The hero photo is
-        // fetched in the same pass, and served under each deal's OWN token —
-        // the portfolio token can't authorize another room's photo.
-        for (const r of listed) {
-          await ensureShareLink(r);
-          const photos = r.offerId ? await store.listOfferPhotos(r.offerId) : [];
-          r.heroPhoto = photos[0] || null;
-        }
+        const listed = await loadBoardDeals(room.locationId);
         return res.type("html").send(renderPortfolio({
           rooms: listed, company: await companyFor(room.locationId, listed),
         }));

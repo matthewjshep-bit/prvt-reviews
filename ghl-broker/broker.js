@@ -124,7 +124,7 @@ app.use("/api/datarooms", createDataroomRouter({ resolveLocation, publicBaseUrl:
 // Investor datarooms are opened by people outside the GHL account, so /d is
 // deliberately outside the location gate — the per-invite token is the
 // credential, and the router enforces PIN, expiry, and revocation itself.
-app.use("/d", createDataroomPublicRouter());
+app.use("/d", createDataroomPublicRouter({ publicBaseUrl: PUBLIC_BASE_URL }));
 
 store.init().catch((e) => console.error("store init failed:", e.message));
 

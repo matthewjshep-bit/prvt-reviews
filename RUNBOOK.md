@@ -34,7 +34,14 @@ DATABASE_URL=postgres://...       # Render Postgres; schema auto-applies on boot
 # R2_* (optional) — when set, documents go to Cloudflare R2 instead of Postgres
 APP_ORIGIN=https://<your-netlify-site>   # frontend origin (cross-origin CORS)
 # CARD_SENDS_ENABLED=true         # leave unset until you want live SMS sends
+DATAROOM_FEED_LOCATIONS=          # locations allowed to publish a PUBLIC deals feed
+# DATAROOM_FEED_TTL_MS=60000      # server memo for that feed; leave unset
 ```
+
+`PUBLIC_BASE_URL` matters more than it used to: the public deals feed builds
+absolute deal and photo URLs from it, so if it points at a hostname that no
+longer resolves, the marketing site renders cards with dead links and broken
+images. Check it resolves before relying on the feed.
 
 Token scopes: `contacts.readonly`, `contacts.write`,
 `locations/customFields.readonly`, `locations/customFields.write`,
@@ -45,6 +52,50 @@ without it.
 
 Sanity: `GET /` → `offer broker ok`, then
 `POST /api/offers/calculate` with `{"location_id":"...","inputs":{"askingPrice":200000}}`.
+
+### Publishing the deals board to a public website
+
+`GET /d/deals.json?location_id=<id>` serves the location's board as JSON, so an
+external marketing site (shepflips.com) can render the cards in its own brand
+instead of iframing the dataroom — which is impossible anyway, since every
+dataroom response sends `X-Frame-Options: DENY`.
+
+It is **off for every location by default**. Two gates must both pass or it
+answers 404, deliberately indistinguishable from an unknown location:
+
+1. The location id appears in `DATAROOM_FEED_LOCATIONS` (comma-separated). This
+   gate exists because the broker is multi-tenant and the feed is keyed on a
+   location id rather than a 256-bit token — without it, any tenant's board
+   would be readable by anyone who learned their id.
+2. The location's portfolio dataroom is `status: active`. That is the publish
+   switch: revoking the portfolio room takes the board off the website, and the
+   site degrades to its link-out on its own.
+
+Verify after deploy — the third command must print `0`:
+
+```bash
+curl -s  "$BROKER/d/deals.json?location_id=$LOC" | jq '.count, .deals[0].url'
+curl -sI "$BROKER/d/deals.json?location_id=$LOC" | grep -i 'access-control\|cache-control'
+curl -s  "$BROKER/d/deals.json?location_id=$LOC" | grep -ci 'notes\|comps\|assignmentFee'
+```
+
+The feed's cards link to each deal's **public teaser** (`/d/deal/<roomId>`), a
+tokenless page showing only the room's `publicSections` (toggled in the deal's
+Dataroom modal; documents and the fee breakdown are locked off server-side).
+The full package still travels only by share/personal link — the feed carries
+no tokens at all.
+
+Three things to know once it's live:
+
+- **The feed and the teaser write nothing.** No view counts, no access-log
+  rows — both URLs are public, so every homepage visitor and every crawler
+  would bury the log the operator reads. Real interest shows up when a visitor
+  asks for their personal link (the teaser's closing card tells them how).
+- **`GET /api/datarooms/portfolio` `views` goes flat.** It counts opens of the
+  portfolio HTML page, and the website no longer sends anyone through it. Use
+  the site's own analytics for "did anyone look at the board".
+- **The share link stays out of the feed on purpose.** If it ever shows up in
+  `deals.json`, that's a regression — the test suite pins this.
 
 DB note: the schema (`ghl-broker/schema.pg.sql`) is applied idempotently on
 boot. Tables from the pre-overhaul card-studio era are left untouched; the file

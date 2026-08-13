@@ -45,6 +45,17 @@ const SECTIONS = [
   ["feeBreakdown", "Price breakdown", "Reveals your contract price and fee"],
 ];
 
+// What can go on the tokenless public teaser page. Documents and the price
+// breakdown aren't offered — the server locks them off no matter what.
+const PUBLIC_SECTIONS = [
+  ["summary", "Headline numbers"],
+  ["equity", "Spread at ARV"],
+  ["photos", "Photos"],
+  ["comps", "Comparable sales"],
+  ["scope", "Rehab scope"],
+  ["terms", "Terms"],
+];
+
 const shortDateTime = (iso) =>
   iso ? new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
 const shortDate = (iso) =>
@@ -457,6 +468,18 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
     });
   }
 
+  // What the tokenless public teaser (the website's deal page) may show.
+  // Server-normalized: documents and the price breakdown can never go public.
+  const publicSections = room?.publicSections || {};
+
+  async function togglePublicSection(key) {
+    await run(async () => {
+      const next = { ...publicSections, [key]: !publicSections[key] };
+      setRoom((r) => ({ ...r, publicSections: next }));
+      await updateDataroom(room.id, { publicSections: next });
+    });
+  }
+
   async function saveText(patch) {
     await run(async () => {
       const saved = await updateDataroom(room.id, patch);
@@ -704,6 +727,37 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
                   </span>
                 </span>
               </label>
+            </div>
+
+            {/* --- the public teaser: what the website shows --- */}
+            <div className="mb-4 rounded-xl border border-slate-200 p-3">
+              <div className="mb-1.5 flex items-center justify-between gap-3">
+                <span className={`${LABEL_CLS} mb-0`}>Public teaser — what the website shows</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <input readOnly value={room.teaserLink || ""}
+                  onFocus={(e) => e.target.select()}
+                  className="w-full rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-2 font-mono text-xs" />
+                <CopyButton value={room.teaserLink || ""} className={`${BTN_CLS} shrink-0 bg-white`} />
+                <a href={room.teaserLink || "#"} target="_blank" rel="noreferrer"
+                  className={`${BTN_CLS} shrink-0 bg-white`} title="Open it the way a website visitor will see it">
+                  <Eye size={13} /> View
+                </a>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                The tokenless page your site's deal cards open. It can only ever show a subset of the
+                package above; documents and the price breakdown never go public. Live while the deal
+                is on the all-deals page.
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-slate-100 pt-2 sm:grid-cols-3">
+                {PUBLIC_SECTIONS.map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={Boolean(publicSections[key])} disabled={busy}
+                      className="h-3.5 w-3.5" onChange={() => togglePublicSection(key)} />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
             </div>
 
             <PhotosPane offerId={offer.id} busy={busy} setBusy={setBusy} onError={setError} />
