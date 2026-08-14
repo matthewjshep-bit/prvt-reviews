@@ -34,6 +34,7 @@
 //   DELETE /api/offers/:id/deal               un-promote (mistake correction)
 //   POST   /api/offers/:id/deal/investors     link a disposition investor (GHL contact)
 //   POST   /api/offers/:id/deal/suggest-investors   AI-suggest investors from conversation history
+//   POST   /api/offers/automations/deal-interest    GHL workflow webhook: Conversation AI flags interest → link investor to the deal they messaged about
 //   PATCH  /api/offers/:id/deal/investors/:contactId    evaluation status
 //   DELETE /api/offers/:id/deal/investors/:contactId    unlink
 //   POST   /api/offers/deals/sync-investor-tags   backfill the on-deal GHL tag for all deal investors
@@ -2457,6 +2458,81 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         historyLine(ts, offer.address, "sent"));
       await syncInvestorDealTag(client, locationId, contactId);
       res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- automations: Conversation AI → deal interest ---------- */
+  // POST /automations/deal-interest — the target of a GHL workflow's Webhook
+  // action, which a Conversation AI bot triggers when a contact expresses
+  // interest in a property. Figures out WHICH open deal they were talking
+  // about — their recent messages are searched for each deal's street line,
+  // in both spelled-out and USPS-abbreviated forms — and links them as an
+  // "evaluating" investor: the same write the Deals UI makes, deal-history
+  // stamp and tag sync included. Idempotent: already linked as "sent"
+  // advances to "evaluating"; any other existing status is left alone.
+  // Auth is the standard location gate (location_id + location_key in the
+  // webhook URL's query string).
+  router.post("/automations/deal-interest", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      // GHL webhook payloads vary by trigger — accept every shape it sends.
+      const contactId = dealStr(
+        b.contactId || b.contact_id || b.contact?.id || b.customData?.contact_id, 64);
+      if (!contactId) return res.status(400).json({ error: "contact_id required" });
+
+      const OPEN_STAGES = new Set(["under_contract", "buyer_found"]);
+      const open = (await store.listDeals(locationId)).filter((o) => OPEN_STAGES.has(o.deal?.stage));
+      if (!open.length) return res.json({ ok: true, linked: false, reason: "no open deals" });
+
+      let text = "";
+      try {
+        const t = await buildTranscript(client, locationId, contactId, {
+          maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 80,
+          maxChars: 15000, maxCallTranscripts: 0,
+        });
+        text = t.text.toLowerCase();
+      } catch { /* missing scope or no messages — the single-deal fallback below still applies */ }
+
+      // Most recently mentioned deal wins; a lone open deal needs no mention.
+      let match = null;
+      let matchPos = -1;
+      for (const o of open) {
+        for (const v of addressQueryVariants(o.address || "")) {
+          const street = v.split(",")[0].trim().toLowerCase();
+          if (street.length < 6) continue;
+          const pos = text.lastIndexOf(street);
+          if (pos > matchPos) { match = o; matchPos = pos; }
+        }
+      }
+      if (!match && open.length === 1) match = open[0];
+      if (!match) return res.json({ ok: true, linked: false, reason: "no deal address in recent messages" });
+
+      const offer = match;
+      offer.deal.investors = offer.deal.investors || [];
+      const ts = new Date().toISOString();
+      const existing = offer.deal.investors.find((i) => i.contactId === contactId);
+      if (existing && existing.status !== "sent") {
+        return res.json({
+          ok: true, linked: true, unchanged: true,
+          offerId: offer.id, address: offer.address, status: existing.status,
+        });
+      }
+      if (existing) {
+        existing.status = "evaluating";
+        existing.updatedAt = ts;
+      } else {
+        let name = "";
+        try { name = contactName(await getContact(client, contactId)) || contactId; }
+        catch { name = contactId; }
+        offer.deal.investors.push({ contactId, name, status: "evaluating", addedAt: ts, updatedAt: ts });
+      }
+      offer.deal.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      await appendDealHistory(client, locationId, contactId, "investor_deal_history",
+        historyLine(ts, offer.address, "evaluating", "Conversation AI flagged interest"));
+      await syncInvestorDealTag(client, locationId, contactId);
+      res.json({ ok: true, linked: true, offerId: offer.id, address: offer.address, status: "evaluating" });
     } catch (err) { fail(res, err); }
   });
 
