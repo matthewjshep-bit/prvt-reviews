@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { compareByMatch, matchLabel, matchTone, milesBetween, scoreComp } from "./comp-match.js";
+import { compareByMatch, matchLabel, matchTone, mergeSelection, milesBetween, scoreComp } from "./comp-match.js";
 
 const KENT = { lat: 47.3809, lng: -122.2348 };
 const SPOKANE = { lat: 47.6588, lng: -117.426 };
@@ -108,4 +108,47 @@ test("best match first, then closest", () => {
   const sorted = [far, weak, near].sort(compareByMatch);
   assert.equal(sorted[0], near, "the best match leads");
   assert.equal(sorted[2], weak, "a close but dissimilar comp ranks last");
+});
+
+/* ---------------- selection across a re-pull ---------------- */
+//
+// The bug: "Load comps" ended with setSelected(new Set(pre)), replacing the
+// whole selection with the provider's fresh top six. Every Zillow capture got
+// silently un-ticked, and since the server only persists comps whose id is in
+// the selection, they never reached the offer or the comps PDF — while still
+// sitting visibly on the board, so nothing looked wrong until you opened the
+// PDF. Zillow captures are the expensive ones to lose: /comps/claim is
+// read-and-delete, so a lost capture can't be re-fetched.
+
+test("a re-pull never drops a Zillow capture or a manual comp", () => {
+  const keep = ["z-101", "m-1"];                  // captured + manual on the board
+  const previous = new Set(["z-101", "m-1", "p-old-1", "p-old-2"]);
+  const next = mergeSelection(previous, keep, ["p-new-1", "p-new-2", "p-new-3"]);
+
+  assert.ok(next.has("z-101"), "the Zillow capture stays ticked");
+  assert.ok(next.has("m-1"), "the manual comp stays ticked");
+  assert.ok(next.has("p-new-1"), "the fresh preselection is applied");
+  assert.ok(!next.has("p-old-1"), "stale provider ids don't accumulate");
+  assert.equal(next.size, 5);
+});
+
+test("repeated pulls don't accumulate stale provider ids", () => {
+  const keep = ["z-1"];
+  let sel = new Set(["z-1"]);
+  sel = mergeSelection(sel, keep, ["p-a", "p-b"]);
+  sel = mergeSelection(sel, keep, ["p-c"]);
+  sel = mergeSelection(sel, keep, ["p-d"]);
+  assert.deepEqual([...sel].sort(), ["p-d", "z-1"], "only the newest pull plus the keepers");
+});
+
+test("a pull that preselects nothing still keeps the hand-picked comps", () => {
+  // bedBathRelaxed responses deliberately preselect nothing.
+  const next = mergeSelection(new Set(["z-1", "p-1"]), ["z-1"], []);
+  assert.deepEqual([...next], ["z-1"]);
+});
+
+test("mergeSelection takes arrays or Sets, and tolerates empties", () => {
+  assert.deepEqual([...mergeSelection(new Set(["z-1"]), new Set(["z-1"]), ["p-1"])].sort(), ["p-1", "z-1"]);
+  assert.deepEqual([...mergeSelection(null, null, null)], []);
+  assert.deepEqual([...mergeSelection(new Set(["z-1"]), [], [])], [], "nothing to keep means nothing kept");
 });

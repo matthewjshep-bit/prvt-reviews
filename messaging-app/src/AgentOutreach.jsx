@@ -7,7 +7,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown, ChevronUp, Download, ExternalLink, EyeOff, Loader2,
-  Pencil, Plus, RefreshCw, RotateCcw, Search, Trash2, X,
+  Pencil, Plus, RefreshCw, RotateCcw, Search, Trash2,
 } from "lucide-react";
 import {
   getOutreachAgents, getAgentListings, pullOutreach, importOutreachAgents,
@@ -15,6 +15,7 @@ import {
   renameOutreachBatch, deleteOutreachBatch,
   ghlContactUrl, getLocationId, getLocationKey, zillowUrl,
 } from "./api.js";
+import { EmptyState, ErrorBar, FilterChips, SearchInput, Spinner, TableCard } from "./ui.jsx";
 
 // RentCast propertyType values.
 const PROPERTY_TYPES = ["Single Family", "Condo", "Townhouse", "Multi-Family", "Manufactured", "Land"];
@@ -414,8 +415,8 @@ export default function AgentOutreach({ settings }) {
     }
   };
 
-  if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
-  if (!data) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400" /></div>;
+  if (error) return <ErrorBar>{error}</ErrorBar>;
+  if (!data) return <Spinner />;
 
   const usage = data.usage || {};
   const meterAmber = (usage.requestsThisMonth || 0) >= 40;
@@ -573,15 +574,12 @@ export default function AgentOutreach({ settings }) {
       {agents.length > 0 && (
         <>
           <div className="flex flex-wrap items-center gap-2">
-            {[
-              ["all", "All"], ["new", "New"], ["inghl", "Already in GHL"],
-              ["imported", "Imported"], ["skipped", "Skipped"],
-            ].map(([key, label]) => (
-              <button key={key} type="button" onClick={() => setFilter(key)}
-                className={`rounded-full px-3 py-1 text-xs font-medium ${filter === key ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-100"}`}>
-                {label}
-              </button>
-            ))}
+            <FilterChips value={filter} onChange={setFilter} label="Filter agents"
+              options={[
+                { key: "all", label: "All" }, { key: "new", label: "New" },
+                { key: "inghl", label: "Already in GHL" },
+                { key: "imported", label: "Imported" }, { key: "skipped", label: "Skipped" },
+              ]} />
             <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}
               className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 focus:border-blue-500 focus:outline-none"
               title="Classified by RentCast's property type plus address suffix (Apt/Unit/#)">
@@ -600,16 +598,8 @@ export default function AgentOutreach({ settings }) {
               className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
             <input value={priceMax} onChange={(e) => setPriceMax(e.target.value)} placeholder="Max $" inputMode="numeric"
               className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
-            <div className="ml-auto flex min-w-[14rem] items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5">
-              <Search size={14} className="text-slate-400" />
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agents…"
-                className="w-full text-sm focus:outline-none" />
-              {q && (
-                <button type="button" onClick={() => setQ("")} className="rounded p-0.5 text-slate-400 hover:bg-slate-100">
-                  <X size={13} />
-                </button>
-              )}
-            </div>
+            <SearchInput value={q} onChange={setQ} placeholder="Search agents…"
+              className="ml-auto min-w-[14rem]" label="Search agents" />
           </div>
 
           {/* ---- import bar ---- */}
@@ -681,11 +671,9 @@ export default function AgentOutreach({ settings }) {
 
           {/* ---- agent table ---- */}
           {shown.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
-              No agents match.
-            </div>
+            <EmptyState>No agents match.</EmptyState>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+            <TableCard>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
@@ -772,15 +760,15 @@ export default function AgentOutreach({ settings }) {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableCard>
           )}
         </>
       )}
 
       {data.enabled && agents.length === 0 && (
-        <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
+        <EmptyState>
           {activeBatch ? `No agents in "${activeBatch.name}" yet — pull listings above.` : "No agents yet — pull listings above to get started."}
-        </div>
+        </EmptyState>
       )}
     </div>
   );

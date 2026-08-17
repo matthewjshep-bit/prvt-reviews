@@ -188,6 +188,14 @@ export const getOffer = (id) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}?${locq()}`).then(j).then((r) => r.offer);
 export const deleteOffer = (id) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}?${locq()}`, { method: "DELETE" }).then(j);
+// Record an offer outcome. "accepted" promotes to a deal server-side and comes
+// back with `promoted: true` — the caller navigates to the Deals tab.
+export const setOfferStatus = (id, status, note = "") =>
+  post(`/api/offers/${encodeURIComponent(id)}/status`, { status, note }, "PATCH");
+// Bulk outcome for the history selection bar. Returns { results, offers } —
+// per-id so one failure doesn't hide the rest.
+export const setOfferStatusBulk = (ids, status, note = "") =>
+  post(`/api/offers/status`, { ids, status, note }, "PATCH");
 export const generateContract = (id, fields) =>
   post(`/api/offers/${encodeURIComponent(id)}/contract`, { fields });
 export const generateAssignment = (id, fields) =>
@@ -212,6 +220,29 @@ export const removeDealInvestor = (id, contactId) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/investors/${encodeURIComponent(contactId)}?${locq()}`, { method: "DELETE" }).then(j);
 export const suggestInvestors = (id) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/suggest-investors`, {});
+
+/* ---------- agent offer pages ---------- */
+// A shareable web page built from one offer, for the listing agent: the offer,
+// how we got to the number, the comps behind it, the scope, and the seller's
+// net. One forwardable link per offer — rotate it to kill a link that travelled
+// further than intended.
+export const createOfferPage = (offerId, body = {}) =>
+  post(`/api/offer-pages`, { offerId, ...body }).then((r) => r.offerPage);
+export const listOfferPages = (offerId = "") => {
+  const p = new URLSearchParams(locq());
+  if (offerId) p.set("offer_id", offerId);
+  return fetch(`${API_BASE}/api/offer-pages?${p}`).then(j).then((r) => r.offerPages);
+};
+export const getOfferPage = (id) =>
+  fetch(`${API_BASE}/api/offer-pages/${encodeURIComponent(id)}?${locq()}`).then(j);
+export const updateOfferPage = (id, patch) =>
+  post(`/api/offer-pages/${encodeURIComponent(id)}`, patch, "PUT").then((r) => r.offerPage);
+export const rotateOfferPageLink = (id) =>
+  post(`/api/offer-pages/${encodeURIComponent(id)}/share/rotate`, {}).then((r) => r.shareLink);
+export const revokeOfferPage = (id, revoked = true) =>
+  post(`/api/offer-pages/${encodeURIComponent(id)}/revoke`, { revoked }).then((r) => r.offerPage);
+export const deleteOfferPage = (id) =>
+  fetch(`${API_BASE}/api/offer-pages/${encodeURIComponent(id)}?${locq()}`, { method: "DELETE" }).then(j);
 
 /* ---------- investor datarooms ---------- */
 // A dataroom is a frozen, investor-facing package built from one offer.

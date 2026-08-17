@@ -1,30 +1,48 @@
-// OffersHistory.jsx — every offer created for this location, grouped by agent
-// (contact): one collapsible row per agent, individual offers nested under it.
-// The contact links to the GHL contact record; clicking an offer row opens the
-// full offer detail (document, all three options, attach status).
+// OffersHistory.jsx — the landing view: every offer created for this location,
+// grouped by agent (contact), with its outcome. One collapsible row per agent,
+// individual offers nested under it. The contact links to the GHL contact
+// record; clicking an offer row opens the full offer detail.
+//
+// This is where the day is worked, so the table is organized around the one
+// question that matters at 10 offers a day: which of these is still alive?
+// Hence the status column (a control, not a label — you set an outcome from
+// the row itself), the filter chips that answer it in one tap, and the KPI
+// strip that turns 120-offers-to-1-contract into numbers you can watch.
+//
+// Status lives in shared/offer-status.js; nothing here decides what a status
+// means, only how it looks and how you change it.
 
 import React, { useEffect, useState } from "react";
-import { Briefcase, ChevronDown, ChevronRight, ExternalLink, FileText, Loader2, Pencil, Search, Send, Sparkles, Trash2, X } from "lucide-react";
+import { Briefcase, ChevronDown, ChevronRight, ExternalLink, FileText, Link2, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { deleteOffer, getSettings, ghlContactUrl, listOffers, promoteDeal, zillowUrl } from "./api.js";
+import { DEAD_STATUSES, OFFER_STATUS, effectiveStatus } from "@shared/offer-status.js";
+import {
+  deleteOffer, getSettings, ghlContactUrl, listOffers, promoteDeal,
+  setOfferStatus, setOfferStatusBulk, zillowUrl,
+} from "./api.js";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
 import AssignmentModal from "./AssignmentModal.jsx";
 import NetSheetModal from "./NetSheetModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
-import { StagePill } from "./DealsView.jsx";
+import OfferPageModal from "./OfferPageModal.jsx";
+import {
+  BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
+  SearchInput, SkeletonRows, StagePill, StatusDots, StatusMenu, StatusPill, TableCard,
+  rowActivation,
+} from "./ui.jsx";
 
-function AttachStatus({ offer }) {
-  if (offer.status === "draft") {
-    return <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-800">Draft</span>;
-  }
-  if (!offer.ghl) return <span className="text-slate-400">—</span>;
-  const ok = offer.ghl.fields && offer.ghl.note && offer.ghl.tag;
-  return ok ? (
-    <span className="font-medium text-emerald-700">✓ contact</span>
-  ) : (
-    <span className="font-medium text-amber-700" title={(offer.warnings || []).join("\n")}>
-      ⚠ partial
+// The CRM write can partially fail (fields saved, tag didn't). That's rare and
+// not part of the daily read, so it shrinks to a warning glyph beside the
+// status rather than owning a column of its own.
+function AttachWarning({ offer }) {
+  if (offer.status === "draft" || !offer.ghl) return null;
+  if (offer.ghl.fields && offer.ghl.note && offer.ghl.tag) return null;
+  return (
+    <span className="ml-1 cursor-help text-amber-600" role="img"
+      aria-label="Some CRM fields did not save"
+      title={`Partially attached to the contact:\n${(offer.warnings || []).join("\n")}`}>
+      ⚠
     </span>
   );
 }
@@ -38,20 +56,19 @@ function SentBadge({ offer }) {
   if (!sends.length) return null;
   const last = sends[sends.length - 1];
   const failed = Object.values(last.results || {}).some((r) => !r.ok);
-  const cls = failed ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800";
   const title = sends
     .map((s) => `${(s.ts || "").slice(0, 16).replace("T", " ")} — ${s.channels
       .map((c) => `${CHANNEL_LABELS[c] || c}${s.results?.[c]?.ok === false ? ` (failed: ${s.results[c].error})` : ""}`)
       .join(", ")} · docs: ${(s.docs || []).join(", ")}`)
     .join("\n");
   return (
-    <span className={`ml-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${cls}`} title={title}>
-      {failed ? "⚠ " : ""}Sent {sendLabel(last)}
+    <span className={`ml-1.5 whitespace-nowrap text-[11px] ${failed ? "text-amber-700" : "text-slate-400"}`} title={title}>
+      {failed ? "⚠ " : ""}{sendLabel(last)}
     </span>
   );
 }
 
-function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment, onNetSheet, onPromote, onDealNav }) {
+function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment, onNetSheet, onPromote, onDealNav, onOfferPage }) {
   const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
   const Row = ({ label, value }) => (
     <div className="flex justify-between gap-4 text-sm">
@@ -59,9 +76,11 @@ function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment,
       <span className="font-medium">{value}</span>
     </div>
   );
+  const history = offer.statusHistory || [];
   return (
     <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={onClose}>
-      <div className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label={offer.address || "Offer"}
+        className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <div className="text-lg font-bold">
@@ -73,13 +92,16 @@ function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment,
                 </a>
               )}
             </div>
-            <div className="text-sm text-slate-500">
-              {offer.dateLabel} ·{" "}
+            <div className="flex flex-wrap items-center gap-1.5 text-sm text-slate-500">
+              <span>{offer.dateLabel}</span>
+              <span aria-hidden="true">·</span>
               <a href={ghlContactUrl(offer.contactId)} target="_blank" rel="noreferrer"
                 className="inline-flex items-center gap-1 text-slate-700 underline hover:text-slate-900">
                 {offer.contactName || offer.contactId} <ExternalLink size={12} />
-              </a>{" "}
-              · <AttachStatus offer={offer} />
+              </a>
+              <span aria-hidden="true">·</span>
+              <StatusPill offer={offer} small />
+              <AttachWarning offer={offer} />
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -105,7 +127,8 @@ function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment,
               className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50">
               <Pencil size={14} /> Edit offer
             </button>
-            <button type="button" onClick={onClose} className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
+            <button type="button" onClick={onClose} aria-label="Close"
+              className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
               <X size={18} />
             </button>
           </div>
@@ -152,6 +175,20 @@ function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment,
               <ul className="list-inside list-disc rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
                 {offer.warnings.map((w, i) => <li key={i}>{w}</li>)}
               </ul>
+            )}
+            {history.length > 0 && (
+              <div className="rounded-xl border border-slate-200 p-3">
+                <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">Status history</div>
+                {history.map((h, i) => (
+                  <div key={i} className="flex items-start justify-between gap-3 py-0.5 text-xs">
+                    <span className="whitespace-nowrap text-slate-500">{(h.ts || "").slice(0, 16).replace("T", " ")}</span>
+                    <span className="text-right">
+                      <span className="font-medium text-slate-700">{OFFER_STATUS[h.status]?.label || h.status}</span>
+                      {h.note && <span className="text-slate-500"> · {h.note}</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
             )}
             {(offer.sends || []).length > 0 && (
               <div className="rounded-xl border border-slate-200 p-3">
@@ -200,6 +237,13 @@ function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment,
                 </a>
               )}
               {offer.status !== "draft" && (
+                <button type="button" onClick={() => onOfferPage?.(offer)}
+                  className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50"
+                  title="One shareable web page for the agent: the offer, the comps, the scope and the seller's net">
+                  <Link2 size={15} /> Agent offer page
+                </button>
+              )}
+              {offer.status !== "draft" && (
                 <button type="button" onClick={() => onContract?.(offer)}
                   className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50"
                   title="Generate or update the purchase & sale contract">
@@ -241,18 +285,41 @@ function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment,
   );
 }
 
+/* ---------- filters ---------- */
+
+// Each chip is one question you actually ask the list. `test` runs against a
+// single offer; counts come from running them over the search-filtered set, so
+// a chip's number always matches what clicking it shows.
+const FILTERS = [
+  { key: "all", label: "All", test: () => true },
+  { key: "unsent", label: "Not sent", test: (o) => !o.deal && effectiveStatus(o) === "new" && o.status !== "draft" },
+  { key: "waiting", label: "Awaiting reply", test: (o) => !o.deal && effectiveStatus(o) === "sent" },
+  { key: "countered", label: "Countered", test: (o) => !o.deal && effectiveStatus(o) === "countered" },
+  { key: "dead", label: "Passed / no reply", test: (o) => !o.deal && DEAD_STATUSES.has(effectiveStatus(o)) },
+  { key: "deals", label: "Deals", test: (o) => Boolean(o.deal) },
+  { key: "drafts", label: "Drafts", test: (o) => o.status === "draft" },
+];
+
+const LIVE_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
+
 export default function OffersHistory({ onEdit, onDeal }) {
   const [offers, setOffers] = useState(null);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
   const [sending, setSending] = useState(null);
   const [contracting, setContracting] = useState(null); // offer open in ContractModal
   const [assigning, setAssigning] = useState(null); // offer open in AssignmentModal
   const [netSheeting, setNetSheeting] = useState(null); // offer open in NetSheetModal
   const [enriching, setEnriching] = useState(null); // { contactId, contactName } in EnrichModal
+  const [offerPaging, setOfferPaging] = useState(null); // offer open in OfferPageModal
   const [settings, setSettings] = useState(null); // fetched lazily for contract prefills
   const [q, setQ] = useState("");
+  const [filter, setFilter] = useState("all");
   const [expanded, setExpanded] = useState(() => new Set()); // group keys open
+  const [picked, setPicked] = useState(() => new Set()); // offer ids selected for bulk
+  const [statusBusy, setStatusBusy] = useState(null); // offer id whose status is in flight
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [promoting, setPromoting] = useState(null); // offer id in flight
 
   function toggleGroup(key) {
     setExpanded((prev) => {
@@ -268,6 +335,22 @@ export default function OffersHistory({ onEdit, onDeal }) {
       .catch((e) => setError(e.message));
   }, []);
 
+  // The selection describes the CURRENT view — narrowing it must never leave
+  // hidden rows in the batch, or "mark 12 passed" quietly touches rows you
+  // can't see. Same rule Agent Outreach uses.
+  useEffect(() => { setPicked(new Set()); }, [q, filter]);
+
+  // One patcher for every copy of an offer we're holding.
+  function patchOffer(updated) {
+    if (!updated) return;
+    const patch = (o) => (o && o.id === updated.id ? updated : o);
+    setOffers((list) => (list || []).map(patch));
+    setSending(patch);
+    setContracting(patch);
+    setAssigning(patch);
+    setNetSheeting(patch);
+  }
+
   async function remove(o) {
     const msg = o.deal
       ? "This offer is an active deal — deleting removes the deal tracking too. Delete anyway?"
@@ -276,17 +359,17 @@ export default function OffersHistory({ onEdit, onDeal }) {
     try {
       await deleteOffer(o.id);
       setOffers((list) => list.filter((x) => x.id !== o.id));
+      setPicked((prev) => { const n = new Set(prev); n.delete(o.id); return n; });
     } catch (e) { setError(e.message); }
   }
 
   // Promote an accepted offer into an active deal, then jump to the Deals tab.
-  const [promoting, setPromoting] = useState(null); // offer id in flight
   async function promote(o) {
     if (promoting) return;
     setPromoting(o.id);
     try {
       const r = await promoteDeal(o.id);
-      setOffers((list) => (list || []).map((x) => (x.id === o.id ? r.offer : x)));
+      patchOffer(r.offer);
       onDeal?.();
     } catch (e) {
       if (e.status === 409) onDeal?.(); // already a deal — just go there
@@ -295,11 +378,44 @@ export default function OffersHistory({ onEdit, onDeal }) {
     setPromoting(null);
   }
 
-  // A live send appends to offer.sends — refresh every copy of the row we hold.
-  function handleSent(id, sends) {
+  // Record an outcome from the row. "accepted" promotes server-side and comes
+  // back flagged, so the one action lands you on the deal it just created.
+  async function changeStatus(o, status) {
+    if (statusBusy) return;
+    setStatusBusy(o.id);
+    setError("");
+    try {
+      const r = await setOfferStatus(o.id, status);
+      patchOffer(r.offer);
+      if (r.promoted) onDeal?.();
+    } catch (e) { setError(e.message); }
+    setStatusBusy(null);
+  }
+
+  async function bulkStatus(status) {
+    const ids = [...picked];
+    if (!ids.length || bulkBusy) return;
+    setBulkBusy(true);
+    setError("");
+    try {
+      const r = await setOfferStatusBulk(ids, status);
+      const byId = new Map((r.offers || []).map((o) => [o.id, o]));
+      setOffers((list) => (list || []).map((o) => byId.get(o.id) || o));
+      setPicked(new Set());
+      const failed = (r.results || []).filter((x) => !x.ok);
+      if (failed.length) {
+        setError(`${failed.length} of ${ids.length} couldn't be updated — ${failed[0].error}`);
+      }
+    } catch (e) { setError(e.message); }
+    setBulkBusy(false);
+  }
+
+  // A live send appends to offer.sends and can advance the status — take the
+  // whole offer back when the server returns one.
+  function handleSent(id, sends, updated) {
+    if (updated) return patchOffer(updated);
     const patch = (o) => (o && o.id === id ? { ...o, sends } : o);
     setOffers((list) => (list || []).map(patch));
-    setSelected(patch);
     setSending(patch);
   }
 
@@ -321,28 +437,18 @@ export default function OffersHistory({ onEdit, onDeal }) {
     if (!settings) getSettings().then(setSettings).catch(() => {});
   }
 
-  // Contract/assignment/net-sheet generation updates the whole offer (pdf URLs + fields).
-  function handleContractGenerated(updated) {
-    const patch = (o) => (o && o.id === updated.id ? updated : o);
-    setOffers((list) => (list || []).map(patch));
-    setSelected(patch);
-    setContracting(patch);
-    setAssigning(patch);
-    setNetSheeting(patch);
-  }
-
-  if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
-  if (!offers) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400" /></div>;
+  if (error && !offers) return <ErrorBar>{error}</ErrorBar>;
+  if (!offers) return <SkeletonRows cols={7} rows={8} />;
   if (!offers.length) {
     return (
-      <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
-        No offers yet — create your first one from the New Offer tab.
-      </div>
+      <EmptyState>No offers yet — hit <span className="font-semibold text-slate-500">New Offer</span> to create your first one.</EmptyState>
     );
   }
 
+  /* ---------- derive: search → filter → group ---------- */
+
   const needle = q.trim().toLowerCase();
-  const shown = !needle
+  const searched = !needle
     ? offers
     : offers.filter((o) =>
         [
@@ -352,6 +458,29 @@ export default function OffersHistory({ onEdit, onDeal }) {
           o.cashAmount != null ? String(o.cashAmount) : "",
           o.cashAmount != null ? fmtMoney(o.cashAmount) : "",
         ].some((v) => (v || "").toLowerCase().includes(needle)));
+
+  const chips = FILTERS.map((f) => ({ key: f.key, label: f.label, count: searched.filter(f.test).length }));
+  const activeFilter = FILTERS.find((f) => f.key === filter) || FILTERS[0];
+  const shown = searched.filter(activeFilter.test);
+
+  // KPIs run over everything loaded, not the filtered view — they're the state
+  // of the business, not of the current query.
+  const real = offers.filter((o) => o.status !== "draft");
+  const monthAgo = Date.now() - 30 * 86400000;
+  const recent = real.filter((o) => new Date(o.createdAt || 0).getTime() >= monthAgo).length;
+  const waiting = real.filter((o) => !o.deal && effectiveStatus(o) === "sent").length;
+  // Reply rate: of everything that actually went out, how much came back with
+  // an answer of any kind. "No response" is a non-reply, so it sits in the
+  // denominator only — which is the point of tracking it separately.
+  const delivered = real.filter((o) => effectiveStatus(o) !== "new").length;
+  const replied = real.filter((o) => ["countered", "passed", "accepted"].includes(effectiveStatus(o))).length;
+  const liveDeals = real.filter((o) => o.deal && LIVE_STAGES.has(o.deal.stage)).length;
+  const kpis = [
+    { label: "Offers (30d)", value: recent, hint: "Non-draft offers created in the last 30 days" },
+    { label: "Awaiting reply", value: waiting, hint: "Sent, no outcome recorded yet" },
+    { label: "Reply rate", value: delivered ? `${Math.round((replied / delivered) * 100)}%` : "—", hint: `${replied} answered of ${delivered} sent` },
+    { label: "Live deals", value: liveDeals, hint: "Under contract, buyer found, or assigned" },
+  ];
 
   // Group offers by agent. Offers arrive newest-first, so first appearance
   // orders the groups by each agent's most recent offer.
@@ -368,38 +497,71 @@ export default function OffersHistory({ onEdit, onDeal }) {
     g.offers.push(o);
   }
 
+  // Bulk applies to real, un-promoted offers: drafts have no outcome and a
+  // deal's stage is changed on the Deals tab, so neither is selectable.
+  const selectable = shown.filter((o) => o.status !== "draft" && !o.deal);
+  const allPicked = selectable.length > 0 && selectable.every((o) => picked.has(o.id));
+  const toggleAll = () =>
+    setPicked(allPicked ? new Set() : new Set(selectable.map((o) => o.id)));
+  const togglePick = (id) =>
+    setPicked((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const clearFilters = () => { setQ(""); setFilter("all"); };
+
   return (
     <>
-      <div className="mb-3 flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
-        <Search size={15} className="text-slate-400" />
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search by contact, address, amount, or date…"
-          className="w-full text-sm focus:outline-none"
-        />
-        {q && (
-          <button type="button" onClick={() => setQ("")} className="rounded p-0.5 text-slate-400 hover:bg-slate-100">
-            <X size={14} />
-          </button>
-        )}
+      <div className="mb-3">
+        <KpiRow items={kpis} />
       </div>
-      {shown.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
-          No offers match "{q.trim()}".
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <FilterChips value={filter} onChange={setFilter} options={chips} label="Filter offers by status" />
+        <SearchInput value={q} onChange={setQ} className="ml-auto min-w-[16rem] flex-1 sm:max-w-sm"
+          placeholder="Search by contact, address, amount, or date…" label="Search offers" />
+      </div>
+
+      {error && <div className="mb-3"><ErrorBar>{error}</ErrorBar></div>}
+
+      {picked.size > 0 && (
+        <div className="sticky top-14 z-20 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-slate-300 bg-white p-3 shadow-sm">
+          <span className="text-sm font-semibold">{picked.size} selected</span>
+          <span className="text-xs text-slate-400">Record the same outcome on all of them</span>
+          <div className="ml-auto flex flex-wrap gap-2">
+            <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("sent")}>Mark sent</button>
+            <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("countered")}>Mark countered</button>
+            <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("no_response")}>Mark no response</button>
+            <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("passed")}>Mark passed</button>
+            <button type="button" className={BTN_ICON} onClick={() => setPicked(new Set())} aria-label="Clear selection">
+              <X size={15} />
+            </button>
+          </div>
         </div>
+      )}
+
+      {shown.length === 0 ? (
+        <EmptyState action={<button type="button" className={BTN_PRIMARY} onClick={clearFilters}>Clear filters</button>}>
+          {needle ? `No offers match "${q.trim()}"` : "Nothing in this view"}
+          {filter !== "all" && needle ? ` in ${activeFilter.label.toLowerCase()}` : ""}.
+        </EmptyState>
       ) : (
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-        <table className="w-full text-sm">
+      <TableCard>
+        {/* min-w scrolls the card rather than crushing columns on narrow
+            screens; the document links wrap (below) rather than run under the
+            opaque sticky action cell when the table is merely tight. */}
+        <table className="w-full min-w-[64rem] text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-              <th className="px-4 py-2.5">Agent</th>
-              <th className="px-4 py-2.5">Date</th>
-              <th className="px-4 py-2.5">Property</th>
-              <th className="px-4 py-2.5 text-right">Cash offer</th>
-              <th className="px-4 py-2.5">Document</th>
-              <th className="px-4 py-2.5">Attached</th>
-              <th className="sticky right-0 bg-white px-4 py-2.5" />
+              <th scope="col" className="px-3 py-2.5">
+                <input type="checkbox" checked={allPicked} onChange={toggleAll}
+                  disabled={!selectable.length} aria-label="Select all shown offers" />
+              </th>
+              <th scope="col" className="px-4 py-2.5">Agent</th>
+              <th scope="col" className="px-4 py-2.5">Date</th>
+              <th scope="col" className="px-4 py-2.5">Property</th>
+              <th scope="col" className="px-4 py-2.5 text-right">Cash offer</th>
+              <th scope="col" className="px-4 py-2.5">Status</th>
+              <th scope="col" className="w-44 px-4 py-2.5">Document</th>
+              <th scope="col" className="sticky right-0 bg-white px-4 py-2.5"><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -409,17 +571,20 @@ export default function OffersHistory({ onEdit, onDeal }) {
               const addresses = [...new Set(g.offers.map((o) => o.address).filter(Boolean))];
               return (
                 <React.Fragment key={g.key}>
-                  <tr onClick={() => toggleGroup(g.key)}
+                  <tr {...rowActivation(() => toggleGroup(g.key))}
+                    aria-expanded={isOpen}
+                    aria-label={`${g.contactName || "No contact"}, ${g.offers.length} offer${g.offers.length === 1 ? "" : "s"}`}
                     className="group cursor-pointer border-b border-slate-100 bg-slate-50/60 last:border-0 hover:bg-slate-100">
+                    <td className="px-3 py-2.5" />
                     <td className="whitespace-nowrap px-4 py-2.5">
                       <span className="inline-flex items-center gap-1.5">
-                        {isOpen ? <ChevronDown size={15} className="text-slate-400" /> : <ChevronRight size={15} className="text-slate-400" />}
+                        {isOpen ? <ChevronDown size={15} className="text-slate-400" aria-hidden="true" /> : <ChevronRight size={15} className="text-slate-400" aria-hidden="true" />}
                         {g.contactId ? (
                           <a href={ghlContactUrl(g.contactId)} target="_blank" rel="noreferrer"
                             onClick={(e) => e.stopPropagation()}
                             className="inline-flex items-center gap-1 font-semibold underline decoration-slate-300 underline-offset-2 hover:text-slate-900"
                             title="Open contact in GHL">
-                            {g.contactName || g.contactId} <ExternalLink size={12} className="text-slate-400" />
+                            {g.contactName || g.contactId} <ExternalLink size={12} className="text-slate-400" aria-hidden="true" />
                           </a>
                         ) : (
                           <span className="font-semibold">{g.contactName || "No contact"}</span>
@@ -439,38 +604,63 @@ export default function OffersHistory({ onEdit, onDeal }) {
                     <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
                       {latest.cashAmount != null ? fmtMoney(latest.cashAmount) : "—"}
                     </td>
-                    <td className="px-4 py-2.5" />
+                    <td className="whitespace-nowrap px-4 py-2.5">
+                      <StatusDots offers={g.offers} />
+                    </td>
                     <td className="px-4 py-2.5" />
                     <td className="sticky right-0 whitespace-nowrap bg-slate-50/60 px-4 py-2.5 text-right group-hover:bg-slate-100"
                       onClick={(e) => e.stopPropagation()}>
                       {g.contactId && (
                         <button type="button"
                           onClick={() => setEnriching({ contactId: g.contactId, contactName: g.contactName })}
-                          className="rounded p-1 text-amber-500 hover:bg-amber-50"
+                          className={`${BTN_ICON} text-amber-500 hover:bg-amber-50 hover:text-amber-600`}
+                          aria-label={`AI enrichment for ${g.contactName || "this contact"}`}
                           title="AI enrichment — summarize the conversation and fill CRM fields">
                           <Sparkles size={15} />
                         </button>
                       )}
                     </td>
                   </tr>
-                  {isOpen && g.offers.map((o) => (
+                  {isOpen && g.offers.map((o) => {
+                    const draft = o.status === "draft";
+                    return (
               <tr key={o.id}
-                onClick={() => (o.status === "draft" ? onEdit?.(o) : setSelected(o))}
-                className="group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                {...rowActivation(() => (draft ? onEdit?.(o) : setSelectedId(o.id)))}
+                aria-label={`${o.address || "Offer"} — ${OFFER_STATUS[effectiveStatus(o)]?.label || ""}`}
+                className={`group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 ${
+                  picked.has(o.id) ? "bg-blue-50/60" : ""}`}>
+                <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                  {!draft && !o.deal && (
+                    <input type="checkbox" checked={picked.has(o.id)} onChange={() => togglePick(o.id)}
+                      aria-label={`Select the offer on ${o.address || "this property"}`} />
+                  )}
+                </td>
                 <td className="px-4 py-2.5">
                   <span className="ml-5 block border-l-2 border-slate-200 pl-3 text-[11px] uppercase tracking-wide text-slate-400">
-                    {o.status === "draft" ? "draft" : " "}
+                    {" "}
                   </span>
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">
                   {(o.createdAt || "").slice(0, 10)}
                 </td>
-                <td className="max-w-[22rem] truncate px-4 py-2.5" title={o.address || undefined}>{o.address || "—"}</td>
+                <td className="max-w-[20rem] truncate px-4 py-2.5" title={o.address || undefined}>{o.address || "—"}</td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
                   {o.cashAmount != null ? fmtMoney(o.cashAmount) : "—"}
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
-                  <span className="flex gap-2 text-slate-600">
+                  {draft ? (
+                    <StatusPill offer={o} small />
+                  ) : (
+                    <StatusMenu offer={o} busy={statusBusy === o.id}
+                      onSelect={(s) => changeStatus(o, s)} onDealNav={onDeal} />
+                  )}
+                  <AttachWarning offer={o} />
+                  <SentBadge offer={o} />
+                </td>
+                <td className="w-44 px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                  {/* shrink-0 on the links: flex items shrink before they wrap,
+                      which clips a label mid-word instead of moving it down. */}
+                  <span className="flex flex-wrap gap-x-2 text-slate-600 [&>a]:shrink-0">
                     {o.pdfUrl && (
                       <a href={o.pdfUrl} target="_blank" rel="noreferrer" className="underline hover:text-slate-900">PDF</a>
                     )}
@@ -491,66 +681,56 @@ export default function OffersHistory({ onEdit, onDeal }) {
                     )}
                   </span>
                 </td>
-                <td className="whitespace-nowrap px-4 py-2.5 text-xs">
-                  <AttachStatus offer={o} />
-                  <SentBadge offer={o} />
-                </td>
                 <td className="sticky right-0 whitespace-nowrap bg-white px-4 py-2.5 text-right group-hover:bg-slate-50" onClick={(e) => e.stopPropagation()}>
-                  {o.status !== "draft" && !o.deal && (
-                    <button type="button" onClick={() => promote(o)} disabled={promoting === o.id}
-                      className="mr-1 inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
-                      title="Accepted offer — start tracking it as an active deal">
-                      <Briefcase size={13} /> {promoting === o.id ? "…" : "Deal"}
-                    </button>
-                  )}
-                  {o.deal && (
-                    <button type="button" onClick={() => onDeal?.()} className="mr-1 align-middle" title="Open the Deals tab">
-                      <StagePill stage={o.deal.stage} small />
-                    </button>
-                  )}
-                  {o.status !== "draft" && o.contactId && (
-                    <button type="button" onClick={() => setSending(o)}
-                      className="mr-1 inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  {!draft && o.contactId && (
+                    <button type="button" onClick={() => setSending(o)} className={`${BTN} mr-1`}
                       title="Text or email the offer documents">
-                      <Send size={13} /> Send
+                      <Send size={13} aria-hidden="true" /> Send
                     </button>
                   )}
-                  <button type="button" onClick={() => onEdit?.(o)}
-                    className="mr-1 inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                    title={o.status === "draft" ? "Continue editing draft" : "Reopen as a new working copy"}>
-                    <Pencil size={13} /> Edit
+                  <button type="button" onClick={() => onEdit?.(o)} className={`${BTN} mr-1`}
+                    title={draft ? "Continue editing draft" : "Reopen as a new working copy"}>
+                    <Pencil size={13} aria-hidden="true" /> Edit
                   </button>
-                  <button type="button" onClick={() => remove(o)}
-                    className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600" title="Delete">
+                  <button type="button" onClick={() => remove(o)} className={BTN_ICON}
+                    aria-label={`Delete the offer on ${o.address || "this property"}`} title="Delete">
                     <Trash2 size={15} />
                   </button>
                 </td>
               </tr>
-                  ))}
+                    );
+                  })}
                 </React.Fragment>
               );
             })}
           </tbody>
         </table>
-      </div>
+      </TableCard>
       )}
-      {selected && <OfferDetail offer={selected} onClose={() => setSelected(null)}
-        onEdit={(o) => { setSelected(null); onEdit?.(o); }}
-        onSend={(o) => setSending(o)}
-        onContract={openContract}
-        onAssignment={openAssignment}
-        onNetSheet={openNetSheet}
-        onPromote={(o) => { setSelected(null); promote(o); }}
-        onDealNav={onDeal} />}
+      {selectedId && (() => {
+        const sel = offers.find((o) => o.id === selectedId);
+        return sel ? (
+          <OfferDetail offer={sel} onClose={() => setSelectedId(null)}
+            onEdit={(o) => { setSelectedId(null); onEdit?.(o); }}
+            onSend={(o) => setSending(o)}
+            onContract={openContract}
+            onAssignment={openAssignment}
+            onNetSheet={openNetSheet}
+            onOfferPage={(o) => setOfferPaging(o)}
+            onPromote={(o) => { setSelectedId(null); promote(o); }}
+            onDealNav={onDeal} />
+        ) : null;
+      })()}
       {sending && <SendModal offer={sending} onClose={() => setSending(null)} onSent={handleSent} />}
+      {offerPaging && <OfferPageModal offer={offerPaging} onClose={() => setOfferPaging(null)} />}
       {enriching && <EnrichModal contactId={enriching.contactId} contactName={enriching.contactName}
         defaultType="agent" onClose={() => setEnriching(null)} />}
       {contracting && <ContractModal offer={contracting} settings={settings}
-        onClose={() => setContracting(null)} onGenerated={handleContractGenerated} />}
+        onClose={() => setContracting(null)} onGenerated={patchOffer} />}
       {assigning && <AssignmentModal offer={assigning} settings={settings}
-        onClose={() => setAssigning(null)} onGenerated={handleContractGenerated} />}
+        onClose={() => setAssigning(null)} onGenerated={patchOffer} />}
       {netSheeting && <NetSheetModal offer={netSheeting} settings={settings}
-        onClose={() => setNetSheeting(null)} onGenerated={handleContractGenerated} />}
+        onClose={() => setNetSheeting(null)} onGenerated={patchOffer} />}
     </>
   );
 }

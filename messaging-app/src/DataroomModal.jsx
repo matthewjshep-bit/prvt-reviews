@@ -13,7 +13,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ArrowLeft, Check, Copy, Eye, ImagePlus, Loader2, Lock, Plus, RefreshCw, Send, ShieldOff,
+  ArrowLeft, Eye, ImagePlus, Loader2, Lock, Plus, RefreshCw, Send, ShieldOff,
   Star, Trash2, X,
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
@@ -25,6 +25,7 @@ import {
   sendDataroomInvite, updateDataroom, uploadOfferPhoto,
 } from "./api.js";
 import { propertyPhotoVariants } from "./image.js";
+import { CopyButton } from "./ui.jsx";
 
 const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 const INPUT_CLS =
@@ -62,22 +63,6 @@ const shortDate = (iso) =>
   iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
 // Street line only — the deal strip has no room for city/state/zip.
 const shortAddress = (a) => String(a || "Deal").split(",")[0].trim() || "Deal";
-
-function CopyButton({ value, label = "Copy link", className = BTN_CLS }) {
-  const [done, setDone] = useState(false);
-  return (
-    <button type="button" className={className}
-      onClick={() => {
-        navigator.clipboard?.writeText(value).then(() => {
-          setDone(true);
-          setTimeout(() => setDone(false), 1500);
-        }).catch(() => {});
-      }}>
-      {done ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
-      {done ? "Copied" : label}
-    </button>
-  );
-}
 
 // Typeahead over GHL contacts — same debounced shape as DealsView's picker.
 function ContactPicker({ existingIds, onPick, busy }) {

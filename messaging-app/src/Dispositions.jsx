@@ -535,8 +535,8 @@ export default function Dispositions() {
     if (query) await runSearch({ parsed: query });
   };
 
-  if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
-  if (!data) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400" /></div>;
+  if (error) return <ErrorBar>{error}</ErrorBar>;
+  if (!data) return <Spinner />;
 
   return (
     <div className="space-y-4">
@@ -810,15 +810,15 @@ export default function Dispositions() {
       </div>
 
       {rows.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
+        <EmptyState>
           {search?.results
             ? "No investor's buy box fits that. Try removing a criterion above, or sync if your book looks stale."
             : investors.length === 0
               ? "No investors yet — Sync from GoHighLevel to pull in every contact carrying your investor tags."
               : "No investors match that filter."}
-        </div>
+        </EmptyState>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <TableCard>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
@@ -908,7 +908,7 @@ export default function Dispositions() {
               })}
             </tbody>
           </table>
-        </div>
+        </TableCard>
       )}
     </div>
   );

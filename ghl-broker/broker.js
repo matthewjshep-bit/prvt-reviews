@@ -15,6 +15,7 @@ import createOutreachRouter from "./routes/outreach.js";
 import createDashboardRouter from "./routes/dashboard.js";
 import createDispoRouter from "./routes/dispo.js";
 import { createDataroomRouter, createDataroomPublicRouter } from "./routes/dataroom.js";
+import { createOfferPageRouter, createOfferPagePublicRouter } from "./routes/offer-page.js";
 import { store } from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -126,10 +127,17 @@ app.use("/api/outreach", createOutreachRouter({ resolveLocation }));
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
 app.use("/api/dispo", createDispoRouter({ resolveLocation }));
 app.use("/api/datarooms", createDataroomRouter({ resolveLocation, publicBaseUrl: DATAROOM_BASE_URL }));
+// Agent-facing offer packages. These live on the OFFERS hostname, not the
+// deals one: an agent gets links branded like the documents they already have,
+// and nothing about a listing agent's page should read as investor marketing.
+app.use("/api/offer-pages", createOfferPageRouter({ resolveLocation, publicBaseUrl: PUBLIC_BASE_URL }));
 // Investor datarooms are opened by people outside the GHL account, so /d is
 // deliberately outside the location gate — the per-invite token is the
 // credential, and the router enforces PIN, expiry, and revocation itself.
 app.use("/d", createDataroomPublicRouter({ publicBaseUrl: DATAROOM_BASE_URL }));
+// Same deal for /o: the share token is the credential, so it sits outside the
+// location gate. It refuses dataroom tokens, and /d refuses these.
+app.use("/o", createOfferPagePublicRouter());
 
 store.init().catch((e) => console.error("store init failed:", e.message));
 

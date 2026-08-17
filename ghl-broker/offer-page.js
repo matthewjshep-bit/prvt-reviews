@@ -1,0 +1,328 @@
+// offer-page.js — the agent-facing offer package.
+//
+// The investor dataroom (dataroom.js) answers "should I buy this deal from
+// you". This answers a different question, for a different reader: a listing
+// agent who just got a cash offer well under asking and is deciding whether to
+// take it to their seller or bin it.
+//
+// So it shares the dataroom's plumbing — same token model, same page shell and
+// CSS, same frozen-snapshot rule, same no-JavaScript CSP — and almost none of
+// its copy or content. Three things are deliberately different:
+//
+//   1. The arithmetic is the point. An agent who can see how the number was
+//      built argues with the inputs instead of dismissing the offer. That's
+//      shared/offer-breakdown.js, and it never shows our assignment fee.
+//   2. The seller's net is here. It's the one figure an agent actually
+//      presents, and it's what makes a lower gross number defensible.
+//   3. No fee breakdown, no investor pricing, no spread. An agent must never
+//      see what we resell for; the dataroom's feeBreakdown section has no
+//      equivalent here and there is no toggle that could turn one on.
+//
+// Storage rides on the `datarooms` table with kind:"offer" — see the isolation
+// note in routes/offer-page.js for why that must never leak into the investor
+// feed.
+
+import { netComparison } from "./shared/offer-calc.js";
+import { offerBreakdown } from "./shared/offer-breakdown.js";
+import { esc, page, pickedComps } from "./dataroom.js";
+
+const num = (v) => {
+  const n = Number(String(v ?? "").replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+};
+const clean = (v, max) => String(v ?? "").trim().slice(0, max);
+const money = (n) => `$${Math.round(num(n)).toLocaleString("en-US")}`;
+
+/* ============================================================= *
+ * sections
+ * ============================================================= */
+
+// `offer` is not in here on purpose: the price and the property are the page.
+// A package that can hide its own offer is a blank page with a header.
+export const OFFER_SECTION_KEYS = ["breakdown", "comps", "scope", "netsheet", "note", "documents"];
+
+// Everything on except the breakdown. Showing your working is a per-offer
+// judgement — persuasive to an agent who's pushing back on price, needless
+// noise on an offer that's already close to asking.
+export const DEFAULT_OFFER_SECTIONS = {
+  breakdown: false, comps: true, scope: true, netsheet: true, note: true, documents: true,
+};
+
+export function normalizeOfferSections(input) {
+  const out = { ...DEFAULT_OFFER_SECTIONS };
+  for (const k of OFFER_SECTION_KEYS) {
+    if (input && typeof input[k] === "boolean") out[k] = input[k];
+  }
+  return out;
+}
+
+/* ============================================================= *
+ * snapshot
+ * ============================================================= */
+
+// Documents an agent may open. The contract and assignment PDFs are ours and
+// are absent by construction — there is no key here that maps to them.
+export const OFFER_DOC_KINDS = {
+  offer: { docKind: "pdf", urlKey: "pdfUrl", label: "The written offer" },
+  comps: { docKind: "compspdf", urlKey: "compsPdfUrl", label: "Comparable sales analysis" },
+  scope: { docKind: "scopepdf", urlKey: "scopePdfUrl", label: "Renovation scope of work" },
+  netsheet: { docKind: "netsheetpdf", urlKey: "netSheetPdfUrl", label: "Seller net comparison" },
+};
+
+// Freeze the package from an offer. Taken once, so editing the offer afterwards
+// never changes what an agent already opened; the operator refreshes on
+// purpose. headline/note are operator-authored and must be passed back in on a
+// refresh or rebuilding from the offer would silently drop them.
+export function buildOfferSnapshot({ offer, settings = {}, sections, headline = "", note = "" }) {
+  const inputs = offer?.calc?.inputs || {};
+  const snap = offer?.snapshot || null;
+  const company = offer?.calc?.settings?.company || settings?.company || {};
+  const effective = offer?.calc?.settings || settings || {};
+
+  const amount = Math.round(num(offer?.cashAmount) || num(offer?.calc?.offers?.cash?.amount));
+  const net = netComparison(amount, effective);
+  const subject = snap?.comps?.result?.info || snap?.subjectInfo || null;
+
+  // The letter's own terms table, so the page and the PDF can't disagree.
+  const terms = (Array.isArray(snap?.letterTerms) ? snap.letterTerms : [])
+    .map((t) => ({ label: clean(t?.label, 60), value: clean(t?.value ?? t?.text, 240) }))
+    .filter((t) => t.label && t.value)
+    .slice(0, 12);
+
+  return {
+    builtAt: new Date().toISOString(),
+    kind: "offer",
+    sections: normalizeOfferSections(sections),
+    headline: clean(headline, 120),
+    note: clean(note, 2000),
+    company: {
+      name: clean(company.name, 80),
+      tagline: clean(company.tagline, 120),
+      signer: clean(company.signer, 80),
+      phone: clean(company.phone, 40),
+      email: clean(company.email, 120),
+    },
+    property: {
+      address: clean(inputs.address || offer?.address, 160),
+      beds: subject?.beds != null ? num(subject.beds) : null,
+      baths: subject?.baths != null ? num(subject.baths) : null,
+      sqft: Math.round(num(subject?.sqft) || num(snap?.subjectSqft)) || null,
+      yearBuilt: Math.round(num(subject?.yearBuilt)) || null,
+    },
+    offer: {
+      amount,
+      dateLabel: clean(offer?.dateLabel, 40),
+      validLabel: clean(offer?.validLabel, 40),
+      askingPrice: Math.round(num(inputs.askingPrice)) || null,
+      terms,
+    },
+    // Precomputed and frozen: the page must show the same arithmetic six weeks
+    // from now even if settings change underneath it.
+    breakdown: offerBreakdown(offer),
+    netsheet: net ? {
+      offer: Math.round(net.offer),
+      sellerPct: net.sellerPct,
+      buyerPct: net.buyerPct,
+      netA: Math.round(net.netA),
+      listPrice: Math.round(net.listPrice),
+      sellerCommissionA: Math.round(net.sellerCommissionA),
+      sellerCommissionB: Math.round(net.sellerCommissionB),
+      buyerCommissionB: Math.round(net.buyerCommissionB),
+    } : null,
+    comps: {
+      items: pickedComps(snap),
+      basis: clean(snap?.comps?.arvBasis, 120),
+      months: Math.round(num(snap?.comps?.months)) || null,
+    },
+    scope: (offer?.scope || []).slice(0, 60)
+      .map((s) => ({ label: clean(s.label, 120), cost: Math.round(num(s.cost)) })),
+    documents: Object.entries(OFFER_DOC_KINDS)
+      .filter(([, def]) => offer?.[def.urlKey])
+      .map(([key, def]) => ({ key, label: def.label })),
+  };
+}
+
+/* ============================================================= *
+ * HTML
+ * ============================================================= */
+
+const OFFER_CSS = `
+.lead{background:#0F172A;border-radius:12px;padding:22px 20px;margin:0 0 16px;color:#fff}
+.lead .k{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#94A3B8;margin-bottom:6px}
+.lead .v{font-size:24px;font-weight:800;letter-spacing:-.025em;font-variant-numeric:tabular-nums;line-height:1.1}
+.lead .sub{font-size:13px;color:#CBD5E1;margin-top:8px}
+.stack td{border-bottom:0;padding:7px 8px 7px 0}
+.stack tr.tot td{border-top:2px solid #0F172A;font-weight:800;padding-top:11px;font-size:15px}
+.stack td.r{font-variant-numeric:tabular-nums;text-align:right;padding-right:0}
+.stack .op{color:#94A3B8;width:14px;padding-right:6px;text-align:center}
+.note p{margin:0 0 10px;font-size:14px}.note p:last-child{margin:0}
+.netrow{display:flex;flex-wrap:wrap;gap:1px;background:#E2E8F0;border:1px solid #E2E8F0;border-radius:8px;overflow:hidden}
+.netcol{background:#fff;padding:14px 16px;flex:1 1 200px;min-width:0}
+.netcol.win{background:#ECFDF5}
+.netcol .t{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748B;margin-bottom:8px}
+.netcol .big{font-size:20px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.netcol.win .big{color:#047857}
+.netcol .ln{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:#475569;margin-top:5px;
+  font-variant-numeric:tabular-nums}
+`;
+
+function leadCard(snap) {
+  const o = snap.offer || {};
+  const p = snap.property || {};
+  const facts = [
+    p.beds != null ? `${p.beds} bd` : "",
+    p.baths != null ? `${p.baths} ba` : "",
+    p.sqft ? `${p.sqft.toLocaleString("en-US")} sqft` : "",
+    p.yearBuilt ? `built ${p.yearBuilt}` : "",
+  ].filter(Boolean).join(" · ");
+  const valid = o.validLabel ? `Valid through ${esc(o.validLabel)}` : "";
+  const asking = o.askingPrice ? `Asking ${money(o.askingPrice)}` : "";
+  return `<div class="lead">
+    <div class="k">All-cash offer</div>
+    <div class="v">${money(o.amount)}</div>
+    <div class="sub">${esc(snap.property.address || "")}${facts ? ` · ${esc(facts)}` : ""}</div>
+    ${valid || asking ? `<div class="sub">${[asking, valid].filter(Boolean).join(" · ")}</div>` : ""}
+  </div>`;
+}
+
+function noteSection(snap) {
+  if (!snap.note && !snap.headline) return "";
+  const paras = String(snap.note || "").split(/\n{2,}/).filter(Boolean)
+    .map((t) => `<p>${esc(t).replace(/\n/g, "<br>")}</p>`).join("");
+  return `<div class="card">
+    <h2>${esc(snap.headline || "A note on this offer")}</h2>
+    <div class="note">${paras || `<p class="muted">—</p>`}</div>
+  </div>`;
+}
+
+function termsSection(snap) {
+  const rows = snap.offer?.terms || [];
+  if (!rows.length) return "";
+  return `<div class="card"><h2>Terms</h2><table>${rows.map((t) => `<tr>
+    <td style="color:#64748B;white-space:nowrap">${esc(t.label)}</td>
+    <td>${esc(t.value)}</td></tr>`).join("")}</table></div>`;
+}
+
+function breakdownSection(snap) {
+  const b = snap.breakdown;
+  if (!b || !b.rows?.length) return "";
+  const rows = b.rows.map((r) => `<tr>
+    <td class="op">${r.sign === "+" ? "" : "−"}</td>
+    <td>${esc(r.label)}</td>
+    <td class="r">${money(r.amount)}</td></tr>`).join("");
+  return `<div class="card">
+    <h2>How we got to this number</h2>
+    <table class="stack">${rows}
+      <tr class="tot"><td class="op"></td><td>Our offer</td><td class="r">${money(b.total)}</td></tr>
+    </table>
+    <p class="muted" style="margin-top:12px">${esc(b.basis)}</p>
+  </div>`;
+}
+
+function netSection(snap) {
+  const n = snap.netsheet;
+  if (!n) return "";
+  // The comparison an agent can actually take to a seller: our offer with only
+  // their side of the commission, against the list price a traditional sale
+  // would need to leave the seller the same money.
+  return `<div class="card">
+    <h2>What the seller nets</h2>
+    <div class="netrow">
+      <div class="netcol win">
+        <div class="t">Our offer — no buyer's agent</div>
+        <div class="big">${money(n.netA)}</div>
+        <div class="ln"><span>Offer price</span><span>${money(n.offer)}</span></div>
+        <div class="ln"><span>Your commission (${n.sellerPct}%)</span><span>− ${money(n.sellerCommissionA)}</span></div>
+      </div>
+      <div class="netcol">
+        <div class="t">Listed, to net the same</div>
+        <div class="big">${money(n.listPrice)}</div>
+        <div class="ln"><span>Your commission (${n.sellerPct}%)</span><span>− ${money(n.sellerCommissionB)}</span></div>
+        <div class="ln"><span>Buyer's agent (${n.buyerPct}%)</span><span>− ${money(n.buyerCommissionB)}</span></div>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:12px">
+      Before repairs, concessions, carrying costs and time on market — all of which fall on the seller in the
+      listed column and on us in ours.
+    </p>
+  </div>`;
+}
+
+function compsSection(snap) {
+  const items = snap.comps?.items || [];
+  if (!items.length) return "";
+  const rows = items.map((c) => `<tr>
+    <td>${esc(c.address)}${c.condition ? ` <span class="pill">${esc(c.condition)}</span>` : ""}</td>
+    <td class="r">${c.beds != null ? esc(String(c.beds)) : "—"}/${c.baths != null ? esc(String(c.baths)) : "—"}</td>
+    <td class="r">${c.sqft ? c.sqft.toLocaleString("en-US") : "—"}</td>
+    <td class="r">${c.saleDate ? esc(c.saleDate) : "—"}</td>
+    <td class="r">${money(c.price)}</td></tr>`).join("");
+  const basis = [
+    snap.comps.basis,
+    snap.comps.months ? `sold within ${snap.comps.months} months` : "",
+  ].filter(Boolean).join(" · ");
+  return `<div class="card">
+    <h2>The comparable sales behind it</h2>
+    <div class="scroll wide"><table>
+      <tr><th>Address</th><th class="r">Bd/Ba</th><th class="r">Sqft</th><th class="r">Sold</th><th class="r">Price</th></tr>
+      ${rows}
+    </table></div>
+    <p class="hint">Scroll the table sideways to see every column.</p>
+    ${basis ? `<p class="muted" style="margin-top:12px">${esc(basis)}</p>` : ""}
+  </div>`;
+}
+
+function scopeSection(snap) {
+  const rows = snap.scope || [];
+  if (!rows.length) return "";
+  const total = rows.reduce((t, s) => t + num(s.cost), 0);
+  return `<div class="card">
+    <h2>What we'd have to put into it</h2>
+    <table>${rows.map((s) => `<tr><td>${esc(s.label)}</td><td class="r">${money(s.cost)}</td></tr>`).join("")}
+      <tr><td style="font-weight:700;border-top:2px solid #0F172A;padding-top:10px">Total</td>
+          <td class="r" style="font-weight:700;border-top:2px solid #0F172A;padding-top:10px">${money(total)}</td></tr>
+    </table>
+  </div>`;
+}
+
+function documentsSection(snap, base) {
+  const docs = snap.documents || [];
+  if (!docs.length) return "";
+  return `<div class="card"><h2>Documents</h2>${docs.map((d) => `<div class="doc">
+    <div>${esc(d.label)}</div>
+    <a class="btn ghost" href="${base}/file/${encodeURIComponent(d.key)}" target="_blank" rel="noreferrer">Open PDF</a>
+  </div>`).join("")}</div>`;
+}
+
+// The whole page. `token` scopes the document links.
+export function renderOfferPage({ snap, token, brand = null }) {
+  const s = snap.sections || DEFAULT_OFFER_SECTIONS;
+  const base = `/o/${encodeURIComponent(token)}`;
+  const co = snap.company || {};
+  const contact = [co.signer, co.phone, co.email].filter(Boolean).map(esc).join(" · ");
+
+  const body = `
+    ${leadCard(snap)}
+    ${s.note ? noteSection(snap) : ""}
+    ${termsSection(snap)}
+    ${s.breakdown ? breakdownSection(snap) : ""}
+    ${s.netsheet ? netSection(snap) : ""}
+    ${s.comps ? compsSection(snap) : ""}
+    ${s.scope ? scopeSection(snap) : ""}
+    ${s.documents ? documentsSection(snap, base) : ""}
+    <p class="foot">
+      ${esc(co.name || "")}${contact ? `<br>${contact}` : ""}
+      ${snap.offer?.dateLabel ? `<br>Offer dated ${esc(snap.offer.dateLabel)}` : ""}
+    </p>`;
+
+  return page({
+    title: `Cash offer — ${snap.property?.address || "property"}`,
+    css: OFFER_CSS,
+    body,
+    // No watermark. The dataroom watermarks because an investor package is
+    // confidential and forwarding it costs us the deal; this page exists to be
+    // forwarded — to the seller, to a broker, to whoever needs convincing.
+    watermark: "",
+    brand,
+  });
+}

@@ -115,7 +115,8 @@ export default function SendModal({ offer, onClose, onSent }) {
       } else {
         setResult(r);
         setStep("sent");
-        onSent?.(offer.id, r.sends);
+        // A live send can also advance the offer's status server-side.
+        onSent?.(offer.id, r.sends, { status: r.status, statusHistory: r.statusHistory });
       }
     } catch (e) { setError(e.message); }
     setBusy(false);

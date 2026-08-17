@@ -15,15 +15,15 @@ import AssignmentModal from "./AssignmentModal.jsx";
 import DataroomModal from "./DataroomModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 import MatchInvestorsModal from "./MatchInvestorsModal.jsx";
+import {
+  DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
+  rowActivation,
+} from "./ui.jsx";
 
-export const DEAL_STAGES = [
-  { key: "under_contract", label: "Under contract", cls: "bg-amber-100 text-amber-800" },
-  { key: "buyer_found", label: "Buyer found", cls: "bg-blue-100 text-blue-800" },
-  { key: "assigned", label: "Assigned", cls: "bg-violet-100 text-violet-800" },
-  { key: "closed", label: "Closed", cls: "bg-emerald-100 text-emerald-800" },
-  { key: "fell_through", label: "Fell through", cls: "bg-slate-200 text-slate-600" },
-];
-export const STAGE = Object.fromEntries(DEAL_STAGES.map((s) => [s.key, s]));
+// Stage vocabulary and the pill live in ui.jsx so History can render a stage
+// without importing from a sibling view. Re-exported here for the modules that
+// already reach for them through DealsView.
+export { DEAL_STAGES, STAGE, StagePill };
 const TERMINAL = new Set(["closed", "fell_through"]);
 
 const INVESTOR_STATUSES = ["sent", "evaluating", "passed", "committed"];
@@ -41,15 +41,6 @@ const sortInvestors = (list) =>
   [...(list || [])].sort((a, b) =>
     (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) ||
     String(a.name || "").localeCompare(String(b.name || "")));
-
-export function StagePill({ stage, small }) {
-  const s = STAGE[stage] || { label: stage, cls: "bg-slate-100 text-slate-600" };
-  return (
-    <span className={`rounded-full font-semibold ${s.cls} ${small ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs"}`}>
-      {s.label}
-    </span>
-  );
-}
 
 // yyyy-mm-dd parsed as a LOCAL date (same convention as the contract PDFs) so
 // the countdown never drifts a day across timezones.
@@ -527,8 +518,8 @@ export default function DealsView({ settings, onEdit }) {
       .catch(() => onEdit?.(o));
   };
 
-  if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
-  if (!deals) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400" /></div>;
+  if (error) return <ErrorBar>{error}</ErrorBar>;
+  if (!deals) return <SkeletonRows cols={9} rows={5} />;
 
   const active = deals.filter((o) => !TERMINAL.has(o.deal.stage));
   const closed = deals.filter((o) => o.deal.stage === "closed");
@@ -545,23 +536,18 @@ export default function DealsView({ settings, onEdit }) {
 
   return (
     <>
-      <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {kpis.map((k) => (
-          <div key={k.label} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{k.label}</div>
-            <div className="text-lg font-bold">{k.value}</div>
-          </div>
-        ))}
+      <div className="mb-3">
+        <KpiRow items={kpis} cols="sm:grid-cols-3" />
       </div>
 
       {deals.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
-          No deals yet — when an offer gets an accepted contract, open History and hit
-          <span className="mx-1 font-semibold text-slate-500">Mark under contract</span>.
-        </div>
+        <EmptyState>
+          No deals yet — when an agent accepts, set that offer's status to
+          <span className="mx-1 font-semibold text-slate-500">Accepted</span> on the Offers tab.
+        </EmptyState>
       ) : (
         <>
-          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+          <TableCard>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
@@ -584,7 +570,8 @@ export default function DealsView({ settings, onEdit }) {
                   const inspection = dateInfo(d.inspectionDate);
                   const assignment = assignmentTotal(d.contractPrice, d.assignmentFee);
                   return (
-                    <tr key={o.id} onClick={() => setSelectedId(o.id)}
+                    <tr key={o.id} {...rowActivation(() => setSelectedId(o.id))}
+                      aria-label={`${o.address || "Deal"} — ${STAGE[d.stage]?.label || d.stage}`}
                       className="group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50">
                       <td className="max-w-[24rem] truncate px-4 py-2.5 font-medium" title={o.address || undefined}>{o.address || "—"}</td>
                       <td className="whitespace-nowrap px-4 py-2.5">
@@ -625,9 +612,11 @@ export default function DealsView({ settings, onEdit }) {
                         ) : <span className="text-slate-400">—</span>}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                        {/* Revealed on hover, but never hidden from the keyboard:
+                            focus-within brings it back for tab users. */}
                         <button type="button" onClick={() => setSelectedId(o.id)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 opacity-0 hover:bg-slate-50 group-hover:opacity-100">
-                          <Pencil size={13} /> Manage
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 opacity-0 hover:bg-slate-50 focus:opacity-100 group-hover:opacity-100">
+                          <Pencil size={13} aria-hidden="true" /> Manage
                         </button>
                       </td>
                     </tr>
@@ -635,7 +624,7 @@ export default function DealsView({ settings, onEdit }) {
                 })}
               </tbody>
             </table>
-          </div>
+          </TableCard>
           {(closed.length > 0 || fell.length > 0) && (
             <button type="button" onClick={() => setShowTerminal((v) => !v)}
               className="mt-2 text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-900">

@@ -42,8 +42,14 @@ import {
 // that deal rooms already have. Its contents are resolved at render time from
 // whichever deal rooms are currently active and listed.
 const isPortfolio = (room) => room?.kind === "portfolio";
+// Agent-facing offer packages (routes/offer-page.js) share this table. They
+// carry our underwriting, so they must never be picked up by anything that
+// lists or publishes rooms — the portfolio board and the PUBLIC deals feed both
+// select through listedInPortfolio, and an offer page passing that filter would
+// put our arithmetic on a marketing page. Excluded here, once, at the source.
+const isOfferPage = (room) => room?.kind === "offer";
 const listedInPortfolio = (room) =>
-  !isPortfolio(room) && room?.status === "active" && !room?.unlisted;
+  !isPortfolio(room) && !isOfferPage(room) && room?.status === "active" && !room?.unlisted;
 
 // The shareable marketing link — one per room, no expiry, no recipient.
 //
@@ -205,7 +211,9 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
   async function loadRoom(req, res) {
     const { locationId, client } = resolveLocation(req);
     const room = await store.getDataroom(req.params.id);
-    if (!room || room.locationId !== locationId) {
+    if (!room || room.locationId !== locationId || isOfferPage(room)) {
+      // An offer-page id 404s here exactly like an unknown one: the two
+      // features share a table but never each other's routes.
       res.status(404).json({ error: "dataroom not found" });
       return null;
     }
@@ -286,7 +294,9 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
       const { locationId } = resolveLocation(req);
       const offerId = str(req.query.offer_id, 64);
       const all = await store.listDatarooms(locationId, { offerId: offerId || null });
-      const rooms = all.filter((r) => !isPortfolio(r)); // the portfolio isn't a deal
+      // The portfolio isn't a deal, and an agent-facing offer page isn't a
+      // dataroom at all — it only shares the table.
+      const rooms = all.filter((r) => !isPortfolio(r) && !isOfferPage(r));
       const withCounts = await Promise.all(rooms.map(async (r) => {
         const invites = await store.listDataroomInvites(r.id);
         return {
@@ -622,6 +632,9 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
     if (invite.status !== "active" || expired(invite)) { gone(res); return null; }
     const room = await store.getDataroom(invite.dataroomId);
     if (!room || room.status !== "active") { gone(res); return null; }
+    // Offer-page tokens live in this same invite table and must not open an
+    // investor room. /o/:token enforces the mirror of this.
+    if (isOfferPage(room)) { gone(res); return null; }
     return { token, invite, room };
   }
 

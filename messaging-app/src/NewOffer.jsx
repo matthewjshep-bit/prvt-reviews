@@ -2,7 +2,7 @@
 // offers → generate the document and attach everything to the GHL contact.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronUp, ExternalLink, FileText, Loader2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ExternalLink, FileText, Link2, Loader2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
   addContactNote, createOffer, getContactDetail, getContactNotes, ghlContactUrl, previewDocument, saveDraft, saveSettings, searchContacts, suggestAddresses, zillowUrl,
@@ -15,6 +15,7 @@ import ContractModal from "./ContractModal.jsx";
 import AssignmentModal from "./AssignmentModal.jsx";
 import NetSheetModal from "./NetSheetModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
+import OfferPageModal from "./OfferPageModal.jsx";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -527,6 +528,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const [contractOpen, setContractOpen] = useState(false); // ContractModal (purchase & sale PDF)
   const [assignmentOpen, setAssignmentOpen] = useState(false); // AssignmentModal (dispositions PDF)
   const [netSheetOpen, setNetSheetOpen] = useState(false); // NetSheetModal (seller net comparison)
+  const [offerPageOpen, setOfferPageOpen] = useState(false); // OfferPageModal (agent-facing page)
   const [enrichOpen, setEnrichOpen] = useState(false); // EnrichModal (AI conversation → CRM fields)
   const [lastSend, setLastSend] = useState(null);  // most recent send record, for the ✓ banner
 
@@ -655,21 +657,110 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     setCreating(false);
   }
 
+  const draftBody = () => ({
+    mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, uwOverrides, letterTerms, offerExpires,
+    rehab: rehabStateRef.current,
+    comps: compsStateRef.current,
+    cashPreview: calc?.offers?.cash?.amount ?? null,
+  });
+
   async function doSaveDraft() {
     setError(""); setSavingDraft(true);
     try {
-      const r = await saveDraft(draftId, {
-        mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, uwOverrides, letterTerms, offerExpires,
-        rehab: rehabStateRef.current,
-        comps: compsStateRef.current,
-        cashPreview: calc?.offers?.cash?.amount ?? null,
-      });
+      const r = await saveDraft(draftId, draftBody());
       setDraftId(r.offer.id);
       setDraftSaved(true);
       setTimeout(() => setDraftSaved(false), 2500);
     } catch (e) { setError(e.message); }
     setSavingDraft(false);
   }
+
+  /* ---------- draft autosave ---------- */
+  // Comps claimed off Zillow are read-and-delete on the server: the instant the
+  // comps pane claims them they exist nowhere but this component's state. So
+  // switching to History — which unmounts this form — used to destroy them for
+  // good, and the only defense was remembering to press "Save draft". Now any
+  // work that couldn't be reconstructed schedules a draft write on its own.
+  //
+  // Deliberately not a save-everything-on-every-keystroke autosave: a draft
+  // holding nothing but a half-typed address is clutter in the History tab, so
+  // hasWorkToLose() gates it on something that would actually hurt to lose.
+  const autosaveTimer = useRef(null);
+  const autosaveInFlight = useRef(false);
+  const autosaveQueued = useRef(false);
+  const mountedRef = useRef(true);
+  // Everything the flush reads goes through a ref: the unmount handler runs
+  // from a `[]`-deps effect, so a plain closure there would see first-render
+  // values and happily write a draft for an offer that has since been created.
+  const draftIdRef = useRef(draftId);
+  const draftBodyRef = useRef(draftBody);
+  const blockAutosave = useRef(false);
+  draftBodyRef.current = draftBody;
+  blockAutosave.current = Boolean(result) || creating;
+  useEffect(() => { draftIdRef.current = draftId; }, [draftId]);
+
+  // Comps that can't be re-fetched, or a rehab scope built by hand.
+  const hasWorkToLose = (body) => {
+    const c = body.comps || {};
+    return Boolean(
+      (c.captured || []).length || (c.manual || []).length ||
+      (c.selected || []).length || (body.scope || []).length
+    );
+  };
+
+  async function flushDraft() {
+    if (blockAutosave.current) return;
+    const body = draftBodyRef.current();
+    if (!String(body.inputs?.address || "").trim() || !hasWorkToLose(body)) return;
+    // One write at a time. Two in flight would each create a draft row, and
+    // doCreate only ever consumes the one id it holds.
+    if (autosaveInFlight.current) { autosaveQueued.current = true; return; }
+    autosaveInFlight.current = true;
+    try {
+      const r = await saveDraft(draftIdRef.current, body);
+      if (r?.offer?.id && r.offer.id !== draftIdRef.current) {
+        draftIdRef.current = r.offer.id;
+        if (mountedRef.current) setDraftId(r.offer.id);
+      }
+      if (mountedRef.current) {
+        setDraftSaved(true);
+        setTimeout(() => { if (mountedRef.current) setDraftSaved(false); }, 2500);
+      }
+    } catch { /* a safety net, not a user action — never interrupt with an error */ }
+    autosaveInFlight.current = false;
+    if (autosaveQueued.current) { autosaveQueued.current = false; flushDraft(); }
+  }
+
+  function scheduleDraftSave() {
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(() => { autosaveTimer.current = null; flushDraft(); }, 1500);
+  }
+
+  // Both panes report their state once on mount — that first emission is the
+  // restored workspace echoing back, not work anybody did. Autosaving it would
+  // mint a draft row every time you opened an existing offer just to look at
+  // it, so the first report from each pane only updates the ref.
+  const firstReport = useRef({ comps: true, rehab: true });
+  const reportPaneState = (which, ref) => (s) => {
+    ref.current = s;
+    if (firstReport.current[which]) { firstReport.current[which] = false; return; }
+    scheduleDraftSave();
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+    // Backgrounding the tab is the other moment a pending timer would be lost.
+    const onHide = () => { if (document.visibilityState === "hidden") flushDraft(); };
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      mountedRef.current = false;
+      // Leaving the form is exactly when the debounce would otherwise be
+      // thrown away — fire the pending write instead of clearing it.
+      if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); flushDraft(); }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (result) {
     const { offer, ghl, warnings } = result;
@@ -710,8 +801,13 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         <div className="grid gap-4 sm:grid-cols-2">
           <img src={offer.imageUrl} alt="Offer document" className="w-full rounded-xl border border-slate-200 shadow-sm" />
           <div className="space-y-3">
+            <button type="button" onClick={() => setOfferPageOpen(true)}
+              className="flex w-full items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+              title="One shareable web page for the agent: the offer, the comps, the scope and the seller's net">
+              <Link2 size={16} /> Share an offer page with the agent
+            </button>
             <a href={offer.pdfUrl} target="_blank" rel="noreferrer"
-              className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
+              className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
               <FileText size={16} /> Open PDF document
             </a>
             {offer.scopePdfUrl && (
@@ -814,6 +910,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
             onGenerated={(o) => setResult((r) => ({ ...r, offer: o }))}
           />
         )}
+        {offerPageOpen && <OfferPageModal offer={offer} onClose={() => setOfferPageOpen(false)} />}
       </div>
     );
   }
@@ -882,7 +979,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         setSqft={setSubjectSqft}
         onSubjectInfo={setSubjectInfo}
         initialState={compsInit}
-        onStateChange={(s) => { compsStateRef.current = s; }}
+        onStateChange={reportPaneState("comps", compsStateRef)}
         onUseArv={(arv) => setInputs((s) => ({ ...s, arv: Number(arv).toLocaleString("en-US") }))}
       />
 
@@ -893,7 +990,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         yearBuilt={Number(subjectInfo?.yearBuilt) || 0}
         address={inputs.address}
         initialState={rehabInit}
-        onStateChange={(s) => { rehabStateRef.current = s; }}
+        onStateChange={reportPaneState("rehab", rehabStateRef)}
         onApply={(total, lines) => {
           setInputs((s) => ({ ...s, repairs: Number(total).toLocaleString("en-US") }));
           setScope(lines);

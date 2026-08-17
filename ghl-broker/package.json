@@ -9,7 +9,10 @@
   },
   "scripts": {
     "start": "node broker.js",
-    "test:dataroom": "node dataroom.test.mjs"
+    "test:dataroom": "node dataroom.test.mjs",
+    "test:status": "node --test offer-status.test.mjs",
+    "test:snapshot": "node --test offer-snapshot.test.mjs",
+    "test:offer-page": "node --test offer-page.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

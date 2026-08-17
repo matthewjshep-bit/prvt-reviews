@@ -12,6 +12,8 @@
 //   GET    /api/offers?contact_id=&limit=    list saved offers
 //   GET    /api/offers/:id
 //   DELETE /api/offers/:id
+//   PATCH  /api/offers/:id/status            record an offer outcome (sent/countered/no_response/passed/accepted)
+//   PATCH  /api/offers/status                bulk outcome for a selection of offers
 //   POST   /api/offers/:id/send              send offer docs via text/email
 //   POST   /api/offers/:id/contract          render the purchase & sale contract PDF
 //   GET    /api/offers/:id/contract.pdf
@@ -43,6 +45,10 @@ import express from "express";
 import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../shared/offer-calc.js";
+import {
+  SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK,
+  effectiveStatus, statusAfterSend, statusAfterUnpromote,
+} from "../shared/offer-status.js";
 import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, buildNetSheetDocument, moneyInWords } from "../offer-doc.js";
 import { renderContractPdf } from "../contract-pdf.js";
 import {
@@ -68,6 +74,7 @@ import {
   buildTranscript, runEnrichment, suggestDealInvestors, mergeHistory, historyLine,
 } from "../enrich.js";
 import { OFFER_FIELDS, APP_FIELD_REGISTRY, registryByKey } from "../field-registry.js";
+import { fitSnapshot } from "../offer-snapshot.js";
 import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
@@ -75,6 +82,17 @@ const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
 const OFFER_TAG = process.env.OFFER_TAG || "offer-created";
 const DEAL_TAG = process.env.DEAL_TAG || "under-contract";
 const INVESTOR_DEAL_TAG = process.env.INVESTOR_DEAL_TAG || "on-deal";
+
+// Offer-outcome tags on the AGENT contact. Only the outcomes that need to
+// drive a GHL workflow get one: "sent" and "accepted" are already covered by
+// OFFER_TAG and DEAL_TAG. These three are mutually exclusive — see
+// syncAgentOfferTag for why a contact can only ever carry one.
+const OFFER_STATUS_TAGS = {
+  countered: process.env.OFFER_COUNTERED_TAG || "offer-countered",
+  no_response: process.env.OFFER_NO_RESPONSE_TAG || "offer-no-response",
+  passed: process.env.OFFER_PASSED_TAG || "offer-passed",
+};
+const ALL_STATUS_TAGS = Object.values(OFFER_STATUS_TAGS);
 
 // Active-deal tracking (offers under signed contract). Transitions are
 // deliberately permissive (any stage to any stage) so mistakes are correctable;
@@ -1768,13 +1786,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             .map((s) => ({ label: String(s.label).slice(0, 120), cost: Math.round(Number(s.cost)) }))
         : [];
       // Full form snapshot (comps workspace + rehab state) so editing the
-      // offer later restores everything. Size-capped defensively.
-      let snapshot = null;
-      if (req.body?.snapshot && typeof req.body.snapshot === "object") {
-        try {
-          if (JSON.stringify(req.body.snapshot).length <= 400_000) snapshot = req.body.snapshot;
-        } catch { /* unserializable — drop */ }
-      }
+      // offer later restores everything. Over the cap it is trimmed a piece at
+      // a time rather than discarded whole — see ghl-broker/offer-snapshot.js
+      // for the shedding order and why comps outrank everything in it.
+      const fitted = fitSnapshot(req.body?.snapshot);
+      const snapshot = fitted.snapshot;
+      const snapshotWarnings = fitted.warnings;
 
       // 1. Resolve the contact (existing id, or find/create by phone).
       let contactId = bodyContactId || "";
@@ -1899,12 +1916,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         scope,
         snapshot,
         calc,
+        // A generated offer starts its lifecycle at "not sent". Sending it,
+        // or recording an outcome by hand, moves it from here.
+        status: "new",
+        statusHistory: [{ status: "new", ts: created.toISOString() }],
       });
 
       // 5. Associate with the GHL contact record. Each write is independent;
       //    failures are reported + logged, not fatal (the offer itself is saved).
       const ghl = { fields: false, note: false, tag: false };
-      const warnings = [];
+      const warnings = [...snapshotWarnings];
       if (scopeWarning) warnings.push(scopeWarning);
       if (compsWarning) warnings.push(compsWarning);
       if (netSheetWarning) warnings.push(netSheetWarning);
@@ -2307,6 +2328,202 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     }
   }
 
+  /* ---------- offer lifecycle status ---------- */
+  // An offer's outcome: not sent → sent → countered / no response / passed /
+  // accepted. See shared/offer-status.js for why "expired" is derived rather
+  // than stored, and why "accepted" is the promote action under another name.
+
+  // Write a status onto the offer doc and append to its ledger. Mirrors the
+  // deal's stage/stageHistory pair — the current value is what the UI reads,
+  // the history is what the KPI math trusts.
+  function recordStatus(offer, status, note = "", ts = new Date().toISOString()) {
+    offer.status = status;
+    offer.statusAt = ts;
+    offer.statusNote = note;
+    offer.statusHistory = [...(offer.statusHistory || []), { status, ts, ...(note ? { note } : {}) }];
+    return offer;
+  }
+
+  // Best-effort: reconcile the agent's offer-outcome tag in GHL.
+  //
+  // The awkward part: tags live on the CONTACT, but statuses live on OFFERS,
+  // and one agent can have a dozen offers. So this deliberately ignores the
+  // offer you just touched and recomputes across ALL of that contact's offers,
+  // applying the tag for their most advanced status (STATUS_RANK). An agent
+  // with one passed offer and one live one is not a "passed" agent — tagging
+  // them from the last row you happened to click would quietly drop them out
+  // of your follow-up workflows. Same recompute-and-reconcile shape as
+  // syncInvestorDealTag. Never throws.
+  async function syncAgentOfferTag(client, locationId, contactId) {
+    if (!contactId) return;
+    try {
+      const offers = await store.listOffers(locationId, { contactId, limit: 200 });
+      let best = null;
+      for (const o of offers) {
+        if (o.status === "draft") continue; // not an offer yet
+        const s = effectiveStatus(o);
+        if (best === null || (STATUS_RANK[s] ?? -1) > (STATUS_RANK[best] ?? -1)) best = s;
+      }
+      const want = best ? OFFER_STATUS_TAGS[best] : null;
+      const stale = ALL_STATUS_TAGS.filter((t) => t !== want);
+      if (want) await addContactTags(client, contactId, [want]);
+      await removeContactTags(client, contactId, stale);
+    } catch (e) {
+      console.error(`offers: agent offer tag sync failed contact=${contactId}:`, e?.message);
+    }
+  }
+
+  // Promote an offer to an active deal. Shared by POST /:id/deal and by
+  // setting the status to "accepted", so there is exactly one code path that
+  // can record an acceptance. Throws with .http for the caller to surface.
+  async function promoteToDeal({ locationId, client, offer, body = {} }) {
+    if (offer.status === "draft") {
+      throw Object.assign(new Error("drafts can't be promoted — create the offer first"), { http: 400 });
+    }
+    if (offer.deal) throw Object.assign(new Error("already a deal"), { http: 409, offer });
+
+    const settings = effectiveSettings(await store.getOfferSettings(locationId));
+    const ts = new Date().toISOString();
+    const contractPrice = dealMoney(body.contractPrice)
+      ?? dealMoney(offer.contract?.fields?.price)
+      ?? dealMoney(offer.cashAmount);
+    const assignmentFee = dealMoney(body.assignmentFee) ?? dealMoney(settings.wholesaleFee);
+    // Inspection contingency deadline: today + the contract's inspection
+    // period (local date, same yyyy-mm-dd convention as closingDate).
+    const parsedDays = parseInt(offer.contract?.fields?.inspectionDays, 10);
+    const inspEnd = new Date();
+    inspEnd.setDate(inspEnd.getDate() + (Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 10));
+    const inspectionDefault = `${inspEnd.getFullYear()}-${String(inspEnd.getMonth() + 1).padStart(2, "0")}-${String(inspEnd.getDate()).padStart(2, "0")}`;
+    offer.deal = {
+      stage: "under_contract",
+      createdAt: ts,
+      updatedAt: ts,
+      stageHistory: [{ stage: "under_contract", ts }],
+      contractPrice,
+      assignmentFee,
+      closingDate: dealStr(body.closingDate, 40) || dealStr(offer.contract?.fields?.closingDate, 40),
+      inspectionDate: dealStr(body.inspectionDate, 40) || inspectionDefault,
+      notes: "",
+      fellThroughReason: "",
+      investors: [],
+      ghl: { tag: false, note: false },
+    };
+    // Under contract IS the accepted state — keep the two from disagreeing.
+    recordStatus(offer, "accepted", "", ts);
+
+    // Mark the agent contact in GHL — best-effort, never fails the promote.
+    const warnings = [];
+    const noteFailure = (step, e) => {
+      console.error(`offers: deal attach failed [${step}] contact=${offer.contactId}:`, e?.message);
+      warnings.push(`${step}: ${e.message}`);
+    };
+    if (offer.contactId) {
+      try {
+        await addContactTags(client, offer.contactId, [DEAL_TAG]);
+        offer.deal.ghl.tag = true;
+      } catch (e) { noteFailure("deal tag", e); }
+      try {
+        await createContactNote(client, offer.contactId, {
+          body: `UNDER CONTRACT — ${offer.address || "property"} (${dateLabel()})` +
+            (contractPrice ? `\nContract price: ${fmtMoney(contractPrice)}` : "") +
+            `\nTracked in the offer app (Deals tab).`,
+        });
+        offer.deal.ghl.note = true;
+      } catch (e) { noteFailure("deal note", e); }
+    }
+    if (warnings.length) offer.warnings = [...(offer.warnings || []), ...warnings];
+    await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
+      historyLine(ts, offer.address, "under contract"));
+
+    await store.updateOffer(offer.id, offer);
+    // The agent is no longer "countered"/"passed" once they're under contract.
+    await syncAgentOfferTag(client, locationId, offer.contactId);
+    return { offer, warnings };
+  }
+
+  // Record an offer outcome. Body: { status, note? }. Picking "accepted" runs
+  // the promote path so an acceptance can only ever be recorded one way.
+  router.patch("/:id/status", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { locationId, client, offer } = ctx;
+      const status = dealStr(req.body?.status, 40);
+      if (!SETTABLE_STATUSES.includes(status)) {
+        return res.status(400).json({ error: `status must be one of: ${SETTABLE_STATUSES.join(", ")}` });
+      }
+      if (offer.status === "draft") {
+        return res.status(400).json({ error: "drafts have no outcome — create the offer first" });
+      }
+      const note = dealStr(req.body?.note, 200);
+
+      if (status === "accepted") {
+        // Already a deal: nothing to promote, and the status is already right.
+        if (offer.deal) return res.json({ ok: true, offer, warnings: [] });
+        const r = await promoteToDeal({ locationId, client, offer, body: req.body || {} });
+        return res.json({ ok: true, promoted: true, ...r });
+      }
+
+      const ts = new Date().toISOString();
+      recordStatus(offer, status, note, ts);
+      await store.updateOffer(offer.id, offer);
+
+      // Best-effort CRM mirror: the ledger line keeps AI enrichment from
+      // pitching an agent who already said no; the tag lets workflows branch.
+      await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
+        historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), note));
+      await syncAgentOfferTag(client, locationId, offer.contactId);
+
+      res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Bulk outcome for the history table's selection bar. Body: { ids, status,
+  // note? }. Per-id results so one bad id doesn't sink the batch. "accepted"
+  // is excluded — promoting many offers at once is never what you meant.
+  router.patch("/status", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const status = dealStr(req.body?.status, 40);
+      if (!SETTABLE_STATUSES.includes(status) || status === "accepted") {
+        const allowed = SETTABLE_STATUSES.filter((s) => s !== "accepted");
+        return res.status(400).json({ error: `status must be one of: ${allowed.join(", ")}` });
+      }
+      const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).slice(0, 100).map((v) => dealStr(v, 64));
+      if (!ids.length) return res.status(400).json({ error: "no offers selected" });
+      const note = dealStr(req.body?.note, 200);
+
+      const ts = new Date().toISOString();
+      const results = [];
+      const offers = [];
+      const touchedContacts = new Set();
+      for (const id of ids) {
+        try {
+          const offer = await store.getOffer(id);
+          if (!offer || offer.locationId !== locationId) throw new Error("offer not found");
+          if (offer.status === "draft") throw new Error("drafts have no outcome");
+          if (offer.deal) throw new Error("already a deal — change its stage instead");
+          recordStatus(offer, status, note, ts);
+          await store.updateOffer(id, offer);
+          offers.push(offer);
+          if (offer.contactId) touchedContacts.add(offer.contactId);
+          await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
+            historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), note));
+          results.push({ id, ok: true });
+        } catch (e) {
+          results.push({ id, ok: false, error: e.message });
+        }
+      }
+      // One tag reconcile per contact, not per offer — the tag is computed
+      // from all of their offers anyway, so repeating it would be pure waste.
+      for (const contactId of touchedContacts) {
+        await syncAgentOfferTag(client, locationId, contactId);
+      }
+
+      res.json({ ok: true, results, offers });
+    } catch (err) { fail(res, err); }
+  });
+
   // Promote an offer to an active deal. Body (all optional): { contractPrice,
   // assignmentFee, closingDate, inspectionDate } — defaults come from the
   // generated contract, the cash offer, and settings.wholesaleFee.
@@ -2315,65 +2532,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const ctx = await loadDealOffer(req, res, { requireDeal: false });
       if (!ctx) return;
       const { locationId, client, offer } = ctx;
-      if (offer.status === "draft") {
-        return res.status(400).json({ error: "drafts can't be promoted — create the offer first" });
-      }
-      if (offer.deal) return res.status(409).json({ error: "already a deal", offer });
-
-      const settings = effectiveSettings(await store.getOfferSettings(locationId));
-      const ts = new Date().toISOString();
-      const contractPrice = dealMoney(req.body?.contractPrice)
-        ?? dealMoney(offer.contract?.fields?.price)
-        ?? dealMoney(offer.cashAmount);
-      const assignmentFee = dealMoney(req.body?.assignmentFee) ?? dealMoney(settings.wholesaleFee);
-      // Inspection contingency deadline: today + the contract's inspection
-      // period (local date, same yyyy-mm-dd convention as closingDate).
-      const parsedDays = parseInt(offer.contract?.fields?.inspectionDays, 10);
-      const inspEnd = new Date();
-      inspEnd.setDate(inspEnd.getDate() + (Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 10));
-      const inspectionDefault = `${inspEnd.getFullYear()}-${String(inspEnd.getMonth() + 1).padStart(2, "0")}-${String(inspEnd.getDate()).padStart(2, "0")}`;
-      offer.deal = {
-        stage: "under_contract",
-        createdAt: ts,
-        updatedAt: ts,
-        stageHistory: [{ stage: "under_contract", ts }],
-        contractPrice,
-        assignmentFee,
-        closingDate: dealStr(req.body?.closingDate, 40) || dealStr(offer.contract?.fields?.closingDate, 40),
-        inspectionDate: dealStr(req.body?.inspectionDate, 40) || inspectionDefault,
-        notes: "",
-        fellThroughReason: "",
-        investors: [],
-        ghl: { tag: false, note: false },
-      };
-
-      // Mark the agent contact in GHL — best-effort, never fails the promote.
-      const warnings = [];
-      const noteFailure = (step, e) => {
-        console.error(`offers: deal attach failed [${step}] contact=${offer.contactId}:`, e?.message);
-        warnings.push(`${step}: ${e.message}`);
-      };
-      if (offer.contactId) {
-        try {
-          await addContactTags(client, offer.contactId, [DEAL_TAG]);
-          offer.deal.ghl.tag = true;
-        } catch (e) { noteFailure("deal tag", e); }
-        try {
-          await createContactNote(client, offer.contactId, {
-            body: `UNDER CONTRACT — ${offer.address || "property"} (${dateLabel()})` +
-              (contractPrice ? `\nContract price: ${fmtMoney(contractPrice)}` : "") +
-              `\nTracked in the offer app (Deals tab).`,
-          });
-          offer.deal.ghl.note = true;
-        } catch (e) { noteFailure("deal note", e); }
-      }
-      if (warnings.length) offer.warnings = [...(offer.warnings || []), ...warnings];
-      await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
-        historyLine(ts, offer.address, "under contract"));
-
-      await store.updateOffer(offer.id, offer);
-      res.json({ ok: true, offer, warnings });
-    } catch (err) { fail(res, err); }
+      const r = await promoteToDeal({ locationId, client, offer, body: req.body || {} });
+      res.json({ ok: true, ...r });
+    } catch (err) {
+      // 409 keeps its historical shape: the client navigates to the existing deal.
+      if (err.http === 409) return res.status(409).json({ error: err.message, offer: err.offer });
+      fail(res, err);
+    }
   });
 
   // Update deal terms / stage. Body: any of { stage, contractPrice,
@@ -2427,7 +2592,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { locationId, client, offer } = ctx;
       const investors = offer.deal.investors || [];
       delete offer.deal;
+      // The acceptance is being taken back too — fall to whatever was true
+      // before it (sent if the docs went out, otherwise not sent).
+      recordStatus(offer, statusAfterUnpromote(offer));
       await store.updateOffer(offer.id, offer);
+      await syncAgentOfferTag(client, locationId, offer.contactId);
       for (const inv of investors) {
         await syncInvestorDealTag(client, locationId, inv.contactId);
       }
@@ -2817,21 +2986,37 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       // Record the send on the offer so History can show what went out.
       // (Failed attempts are recorded too — they're part of the story.)
+      const sentAt = new Date().toISOString();
       offer.sends = [...(offer.sends || []), {
-        ts: new Date().toISOString(),
+        ts: sentAt,
         channels,
         docs: picked.map(([key]) => key),
         results,
       }];
+
+      // A successful send advances the lifecycle — but only forwards. Texting
+      // the documents again to an agent who already countered (or passed)
+      // must not erase what they told us.
+      const outcomes = Object.values(results);
+      if (outcomes.some((r) => r.ok)) {
+        const next = statusAfterSend(offer);
+        if (next !== effectiveStatus(offer) || !offer.status) {
+          recordStatus(offer, next, "", sentAt);
+        }
+      }
       await store.updateOffer(offer.id, offer).catch(() => {});
 
-      const outcomes = Object.values(results);
       if (!outcomes.some((r) => r.ok)) {
         // Nothing went out — error response, like the old route on a failed text.
         const detail = Object.entries(results).map(([ch, r]) => `${ch}: ${r.error}`).join("; ");
         return res.status(502).json({ error: "send failed", detail, results, sends: offer.sends });
       }
-      res.json({ ok: outcomes.every((r) => r.ok), sent: true, results, sends: offer.sends });
+      // status/statusHistory come back too: a send can advance the lifecycle,
+      // and the history row has to show that without a refetch of the fat doc.
+      res.json({
+        ok: outcomes.every((r) => r.ok), sent: true, results,
+        sends: offer.sends, status: offer.status, statusHistory: offer.statusHistory,
+      });
     } catch (err) { fail(res, err); }
   });
 

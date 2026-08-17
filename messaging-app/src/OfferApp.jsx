@@ -1,12 +1,16 @@
 // OfferApp.jsx — the offer generator shell. Four views:
+//   Offers    — every offer created for this location, grouped by agent, with
+//               its outcome. The landing view: the daily job is working the
+//               list, so the list is home and creating is an action off it.
 //   New Offer — pick a contact, enter property numbers, get three offers,
 //               generate the document, attach it to the contact record.
-//   History   — every offer created for this location, grouped by agent.
+//               Reached from the header button, not a tab.
 //   Deals     — offers under signed contract, tracked through disposition.
 //   Settings  — calculation defaults + company info printed on the document.
 // Plus three sibling apps on their own paths: /agents, /dashboard, /dispo.
 
 import React, { useEffect, useState } from "react";
+import { Plus } from "lucide-react";
 import NewOffer from "./NewOffer.jsx";
 import OffersHistory from "./OffersHistory.jsx";
 import DealsView from "./DealsView.jsx";
@@ -60,11 +64,14 @@ const NAV =
     : APP_MODE === "deals"
     ? [{ view: "deals", label: "Deals" }]
     : [
-        { view: "new", label: "New Offer" },
-        { view: "history", label: "History" },
+        { view: "history", label: "Offers" },
         { view: "deals", label: "Deals" },
         { view: "settings", label: "Settings" },
       ];
+
+// "new" is reachable but not a tab — it's the primary button in the header and
+// the target of the ?offer_id= deep link, so it still has to be a valid view.
+const VIEWS = new Set([...NAV.map((n) => n.view), "new"]);
 
 function readParam(name) {
   try {
@@ -74,10 +81,19 @@ function readParam(name) {
   }
 }
 
+// Keep the URL honest about which view is showing. Until now the URL never
+// changed, so the browser back button did nothing and no view but the first
+// could be linked to — both of which read as the app being broken.
+function viewUrl(view) {
+  const p = new URLSearchParams(window.location.search);
+  p.set("view", view);
+  return `${window.location.pathname}?${p}`;
+}
+
 export default function OfferApp() {
   const [view, setView] = useState(() => {
     const v = readParam("view");
-    return NAV.some((n) => n.view === v) ? v : NAV[0].view;
+    return VIEWS.has(v) ? v : NAV[0].view;
   });
   const [initialContactId, setInitialContactId] = useState(() => readParam("contact_id"));
   const [editing, setEditing] = useState(null); // draft/offer being reopened in the form
@@ -96,6 +112,28 @@ export default function OfferApp() {
     getSettings()
       .then(setSettings)
       .catch((e) => setSettingsError(e.message));
+  }, []);
+
+  // Push each view onto history so Back works and any view can be linked to.
+  // replaceState on the first render (there's nothing to go back to yet);
+  // pushState after, and popstate restores whatever the user came from.
+  const firstRender = React.useRef(true);
+  useEffect(() => {
+    try {
+      const url = viewUrl(view);
+      if (firstRender.current) window.history.replaceState({ view }, "", url);
+      else if (window.history.state?.view !== view) window.history.pushState({ view }, "", url);
+    } catch { /* iframe history can be restricted — the app still works */ }
+    firstRender.current = false;
+  }, [view]);
+
+  useEffect(() => {
+    const onPop = (e) => {
+      const v = e.state?.view || readParam("view");
+      if (VIEWS.has(v)) setView(v);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   // Deep link from the GHL contact note: ?offer_id= reopens that offer in the
@@ -137,7 +175,8 @@ export default function OfferApp() {
             <button
               key={n.view}
               type="button"
-              onClick={() => { if (n.view === "new") setEditing(null); setView(n.view); }}
+              onClick={() => setView(n.view)}
+              aria-current={n.view === view ? "page" : undefined}
               className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
                 n.view === view ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"
               }`}
@@ -145,6 +184,20 @@ export default function OfferApp() {
               {n.label}
             </button>
           ))}
+          {APP_MODE === "offers" && (
+            <button
+              type="button"
+              onClick={() => { setEditing(null); setView("new"); }}
+              aria-current={view === "new" ? "page" : undefined}
+              className={`ml-auto inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors ${
+                view === "new"
+                  ? "bg-blue-700 text-white"
+                  : "bg-blue-600 text-white hover:bg-blue-700"
+              }`}
+            >
+              <Plus size={15} aria-hidden="true" /> New Offer
+            </button>
+          )}
         </div>
       </header>
       <div className={`px-4 py-6 sm:px-6 lg:px-8 ${containerWidth}`}>

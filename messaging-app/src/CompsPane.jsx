@@ -16,7 +16,7 @@ import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { ExternalLink, Loader2, MapPin, Plus, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { compareByMatch, matchLabel, matchTone, milesBetween, scoreComp } from "@shared/comp-match.js";
+import { compareByMatch, matchLabel, matchTone, mergeSelection, milesBetween, scoreComp } from "@shared/comp-match.js";
 import { deriveArv } from "@shared/arv.js";
 import { claimCompCaptures, geocode, getComps, setCaptureTarget, zillowUrl } from "./api.js";
 
@@ -190,7 +190,13 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             .sort(compareByMatch)
             .slice(0, 6)
             .map((c) => c.id);
-      setSelected(new Set(pre));
+      // Re-pick the provider's own six, but never drop a Zillow capture or a
+      // manual comp — see mergeSelection in shared/comp-match.js.
+      setSelected((prev) => mergeSelection(
+        prev,
+        [...captured.map((c) => c.id), ...manual.map((c) => c.id)],
+        pre,
+      ));
     } catch (e) { setError(e.message); setState(null); }
     setLoading(false);
   }
@@ -267,7 +273,14 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
   }, [address, state?.subject?.lat, state?.subject?.lng]);
 
   // Claim this property's captures and drop them into the list. Read-and-delete
-  // happens in one server call, so nothing arrives twice.
+  // happens in one server call, so nothing arrives twice — and nothing arrives
+  // again if we drop it here. The claim effect below runs with `[]` deps, so a
+  // `dismissed` read straight off state would be frozen at first render: on a
+  // restored offer that means filtering a capture against a stale set moments
+  // after the server already deleted it, losing it for good. Read through a ref
+  // instead, same as addressRef.
+  const dismissedRef = useRef(dismissed);
+  useEffect(() => { dismissedRef.current = dismissed; }, [dismissed]);
   const claimCaptures = async (a) => {
     if (!a) return;
     setClaiming(true);
@@ -278,7 +291,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
           const have = new Set(list.map((c) => c.id));
           const fresh = incoming
             .map((c) => ({ ...c, id: `z-${c.zpid || c.id}`, source: "zillow" }))
-            .filter((c) => !have.has(c.id) && !dismissed.has(c.id));
+            .filter((c) => !have.has(c.id) && !dismissedRef.current.has(c.id));
           if (fresh.length) {
             // Ticked on arrival — you hand-picked these on Zillow, which is a
             // stronger signal than anything the provider's list gives us.

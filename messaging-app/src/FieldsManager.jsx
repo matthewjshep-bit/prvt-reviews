@@ -12,7 +12,7 @@ import {
   createCustomField, getContactRecord, getFieldRegistry, ghlContactUrl,
   listCustomFields, pruneCustomFields, saveContactRecord, searchContacts,
 } from "./api.js";
-import { StagePill } from "./DealsView.jsx";
+import { EmptyState, ErrorBar, Spinner, StagePill } from "./ui.jsx";
 
 const SOURCE_ORDER = ["offers", "outreach", "enrich-shared", "enrich-agent", "enrich-investor", "other"];
 const SOURCE_LABELS = {
@@ -50,8 +50,8 @@ function DefinitionsPane() {
       .catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
 
-  if (error) return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>;
-  if (!ghlFields || !registry) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400" /></div>;
+  if (error) return <ErrorBar>{error}</ErrorBar>;
+  if (!ghlFields || !registry) return <Spinner />;
 
   // Join GHL definitions against the app registry — same rule the broker
   // uses when creating (match by key, else by name).
@@ -399,9 +399,7 @@ function PreviewPane() {
       {loading && <div className="flex justify-center p-8"><Loader2 className="animate-spin text-slate-400" /></div>}
 
       {!record && !loading && (
-        <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
-          Pick a contact to see every field on their record.
-        </div>
+        <EmptyState>Pick a contact to see every field on their record.</EmptyState>
       )}
 
       {record && draft && !loading && (

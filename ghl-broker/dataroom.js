@@ -130,7 +130,7 @@ export function normalizeLinks(input) {
 
 // Comps the operator actually selected, plus any added by hand — the same
 // selection the Comparable Sales Analysis PDF prints.
-function pickedComps(snapshot) {
+export function pickedComps(snapshot) {
   const cs = snapshot?.comps;
   if (!cs) return [];
   const sel = new Set(Array.isArray(cs.selected) ? cs.selected : []);
@@ -298,7 +298,7 @@ export function feedHeaders(res, maxAge = 60) {
 
 const FONT = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Plus Jakarta Sans", system-ui, sans-serif`;
 
-const BASE_CSS = `
+export const BASE_CSS = `
 *,*::before,*::after{box-sizing:border-box}
 body{margin:0;font-family:${FONT};background:#F8FAFC;color:#0F172A;
   -webkit-text-size-adjust:100%;line-height:1.5}
@@ -428,7 +428,7 @@ export function brandFrom(company = {}) {
   };
 }
 
-function brandHeader(brand) {
+export function brandHeader(brand) {
   if (!brand?.wordmark) return "";
   const mark = esc(brand.wordmark)
     .split("·")
@@ -452,7 +452,7 @@ function brandHeader(brand) {
   </div></header>`;
 }
 
-function page({ title, css = "", body, watermark = "", brand = null }) {
+export function page({ title, css = "", body, watermark = "", brand = null }) {
   const tiles = watermark
     ? `<div class="wm" aria-hidden="true">${Array.from({ length: 24 }, () => `<span>${esc(watermark)}</span>`).join("")}</div>`
     : "";
@@ -469,11 +469,11 @@ function page({ title, css = "", body, watermark = "", brand = null }) {
 
 // Standalone notice — bad link, expired, revoked, locked out. Deliberately
 // says as little as possible about which one to anyone without a valid token.
-export function renderNotice({ title, message, detail = "" }) {
+export function renderNotice({ title, message, detail = "", eyebrow = "Secure investor dataroom" }) {
   return page({
     title,
     body: `<div class="card" style="margin-top:48px;text-align:center">
-      <p class="eyebrow">Secure investor dataroom</p>
+      <p class="eyebrow">${esc(eyebrow)}</p>
       <h1>${esc(title)}</h1>
       <p class="muted">${esc(message)}</p>
       ${detail ? `<p class="muted">${esc(detail)}</p>` : ""}

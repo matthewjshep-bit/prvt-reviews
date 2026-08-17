@@ -162,6 +162,25 @@ export function compareByMatch(a, b) {
   return String(b.saleDate || "").localeCompare(String(a.saleDate || ""));
 }
 
+// Which comps stay ticked after a fresh provider pull.
+//
+// A pull replaces the provider's own list wholesale, so it gets to re-pick its
+// own preselection. What it must NOT do is touch comps that came from anywhere
+// else. Zillow captures are hand-picked off the listing site — a stronger
+// signal than anything the provider's ranking produces — and manual comps were
+// typed in on purpose. Replacing the whole selection silently un-ticks both,
+// and because the server only persists comps whose id is in the selection,
+// they then vanish from the offer and the comps PDF while still sitting
+// visibly on the board. That failure is invisible until you open the PDF.
+//
+//   keepIds — ids that survive a pull (captured + manual)
+//   preIds  — the fresh provider preselection
+export function mergeSelection(previous, keepIds, preIds) {
+  const keep = keepIds instanceof Set ? keepIds : new Set(keepIds || []);
+  const kept = [...(previous || [])].filter((id) => keep.has(id));
+  return new Set([...kept, ...(preIds || [])]);
+}
+
 // A short label for the chip: "6/8", or "—" when nothing is knowable.
 export const matchLabel = (m) => (m && m.max ? `${m.score}/${m.max}` : "—");
 
