@@ -51,6 +51,35 @@ const isOfferPage = (room) => room?.kind === "offer";
 const listedInPortfolio = (room) =>
   !isPortfolio(room) && !isOfferPage(room) && room?.status === "active" && !room?.unlisted;
 
+// The room's own flags say whether the operator wants it published; they say
+// nothing about whether the deal is still for sale. A room is built once and
+// then outlives the deal — so a property that closed, fell through, or whose
+// offer was deleted kept advertising itself on a board titled "Current deals".
+// The deal's own stage is the authority, checked at render time rather than
+// mirrored onto the room, because a mirror needs every stage change to
+// remember to update it and this can't be forgotten.
+const DEAD_STAGES = new Set(["closed", "fell_through"]);
+// An offer that never became a deal still belongs on the board: the operator
+// built the room deliberately, and plenty of properties get shopped to buyers
+// while the contract is still being signed.
+const stillForSale = (offer) => Boolean(offer) && !DEAD_STAGES.has(offer.deal?.stage);
+
+// Rooms that belong on the public board right now: listed by the operator AND
+// backed by a deal that hasn't closed or died. The one place both halves of
+// that question are asked, so the board, the teaser and the operator's own
+// "listed" count can't disagree.
+async function boardRooms(locationId) {
+  const listed = (await store.listDatarooms(locationId, { limit: 500 })).filter(listedInPortfolio);
+  const out = [];
+  // Sequential, like the photo loads below: a primary-key lookup each, against
+  // a pool of 8 connections.
+  for (const r of listed) {
+    if (r.offerId && !stillForSale(await store.getOffer(r.offerId))) continue;
+    out.push(r);
+  }
+  return out;
+}
+
 // The shareable marketing link — one per room, no expiry, no recipient.
 //
 // Its token is deliberately stored in the clear (unlike personal invites,
@@ -88,8 +117,7 @@ async function ensureShareLink(room) {
 // references to its in-memory documents, so hanging heroPhoto off the room
 // object itself would ride into store.json on the next unrelated persist().
 async function loadBoardDeals(locationId) {
-  const listed = (await store.listDatarooms(locationId, { limit: 500 }))
-    .filter((r) => listedInPortfolio(r) && r.snapshot);
+  const listed = (await boardRooms(locationId)).filter((r) => r.snapshot);
   const out = [];
   // Sequential on purpose: the pool is 8 connections, so firing every room's
   // photo query at once would only queue them.
@@ -242,8 +270,9 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
     try {
       const { locationId } = resolveLocation(req);
       const portfolio = await ensurePortfolio(locationId);
-      const rooms = await store.listDatarooms(locationId, { limit: 500 });
-      const listed = rooms.filter(listedInPortfolio);
+      // The same count the board itself renders — closed and fell-through deals
+      // drop out of both together.
+      const listed = await boardRooms(locationId);
       const invites = await store.listDataroomInvites(portfolio.id);
       const share = invites.find((i) => i.doc?.share && i.status === "active");
       res.json({
@@ -792,6 +821,9 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
       gone(res);
       return null;
     }
+    // A dead deal's teaser dies with it — the card is off the board, so a
+    // bookmarked or shared teaser link shouldn't be the way back in.
+    if (room.offerId && !stillForSale(await store.getOffer(room.offerId))) { gone(res); return null; }
     const rooms = await store.listDatarooms(room.locationId, { limit: 500 });
     if (!rooms.some((r) => isPortfolio(r) && r.status === "active")) { gone(res); return null; }
     return room;

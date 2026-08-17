@@ -492,6 +492,45 @@ ok("restoring it revives the teaser", (await fetch(TEASER, { redirect: "manual" 
 tv = await fetch(`${B}/d/deal/nope-not-a-room`, { redirect: "manual" });
 ok("a bogus room id is the same 404 notice", tv.status === 404, tv.status);
 
+console.log("\n== the board follows the deal ==");
+// A room is built once and outlives the deal. The board is titled "Current
+// deals", so a property that closed or fell through has to leave it without
+// anyone remembering to unlist the room by hand.
+const VASHON_TEASER = `${B}/d/deal/${room2.id}`;
+const setStage = async (stage) => {
+  const o = await store.getOffer(offer2.id);
+  o.deal.stage = stage;
+  await store.updateOffer(o.id, o);
+};
+
+for (const stage of ["fell_through", "closed"]) {
+  await setStage(stage);
+  ph = await (await fetch(portfolioLink, { redirect: "manual" })).text();
+  ok(`a ${stage} deal drops off the board`, !ph.includes("Vashon") && ph.includes("Sumner"));
+  feed = await (await fetch(FEED)).json();
+  ok(`the feed stops advertising a ${stage} deal`,
+    feed.deals.length === 1 && !feed.deals.some((d) => d.address.includes("Vashon")), feed.deals.length);
+  r = await jget(`${B}/api/datarooms/portfolio?location_id=${LOC}`);
+  ok(`the operator's listed count agrees (${stage})`, r.body.listedCount === 1, r.body.listedCount);
+  tv = await fetch(VASHON_TEASER, { redirect: "manual" });
+  ok(`a ${stage} deal's public teaser is gone`, tv.status === 404, tv.status);
+}
+
+// Back to live: a fell-through deal that gets resurrected shouldn't need the
+// room rebuilt.
+await setStage("under_contract");
+ph = await (await fetch(portfolioLink, { redirect: "manual" })).text();
+ok("reviving the deal puts it back on the board", ph.includes("Vashon"));
+ok("its teaser comes back too", (await fetch(VASHON_TEASER, { redirect: "manual" })).status === 200);
+
+// The room's own link is NOT the board: an investor mid-conversation keeps the
+// package they were sent until the operator revokes it.
+r = await jget(`${B}/api/datarooms/${room2.id}?location_id=${LOC}`);
+await setStage("fell_through");
+ok("the deal's own share link survives a dead stage",
+  (await fetch(r.body.dataroom.shareLink, { redirect: "manual" })).status === 200);
+await setStage("under_contract");
+
 console.log("\n== operator: wrong location is refused ==");
 r = await jget(`${B}/api/datarooms/${room.id}?location_id=someone-else`);
 ok("403 on a foreign location", r.status === 403, r.status);
