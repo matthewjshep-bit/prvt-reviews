@@ -23,6 +23,7 @@
 // feed.
 
 import { netComparison } from "./shared/offer-calc.js";
+import { zillowUrl } from "./shared/us-address.js";
 import { offerBreakdown } from "./shared/offer-breakdown.js";
 import { esc, page, pickedComps } from "./dataroom.js";
 
@@ -130,7 +131,11 @@ export function buildOfferSnapshot({ offer, settings = {}, sections, headline = 
       buyerCommissionB: Math.round(net.buyerCommissionB),
     } : null,
     comps: {
-      items: pickedComps(snap),
+      // Each comp carries its own Zillow link so the agent can check our work
+      // rather than take the table on faith — the whole point of showing comps
+      // to someone who sells houses for a living. Frozen with the rest of the
+      // snapshot; a URL derived from an address can't go stale on its own.
+      items: pickedComps(snap).map((c) => ({ ...c, zillow: zillowUrl(c.address) || "" })),
       basis: clean(snap?.comps?.arvBasis, 120),
       months: Math.round(num(snap?.comps?.months)) || null,
     },
@@ -148,13 +153,21 @@ export function buildOfferSnapshot({ offer, settings = {}, sections, headline = 
 
 const OFFER_CSS = `
 .lead{background:#0F172A;border-radius:12px;padding:22px 20px;margin:0 0 16px;color:#fff}
-.lead .k{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#94A3B8;margin-bottom:6px}
-.lead .v{font-size:24px;font-weight:800;letter-spacing:-.025em;font-variant-numeric:tabular-nums;line-height:1.1}
-.lead .sub{font-size:13px;color:#CBD5E1;margin-top:8px}
+.lead .addr{font-size:24px;font-weight:800;letter-spacing:-.02em;line-height:1.2;margin:0;
+  color:#fff;overflow-wrap:break-word}
+.lead .facts{font-size:13px;color:#CBD5E1;margin-top:6px}
+/* The offer sits in its own block under the address, divided rather than
+   merely spaced — the rule is what stops the number reading as another fact
+   about the property. */
+.lead .amt{margin-top:16px;padding-top:16px;border-top:1px solid rgba(255,255,255,.14)}
+.lead .k{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#94A3B8;margin-bottom:4px}
+.lead .v{font-size:20px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
+.lead .sub{font-size:13px;color:#CBD5E1;margin-top:10px}
 .stack td{border-bottom:0;padding:7px 8px 7px 0}
 .stack tr.tot td{border-top:2px solid #0F172A;font-weight:800;padding-top:11px;font-size:15px}
 .stack td.r{font-variant-numeric:tabular-nums;text-align:right;padding-right:0}
 .stack .op{color:#94A3B8;width:14px;padding-right:6px;text-align:center}
+td a{color:#2563EB;text-decoration:none;border-bottom:1px solid rgba(37,99,235,.3)}
 .note p{margin:0 0 10px;font-size:14px}.note p:last-child{margin:0}
 .netrow{display:flex;flex-wrap:wrap;gap:1px;background:#E2E8F0;border:1px solid #E2E8F0;border-radius:8px;overflow:hidden}
 .netcol{background:#fff;padding:14px 16px;flex:1 1 200px;min-width:0}
@@ -166,6 +179,10 @@ const OFFER_CSS = `
   font-variant-numeric:tabular-nums}
 `;
 
+// The property leads, the offer follows. An agent opening this on a phone is
+// triaging — they have several properties in play and need to know WHICH one
+// before the number means anything. So the address is the page's h1, and the
+// offer sits under it as the answer to a question the address has already asked.
 function leadCard(snap) {
   const o = snap.offer || {};
   const p = snap.property || {};
@@ -178,9 +195,12 @@ function leadCard(snap) {
   const valid = o.validLabel ? `Valid through ${esc(o.validLabel)}` : "";
   const asking = o.askingPrice ? `Asking ${money(o.askingPrice)}` : "";
   return `<div class="lead">
-    <div class="k">All-cash offer</div>
-    <div class="v">${money(o.amount)}</div>
-    <div class="sub">${esc(snap.property.address || "")}${facts ? ` · ${esc(facts)}` : ""}</div>
+    <h1 class="addr">${esc(p.address || "")}</h1>
+    ${facts ? `<div class="facts">${esc(facts)}</div>` : ""}
+    <div class="amt">
+      <div class="k">All-cash offer</div>
+      <div class="v">${money(o.amount)}</div>
+    </div>
     ${valid || asking ? `<div class="sub">${[asking, valid].filter(Boolean).join(" · ")}</div>` : ""}
   </div>`;
 }
@@ -241,9 +261,16 @@ function netSection(snap) {
         <div class="ln"><span>Buyer's agent (${n.buyerPct}%)</span><span>− ${money(n.buyerCommissionB)}</span></div>
       </div>
     </div>
-    <p class="muted" style="margin-top:12px">
-      Before repairs, concessions, carrying costs and time on market — all of which fall on the seller in the
-      listed column and on us in ours.
+    <p class="muted" style="margin-top:14px">
+      We represent ourselves on the purchase, so there's no buyer's agent commission to pay — that saving is
+      already built into the number above. We're also flexible on how that side is handled: if you'd rather
+      bring a buyer's agent, or write your own commission into the deal, tell us what you need and we'll
+      work with it.
+    </p>
+    <p class="muted" style="margin-top:10px">
+      The right-hand column is what the property would have to list for to leave your seller the same money
+      after both commissions — before repairs, concessions, carrying costs and time on market, all of which
+      fall on the seller in that column and on us in ours.
     </p>
   </div>`;
 }
@@ -251,24 +278,51 @@ function netSection(snap) {
 function compsSection(snap) {
   const items = snap.comps?.items || [];
   if (!items.length) return "";
-  const rows = items.map((c) => `<tr>
-    <td>${esc(c.address)}${c.condition ? ` <span class="pill">${esc(c.condition)}</span>` : ""}</td>
-    <td class="r">${c.beds != null ? esc(String(c.beds)) : "—"}/${c.baths != null ? esc(String(c.baths)) : "—"}</td>
-    <td class="r">${c.sqft ? c.sqft.toLocaleString("en-US") : "—"}</td>
-    <td class="r">${c.saleDate ? esc(c.saleDate) : "—"}</td>
-    <td class="r">${money(c.price)}</td></tr>`).join("");
+
+  // Only carry columns that some comp can actually fill. A Zillow capture often
+  // arrives without a sold date (Zillow doesn't always expose one), and a
+  // hand-entered comp has no bed/bath count — a column of em-dashes on a
+  // document going to an agent reads as sloppy data rather than absent data.
+  const has = (f) => items.some((c) => f(c));
+  const cols = {
+    bedbath: has((c) => c.beds != null || c.baths != null),
+    sqft: has((c) => c.sqft),
+    sold: has((c) => c.saleDate),
+  };
+  const dash = (v) => (v == null || v === "" ? "—" : esc(String(v)));
+
+  const rows = items.map((c) => {
+    // The address is the link — an agent checking a comp goes straight to the
+    // listing. rel/target so we never navigate the offer page itself away.
+    const addr = c.zillow
+      ? `<a href="${esc(c.zillow)}" target="_blank" rel="noreferrer noopener">${esc(c.address)}</a>`
+      : esc(c.address);
+    return `<tr>
+      <td>${addr}${c.condition ? ` <span class="pill">${esc(c.condition)}</span>` : ""}</td>
+      ${cols.bedbath ? `<td class="r">${dash(c.beds)}/${dash(c.baths)}</td>` : ""}
+      ${cols.sqft ? `<td class="r">${c.sqft ? c.sqft.toLocaleString("en-US") : "—"}</td>` : ""}
+      ${cols.sold ? `<td class="r">${dash(c.saleDate)}</td>` : ""}
+      <td class="r">${money(c.price)}</td></tr>`;
+  }).join("");
+
   const basis = [
     snap.comps.basis,
     snap.comps.months ? `sold within ${snap.comps.months} months` : "",
   ].filter(Boolean).join(" · ");
+  const linked = items.some((c) => c.zillow);
   return `<div class="card">
     <h2>The comparable sales behind it</h2>
     <div class="scroll wide"><table>
-      <tr><th>Address</th><th class="r">Bd/Ba</th><th class="r">Sqft</th><th class="r">Sold</th><th class="r">Price</th></tr>
+      <tr><th>Address</th>
+        ${cols.bedbath ? `<th class="r">Bd/Ba</th>` : ""}
+        ${cols.sqft ? `<th class="r">Sqft</th>` : ""}
+        ${cols.sold ? `<th class="r">Sold</th>` : ""}
+        <th class="r">Price</th></tr>
       ${rows}
     </table></div>
     <p class="hint">Scroll the table sideways to see every column.</p>
-    ${basis ? `<p class="muted" style="margin-top:12px">${esc(basis)}</p>` : ""}
+    ${linked ? `<p class="muted" style="margin-top:12px">Tap any address to open it on Zillow.</p>` : ""}
+    ${basis ? `<p class="muted" style="margin-top:${linked ? 4 : 12}px">${esc(basis)}</p>` : ""}
   </div>`;
 }
 
