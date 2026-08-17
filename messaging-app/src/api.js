@@ -221,6 +221,22 @@ export const removeDealInvestor = (id, contactId) =>
 export const suggestInvestors = (id) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/suggest-investors`, {});
 
+// Deal attachments — the signed purchase & sale and everything that follows it.
+// One file per call: a whole batch in a single JSON body would be tens of MB of
+// base64 for the broker to parse in one blocking go.
+export const listDealDocs = (id) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/documents?${locq()}`)
+    .then(j).then((r) => r.documents);
+export const uploadDealDoc = (id, { name, kind, data }) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal/documents`, { name, kind, data })
+    .then((r) => r.documents);
+// The console's own link. Location-gated like every other read in this app.
+export const dealDocUrl = (id, docId, { download = false } = {}) =>
+  `${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/documents/${encodeURIComponent(docId)}?${locq()}${download ? "&download=1" : ""}`;
+export const deleteDealDoc = (id, docId) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/documents/${encodeURIComponent(docId)}?${locq()}`,
+    { method: "DELETE" }).then(j).then((r) => r.documents);
+
 /* ---------- agent offer pages ---------- */
 // A shareable web page built from one offer, for the listing agent: the offer,
 // how we got to the number, the comps behind it, the scope, and the seller's

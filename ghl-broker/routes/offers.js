@@ -2842,6 +2842,121 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  /* ---- deal attachments -------------------------------------------------
+   * Files the operator uploads against a deal: the signed purchase & sale,
+   * addenda, title work, inspection reports. Stored as bytes next to the deal
+   * (store.saveDealDoc) rather than on R2, so a link never outlives the
+   * location gate — every read below is location-scoped like the rest of this
+   * router. Uploads arrive as a base64 data URI, same shape as the photos.
+   * ---------------------------------------------------------------------- */
+
+  const MAX_DEAL_DOC_BYTES = 15 * 1024 * 1024;
+  const DEAL_DOC_KINDS = [
+    "Purchase & sale", "Assignment", "Addendum", "Inspection",
+    "Title", "Photos / other", "Other",
+  ];
+
+  // Trust the bytes, not the declared type. Anything we can't identify from its
+  // magic number is rejected — an attachment list is a place people click, so
+  // "some file that claims to be a PDF" is not good enough.
+  const DOC_MAGIC = [
+    { type: "application/pdf", test: (b) => b.slice(0, 5).toString("ascii") === "%PDF-" },
+    { type: "image/jpeg", test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+    { type: "image/png", test: (b) => b.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+    { type: "image/webp", test: (b) => b.slice(0, 4).toString("ascii") === "RIFF" && b.slice(8, 12).toString("ascii") === "WEBP" },
+    { type: "image/heic", test: (b) => b.slice(4, 8).toString("ascii") === "ftyp" && /heic|heix|mif1/.test(b.slice(8, 12).toString("ascii")) },
+    // Modern Office files are zips; legacy .doc/.xls are OLE compound files.
+    { type: "application/vnd.openxmlformats-officedocument", test: (b) => b[0] === 0x50 && b[1] === 0x4b && (b[2] === 0x03 || b[2] === 0x05 || b[2] === 0x07) },
+    { type: "application/msword", test: (b) => b.slice(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])) },
+  ];
+
+  // A zip could be .docx, .xlsx or a plain .zip — the extension decides which,
+  // since the container bytes are identical.
+  const OOXML_BY_EXT = {
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    zip: "application/zip",
+  };
+
+  function decodeDealDocUpload(dataUri, filename) {
+    const m = /^data:([\w.+-]+\/[\w.+-]+)?(;charset=[\w-]+)?;base64,(.+)$/s.exec(String(dataUri || ""));
+    if (!m) throw Object.assign(new Error("file must be a base64 data URI"), { http: 400 });
+    const bytes = Buffer.from(m[3], "base64");
+    if (!bytes.length) throw Object.assign(new Error("file is empty"), { http: 400 });
+    if (bytes.length > MAX_DEAL_DOC_BYTES) {
+      throw Object.assign(new Error("file is too large (max 15MB)"), { http: 413 });
+    }
+    const hit = DOC_MAGIC.find((d) => d.test(bytes));
+    if (!hit) {
+      throw Object.assign(
+        new Error("unsupported file type — PDF, image, or Office document"),
+        { http: 400 }
+      );
+    }
+    const ext = String(filename || "").split(".").pop().toLowerCase();
+    const contentType =
+      hit.type === "application/vnd.openxmlformats-officedocument"
+        ? OOXML_BY_EXT[ext] || "application/zip"
+        : hit.type;
+    return { bytes, contentType };
+  }
+
+  // Never let an uploaded name reach a header or a filesystem path.
+  const safeDocName = (name) =>
+    dealStr(String(name || "").replace(/[\\/\r\n"]/g, " ").replace(/\s+/g, " "), 120) || "document";
+
+  router.get("/:id/deal/documents", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      res.json({ documents: await store.listDealDocs(ctx.offer.id) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // One file per request: a multi-file batch would be tens of MB of base64 for
+  // a single-threaded process to JSON.parse in one blocking go. The client
+  // uploads a picked batch one at a time, so one failure doesn't lose the rest.
+  router.post("/:id/deal/documents", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const name = safeDocName(req.body?.name);
+      const kind = DEAL_DOC_KINDS.includes(req.body?.kind) ? req.body.kind : "Other";
+      const { bytes, contentType } = decodeDealDocUpload(req.body?.data, name);
+      const document = await store.saveDealDoc(ctx.offer.id, ctx.locationId, { kind, name, contentType, bytes });
+      res.json({ ok: true, document, documents: await store.listDealDocs(ctx.offer.id) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Membership is checked through the offer's own list, never by document id
+  // alone — the same rule the photo read path follows.
+  router.get("/:id/deal/documents/:docId", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const meta = (await store.listDealDocs(ctx.offer.id)).find((d) => d.id === req.params.docId);
+      if (!meta) return res.status(404).type("text/plain").send("not found");
+      const stored = await store.readDealDocBytes(req.params.docId);
+      if (!stored?.bytes) return res.status(404).type("text/plain").send("not found");
+      const disposition = req.query.download === "1" ? "attachment" : "inline";
+      res.set("Content-Type", meta.contentType || "application/octet-stream");
+      res.set("Content-Disposition", `${disposition}; filename="${meta.name}"`);
+      res.set("Cache-Control", "private, max-age=3600");
+      res.send(stored.bytes);
+    } catch (err) { fail(res, err); }
+  });
+
+  router.delete("/:id/deal/documents/:docId", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const ok = await store.deleteDealDoc(ctx.offer.id, req.params.docId);
+      if (!ok) return res.status(404).json({ error: "document not found" });
+      res.json({ ok: true, documents: await store.listDealDocs(ctx.offer.id) });
+    } catch (err) { fail(res, err); }
+  });
+
   // One-time backfill: recompute the INVESTOR_DEAL_TAG for every contact that
   // appears as an investor on any of the location's deals (live or dead).
   // Investors linked before tag sync existed have no tag; running this once

@@ -5,11 +5,14 @@
 // immediately; terms (price / fee / inspection / closing / notes) save via the modal.
 
 import React, { useEffect, useRef, useState } from "react";
-import { ExternalLink, FileText, Loader2, Lock, Pencil, Sparkles, Target, Trash2, X } from "lucide-react";
+import {
+  ExternalLink, FileText, Loader2, Lock, Paperclip, Pencil, Sparkles, Target, Trash2, Upload, X,
+} from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
-  addDealInvestor, getOffer, ghlContactUrl, listDeals, removeDeal, removeDealInvestor,
-  searchContacts, suggestInvestors, updateDeal, updateDealInvestor, zillowUrl,
+  addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
+  removeDeal, removeDealInvestor, searchContacts, suggestInvestors, updateDeal, updateDealInvestor,
+  uploadDealDoc, zillowUrl,
 } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
 import DataroomModal from "./DataroomModal.jsx";
@@ -66,21 +69,175 @@ const assignmentTotal = (contractPrice, assignmentFee) => num(contractPrice) + n
 const shortDate = (iso) =>
   iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
 
-function InvestorChips({ deal }) {
-  const inv = sortInvestors(deal.investors);
+// Deliberately NOT a list of names: on a deal that's been blasted to twenty
+// buyers the chips were taller than the row itself. The overview answers "how
+// far along is disposition", the modal answers "who, exactly".
+function InvestorSummary({ deal }) {
+  const inv = deal.investors || [];
   if (!inv.length) return <span className="text-xs text-slate-400">none yet</span>;
+  const live = inv.filter((i) => i.status !== "passed").length;
+  const committed = inv.some((i) => i.status === "committed");
   return (
-    <span className="flex flex-wrap gap-1">
-      {inv.map((i) => (
-        <span key={i.contactId} title={`${i.name} — ${i.status}`}
-          className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-            i.status === "committed" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-700"
-          }`}>
-          <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[i.status] || "bg-slate-400"}`} />
-          {i.name}
-        </span>
-      ))}
+    <span title={sortInvestors(inv).map((i) => `${i.name} — ${i.status}`).join("\n")}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${
+        committed ? "bg-emerald-100 text-emerald-900" : "bg-slate-100 text-slate-700"
+      }`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${committed ? STATUS_DOT.committed : STATUS_DOT.sent}`} />
+      {committed ? "buyer committed" : `${live} of ${inv.length} live`}
     </span>
+  );
+}
+
+const DOC_KINDS = [
+  "Purchase & sale", "Assignment", "Addendum", "Inspection", "Title", "Photos / other", "Other",
+];
+
+const fileSize = (n) =>
+  n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+
+const readAsDataUrl = (file) =>
+  new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error("could not be read"));
+    r.readAsDataURL(file);
+  });
+
+// Files that live with the deal rather than with the offer: the signed purchase
+// & sale, addenda, title work, inspection reports. Fetched on open instead of
+// riding along on the deals list — most deals are never opened, and the list
+// endpoint is deliberately lean.
+function DealDocuments({ offerId }) {
+  const [docs, setDocs] = useState(null);
+  const [kind, setKind] = useState(DOC_KINDS[0]);
+  const [uploading, setUploading] = useState(null); // null | { done, total }
+  const [error, setError] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    let live = true;
+    listDealDocs(offerId)
+      .then((d) => { if (live) setDocs(d); })
+      .catch((e) => { if (live) { setError(e.message); setDocs([]); } });
+    return () => { live = false; };
+  }, [offerId]);
+
+  // One file per request, and each result replaces the whole list — so a
+  // failure halfway through a batch still leaves what did land on screen.
+  async function addFiles(list) {
+    const files = [...(list || [])];
+    if (!files.length) return;
+    setError("");
+    setUploading({ done: 0, total: files.length });
+    const failed = [];
+    for (const [i, file] of files.entries()) {
+      try {
+        setDocs(await uploadDealDoc(offerId, { name: file.name, kind, data: await readAsDataUrl(file) }));
+      } catch (e) {
+        failed.push(`${file.name} — ${e.message}`);
+      }
+      setUploading({ done: i + 1, total: files.length });
+    }
+    setUploading(null);
+    if (failed.length) setError(failed.join(" · "));
+  }
+
+  async function remove(doc) {
+    if (!window.confirm(`Delete "${doc.name}"? This can't be undone.`)) return;
+    setError("");
+    try {
+      setDocs(await deleteDealDoc(offerId, doc.id));
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  const busy = Boolean(uploading);
+
+  return (
+    <div>
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Documents</span>
+        {uploading && (
+          <span className="text-[11px] text-slate-500">Uploading {uploading.done}/{uploading.total}…</span>
+        )}
+      </div>
+
+      {docs === null ? (
+        <div className="flex justify-center py-3"><Loader2 size={16} className="animate-spin text-slate-400" /></div>
+      ) : (
+        <>
+          {docs.length > 0 && (
+            <div className="mb-2 space-y-1.5">
+              {docs.map((d) => (
+                <div key={d.id} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5">
+                  <a href={dealDocUrl(offerId, d.id)} target="_blank" rel="noreferrer"
+                    className="inline-flex min-w-0 items-center gap-1.5" title={`Open ${d.name}`}>
+                    <FileText size={13} className="shrink-0 text-slate-400" />
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium underline decoration-slate-300 underline-offset-2">
+                        {d.name}
+                      </span>
+                      <span className="block text-[11px] text-slate-500">
+                        {d.kind} · {fileSize(d.size)} · {shortDate(d.createdAt)}
+                      </span>
+                    </span>
+                  </a>
+                  <button type="button" title="Delete this document" onClick={() => remove(d)}
+                    className="shrink-0 rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600">
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* The kind is stamped at upload time — pick it first, then drop the
+              files in. Re-labelling later is delete + re-upload, on purpose:
+              these are signed originals, not a filing cabinet to reorganize. */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); if (!busy) setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              if (!busy) addFiles(e.dataTransfer?.files);
+            }}
+            className={`rounded-lg border border-dashed p-2.5 transition-colors ${
+              dragging ? "border-blue-500 bg-blue-50" : "border-slate-300"
+            }`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <select value={kind} onChange={(e) => setKind(e.target.value)} disabled={busy}
+                aria-label="Document type"
+                className="rounded-lg border border-slate-300 px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none">
+                {DOC_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+              </select>
+              <button type="button" disabled={busy} onClick={() => fileRef.current?.click()}
+                className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60">
+                {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                {docs.length ? "Attach more" : "Attach files"}
+              </button>
+              <input ref={fileRef} type="file" multiple className="hidden"
+                accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.doc,.docx,.xls,.xlsx"
+                onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+              <span className="text-[11px] text-slate-500">
+                {dragging ? "Drop them here" : "or drag them in"}
+              </span>
+            </div>
+          </div>
+
+          {error && <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">{error}</div>}
+          {docs.length === 0 && !error && (
+            <p className="mt-1.5 flex items-start gap-1.5 text-[11px] leading-tight text-slate-400">
+              <Paperclip size={12} className="mt-px shrink-0" />
+              The signed purchase &amp; sale, addenda, title and inspection paperwork. PDF, image or
+              Office file, up to 15MB each.
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -221,7 +378,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
 
   return (
     <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={onClose}>
-      <div className="w-full max-w-5xl rounded-2xl bg-white p-5 sm:p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-7xl rounded-2xl bg-white p-5 sm:p-7 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <div className="text-lg font-bold">
@@ -279,7 +436,9 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
           )}
         </div>
 
-        <div className="grid gap-6 sm:grid-cols-[1fr_1.3fr]">
+        {/* Three lanes on a wide screen — terms, disposition, paperwork — so a
+            deal with twenty investors doesn't push the documents off the fold. */}
+        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.15fr)_minmax(0,1fr)]">
           {/* Terms */}
           <div className="space-y-3">
             <div>
@@ -326,7 +485,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             )}
           </div>
 
-          {/* Investors + timeline + documents */}
+          {/* Disposition — who the deal is being shopped to */}
           <div className="space-y-4">
             <div>
               <span className={labelCls}>Disposition investors</span>
@@ -430,6 +589,11 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 )}
               </div>
             </div>
+          </div>
+
+          {/* Paperwork — generated documents, uploaded originals, timeline */}
+          <div className="space-y-4">
+            <DealDocuments offerId={offer.id} />
 
             <div>
               <span className={labelCls}>Timeline</span>
@@ -554,7 +718,7 @@ export default function DealsView({ settings, onEdit }) {
                   <th className="px-4 py-2.5">Property</th>
                   <th className="px-4 py-2.5">Agent</th>
                   <th className="px-4 py-2.5">Stage</th>
-                  <th className="px-4 py-2.5">Investors</th>
+                  <th className="px-4 py-2.5">Disposition</th>
                   <th className="px-4 py-2.5 text-right">Contract</th>
                   <th className="px-4 py-2.5 text-right">Fee</th>
                   <th className="px-4 py-2.5 text-right">Assignment</th>
@@ -585,7 +749,7 @@ export default function DealsView({ settings, onEdit }) {
                         ) : (o.contactName || "—")}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5"><StagePill stage={d.stage} /></td>
-                      <td className="px-4 py-2.5"><InvestorChips deal={d} /></td>
+                      <td className="whitespace-nowrap px-4 py-2.5"><InvestorSummary deal={d} /></td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
                         {d.contractPrice ? fmtMoney(d.contractPrice) : "—"}
                       </td>

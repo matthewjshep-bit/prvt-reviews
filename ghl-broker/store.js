@@ -95,8 +95,9 @@ const pgStore = {
   },
   async deleteOffer(id) {
     await query(`delete from offer_documents where offer_id = $1`, [id]).catch(() => {});
-    // offer_photo_bytes cascades from offer_photos.
+    // offer_photo_bytes / deal_document_bytes cascade from their parent rows.
     await query(`delete from offer_photos where offer_id = $1`, [id]).catch(() => {});
+    await query(`delete from deal_documents where offer_id = $1`, [id]).catch(() => {});
     const { rowCount } = await query(`delete from offers where id = $1`, [id]);
     return rowCount > 0;
   },
@@ -116,6 +117,53 @@ const pgStore = {
       [offerId, kind]
     );
     return rows[0] || null;
+  },
+
+  /* ---- deal attachments (operator-uploaded files: signed P&S, addenda…) ---- */
+
+  // Metadata only — never `select *`, or every list drags the file bytes along.
+  async listDealDocs(offerId) {
+    const { rows } = await query(
+      `select id, offer_id as "offerId", location_id as "locationId", kind, name,
+              content_type as "contentType", size_bytes as "size", created_at as "createdAt"
+         from deal_documents where offer_id = $1
+        order by created_at, id`,
+      [offerId]
+    );
+    return rows;
+  },
+  async saveDealDoc(offerId, locationId, { kind, name, contentType, bytes }) {
+    const id = crypto.randomUUID();
+    await query(
+      `insert into deal_documents (id, offer_id, location_id, kind, name, content_type, size_bytes)
+       values ($1,$2,$3,$4,$5,$6,$7)`,
+      [id, offerId, locationId, kind, name, contentType, bytes.length]
+    );
+    await query(`insert into deal_document_bytes (document_id, bytes) values ($1,$2)`, [id, bytes]);
+    const { rows } = await query(
+      `select id, offer_id as "offerId", location_id as "locationId", kind, name,
+              content_type as "contentType", size_bytes as "size", created_at as "createdAt"
+         from deal_documents where id = $1`,
+      [id]
+    );
+    return rows[0];
+  },
+  async readDealDocBytes(docId) {
+    const { rows } = await query(
+      `select d.name, d.content_type as "contentType", b.bytes, b.storage_key as "storageKey"
+         from deal_documents d join deal_document_bytes b on b.document_id = d.id
+        where d.id = $1`,
+      [docId]
+    );
+    return rows[0] || null;
+  },
+  // offer_id in the WHERE: a caller can't delete someone else's attachment by
+  // id-stuffing, same rule as the photos.
+  async deleteDealDoc(offerId, docId) {
+    const { rowCount } = await query(
+      `delete from deal_documents where id = $1 and offer_id = $2`, [docId, offerId]
+    );
+    return rowCount > 0;
   },
 
   /* ---- property photos ---- */
@@ -649,6 +697,7 @@ const fileStore = (() => {
       data.dataroomInvites = data.dataroomInvites || {};
       data.dataroomEvents = data.dataroomEvents || [];
       data.offerPhotos = data.offerPhotos || {};
+      data.dealDocs = data.dealDocs || {};
       data.compCaptures = data.compCaptures || {};
       data.investors = data.investors || {};
       adoptLegacyOutreachRows();
@@ -756,6 +805,8 @@ const fileStore = (() => {
       }
       for (const p of Object.values(data.offerPhotos)) if (p.offerId === id) delete data.offerPhotos[p.id];
       fs.rmSync(path.join(DATA_DIR, "photos", id), { recursive: true, force: true });
+      for (const d of Object.values(data.dealDocs)) if (d.offerId === id) delete data.dealDocs[d.id];
+      fs.rmSync(path.join(DATA_DIR, "deal-docs", id), { recursive: true, force: true });
       persist();
       return true;
     },
@@ -780,6 +831,54 @@ const fileStore = (() => {
       } catch {
         return null;
       }
+    },
+
+    /* ---- deal attachments ---- */
+    // Same split as the photos: metadata in store.json, bytes on disk under
+    // DATA_DIR/deal-docs/<offerId>/ (dev only — production runs Postgres).
+    async listDealDocs(offerId) {
+      ensure();
+      return Object.values(data.dealDocs)
+        .filter((d) => d.offerId === offerId)
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || a.id.localeCompare(b.id));
+    },
+    async saveDealDoc(offerId, locationId, { kind, name, contentType, bytes }) {
+      ensure();
+      const id = crypto.randomUUID();
+      const dir = path.join(DATA_DIR, "deal-docs", offerId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, id), bytes);
+      const row = {
+        id, offerId, locationId, kind, name, contentType,
+        size: bytes.length,
+        createdAt: new Date().toISOString(),
+      };
+      data.dealDocs[id] = row;
+      persist();
+      return row;
+    },
+    async readDealDocBytes(docId) {
+      ensure();
+      const row = data.dealDocs[docId];
+      if (!row) return null;
+      try {
+        return {
+          name: row.name,
+          contentType: row.contentType,
+          bytes: fs.readFileSync(path.join(DATA_DIR, "deal-docs", row.offerId, docId)),
+        };
+      } catch {
+        return null;
+      }
+    },
+    async deleteDealDoc(offerId, docId) {
+      ensure();
+      const row = data.dealDocs[docId];
+      if (!row || row.offerId !== offerId) return false;
+      delete data.dealDocs[docId];
+      fs.rmSync(path.join(DATA_DIR, "deal-docs", offerId, docId), { force: true });
+      persist();
+      return true;
     },
 
     /* ---- property photos ---- */

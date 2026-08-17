@@ -71,6 +71,31 @@ create table if not exists offer_photo_bytes (
   primary key (photo_id, variant)
 );
 
+-- Deal attachments: files the operator uploads against a deal (signed purchase
+-- & sale, addenda, title work, inspection reports). Distinct from
+-- offer_documents, which holds the ONE generated PDF/JPEG per kind — these are
+-- many arbitrary files per offer, named by the operator.
+--
+-- Same metadata/bytes split as the photos, for the same reason: listing a
+-- deal's attachments must never drag their bytes into Node.
+create table if not exists deal_documents (
+  id            uuid primary key,
+  offer_id      uuid not null,
+  location_id   text not null,
+  kind          text not null default 'Other',  -- operator label, e.g. 'Purchase & sale'
+  name          text not null,                  -- original filename
+  content_type  text not null,
+  size_bytes    int not null,
+  created_at    timestamptz not null default now()
+);
+create index if not exists deal_documents_offer_idx on deal_documents (offer_id, created_at);
+
+create table if not exists deal_document_bytes (
+  document_id   uuid primary key references deal_documents (id) on delete cascade,
+  bytes         bytea,
+  storage_key   text
+);
+
 -- Agent Outreach: listing agents discovered from RentCast pulls.
 -- agent_key encodes the dedupe identity: "e:<email>" else "p:<10-digit phone>"
 -- else "n:<name-slug>|<office-slug>". Lifecycle lives in columns (not doc) so
