@@ -154,7 +154,7 @@ export async function fetchRemoteImage(rawUrl, { maxBytes = DEFAULT_MAX_BYTES, t
         headers: {
           Accept: "image/*",
           // Some CDNs 403 an empty UA; identify honestly rather than spoof.
-          "User-Agent": "prvt-offer-broker/1.0 (property photo import)",
+          "User-Agent": "shepflips-offer-broker/1.0 (property photo import)",
         },
       });
     } catch (e) {

@@ -1,5 +1,5 @@
 {
-  "name": "prvt-card-service",
+  "name": "shepflips-card-service",
   "version": "1.0.0",
   "description": "Personalized review-card image microservice (name overlaid on brand background) for GHL MMS",
   "type": "module",

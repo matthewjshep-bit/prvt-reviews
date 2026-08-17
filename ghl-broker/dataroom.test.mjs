@@ -61,7 +61,7 @@ const offer = await store.createOffer({
   scope: [{ label: "Kitchen refresh", cost: 18000 }, { label: "Roof", cost: 14500 }],
   calc: {
     inputs: { address: "7316 166th Avenue East, Sumner, WA 98390", arv: 520000, repairs: 62000 },
-    settings: { company: { name: "Prvt Capital", tagline: "Cash offers, closed fast", signer: "Matt Shepherd", phone: "(253) 555-0143", email: "matt@example.com" } },
+    settings: { company: { name: "Shep Flips", tagline: "Cash offers, closed fast", signer: "Matt Shepherd", phone: "(253) 555-0143", email: "matt@example.com" } },
   },
   snapshot: {
     subjectSqft: 1840,
@@ -133,7 +133,7 @@ const offer2 = await store.createOffer({
   locationId: LOC, contactId: "contact-agent-2", contactName: "Lee Ash",
   address: "900 Vashon Hwy SW, Vashon, WA 98070", cashAmount: 250000,
   calc: { inputs: { address: "900 Vashon Hwy SW, Vashon, WA 98070", arv: 600000, repairs: 90000 },
-          settings: { company: { name: "Prvt Capital" } } },
+          settings: { company: { name: "Shep Flips" } } },
   deal: { stage: "under_contract", contractPrice: 250000, assignmentFee: 20000, investors: [] },
 });
 r = await jget(`${B}/api/datarooms`, {
@@ -155,7 +155,7 @@ ok("portfolio page renders", pv.status === 200 && ph.includes("Current deals"), 
 ok("lists both addresses", ph.includes("Sumner") && ph.includes("Vashon"));
 ok("shows highlights", ph.includes("$327,000") && ph.includes("$270,000"));
 ok("links through to each deal", (ph.match(/href="\/d\//g) || []).length >= 2);
-ok("brands the page from the deals when settings are blank", ph.includes("Prvt Capital"));
+ok("brands the page from the deals when settings are blank", ph.includes("Shep Flips"));
 
 // The portfolio isn't a deal, so it must not appear in the operator's deal list.
 r = await jget(`${B}/api/datarooms?location_id=${LOC}`);
@@ -312,7 +312,7 @@ ok("carries the property basics",
   sumner.beds === 4 && sumner.baths === 2.5 && sumner.sqft === 1840 && sumner.yearBuilt === 1996);
 ok("a deal with no subject info still lists", vashon.beds === null && vashon.price === 270000,
   `${vashon.beds} ${vashon.price}`);
-ok("brands from the deals when settings are blank", feed.company.name === "Prvt Capital", feed.company.name);
+ok("brands from the deals when settings are blank", feed.company.name === "Shep Flips", feed.company.name);
 
 // The one that matters most here. The snapshot carries plenty this must never
 // publish, so the feed is an explicit projection and never a spread of it.
@@ -394,14 +394,14 @@ ok("teaser shows the buy-side numbers", thtml.includes("$327,000"));
 ok("teaser is noindex", (tv.headers.get("x-robots-tag") || "").includes("noindex"));
 ok("teaser carries no watermark", !thtml.includes("CONFIDENTIAL"));
 ok("teaser sells the full package instead of assuming it", thtml.includes("Get the full package"));
-ok("teaser wears the brand header", thtml.includes('class="bmark"') && thtml.includes("Prvt Capital"));
+ok("teaser wears the brand header", thtml.includes('class="bmark"') && thtml.includes("Shep Flips"));
 const pfh = await (await fetch(portfolioLink, { redirect: "manual" })).text();
 ok("portfolio wears the brand header too", pfh.includes('class="bmark"'));
 
 // Header nav from settings: first link is the wordmark's home, the rest render
 // as nav, cta gets the button — and only http(s) URLs survive.
 await store.saveOfferSettings(LOC, { company: {
-  name: "Prvt Capital", wordmark: "Prvt·Capital", tagline: "Test Cap",
+  name: "Shep Flips", wordmark: "Shep·Flips", tagline: "Test Cap",
   brandLinks: [
     { label: "Home", url: "https://example.com/" },
     { label: "Investors", url: "https://example.com/investors" },
@@ -414,7 +414,7 @@ ok("header nav renders from settings", thtml.includes('class="bnav"') && thtml.i
 ok("the wordmark links home", thtml.includes('class="bhome" href="https://example.com/"'));
 ok("the cta link gets the button", thtml.includes('class="bcta"') && thtml.includes("Join the list"));
 ok("a javascript: url never renders", !thtml.includes("javascript:"));
-ok("accent middle-dot renders in the wordmark", thtml.includes("Prvt<span"));
+ok("accent middle-dot renders in the wordmark", thtml.includes("Shep<span"));
 await store.saveOfferSettings(LOC, {});
 ok("teaser hides comps by default", !thtml.includes("Comparable sales"));
 ok("teaser hides the scope by default", !thtml.includes("Rehab scope of work"));

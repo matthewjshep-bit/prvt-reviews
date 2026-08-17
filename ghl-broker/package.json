@@ -1,5 +1,5 @@
 {
-  "name": "prvt-offer-broker",
+  "name": "shepflips-offer-broker",
   "version": "2.0.0",
   "description": "Backend for the real-estate offer generator: calculates cash/creative offers, renders the offer document via cardgen, and attaches offers to GoHighLevel contact records",
   "type": "module",

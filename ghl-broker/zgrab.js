@@ -27,7 +27,7 @@ var CFG = ${cfg};
 
 /* ---------- toast ---------- */
 function toast(msg, ok) {
-  var id = "prvt-zgrab-toast";
+  var id = "sf-zgrab-toast";
   var el = document.getElementById(id);
   if (!el) {
     el = document.createElement("div");
@@ -321,7 +321,7 @@ function relay(payload) {
   // and let that page do the POST from an origin the broker already allows.
   var w = window.open(
     CFG.app + "/zcapture.html#" + encodeURIComponent(JSON.stringify(payload)),
-    "prvtcapture", "width=420,height=260"
+    "sfcapture", "width=420,height=260"
   );
   if (!w) toast("Popup blocked.\\nAllow popups for zillow.com and click again.", false);
 }

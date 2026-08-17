@@ -2,7 +2,7 @@
 // location-scoped; the iframe never talks to GHL directly. The page runs
 // inside a GHL Custom Menu Link iframe that supplies ?location_id=.
 
-const API_BASE = import.meta.env.VITE_API_BASE || "https://prvt-reviews-1.onrender.com";
+const API_BASE = import.meta.env.VITE_API_BASE || "https://offers.shepflips.com";
 
 export function getLocationId() {
   try {

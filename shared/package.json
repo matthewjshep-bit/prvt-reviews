@@ -1,5 +1,5 @@
 {
-  "name": "@prvt/shared",
+  "name": "@shepflips/shared",
   "version": "1.0.0",
   "description": "Shared template + data-source schema (zod) imported by messaging-app, ghl-broker, and cardgen",
   "type": "module",

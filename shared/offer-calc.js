@@ -94,8 +94,14 @@ export const DEFAULT_OFFER_SETTINGS = {
   outreachCity: "",
   outreachState: "",
   outreachDaysOld: 180,      // only pull listings listed/updated in the last N days
-  // Printed on the offer document letterhead
-  company: { name: "", tagline: "", signer: "", phone: "", email: "" },
+  // Printed on the offer document letterhead. The brand* fields additionally
+  // drive the header on every investor-facing dataroom page — see brandFrom()
+  // in ghl-broker/dataroom.js, which validates the colors as hex and falls back
+  // to the design-system defaults (#0F172A / #2563EB) when they are blank.
+  company: {
+    name: "", tagline: "", signer: "", phone: "", email: "",
+    wordmark: "", brandPrimary: "", brandAccent: "", brandLinks: [],
+  },
 };
 
 const num = (v, fallback = 0) => {

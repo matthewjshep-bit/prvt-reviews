@@ -1,11 +1,18 @@
-# PRVT MKT — Personalized Review-Card Service
+# cardgen — Personalized Review-Card Service (legacy endpoint)
+
+> **This document covers the legacy `/card` endpoint only, and none of it is
+> live.** The offer generator uses this service through `POST /render`, driven
+> entirely by the broker — `/card` has no caller today, and the
+> `cards.prvtmkt.com` hostname in the examples below never resolved. Kept
+> because the endpoint still works if the review-card product comes back. For
+> how cardgen is actually deployed and reached, see the repo-root `RUNBOOK.md`.
 
 A tiny public HTTP service that renders a per-recipient image: the customer's
 name burned onto your brand background (the "Jessica!" card). GHL fetches it at
 send time, so every contact gets a unique image from one URL pattern.
 
 ```
-GET /card?name=Jessica&bg=https://cdn.yoursite.com/brand.png&brand=PRVT%20MKT
+GET /card?name=Jessica&bg=https://cdn.yoursite.com/brand.png&brand=Shep%20Flips
 → image/jpeg
 ```
 
@@ -29,7 +36,7 @@ by this service. If `bg` is omitted it renders the name on a solid dark card
 ```bash
 npm install
 npm start
-# open http://localhost:3000/card?name=Jessica&brand=PRVT%20MKT
+# open http://localhost:3000/card?name=Jessica&brand=Shep%20Flips
 ```
 
 ## Deploy
@@ -45,7 +52,7 @@ Any host that serves a public HTTPS URL works (GHL must be able to reach it).
 Set these env vars in production:
 
 - `ALLOWED_BG_HOSTS` — comma-separated allowlist of hosts permitted for `bg`,
-  e.g. `cdn.prvtmkt.com,prvt-assets.s3.amazonaws.com`. **Set this.** Without it
+  e.g. `cdn.shepflips.com,docs.shepflips.com`. **Set this.** Without it
   the endpoint will fetch any image URL (abuse / SSRF surface).
 - `PORT` — defaults to 3000.
 
@@ -58,7 +65,7 @@ You need the **final image URL** to be unique per contact. Two ways:
    - `logo_url` = the uploaded brand image URL (this is what your iframe's
      "Update" writes).
 2. Add another custom value `card_url` =
-   `https://cards.prvtmkt.com/card?name={{contact.first_name}}&bg={{custom_values.logo_url}}`
+   `https://cards.example.com/card?name={{contact.first_name}}&bg={{custom_values.logo_url}}`
 3. In the review-request **Workflow → Send SMS/MMS** action, set the message
    body, and in the **attachment / media URL** field insert `{{custom_values.card_url}}`.
 4. At send time GHL resolves the merge fields → a unique URL per contact →
@@ -73,7 +80,7 @@ each contact, build the URL yourself and post the message:
 
 ```js
 const cardUrl =
-  `https://cards.prvtmkt.com/card?name=${encodeURIComponent(firstName)}` +
+  `https://cards.example.com/card?name=${encodeURIComponent(firstName)}` +
   `&bg=${encodeURIComponent(logoUrl)}`;
 
 await fetch("https://services.leadconnectorhq.com/conversations/messages", {

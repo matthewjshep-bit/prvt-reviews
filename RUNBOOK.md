@@ -5,10 +5,32 @@ Three deployables, in dependency order: cardgen (Render/Docker), ghl-broker
 
 Current live hosts (dashboard-configured, auto-deploy on push to `main`):
 
-- cardgen  → `https://prvt-reviews.onrender.com`
-- broker   → `https://prvt-reviews-1.onrender.com`
-- frontend → Netlify (repo-root `netlify.toml`, base `messaging-app`; the
-  Netlify UI "Base directory" must stay EMPTY for that toml to be read)
+- cardgen  → `https://prvt-reviews.onrender.com` (internal; broker-to-cardgen only)
+- broker   → `https://offers.shepflips.com` (agent-facing) and
+  `https://deals.shepflips.com` (investor-facing) — **the same Render service
+  under two custom domains**; see "Two hostnames, one broker" below
+- frontend → `https://app.shepflips.com` on Netlify (repo-root `netlify.toml`,
+  base `messaging-app`; the Netlify UI "Base directory" must stay EMPTY for that
+  toml to be read)
+
+The original `.onrender.com` hostnames stay attached to their services
+permanently. Every offer PDF link written into a GHL contact field, every note
+body, and every dataroom link already texted to an investor is absolute on the
+old host — leaving those domains connected is what keeps them resolving. Do not
+remove them.
+
+### Two hostnames, one broker
+
+One Render service answers on both names; `PUBLIC_BASE_URL` and
+`DATAROOM_BASE_URL` decide only which name gets *printed* into a link:
+
+| Env var | Hostname | What it names |
+|---|---|---|
+| `PUBLIC_BASE_URL` | `offers.shepflips.com` | offer doc URLs, webhook targets |
+| `DATAROOM_BASE_URL` | `deals.shepflips.com` | `/d/<token>`, teasers, `deals.json` deal + photo URLs |
+
+`DATAROOM_BASE_URL` falls back to `PUBLIC_BASE_URL`, so a single-domain setup
+still works with only the first one set.
 
 ---
 
@@ -29,19 +51,28 @@ Env (see `ghl-broker/.env.example` for the full annotated list):
 GHL_TOKEN=pit-...                 # Private Integration token
 GHL_LOCATION_ID=...               # single-tenant guard
 CARD_SERVICE_URL=https://prvt-reviews.onrender.com
-PUBLIC_BASE_URL=https://prvt-reviews-1.onrender.com
+PUBLIC_BASE_URL=https://offers.shepflips.com    # agent-facing links
+DATAROOM_BASE_URL=https://deals.shepflips.com   # investor-facing links
 DATABASE_URL=postgres://...       # Render Postgres; schema auto-applies on boot
-# R2_* (optional) — when set, documents go to Cloudflare R2 instead of Postgres
-APP_ORIGIN=https://<your-netlify-site>   # frontend origin (cross-origin CORS)
+# R2_* (optional) — when set, documents go to Cloudflare R2 instead of Postgres.
+# R2_PUBLIC_BASE is the hostname on every offer PDF an agent opens — connect a
+# custom domain (docs.shepflips.com) to the bucket and keep the old one attached
+# so already-issued document URLs keep resolving.
+APP_ORIGIN=https://app.shepflips.com     # frontend origin (cross-origin CORS)
 # CARD_SENDS_ENABLED=true         # leave unset until you want live SMS sends
 DATAROOM_FEED_LOCATIONS=          # locations allowed to publish a PUBLIC deals feed
 # DATAROOM_FEED_TTL_MS=60000      # server memo for that feed; leave unset
 ```
 
-`PUBLIC_BASE_URL` matters more than it used to: the public deals feed builds
+`DATAROOM_BASE_URL` matters more than the rest: the public deals feed builds
 absolute deal and photo URLs from it, so if it points at a hostname that no
 longer resolves, the marketing site renders cards with dead links and broken
 images. Check it resolves before relying on the feed.
+
+`APP_ORIGIN` is comma-separated for CORS, but only its **first** entry is
+written into the `offer_app_link` deep link on each contact. Put the canonical
+console origin first; list any others (an old Netlify URL kept alive during a
+cutover, the standalone Agent Outreach site) after it.
 
 Token scopes: `contacts.readonly`, `contacts.write`,
 `locations/customFields.readonly`, `locations/customFields.write`,
@@ -71,12 +102,14 @@ answers 404, deliberately indistinguishable from an unknown location:
    switch: revoking the portfolio room takes the board off the website, and the
    site degrades to its link-out on its own.
 
-Verify after deploy — the third command must print `0`:
+Verify after deploy — the third command must print `0`, and the `url` from the
+first must be on `deals.shepflips.com`, never the offers host:
 
 ```bash
-curl -s  "$BROKER/d/deals.json?location_id=$LOC" | jq '.count, .deals[0].url'
-curl -sI "$BROKER/d/deals.json?location_id=$LOC" | grep -i 'access-control\|cache-control'
-curl -s  "$BROKER/d/deals.json?location_id=$LOC" | grep -ci 'notes\|comps\|assignmentFee'
+DEALS=https://deals.shepflips.com
+curl -s  "$DEALS/d/deals.json?location_id=$LOC" | jq '.count, .deals[0].url, .deals[0].photo.url'
+curl -sI "$DEALS/d/deals.json?location_id=$LOC" | grep -i 'access-control\|cache-control'
+curl -s  "$DEALS/d/deals.json?location_id=$LOC" | grep -ci 'notes\|comps\|assignmentFee'
 ```
 
 The feed's cards link to each deal's **public teaser** (`/d/deal/<roomId>`), a

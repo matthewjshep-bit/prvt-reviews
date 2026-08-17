@@ -23,6 +23,11 @@ const PORT = process.env.PORT || 4000;
 const GHL_TOKEN = process.env.GHL_TOKEN || "";
 const ALLOWED_LOCATION = process.env.GHL_LOCATION_ID || ""; // single-tenant guard
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
+// Investor-facing links live on their own hostname (deals.shepflips.com) so a deal
+// package never shows the offers host. Both hostnames point at this same service —
+// the split only decides which name gets printed into a link. Falls back to
+// PUBLIC_BASE_URL for dev and for anyone running a single domain.
+const DATAROOM_BASE_URL = (process.env.DATAROOM_BASE_URL || PUBLIC_BASE_URL).replace(/\/$/, "");
 // Allowed browser origins (comma-separated) — the offers site and the
 // standalone Agent Outreach site both talk to this one broker.
 const APP_ORIGINS = (process.env.APP_ORIGIN || "")
@@ -120,11 +125,11 @@ app.use("/api/offers", createOffersRouter({ resolveLocation, uploadDir: UPLOAD_D
 app.use("/api/outreach", createOutreachRouter({ resolveLocation }));
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
 app.use("/api/dispo", createDispoRouter({ resolveLocation }));
-app.use("/api/datarooms", createDataroomRouter({ resolveLocation, publicBaseUrl: PUBLIC_BASE_URL }));
+app.use("/api/datarooms", createDataroomRouter({ resolveLocation, publicBaseUrl: DATAROOM_BASE_URL }));
 // Investor datarooms are opened by people outside the GHL account, so /d is
 // deliberately outside the location gate — the per-invite token is the
 // credential, and the router enforces PIN, expiry, and revocation itself.
-app.use("/d", createDataroomPublicRouter({ publicBaseUrl: PUBLIC_BASE_URL }));
+app.use("/d", createDataroomPublicRouter({ publicBaseUrl: DATAROOM_BASE_URL }));
 
 store.init().catch((e) => console.error("store init failed:", e.message));
 

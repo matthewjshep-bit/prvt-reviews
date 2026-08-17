@@ -71,7 +71,7 @@
   // The broker origin is baked in at build time via VITE_API_BASE, but this
   // file is static and never sees import.meta.env — so accept it on the
   // payload (the bookmarklet knows it) and fall back to the production host.
-  var broker = payload.broker || "https://prvt-reviews-1.onrender.com";
+  var broker = payload.broker || "https://offers.shepflips.com";
 
   fetch(broker + "/api/offers/comps/capture", {
     method: "POST",

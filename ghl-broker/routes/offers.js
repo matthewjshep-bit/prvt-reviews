@@ -82,7 +82,9 @@ const INVESTOR_DEAL_TAG = process.env.INVESTOR_DEAL_TAG || "on-deal";
 const DEAL_STAGES = ["under_contract", "buyer_found", "assigned", "closed", "fell_through"];
 const LIVE_DEAL_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
 const INVESTOR_STATUSES = ["sent", "evaluating", "passed", "committed"];
-const APP_ORIGIN = (process.env.APP_ORIGIN || "").replace(/\/$/, "");
+// First entry wins: APP_ORIGIN may list several allowed CORS origins (broker.js
+// splits it), but a deep link written onto a contact has to name exactly one.
+const APP_ORIGIN = (process.env.APP_ORIGIN || "").split(",")[0].trim().replace(/\/$/, "");
 
 // Per-location access keys (enforced in broker.js resolveLocation) — deep
 // links must carry the key or they'd 403 for key-protected locations.

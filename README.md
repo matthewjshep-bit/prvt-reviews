@@ -1,4 +1,4 @@
-# Offer Generator
+# Shep Flips — Offer Generator
 
 A real-estate offer generator for GoHighLevel (in the spirit of lowballoffer.ai):
 enter a property's numbers, get three ready-to-present offers (cash, seller
@@ -9,16 +9,21 @@ finance, lease option), generate a professional one-page offer document
 ghl-broker/     The backend. Holds the GHL token (never the browser), runs the
                 offer API (/api/offers): calculate → render document → store →
                 write custom fields + note + tag on the contact.
-                → deploy on Render (Node)   [live: prvt-reviews-1.onrender.com]
+                Also serves the investor datarooms at /d.
+                → deploy on Render (Node)   [live: offers.shepflips.com for
+                  agent-facing links, deals.shepflips.com for investor links —
+                  one service, two custom domains]
 
 cardgen/        Stateless render service (sharp/SVG). The broker posts it the
                 offer-document template; it returns the letter-size JPEG that
                 the broker also wraps into a PDF. Stores to R2 when configured.
-                → deploy on Render (Docker) [live: prvt-reviews.onrender.com]
+                → deploy on Render (Docker) [live: prvt-reviews.onrender.com —
+                  internal only, the broker is its only caller]
 
 messaging-app/  The React iframe app (New Offer / History / Settings). Loads
                 inside a GHL Custom Menu Link with ?location_id=.
                 → build with Vite, hosted on Netlify (netlify.toml at repo root)
+                  [live: app.shepflips.com]
 
 shared/         Source of truth for shared modules. offer-calc.js (the offer
                 math, used by broker + frontend), template-schema.js and

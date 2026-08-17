@@ -44,6 +44,72 @@ function Txt({ label, value, onChange, placeholder }) {
   );
 }
 
+// Hex color with a live swatch. The broker's brandFrom() validates against this
+// same pattern and falls back to the system default, so a malformed value
+// degrades the header rather than breaking it — the swatch just goes blank.
+const HEX_RE = /^#[0-9a-fA-F]{3,8}$/;
+
+function Hex({ label, value, onChange, placeholder }) {
+  const v = String(value || "");
+  const ok = HEX_RE.test(v);
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+      <div className="flex items-center gap-2">
+        <span className="h-[38px] w-[38px] shrink-0 rounded-lg border border-slate-300"
+          style={ok ? { background: v } : undefined}
+          title={ok ? v : `Not a hex color — investor pages fall back to ${placeholder}`} />
+        <input className={INPUT_CLS} value={v} placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)} />
+      </div>
+    </label>
+  );
+}
+
+// Nav links across the top of every investor page. The first one is the
+// wordmark's home link; the rest render as nav, and any marked CTA becomes a
+// filled button that survives on phones (the plain links hide under 640px).
+// The broker keeps the first 6 that have both a label and an http(s) URL.
+const MAX_BRAND_LINKS = 6;
+
+function BrandLinksEditor({ value, onChange }) {
+  const list = Array.isArray(value) ? value : [];
+  const mutate = (fn) => onChange(fn(list.map((l) => ({ ...l }))));
+  const patch = (i, k) => (e) => mutate((l) => { l[i] = { ...l[i], [k]: e.target.value }; return l; });
+  const toggleCta = (i) => mutate((l) => { l[i] = { ...l[i], cta: !l[i].cta }; return l; });
+  const remove = (i) => mutate((l) => l.filter((_, x) => x !== i));
+  const add = () => mutate((l) => [...l, { label: "", url: "", cta: false }]);
+  return (
+    <>
+      {list.map((l, i) => (
+        <div key={i} className="mb-2 flex items-center gap-2">
+          <span className="w-14 shrink-0 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+            {i === 0 ? "Home" : `Link ${i}`}
+          </span>
+          <input className={INPUT_CLS} value={l.label || ""} onChange={patch(i, "label")} placeholder="Label" />
+          <input className={INPUT_CLS} value={l.url || ""} onChange={patch(i, "url")}
+            placeholder="https://shepflips.com" />
+          <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs font-semibold text-slate-600"
+            title="Render as a filled button. Stays visible on phones when the other nav links hide.">
+            <input type="checkbox" className="cursor-pointer" checked={Boolean(l.cta)}
+              onChange={() => toggleCta(i)} disabled={i === 0} />
+            CTA
+          </label>
+          <button type="button" onClick={() => remove(i)}
+            className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" title="Remove link">
+            <Trash2 size={15} />
+          </button>
+        </div>
+      ))}
+      <button type="button" onClick={add} disabled={list.length >= MAX_BRAND_LINKS}
+        className="mt-1 flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50 disabled:opacity-40"
+        title={list.length >= MAX_BRAND_LINKS ? `${MAX_BRAND_LINKS} links is the maximum` : ""}>
+        <Plus size={14} /> Add link
+      </button>
+    </>
+  );
+}
+
 // Clause-template editor shared by the Purchase & Sale and Assignment contract
 // sections. `value` is the saved override ([{id, title, body}] or null/empty
 // for the built-in defaults); the first edit materializes a copy via onChange;
@@ -403,11 +469,39 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Company (printed on the document)</h2>
         <div className="grid grid-cols-2 gap-3">
-          <Txt label="Company name" value={form.company.name} onChange={setCo("name")} placeholder="PRVT MKT" />
-          <Txt label="Tagline" value={form.company.tagline} onChange={setCo("tagline")} placeholder="Private Market Home Buyers" />
+          <Txt label="Company name" value={form.company.name} onChange={setCo("name")} placeholder="Shep Flips" />
+          <Txt label="Tagline" value={form.company.tagline} onChange={setCo("tagline")} placeholder="Cash offers on listed property" />
           <Txt label="Signer" value={form.company.signer} onChange={setCo("signer")} placeholder="Matt Shepherd" />
           <Txt label="Phone" value={form.company.phone} onChange={setCo("phone")} placeholder="(206) 555-0142" />
-          <Txt label="Email" value={form.company.email} onChange={setCo("email")} placeholder="matt@prvtmkt.com" />
+          <Txt label="Email" value={form.company.email} onChange={setCo("email")} placeholder="matt@shepflips.com" />
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-1 text-sm font-bold">Investor page header</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          The wordmark across the top of every investor-facing page — deal packages, teasers, and the
+          portfolio. These are read live, so editing them here rebrands links you have already sent.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <Txt label="Wordmark" value={form.company.wordmark || ""} onChange={setCo("wordmark")}
+            placeholder="Shep·Flips" />
+          <Hex label="Wordmark color" value={form.company.brandPrimary || ""} onChange={setCo("brandPrimary")}
+            placeholder="#0F172A" />
+          <Hex label="Accent color" value={form.company.brandAccent || ""} onChange={setCo("brandAccent")}
+            placeholder="#2563EB" />
+        </div>
+        <p className="mt-1 text-xs text-slate-500">
+          A middle dot (·) in the wordmark renders in the accent color — "Shep·Flips" reads as SHEP·FLIPS
+          with a colored dot. Blank falls back to the company name, and the tagline above prints beneath it.
+        </p>
+        <div className="mt-4">
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Header links</h3>
+          <p className="mb-3 text-xs text-slate-500">
+            The first link is where the wordmark points; the rest become nav. Mark one as CTA to render it
+            as a button — on phones the plain links hide and only the CTA survives.
+          </p>
+          <BrandLinksEditor value={form.company.brandLinks} onChange={setCo("brandLinks")} />
         </div>
       </section>
 
