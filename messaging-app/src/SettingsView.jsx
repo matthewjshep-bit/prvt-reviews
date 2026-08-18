@@ -253,14 +253,51 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <Num label="Selling costs" suffix="% of ARV" value={form.sellingCostPct} onChange={set("sellingCostPct")} />
           <Num label="Flipper profit" suffix="% of ARV" value={form.flipProfitPct} onChange={set("flipProfitPct")} />
           <Num label="Holding period" suffix="months" value={form.holdMonths} onChange={set("holdMonths")} />
-          <Num label="Holding cost" suffix="$ / month" money value={form.holdMonthlyCost} onChange={set("holdMonthlyCost")} />
           <Num label="Assignment fee / spread" suffix="$" money value={form.wholesaleFee} onChange={set("wholesaleFee")} />
           <Num label="Classic 70% rule" suffix="% of ARV" value={form.maoPctOfArv} onChange={set("maoPctOfArv")} />
         </div>
         <p className="mt-3 text-xs text-slate-500">
-          Selling costs default to 7% — 3% listing + 3% buyer agent + ~1% closing. Holding covers taxes,
-          insurance, utilities and loan carry. "Classic 70% rule" only applies to the 70%-ARV mode.
+          Selling costs default to 7% — 3% listing + 3% buyer agent + ~1% closing. Holding is sized off the
+          deal below. "Classic 70% rule" only applies to the 70%-ARV mode. The <b>Blended</b> mode averages
+          the back-stack, the 90%-ARV anchor and the 70% rule, so these figures reach it too.
         </p>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Holding costs</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          One flat $/month can't be right across a $180k cosmetic and a $900k gut — the loan carry alone moves
+          by an order of magnitude, and it's the biggest line. So the carry is estimated from the deal itself:
+          <b> points + months × (loan interest + taxes + insurance + utilities)</b>, with the loan sized off the
+          purchase price plus the rehab. Nothing extra to enter per deal — set the hold length on the New Offer
+          page and everything else follows.
+        </p>
+        <label className="mb-3 flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" checked={form.holdingModel !== "flat"}
+            onChange={(e) => { setSaved(false); setForm((f) => ({ ...f, holdingModel: e.target.checked ? "scaled" : "flat" })); }} />
+          Size the carry off the deal (uncheck for a flat monthly figure)
+        </label>
+        {form.holdingModel === "flat" ? (
+          <div className="grid grid-cols-2 gap-3">
+            <Num label="Holding cost" suffix="$ / month" money value={form.holdMonthlyCost} onChange={set("holdMonthlyCost")} />
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Num label="Loan to cost" suffix="% of purchase + rehab" value={form.loanToCostPct} onChange={set("loanToCostPct")} />
+              <Num label="Loan rate" suffix="% / year, interest-only" value={form.loanRatePct} onChange={set("loanRatePct")} />
+              <Num label="Origination points" suffix="% of loan, once" value={form.loanPointsPct} onChange={set("loanPointsPct")} />
+              <Num label="Property tax" suffix="% of ARV / year" value={form.taxRatePct} onChange={set("taxRatePct")} />
+              <Num label="Insurance" suffix="% of ARV / year" value={form.insuranceRatePct} onChange={set("insuranceRatePct")} />
+              <Num label="Utilities & upkeep" suffix="$ / month" money value={form.utilitiesMonthly} onChange={set("utilitiesMonthly")} />
+            </div>
+            <p className="mt-3 text-xs text-slate-500">
+              Defaults are typical hard-money terms — 85% LTC at 11% with 2 points. Set loan to cost to <b>0</b>
+              {" "}for an all-cash buyer and only taxes, insurance and utilities carry. Insurance assumes a vacant
+              or builder's-risk policy, which runs well above an owner-occupied one.
+            </p>
+          </>
+        )}
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">

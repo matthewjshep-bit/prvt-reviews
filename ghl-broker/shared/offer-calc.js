@@ -5,7 +5,7 @@
 // (document generation + persistence) and the frontend (live preview as the
 // user types). Pure functions, no I/O, no deps.
 //
-// Three underwriting models (see UNDERWRITE_MODES), picked per offer:
+// Four underwriting models (see UNDERWRITE_MODES), picked per offer:
 //
 //   backstack (default) — the real underwrite. Subtract every cost a flipper
 //     carries from the ARV: selling costs, their profit, repairs at face
@@ -13,6 +13,9 @@
 //     line by line to a seller's agent.
 //   lowball  — the aggressive anchor, documented below.
 //   mao      — the classic 70% rule, minus the fee.
+//   blended  — the mean of the three above. The models disagree by design
+//     (one defends, one anchors, one is a rule of thumb); averaging them is
+//     the number to lead with when you don't want to commit to one lens.
 //
 // The lowball model is reverse engineered from lowballoffer.ai's shipped bundle
 // (app/page-*.js, decoded 2026-07-26) — their "fix & flip" cash offer:
@@ -35,12 +38,18 @@
 // "backstack" is the real underwrite (default): every cost a flipper actually
 // carries, stacked backwards off the ARV. "lowball" is the reverse-engineered
 // lowballoffer.ai model below; "mao" is the classic flipper 70% rule:
-// maoPctOfArv% of ARV minus repairs, minus the fee, no jitter.
+// maoPctOfArv% of ARV minus repairs, minus the fee, no jitter. "blended" is
+// the mean of those three.
 export const UNDERWRITE_MODES = [
   { key: "backstack", label: "Back-stack from ARV", hint: "ARV − selling costs − flip profit − repairs − holding − your fee" },
   { key: "lowball", label: "90% ARV − 2× rehab", hint: "aggressive spread + fee" },
   { key: "mao", label: "70% ARV − rehab", hint: "classic 70% rule, minus your fee/spread" },
+  { key: "blended", label: "Blended", hint: "the average of the three models above" },
 ];
+
+// What "blended" averages, and the short labels its card lists them under.
+const BLEND_MODES = ["backstack", "lowball", "mao"];
+const MODE_LABELS = Object.fromEntries(UNDERWRITE_MODES.map((m) => [m.key, m.label]));
 
 export const DEFAULT_OFFER_SETTINGS = {
   underwriteMode: "backstack", // "backstack" | "lowball" | "mao" — see UNDERWRITE_MODES
@@ -50,7 +59,16 @@ export const DEFAULT_OFFER_SETTINGS = {
   sellingCostPct: 7,         // 3% listing + 3% buyer agent + ~1% closing (his 6–7%)
   flipProfitPct: 13,         // the flipper's margin on ARV (12–15% band, mid)
   holdMonths: 5,             // months carried from purchase to resale
-  holdMonthlyCost: 1200,     // taxes + insurance + utilities + loan carry, per month
+  // Holding costs — see estimateHolding(). "scaled" (default) sizes the carry
+  // off the deal itself; "flat" is the old holdMonths × holdMonthlyCost.
+  holdingModel: "scaled",    // "scaled" | "flat"
+  holdMonthlyCost: 1200,     // "flat" model only: all-in carry per month
+  loanToCostPct: 85,         // hard money lends this % of (purchase + rehab)
+  loanRatePct: 11,           // annual interest on that loan, interest-only
+  loanPointsPct: 2,          // origination points, charged once on the loan
+  taxRatePct: 1.1,           // annual property tax, % of ARV
+  insuranceRatePct: 0.5,     // annual vacant/builder's-risk insurance, % of ARV
+  utilitiesMonthly: 250,     // power, water, lawn, snow, minor upkeep — per month
   maoPctOfArv: 70,           // % of ARV for the "mao" mode
   cashPctOfArv: 90,          // base % of ARV before deductions
   repairBuffer: 30000,       // small-repair floor: repairs < buffer → repairs + buffer
@@ -131,6 +149,65 @@ function hash32(str) {
   return h >>> 0;
 }
 
+// Holding costs, estimated from the size of the deal rather than guessed flat.
+//
+// A single $/month figure cannot be right across a $150k rural cosmetic and a
+// $700k gut: the loan carry alone moves by an order of magnitude, and it is by
+// far the largest line. So the default model derives every leg from numbers the
+// offer already has — no new per-deal data entry:
+//
+//   loan      = loanToCostPct% × (purchase price + repairs)  — hard-money LTC
+//   points    = loanPointsPct% × loan                        — charged once
+//   interest  = loan × loanRatePct% ÷ 12                     — per month, IO
+//   taxes     = ARV × taxRatePct% ÷ 12                       — per month
+//   insurance = ARV × insuranceRatePct% ÷ 12                 — vacant policy
+//   utilities = utilitiesMonthly                             — the flat rump
+//
+//   holding   = points + holdMonths × (interest + taxes + insurance + utilities)
+//
+// Per deal you move holdMonths and everything else follows. Set loanToCostPct
+// to 0 for an all-cash buyer and the two loan legs drop out. holdingModel:
+// "flat" restores the old holdMonths × holdMonthlyCost behaviour verbatim.
+//
+// basis: { purchase, repairs, arv } — purchase is what the FLIPPER pays, i.e.
+// our contract price plus the assignment fee, because that's what they borrow
+// against. Returns whole-dollar-ish floats; the caller rounds.
+export function estimateHolding(basis = {}, settingsOverride = {}) {
+  const s = effectiveSettings(settingsOverride);
+  const months = Math.max(0, num(s.holdMonths, 5));
+  const arv = Math.max(0, num(basis.arv));
+
+  if (s.holdingModel === "flat") {
+    const monthly = Math.max(0, num(s.holdMonthlyCost, 1200));
+    return {
+      model: "flat", months, monthly, total: months * monthly,
+      loanAmount: 0, points: 0, interest: 0, taxes: 0, insurance: 0, utilities: monthly,
+    };
+  }
+
+  const cost = Math.max(0, num(basis.purchase)) + Math.max(0, num(basis.repairs));
+  const loanAmount = (Math.max(0, num(s.loanToCostPct, 85)) / 100) * cost;
+  const points = (Math.max(0, num(s.loanPointsPct, 2)) / 100) * loanAmount;
+  const interest = (loanAmount * Math.max(0, num(s.loanRatePct, 11))) / 100 / 12;
+  const taxes = (arv * Math.max(0, num(s.taxRatePct, 1.1))) / 100 / 12;
+  const insurance = (arv * Math.max(0, num(s.insuranceRatePct, 0.5))) / 100 / 12;
+  const utilities = Math.max(0, num(s.utilitiesMonthly, 250));
+  const monthly = interest + taxes + insurance + utilities;
+  return {
+    model: "scaled", months, monthly, loanAmount, points,
+    interest, taxes, insurance, utilities,
+    total: points + months * monthly,
+  };
+}
+
+// The label the holding row carries on the offer stack — the model's own
+// arithmetic, short enough to sit in a table cell.
+function holdingLabel(d) {
+  if (d.model === "flat") return `Holding (${d.months} × ${fmtMoney(Math.round(d.monthly))})`;
+  const pts = d.points > 0 ? ` + ${fmtMoney(Math.round(d.points))} pts` : "";
+  return `Holding (${d.months} mo × ${fmtMoney(Math.round(d.monthly))}${pts})`;
+}
+
 // The lowballoffer.ai repairs adjustment (piecewise, continuous at both knees).
 export function repairsAdjustment(repairs, arv, s) {
   const heavy = (s.repairHeavyPctOfArv / 100) * arv;
@@ -205,12 +282,23 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
     const sellingCostPct = Math.max(0, num(s.sellingCostPct, 7));
     const flipProfitPct = Math.max(0, num(s.flipProfitPct, 13));
     const holdMonths = Math.max(0, num(s.holdMonths, 5));
-    const holdMonthlyCost = Math.max(0, num(s.holdMonthlyCost, 1200));
     const wholesaleFee = num(s.wholesaleFee);
 
     const sellingCosts = (sellingCostPct / 100) * arv;
     const flipProfit = (flipProfitPct / 100) * arv;
-    const holding = holdMonths * holdMonthlyCost;
+
+    // Holding and price are mutually dependent: the loan is sized off the
+    // purchase price, and the purchase price is what the stack solves for. So
+    // iterate to a fixed point. The feedback factor is the LTC times the
+    // holding rate — around 6% — so it settles below a cent within a few
+    // passes; eight is free and leaves headroom for aggressive settings.
+    let hold = estimateHolding({ arv, repairs, purchase: 0 }, s);
+    for (let i = 0; i < 8; i++) {
+      const purchase = Math.max(0, arv - sellingCosts - flipProfit - repairs - hold.total);
+      hold = estimateHolding({ arv, repairs, purchase }, s);
+    }
+    const holding = hold.total;
+    const holdMonthlyCost = hold.monthly;
     const cashRaw = arv - sellingCosts - flipProfit - repairs - holding - wholesaleFee;
 
     cash = {
@@ -225,10 +313,26 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
       pctUsed: Math.round((100 - sellingCostPct - flipProfitPct) * 100) / 100,
       repairs,
       repairAdjustment: repairs,
-      sellingCostPct, flipProfitPct, holdMonths, holdMonthlyCost,
+      sellingCostPct, flipProfitPct, holdMonths,
+      // The EFFECTIVE monthly carry, derived under the scaled model rather
+      // than read back off the setting — anything rendering this should show
+      // what the deal actually costs to hold.
+      holdMonthlyCost: Math.round(holdMonthlyCost),
       sellingCosts: Math.round(sellingCosts),
       flipProfit: Math.round(flipProfit),
       holding: Math.round(holding),
+      // Every leg of the carry, for the tooltip / any future line-by-line view.
+      holdingDetail: {
+        model: hold.model,
+        months: hold.months,
+        monthly: Math.round(hold.monthly),
+        loanAmount: Math.round(hold.loanAmount),
+        points: Math.round(hold.points),
+        interest: Math.round(hold.interest),
+        taxes: Math.round(hold.taxes),
+        insurance: Math.round(hold.insurance),
+        utilities: Math.round(hold.utilities),
+      },
       wholesaleFee,
       // A negative stack means repairs + profit exceed the ARV. The amount
       // clamps to 0 like the other modes, but that reads as a bug unless the
@@ -241,9 +345,40 @@ export function calculateOffers(rawInputs = {}, settingsOverride = {}) {
         { key: "selling", label: `Selling costs (${sellingCostPct}%)`, amount: Math.round(sellingCosts), sign: "−" },
         { key: "profit", label: `Flip profit (${flipProfitPct}%)`, amount: Math.round(flipProfit), sign: "−" },
         { key: "repairs", label: "Repairs", amount: Math.round(repairs), sign: "−" },
-        { key: "holding", label: `Holding (${holdMonths} × ${fmtMoney(holdMonthlyCost)})`, amount: Math.round(holding), sign: "−" },
+        { key: "holding", label: holdingLabel(hold), amount: Math.round(holding), sign: "−" },
         { key: "fee", label: "Assignment fee", amount: Math.round(wholesaleFee), sign: "−" },
       ],
+      pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : null,
+    };
+  } else if (s.underwriteMode === "blended") {
+    // The mean of the other three. They disagree on purpose — the back-stack
+    // defends, the lowball anchors, the 70% rule is a sanity check — so the
+    // average is the number to lead with when you don't want to argue any one
+    // lens. Each component is computed WITHOUT the manual price override
+    // (that's applied once, to the blend) but with every other setting the
+    // user has in play, so the fee and the carry assumptions carry through.
+    const parts = BLEND_MODES.map((mode) => {
+      const one = calculateOffers({ ...rawInputs, priceOverride: 0 }, { ...s, underwriteMode: mode });
+      return { key: mode, label: MODE_LABELS[mode] || mode, amount: Math.round(num(one.offers.cash.amount)) };
+    });
+    const cashRaw = parts.reduce((t, p) => t + p.amount, 0) / parts.length;
+    cash = {
+      key: "cash",
+      label: "Cash",
+      mode: "blended",
+      amount: cashRaw > 0 ? Math.round(cashRaw) : 0,
+      base: Math.round(arv),
+      pctOfArv: Math.round((Math.max(0, cashRaw) / arv) * 10000) / 100,
+      pctUsed: Math.round((Math.max(0, cashRaw) / arv) * 10000) / 100,
+      repairs,
+      repairAdjustment: repairs,
+      wholesaleFee: num(s.wholesaleFee),
+      // The three numbers being averaged, for the card. Each is already net of
+      // the fee, so the blend is too — there is no fee row left to subtract.
+      components: parts,
+      // Only underwater when there is genuinely nothing to offer. One zero
+      // component among three simply drags the average down.
+      underwater: cashRaw <= 0,
       pctOfAsking: askingPrice > 0 ? Math.round((Math.max(0, cashRaw) / askingPrice) * 100) : null,
     };
   } else if (s.underwriteMode === "mao") {

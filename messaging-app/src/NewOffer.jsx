@@ -298,6 +298,19 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
     );
   }
   const { cash } = calc.offers;
+  // Every leg of the carry, spelled out on hover — the number moved a long way
+  // when it stopped being a flat guess, so it has to be inspectable.
+  const hd = cash.holdingDetail;
+  const holdTip = hd?.model === "scaled"
+    ? [
+        `Loan ${fmtMoney(hd.loanAmount)} (${settings?.loanToCostPct ?? DEFAULT_OFFER_SETTINGS.loanToCostPct}% of purchase + rehab)`,
+        `Points ${fmtMoney(hd.points)}, once`,
+        `Interest ${fmtMoney(hd.interest)}/mo`,
+        `Taxes ${fmtMoney(hd.taxes)}/mo`,
+        `Insurance ${fmtMoney(hd.insurance)}/mo`,
+        `Utilities & upkeep ${fmtMoney(hd.utilities)}/mo`,
+      ].join("\n")
+    : "Flat monthly carry — change the model in Settings to size it off the deal.";
   const Row = ({ label, value }) => (
     <div className="flex justify-between gap-4 text-sm">
       <span className="text-slate-600">{label}</span>
@@ -305,12 +318,14 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
     </div>
   );
   // The editable fee row is shared by every mode — it's the one deduction the
-  // user reaches for on almost every deal.
-  const feeRow = (
+  // user reaches for on almost every deal. The blend takes it without the "−":
+  // each averaged model already subtracted it, so the mean is net of it and a
+  // minus sign there would read as a second bite.
+  const feeRowWith = (label, minus = true) => (
     <div className="flex items-center justify-between gap-4 text-sm">
-      <span className="text-slate-600">{cash.mode === "backstack" ? "Assignment fee" : "Fee / spread"}</span>
+      <span className="text-slate-600">{label}</span>
       <span className="flex items-center gap-1 font-medium tabular-nums">
-        − $
+        {minus ? "− $" : "$"}
         <input
           className="w-20 rounded-lg border border-amber-300 bg-white px-1.5 py-0.5 text-right text-sm focus:border-blue-500 focus:outline-none"
           inputMode="numeric"
@@ -321,6 +336,7 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
       </span>
     </div>
   );
+  const feeRow = feeRowWith(cash.mode === "backstack" ? "Assignment fee" : "Fee / spread");
   // A percent/number input that shows the saved setting as its placeholder, so
   // an empty field visibly means "use the default" rather than "zero".
   // Deliberately a function returning JSX, NOT a component: a component
@@ -390,15 +406,42 @@ function OfferCards({ calc, underwriteMode, setUnderwriteMode, priceOverride, se
                 <span className="font-medium tabular-nums">− {fmtMoney(cash.flipProfit)}</span>
               </div>
               <Row label="Repairs" value={`− ${fmtMoney(cash.repairs)}`} />
+              {/* Under the scaled model the $/mo is an OUTPUT — loan carry,
+                  taxes, insurance and utilities sized off this deal — so it's
+                  shown, not typed. Months stays editable: it's the one carry
+                  input that genuinely moves property to property. */}
               <div className="flex items-center justify-between gap-4 text-sm">
                 <span className="flex items-center gap-1 text-slate-600">
-                  Holding {uwInput("holdMonths", "w-9")}mo × ${uwInput("holdMonthlyCost", "w-14")}
+                  Holding {uwInput("holdMonths", "w-9")}mo ×{" "}
+                  {hd?.model === "scaled"
+                    ? <span className="tabular-nums" title={holdTip}>{fmtMoney(hd.monthly)}/mo</span>
+                    : <>${uwInput("holdMonthlyCost", "w-14")}</>}
                 </span>
-                <span className="font-medium tabular-nums">− {fmtMoney(cash.holding)}</span>
+                <span className="font-medium tabular-nums" title={holdTip}>− {fmtMoney(cash.holding)}</span>
               </div>
               {feeRow}
               <div className="!mt-2 border-t border-amber-200 pt-2 text-[11px] text-slate-600">
                 lands at ≈{cash.pctOfArv}% of ARV before repairs, holding and fee
+                {hd?.model === "scaled" && hd.loanAmount > 0 && (
+                  <> · carry on a {fmtMoney(hd.loanAmount)} loan</>
+                )}
+              </div>
+            </>
+          ) : cash.components ? (
+            <>
+              {/* The blend shows its work as the three numbers it averaged —
+                  they disagree on purpose, and seeing the spread is the point.
+                  No arithmetic column: nothing is being subtracted here. */}
+              {cash.components.map((p) => (
+                <Row key={p.key} label={p.label} value={fmtMoney(p.amount)} />
+              ))}
+              <div className="!mt-2 flex justify-between gap-4 border-t border-amber-200 pt-2 text-sm font-semibold">
+                <span className="text-slate-700">Average</span>
+                <span className="tabular-nums">{fmtMoney(cash.amount)}</span>
+              </div>
+              {feeRowWith("Fee / spread (inside each)", false)}
+              <div className="!mt-2 border-t border-amber-200 pt-2 text-[11px] text-slate-600">
+                the mean of all three models — ≈{cash.pctOfArv}% of ARV, already net of your fee
               </div>
             </>
           ) : (

@@ -25,7 +25,7 @@ const asOffer = (inputs, settings) => {
   return { calc, cashAmount: calc.offers.cash.amount };
 };
 
-const MODES = ["backstack", "mao", "lowball"];
+const MODES = ["backstack", "mao", "lowball", "blended"];
 const CASES = [
   { label: "typical", inputs: { address: "1 Main St", arv: 420000, repairs: 28500 } },
   { label: "no repairs", inputs: { address: "2 Main St", arv: 500000, repairs: 0 } },
