@@ -689,7 +689,12 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       s.wholesaleFee = Number(String(feeOverride).replace(/[^\d]/g, "")) || 0;
     }
     for (const [k, v] of Object.entries(uwOverrides)) {
-      if (String(v).trim() !== "") s[k] = Number(v) || 0;
+      const raw = String(v).trim();
+      if (raw === "") continue;            // blank means "use the saved default"
+      // Mid-typing garbage ("7." is fine, "7.5.5" isn't) keeps the default
+      // rather than silently underwriting at zero.
+      const n = Number(raw);
+      if (Number.isFinite(n)) s[k] = n;
     }
     if (offerExpires) s.offerExpires = offerExpires;
     // The letter prints exactly these rows (after Purchase Price) — an empty
@@ -698,7 +703,10 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       .map((r) => ({ label: r.label.trim(), value: r.value.trim() }))
       .filter((r) => r.label && r.value);
     return s;
-  }, [settings, underwriteMode, feeOverride, offerExpires, letterTerms]);
+    // uwOverrides belongs here as much as feeOverride does: leaving it out
+    // froze the whole stack — you could type a new selling-cost or profit
+    // percentage, watch the field change, and the offer never moved.
+  }, [settings, underwriteMode, feeOverride, uwOverrides, offerExpires, letterTerms]);
 
   const calc = useMemo(() => {
     try {
