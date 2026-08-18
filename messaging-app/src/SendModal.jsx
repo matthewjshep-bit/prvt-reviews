@@ -4,9 +4,10 @@
 // Live sends still require CARD_SENDS_ENABLED=true on the server.
 
 import React, { useEffect, useState } from "react";
-import { ArrowLeft, Check, FileText, Loader2, Mail, MessageSquare, Send, X } from "lucide-react";
+import { ArrowLeft, Check, FileText, Link2, Loader2, Mail, MessageSquare, Send, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { getContactDetail, sendOffer } from "./api.js";
+import { createOfferPage, getContactDetail, listOfferPages, sendOffer } from "./api.js";
+import { BTN } from "./ui.jsx";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -21,6 +22,27 @@ const DOC_OPTIONS = [
 ];
 
 export const CHANNEL_LABELS = { sms: "text", email: "email" };
+
+// The opening line. Short on purpose: the agent is being asked to look at
+// something, not read a pitch, and the offer page is where the reasoning
+// lives. Kept in sync with the server's fallback in routes/offers.js.
+export const defaultSendMessage = (contactName) =>
+  `${(contactName || "").split(" ")[0] || "Hi"}, put together this offer and the 'why' behind it. ` +
+  `Let me know what you think.`;
+
+// The offer-page link rides at the end of the message rather than as a
+// separate field, so the textarea stays the whole truth about what goes out —
+// the operator can move it, wrap words around it, or delete it by hand.
+const withLink = (text, url) =>
+  !url || text.includes(url) ? text : `${text.replace(/\s+$/, "")}\n\n${url}`;
+const withoutLink = (text, url) =>
+  !url ? text : text.split(url).join("").replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "");
+
+// "a", "a and b", "a, b and c" — the text-channel hint lists whatever actually
+// travels with the message, and a stray "and" reads like a bug in a product
+// whose whole job is writing to other people.
+const sentenceList = (parts) =>
+  parts.length < 2 ? parts[0] || "" : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 
 function ChannelChip({ icon: Icon, label, detail, active, disabled, onClick }) {
   return (
@@ -49,23 +71,38 @@ function ChannelChip({ icon: Icon, label, detail, active, disabled, onClick }) {
 
 export default function SendModal({ offer, onClose, onSent }) {
   const available = DOC_OPTIONS.filter((d) => offer[d.urlKey]);
-  const firstName = (offer.contactName || "").split(" ")[0] || "there";
 
   const [contact, setContact] = useState(null);
   const [contactLoading, setContactLoading] = useState(true);
   const [contactErr, setContactErr] = useState("");
   const [channels, setChannels] = useState({ sms: true, email: false });
   const [docs, setDocs] = useState(() => new Set(available.filter((d) => d.key === "image" || d.key === "pdf").map((d) => d.key)));
-  const [message, setMessage] = useState(
-    `Hi ${firstName}, here's our written cash offer on ${offer.address || "your property"} — ` +
-    `${fmtMoney(offer.cashAmount)}, as-is, close on your timeline (attached). Happy to answer any questions.`
-  );
+  const [message, setMessage] = useState(() => defaultSendMessage(offer.contactName));
+  // The agent-facing offer page — the "why" the message points at. Loaded
+  // rather than assumed: most offers have one, and the ones that don't can
+  // have it built from here rather than in another window.
+  const [page, setPage] = useState(null);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [pageBusy, setPageBusy] = useState(false);
+  const [includeLink, setIncludeLink] = useState(true);
   const [emailSubject, setEmailSubject] = useState(`Cash offer — ${offer.address || "your property"}`);
   const [step, setStep] = useState("compose"); // compose | preview | sent
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [preview, setPreview] = useState(null); // dry-run response
   const [result, setResult] = useState(null); // live-send response
+
+  useEffect(() => {
+    // An offer has at most one page; only a live one has a link worth sending.
+    listOfferPages(offer.id)
+      .then((list) => {
+        const p = (list || [])[0] || null;
+        setPage(p);
+        if (p?.status === "active" && p.shareLink) setMessage((m) => withLink(m, p.shareLink));
+      })
+      .catch(() => { /* the link is optional — never block the send on it */ })
+      .finally(() => setPageLoading(false));
+  }, [offer.id]);
 
   useEffect(() => {
     getContactDetail(offer.contactId)
@@ -80,6 +117,31 @@ export default function SendModal({ offer, onClose, onSent }) {
 
   const activeChannels = Object.keys(channels).filter((c) => channels[c]);
   const canPreview = activeChannels.length > 0 && docs.size > 0 && !busy;
+
+  const pageLink = page?.status === "active" ? page.shareLink || "" : "";
+  const toggleLink = () => {
+    const next = !includeLink;
+    setIncludeLink(next);
+    setMessage((m) => (next ? withLink(m, pageLink) : withoutLink(m, pageLink)));
+  };
+
+  // No page yet: build one with the standard sections (everything but our
+  // arithmetic) rather than sending the operator to another window mid-send.
+  async function buildPage() {
+    setPageBusy(true);
+    setError("");
+    try {
+      const p = await createOfferPage(offer.id, {});
+      // A build that comes back without a link is a failure wearing a success:
+      // say so rather than leaving the operator clicking a button that does
+      // nothing visible.
+      if (!p?.shareLink) throw new Error("the page was built but came back without a link");
+      setPage(p);
+      setIncludeLink(true);
+      setMessage((m) => withLink(m, p.shareLink));
+    } catch (e) { setError(e.message); }
+    setPageBusy(false);
+  }
 
   const toggleDoc = (key) =>
     setDocs((prev) => {
@@ -198,9 +260,46 @@ export default function SendModal({ offer, onClose, onSent }) {
               </div>
               {channels.sms && [...docs].some((k) => k !== "image") && (
                 <p className="mt-1 text-xs text-slate-500">
-                  PDFs go out on email only — the text sends just the message{docs.has("image") ? " and the offer image" : ""}.
+                  PDFs go out on email only — the text sends {sentenceList([
+                    "the message",
+                    ...(docs.has("image") ? ["the offer image"] : []),
+                    ...(includeLink && pageLink ? ["the offer-page link"] : []),
+                  ])}.
                 </p>
               )}
+            </div>
+
+            <div>
+              <span className={LABEL_CLS}>Offer page</span>
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                {pageLoading ? (
+                  <span className="flex items-center gap-2 text-slate-500">
+                    <Loader2 size={14} className="animate-spin" /> Checking for an offer page…
+                  </span>
+                ) : pageLink ? (
+                  <label className="flex cursor-pointer items-start gap-2.5">
+                    <input type="checkbox" checked={includeLink} onChange={toggleLink}
+                      className="mt-0.5 h-4 w-4 accent-blue-600" />
+                    <span className="min-w-0">
+                      <span className="font-medium">Include the link to the offer page</span>
+                      <span className="block truncate text-xs text-slate-500">{pageLink}</span>
+                    </span>
+                  </label>
+                ) : page ? (
+                  <span className="text-slate-600">
+                    This offer's page is switched off — turn it back on from the offer window to send its link.
+                  </span>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-slate-600">
+                      No page yet — one link with the comps, the scope and what the seller nets.
+                    </span>
+                    <button type="button" className={BTN} disabled={pageBusy} onClick={buildPage}>
+                      {pageBusy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />} Build it
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div>

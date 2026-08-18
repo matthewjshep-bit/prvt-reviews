@@ -3020,10 +3020,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         contactErr ? `contact lookup failed: ${contactErr}` : !dest ? `contact has no ${label}` : "";
 
       const firstName = (offer.contactName || "").split(" ")[0] || "there";
+      // Kept in step with defaultSendMessage() in the app's SendModal — this
+      // is the fallback for callers that send no message of their own.
       const text = message ||
-        `Hi ${firstName}, here's our written cash offer on ${offer.address || "your property"} — ` +
-        `${fmtMoney(offer.cashAmount)}, as-is, close on your timeline (attached). ` +
-        `Happy to answer any questions.`;
+        `${firstName}, put together this offer and the 'why' behind it. Let me know what you think.`;
 
       // SMS: just the message, with the image as the MMS attachment. PDFs are
       // email-only — no links in the text.
@@ -3035,8 +3035,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const subject = (emailSubject || `Cash offer — ${offer.address || "your property"}`).slice(0, 150);
       const emailAttachments = picked.map(([, , url]) => url);
       const signoffLines = [company.signer || company.name, company.email, company.phone].filter(Boolean);
+      // A bare https:// in an HTML email is a dead string the agent has to
+      // copy by hand — the operator's message often ends in the offer-page
+      // link, so turn URLs into links. Runs after esc(), and stops at "<" so
+      // it can't reach into the <br> tags inserted alongside it.
+      const linkify = (escaped) =>
+        escaped.replace(/https?:\/\/[^\s<]+[^\s<.,:;"')\]]/g, (u) => `<a href="${u}">${u}</a>`);
       const html = [
-        `<p>${esc(message || `Hi ${firstName},`).replace(/\n/g, "<br>")}</p>`,
+        `<p>${linkify(esc(message || `Hi ${firstName},`).replace(/\n/g, "<br>"))}</p>`,
         ...(message ? [] : [
           `<p>Please find our written cash offer on <strong>${esc(offer.address || "your property")}</strong> attached — ` +
           `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, as-is, close on your timeline. ` +
