@@ -11,6 +11,7 @@
 
 import React, { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
+import { brandMarkSvg } from "@shared/brand-mark.js";
 import NewOffer from "./NewOffer.jsx";
 import OffersHistory from "./OffersHistory.jsx";
 import DealsView from "./DealsView.jsx";
@@ -69,6 +70,13 @@ const NAV =
         { view: "settings", label: "Settings" },
       ];
 
+const APP_TITLE =
+  APP_MODE === "outreach" ? "Agent Outreach"
+  : APP_MODE === "dashboard" ? "Dashboard"
+  : APP_MODE === "deals" ? "Deals"
+  : APP_MODE === "dispo" ? "Dispositions"
+  : "Offer Generator";
+
 // "new" is reachable but not a tab — it's the primary button in the header and
 // the target of the ?offer_id= deep link, so it still has to be a valid view.
 const VIEWS = new Set([...NAV.map((n) => n.view), "new"]);
@@ -88,6 +96,36 @@ function viewUrl(view) {
   const p = new URLSearchParams(window.location.search);
   p.set("view", view);
   return `${window.location.pathname}?${p}`;
+}
+
+// The console wears the same lockup as the investor pages — the operator's
+// mark and wordmark, in their colors, from the same settings blob. It keeps
+// its own tabs: this is the tool, not the shopfront, and swapping working
+// navigation for marketing links would cost the day's job to gain a logo.
+function BrandLockup({ settings, fallback }) {
+  const co = settings?.company || {};
+  const wordmark = (co.wordmark || co.name || "").trim();
+  if (!wordmark) return <span className="text-sm font-bold tracking-tight">{fallback}</span>;
+  const primary = co.brandPrimary || "#16294A";
+  return (
+    <span className="flex items-center gap-2" title={fallback}>
+      {co.logoUrl
+        ? <img src={co.logoUrl} alt="" height={22} className="h-[22px] w-auto" />
+        : <span className="flex items-center"
+            dangerouslySetInnerHTML={{
+              __html: brandMarkSvg({ primary, accent: co.brandAccent, height: 22 }),
+            }} />}
+      <span className="whitespace-nowrap text-[13px] font-bold uppercase leading-none tracking-[0.14em]"
+        style={{ color: primary }}>
+        {wordmark.split("·").map((part, i, all) => (
+          <React.Fragment key={i}>
+            {part}
+            {i < all.length - 1 && <span style={{ color: co.brandAccent || "#B8922E" }}>·</span>}
+          </React.Fragment>
+        ))}
+      </span>
+    </span>
+  );
 }
 
 export default function OfferApp() {
@@ -167,9 +205,9 @@ export default function OfferApp() {
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className={`flex items-center gap-3 px-4 py-2.5 sm:px-6 lg:px-8 ${containerWidth}`}>
-          <div className="mr-2 text-sm font-bold tracking-tight">
-            {APP_MODE === "outreach" ? "Agent Outreach" : APP_MODE === "dashboard" ? "Dashboard"
-              : APP_MODE === "deals" ? "Deals" : APP_MODE === "dispo" ? "Dispositions" : "Offer Generator"}
+          <div className="mr-2 flex items-center gap-2.5">
+            <BrandLockup settings={settings} fallback={APP_TITLE} />
+            <span className="hidden text-sm font-semibold text-slate-400 sm:inline">{APP_TITLE}</span>
           </div>
           {NAV.length > 1 && NAV.map((n) => (
             <button

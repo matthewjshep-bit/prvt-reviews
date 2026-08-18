@@ -486,6 +486,8 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         <div className="grid grid-cols-2 gap-3">
           <Txt label="Wordmark" value={form.company.wordmark || ""} onChange={setCo("wordmark")}
             placeholder="Shep·Flips" />
+          <Txt label="Logo image URL (optional)" value={form.company.logoUrl || ""} onChange={setCo("logoUrl")}
+            placeholder="https://shepflips.com/logo.png" />
           <Hex label="Wordmark color" value={form.company.brandPrimary || ""} onChange={setCo("brandPrimary")}
             placeholder="#0F172A" />
           <Hex label="Accent color" value={form.company.brandAccent || ""} onChange={setCo("brandAccent")}
@@ -494,6 +496,8 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         <p className="mt-1 text-xs text-slate-500">
           A middle dot (·) in the wordmark renders in the accent color — "Shep·Flips" reads as SHEP·FLIPS
           with a colored dot. Blank falls back to the company name, and the tagline above prints beneath it.
+          Leave the logo URL blank to use the built-in house mark, drawn in the two colors above; point it
+          at your own image (https only) to use that instead.
         </p>
         <div className="mt-4">
           <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Header links</h3>

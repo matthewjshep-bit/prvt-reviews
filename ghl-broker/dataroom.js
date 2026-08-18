@@ -18,6 +18,7 @@
 
 import crypto from "node:crypto";
 import { fmtMoney } from "./shared/offer-calc.js";
+import { brandMarkSvg } from "./shared/brand-mark.js";
 import { zillowUrl } from "./shared/us-address.js";
 
 export const DEFAULT_EXPIRY_DAYS = 14;
@@ -390,8 +391,23 @@ tr:last-child td{border-bottom:0}
 .bbar{background:#fff;border-bottom:1px solid #E2E8F0;position:relative;z-index:1}
 .bwrap{max-width:760px;margin:0 auto;padding:14px 16px 12px;
   display:flex;align-items:center;justify-content:space-between;gap:16px}
-.bmark{font-size:18px;font-weight:700;letter-spacing:.17em;line-height:1.1;text-transform:uppercase}
+.blockup{display:flex;align-items:center;gap:11px}
+.blogo{display:block;flex:0 0 auto}
+.bmark{font-size:18px;font-weight:700;letter-spacing:.17em;line-height:1.1;text-transform:uppercase;white-space:nowrap}
 a.bhome{text-decoration:none}
+/* On a phone the lockup and the CTA compete for one row. The tagline is the
+   part that can go — the mark and wordmark already say who this is — and the
+   row is allowed to wrap, so a long CTA label drops to a second line instead
+   of being clipped at the viewport edge on a narrow handset. */
+@media(max-width:520px){
+  .bwrap{flex-wrap:wrap;row-gap:10px;padding:12px 14px 10px}
+  .blockup{gap:8px;min-width:0}
+  .bmark{font-size:14px;letter-spacing:.12em}
+  .bsub{display:none}
+  /* Must NOT shrink: a shrinking nav gets squeezed and its CTA overflows
+     the box instead of wrapping to the next line. */
+  .bnav{flex:0 0 auto;justify-content:flex-end}
+  .bnav a.bcta{padding:8px 11px;font-size:11px}}
 .bsub{font-size:10px;font-weight:600;letter-spacing:.17em;text-transform:uppercase;color:#64748B;margin-top:4px}
 .bnav{display:flex;align-items:center;gap:18px;flex-wrap:wrap;justify-content:flex-end}
 .bnav a{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
@@ -424,6 +440,10 @@ export function brandFrom(company = {}) {
     tagline: clean(company.tagline, 80),
     primary: HEX_RE.test(String(company.brandPrimary || "")) ? company.brandPrimary : "#0F172A",
     accent: HEX_RE.test(String(company.brandAccent || "")) ? company.brandAccent : "#2563EB",
+    // An operator's own image wins over the drawn mark. http(s) only, for the
+    // same reason the nav links are: a settings value must never be able to
+    // smuggle a javascript: or data: URL onto an investor's screen.
+    logoUrl: httpUrl(company.logoUrl),
     links,
   };
 }
@@ -434,9 +454,18 @@ export function brandHeader(brand) {
     .split("·")
     .join(`<span style="color:${brand.accent}">·</span>`);
   const home = brand.links?.[0]?.url || "";
-  const lockup = `<div>
-      <div class="bmark" style="color:${brand.primary}">${mark}</div>
-      ${brand.tagline ? `<div class="bsub">${esc(brand.tagline)}</div>` : ""}
+  // The house mark ahead of the wordmark, exactly as the marketing site sets
+  // it. Drawn (shared/brand-mark.js) unless the operator pointed us at their
+  // own file, so this needs no asset hosting and stays crisp at 30px.
+  const logo = brand.logoUrl
+    ? `<img class="blogo" src="${esc(brand.logoUrl)}" alt="" height="30" loading="lazy">`
+    : `<span class="blogo">${brandMarkSvg({ primary: brand.primary, accent: brand.accent, height: 30 })}</span>`;
+  const lockup = `<div class="blockup">
+      ${logo}
+      <div>
+        <div class="bmark" style="color:${brand.primary}">${mark}</div>
+        ${brand.tagline ? `<div class="bsub">${esc(brand.tagline)}</div>` : ""}
+      </div>
     </div>`;
   const nav = brand.links?.length
     ? `<nav class="bnav">${brand.links

@@ -103,7 +103,7 @@ export const DEFAULT_OFFER_SETTINGS = {
   // to the design-system defaults (#0F172A / #2563EB) when they are blank.
   company: {
     name: "", tagline: "", signer: "", phone: "", email: "",
-    wordmark: "", brandPrimary: "", brandAccent: "", brandLinks: [],
+    wordmark: "", brandPrimary: "", brandAccent: "", brandLinks: [], logoUrl: "",
   },
 };
 

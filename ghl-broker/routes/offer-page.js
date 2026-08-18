@@ -302,10 +302,17 @@ export function createOfferPagePublicRouter() {
       }).catch(() => {});
 
       secureHeaders(res);
+      // The BRAND resolves live, the numbers stay frozen. A snapshot exists so
+      // an agent's offer can't shift under them; the letterhead over it is not
+      // part of that promise, and a rebrand (or a new logo) has to reach the
+      // links already sent without rebuilding every page. Same rule as the
+      // investor dataroom — see companyFor() in routes/dataroom.js.
+      const saved = await store.getOfferSettings(room.locationId).catch(() => null);
+      const company = saved?.company?.name ? saved.company : room.snapshot?.company || {};
       res.type("html").send(renderOfferPage({
         snap: room.snapshot,
         token,
-        brand: brandFrom(room.snapshot?.company || {}),
+        brand: brandFrom(company),
       }));
     } catch {
       gone(res);
