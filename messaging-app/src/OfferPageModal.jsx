@@ -34,6 +34,14 @@ const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
 const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
+// The note the agent reads at the top of the page. Prefilled rather than
+// hinted: this line is the reason the page exists — it hands them the offer
+// AND the reasoning in one sentence — and a placeholder that has to be
+// retyped every time is a placeholder that never gets used.
+export const defaultAgentNote = (contactName) =>
+  `${(contactName || "").split(" ")[0] || "Hi"}, put together this offer and the 'why' behind it. ` +
+  `Let me know what you think.`;
+
 const when = (iso) =>
   iso ? new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
 
@@ -44,7 +52,7 @@ export default function OfferPageModal({ offer, onClose }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [headline, setHeadline] = useState("");
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(() => defaultAgentNote(offer.contactName));
 
   // An offer has at most one page. Reuse it rather than minting a second link
   // for the same property — two live links is a support problem, not a feature.
@@ -53,8 +61,11 @@ export default function OfferPageModal({ offer, onClose }) {
       .then(async (list) => {
         const existing = list?.[0];
         if (!existing) return setLoading(false);
-        const full = await getOfferPage(existing.id).catch(() => ({ offerPage: existing, events: [] }));
-        adopt(full.offerPage, full.events);
+        const full = await getOfferPage(existing.id).catch(() => null);
+        // Fall back to the row from the list rather than adopting undefined —
+        // that silently emptied the modal back to its build form, which reads
+        // as "no page exists" for a page that very much does.
+        adopt(full?.offerPage || existing, full?.events);
         setLoading(false);
       })
       .catch((e) => { setError(e.message); setLoading(false); });
@@ -65,6 +76,8 @@ export default function OfferPageModal({ offer, onClose }) {
     setPage(p);
     if (ev) setEvents(ev);
     setHeadline(p?.snapshot?.headline || "");
+    // A built page's own note wins, including a deliberately empty one — the
+    // prefill is for the build form, not a value to keep reimposing.
     setNote(p?.snapshot?.note || "");
   }
 
@@ -132,6 +145,7 @@ export default function OfferPageModal({ offer, onClose }) {
               <span className={LABEL_CLS}>Note to the agent (optional)</span>
               <textarea className={`${INPUT_CLS} h-24`} value={note} onChange={(e) => setNote(e.target.value)}
                 placeholder="Happy to move faster on closing if that helps your seller — just say the word." />
+              <p className="mt-1 text-xs text-slate-500">Shown at the top of the page, in your words.</p>
             </div>
             <button type="button" className={BTN_PRIMARY} disabled={busy} onClick={build}>
               {busy ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />} Build the page

@@ -3023,7 +3023,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // Kept in step with defaultSendMessage() in the app's SendModal — this
       // is the fallback for callers that send no message of their own.
       const text = message ||
-        `${firstName}, put together this offer and the 'why' behind it. Let me know what you think.`;
+        `Hi ${firstName}, here's our written cash offer on ${offer.address || "your property"} — ` +
+        `${fmtMoney(offer.cashAmount)}, as-is, close on your timeline (attached). ` +
+        `Happy to answer any questions.`;
 
       // SMS: just the message, with the image as the MMS attachment. PDFs are
       // email-only — no links in the text.

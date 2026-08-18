@@ -7,6 +7,7 @@ import React, { useEffect, useState } from "react";
 import { ArrowLeft, Check, FileText, Link2, Loader2, Mail, MessageSquare, Send, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { createOfferPage, getContactDetail, listOfferPages, sendOffer } from "./api.js";
+import { defaultAgentNote } from "./OfferPageModal.jsx";
 import { BTN } from "./ui.jsx";
 
 const INPUT_CLS =
@@ -23,12 +24,14 @@ const DOC_OPTIONS = [
 
 export const CHANNEL_LABELS = { sms: "text", email: "email" };
 
-// The opening line. Short on purpose: the agent is being asked to look at
-// something, not read a pitch, and the offer page is where the reasoning
-// lives. Kept in sync with the server's fallback in routes/offers.js.
-export const defaultSendMessage = (contactName) =>
-  `${(contactName || "").split(" ")[0] || "Hi"}, put together this offer and the 'why' behind it. ` +
-  `Let me know what you think.`;
+// The covering message: what this is, on what property, for how much. The
+// offer page carries the reasoning — its own note does the talking there
+// (defaultAgentNote in OfferPageModal.jsx) — so this one stays a delivery
+// note. Kept in sync with the server's fallback in routes/offers.js.
+export const defaultSendMessage = (offer) =>
+  `Hi ${(offer.contactName || "").split(" ")[0] || "there"}, here's our written cash offer on ` +
+  `${offer.address || "your property"} — ${fmtMoney(offer.cashAmount)}, as-is, close on your timeline ` +
+  `(attached). Happy to answer any questions.`;
 
 // The offer-page link rides at the end of the message rather than as a
 // separate field, so the textarea stays the whole truth about what goes out —
@@ -77,7 +80,7 @@ export default function SendModal({ offer, onClose, onSent }) {
   const [contactErr, setContactErr] = useState("");
   const [channels, setChannels] = useState({ sms: true, email: false });
   const [docs, setDocs] = useState(() => new Set(available.filter((d) => d.key === "image" || d.key === "pdf").map((d) => d.key)));
-  const [message, setMessage] = useState(() => defaultSendMessage(offer.contactName));
+  const [message, setMessage] = useState(() => defaultSendMessage(offer));
   // The agent-facing offer page — the "why" the message points at. Loaded
   // rather than assumed: most offers have one, and the ones that don't can
   // have it built from here rather than in another window.
@@ -131,7 +134,7 @@ export default function SendModal({ offer, onClose, onSent }) {
     setPageBusy(true);
     setError("");
     try {
-      const p = await createOfferPage(offer.id, {});
+      const p = await createOfferPage(offer.id, { note: defaultAgentNote(offer.contactName) });
       // A build that comes back without a link is a failure wearing a success:
       // say so rather than leaving the operator clicking a button that does
       // nothing visible.
@@ -304,7 +307,7 @@ export default function SendModal({ offer, onClose, onSent }) {
 
             <div>
               <span className={LABEL_CLS}>Message</span>
-              <textarea rows={4} value={message} onChange={(e) => setMessage(e.target.value)} className={INPUT_CLS} />
+              <textarea rows={6} value={message} onChange={(e) => setMessage(e.target.value)} className={INPUT_CLS} />
             </div>
 
             {channels.email && (
