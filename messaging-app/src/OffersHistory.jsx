@@ -13,12 +13,12 @@
 // means, only how it looks and how you change it.
 
 import React, { useEffect, useState } from "react";
-import { Briefcase, ChevronDown, ChevronRight, ExternalLink, FileText, Link2, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { DEAD_STATUSES, OFFER_STATUS, effectiveStatus } from "@shared/offer-status.js";
 import {
   deleteOffer, getSettings, ghlContactUrl, listOffers, promoteDeal,
-  setOfferStatus, setOfferStatusBulk, zillowUrl,
+  setOfferStatus, setOfferStatusBulk,
 } from "./api.js";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
@@ -26,26 +26,12 @@ import AssignmentModal from "./AssignmentModal.jsx";
 import NetSheetModal from "./NetSheetModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 import OfferPageModal from "./OfferPageModal.jsx";
+import OfferDetailModal from "./OfferDetailModal.jsx";
 import {
-  BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
-  SearchInput, SkeletonRows, StagePill, StatusDots, StatusMenu, StatusPill, TableCard,
+  AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
+  SearchInput, SkeletonRows, StatusDots, StatusMenu, StatusPill, TableCard,
   rowActivation,
 } from "./ui.jsx";
-
-// The CRM write can partially fail (fields saved, tag didn't). That's rare and
-// not part of the daily read, so it shrinks to a warning glyph beside the
-// status rather than owning a column of its own.
-function AttachWarning({ offer }) {
-  if (offer.status === "draft" || !offer.ghl) return null;
-  if (offer.ghl.fields && offer.ghl.note && offer.ghl.tag) return null;
-  return (
-    <span className="ml-1 cursor-help text-amber-600" role="img"
-      aria-label="Some CRM fields did not save"
-      title={`Partially attached to the contact:\n${(offer.warnings || []).join("\n")}`}>
-      ⚠
-    </span>
-  );
-}
 
 // Compact "what went out" label for a sends entry: "text+email · 07-29".
 const sendLabel = (s) =>
@@ -65,223 +51,6 @@ function SentBadge({ offer }) {
     <span className={`ml-1.5 whitespace-nowrap text-[11px] ${failed ? "text-amber-700" : "text-slate-400"}`} title={title}>
       {failed ? "⚠ " : ""}{sendLabel(last)}
     </span>
-  );
-}
-
-function OfferDetail({ offer, onClose, onEdit, onSend, onContract, onAssignment, onNetSheet, onPromote, onDealNav, onOfferPage }) {
-  const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
-  const Row = ({ label, value }) => (
-    <div className="flex justify-between gap-4 text-sm">
-      <span className="text-slate-500">{label}</span>
-      <span className="font-medium">{value}</span>
-    </div>
-  );
-  const history = offer.statusHistory || [];
-  return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={offer.address || "Offer"}
-        className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <div className="text-lg font-bold">
-              {offer.address || "Offer"}
-              {offer.address && (
-                <a href={zillowUrl(offer.address)} target="_blank" rel="noreferrer"
-                  className="ml-2 align-middle text-xs font-medium text-blue-700 underline hover:text-blue-900">
-                  Zillow ↗
-                </a>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5 text-sm text-slate-500">
-              <span>{offer.dateLabel}</span>
-              <span aria-hidden="true">·</span>
-              <a href={ghlContactUrl(offer.contactId)} target="_blank" rel="noreferrer"
-                className="inline-flex items-center gap-1 text-slate-700 underline hover:text-slate-900">
-                {offer.contactName || offer.contactId} <ExternalLink size={12} />
-              </a>
-              <span aria-hidden="true">·</span>
-              <StatusPill offer={offer} small />
-              <AttachWarning offer={offer} />
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {offer.status !== "draft" && !offer.deal && (
-              <button type="button" onClick={() => onPromote?.(offer)}
-                className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-semibold text-amber-800 hover:bg-amber-100"
-                title="Accepted offer — start tracking it as an active deal">
-                <Briefcase size={14} /> Mark under contract
-              </button>
-            )}
-            {offer.deal && (
-              <button type="button" onClick={() => onDealNav?.()} title="Open the Deals tab">
-                <StagePill stage={offer.deal.stage} />
-              </button>
-            )}
-            {offer.contactId && (
-              <button type="button" onClick={() => onSend?.(offer)}
-                className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700">
-                <Send size={14} /> Send
-              </button>
-            )}
-            <button type="button" onClick={() => onEdit?.(offer)}
-              className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50">
-              <Pencil size={14} /> Edit offer
-            </button>
-            <button type="button" onClick={onClose} aria-label="Close"
-              className="rounded p-1.5 text-slate-400 hover:bg-slate-100">
-              <X size={18} />
-            </button>
-          </div>
-        </div>
-
-        <div className="grid gap-5 sm:grid-cols-2">
-          <img src={offer.imageUrl} alt="Offer document" className="w-full rounded-xl border border-slate-200 shadow-sm" />
-          <div className="space-y-4">
-            {cash && (
-              <div className="rounded-xl border border-amber-300 bg-amber-50 p-3">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Option A — Cash</div>
-                <div className="text-xl font-black">{fmtMoney(cash.amount)}</div>
-              </div>
-            )}
-            {sf && (
-              <div className="rounded-xl border border-slate-200 p-3">
-                <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">Option B — Seller finance</div>
-                <Row label="Price" value={fmtMoney(sf.price)} />
-                <Row label="Down" value={fmtMoney(sf.down)} />
-                <Row label="Monthly" value={`${fmtMoney(sf.monthly)} × ${sf.termYears} yrs${sf.annualRatePct ? ` @ ${sf.annualRatePct}%` : " @ 0%"}`} />
-                {sf.balloon > 0 && <Row label="Balloon" value={`${fmtMoney(sf.balloon)} @ yr ${sf.balloonYears}`} />}
-              </div>
-            )}
-            {lo && (
-              <div className="rounded-xl border border-slate-200 p-3">
-                <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">Option C — Lease option</div>
-                <Row label="Price" value={fmtMoney(lo.price)} />
-                <Row label="Option fee" value={fmtMoney(lo.optionFee)} />
-                <Row label="Monthly" value={`${fmtMoney(lo.monthly)} × ${lo.termMonths} mo`} />
-              </div>
-            )}
-            {(offer.scope || []).length > 0 && (
-              <div className="rounded-xl border border-slate-200 p-3">
-                <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">Rehab scope</div>
-                {offer.scope.map((s, i) => (
-                  <div key={i} className="flex justify-between gap-4 text-sm">
-                    <span className="text-slate-600">{s.label}</span>
-                    <span className="font-medium tabular-nums">{fmtMoney(s.cost)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            {(offer.warnings || []).length > 0 && (
-              <ul className="list-inside list-disc rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
-                {offer.warnings.map((w, i) => <li key={i}>{w}</li>)}
-              </ul>
-            )}
-            {history.length > 0 && (
-              <div className="rounded-xl border border-slate-200 p-3">
-                <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">Status history</div>
-                {history.map((h, i) => (
-                  <div key={i} className="flex items-start justify-between gap-3 py-0.5 text-xs">
-                    <span className="whitespace-nowrap text-slate-500">{(h.ts || "").slice(0, 16).replace("T", " ")}</span>
-                    <span className="text-right">
-                      <span className="font-medium text-slate-700">{OFFER_STATUS[h.status]?.label || h.status}</span>
-                      {h.note && <span className="text-slate-500"> · {h.note}</span>}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-            {(offer.sends || []).length > 0 && (
-              <div className="rounded-xl border border-slate-200 p-3">
-                <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">Send history</div>
-                {offer.sends.map((s, i) => (
-                  <div key={i} className="flex items-start justify-between gap-3 py-0.5 text-xs">
-                    <span className="whitespace-nowrap text-slate-500">{(s.ts || "").slice(0, 16).replace("T", " ")}</span>
-                    <span className="text-right">
-                      {s.channels.map((c) => (
-                        <span key={c} className={s.results?.[c]?.ok === false ? "text-red-600" : "text-emerald-700"}
-                          title={s.results?.[c]?.error || ""}>
-                          {CHANNEL_LABELS[c] || c}{s.results?.[c]?.ok === false ? " ✗" : " ✓"}{" "}
-                        </span>
-                      ))}
-                      <span className="text-slate-500">· {(s.docs || []).join(", ")}</span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="flex flex-wrap gap-2">
-              <a href={offer.pdfUrl} target="_blank" rel="noreferrer"
-                className="flex items-center gap-2 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-                <FileText size={15} /> Offer PDF
-              </a>
-              {offer.scopePdfUrl && (
-                <a href={offer.scopePdfUrl} target="_blank" rel="noreferrer"
-                  className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50">
-                  <FileText size={15} /> Rehab SOW
-                </a>
-              )}
-              {offer.compsPdfUrl && (
-                <a href={offer.compsPdfUrl} target="_blank" rel="noreferrer"
-                  className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50">
-                  <FileText size={15} /> Comps PDF
-                </a>
-              )}
-              <a href={offer.imageUrl} target="_blank" rel="noreferrer"
-                className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50">
-                <FileText size={15} /> Image
-              </a>
-              {offer.contractPdfUrl && (
-                <a href={offer.contractPdfUrl} target="_blank" rel="noreferrer"
-                  className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50">
-                  <FileText size={15} /> Contract PDF
-                </a>
-              )}
-              {offer.status !== "draft" && (
-                <button type="button" onClick={() => onOfferPage?.(offer)}
-                  className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50"
-                  title="One shareable web page for the agent: the offer, the comps, the scope and the seller's net">
-                  <Link2 size={15} /> Agent offer page
-                </button>
-              )}
-              {offer.status !== "draft" && (
-                <button type="button" onClick={() => onContract?.(offer)}
-                  className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50"
-                  title="Generate or update the purchase & sale contract">
-                  <FileText size={15} /> {offer.contractPdfUrl ? "Update contract" : "Generate contract"}
-                </button>
-              )}
-              {offer.status !== "draft" && (
-                <button type="button" onClick={() => onNetSheet?.(offer)}
-                  className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50"
-                  title="One-pager: our offer with no buyer's commission vs. the list price needed to net the same">
-                  <FileText size={15} /> Net comparison
-                </button>
-              )}
-            </div>
-            {offer.status !== "draft" && (
-              <div className="rounded-xl border border-slate-200 p-3">
-                <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                  Dispositions — for the end buyer, not the seller
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {offer.assignmentPdfUrl && (
-                    <a href={offer.assignmentPdfUrl} target="_blank" rel="noreferrer"
-                      className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50">
-                      <FileText size={15} /> Assignment PDF
-                    </a>
-                  )}
-                  <button type="button" onClick={() => onAssignment?.(offer)}
-                    className="flex items-center gap-2 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold hover:bg-slate-50"
-                    title="Generate or update the assignment of contract for the end buyer">
-                    <FileText size={15} /> {offer.assignmentPdfUrl ? "Update assignment" : "Generate assignment"}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -709,8 +478,17 @@ export default function OffersHistory({ onEdit, onDeal }) {
       )}
       {selectedId && (() => {
         const sel = offers.find((o) => o.id === selectedId);
-        return sel ? (
-          <OfferDetail offer={sel} onClose={() => setSelectedId(null)}
+        if (!sel) return null;
+        // The agent's other offers, in the same newest-first order the table
+        // shows — unfiltered, because the popout is where you go to see the
+        // whole relationship, not the slice the current chip left standing.
+        const key = sel.contactId || (sel.contactName ? `name:${sel.contactName}` : "none");
+        const siblings = offers.filter(
+          (o) => (o.contactId || (o.contactName ? `name:${o.contactName}` : "none")) === key);
+        return (
+          <OfferDetailModal offer={sel} siblings={siblings}
+            onSelect={(o) => setSelectedId(o.id)}
+            onClose={() => setSelectedId(null)}
             onEdit={(o) => { setSelectedId(null); onEdit?.(o); }}
             onSend={(o) => setSending(o)}
             onContract={openContract}
@@ -719,7 +497,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
             onOfferPage={(o) => setOfferPaging(o)}
             onPromote={(o) => { setSelectedId(null); promote(o); }}
             onDealNav={onDeal} />
-        ) : null;
+        );
       })()}
       {sending && <SendModal offer={sending} onClose={() => setSending(null)} onSent={handleSent} />}
       {offerPaging && <OfferPageModal offer={offerPaging} onClose={() => setOfferPaging(null)} />}

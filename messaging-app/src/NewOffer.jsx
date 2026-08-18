@@ -2,10 +2,11 @@
 // offers → generate the document and attach everything to the GHL contact.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronUp, ExternalLink, FileText, Link2, Loader2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ExternalLink, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
-  addContactNote, createOffer, getContactDetail, getContactNotes, ghlContactUrl, previewDocument, saveDraft, saveSettings, searchContacts, suggestAddresses, zillowUrl,
+  addContactNote, createOffer, getContactDetail, getContactNotes, ghlContactUrl, listOffers,
+  previewDocument, promoteDeal, saveDraft, saveSettings, searchContacts, suggestAddresses, zillowUrl,
 } from "./api.js";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
@@ -16,6 +17,8 @@ import AssignmentModal from "./AssignmentModal.jsx";
 import NetSheetModal from "./NetSheetModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 import OfferPageModal from "./OfferPageModal.jsx";
+import OfferDetailModal from "./OfferDetailModal.jsx";
+import { StatusPill } from "./ui.jsx";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -94,6 +97,47 @@ function Field({ label, children }) {
     <div>
       <span className={LABEL_CLS}>{label}</span>
       {children}
+    </div>
+  );
+}
+
+/* ---------------- this agent's other offers ---------------- */
+
+// A strip of every offer this agent has, above the form. Clicking one opens
+// the offer window rather than loading it into the editor: mid-underwrite you
+// want to LOOK at what else is open with them, and swapping the form out from
+// under you would be a trap. The window's own "Edit offer" is the deliberate
+// way to switch.
+function AgentOfferTabs({ offers, currentId, contactName, onOpen }) {
+  if (!offers.length) return null;
+  return (
+    <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        <Layers size={13} className="mr-1 inline align-[-2px]" />
+        {contactName ? `${contactName.split(" ")[0]}'s offers` : "Agent's offers"}
+        <span className="ml-1 text-slate-400">({offers.length})</span>
+      </span>
+      <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto">
+        {offers.map((o) => {
+          const current = o.id === currentId;
+          return (
+            <button key={o.id} type="button" onClick={() => onOpen(o)}
+              aria-current={current ? "true" : undefined}
+              title={`${o.address || "Offer"} — ${(o.createdAt || "").slice(0, 10)} · open the offer window`}
+              className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-xs transition-colors ${
+                current
+                  ? "border-blue-500 bg-blue-50 text-blue-900"
+                  : "border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+              }`}>
+              <span className="max-w-[11rem] truncate font-semibold">
+                {String(o.address || "Offer").split(",")[0]}
+              </span>
+              <span className="tabular-nums text-slate-400">{(o.createdAt || "").slice(5, 10)}</span>
+              <StatusPill offer={o} small />
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -404,7 +448,7 @@ const legacyTermsToRows = (t, s) =>
     ...(String(t?.earnestMoney || "").trim() ? { earnestMoney: Number(String(t.earnestMoney).replace(/[^\d]/g, "")) || undefined } : {}),
   });
 
-export default function NewOffer({ settings, initialContactId, restore, onReset, onSettingsSaved }) {
+export default function NewOffer({ settings, initialContactId, restore, onReset, onSettingsSaved, onOpenOffer, onDeal }) {
   // `restore` reopens a saved draft or an existing offer. Both carry a full
   // form snapshot (drafts in .draft, created offers in .snapshot) so the
   // comps workspace and rehab scope come back exactly as they were; very old
@@ -531,6 +575,49 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const [offerPageOpen, setOfferPageOpen] = useState(false); // OfferPageModal (agent-facing page)
   const [enrichOpen, setEnrichOpen] = useState(false); // EnrichModal (AI conversation → CRM fields)
   const [lastSend, setLastSend] = useState(null);  // most recent send record, for the ✓ banner
+
+  // Everything this agent has been offered, and the popout over it. The
+  // editor is where you underwrite ONE property, but the question "what else
+  // is open with this agent" arrives mid-underwrite — so their offers sit in a
+  // strip above the form and open the same detail window the Offers tab uses.
+  const [agentOffers, setAgentOffers] = useState([]);
+  const [peek, setPeek] = useState(null);        // offer whose popout is open
+  const [peekSub, setPeekSub] = useState(null);  // { kind, offer } layered over it
+
+  useEffect(() => {
+    const id = contact?.id;
+    if (!id) { setAgentOffers([]); return; }
+    let live = true;
+    // Drafts are excluded: they have no document to look at, and the strip is
+    // for what actually went out.
+    listOffers({ contactId: id, limit: 50 })
+      .then((list) => { if (live) setAgentOffers((list || []).filter((o) => o.status !== "draft")); })
+      .catch(() => { /* the strip is a convenience — never block the form */ });
+    return () => { live = false; };
+  }, [contact?.id]);
+
+  // "Mark under contract" from the popout, when the shell can take us to the
+  // Deals tab. Without that navigation the button would strand you, so the
+  // modal simply doesn't render it (the handler is what turns it on).
+  async function promoteFromPeek(o) {
+    try {
+      const r = await promoteDeal(o.id);
+      patchPeek(r.offer);
+      setPeek(null);
+      onDeal?.();
+    } catch (e) {
+      if (e.status === 409) { setPeek(null); onDeal?.(); } // already a deal — just go there
+      else setError(e.message);
+    }
+  }
+
+  // One patcher for every copy of an offer the popout is holding.
+  const patchPeek = (updated) => {
+    if (!updated) return;
+    setPeek((p) => (p && p.id === updated.id ? updated : p));
+    setPeekSub((s) => (s && s.offer.id === updated.id ? { ...s, offer: updated } : s));
+    setAgentOffers((list) => list.map((o) => (o.id === updated.id ? updated : o)));
+  };
 
   // Money fields format with thousands separators as you type; the calc
   // engine strips $ , and spaces, so the formatted string feeds it directly.
@@ -929,12 +1016,27 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               : "Work top to bottom: contact → property → comps → rehab → offer."}
           </p>
         </div>
-        <button type="button"
-          onClick={() => { if (window.confirm("Clear the whole form and start a fresh offer?")) onReset?.(); }}
-          className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900">
-          <RotateCcw size={14} /> Clear form
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* The editor shows the working copy; this is the offer as it went
+              out — the document, what was sent, what came back, and every
+              action that follows it. */}
+          {fromOffer && (
+            <button type="button" onClick={() => setPeek(agentOffers.find((o) => o.id === fromOffer.id) || fromOffer)}
+              title="Open the full offer window — document, send history, contract and offer page"
+              className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+              <Maximize2 size={14} /> Offer details
+            </button>
+          )}
+          <button type="button"
+            onClick={() => { if (window.confirm("Clear the whole form and start a fresh offer?")) onReset?.(); }}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900">
+            <RotateCcw size={14} /> Clear form
+          </button>
+        </div>
       </div>
+
+      <AgentOfferTabs offers={agentOffers} currentId={fromOffer?.id}
+        contactName={contact?.name} onOpen={setPeek} />
 
       <ContactPicker
         selected={contact} onSelect={selectContact}
@@ -1149,6 +1251,44 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
           // The summary lands as a note — refresh the panel.
           getContactNotes(contact.id).then((n) => n && setContactNotes(n)).catch(() => {});
         }} />
+    )}
+
+    {/* The same offer window the Offers tab opens, with the same verbs — the
+        editor just supplies the agent's offers as its rail. */}
+    {peek && (
+      <OfferDetailModal
+        offer={peek}
+        siblings={agentOffers}
+        contactName={contact?.name}
+        onSelect={setPeek}
+        onClose={() => setPeek(null)}
+        onEdit={onOpenOffer ? (o) => { setPeek(null); if (o.id !== fromOffer?.id) onOpenOffer(o); } : undefined}
+        onSend={(o) => setPeekSub({ kind: "send", offer: o })}
+        onContract={(o) => setPeekSub({ kind: "contract", offer: o })}
+        onAssignment={(o) => setPeekSub({ kind: "assignment", offer: o })}
+        onNetSheet={(o) => setPeekSub({ kind: "netsheet", offer: o })}
+        onOfferPage={(o) => setPeekSub({ kind: "page", offer: o })}
+        onPromote={onDeal ? promoteFromPeek : undefined}
+        onDealNav={onDeal} />
+    )}
+    {peekSub?.kind === "send" && (
+      <SendModal offer={peekSub.offer} onClose={() => setPeekSub(null)}
+        onSent={(id, sends, patch) => patchPeek({ ...peekSub.offer, sends, ...(patch || {}) })} />
+    )}
+    {peekSub?.kind === "contract" && (
+      <ContractModal offer={peekSub.offer} settings={effSettings}
+        onClose={() => setPeekSub(null)} onGenerated={patchPeek} />
+    )}
+    {peekSub?.kind === "assignment" && (
+      <AssignmentModal offer={peekSub.offer} settings={effSettings}
+        onClose={() => setPeekSub(null)} onGenerated={patchPeek} />
+    )}
+    {peekSub?.kind === "netsheet" && (
+      <NetSheetModal offer={peekSub.offer} settings={effSettings}
+        onClose={() => setPeekSub(null)} onGenerated={patchPeek} />
+    )}
+    {peekSub?.kind === "page" && (
+      <OfferPageModal offer={peekSub.offer} onClose={() => setPeekSub(null)} />
     )}
     </div>
   );

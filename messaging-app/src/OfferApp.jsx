@@ -214,6 +214,11 @@ export default function OfferApp() {
             restore={editing}
             onReset={resetForm}
             onSettingsSaved={(s) => setSettings(s)}
+            // Switching to another of the agent's offers remounts the form on
+            // that offer (the key is the offer id) — same path as History →
+            // Edit, so the outgoing form still flushes its draft on unmount.
+            onOpenOffer={(o) => { setEditing(o); try { window.scrollTo({ top: 0 }); } catch { /* noop */ } }}
+            onDeal={() => setView("deals")}
           />
         )}
         {view === "history" && (

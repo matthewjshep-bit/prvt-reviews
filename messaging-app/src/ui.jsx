@@ -71,6 +71,22 @@ export function StatusPill({ offer, small }) {
   );
 }
 
+// The CRM write can partially fail (fields saved, tag didn't). That's rare and
+// not part of the daily read, so it shrinks to a warning glyph beside the
+// status rather than owning a column of its own. Shared by the history table
+// and the offer popout, which show the same fact in the same place.
+export function AttachWarning({ offer }) {
+  if (offer.status === "draft" || !offer.ghl) return null;
+  if (offer.ghl.fields && offer.ghl.note && offer.ghl.tag) return null;
+  return (
+    <span className="ml-1 cursor-help text-amber-600" role="img"
+      aria-label="Some CRM fields did not save"
+      title={`Partially attached to the contact:\n${(offer.warnings || []).join("\n")}`}>
+      ⚠
+    </span>
+  );
+}
+
 // The status pill as a control: click it, pick an outcome. This is the primary
 // verb of the history table, so it sits in the row itself rather than behind an
 // overflow menu — at ten offers a day, an extra click per row is the whole job.
