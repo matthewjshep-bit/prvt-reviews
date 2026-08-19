@@ -21,6 +21,7 @@ import {
   blastInvestors, getInvestor, getInvestors, ghlContactUrl, saveBuybox,
   searchInvestors, setInvestorStatus, syncInvestors,
 } from "./api.js";
+import { EmptyState, ErrorBar, Spinner, TableCard } from "./ui.jsx";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
