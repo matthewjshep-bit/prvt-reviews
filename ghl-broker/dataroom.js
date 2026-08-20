@@ -467,9 +467,13 @@ export function brandHeader(brand) {
         ${brand.tagline ? `<div class="bsub">${esc(brand.tagline)}</div>` : ""}
       </div>
     </div>`;
-  const nav = brand.links?.length
-    ? `<nav class="bnav">${brand.links
-        .slice(1)
+  // links[0] is the home link and lives on the lockup, so the nav is what's
+  // left. A page may hand us only that one (the offer package does) — check
+  // what's actually left rather than the full list, or the bar keeps an empty
+  // <nav> and the flex gap it brings with it.
+  const navLinks = (brand.links || []).slice(1);
+  const nav = navLinks.length
+    ? `<nav class="bnav">${navLinks
         .map((l) => l.cta
           ? `<a class="bcta" style="background:${brand.primary}" href="${esc(l.url)}">${esc(l.label)}</a>`
           : `<a href="${esc(l.url)}">${esc(l.label)}</a>`)

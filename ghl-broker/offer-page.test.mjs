@@ -279,4 +279,35 @@ test("the page carries no script and refuses to be framed", async () => {
   assert.match(r.headers.get("x-robots-tag") || "", /noindex/);
 });
 
+test("the net comparison shows what we pay before what the seller keeps", async () => {
+  const { token } = await build();
+  const r = await req("GET", `/o/${token}`);
+  // Our purchase price is on the page next to the net it produces — an agent
+  // reading only this card must not have to reverse the commission to find
+  // the offer. Both columns land on the same net; that is the comparison.
+  const net = r.text.split("What the seller nets")[1].split("</div></div>")[0];
+  assert.match(net, /Our purchase price/);
+  assert.ok(net.indexOf("$286,500") < net.indexOf("$277,905"), "price above the net, not after it");
+  assert.equal((net.match(/\$277,905/g) || []).length, 2, "both columns net the seller the same");
+});
+
+test("the offer page header keeps the logo and drops the marketing nav", async () => {
+  const { renderOfferPage } = await import("./offer-page.js");
+  const { brandFrom } = await import("./dataroom.js");
+  const brand = brandFrom({
+    name: "Shep Flips",
+    brandLinks: [
+      { label: "Home", url: "https://shepflips.com" },
+      { label: "Deals", url: "https://shepflips.com/deals" },
+      { label: "Join the buyers list", url: "https://shepflips.com/join", cta: true },
+    ],
+  });
+  const html = renderOfferPage({ snap: { property: { address: "7374 Lazy S Ln NE" }, offer: {} }, token: "t", brand });
+  const header = html.split("</header>")[0];
+  assert.match(header, /Shep Flips/, "the lockup stays");
+  assert.match(header, /href="https:\/\/shepflips.com"/, "and stays clickable");
+  assert.doesNotMatch(header, /<nav/, "no nav links beside it, empty or otherwise");
+  assert.doesNotMatch(header, /Join the buyers list|shepflips.com\/deals/);
+});
+
 test.after(() => server.close());

@@ -173,10 +173,20 @@ td a{color:#2563EB;text-decoration:none;border-bottom:1px solid rgba(37,99,235,.
 .netcol{background:#fff;padding:14px 16px;flex:1 1 200px;min-width:0}
 .netcol.win{background:#ECFDF5}
 .netcol .t{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748B;margin-bottom:8px}
+.netcol .k{font-size:12px;color:#475569;margin-bottom:2px}
 .netcol .big{font-size:20px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-.netcol.win .big{color:#047857}
 .netcol .ln{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:#475569;margin-top:5px;
   font-variant-numeric:tabular-nums}
+/* The net is the arithmetic's answer, so it sits under a rule at the foot of
+   the column rather than at the top — price first, deductions, then what's
+   left. Green only in our column, and only on this line: the offer price
+   above it is a plain number, not a claim. */
+.netcol .net{display:flex;justify-content:space-between;gap:10px;align-items:baseline;margin-top:10px;
+  padding-top:9px;border-top:1px solid #CBD5E1;font-variant-numeric:tabular-nums}
+.netcol .net span:first-child{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748B}
+.netcol .net span:last-child{font-size:20px;font-weight:800;letter-spacing:-.02em}
+.netcol.win .net{border-top-color:#A7F3D0}
+.netcol.win .net span:last-child{color:#047857}
 `;
 
 // The property leads, the offer follows. An agent opening this on a phone is
@@ -245,20 +255,29 @@ function netSection(snap) {
   // The comparison an agent can actually take to a seller: our offer with only
   // their side of the commission, against the list price a traditional sale
   // would need to leave the seller the same money.
+  // Both columns start with a price and end with the same net, so the two
+  // sides are read as like against like: our purchase price up top — the
+  // number the agent already saw at the head of the page — the commissions
+  // taken out beneath it, and the seller's money last. Leading with the net
+  // asked the reader to work backwards to find the offer.
   return `<div class="card">
     <h2>What the seller nets</h2>
     <div class="netrow">
       <div class="netcol win">
         <div class="t">Our offer — no buyer's agent</div>
-        <div class="big">${money(n.netA)}</div>
-        <div class="ln"><span>Offer price</span><span>${money(n.offer)}</span></div>
+        <div class="k">Our purchase price</div>
+        <div class="big">${money(n.offer)}</div>
         <div class="ln"><span>Your commission (${n.sellerPct}%)</span><span>− ${money(n.sellerCommissionA)}</span></div>
+        <div class="ln"><span>Buyer's agent</span><span>none</span></div>
+        <div class="net"><span>Seller nets</span><span>${money(n.netA)}</span></div>
       </div>
       <div class="netcol">
         <div class="t">Listed, to net the same</div>
+        <div class="k">List price required</div>
         <div class="big">${money(n.listPrice)}</div>
         <div class="ln"><span>Your commission (${n.sellerPct}%)</span><span>− ${money(n.sellerCommissionB)}</span></div>
         <div class="ln"><span>Buyer's agent (${n.buyerPct}%)</span><span>− ${money(n.buyerCommissionB)}</span></div>
+        <div class="net"><span>Seller nets</span><span>${money(n.netA)}</span></div>
       </div>
     </div>
     <p class="muted" style="margin-top:14px">
@@ -369,6 +388,15 @@ export function renderOfferPage({ snap, token, brand = null }) {
       ${snap.offer?.dateLabel ? `<br>Offer dated ${esc(snap.offer.dateLabel)}` : ""}
     </p>`;
 
+  // The header keeps the lockup and drops the nav. On the investor dataroom
+  // those links are the point — a buyer who likes the deal should be able to
+  // reach the rest of the site. Here the reader is a listing agent with one
+  // question to answer, and a row of marketing CTAs above the offer both
+  // crowds the bar and invites them somewhere other than the number. brandFrom
+  // puts the home link first and the nav renders links.slice(1), so keeping
+  // only the first leaves the logo clickable with nothing beside it.
+  const bareBrand = brand?.links?.length > 1 ? { ...brand, links: brand.links.slice(0, 1) } : brand;
+
   return page({
     title: `Cash offer — ${snap.property?.address || "property"}`,
     css: OFFER_CSS,
@@ -377,6 +405,6 @@ export function renderOfferPage({ snap, token, brand = null }) {
     // confidential and forwarding it costs us the deal; this page exists to be
     // forwarded — to the seller, to a broker, to whoever needs convincing.
     watermark: "",
-    brand,
+    brand: bareBrand,
   });
 }
