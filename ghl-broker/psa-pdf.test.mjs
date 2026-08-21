@@ -131,3 +131,48 @@ test("additional terms extend the document without renumbering it", async () => 
   const withTerms = await render({ mode: "standard", additionalTerms: "x".repeat(6000) });
   assert.ok(await pageCount(withTerms) > await pageCount(plain), "6k of extra terms adds pages");
 });
+
+/* ------------------------- pre-applied signature ------------------------- */
+// The operator sends ten of these a day; signing each by hand defeats the
+// point. What must never happen is the counterparty's line getting signed too,
+// or the signature reflowing a document someone has already reviewed.
+
+const SIGNATURE = { name: "Matthew Shepherd", date: "August 21, 2026", capacity: "Manager" };
+
+test("signing does not reflow the document", async () => {
+  for (const mode of ["standard", "short_sale"]) {
+    const unsigned = await pageCount(await render({ mode }));
+    const signed = await pageCount(await render({ mode, signature: SIGNATURE }));
+    assert.equal(signed, unsigned, `${mode}: signing changed the pagination`);
+  }
+});
+
+test("the script font is embedded only when there is a signature to draw", async () => {
+  const unsigned = await render({ mode: "standard" });
+  const signed = await render({ mode: "standard", signature: SIGNATURE });
+  assert.ok(signed.length > unsigned.length, "a signed file carries the embedded face");
+  // A blank or whitespace name is not a signature — and must not drag a 450KB
+  // font into every offer that isn't being signed.
+  for (const name of ["", "   ", null, undefined]) {
+    const buf = await render({ mode: "standard", signature: { name, date: "August 21, 2026" } });
+    assert.equal(buf.length, unsigned.length, `name ${JSON.stringify(name)} should render as unsigned`);
+  }
+});
+
+test("a signature name the script face can't render doesn't crash the offer", async () => {
+  // Great Vibes covers Latin. A name with CJK or emoji in it must degrade, not
+  // take down the whole agreement.
+  for (const name of ["Zoë O'Brien-Smith", "松本 健", "Matt 🖊 Shepherd"]) {
+    const buf = await render({ mode: "standard", signature: { ...SIGNATURE, name } });
+    assert.equal(buf.subarray(0, 5).toString("ascii"), "%PDF-", `name ${name} crashed the render`);
+  }
+});
+
+test("signature blocks are placed as a pair, never split across pages", async () => {
+  // The failure this catches: the seller's block alone on an otherwise blank
+  // page, which on a document you're asking someone to sign reads as a
+  // printing error. Both blocks are ~112pt; a page break between them shows up
+  // as an extra page against a known-good count.
+  assert.equal(await pageCount(await render({ mode: "standard", signature: SIGNATURE })), 7);
+  assert.equal(await pageCount(await render({ mode: "short_sale", signature: SIGNATURE })), 9);
+});

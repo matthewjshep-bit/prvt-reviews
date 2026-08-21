@@ -15,6 +15,10 @@
 // are measured with font.widthOfTextAtSize.
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   PSA_TITLE, PSA_SUBTITLE, PSA_TOKENS,
   PSA_SUMMARY_TITLE, PSA_SUMMARY_INTRO, PSA_PACKAGE_TITLE,
@@ -37,6 +41,8 @@ const clean = (s) => sanitizeWinAnsi(s, { keep: KEEP });
 const INK = rgb(0.1, 0.1, 0.12);
 const MUTED = rgb(0.42, 0.42, 0.46);
 const RULE = rgb(0.78, 0.78, 0.8);
+// Blue-black: a signature in body-text black reads as part of the typesetting.
+const SIGNATURE_INK = rgb(0.09, 0.15, 0.36);
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 // Settings colors are operator-typed; anything that isn't a plain 6-digit hex
@@ -44,6 +50,16 @@ const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 function hexColor(value, fallback) {
   const h = HEX_RE.test(String(value || "")) ? String(value) : fallback;
   return rgb(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255);
+}
+
+// Great Vibes (SIL OFL, fonts/GreatVibes-OFL.txt) — the script face the buyer's
+// signature is drawn in. Read once and cached: a 450KB file has no business
+// being read off disk on every offer.
+const SCRIPT_FONT_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "fonts", "GreatVibes-Regular.ttf");
+let scriptFontBytes = null;
+async function loadScriptFont() {
+  if (!scriptFontBytes) scriptFontBytes = await fs.readFile(SCRIPT_FONT_PATH);
+  return scriptFontBytes;
 }
 
 const BODY = 10;
@@ -57,10 +73,13 @@ const GUTTER = 22; // hanging indent for section bodies under "N."
  * @param {string} address  printed in the running footer
  * @param {string} additionalTerms  operator's extra terms, unnumbered
  * @param {Array<{title:string,bytes:Buffer,contentType:string}>} exhibits
+ * @param {{name:string,date:string}|null} signature  Buyer's pre-applied
+ *        signature. Drawn in script on every BUYER line, with the date filled
+ *        in. Never applied to a SELLER line — that one is theirs to sign.
  */
 export async function renderPsaPdf({
   mode = "standard", values = {}, company = {}, address = "",
-  additionalTerms = "", exhibits = [],
+  additionalTerms = "", exhibits = [], signature = null,
 } = {}) {
   const pdf = await PDFDocument.create();
   const times = await pdf.embedFont(StandardFonts.TimesRoman);
@@ -68,6 +87,15 @@ export async function renderPsaPdf({
   const italic = await pdf.embedFont(StandardFonts.TimesRomanItalic);
   const helv = await pdf.embedFont(StandardFonts.Helvetica);
   const helvBold = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+  // The script face is embedded only when there is actually a signature to
+  // draw — it is by far the largest thing in the file, even subsetted.
+  const signName = String(signature?.name || "").trim();
+  let script = null;
+  if (signName) {
+    pdf.registerFontkit(fontkit);
+    script = await pdf.embedFont(await loadScriptFont(), { subset: true });
+  }
 
   const NAVY = hexColor(company.brandPrimary, BRAND_NAVY);
   const GOLD = hexColor(company.brandAccent, BRAND_GOLD);
@@ -287,18 +315,31 @@ export async function renderPsaPdf({
   return Buffer.from(await pdf.save());
 
   // BUYER over SELLER, stacked. The paper original signs each document
-  // separately, so this is called once per piece (Agreement, each addendum).
+  // separately, so this is called once per piece (Agreement, each addendum) —
+  // and so a pre-applied buyer signature lands on all of them, because a signed
+  // agreement stapled to unsigned addenda looks like a mistake.
   function signatures() {
     const blockH = 16 + 30 + 12 + LINE * 4;
     const roles = [
-      { role: "BUYER", name: buyerSignatureName(), email: values.signer_email, phone: values.signer_phone },
-      { role: "SELLER", name: values.seller_name, email: "", phone: "" },
+      { role: "BUYER", name: buyerSignatureName(), email: values.signer_email, phone: values.signer_phone, signed: Boolean(script) },
+      // Never signed for them, whatever is configured. This line is the
+      // counterparty's assent and forging it is the one thing this file must
+      // not do.
+      { role: "SELLER", name: values.seller_name, email: "", phone: "", signed: false },
     ];
+    // Both blocks are placed as a unit. Fitting them one at a time strands the
+    // seller's block alone on a page of its own, which on a document you are
+    // asking someone to sign reads as a printing error.
+    ensureSpace(blockH * 2 + 24);
     for (const sig of roles) {
-      ensureSpace(blockH + 8); // a signature block never splits across pages
       y -= 16;
       page.drawText(sig.role, { x: MARGIN, y, size: 10.5, font: helvBold, color: NAVY });
       y -= 30;
+      // The script sits ON the rule, slightly above it, the way a pen would.
+      if (sig.signed) {
+        const size = 21;
+        page.drawText(signName, { x: MARGIN + 6, y: y + 5, size, font: script, color: SIGNATURE_INK });
+      }
       drawLine(MARGIN, y, PAGE_W - MARGIN, y, INK, 0.8);
       y -= 10;
       page.drawText("Signature", { x: MARGIN, y, size: 8, font: times, color: MUTED });
@@ -306,9 +347,11 @@ export async function renderPsaPdf({
       page.drawText(`Printed name: ${clean(sig.name || "").trim() || "_".repeat(34)}`,
         { x: MARGIN, y, size: BODY, font: times, color: INK });
       y -= LINE;
-      page.drawText(`Title / capacity: ${"_".repeat(28)}`, { x: MARGIN, y, size: BODY, font: times, color: INK });
+      const capacity = sig.signed ? clean(signature?.capacity || "").trim() : "";
+      page.drawText(`Title / capacity: ${capacity || "_".repeat(28)}`, { x: MARGIN, y, size: BODY, font: times, color: INK });
       y -= LINE;
-      page.drawText(`Date: ${"_".repeat(28)}`, { x: MARGIN, y, size: BODY, font: times, color: INK });
+      const dated = sig.signed ? clean(signature?.date || "").trim() : "";
+      page.drawText(`Date: ${dated || "_".repeat(28)}`, { x: MARGIN, y, size: BODY, font: times, color: INK });
       y -= LINE;
       const contact = `Email: ${clean(sig.email || "").trim() || "_".repeat(26)}   |   Phone: ${clean(sig.phone || "").trim() || "_".repeat(18)}`;
       page.drawText(contact, { x: MARGIN, y, size: 9, font: times, color: INK });

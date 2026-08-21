@@ -640,6 +640,35 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           every agreement you produce afterwards. Leave one blank and the agreement quietly drops both
           its page and the sentence that cites it.
         </p>
+
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <label className="flex cursor-pointer items-start gap-2.5">
+            <input type="checkbox" className="mt-0.5 h-4 w-4 rounded border-slate-300"
+              checked={Boolean(form.psa.autoSign)}
+              onChange={(e) => setPsa("autoSign")(e.target.checked)} />
+            <span>
+              <span className="block text-sm font-semibold">Pre-sign every agreement</span>
+              <span className="block text-xs text-slate-500">
+                Signs the buyer line on the agreement and both addenda in script, dated to the
+                agreement's effective date, so ten offers a day isn't ten signatures a day. The
+                seller's line is always left blank.
+              </span>
+            </span>
+          </label>
+          {form.psa.autoSign && (
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <Txt label="Signature" value={form.psa.signatureName} onChange={setPsa("signatureName")}
+                placeholder={form.company.signer || "Matthew Shepherd"} />
+              <Txt label="Title / capacity" value={form.psa.signatureCapacity} onChange={setPsa("signatureCapacity")}
+                placeholder="Manager" />
+              <p className="col-span-2 text-xs text-amber-700">
+                A pre-signed offer is binding the moment the seller signs it. Your exits are the
+                feasibility period (§ 6) and the expiry date on each offer — check both are set the way
+                you want before turning this on. Blank falls back to the signer name above.
+              </p>
+            </div>
+          )}
+        </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">

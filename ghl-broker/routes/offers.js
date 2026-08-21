@@ -2267,8 +2267,20 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       const exhibits = await loadPsaExhibits(psaDefaults, mode);
 
+      // Pre-applied buyer signature, when the operator has opted in. Dated to
+      // the agreement's own effective date rather than "now", so the signature
+      // and the document can't disagree about when it was signed.
+      const signName = psaDefaults.signatureName || company.signer || "";
+      const signature = psaDefaults.autoSign && signName
+        ? {
+            name: signName,
+            date: values.effective_date || dateLabel(),
+            capacity: psaDefaults.signatureCapacity || "",
+          }
+        : null;
+
       const pdf = await renderPsaPdf({
-        mode, values, company, exhibits,
+        mode, values, company, exhibits, signature,
         address: fields.address,
         additionalTerms: fields.additionalTerms,
       });

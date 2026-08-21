@@ -135,6 +135,14 @@ export const DEFAULT_OFFER_SETTINGS = {
     closingDays: 21,
     counterDays: 5,
     emdCheckUrl: "", proofOfFundsUrl: "",
+    // Pre-apply the buyer's signature to every agreement, so ten offers a day
+    // don't mean ten signatures a day. OFF by default and deliberately so:
+    // turning it on means a binding offer leaves the building already signed,
+    // which is the operator's call to make once, in Settings, not a default
+    // that arrives with a deploy. Only ever applied to the BUYER line.
+    autoSign: false,
+    signatureName: "",       // blank falls back to company.signer
+    signatureCapacity: "Manager",
   },
 };
 
