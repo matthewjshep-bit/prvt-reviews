@@ -5,6 +5,7 @@
 //
 //   GET    /api/offers/settings              location calculation defaults
 //   PUT    /api/offers/settings
+//   POST   /api/offers/settings/exhibit      store a standing PSA exhibit (EMD check / proof of funds)
 //   POST   /api/offers/calculate             pure calc — no side effects
 //   POST   /api/offers/preview               render document, return data URL
 //   GET    /api/offers/contacts?query=       GHL contact typeahead
@@ -15,7 +16,9 @@
 //   PATCH  /api/offers/:id/status            record an offer outcome (sent/countered/no_response/passed/accepted)
 //   PATCH  /api/offers/status                bulk outcome for a selection of offers
 //   POST   /api/offers/:id/send              send offer docs via text/email
-//   POST   /api/offers/:id/contract          render the purchase & sale contract PDF
+//   POST   /api/offers/:id/psa               render the Washington purchase & sale agreement package
+//   GET    /api/offers/:id/psa.pdf
+//   POST   /api/offers/:id/contract          render the generic purchase & sale contract PDF
 //   GET    /api/offers/:id/contract.pdf
 //   POST   /api/offers/:id/assignment        render the assignment of contract PDF (dispositions)
 //   GET    /api/offers/:id/assignment.pdf
@@ -51,6 +54,8 @@ import {
 } from "../shared/offer-status.js";
 import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, buildNetSheetDocument, moneyInWords } from "../offer-doc.js";
 import { renderContractPdf } from "../contract-pdf.js";
+import { renderPsaPdf } from "../psa-pdf.js";
+import { PSA_MODES } from "../shared/wa-psa-template.js";
 import {
   DEFAULT_CONTRACT_CLAUSES, DEFAULT_ASSIGNMENT_CLAUSES, ASSIGNMENT_TOKENS, ASSIGNMENT_PREAMBLE,
 } from "../shared/contract-template.js";
@@ -58,7 +63,7 @@ import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, gradeCompCo
 import { addressKey, addressQueryVariants, zillowUrl } from "../shared/us-address.js";
 import { YEAR_BUILT_TOLERANCE } from "../shared/comp-match.js";
 import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
-import { fetchRemoteImage } from "../fetch-image.js";
+import { fetchRemoteImage, sniffImageType, sniffPdf } from "../fetch-image.js";
 export { zillowUrl };
 import { jpegToPdf, jpegsToPdf } from "../pdf.js";
 import { mapPool } from "../map-pool.js";
@@ -140,6 +145,14 @@ function bestContactAddress(custom) {
 
 const dateLabel = (d = new Date()) =>
   d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+
+// yyyy-mm-dd (what a date input submits) parses as a LOCAL date so the printed
+// label never drifts a day across timezones; anything else passes through as
+// the operator typed it. Shared by every document that prints a date.
+const dateText = (v) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || "").trim());
+  return m ? dateLabel(new Date(+m[1], +m[2] - 1, +m[3])) : String(v || "").trim();
+};
 
 // The offer's expiry date: the per-offer "Offer expires" picker when set
 // (settings.offerExpires, yyyy-mm-dd, parsed as a local date so the label
@@ -291,6 +304,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   router.get("/:id/scope.pdf", serveDoc("scopepdf", "REHAB SOW", "pdf"));
   router.get("/:id/comps.pdf", serveDoc("compspdf", "COMPS", "pdf"));
   router.get("/:id/contract.pdf", serveDoc("contractpdf", "CONTRACT", "pdf"));
+  router.get("/:id/psa.pdf", serveDoc("psapdf", "PURCHASE AGREEMENT", "pdf"));
   router.get("/:id/assignment.pdf", serveDoc("assignmentpdf", "ASSIGNMENT", "pdf"));
   router.get("/:id/netsheet.pdf", serveDoc("netsheetpdf", "NET COMPARISON", "pdf"));
 
@@ -490,6 +504,46 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const settings = effectiveSettings(body.settings || body);
       await store.saveOfferSettings(locationId, settings);
       res.json({ ok: true, settings });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- PSA exhibits (standing files, not per-offer) ---------- */
+  // Body: { kind: "emdCheck" | "proofOfFunds", dataUri }. Stores one file and
+  // returns its URL for the operator to save into settings.psa. These are
+  // standing documents — the same earnest money check and proof-of-funds letter
+  // ride along on every agreement — so they live in Settings rather than being
+  // re-uploaded per offer. Settings also accepts a pasted URL directly; this
+  // route exists because the operator usually has a file, not a link.
+  const EXHIBIT_KINDS = ["emdCheck", "proofOfFunds"];
+  const MAX_EXHIBIT_BYTES = 8 * 1024 * 1024;
+
+  router.post("/settings/exhibit", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const kind = String(req.body?.kind || "");
+      if (!EXHIBIT_KINDS.includes(kind)) return res.status(400).json({ error: "unknown exhibit kind" });
+
+      const m = /^data:(application\/pdf|image\/(?:jpeg|png));base64,(.+)$/.exec(String(req.body?.dataUri || ""));
+      if (!m) return res.status(400).json({ error: "exhibit must be a PDF, JPEG or PNG data URI" });
+      const bytes = Buffer.from(m[2], "base64");
+      if (!bytes.length) return res.status(400).json({ error: "that file is empty" });
+      if (bytes.length > MAX_EXHIBIT_BYTES) return res.status(413).json({ error: "that file is too large (max 8MB)" });
+
+      // Trust the bytes, not the declared type — same rule the photo path uses.
+      const sniffed = sniffPdf(bytes) || sniffImageType(bytes);
+      if (sniffed !== "application/pdf" && sniffed !== "image/jpeg" && sniffed !== "image/png") {
+        return res.status(400).json({ error: "that file isn't a PDF, JPEG or PNG" });
+      }
+      const ext = sniffed === "application/pdf" ? "pdf" : sniffed === "image/png" ? "png" : "jpg";
+
+      // Content-addressed: replacing the file gets a new URL, so a cached copy
+      // of the old one can never be the thing an agreement links to.
+      const digest = crypto.createHash("sha256").update(bytes).digest("hex").slice(0, 12);
+      const url = await uploadAsset(
+        `psa-exhibits/${locationId}/${kind}-${digest}.${ext}`, bytes, sniffed,
+        { localDir: uploadDir, localBaseUrl: `${publicBaseUrl}/uploads` }
+      );
+      res.json({ ok: true, url, contentType: sniffed });
     } catch (err) { fail(res, err); }
   });
 
@@ -2066,13 +2120,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ? settings.contractTemplate
         : DEFAULT_CONTRACT_CLAUSES;
 
-      // yyyy-mm-dd (the date inputs) parses as a LOCAL date so the printed
-      // label never drifts a day across timezones; anything else passes
-      // through as typed.
-      const dateText = (v) => {
-        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-        return m ? dateLabel(new Date(+m[1], +m[2] - 1, +m[3])) : v;
-      };
       const values = {
         effective_date: dateText(fields.effectiveDate),
         buyer_name: fields.buyerName,
@@ -2117,6 +2164,162 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  /* ---------- purchase & sale agreement (the "official offer") ---------- */
+  // Body: { fields: { mode, effectiveDate, buyerEntity, buyerEntityState,
+  //         sellerName, address, apn, legalDescription, county, price,
+  //         earnestMoney, feasibilityDays, closingDays, closingDate,
+  //         backstopDate, titleCompany, titleOfficer, titlePhone, lenderName,
+  //         approvalDeadline, counterDays, offerExpires, offerExpiresTime,
+  //         additionalTerms } }
+  //
+  // This is the document that answers "that's just an LOI, not a real offer".
+  // It renders the Washington PSA package from shared/wa-psa-template.js —
+  // Offer Summary cover, 22 numbered sections, Addendum A, plus Addendum B and
+  // approval-keyed timelines on a short sale — with the standing exhibits from
+  // Settings merged on the end. Blanks print as fill-in lines, so a
+  // half-filled agreement is still printable and signable.
+  //
+  // Deliberately separate from POST /:id/contract: that one is the generic
+  // multi-state clause template the operator edits in Settings. This one is
+  // authored, locked text whose section numbers are cross-referenced inside the
+  // document itself.
+  router.post("/:id/psa", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const offer = await store.getOffer(req.params.id);
+      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
+
+      const raw = req.body?.fields || {};
+      const str = (k, max = 200) => String(raw[k] ?? "").trim().slice(0, max);
+      const money = (k) => {
+        const n = Number(String(raw[k] ?? "").replace(/[$,\s]/g, ""));
+        return Number.isFinite(n) && n > 0 ? n : 0;
+      };
+      const days = (k, fallback) => {
+        const n = parseInt(raw[k], 10);
+        return Number.isFinite(n) && n > 0 ? Math.min(n, 365) : fallback;
+      };
+
+      const settings = effectiveSettings(await store.getOfferSettings(locationId));
+      const psaDefaults = settings.psa;
+      const company = settings.company || {};
+
+      const mode = PSA_MODES.includes(raw.mode) ? raw.mode : "standard";
+      const fields = {
+        mode,
+        effectiveDate: str("effectiveDate"),
+        buyerEntity: str("buyerEntity") || psaDefaults.buyerEntity,
+        buyerEntityState: str("buyerEntityState") || psaDefaults.buyerEntityState,
+        sellerName: str("sellerName"),
+        address: str("address") || offer.address || "",
+        apn: str("apn", 40),
+        legalDescription: str("legalDescription", 2000),
+        county: str("county", 60),
+        price: money("price") || Math.round(Number(offer.cashAmount) || 0),
+        earnestMoney: money("earnestMoney") || Number(settings.earnestMoney) || 0,
+        feasibilityDays: days("feasibilityDays", psaDefaults.feasibilityDays),
+        closingDays: days("closingDays", psaDefaults.closingDays),
+        closingDate: str("closingDate"),
+        backstopDate: str("backstopDate"),
+        titleCompany: str("titleCompany") || psaDefaults.titleCompany,
+        titleOfficer: str("titleOfficer") || psaDefaults.titleOfficer,
+        titlePhone: str("titlePhone", 40) || psaDefaults.titlePhone,
+        lenderName: str("lenderName") || psaDefaults.lenderName,
+        approvalDeadline: str("approvalDeadline"),
+        counterDays: days("counterDays", psaDefaults.counterDays),
+        offerExpires: str("offerExpires"),
+        offerExpiresTime: str("offerExpiresTime", 20),
+        additionalTerms: str("additionalTerms", 4000),
+      };
+
+      // "August 24, 2026 at 5:00 PM" — one string, because § 22 and the summary
+      // row both print the whole expiry and neither wants to reassemble it.
+      const expiresLabel = [dateText(fields.offerExpires), fields.offerExpiresTime]
+        .filter(Boolean).join(" at ");
+
+      const values = {
+        effective_date: dateText(fields.effectiveDate),
+        buyer_entity: fields.buyerEntity,
+        buyer_state: fields.buyerEntityState,
+        seller_name: fields.sellerName,
+        address: fields.address,
+        apn: fields.apn,
+        legal_description: fields.legalDescription,
+        county: fields.county,
+        price: fields.price ? fmtMoney(fields.price) : "",
+        price_words: fields.price ? moneyInWords(fields.price) : "",
+        earnest_money: fields.earnestMoney ? fmtMoney(fields.earnestMoney) : "",
+        feasibility_days: String(fields.feasibilityDays),
+        closing_days: String(fields.closingDays),
+        closing_date: dateText(fields.closingDate),
+        backstop_date: dateText(fields.backstopDate),
+        title_company: fields.titleCompany,
+        title_officer: fields.titleOfficer,
+        title_phone: fields.titlePhone,
+        lender_name: fields.lenderName,
+        approval_deadline: dateText(fields.approvalDeadline),
+        counter_days: String(fields.counterDays),
+        offer_expires: expiresLabel,
+        signer_name: company.signer || "",
+        signer_email: company.email || "",
+        signer_phone: company.phone || "",
+      };
+
+      const exhibits = await loadPsaExhibits(psaDefaults, mode);
+
+      const pdf = await renderPsaPdf({
+        mode, values, company, exhibits,
+        address: fields.address,
+        additionalTerms: fields.additionalTerms,
+      });
+
+      let url;
+      if (r2Enabled) {
+        url = await uploadAsset(`offers/${locationId}/${offer.id}-psa.pdf`, pdf, "application/pdf", {
+          localDir: uploadDir,
+          localBaseUrl: `${publicBaseUrl}/uploads`,
+          contentDisposition: `inline; filename="${docFilename(offer.address, "PURCHASE AGREEMENT", "pdf")}"`,
+        });
+      } else {
+        await store.saveOfferDoc(offer.id, "psapdf", pdf, "application/pdf");
+        url = `${publicBaseUrl}/api/offers/${offer.id}/psa.pdf`;
+      }
+      // The doc routes serve immutable/long-cache; version the URL so a
+      // regenerated agreement isn't hidden behind the old cached copy.
+      url += `${url.includes("?") ? "&" : "?"}v=${Date.now()}`;
+
+      offer.psa = { fields, generatedAt: new Date().toISOString() };
+      offer.psaPdfUrl = url;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The standing exhibits, fetched fresh at render time so replacing the file
+  // in Settings updates every agreement generated afterwards. A fetch failure
+  // drops that exhibit rather than failing the offer — and because the renderer
+  // numbers exhibits from what it is actually handed, the summary and § 21 stay
+  // consistent with what's in the envelope.
+  //
+  // The proof-of-funds letter only rides along when there's a lender named to
+  // attribute it to, which is also the only case the summary row cites it.
+  async function loadPsaExhibits(psaDefaults, mode) {
+    const wanted = [
+      { kind: "emdCheck", url: psaDefaults.emdCheckUrl, title: "Copy of earnest money check payable to the Closing Agent" },
+      { kind: "proofOfFunds", url: psaDefaults.proofOfFundsUrl, title: "Proof of funds letter" },
+    ].filter((e) => String(e.url || "").trim());
+
+    const loaded = await Promise.all(wanted.map(async (e) => {
+      try {
+        const { bytes, contentType } = await fetchRemoteImage(e.url, { allowPdf: true, maxBytes: 8 * 1024 * 1024 });
+        return { kind: e.kind, title: e.title, bytes, contentType };
+      } catch {
+        return null;
+      }
+    }));
+    return loaded.filter(Boolean);
+  }
+
   /* ---------- assignment of contract (dispositions — the end buyer) ---------- */
   // Body: { fields: { effectiveDate, assignorName, assignorCompany,
   //         assigneeName, assigneeCompany, address, totalPrice, deposit,
@@ -2155,10 +2358,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ? settings.assignmentTemplate
         : DEFAULT_ASSIGNMENT_CLAUSES;
 
-      const dateText = (v) => {
-        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-        return m ? dateLabel(new Date(+m[1], +m[2] - 1, +m[3])) : v;
-      };
       const values = {
         effective_date: dateText(fields.effectiveDate),
         assignor_name: fields.assignorName,
@@ -2998,6 +3197,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // Requested documents, filtered to what this offer actually has.
       const DOC_DEFS = [
         ["pdf", "Offer letter (PDF)", offer.pdfUrl],
+        ["psa", "Purchase & sale agreement", offer.psaPdfUrl],
         ["scope", "Rehab scope of work", offer.scopePdfUrl],
         ["comps", "Comparable sales analysis", offer.compsPdfUrl],
         ["netsheet", "Seller net comparison", offer.netSheetPdfUrl],

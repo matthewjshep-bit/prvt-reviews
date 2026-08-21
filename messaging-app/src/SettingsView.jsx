@@ -8,7 +8,7 @@ import {
   CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
-import { getCompBookmarklet, regenerateCompToken, saveSettings } from "./api.js";
+import { getCompBookmarklet, regenerateCompToken, saveSettings, uploadPsaExhibit } from "./api.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
 
@@ -41,6 +41,53 @@ function Txt({ label, value, onChange, placeholder }) {
       <input className={INPUT_CLS} value={value} placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)} />
     </label>
+  );
+}
+
+// One standing PSA exhibit — the earnest money check copy or the proof-of-funds
+// letter. Either upload a file (stored server-side, content-addressed, and the
+// URL comes back) or paste a URL you already host. Blank is a valid answer: the
+// agreement then drops both the exhibit page AND every reference to it, so it
+// never cites something that isn't in the envelope.
+function ExhibitField({ label, kind, value, onChange, hint }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function pick(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // let the same file be re-picked after a failure
+    if (!file) return;
+    setError("");
+    setBusy(true);
+    try {
+      const dataUri = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result));
+        fr.onerror = () => reject(new Error("couldn't read that file"));
+        fr.readAsDataURL(file);
+      });
+      const r = await uploadPsaExhibit(kind, dataUri);
+      onChange(r.url);
+    } catch (err) { setError(err.message); }
+    setBusy(false);
+  }
+
+  return (
+    <div>
+      <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+      <div className="flex gap-2">
+        <input className={INPUT_CLS} value={value || ""} placeholder="https://… or upload a file"
+          onChange={(e) => onChange(e.target.value)} />
+        <label className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 px-3 text-sm font-semibold ${
+          busy ? "opacity-60" : "hover:bg-slate-50"}`}>
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} File
+          <input type="file" className="hidden" accept="application/pdf,image/jpeg,image/png"
+            disabled={busy} onChange={pick} />
+        </label>
+      </div>
+      {error && <div className="mt-1 text-xs text-red-600">{error}</div>}
+      {hint && !error && <div className="mt-1 text-xs text-slate-500">{hint}</div>}
+    </div>
   );
 }
 
@@ -213,6 +260,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
 
   const set = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, [k]: v })); };
   const setCo = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, company: { ...f.company, [k]: v } })); };
+  const setPsa = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, psa: { ...f.psa, [k]: v } })); };
 
   // Contract clause templates (Purchase & Sale + Assignment). null/empty → the
   // built-in default language; the first edit materializes a copy into the form
@@ -224,13 +272,21 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
     try {
       // Coerce numerics (stripping comma formatting); anything unparseable
       // falls back to the default.
-      const clean = { ...form };
-      for (const k of Object.keys(DEFAULT_OFFER_SETTINGS)) {
-        if (typeof DEFAULT_OFFER_SETTINGS[k] === "number") {
-          const n = Number(String(clean[k]).replace(/[$,\s]/g, ""));
-          clean[k] = Number.isFinite(n) ? n : DEFAULT_OFFER_SETTINGS[k];
+      const coerce = (obj, defaults) => {
+        const out = { ...obj };
+        for (const k of Object.keys(defaults)) {
+          if (typeof defaults[k] === "number") {
+            const n = Number(String(out[k]).replace(/[$,\s]/g, ""));
+            out[k] = Number.isFinite(n) ? n : defaults[k];
+          }
         }
-      }
+        return out;
+      };
+      const clean = coerce(form, DEFAULT_OFFER_SETTINGS);
+      // settings.psa is a nested blob with its own day counts — the top-level
+      // walk above never reaches them, and a string "10" would come back from
+      // the server as a string forever.
+      clean.psa = coerce(form.psa || {}, DEFAULT_OFFER_SETTINGS.psa);
       const r = await saveSettings(clean);
       onSaved?.(r.settings);
       setForm(effectiveSettings(r.settings));
@@ -547,9 +603,51 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <h2 className="mb-1 text-sm font-bold">Purchase &amp; sale contract</h2>
+        <h2 className="mb-1 text-sm font-bold">Purchase &amp; sale agreement (the official offer)</h2>
         <p className="mb-3 text-xs text-slate-500">
-          Clause language for the generated contract (New Offer → result → Generate purchase contract).
+          Standing values for the Washington PSA — the signable agreement generated from an offer
+          (New Offer → result → <b>Generate Offer PSA</b>). These are the parts that are the same on
+          every deal; price, dates and the legal description are filled in per offer. The clause
+          language itself is fixed: its section numbers are cross-referenced inside the document, so
+          it isn't edited here. Not legal advice — have a Washington real estate attorney read the
+          document once before you send it.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <Txt label="Buyer entity" value={form.psa.buyerEntity} onChange={setPsa("buyerEntity")}
+            placeholder="Shep Flips Holdings LLC" />
+          <Txt label="Entity formed in" value={form.psa.buyerEntityState} onChange={setPsa("buyerEntityState")}
+            placeholder="Washington" />
+          <Txt label="Title / escrow company" value={form.psa.titleCompany} onChange={setPsa("titleCompany")}
+            placeholder="Rainier Title" />
+          <Txt label="Escrow officer" value={form.psa.titleOfficer} onChange={setPsa("titleOfficer")} />
+          <Txt label="Escrow phone" value={form.psa.titlePhone} onChange={setPsa("titlePhone")} />
+          <Txt label="Hard money lender" value={form.psa.lenderName} onChange={setPsa("lenderName")}
+            placeholder="Named on the proof-of-funds letter" />
+          <Num label="Feasibility period" suffix="days" value={form.psa.feasibilityDays} onChange={setPsa("feasibilityDays")} />
+          <Num label="Closing after approval" suffix="days" value={form.psa.closingDays} onChange={setPsa("closingDays")} />
+          <Num label="Accept changed terms within" suffix="business days" value={form.psa.counterDays} onChange={setPsa("counterDays")} />
+        </div>
+        <div className="mt-4 grid grid-cols-1 gap-3">
+          <ExhibitField label="Exhibit — earnest money check" kind="emdCheck"
+            value={form.psa.emdCheckUrl} onChange={setPsa("emdCheckUrl")}
+            hint="A scan or photo of the check made out to the closing agent. PDF, JPEG or PNG, up to 8MB." />
+          <ExhibitField label="Exhibit — proof of funds letter" kind="proofOfFunds"
+            value={form.psa.proofOfFundsUrl} onChange={setPsa("proofOfFundsUrl")}
+            hint="Your lender's POF letter. Attached and cited only when a lender is named above." />
+        </div>
+        <p className="mt-3 text-xs text-slate-500">
+          Exhibits are read fresh each time an agreement is generated, so replacing a file here updates
+          every agreement you produce afterwards. Leave one blank and the agreement quietly drops both
+          its page and the sentence that cites it.
+        </p>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-1 text-sm font-bold">Generic purchase contract (non-WA)</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Clause language for the generic, multi-state contract (New Offer → result → Generate purchase
+          contract). The Washington agreement above is the one to send on a WA listing; this is the
+          fallback for everything else.
           Clauses are numbered by their position here, so reference other clauses by name ("under the
           Inspection Period paragraph"), never by number. Not legal advice — have your attorney review
           your template.

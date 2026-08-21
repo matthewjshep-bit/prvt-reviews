@@ -327,7 +327,8 @@ export function createOfferPagePublicRouter() {
       const def = OFFER_DOC_KINDS[req.params.kind];
       // Double gate: a known kind AND one this page actually froze. Turning
       // documents off, or refreshing off an offer that lost a PDF, kills the
-      // URL. The contract and assignment PDFs have no key here at all.
+      // URL. The generic contract and the assignment PDF have no key here at
+      // all; the PSA does, because the listing agent is its audience.
       const offered = (room.snapshot?.documents || []).some((d) => d.key === req.params.kind);
       if (!def || !offered) return gone(res);
 

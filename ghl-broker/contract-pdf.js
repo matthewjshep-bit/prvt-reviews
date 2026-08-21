@@ -5,66 +5,19 @@
 // Specific Terms summary table, numbered General Terms clauses, signature
 // blocks, per-page footer with initials lines — with entirely original text.
 //
-// pdf-lib does no text layout of its own: wrapping, hanging indents, and page
-// breaks are all manual here, measured with font.widthOfTextAtSize.
+// pdf-lib does no text layout of its own: hanging indents and page breaks are
+// manual here; wrapping, page geometry and WinAnsi safety come from pdf-text.js.
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { CONTRACT_DISCLAIMER, CONTRACT_PREAMBLE, CONTRACT_TOKENS, mergeTokens } from "./shared/contract-template.js";
-
-const PAGE_W = 612; // US Letter, points
-const PAGE_H = 792;
-const MARGIN = 54;
-const CONTENT_W = PAGE_W - MARGIN * 2;
-const FOOTER_Y = 36; // baseline of the footer line
-const FOOTER_RESERVE = 24; // content must stay this far above the footer
+import {
+  PAGE_W, PAGE_H, MARGIN, CONTENT_W, FOOTER_Y, FOOTER_RESERVE,
+  sanitizeWinAnsi, wrapText,
+} from "./pdf-text.js";
 
 const INK = rgb(0.1, 0.1, 0.12);
 const MUTED = rgb(0.42, 0.42, 0.46);
 const RULE = rgb(0.78, 0.78, 0.8);
-
-// pdf-lib's standard fonts are WinAnsi-encoded and THROW on characters outside
-// it (emoji, most non-Latin scripts). Map the common typographic characters to
-// ASCII and drop the rest to "?" so user-typed text can never crash a render.
-const CHAR_MAP = {
-  "‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"',
-  "–": "-", "—": "--", "―": "--", "…": "...", " ": " ",
-  "•": "-", "·": "-", "‐": "-", "‑": "-", "−": "-",
-};
-function sanitizeWinAnsi(str) {
-  return String(str || "")
-    .replace(/[‘’‚“”„–—―… •·‐‑−]/g, (c) => CHAR_MAP[c])
-    .replace(/[^\n\x20-\x7e]/g, "?");
-}
-
-// Greedy word wrap. Splits on \n first (blank lines survive as "" entries so
-// paragraph spacing is preserved); hard-breaks any single word wider than
-// maxWidth (long underscore blanks, pasted URLs).
-function wrapText(text, font, size, maxWidth) {
-  const lines = [];
-  for (const para of String(text).split("\n")) {
-    if (!para.trim()) { lines.push(""); continue; }
-    let line = "";
-    for (let word of para.split(/\s+/).filter(Boolean)) {
-      while (font.widthOfTextAtSize(word, size) > maxWidth) {
-        // Peel off the widest prefix that fits (flushing any pending line first).
-        if (line) { lines.push(line); line = ""; }
-        let cut = word.length - 1;
-        while (cut > 1 && font.widthOfTextAtSize(word.slice(0, cut), size) > maxWidth) cut--;
-        lines.push(word.slice(0, cut));
-        word = word.slice(cut);
-      }
-      const candidate = line ? `${line} ${word}` : word;
-      if (font.widthOfTextAtSize(candidate, size) > maxWidth) {
-        lines.push(line);
-        line = word;
-      } else {
-        line = candidate;
-      }
-    }
-    lines.push(line);
-  }
-  return lines;
-}
 
 // `layout` customizes the document shell for other contract types (title,
 // preamble, Specific Terms rows, token list for blank widths, signature roles,

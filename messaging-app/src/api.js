@@ -64,6 +64,11 @@ const post = (path, body, method = "POST") =>
 export const getSettings = () =>
   fetch(`${API_BASE}/api/offers/settings?${locq()}`).then(j).then((r) => r.settings);
 export const saveSettings = (settings) => post(`/api/offers/settings`, { settings }, "PUT");
+// Store a standing PSA exhibit (earnest money check copy / proof of funds
+// letter) and get back the URL to save into settings.psa. `kind` is
+// "emdCheck" or "proofOfFunds".
+export const uploadPsaExhibit = (kind, dataUri) =>
+  post(`/api/offers/settings/exhibit`, { kind, dataUri });
 
 /* ---------- contacts ---------- */
 export const searchContacts = (query) =>
@@ -196,6 +201,10 @@ export const setOfferStatus = (id, status, note = "") =>
 // per-id so one failure doesn't hide the rest.
 export const setOfferStatusBulk = (ids, status, note = "") =>
   post(`/api/offers/status`, { ids, status, note }, "PATCH");
+// The Washington purchase & sale agreement — the seller-facing "official
+// offer". `fields.mode` is "standard" or "short_sale".
+export const generatePsa = (id, fields) =>
+  post(`/api/offers/${encodeURIComponent(id)}/psa`, { fields });
 export const generateContract = (id, fields) =>
   post(`/api/offers/${encodeURIComponent(id)}/contract`, { fields });
 export const generateAssignment = (id, fields) =>

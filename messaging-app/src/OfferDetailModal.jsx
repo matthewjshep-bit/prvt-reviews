@@ -15,7 +15,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Briefcase, ChevronLeft, ChevronRight, ExternalLink, FileText, Link2, Pencil, Send, X,
+  Briefcase, ChevronLeft, ChevronRight, ExternalLink, FileSignature, FileText, Link2, Pencil, Send, X,
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { OFFER_STATUS } from "@shared/offer-status.js";
@@ -128,7 +128,7 @@ function AgentRail({ offers, currentId, contactName, onSelect }) {
 
 export default function OfferDetailModal({
   offer, siblings = [], contactName,
-  onClose, onSelect, onEdit, onSend, onContract, onAssignment, onNetSheet,
+  onClose, onSelect, onEdit, onSend, onPsa, onContract, onAssignment, onNetSheet,
   onPromote, onDealNav, onOfferPage,
 }) {
   const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
@@ -326,13 +326,18 @@ export default function OfferDetailModal({
                       <FileText size={15} /> Image
                     </a>
                   )}
+                  {offer.psaPdfUrl && (
+                    <a href={offer.psaPdfUrl} target="_blank" rel="noreferrer" className={DOC_LINK}>
+                      <FileSignature size={15} /> Offer PSA
+                    </a>
+                  )}
                   {offer.contractPdfUrl && (
                     <a href={offer.contractPdfUrl} target="_blank" rel="noreferrer" className={DOC_LINK}>
                       <FileText size={15} /> Contract PDF
                     </a>
                   )}
                 </div>
-                {!draft && (onOfferPage || onContract || onNetSheet) && (
+                {!draft && (onOfferPage || onPsa || onContract || onNetSheet) && (
                   <div className="mt-2.5 flex flex-wrap gap-2 border-t border-slate-100 pt-2.5">
                     {onOfferPage && (
                       <button type="button" onClick={() => onOfferPage(offer)} className={DOC_LINK}
@@ -340,9 +345,16 @@ export default function OfferDetailModal({
                         <Link2 size={15} /> Agent offer page
                       </button>
                     )}
+                    {onPsa && (
+                      <button type="button" onClick={() => onPsa(offer)}
+                        className="flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800"
+                        title="The signable Washington purchase & sale agreement — the official offer, not a letter of intent">
+                        <FileSignature size={15} /> {offer.psaPdfUrl ? "Update offer PSA" : "Generate offer PSA"}
+                      </button>
+                    )}
                     {onContract && (
                       <button type="button" onClick={() => onContract(offer)} className={DOC_LINK}
-                        title="Generate or update the purchase & sale contract">
+                        title="Generate or update the generic purchase & sale contract">
                         <FileText size={15} /> {offer.contractPdfUrl ? "Update contract" : "Generate contract"}
                       </button>
                     )}

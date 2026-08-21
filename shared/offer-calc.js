@@ -120,6 +120,22 @@ export const DEFAULT_OFFER_SETTINGS = {
     name: "", tagline: "", signer: "", phone: "", email: "",
     wordmark: "", brandPrimary: "", brandAccent: "", brandLinks: [], logoUrl: "",
   },
+  // Standing defaults for the Purchase & Sale Agreement (the seller-facing
+  // "official offer"). These are the fields that are the same on every offer —
+  // the per-deal blanks live on the offer itself. The two exhibit URLs point at
+  // the earnest money check copy and the lender proof-of-funds letter; when one
+  // is blank the PDF drops both the page AND the reference to it, so an offer
+  // never cites an exhibit that isn't in the envelope.
+  psa: {
+    buyerEntity: "",
+    buyerEntityState: "Washington",
+    titleCompany: "", titleOfficer: "", titlePhone: "",
+    lenderName: "",
+    feasibilityDays: 10,
+    closingDays: 21,
+    counterDays: 5,
+    emdCheckUrl: "", proofOfFundsUrl: "",
+  },
 };
 
 const num = (v, fallback = 0) => {
@@ -242,7 +258,10 @@ export function netComparison(cashAmount, s = {}) {
 // Merge partial settings over the defaults (one level deep + company).
 export function effectiveSettings(overrides = {}) {
   const s = { ...DEFAULT_OFFER_SETTINGS, ...(overrides || {}) };
+  // The nested blobs need their own merge — a saved partial would otherwise
+  // replace the defaults wholesale and blank out keys it never mentioned.
   s.company = { ...DEFAULT_OFFER_SETTINGS.company, ...((overrides || {}).company || {}) };
+  s.psa = { ...DEFAULT_OFFER_SETTINGS.psa, ...((overrides || {}).psa || {}) };
   return s;
 }
 

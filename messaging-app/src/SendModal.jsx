@@ -16,6 +16,7 @@ const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text
 
 const DOC_OPTIONS = [
   { key: "pdf", label: "Offer letter (PDF)", urlKey: "pdfUrl" },
+  { key: "psa", label: "Purchase & sale agreement", urlKey: "psaPdfUrl" },
   { key: "scope", label: "Rehab scope of work", urlKey: "scopePdfUrl" },
   { key: "comps", label: "Comparable sales analysis", urlKey: "compsPdfUrl" },
   { key: "netsheet", label: "Seller net comparison", urlKey: "netSheetPdfUrl" },

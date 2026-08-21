@@ -22,6 +22,7 @@ import {
 } from "./api.js";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
+import PsaModal from "./PsaModal.jsx";
 import AssignmentModal from "./AssignmentModal.jsx";
 import NetSheetModal from "./NetSheetModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
@@ -76,6 +77,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const [sending, setSending] = useState(null);
+  const [psaing, setPsaing] = useState(null); // offer open in PsaModal (the WA purchase & sale agreement)
   const [contracting, setContracting] = useState(null); // offer open in ContractModal
   const [assigning, setAssigning] = useState(null); // offer open in AssignmentModal
   const [netSheeting, setNetSheeting] = useState(null); // offer open in NetSheetModal
@@ -186,6 +188,13 @@ export default function OffersHistory({ onEdit, onDeal }) {
     const patch = (o) => (o && o.id === id ? { ...o, sends } : o);
     setOffers((list) => (list || []).map(patch));
     setSending(patch);
+  }
+
+  function openPsa(offer) {
+    setPsaing(offer);
+    // Buyer entity, title company and the exhibit files all prefill from
+    // settings.psa; fetch once, best-effort.
+    if (!settings) getSettings().then(setSettings).catch(() => {});
   }
 
   function openContract(offer) {
@@ -491,6 +500,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
             onClose={() => setSelectedId(null)}
             onEdit={(o) => { setSelectedId(null); onEdit?.(o); }}
             onSend={(o) => setSending(o)}
+            onPsa={openPsa}
             onContract={openContract}
             onAssignment={openAssignment}
             onNetSheet={openNetSheet}
@@ -503,6 +513,8 @@ export default function OffersHistory({ onEdit, onDeal }) {
       {offerPaging && <OfferPageModal offer={offerPaging} onClose={() => setOfferPaging(null)} />}
       {enriching && <EnrichModal contactId={enriching.contactId} contactName={enriching.contactName}
         defaultType="agent" onClose={() => setEnriching(null)} />}
+      {psaing && <PsaModal offer={psaing} settings={settings}
+        onClose={() => setPsaing(null)} onGenerated={patchOffer} />}
       {contracting && <ContractModal offer={contracting} settings={settings}
         onClose={() => setContracting(null)} onGenerated={patchOffer} />}
       {assigning && <AssignmentModal offer={assigning} settings={settings}

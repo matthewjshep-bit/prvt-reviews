@@ -61,10 +61,13 @@ export function normalizeOfferSections(input) {
  * snapshot
  * ============================================================= */
 
-// Documents an agent may open. The contract and assignment PDFs are ours and
-// are absent by construction — there is no key here that maps to them.
+// Documents an agent may open. The PSA is here on purpose — it is the
+// seller-facing offer, and putting it in front of the listing broker is the
+// whole reason it exists. The generic contract and the assignment PDF are NOT:
+// one is an internal template, the other goes to the end buyer.
 export const OFFER_DOC_KINDS = {
   offer: { docKind: "pdf", urlKey: "pdfUrl", label: "The written offer" },
+  psa: { docKind: "psapdf", urlKey: "psaPdfUrl", label: "Purchase & sale agreement" },
   comps: { docKind: "compspdf", urlKey: "compsPdfUrl", label: "Comparable sales analysis" },
   scope: { docKind: "scopepdf", urlKey: "scopePdfUrl", label: "Renovation scope of work" },
   netsheet: { docKind: "netsheetpdf", urlKey: "netSheetPdfUrl", label: "Seller net comparison" },

@@ -2,7 +2,7 @@
 // offers → generate the document and attach everything to the GHL contact.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronUp, ExternalLink, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ExternalLink, FileSignature, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
   addContactNote, createOffer, getContactDetail, getContactNotes, ghlContactUrl, listOffers,
@@ -13,6 +13,7 @@ import RehabPane from "./RehabPane.jsx";
 import NotesPanel from "./NotesPanel.jsx";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
+import PsaModal from "./PsaModal.jsx";
 import AssignmentModal from "./AssignmentModal.jsx";
 import NetSheetModal from "./NetSheetModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
@@ -612,7 +613,8 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const [result, setResult] = useState(null);     // { offer, ghl, warnings }
   const [error, setError] = useState("");
   const [sendOpen, setSendOpen] = useState(false); // SendModal (text and/or email via GHL)
-  const [contractOpen, setContractOpen] = useState(false); // ContractModal (purchase & sale PDF)
+  const [contractOpen, setContractOpen] = useState(false); // ContractModal (generic contract PDF)
+  const [psaOpen, setPsaOpen] = useState(false); // PsaModal (the signable WA purchase & sale agreement)
   const [assignmentOpen, setAssignmentOpen] = useState(false); // AssignmentModal (dispositions PDF)
   const [netSheetOpen, setNetSheetOpen] = useState(false); // NetSheetModal (seller net comparison)
   const [offerPageOpen, setOfferPageOpen] = useState(false); // OfferPageModal (agent-facing page)
@@ -964,6 +966,12 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
               <FileText size={16} /> Open image version
             </a>
+            {offer.psaPdfUrl && (
+              <a href={offer.psaPdfUrl} target="_blank" rel="noreferrer"
+                className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
+                <FileSignature size={16} /> Open Offer PSA (PDF)
+              </a>
+            )}
             {offer.contractPdfUrl && (
               <a href={offer.contractPdfUrl} target="_blank" rel="noreferrer"
                 className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
@@ -974,6 +982,11 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               className="flex w-full items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50"
               title="One-pager: our offer with no buyer's commission vs. the list price needed to net the same">
               <FileText size={16} /> {offer.netSheetPdfUrl ? "Seller net comparison" : "Generate seller net comparison"}
+            </button>
+            <button type="button" onClick={() => setPsaOpen(true)}
+              className="flex w-full items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
+              title="The signable Washington purchase & sale agreement — an official offer the listing broker can take to the seller, not a letter of intent">
+              <FileSignature size={16} /> {offer.psaPdfUrl ? "Update Offer PSA" : "Generate Offer PSA"}
             </button>
             <button type="button" onClick={() => setContractOpen(true)}
               className="flex w-full items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
@@ -1022,6 +1035,14 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
             offer={offer}
             onClose={() => setSendOpen(false)}
             onSent={(id, sends) => setLastSend(sends?.[sends.length - 1] || { channels: [] })}
+          />
+        )}
+        {psaOpen && (
+          <PsaModal
+            offer={offer}
+            settings={effSettings}
+            onClose={() => setPsaOpen(false)}
+            onGenerated={(o) => setResult((r) => ({ ...r, offer: o }))}
           />
         )}
         {contractOpen && (
@@ -1315,6 +1336,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         onClose={() => setPeek(null)}
         onEdit={onOpenOffer ? (o) => { setPeek(null); if (o.id !== fromOffer?.id) onOpenOffer(o); } : undefined}
         onSend={(o) => setPeekSub({ kind: "send", offer: o })}
+        onPsa={(o) => setPeekSub({ kind: "psa", offer: o })}
         onContract={(o) => setPeekSub({ kind: "contract", offer: o })}
         onAssignment={(o) => setPeekSub({ kind: "assignment", offer: o })}
         onNetSheet={(o) => setPeekSub({ kind: "netsheet", offer: o })}
@@ -1325,6 +1347,10 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     {peekSub?.kind === "send" && (
       <SendModal offer={peekSub.offer} onClose={() => setPeekSub(null)}
         onSent={(id, sends, patch) => patchPeek({ ...peekSub.offer, sends, ...(patch || {}) })} />
+    )}
+    {peekSub?.kind === "psa" && (
+      <PsaModal offer={peekSub.offer} settings={effSettings}
+        onClose={() => setPeekSub(null)} onGenerated={patchPeek} />
     )}
     {peekSub?.kind === "contract" && (
       <ContractModal offer={peekSub.offer} settings={effSettings}

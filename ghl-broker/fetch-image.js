@@ -136,11 +136,20 @@ export function sniffImageType(bytes) {
   return null;
 }
 
+export function sniffPdf(bytes) {
+  return bytes.slice(0, 5).toString("ascii") === "%PDF-" ? "application/pdf" : null;
+}
+
 /**
  * Fetch an image URL safely and return { bytes, contentType, url }.
  * Throws an Error with .http set on every rejection path.
+ *
+ * `allowPdf` widens the accepted types to PDF as well, for the PSA exhibits
+ * (a proof-of-funds letter is almost always a PDF). Everything else — the SSRF
+ * guards, the redirect vetting, the caps — is deliberately shared: a second
+ * fetcher would mean a second place to get those wrong.
  */
-export async function fetchRemoteImage(rawUrl, { maxBytes = DEFAULT_MAX_BYTES, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export async function fetchRemoteImage(rawUrl, { maxBytes = DEFAULT_MAX_BYTES, timeoutMs = DEFAULT_TIMEOUT_MS, allowPdf = false } = {}) {
   let url = parseHttpUrl(rawUrl);
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -152,7 +161,7 @@ export async function fetchRemoteImage(rawUrl, { maxBytes = DEFAULT_MAX_BYTES, t
         redirect: "manual", // we vet each hop ourselves
         signal: AbortSignal.timeout(timeoutMs),
         headers: {
-          Accept: "image/*",
+          Accept: allowPdf ? "application/pdf,image/*" : "image/*",
           // Some CDNs 403 an empty UA; identify honestly rather than spoof.
           "User-Agent": "shepflips-offer-broker/1.0 (property photo import)",
         },
@@ -187,8 +196,9 @@ export async function fetchRemoteImage(rawUrl, { maxBytes = DEFAULT_MAX_BYTES, t
     if (buf.length > maxBytes) throw bad("that image is too large (max 12MB)", 413);
     if (!buf.length) throw bad("that link returned an empty file");
 
-    const contentType = sniffImageType(buf);
+    const contentType = sniffImageType(buf) || (allowPdf ? sniffPdf(buf) : null);
     if (!contentType) {
+      if (allowPdf) throw bad("that link isn't a PDF or an image");
       // Overwhelmingly this is an album/gallery PAGE rather than an image.
       throw bad(
         "that link isn't a direct image — it looks like a web page. Right-click the photo itself and copy the image address, or save it and upload the file"
