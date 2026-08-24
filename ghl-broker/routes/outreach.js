@@ -186,7 +186,13 @@ export default function createOutreachRouter({ resolveLocation }) {
     const priceBandPct = Math.min(75, Math.max(0, parseInt(body.priceBandPct, 10) || 0));
     const distressOnly = body.distressOnly !== false;
     const staleDom = Math.min(365, Math.max(1, parseInt(body.staleDom, 10) || 45));
-    return { zips, county, city, state, daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom };
+    // Newer builds are never fixers — maxYearBuilt drops anything built after
+    // it. Listings with no yearBuilt are KEPT (RentCast omits it on plenty of
+    // older homes; dropping them would cost real leads) and counted in the
+    // warning so the omission is visible.
+    const rawMaxYear = parseInt(body.maxYearBuilt ?? settings.outreachMaxYearBuilt, 10);
+    const maxYearBuilt = rawMaxYear >= 1800 && rawMaxYear <= 2100 ? rawMaxYear : 0;
+    return { zips, county, city, state, daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt };
   }
 
   async function runPull(locationId, client, body) {
@@ -194,7 +200,7 @@ export default function createOutreachRouter({ resolveLocation }) {
     const apiKey = String(settings.rentcastApiKey || "").trim();
     if (!apiKey) throw Object.assign(new Error("RentCast API key not configured — add it in Settings"), { http: 400 });
 
-    const { zips, county, city, state, daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom } =
+    const { zips, county, city, state, daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt } =
       pullParams(body, settings);
     // Precedence: zips (one query each) → county (one circular query around
     // the county centroid, post-filtered to the county line) → city/state.
@@ -290,6 +296,19 @@ export default function createOutreachRouter({ resolveLocation }) {
       : 0;
 
     let pool = listings;
+    if (maxYearBuilt) {
+      const before = pool.length;
+      let unknownYear = 0;
+      pool = pool.filter((l) => {
+        const y = Number(l.yearBuilt) || 0;
+        if (!y) { unknownYear++; return true; }
+        return y <= maxYearBuilt;
+      });
+      warnings.push(
+        `year built filter (${maxYearBuilt} or older) kept ${pool.length} of ${before}` +
+        (unknownYear ? ` — ${unknownYear} with no year built were kept` : "")
+      );
+    }
     if (distressOnly) {
       const before = pool.length;
       pool = pool.filter((l) => distressSignals(l, { medianPpsf, staleDom }).any);
@@ -369,7 +388,7 @@ export default function createOutreachRouter({ resolveLocation }) {
           ghl: stored?.doc?.ghl || { contactId: null, matchedBy: null, checkedAt: null },
           hook: {
             listingKey: hook.listingKey, address: hook.address, price: hook.price,
-            dom: hook.daysOnMarket, propertyType: hook.propertyType,
+            dom: hook.daysOnMarket, propertyType: hook.propertyType, yearBuilt: hook.yearBuilt,
             score: hook.score, components: hook.components,
           },
           listingCount: g.listings.length,
@@ -420,7 +439,7 @@ export default function createOutreachRouter({ resolveLocation }) {
     await store.upsertOutreachAgents(locationId, batch.id, agentRows.map(({ agentKey, doc }) => ({ agentKey, doc })));
     await store.recordOutreachPull(locationId, {
       batchId: batch.id,
-      params: { targets, ...(countyMeta ? { county: countyMeta.name } : {}), daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom },
+      params: { targets, ...(countyMeta ? { county: countyMeta.name } : {}), daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt },
       requestsUsed, cached, listingsFetched: listings.length, listingsKept: pool.length,
       agentsTotal: agentRows.length, agentsNew, medianPpsf: Math.round(medianPpsf),
       medianPrice: Math.round(medianPrice),

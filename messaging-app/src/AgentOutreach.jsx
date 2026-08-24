@@ -159,6 +159,7 @@ export default function AgentOutreach({ settings }) {
   const [daysOld, setDaysOld] = useState("");
   const [propertyType, setPropertyType] = useState("Single Family");
   const [priceBandPct, setPriceBandPct] = useState("0"); // 0 = off
+  const [minAgeYears, setMinAgeYears] = useState("0"); // skip builds newer than this many years, 0 = off
   const [distressOnly, setDistressOnly] = useState(true);
   const [staleDom, setStaleDom] = useState("45"); // DOM at which a listing counts as stale
   const [pulling, setPulling] = useState(false);
@@ -272,6 +273,9 @@ export default function AgentOutreach({ settings }) {
         daysOld: parseInt(daysOld, 10) || undefined,
         propertyType,
         priceBandPct: parseInt(priceBandPct, 10) || 0,
+        maxYearBuilt: parseInt(minAgeYears, 10)
+          ? new Date().getFullYear() - parseInt(minAgeYears, 10)
+          : undefined,
         distressOnly,
         staleDom: parseInt(staleDom, 10) || 45,
         ...(batchId ? { batchId } : {}),
@@ -517,6 +521,19 @@ export default function AgentOutreach({ settings }) {
                 </select>
               </div>
               <div className="col-span-2 sm:col-span-1">
+                <label className={LABEL_CLS} title="Drop new construction — keeps only homes at least this old. Filtered after the pull (RentCast can't filter on year built), so it doesn't save requests. Listings with no year built are kept.">
+                  Home age
+                </label>
+                <select className={INPUT_CLS} value={minAgeYears} onChange={(e) => setMinAgeYears(e.target.value)}>
+                  <option value="0">Any age</option>
+                  <option value="5">5+ years old (built {new Date().getFullYear() - 5} or earlier)</option>
+                  <option value="10">10+ years old (built {new Date().getFullYear() - 10} or earlier)</option>
+                  <option value="20">20+ years old (built {new Date().getFullYear() - 20} or earlier)</option>
+                  <option value="30">30+ years old (built {new Date().getFullYear() - 30} or earlier)</option>
+                  <option value="50">50+ years old (built {new Date().getFullYear() - 50} or earlier)</option>
+                </select>
+              </div>
+              <div className="col-span-2 sm:col-span-1">
                 <label className={LABEL_CLS} title="A listing counts as distressed once it has sat this many days on market (one of the three distress signals)">
                   Stale after (days)
                 </label>
@@ -731,6 +748,7 @@ export default function AgentOutreach({ settings }) {
                           <div className="text-xs text-slate-500">
                             {fmtPrice(a.hook?.price)} · {a.hook?.dom != null ? `${a.hook.dom} DOM` : "DOM —"}
                             {a.hook?.propertyType ? ` · ${a.hook.propertyType}` : ""}
+                            {a.hook?.yearBuilt ? ` · built ${a.hook.yearBuilt}` : ""}
                           </div>
                         </td>
                         <td className="sticky right-0 whitespace-nowrap bg-white px-3 py-2.5 text-right group-hover:bg-slate-50">
