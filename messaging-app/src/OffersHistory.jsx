@@ -86,7 +86,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
   const [offerPaging, setOfferPaging] = useState(null); // offer open in OfferPageModal
   const [settings, setSettings] = useState(null); // fetched lazily for contract prefills
   const [q, setQ] = useState("");
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState("waiting"); // open on the offers you're owed a reply on
   const [expanded, setExpanded] = useState(() => new Set()); // group keys open
   const [picked, setPicked] = useState(() => new Set()); // offer ids selected for bulk
   const [statusBusy, setStatusBusy] = useState(null); // offer id whose status is in flight
