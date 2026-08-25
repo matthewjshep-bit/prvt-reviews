@@ -10,7 +10,7 @@
 //   POST   /api/offers/preview               render document, return data URL
 //   GET    /api/offers/contacts?query=       GHL contact typeahead
 //   POST   /api/offers                       create: calc + document + attach
-//   GET    /api/offers?contact_id=&limit=    list saved offers
+//   GET    /api/offers?contact_id=&limit=&lean=  list saved offers (lean=1 → table rows)
 //   GET    /api/offers/:id
 //   DELETE /api/offers/:id
 //   PATCH  /api/offers/:id/status            record an offer outcome (sent/countered/no_response/passed/accepted)
@@ -2056,8 +2056,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const { locationId } = resolveLocation(req);
       const contactId = String(req.query.contact_id || "") || null;
-      const limit = Math.min(200, parseInt(req.query.limit, 10) || 50);
-      res.json({ offers: await store.listOffers(locationId, { contactId, limit }) });
+      // A lean row is ~1KB against ~9KB for the whole document, so the history
+      // page can ask for the location's entire book in one call. Full docs keep
+      // the cap they always had — that ceiling is why the page silently showed
+      // only its newest 100 offers, and nothing should hit it by accident again.
+      const lean = req.query.lean === "1" || req.query.lean === "true";
+      const limit = Math.min(lean ? 2000 : 200, parseInt(req.query.limit, 10) || 50);
+      res.json({ offers: await store.listOffers(locationId, { contactId, limit, lean }) });
     } catch (err) { fail(res, err); }
   });
 

@@ -11,9 +11,38 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dbEnabled, query, migrate } from "./db.js";
+import { OFFER_LIST_FIELDS, toListOffer } from "./shared/offer-status.js";
 
 const nowIso = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
+
+/* ============================================================= *
+ * Offer list query
+ * ============================================================= */
+
+// The offers list, built as { text, params } in one place so it can be
+// exercised without a database (see offer-list-query.test.mjs).
+//
+// `lean` trims each doc to the table's fields (OFFER_LIST_FIELDS) in SQL, so
+// the weight never leaves Postgres: ~1KB a row instead of ~9KB. That trim is
+// what makes "load every offer for the location" affordable, which is the
+// difference between the history page showing your book and showing the newest
+// hundred rows of it.
+export function offerListQuery({ locationId, contactId = null, limit = 50, lean = false }) {
+  const params = [locationId];
+  const ph = (v) => `$${params.push(v)}`; // bind v, return its placeholder
+  const col = lean
+    ? `coalesce((select jsonb_object_agg(k, v) from jsonb_each(doc) as e(k, v)
+                  where k = any(${ph(OFFER_LIST_FIELDS)}::text[])), '{}'::jsonb) as doc`
+    : "doc";
+  const where = contactId ? ` and contact_id = ${ph(contactId)}` : "";
+  return {
+    text: `select ${col} from offers
+            where location_id = $1${where}
+            order by created_at desc limit ${ph(limit)}`,
+    params,
+  };
+}
 
 /* ============================================================= *
  * Postgres backend
@@ -52,17 +81,15 @@ const pgStore = {
     );
     return full;
   },
-  async listOffers(locationId, { contactId = null, limit = 50 } = {}) {
-    const { rows } = contactId
-      ? await query(
-          `select doc from offers where location_id = $1 and contact_id = $2 order by created_at desc limit $3`,
-          [locationId, contactId, limit]
-        )
-      : await query(
-          `select doc from offers where location_id = $1 order by created_at desc limit $2`,
-          [locationId, limit]
-        );
-    return rows.map((r) => r.doc);
+  // `lean` trims each doc to the table's fields (see OFFER_LIST_FIELDS) in SQL,
+  // so the weight never leaves Postgres: ~1KB a row instead of ~9KB. That trim
+  // is what makes "load every offer for the location" affordable, which is the
+  // difference between the history page showing your book and showing the
+  // newest hundred rows of it.
+  async listOffers(locationId, { contactId = null, limit = 50, lean = false } = {}) {
+    const { text, params } = offerListQuery({ locationId, contactId, limit, lean });
+    const { rows } = await query(text, params);
+    return lean ? rows.map((r) => toListOffer(r.doc)) : rows.map((r) => r.doc);
   },
   // Offers promoted to deals (doc has a `deal` key), newest deal first.
   async listDeals(locationId, { limit = 200 } = {}) {
@@ -757,12 +784,13 @@ const fileStore = (() => {
       persist();
       return full;
     },
-    async listOffers(locationId, { contactId = null, limit = 50 } = {}) {
+    async listOffers(locationId, { contactId = null, limit = 50, lean = false } = {}) {
       ensure();
-      return Object.values(data.offers)
+      const rows = Object.values(data.offers)
         .filter((o) => o.locationId === locationId && (!contactId || o.contactId === contactId))
         .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit);
+      return lean ? rows.map(toListOffer) : rows;
     },
     async listDeals(locationId, { limit = 200 } = {}) {
       ensure();

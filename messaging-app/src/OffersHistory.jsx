@@ -15,9 +15,9 @@
 import React, { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { DEAD_STATUSES, OFFER_STATUS, effectiveStatus } from "@shared/offer-status.js";
+import { DEAD_STATUSES, OFFER_STATUS, effectiveStatus, toListOffer } from "@shared/offer-status.js";
 import {
-  deleteOffer, getSettings, ghlContactUrl, listOffers, promoteDeal,
+  deleteOffer, getOffer, getSettings, ghlContactUrl, listOffers, promoteDeal,
   setOfferStatus, setOfferStatusBulk,
 } from "./api.js";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
@@ -75,7 +75,8 @@ const LIVE_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
 export default function OffersHistory({ onEdit, onDeal }) {
   const [offers, setOffers] = useState(null);
   const [error, setError] = useState("");
-  const [selectedId, setSelectedId] = useState(null);
+  const [selected, setSelected] = useState(null); // the OPEN offer, hydrated (see openDetail)
+  const [opening, setOpening] = useState(null);   // offer id being hydrated
   const [sending, setSending] = useState(null);
   const [psaing, setPsaing] = useState(null); // offer open in PsaModal (the WA purchase & sale agreement)
   const [contracting, setContracting] = useState(null); // offer open in ContractModal
@@ -100,8 +101,13 @@ export default function OffersHistory({ onEdit, onDeal }) {
     });
   }
 
+  // Every offer for the location, as lean table rows. It used to be the newest
+  // 100 whole documents, which silently hid everything older than the cap —
+  // agents, passed offers, even live deals — from the chips, the search box and
+  // the KPI strip alike. The row is ~1KB, so the whole book fits; a fat field
+  // is fetched on demand by hydrate().
   useEffect(() => {
-    listOffers({ limit: 100 })
+    listOffers({ limit: 2000, lean: true })
       .then(setOffers)
       .catch((e) => setError(e.message));
   }, []);
@@ -111,16 +117,39 @@ export default function OffersHistory({ onEdit, onDeal }) {
   // can't see. Same rule Agent Outreach uses.
   useEffect(() => { setPicked(new Set()); }, [q, filter]);
 
-  // One patcher for every copy of an offer we're holding.
+  // One patcher for every copy of an offer we're holding. The table keeps the
+  // lean row it was loaded with; whatever is open keeps the whole document.
   function patchOffer(updated) {
     if (!updated) return;
     const patch = (o) => (o && o.id === updated.id ? updated : o);
-    setOffers((list) => (list || []).map(patch));
+    setOffers((list) => (list || []).map((o) => (o.id === updated.id ? toListOffer(updated) : o)));
+    setSelected(patch);
     setSending(patch);
     setContracting(patch);
     setAssigning(patch);
     setNetSheeting(patch);
   }
+
+  // Table rows are the lean projection. Anything that reads a fat field — the
+  // popout (calc.offers, statusHistory, scope), the editor (draft/snapshot),
+  // every generator — takes the real document, fetched here.
+  async function hydrate(o) {
+    if (!o?.listOnly) return o;
+    return (await getOffer(o.id)) || o;
+  }
+
+  // Open the popout / the editor on a row: fetch first, then hand over. The row
+  // marks itself busy meanwhile, so a slow fetch reads as loading, not as a
+  // dead click.
+  async function openWith(o, use) {
+    if (opening) return;
+    setOpening(o.id);
+    try { use(await hydrate(o)); }
+    catch (e) { setError(e.message); }
+    setOpening(null);
+  }
+  const openDetail = (o) => openWith(o, setSelected);
+  const openEdit = (o) => openWith(o, (full) => onEdit?.(full));
 
   async function remove(o) {
     const msg = o.deal
@@ -130,6 +159,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
     try {
       await deleteOffer(o.id);
       setOffers((list) => list.filter((x) => x.id !== o.id));
+      setSelected((sel) => (sel && sel.id === o.id ? null : sel));
       setPicked((prev) => { const n = new Set(prev); n.delete(o.id); return n; });
     } catch (e) { setError(e.message); }
   }
@@ -170,7 +200,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
     setError("");
     try {
       const r = await setOfferStatusBulk(ids, status);
-      const byId = new Map((r.offers || []).map((o) => [o.id, o]));
+      const byId = new Map((r.offers || []).map((o) => [o.id, toListOffer(o)]));
       setOffers((list) => (list || []).map((o) => byId.get(o.id) || o));
       setPicked(new Set());
       const failed = (r.results || []).filter((x) => !x.ok);
@@ -181,12 +211,15 @@ export default function OffersHistory({ onEdit, onDeal }) {
     setBulkBusy(false);
   }
 
-  // A live send appends to offer.sends and can advance the status — take the
-  // whole offer back when the server returns one.
-  function handleSent(id, sends, updated) {
-    if (updated) return patchOffer(updated);
-    const patch = (o) => (o && o.id === id ? { ...o, sends } : o);
+  // A live send appends to offer.sends and can advance the status. The server
+  // returns those as loose fields, not a whole offer, so they merge onto the
+  // copies we hold — keyed by the id the caller passes, since the patch itself
+  // carries none. (It used to be handed to patchOffer, which matches on
+  // patch.id and therefore quietly updated nothing at all.)
+  function handleSent(id, sends, fields) {
+    const patch = (o) => (o && o.id === id ? { ...o, sends, ...(fields || {}) } : o);
     setOffers((list) => (list || []).map(patch));
+    setSelected(patch);
     setSending(patch);
   }
 
@@ -241,8 +274,8 @@ export default function OffersHistory({ onEdit, onDeal }) {
   const activeFilter = FILTERS.find((f) => f.key === filter) || FILTERS[0];
   const shown = searched.filter(activeFilter.test);
 
-  // KPIs run over everything loaded, not the filtered view — they're the state
-  // of the business, not of the current query.
+  // KPIs run over every offer for the location, not the filtered view — they're
+  // the state of the business, not of the current query.
   const real = offers.filter((o) => o.status !== "draft");
   const monthAgo = Date.now() - 30 * 86400000;
   const recent = real.filter((o) => new Date(o.createdAt || 0).getTime() >= monthAgo).length;
@@ -403,10 +436,11 @@ export default function OffersHistory({ onEdit, onDeal }) {
                     const draft = o.status === "draft";
                     return (
               <tr key={o.id}
-                {...rowActivation(() => (draft ? onEdit?.(o) : setSelectedId(o.id)))}
+                {...rowActivation(() => (draft ? openEdit(o) : openDetail(o)))}
                 aria-label={`${o.address || "Offer"} — ${OFFER_STATUS[effectiveStatus(o)]?.label || ""}`}
+                aria-busy={opening === o.id || undefined}
                 className={`group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 ${
-                  picked.has(o.id) ? "bg-blue-50/60" : ""}`}>
+                  picked.has(o.id) ? "bg-blue-50/60" : ""} ${opening === o.id ? "opacity-60" : ""}`}>
                 <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                   {!draft && !o.deal && (
                     <input type="checkbox" checked={picked.has(o.id)} onChange={() => togglePick(o.id)}
@@ -466,7 +500,8 @@ export default function OffersHistory({ onEdit, onDeal }) {
                       <Send size={13} aria-hidden="true" /> Send
                     </button>
                   )}
-                  <button type="button" onClick={() => onEdit?.(o)} className={`${BTN} mr-1`}
+                  <button type="button" onClick={() => openEdit(o)} className={`${BTN} mr-1`}
+                    disabled={opening === o.id}
                     title={draft ? "Continue editing draft" : "Reopen as a new working copy"}>
                     <Pencil size={13} aria-hidden="true" /> Edit
                   </button>
@@ -485,27 +520,27 @@ export default function OffersHistory({ onEdit, onDeal }) {
         </table>
       </TableCard>
       )}
-      {selectedId && (() => {
-        const sel = offers.find((o) => o.id === selectedId);
-        if (!sel) return null;
+      {selected && (() => {
         // The agent's other offers, in the same newest-first order the table
         // shows — unfiltered, because the popout is where you go to see the
         // whole relationship, not the slice the current chip left standing.
-        const key = sel.contactId || (sel.contactName ? `name:${sel.contactName}` : "none");
+        // These are lean rows: the rail only shows address, date and status,
+        // and picking one re-enters through openDetail, which hydrates it.
+        const key = selected.contactId || (selected.contactName ? `name:${selected.contactName}` : "none");
         const siblings = offers.filter(
           (o) => (o.contactId || (o.contactName ? `name:${o.contactName}` : "none")) === key);
         return (
-          <OfferDetailModal offer={sel} siblings={siblings}
-            onSelect={(o) => setSelectedId(o.id)}
-            onClose={() => setSelectedId(null)}
-            onEdit={(o) => { setSelectedId(null); onEdit?.(o); }}
+          <OfferDetailModal offer={selected} siblings={siblings}
+            onSelect={openDetail}
+            onClose={() => setSelected(null)}
+            onEdit={(o) => { setSelected(null); onEdit?.(o); }}
             onSend={(o) => setSending(o)}
             onPsa={openPsa}
             onContract={openContract}
             onAssignment={openAssignment}
             onNetSheet={openNetSheet}
             onOfferPage={(o) => setOfferPaging(o)}
-            onPromote={(o) => { setSelectedId(null); promote(o); }}
+            onPromote={(o) => { setSelected(null); promote(o); }}
             onDealNav={onDeal} />
         );
       })()}

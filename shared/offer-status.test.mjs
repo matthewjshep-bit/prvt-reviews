@@ -10,6 +10,10 @@
 //      the moment its validity lapsed — losing the outcome you recorded.
 //   3. A send walking an offer backwards. Re-texting the docs to an agent who
 //      already countered must not reset them to "sent".
+//   4. A list row that lost something the table draws. toListOffer() is what
+//      lets the history page hold every offer instead of the newest hundred —
+//      but only the fields it keeps ever reach the screen, so a key dropped
+//      here is a column that silently goes blank.
 //
 //   node --test offer-status.test.mjs
 
@@ -27,6 +31,7 @@ import {
   offerExpiresAt,
   statusAfterSend,
   statusAfterUnpromote,
+  toListOffer,
 } from "./offer-status.js";
 
 const iso = (d) => d.toISOString();
@@ -120,4 +125,41 @@ test("un-promoting a deal restores the pre-acceptance truth", () => {
   assert.equal(statusAfterUnpromote({ deal: {}, sends: [{}] }), "sent");
   // Anything not accepted is left exactly as it is.
   assert.equal(statusAfterUnpromote({ status: "countered" }), "countered");
+});
+
+test("a list row keeps what the table draws and drops the weight", () => {
+  const offer = {
+    id: "o1", contactId: "c1", contactName: "Jeffrey Menday",
+    address: "741 North 128th Street, Seattle, Washington 98133",
+    cashAmount: 412000, status: "passed", createdAt: "2026-08-11T18:20:55.973Z",
+    sends: [{ channels: ["text"] }], ghl: { fields: true, note: true, tag: true },
+    pdfUrl: "https://x/o1.pdf", contractPdfUrl: "https://x/o1-contract.pdf",
+    // the four keys that are ~90% of a stored offer
+    snapshot: { comps: new Array(50).fill({ address: "a" }) },
+    calc: { inputs: { arv: 500000 }, settings: { validityDays: 7 } },
+    draft: { inputs: {} },
+    scope: [{ item: "roof" }],
+  };
+  const row = toListOffer(offer);
+
+  for (const k of ["id", "contactId", "contactName", "address", "cashAmount",
+                   "status", "createdAt", "sends", "ghl", "pdfUrl", "contractPdfUrl"]) {
+    assert.deepEqual(row[k], offer[k], `the table renders ${k}`);
+  }
+  for (const k of ["snapshot", "calc", "draft", "scope"]) {
+    assert.equal(row[k], undefined, `${k} must not ride along`);
+  }
+  assert.equal(row.listOnly, true, "rows announce that they are not documents");
+  // Modest fixture; against production docs the row is ~1KB against ~9KB.
+  assert.ok(JSON.stringify(row).length * 3 < JSON.stringify(offer).length);
+
+  // The ⏱ marker reads calc.settings, which is exactly what was dropped — so
+  // the date rides along precomputed and must land on the same instant.
+  assert.equal(offerExpiresAt(row).getTime(), offerExpiresAt(offer).getTime());
+  assert.equal(isExpired(row), isExpired(offer));
+  // Status inference must still work off a row alone.
+  assert.equal(effectiveStatus(row), "passed");
+  assert.equal(effectiveStatus(toListOffer({ sends: [{}] })), "sent");
+  // Re-trimming a row changes nothing (patching the list runs it again).
+  assert.deepEqual(toListOffer(row), row);
 });

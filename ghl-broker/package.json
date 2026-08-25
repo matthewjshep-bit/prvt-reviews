@@ -15,7 +15,8 @@
     "test:offer-page": "node --test offer-page.test.mjs",
     "test:deal-docs": "node --test deal-documents.test.mjs",
     "test:psa": "node --test psa-pdf.test.mjs",
-    "test:psa-template": "node --test ../shared/wa-psa-template.test.mjs"
+    "test:psa-template": "node --test ../shared/wa-psa-template.test.mjs",
+    "test:offer-list": "node --test offer-list-query.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

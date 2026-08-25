@@ -183,9 +183,14 @@ export const getCompBookmarklet = () =>
   fetch(`${API_BASE}/api/offers/comps/bookmarklet?${locq()}`).then(j);
 export const regenerateCompToken = () =>
   post(`/api/offers/comps/capture-token`, {});
-export const listOffers = ({ contactId = "", limit = 50 } = {}) => {
+// `lean` returns table rows (see OFFER_LIST_FIELDS) instead of whole offer
+// documents — ~1KB each rather than ~9KB, and the only way to load a location's
+// full history in one call. Rows are flagged `listOnly`; use getOffer(id) for
+// anything that reads a fat field (calc, snapshot, scope, draft).
+export const listOffers = ({ contactId = "", limit = 50, lean = false } = {}) => {
   const p = new URLSearchParams(locq());
   p.set("limit", limit);
+  if (lean) p.set("lean", "1");
   if (contactId) p.set("contact_id", contactId);
   return fetch(`${API_BASE}/api/offers?${p}`).then(j).then((r) => r.offers);
 };

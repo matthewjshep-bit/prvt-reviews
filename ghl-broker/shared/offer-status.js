@@ -78,6 +78,12 @@ function parseYmd(str) {
 // document ("September 1, 2026"), kept for rows saved before calc settings
 // were snapshotted. Returns null when nothing can be determined.
 export function offerExpiresAt(offer) {
+  // A list row (see toListOffer) carries the answer instead of the calc
+  // settings it was derived from — same date, a fraction of the bytes.
+  if (offer?.expiresAt) {
+    const pre = new Date(offer.expiresAt);
+    if (!Number.isNaN(pre.getTime())) return pre;
+  }
   const s = offer?.calc?.settings || {};
   const picked = parseYmd(s.offerExpires);
   if (picked) return picked;
@@ -119,3 +125,39 @@ export const STATUS_HISTORY_PHRASE = {
   passed: "passed on our offer",
   accepted: "accepted our offer",
 };
+
+/* ---------- the list projection ---------- */
+
+// What the offers table actually renders. A stored offer averages ~9KB, and
+// four keys — snapshot, calc, draft, scope — are ~90% of that; none of them
+// reach the screen until you open a row. GET /api/offers?lean=1 returns only
+// the fields below, which is what lets the page hold every offer for the
+// location instead of the newest hundred. Anything that needs the whole
+// document (the popout, the editor, the PSA/contract/net-sheet generators)
+// re-fetches it by id.
+export const OFFER_LIST_FIELDS = [
+  "id", "locationId", "contactId", "contactName", "address", "cashAmount",
+  "status", "statusAt", "statusNote", "deal", "sends", "ghl", "warnings",
+  "createdAt", "updatedAt", "dateLabel", "validLabel",
+  "pdfUrl", "imageUrl", "scopePdfUrl", "compsPdfUrl",
+  "psaPdfUrl", "contractPdfUrl", "assignmentPdfUrl", "netSheetPdfUrl",
+];
+
+// Trim an offer to a table row. Two derived keys ride along:
+//
+//   expiresAt  the ⏱ marker needs calc.settings.{offerExpires,validityDays},
+//              which is exactly the weight being dropped — so carry the
+//              computed date (25 bytes) instead of its inputs (~1.4KB).
+//   listOnly   the flag that says "this is a row, not a document". Callers
+//              hydrate on it; nothing should read a fat field without it.
+//
+// Idempotent: re-trimming a row you already trimmed changes nothing.
+export function toListOffer(offer) {
+  if (!offer) return offer;
+  const row = {};
+  for (const k of OFFER_LIST_FIELDS) if (offer[k] !== undefined) row[k] = offer[k];
+  const at = offerExpiresAt(offer);
+  if (at) row.expiresAt = at.toISOString();
+  row.listOnly = true;
+  return row;
+}
