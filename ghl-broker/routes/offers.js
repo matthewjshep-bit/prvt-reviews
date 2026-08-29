@@ -2731,7 +2731,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // Same double gate as sends, outreach imports and dispo blasts: the
       // caller has to ask for a live run AND the broker has to be configured
       // for it. A dry run still does all the work — it just saves a draft.
-      const dryRun = b.dryRun !== false || !AUTO_UNDERWRITE_ENABLED;
+      // GHL's Custom Data is all strings, so a "dryRun" row set to false
+      // arrives as the STRING "false" — which is not `false`, and would have
+      // left the run dry forever with nothing to show for the setting.
+      const askedLive = b.dryRun === false || String(b.dryRun).toLowerCase() === "false";
+      const dryRun = !askedLive || !AUTO_UNDERWRITE_ENABLED;
 
       const { skipped, job } = await startUnderwrite({
         client, locationId, saved, store, contactId, message, address, askingPrice, dryRun,

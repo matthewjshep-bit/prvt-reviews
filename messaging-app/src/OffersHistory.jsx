@@ -148,8 +148,18 @@ export default function OffersHistory({ onEdit, onDeal }) {
   // Table rows are the lean projection. Anything that reads a fat field — the
   // popout (calc.offers, statusHistory, scope), the editor (draft/snapshot),
   // every generator — takes the real document, fetched here.
+  // Two kinds of stub reach this: a lean table row (listOnly), and a bare
+  // { id } from something that only ever knew an offer's id — the
+  // auto-underwrite strip's "Review draft" being the one that exists. The old
+  // test was listOnly alone, so a bare id sailed through unhydrated and opened
+  // the editor on an object with no draft in it: a form that restores
+  // completely empty, with nothing to say why.
+  //
+  // createdAt is the tell. Every stored offer has one and so does every lean
+  // row; only a hand-made stub doesn't.
   async function hydrate(o) {
-    if (!o?.listOnly) return o;
+    if (!o?.id) return o;
+    if (!o.listOnly && o.createdAt) return o;
     return (await getOffer(o.id)) || o;
   }
 

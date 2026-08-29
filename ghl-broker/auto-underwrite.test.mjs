@@ -398,6 +398,24 @@ test("a non-numeric asking price is dropped, not passed through as NaN", async (
   assert.equal(job.suppliedAskingPrice, 0);
 });
 
+test("a live run has to be asked for two ways, and GHL only speaks strings", () => {
+  // The route's rule. GHL's Custom Data has no types, so "dryRun: false" set in
+  // the workflow arrives as the STRING "false" — which is not `false`, and
+  // silently left every run dry with the setting apparently applied.
+  const isDry = (dryRun, enabled) =>
+    !(dryRun === false || String(dryRun).toLowerCase() === "false") || !enabled;
+
+  assert.equal(isDry(false, true), false, "a real false with the flag on goes live");
+  assert.equal(isDry("false", true), false, "and so does GHL's string");
+  assert.equal(isDry("FALSE", true), false);
+
+  assert.equal(isDry(false, false), true, "the env flag still has a veto");
+  assert.equal(isDry(undefined, true), true, "silence means dry");
+  assert.equal(isDry(true, true), true);
+  assert.equal(isDry("true", true), true);
+  assert.equal(isDry("", true), true);
+});
+
 /* ---------- the job record ---------- */
 
 test("publicJob hides the cancel flag and reports stopping instead", () => {
