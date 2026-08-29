@@ -123,10 +123,25 @@ const APP_ORIGIN = (process.env.APP_ORIGIN || "").split(",")[0].trim().replace(/
 // GHL_LOCATION_KEYS, which resolveLocation applies to every request for a
 // location and therefore cannot be switched on without re-issuing every GHL
 // menu-link URL in the account.
-const AUTO_UNDERWRITE_SECRET = process.env.AUTO_UNDERWRITE_SECRET || "";
+// Trimmed: Render's env editor is a textarea, so a value can pick up a trailing
+// newline that is invisible in the UI and fatal to an exact compare.
+const AUTO_UNDERWRITE_SECRET = (process.env.AUTO_UNDERWRITE_SECRET || "").trim();
+
+// Read the secret from wherever the caller could put it. GHL's Webhook action
+// makes a custom header or a query string far easier to set than a hand-built
+// JSON body, and a workflow saved with the default payload sends neither
+// `secret` nor anything else we asked for — which reads as "bad or missing
+// secret" and sends you looking at your env vars, where nothing is wrong.
+const secretFrom = (req) =>
+  req.get("x-underwrite-secret") ||
+  req.query.secret ||
+  req.body?.secret ||
+  req.body?.customData?.secret ||
+  "";
+
 const secretOk = (got) => {
   if (!AUTO_UNDERWRITE_SECRET) return false;
-  const a = Buffer.from(String(got == null ? "" : got));
+  const a = Buffer.from(String(got == null ? "" : got).trim());
   const b = Buffer.from(AUTO_UNDERWRITE_SECRET);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
@@ -2665,11 +2680,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // every custom menu link in the account until each URL gets ?key=
       // appended. AUTO_UNDERWRITE_SECRET guards only this route and costs no
       // migration — it belongs in the workflow's webhook body, nowhere else.
-      if (!LOCATION_KEYS[locationId] && !secretOk(b.secret)) {
+      if (!LOCATION_KEYS[locationId] && !secretOk(secretFrom(req))) {
+        // Say WHICH of the two it is. "bad or missing secret" sent the operator
+        // to check their env vars, where the secret was set correctly all along
+        // — the workflow simply wasn't sending one.
         return res.status(403).json({
-          error: AUTO_UNDERWRITE_SECRET
-            ? "bad or missing secret"
-            : "auto-underwrite needs a credential — set AUTO_UNDERWRITE_SECRET on the broker and send it as \"secret\" in the webhook body (or put this location in GHL_LOCATION_KEYS)",
+          error: !AUTO_UNDERWRITE_SECRET
+            ? "auto-underwrite needs a credential — set AUTO_UNDERWRITE_SECRET on the broker"
+            : secretFrom(req)
+            ? "the secret sent doesn't match AUTO_UNDERWRITE_SECRET on the broker"
+            : "no secret was sent — add it to the webhook as an x-underwrite-secret header, a ?secret= query param, or \"secret\" in a custom JSON body",
         });
       }
 
