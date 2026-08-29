@@ -636,7 +636,8 @@ export default function createOutreachRouter({ resolveLocation }) {
         fieldIds = {};
         for (const f of IMPORT_FIELDS) {
           fieldIds[f.key] = await withRetry(() =>
-            findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType)
+            findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType,
+              { siblingKey: f.folderSibling })
           );
         }
       }

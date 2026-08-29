@@ -351,14 +351,21 @@ export function evaluateGates({
 
 /* ---------- the Subject Property field ---------- */
 
+// One resolver, so a run that creates the field can't file it somewhere the
+// import wouldn't have.
+const subjectPropertyFieldId = (client, locationId) =>
+  findOrCreateCustomFieldByKey(
+    client, locationId,
+    SUBJECT_PROPERTY_FIELD.key, SUBJECT_PROPERTY_FIELD.name, SUBJECT_PROPERTY_FIELD.dataType,
+    { siblingKey: SUBJECT_PROPERTY_FIELD.folderSibling }
+  );
+
 // The contact's current Subject Property, off a contact record we already have.
 // Needs the field's id, which is created on demand like every other app field.
 async function readSubjectProperty(client, locationId, contact) {
   if (!contact) return "";
   try {
-    const id = await findOrCreateCustomFieldByKey(
-      client, locationId, SUBJECT_PROPERTY_FIELD.key, SUBJECT_PROPERTY_FIELD.name, SUBJECT_PROPERTY_FIELD.dataType
-    );
+    const id = await subjectPropertyFieldId(client, locationId);
     return String((contact.customFields || []).find((f) => f.id === id)?.value ?? "").trim();
   } catch {
     return "";   // the field not existing yet is not an error, it's day one
@@ -373,9 +380,7 @@ async function readSubjectProperty(client, locationId, contact) {
 // not worth failing over a field write.
 async function writeSubjectProperty(client, locationId, contactId, address, warnings) {
   try {
-    const id = await findOrCreateCustomFieldByKey(
-      client, locationId, SUBJECT_PROPERTY_FIELD.key, SUBJECT_PROPERTY_FIELD.name, SUBJECT_PROPERTY_FIELD.dataType
-    );
+    const id = await subjectPropertyFieldId(client, locationId);
     await updateContact(client, contactId, { customFields: [{ id, value: address }] });
   } catch (e) {
     warnings.push(`subject property: ${e.message}`);

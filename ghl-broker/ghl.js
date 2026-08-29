@@ -51,6 +51,10 @@ export async function listCustomFields(client, locationId) {
     name: f.name,
     fieldKey: f.fieldKey || f.key || "",
     dataType: f.dataType || f.type || "TEXT",
+    // The folder GHL files it under. Carried because a field created without
+    // one lands unfiled, and the UI is browsed folder by folder — see the
+    // siblingKey note on findOrCreateCustomFieldByKey.
+    parentId: f.parentId || null,
   }));
 }
 
@@ -71,15 +75,27 @@ export async function deleteCustomField(client, locationId, fieldId) {
 
 // Find a custom field by its logical key (e.g. "last_offer_doc_url"), creating
 // it if absent. Returns the field id. dataType: TEXT | NUMERICAL | DATE.
-export async function findOrCreateCustomFieldByKey(client, locationId, key, name, dataType = "TEXT") {
+// `siblingKey` — put a newly created field in the same FOLDER as an existing
+// one, given that field's key.
+//
+// GHL groups contact fields into folders (`parentId`), and its UI shows them
+// folder by folder. A field created without one lands unfiled, which in
+// practice means the operator opens the group they expect it in, doesn't see
+// it, and reasonably concludes it was never created. Naming a sibling rather
+// than a folder id keeps this multi-tenant: every account's folder ids differ,
+// but "put Subject Property wherever Hook Address lives" holds everywhere.
+//
+// The sibling is resolved from the list already fetched here, so this costs no
+// extra request, and a missing sibling degrades to the old unfiled behaviour.
+export async function findOrCreateCustomFieldByKey(client, locationId, key, name, dataType = "TEXT", { siblingKey } = {}) {
   const fields = await listCustomFields(client, locationId);
-  const match = fields.find(
-    (f) => String(f.fieldKey || "").replace(/^contact\./, "") === key || f.name === (name || key)
-  );
+  const keyOf = (f) => String(f.fieldKey || "").replace(/^contact\./, "");
+  const match = fields.find((f) => keyOf(f) === key || f.name === (name || key));
   if (match) return match.id;
+  const parentId = siblingKey ? fields.find((f) => keyOf(f) === siblingKey)?.parentId : null;
   const created = await client.call(`/locations/${encodeURIComponent(locationId)}/customFields`, {
     method: "POST",
-    body: { name: name || key, dataType, model: "contact" },
+    body: { name: name || key, dataType, model: "contact", ...(parentId ? { parentId } : {}) },
   });
   return created?.customField?.id || created?.id;
 }

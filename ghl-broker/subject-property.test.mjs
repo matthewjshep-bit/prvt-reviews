@@ -131,3 +131,63 @@ test("a run that read the field does not write the field back to itself", () => 
 test("an unchanged address doesn't churn the contact's audit trail", () => {
   assert.equal(shouldWriteBack("workflow", "2 Oak Ave", "2 Oak Ave"), false);
 });
+
+/* ---------- which GHL folder a new field lands in ---------- */
+// GHL groups contact fields into folders and its UI shows them folder by
+// folder, so a field created without a parentId is invisible where the
+// operator looks for it. Observed live: 33 fields across 4 folders, with every
+// outreach field in one of them.
+
+import { findOrCreateCustomFieldByKey } from "./ghl.js";
+
+const FIELDS = [
+  { id: "f1", name: "Hook Address", fieldKey: "contact.hook_address", parentId: "folder-outreach" },
+  { id: "f2", name: "Buy Box: Areas", fieldKey: "contact.buy_box_areas", parentId: "folder-investor" },
+];
+const fakeClient = (created) => ({
+  async call(pathname, opts = {}) {
+    if ((opts.method || "GET") === "GET") return { customFields: FIELDS };
+    created.push(opts.body);
+    return { customField: { id: "f-new" } };
+  },
+});
+
+test("Subject Property is filed beside Hook Address, not left unfiled", () => {
+  assert.equal(SUBJECT_PROPERTY_FIELD.folderSibling, "hook_address");
+});
+
+test("a created field inherits its sibling's folder", async () => {
+  const created = [];
+  const id = await findOrCreateCustomFieldByKey(
+    fakeClient(created), "loc", "subject_property", "Subject Property", "TEXT",
+    { siblingKey: "hook_address" }
+  );
+  assert.equal(id, "f-new");
+  assert.equal(created.length, 1);
+  assert.equal(created[0].parentId, "folder-outreach");
+  assert.equal(created[0].name, "Subject Property");
+  assert.equal(created[0].model, "contact");
+});
+
+test("an unknown sibling degrades to unfiled rather than sending a bogus parentId", async () => {
+  const created = [];
+  await findOrCreateCustomFieldByKey(
+    fakeClient(created), "loc", "whatever", "Whatever", "TEXT", { siblingKey: "does_not_exist" }
+  );
+  assert.equal("parentId" in created[0], false);
+});
+
+test("no sibling named at all keeps the original behaviour", async () => {
+  const created = [];
+  await findOrCreateCustomFieldByKey(fakeClient(created), "loc", "whatever", "Whatever");
+  assert.equal("parentId" in created[0], false);
+});
+
+test("an existing field is reused and never re-created into a folder", async () => {
+  const created = [];
+  const id = await findOrCreateCustomFieldByKey(
+    fakeClient(created), "loc", "hook_address", "Hook Address", "TEXT", { siblingKey: "hook_address" }
+  );
+  assert.equal(id, "f1");
+  assert.equal(created.length, 0);
+});

@@ -50,6 +50,11 @@ export const SUBJECT_PROPERTY_FIELD = {
   key: "subject_property",
   name: "Subject Property",
   dataType: "TEXT",
+  // File it in GHL's folder wherever Hook Address lives — the Agent Outreach
+  // group. It is seeded from that field, so they belong side by side, and an
+  // operator looking for "the property this agent is on about" will look where
+  // the hook is.
+  folderSibling: "hook_address",
   hint:
     "the ONE property this agent is currently discussing with us — full street address with city and state when known. " +
     "Update it when the agent turns the conversation to a different property, including one they raise themselves. " +
