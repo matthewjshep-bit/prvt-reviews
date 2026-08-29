@@ -58,6 +58,27 @@ export const SUBJECT_PROPERTY_FIELD = {
     "so a wrong one values the wrong house. Empty only if no property has ever been discussed.",
 };
 
+/**
+ * What the outreach import should write to Subject Property, or null for
+ * "leave it alone".
+ *
+ * SEEDED, NOT SET. Every other field the import writes is a fact about the
+ * listing that made us reach out, and rewriting it on a re-import is harmless.
+ * This one is a fact about the conversation — so once an agent has pointed us
+ * at a different house, putting the hook address back would silently re-aim
+ * the auto-underwrite at a property nobody is discussing any more.
+ *
+ * `contact` is null for a contact being created, which is the common case and
+ * the one that must always seed.
+ */
+export function seedSubjectProperty({ contact, fieldId, hookAddress }) {
+  const current = String(
+    (contact?.customFields || []).find((f) => f.id === fieldId)?.value ?? ""
+  ).trim();
+  if (current) return null;
+  return String(hookAddress || "").trim() || null;
+}
+
 export const AGENT_ENRICH_FIELDS = [
   SUBJECT_PROPERTY_FIELD,
   { key: "agent_market_area", name: "Areas Served", dataType: "TEXT",

@@ -29,7 +29,7 @@ import { scoreListing, medianPricePerSqft, distressSignals } from "../outreach-s
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
 import { OUTREACH_FIELDS } from "../field-registry.js";
-import { SUBJECT_PROPERTY_FIELD } from "../enrich.js";
+import { SUBJECT_PROPERTY_FIELD, seedSubjectProperty } from "../enrich.js";
 
 // Subject Property is created and seeded here but OWNED by the conversation
 // (see its definition in enrich.js) — hence its own list rather than a new
@@ -708,17 +708,15 @@ export default function createOutreachRouter({ resolveLocation }) {
             brokerage: a.brokerage || "",
           };
 
-          // Subject Property is SEEDED, not set. Every other field here is a
-          // fact about the listing that made us reach out, and rewriting it on
-          // a re-import is harmless. This one is a fact about the conversation:
-          // once an agent has pointed us at a different house, putting the hook
-          // address back would silently re-aim the auto-underwrite at the wrong
-          // property. So it is written only when the contact has none.
-          const subjectId = fieldIds[SUBJECT_PROPERTY_FIELD.key];
-          const currentSubject = String(
-            (existing?.customFields || []).find((f) => f.id === subjectId)?.value ?? ""
-          ).trim();
-          if (!currentSubject && hook.address) values[SUBJECT_PROPERTY_FIELD.key] = hook.address;
+          // Seeded, not set — see seedSubjectProperty. `existing` is null on
+          // the create path, so a brand-new contact always gets the hook
+          // address; a re-import leaves a subject the conversation has moved on.
+          const seeded = seedSubjectProperty({
+            contact: existing,
+            fieldId: fieldIds[SUBJECT_PROPERTY_FIELD.key],
+            hookAddress: hook.address,
+          });
+          if (seeded) values[SUBJECT_PROPERTY_FIELD.key] = seeded;
 
           const customFields = IMPORT_FIELDS
             .filter((f) => values[f.key] !== "" && values[f.key] != null)

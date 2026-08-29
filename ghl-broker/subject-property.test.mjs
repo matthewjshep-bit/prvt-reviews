@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SUBJECT_PROPERTY_FIELD, AGENT_ENRICH_FIELDS, enrichFieldDefs } from "./enrich.js";
+import {
+  SUBJECT_PROPERTY_FIELD, AGENT_ENRICH_FIELDS, enrichFieldDefs, seedSubjectProperty,
+} from "./enrich.js";
 import { APP_FIELD_REGISTRY, registryByKey } from "./field-registry.js";
 
 /* ---------- the field is defined once and reachable from everywhere ---------- */
@@ -38,33 +40,50 @@ test("its hint tells the model to hold the value rather than blank it", () => {
 });
 
 /* ---------- seeding, without clobbering ---------- */
-// The rule the import follows, stated as a function so it can be tested apart
-// from the GHL round-trip it lives inside.
+// The shipped function, not a restatement of it. The route's behaviour end to
+// end is covered separately in outreach-import.test.mjs.
 
-const seed = ({ existingValue, hookAddress }) => {
-  const current = String(existingValue ?? "").trim();
-  return !current && hookAddress ? hookAddress : undefined;   // undefined = don't write
-};
+const FID = "fld-subject";
+const seed = (value, hookAddress) =>
+  seedSubjectProperty({
+    contact: value === null ? null : { customFields: [{ id: FID, value }] },
+    fieldId: FID,
+    hookAddress,
+  });
 
-test("a fresh contact is seeded with the hook address", () => {
-  assert.equal(seed({ existingValue: "", hookAddress: "1911 9th Ave W, Seattle, WA" }), "1911 9th Ave W, Seattle, WA");
-  assert.equal(seed({ existingValue: null, hookAddress: "1911 9th Ave W" }), "1911 9th Ave W");
+test("a contact being CREATED always seeds — there is nothing to preserve", () => {
+  // The common case: outreach creates the contact, so `contact` is null.
+  assert.equal(seed(null, "1911 9th Ave W, Seattle, WA"), "1911 9th Ave W, Seattle, WA");
+});
+
+test("an existing contact with an empty field is seeded with the hook address", () => {
+  assert.equal(seed("", "1911 9th Ave W"), "1911 9th Ave W");
+  assert.equal(seed(undefined, "1911 9th Ave W"), "1911 9th Ave W");
 });
 
 test("a re-import never overwrites a subject the conversation has moved on", () => {
-  // This is the whole reason it isn't in OUTREACH_FIELDS, which the import
-  // rewrites wholesale. Putting the hook address back would silently re-aim
-  // the auto-underwrite at a house the agent stopped talking about.
-  assert.equal(seed({ existingValue: "7130 Bentley Rd E", hookAddress: "1911 9th Ave W" }), undefined);
-  assert.equal(seed({ existingValue: "  7130 Bentley Rd E  ", hookAddress: "1911 9th Ave W" }), undefined);
+  // The whole reason it isn't in OUTREACH_FIELDS, which the import rewrites
+  // wholesale. Putting the hook address back would silently re-aim the
+  // auto-underwrite at a house the agent stopped talking about.
+  assert.equal(seed("7130 Bentley Rd E", "1911 9th Ave W"), null);
+  assert.equal(seed("  7130 Bentley Rd E  ", "1911 9th Ave W"), null);
 });
 
 test("whitespace is not a value", () => {
-  assert.equal(seed({ existingValue: "   ", hookAddress: "1911 9th Ave W" }), "1911 9th Ave W");
+  assert.equal(seed("   ", "1911 9th Ave W"), "1911 9th Ave W");
 });
 
 test("no hook address means nothing is written", () => {
-  assert.equal(seed({ existingValue: "", hookAddress: "" }), undefined);
+  assert.equal(seed("", ""), null);
+  assert.equal(seed(null, "   "), null);
+});
+
+test("a field id that matches nothing on the contact reads as empty, not as a crash", () => {
+  assert.equal(
+    seedSubjectProperty({ contact: { customFields: [{ id: "other", value: "x" }] }, fieldId: FID, hookAddress: "1 Elm" }),
+    "1 Elm"
+  );
+  assert.equal(seedSubjectProperty({ contact: {}, fieldId: FID, hookAddress: "1 Elm" }), "1 Elm");
 });
 
 /* ---------- which address a run uses ---------- */
