@@ -102,6 +102,18 @@ export async function fetchZillowPhotos(address, apifyToken) {
   if (!item) {
     throw Object.assign(new Error("Zillow couldn't match that address"), { http: 404 });
   }
+  // The actor answers a miss with a SENTINEL ROW rather than an empty dataset:
+  // { addressOrUrlFromInput, isValid: false, invalidReason, scrapedAt }. It has
+  // a truthy item, so the guard above waves it through, and every field read
+  // below comes back undefined — no photos, no beds, no sqft, no error. The
+  // caller then can't tell "Zillow has never heard of this house" from "this
+  // listing happens to have no pictures", which are very different problems.
+  if (item.isValid === false) {
+    throw Object.assign(
+      new Error(item.invalidReason || "Zillow has no data for this address"),
+      { http: 404 }
+    );
+  }
   const rawPhotos = item.photos?.length ? item.photos : item.responsivePhotos || [];
   const photos = rawPhotos.map(bestPhotoUrl).filter(Boolean).slice(0, MAX_PHOTOS);
   return {

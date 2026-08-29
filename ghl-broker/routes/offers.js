@@ -61,7 +61,15 @@ import {
 } from "../shared/contract-template.js";
 import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
 import { addressKey, addressQueryVariants, zillowUrl } from "../shared/us-address.js";
-import { YEAR_BUILT_TOLERANCE } from "../shared/comp-match.js";
+import { pullComps, photonGeocode } from "../comps-pull.js";
+import { pullZillowComps } from "../comps-zillow.js";
+import { gradeComps, needsScrape } from "../comps-grade.js";
+import {
+  startUnderwrite, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs,
+  cancelJob as cancelUnderwriteJob, publicJob as publicUnderwriteJob,
+  AUTO_UNDERWRITE_ENABLED,
+  UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT,
+} from "../auto-underwrite.js";
 import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
 import { fetchRemoteImage, sniffImageType, sniffPdf } from "../fetch-image.js";
 export { zillowUrl };
@@ -111,6 +119,18 @@ const APP_ORIGIN = (process.env.APP_ORIGIN || "").split(",")[0].trim().replace(/
 
 // Per-location access keys (enforced in broker.js resolveLocation) — deep
 // links must carry the key or they'd 403 for key-protected locations.
+// Guards the auto-underwrite webhook alone. Deliberately separate from
+// GHL_LOCATION_KEYS, which resolveLocation applies to every request for a
+// location and therefore cannot be switched on without re-issuing every GHL
+// menu-link URL in the account.
+const AUTO_UNDERWRITE_SECRET = process.env.AUTO_UNDERWRITE_SECRET || "";
+const secretOk = (got) => {
+  if (!AUTO_UNDERWRITE_SECRET) return false;
+  const a = Buffer.from(String(got == null ? "" : got));
+  const b = Buffer.from(AUTO_UNDERWRITE_SECRET);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
 let LOCATION_KEYS = {};
 try { LOCATION_KEYS = JSON.parse(process.env.GHL_LOCATION_KEYS || "{}"); } catch { /* broker.js logs it */ }
 
@@ -1080,22 +1100,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   });
 
   /* ---------- geocode (map centering for the comps pane) ---------- */
-  async function photonGeocode(q) {
-    try {
-      const r = await fetch(
-        `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=en`,
-        { signal: AbortSignal.timeout(4000) }
-      );
-      if (!r.ok) return null;
-      const f = ((await r.json()).features || [])[0];
-      if (!f?.geometry?.coordinates) return null;
-      const [lng, lat] = f.geometry.coordinates;
-      return { lat, lng };
-    } catch {
-      return null;
-    }
-  }
-
   router.get("/geocode", async (req, res) => {
     try {
       resolveLocation(req);
@@ -1108,252 +1112,57 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   });
 
   /* ---------- comps (RealEstateAPI.com v3, key configured in Settings) ---------- */
-  // TRUE closed sales: arms-length transactions within N months, same beds +
-  // baths + county, sqft within ±20% and year built within ±10 of the subject.
-  // Cached 24h per query to conserve API credits.
-  //
-  // Apples-to-apples beats recent: when the tight search comes up short we
-  // reach BACK IN TIME first (18 → 24 months) and only widen the radius as a
-  // last resort. A same-subdivision sale from 20 months ago is a better comp
-  // than a 5-mile-away sale from last month, and the UI names whichever
-  // relaxation actually fired so the number stays defensible.
-  const compsCache = new Map();
+  // The pull itself lives in ../comps-pull.js so the auto-underwrite pipeline
+  // can call it directly instead of round-tripping HTTP to this same server.
   router.get("/comps", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
       const address = String(req.query.address || "").trim();
       if (!address) return res.status(400).json({ error: "address required" });
-      const monthsBack = Math.min(24, Math.max(1, parseInt(req.query.months, 10) || 12));
+
+      const saved = await store.getOfferSettings(locationId);
+      const source = saved?.compsSource === "realestateapi" ? "realestateapi" : "zillow";
+      const apifyToken = String(saved?.apifyToken || "").trim();
+      const apiKey = String(saved?.compsApiKey || saved?.rentcastApiKey || "").trim();
+
+      const months = Math.min(24, Math.max(1, parseInt(req.query.months, 10) || 12));
       const sqft = parseInt(req.query.sqft, 10) || 0;
-      // Optional user-corrected subject facts. When present they replace the
-      // same_beds/same_baths matching (which trusts the provider's own record
-      // — sometimes wrong) with explicit range filters.
       const beds = Math.max(0, parseInt(req.query.beds, 10) || 0);
       const baths = Math.max(0, parseFloat(req.query.baths) || 0);
 
-      const saved = await store.getOfferSettings(locationId);
-      const apiKey = String(saved?.compsApiKey || saved?.rentcastApiKey || "").trim();
-      if (!apiKey) return res.json({ enabled: false, comps: [], estimate: null, subject: null });
-
-      const cacheKey = `${address.toLowerCase()}|${monthsBack}|${sqft}|${beds}|${baths}`;
-      const hit = compsCache.get(cacheKey);
-      if (hit && Date.now() - hit.ts < 24 * 3600 * 1000) return res.json(hit.data);
-
-      // When the user corrects beds/baths we do NOT pass bedrooms/bathrooms
-      // filters to the API — RealEstateAPI applies them to the subject lookup
-      // too, so a corrected count that disagrees with their record makes the
-      // whole property "not exist". Instead: drop same_beds/same_baths, pull a
-      // wider pool, and filter the comps ourselves below.
-      const hasBedBathOverride = beds > 0 || baths > 0;
-      const makeBody = ({ radiusMiles, daysBack, matchBedBath }) => ({
-        max_days_back: daysBack,
-        max_radius_miles: radiusMiles,
-        max_results: hasBedBathOverride ? 30 : 15,
-        ...(matchBedBath && !hasBedBathOverride ? { same_beds: true, same_baths: true } : {}),
-        same_county: true,
-        arms_length: true,
-        ...(sqft > 0
-          ? { living_square_feet_min: Math.round(sqft * 0.8), living_square_feet_max: Math.round(sqft * 1.2) }
-          : {}),
-      });
-      const queryComps = async (subject, params) => {
-        const r = await fetch("https://api.realestateapi.com/v3/PropertyComps", {
-          method: "POST",
-          headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ ...makeBody(params), ...subject }),
-          signal: AbortSignal.timeout(15000),
+      let data;
+      if (source === "zillow") {
+        if (!apifyToken) return res.json({ enabled: false, comps: [], estimate: null, subject: null });
+        // Zillow's sold map has no subject record, so the centre comes from a
+        // free geocode and the facts come from whatever the pane already knows.
+        // Typing beds/baths/sqft therefore does more work here than it did
+        // against the county-record provider, which filled them in for you.
+        const geo = await photonGeocode(address);
+        if (!geo) return res.status(404).json({ error: "couldn't locate that address on the map" });
+        data = await pullZillowComps({
+          apifyToken, lat: geo.lat, lng: geo.lng,
+          beds, baths, sqft,
+          radiusMiles: Math.min(5, Math.max(0.1, parseFloat(req.query.radius) || 0.5)),
+          monthsBack: months,
+          // The pane RANKS rather than filters — every comp arrives with a
+          // match chip and you tick the ones you want — so it gets the same
+          // wide bands the automation ranks over. On the tight bands a real
+          // Seattle address returned two comps, which is not a board.
+          bedTolerance: UW_POOL_BEDS_TOLERANCE,
+          bathTolerance: UW_POOL_BATHS_TOLERANCE,
+          sqftPct: UW_POOL_SQFT_PCT,
         });
-        if (!r.ok) {
-          const detail = (await r.text()).slice(0, 300);
-          throw Object.assign(new Error(`RealEstateAPI ${r.status}`), { http: 502, detail });
-        }
-        return r.json();
-      };
-      // IMPORTANT provider quirk: when fewer than 3 comps match the filters,
-      // PropertyComps suppresses the ENTIRE response — empty subject included,
-      // with only a `reason` string. So "no property record" can really mean
-      // "not enough sales matched"; the relaxation ladder below distinguishes
-      // the two.
-      const noRecord = (x) => !x?.subject?.propertyInfo?.latitude && !(x?.comps || []).length;
-      const asRequested = { radiusMiles: 1, daysBack: monthsBack * 30, matchBedBath: true };
-      let j = null;
-      let lastErr = null;
-      // Phase A — resolve by address: the provider's address matcher is
-      // inconsistent about formats ("166th Ave NE" one day, "166th Avenue NE"
-      // the next) while GHL/autocomplete produce the spelled-out form. Walk
-      // the variant ladder until one resolves.
-      for (const variant of addressQueryVariants(address)) {
-        try {
-          const attempt = await queryComps({ address: variant }, asRequested);
-          if (!noRecord(attempt)) { j = attempt; break; }
-          if (!j) j = attempt; // remember the first empty result as a fallback
-        } catch (e) { lastErr = e; }
+      } else {
+        if (!apiKey) return res.json({ enabled: false, comps: [], estimate: null, subject: null });
+        data = await pullComps({ apiKey, address, months, sqft, beds, baths });
       }
-      // Phase B — resolve by coordinates: county records keyed under another
-      // postal city or grid-address quirks make some parcels unfindable by
-      // address entirely. Geocode the typed address and find the parcel via
-      // PropertySearch, then query comps against the property id.
-      let subjectRef = null;
-      if (!j || noRecord(j)) {
-        try {
-          const geo = await photonGeocode(address);
-          if (geo) {
-            const sr = await fetch("https://api.realestateapi.com/v2/PropertySearch", {
-              method: "POST",
-              headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
-              body: JSON.stringify({ latitude: geo.lat, longitude: geo.lng, radius: 0.05, size: 10 }),
-              signal: AbortSignal.timeout(15000),
-            });
-            if (sr.ok) {
-              const list = ((await sr.json()).data || []).filter((p) => p?.id);
-              const houseNo = (address.match(/^\s*(\d+)/) || [])[1];
-              const label = (p) => String(p.address?.address || p.address?.label || "");
-              const pick = (houseNo && list.find((p) => label(p).startsWith(houseNo))) || list[0];
-              if (pick) {
-                subjectRef = { id: pick.id };
-                const byId = await queryComps(subjectRef, asRequested);
-                if (!noRecord(byId)) j = byId;
-              }
-            }
-          }
-        } catch { /* keep whatever the ladder produced */ }
-      }
-      // Phase C — widen the search: still nothing means "fewer than 3 sales
-      // matched", not "no such property" (rural areas rarely have 3 same-bed
-      // sales within a mile). Expand stepwise and tell the UI we did.
-      //
-      // Order matters: TIME first, then distance. Going back another six
-      // months keeps the comps in the same subdivision and price stratum;
-      // going out another four miles doesn't. The radius only moves once the
-      // 24-month window has already failed.
-      let widened = null;
-      if (!j || noRecord(j)) {
-        const ref = subjectRef || { address: addressQueryVariants(address)[0] };
-        const days = (months) => Math.max(monthsBack * 30, months * 30);
-        const steps = [
-          { params: { radiusMiles: 1, daysBack: days(18), matchBedBath: true }, label: "18 months" },
-          { params: { radiusMiles: 1, daysBack: days(24), matchBedBath: true }, label: "24 months" },
-          { params: { radiusMiles: 2, daysBack: days(24), matchBedBath: true }, label: "2 mi / 24 mo" },
-          { params: { radiusMiles: 5, daysBack: days(24), matchBedBath: true }, label: "5 mi / 24 mo" },
-          { params: { radiusMiles: 5, daysBack: days(24), matchBedBath: false }, label: "5 mi / 24 mo / any beds-baths" },
-        ];
-        for (const step of steps) {
-          try {
-            const attempt = await queryComps(ref, step.params);
-            if (!noRecord(attempt)) { j = attempt; widened = step.label; break; }
-          } catch (e) { lastErr = e; }
-        }
-      }
-      if (!j) throw lastErr || Object.assign(new Error("comps lookup failed"), { http: 502 });
-      const subjInfo = j.subject?.propertyInfo || {};
-      const num = (v) => (v == null || v === "" ? null : Number(v) || null);
-      // Stories / construction / subdivision aren't in a documented, stable
-      // place in the v3 payload and vary by plan tier, so probe the plausible
-      // paths rather than assuming one. Everything downstream treats a null as
-      // "unknown" (the match scorecard skips unknown criteria), so a provider
-      // that returns none of these degrades quietly instead of scoring badly.
-      const firstOf = (...vals) => {
-        for (const v of vals) {
-          const s = v == null ? "" : String(v).trim();
-          if (s && s.toLowerCase() !== "null") return s;
-        }
-        return null;
-      };
-      const storiesOf = (o = {}) =>
-        num(o.stories ?? o.storiesCount ?? o.numberOfStories ?? o.propertyInfo?.stories);
-      const subdivisionOf = (o = {}) =>
-        firstOf(o.subdivision, o.lotInfo?.subdivision, o.address?.subdivision, o.propertyInfo?.subdivision);
-      const materialOf = (o = {}) =>
-        firstOf(o.construction, o.constructionType, o.exteriorWalls, o.propertyInfo?.construction, o.propertyInfo?.exteriorWalls);
-      const data = {
-        enabled: true,
-        // AI condition grading needs both the Anthropic key and the Apify
-        // token (Zillow photos) — tell the UI whether to offer the button.
-        gradeEnabled: Boolean(String(saved?.aiApiKey || "").trim() && String(saved?.apifyToken || "").trim()),
-        ...(widened ? { widened } : {}),
-        subject: {
-          lat: num(subjInfo.latitude),
-          lng: num(subjInfo.longitude),
-          beds: num(subjInfo.bedrooms),
-          baths: num(subjInfo.bathrooms),
-          sqft: num(subjInfo.livingSquareFeet),
-          yearBuilt: num(subjInfo.yearBuilt),
-          stories: storiesOf(subjInfo),
-          subdivision: subdivisionOf({ ...j.subject, propertyInfo: subjInfo }),
-          material: materialOf(subjInfo),
-          lastSalePrice: num(j.subject?.lastSalePrice),
-          lastSaleDate: j.subject?.lastSaleDate || null,
-        },
-        estimate: j.reapiAvm
-          ? { price: Math.round(Number(j.reapiAvm)), low: Math.round(Number(j.reapiAvmLow || 0)), high: Math.round(Number(j.reapiAvmHigh || 0)) }
-          : null,
-        comps: (j.comps || [])
-          .map((c) => {
-            const price = c.mlsSoldPrice || c.lastSaleAmount || 0;
-            const saleDate = c.mlsLastSaleDate || c.lastSaleDate || "";
-            return {
-              id: String(c.id || `${c.latitude},${c.longitude}`),
-              address: c.address?.address || [c.address?.city, c.address?.state].filter(Boolean).join(", "),
-              price: Math.round(price),
-              saleDate: String(saleDate).slice(0, 10),
-              sqft: Number(c.squareFeet) || 0,
-              beds: c.bedrooms ?? null,
-              baths: c.bathrooms ?? null,
-              yearBuilt: num(c.yearBuilt),
-              stories: storiesOf(c),
-              subdivision: subdivisionOf(c),
-              material: materialOf(c),
-              distance: c.distance != null ? Math.round(c.distance * 100) / 100 : null,
-              lat: c.latitude,
-              lng: c.longitude,
-            };
-          })
-          .filter((c) => c.lat && c.lng && c.price > 0),
-      };
-      // Enforce "similar sqft" even when the caller didn't pass sqft (the
-      // provider's own record supplies it): keep comps within ±20%.
-      const effSqft = sqft > 0 ? sqft : data.subject.sqft || 0;
-      if (effSqft > 0) {
-        data.comps = data.comps.filter((c) => !c.sqft || (c.sqft >= effSqft * 0.8 && c.sqft <= effSqft * 1.2));
-      }
-      // User-corrected beds/baths: match server-side (comps missing the datum
-      // are kept, mirroring the sqft rule). Baths allow ±0.5 so a 2.75-bath
-      // comp still matches a "3 baths" subject. When the exact match filters
-      // EVERYTHING out (a 6-bed in an area of 3-beds), fall back to the
-      // unfiltered similar-size pool and flag it — hand-picking from nearby
-      // sales beats a dead end.
-      if (beds > 0 || baths > 0) {
-        const pool = data.comps;
-        let filtered = pool;
-        if (beds > 0) filtered = filtered.filter((c) => c.beds == null || Math.round(Number(c.beds)) === beds);
-        if (baths > 0) filtered = filtered.filter((c) => c.baths == null || Math.abs(Number(c.baths) - baths) <= 0.5);
-        if (filtered.length) {
-          data.comps = filtered;
-        } else if (pool.length) {
-          data.comps = pool;
-          data.bedBathRelaxed = true;
-        }
-      }
-      // Era match: a 1962 rambler and a 2015 build are not the same product
-      // even at identical size. ±10 years, same defensive shape as the two
-      // filters above — comps with no year on record are kept, and if the
-      // filter would empty the pool we keep the pool and flag it rather than
-      // returning nothing.
-      const effYear = data.subject.yearBuilt || 0;
-      if (effYear > 0) {
-        const pool = data.comps;
-        const filtered = pool.filter((c) => !c.yearBuilt || Math.abs(c.yearBuilt - effYear) <= YEAR_BUILT_TOLERANCE);
-        if (filtered.length) data.comps = filtered;
-        else if (pool.length) data.yearRelaxed = true;
-      }
-      data.comps = data.comps.slice(0, 15);
-      // Cache hits only — caching an empty result would pin a transient
-      // provider blip as "no record" for 24h.
-      if (data.subject.lat || data.comps.length) {
-        if (compsCache.size > 100) compsCache.clear();
-        compsCache.set(cacheKey, { ts: Date.now(), data });
-      }
-      res.json(data);
+      // AI condition grading needs both the Anthropic key and the Apify
+      // token (Zillow photos) — tell the UI whether to offer the button.
+      res.json({
+        ...data,
+        source,
+        gradeEnabled: Boolean(String(saved?.aiApiKey || "").trim() && apifyToken),
+      });
     } catch (err) { fail(res, err); }
   });
 
@@ -1363,9 +1172,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // then one batched Claude call grades them all. ARV should be derived from
   // renovated/updated comps — that's what "after repair" means. The client
   // sends comps in small chunks (~4) so each request stays fast.
-  const gradeCache = new Map(); // comp address → { ts, grade } (7-day TTL; sold condition is immutable)
-  const GRADE_TTL = 7 * 24 * 3600 * 1000;
-
   router.post("/comps/grade", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -1382,63 +1188,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // Apify is only needed for comps we have to go scrape. Comps captured
       // from Zillow already carry their photos, so grading those must not be
       // gated behind a token the user may never have configured.
-      const needsScrape = comps.some((c) => !(Array.isArray(c.photos) && c.photos.length));
-      if (needsScrape && !apifyToken) {
+      if (needsScrape(comps) && !apifyToken) {
         return res.status(400).json({ error: "Apify token required (Settings) to pull sold-listing photos — or capture these comps from Zillow with the bookmarklet, which brings its own photos" });
       }
 
-      const cacheKey = (c) => String(c.address).trim().toLowerCase();
-      const grades = {}; // id → {condition, confidence, note, cached}
-      const failed = [];
-
-      const uncached = [];
-      for (const c of comps) {
-        const hit = gradeCache.get(cacheKey(c));
-        if (hit && Date.now() - hit.ts < GRADE_TTL) grades[c.id] = { ...hit.grade, cached: true };
-        else uncached.push(c);
+      let out;
+      try {
+        out = await gradeComps({ subjectAddress, comps, aiApiKey, apifyToken });
+      } catch (e) {
+        throw anthropicErrorToHttp(e);
       }
-
-      // Pull each uncached comp's sold listing from Zillow (photos +
-      // description) — unless the client already sent them. Comps captured
-      // with the bookmarklet arrive with their photos attached, so grading
-      // them costs one Claude call and zero Apify credits, and returns in
-      // seconds instead of ~90.
-      const fetched = await mapPool(uncached, 3, async (c) => {
-        if (Array.isArray(c.photos) && c.photos.length) {
-          return { ...c, photos: c.photos.slice(0, 6), description: String(c.description || "").slice(0, 1500) };
-        }
-        try {
-          const z = await fetchZillowPhotos(c.address, apifyToken);
-          if (!z.photos.length) throw new Error("no photos on the listing");
-          return { ...c, photos: z.photos.slice(0, 6), description: z.listing?.remarks || "" };
-        } catch (e) {
-          const reason = e.message.slice(0, 120);
-          grades[c.id] = { condition: "unknown", confidence: "low", note: `Couldn't pull listing photos (${reason})` };
-          failed.push({ id: c.id, reason });
-          return null;
-        }
-      });
-
-      const gradeable = fetched.filter(Boolean);
-      if (gradeable.length) {
-        let result;
-        try {
-          result = await gradeCompConditions({ subjectAddress, comps: gradeable, aiApiKey });
-        } catch (e) {
-          throw anthropicErrorToHttp(e);
-        }
-        for (const g of result.grades || []) {
-          const comp = gradeable.find((c) => c.id === g.id);
-          if (!comp) continue;
-          const grade = { condition: g.condition, confidence: g.confidence, note: g.note };
-          grades[g.id] = grade;
-          // Cache only grades backed by real photos — scrape failures stay retryable.
-          if (gradeCache.size > 200) gradeCache.clear();
-          gradeCache.set(cacheKey(comp), { ts: Date.now(), grade });
-        }
-      }
-
-      res.json({ ok: true, grades, failed });
+      res.json({ ok: true, ...out });
     } catch (err) { fail(res, err); }
   });
 
@@ -1828,214 +1588,228 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   });
 
   /* ---------- create: calculate + document + attach to contact ---------- */
+  // The whole create path — calculate, render every document, persist, write
+  // the contact back — as a plain function. The route below is a thin wrapper,
+  // and the auto-underwrite pipeline calls this directly, so an offer produced
+  // unattended is the same artifact as one built by hand: same PDFs, same
+  // custom fields, same note, same tag.
+  //
+  // It stays inside this closure deliberately — renderDocument, storeDocuments,
+  // storeScopeDocument, offerNoteBody and appendDealHistory all live here.
+  async function createOfferFromRequest({ locationId, client, body = {} }) {
+    const { contactId: bodyContactId, newContact, inputs, settings: settingsOverride } = body || {};
+    // Rehab scope of work (internal — saved + noted, never on the letter).
+    const scope = Array.isArray(body.scope)
+      ? body.scope
+          .filter((s) => s && s.label && Number(s.cost) > 0)
+          .slice(0, 60)
+          .map((s) => ({ label: String(s.label).slice(0, 120), cost: Math.round(Number(s.cost)) }))
+      : [];
+    // Full form snapshot (comps workspace + rehab state) so editing the
+    // offer later restores everything. Over the cap it is trimmed a piece at
+    // a time rather than discarded whole — see ghl-broker/offer-snapshot.js
+    // for the shedding order and why comps outrank everything in it.
+    const fitted = fitSnapshot(body.snapshot);
+    const snapshot = fitted.snapshot;
+    const snapshotWarnings = fitted.warnings;
+
+    // 1. Resolve the contact (existing id, or find/create by phone).
+    let contactId = bodyContactId || "";
+    if (!contactId && newContact?.phone) {
+      contactId = await findOrCreateContactByPhone(client, locationId, newContact.phone, newContact.name || "");
+    }
+    if (!contactId) {
+      throw Object.assign(new Error("contactId or newContact.phone required"), { http: 400 });
+    }
+    const contact = await getContact(client, contactId);
+
+    // 2. Calculate.
+    const saved = await store.getOfferSettings(locationId);
+    const calc = calculateOffers(inputs || {}, { ...(saved || {}), ...(settingsOverride || {}) });
+
+    // 3. Render the document, wrap as PDF, store both.
+    const created = new Date();
+    const validUntil = offerExpiryDate(calc.settings, created);
+    const meta = {
+      contactName: contactName(contact),
+      dateLabel: dateLabel(created),
+      validLabel: dateLabel(validUntil),
+    };
+    const { jpeg, width, height } = await renderDocument(calc, meta, locationId);
+    const pdf = jpegToPdf(jpeg, width, height);
+    const offerId = crypto.randomUUID();
+    const { imageUrl, pdfUrl } = await storeDocuments(offerId, locationId, jpeg, pdf, calc.inputs.address);
+
+    // Companion document: Rehab Scope of Work (when a scope was applied).
+    let scopePdfUrl = null;
+    let scopeWarning = null;
+    if (scope.length) {
+      try {
+        // Photo-review summary + per-item rationale from the form snapshot
+        // (rendered as "condition notes" — no tooling references on paper).
+        const ai = snapshot?.rehab?.aiResult;
+        const assessment = ai && (ai.summary || (ai.notes || []).length || (ai.areas || []).length)
+          ? {
+              summary: ai.summary || "",
+              notes: Array.isArray(ai.notes) ? ai.notes : [],
+              areas: Array.isArray(ai.areas) ? ai.areas : [],
+            }
+          : null;
+        scopePdfUrl = await storeScopeDocument({
+          offerId, locationId, scope,
+          total: calc.inputs.repairs,
+          address: calc.inputs.address,
+          meta, company: calc.settings.company || {},
+          assessment,
+        });
+      } catch (e) { scopeWarning = `rehab SOW: ${e.message}`; }
+    }
+
+    // Companion document: Comparable Sales Analysis (when comps back the ARV).
+    let compsPdfUrl = null;
+    let compsWarning = null;
+    try {
+      const cs = snapshot?.comps;
+      const sel = new Set(Array.isArray(cs?.selected) ? cs.selected : []);
+      const gr = cs?.grades || {};
+      const withCondition = (c) => ({ ...c, condition: gr[c.id]?.condition || null });
+      const picked = [
+        ...(cs?.result?.comps || []).filter((c) => sel.has(c.id)).map(withCondition),
+        // Comps captured from Zillow are ticked the same way pulled ones are
+        // and must reach the PDF, or the analysis silently omits the comps
+        // the user hand-picked — the ones most likely to carry the ARV.
+        ...(Array.isArray(cs?.captured) ? cs.captured : []).filter((c) => sel.has(c.id)).map(withCondition),
+        ...(Array.isArray(cs?.manual) ? cs.manual : []).map(withCondition),
+      ];
+      if (picked.length) {
+        compsPdfUrl = await storeCompsDocument({
+          offerId, locationId,
+          comps: picked,
+          arvBasis: String(cs?.arvBasis || ""),
+          arvBase: Math.round(Number(cs?.arvBase)) || 0,
+          arvAdjustments: (Array.isArray(cs?.adjustments) ? cs.adjustments : [])
+            .map((a) => ({ label: String(a?.label || "").slice(0, 60), pct: Number(a?.pct) || 0 }))
+            .filter((a) => a.pct !== 0)
+            .slice(0, 6),
+          subject: cs?.result?.info || null,
+          estimate: cs?.result?.estimate || null,
+          months: Number(cs?.months) || 0,
+          subjectSqft: Number(String(snapshot?.subjectSqft ?? "").replace(/[^\d.]/g, "")) || 0,
+          arv: calc.inputs.arv,
+          address: calc.inputs.address,
+          meta, company: calc.settings.company || {},
+        });
+      }
+    } catch (e) { compsWarning = `comps PDF: ${e.message}`; }
+
+    // Companion document: Seller Net Comparison (the "no buyer's commission"
+    // one-pager, sent separately from the offer letter).
+    let netSheetPdfUrl = null;
+    let netSheetWarning = null;
+    let netSheetFields = null;
+    try {
+      const net = netComparison(calc.offers.cash.amount, calc.settings);
+      if (net) {
+        netSheetFields = { sellerAgentPct: net.sellerPct, buyerAgentPct: net.buyerPct };
+        netSheetPdfUrl = await storeNetSheetDocument({
+          offerId, locationId, net,
+          address: calc.inputs.address,
+          meta, company: calc.settings.company || {},
+        });
+      }
+    } catch (e) { netSheetWarning = `net comparison: ${e.message}`; }
+
+    // 4. Persist the offer.
+    const offer = await store.createOffer({
+      id: offerId,
+      locationId,
+      contactId,
+      contactName: meta.contactName,
+      address: calc.inputs.address,
+      cashAmount: calc.offers.cash.amount,
+      imageUrl,
+      pdfUrl,
+      scopePdfUrl,
+      compsPdfUrl,
+      netSheetPdfUrl,
+      netSheet: netSheetPdfUrl ? { fields: netSheetFields, generatedAt: created.toISOString() } : null,
+      dateLabel: meta.dateLabel,
+      validLabel: meta.validLabel,
+      scope,
+      snapshot,
+      calc,
+      // A generated offer starts its lifecycle at "not sent". Sending it,
+      // or recording an outcome by hand, moves it from here.
+      status: "new",
+      statusHistory: [{ status: "new", ts: created.toISOString() }],
+    });
+
+    // 5. Associate with the GHL contact record. Each write is independent;
+    //    failures are reported + logged, not fatal (the offer itself is saved).
+    const ghl = { fields: false, note: false, tag: false };
+    const warnings = [...snapshotWarnings];
+    if (scopeWarning) warnings.push(scopeWarning);
+    if (compsWarning) warnings.push(compsWarning);
+    if (netSheetWarning) warnings.push(netSheetWarning);
+    const noteFailure = (step, e) => {
+      const detail = e?.data ? `${e.message} :: ${JSON.stringify(e.data).slice(0, 200)}` : e?.message;
+      console.error(`offers: GHL attach failed [${step}] contact=${contactId}:`, detail);
+      warnings.push(`${step}: ${e.message}`);
+    };
+    try {
+      const fieldValues = {
+        last_offer_amount: calc.offers.cash.amount,
+        last_offer_date: created.toISOString().slice(0, 10),
+        last_offer_doc_url: pdfUrl,
+        last_offer_image_url: imageUrl,
+        zillow_link: zillowUrl(calc.inputs.address),
+        offer_app_link: offerAppLink(locationId, contactId),
+      };
+      const fieldWrites = [];
+      for (const f of OFFER_FIELDS) {
+        if (!fieldValues[f.key]) continue; // e.g. no address → no Zillow link
+        const id = await findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType);
+        if (id) fieldWrites.push({ id, value: fieldValues[f.key] });
+      }
+      if (fieldWrites.length) {
+        await updateContact(client, contactId, { customFields: fieldWrites });
+        ghl.fields = true;
+      }
+    } catch (e) { noteFailure("custom fields", e); }
+    try {
+      await createContactNote(client, contactId, { body: offerNoteBody(offer) });
+      ghl.note = true;
+    } catch (e) { noteFailure("note", e); }
+    try {
+      await addContactTags(client, contactId, [OFFER_TAG]);
+      ghl.tag = true;
+    } catch (e) { noteFailure("tag", e); }
+    if (calc.offers.cash.amount > 0) {
+      await appendDealHistory(client, locationId, contactId, "agent_deal_history",
+        historyLine(created.toISOString(), calc.inputs.address, `we offered ${fmtMoney(calc.offers.cash.amount)}`));
+    }
+
+    // Persist the attach outcome on the offer so History can show it.
+    offer.ghl = ghl;
+    offer.warnings = warnings;
+    await store.updateOffer(offer.id, offer).catch(() => {});
+
+    // Creating from a draft consumes the draft.
+    const draftId = body.draftId;
+    if (draftId) {
+      const d = await store.getOffer(draftId).catch(() => null);
+      if (d && d.locationId === locationId && d.status === "draft") {
+        await store.deleteOffer(draftId).catch(() => {});
+      }
+    }
+
+    return { ok: true, offer, ghl, warnings };
+  }
+
   router.post("/", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
-      const { contactId: bodyContactId, newContact, inputs, settings: settingsOverride } = req.body || {};
-      // Rehab scope of work (internal — saved + noted, never on the letter).
-      const scope = Array.isArray(req.body?.scope)
-        ? req.body.scope
-            .filter((s) => s && s.label && Number(s.cost) > 0)
-            .slice(0, 60)
-            .map((s) => ({ label: String(s.label).slice(0, 120), cost: Math.round(Number(s.cost)) }))
-        : [];
-      // Full form snapshot (comps workspace + rehab state) so editing the
-      // offer later restores everything. Over the cap it is trimmed a piece at
-      // a time rather than discarded whole — see ghl-broker/offer-snapshot.js
-      // for the shedding order and why comps outrank everything in it.
-      const fitted = fitSnapshot(req.body?.snapshot);
-      const snapshot = fitted.snapshot;
-      const snapshotWarnings = fitted.warnings;
-
-      // 1. Resolve the contact (existing id, or find/create by phone).
-      let contactId = bodyContactId || "";
-      if (!contactId && newContact?.phone) {
-        contactId = await findOrCreateContactByPhone(client, locationId, newContact.phone, newContact.name || "");
-      }
-      if (!contactId) return res.status(400).json({ error: "contactId or newContact.phone required" });
-      const contact = await getContact(client, contactId);
-
-      // 2. Calculate.
-      const saved = await store.getOfferSettings(locationId);
-      const calc = calculateOffers(inputs || {}, { ...(saved || {}), ...(settingsOverride || {}) });
-
-      // 3. Render the document, wrap as PDF, store both.
-      const created = new Date();
-      const validUntil = offerExpiryDate(calc.settings, created);
-      const meta = {
-        contactName: contactName(contact),
-        dateLabel: dateLabel(created),
-        validLabel: dateLabel(validUntil),
-      };
-      const { jpeg, width, height } = await renderDocument(calc, meta, locationId);
-      const pdf = jpegToPdf(jpeg, width, height);
-      const offerId = crypto.randomUUID();
-      const { imageUrl, pdfUrl } = await storeDocuments(offerId, locationId, jpeg, pdf, calc.inputs.address);
-
-      // Companion document: Rehab Scope of Work (when a scope was applied).
-      let scopePdfUrl = null;
-      let scopeWarning = null;
-      if (scope.length) {
-        try {
-          // Photo-review summary + per-item rationale from the form snapshot
-          // (rendered as "condition notes" — no tooling references on paper).
-          const ai = snapshot?.rehab?.aiResult;
-          const assessment = ai && (ai.summary || (ai.notes || []).length || (ai.areas || []).length)
-            ? {
-                summary: ai.summary || "",
-                notes: Array.isArray(ai.notes) ? ai.notes : [],
-                areas: Array.isArray(ai.areas) ? ai.areas : [],
-              }
-            : null;
-          scopePdfUrl = await storeScopeDocument({
-            offerId, locationId, scope,
-            total: calc.inputs.repairs,
-            address: calc.inputs.address,
-            meta, company: calc.settings.company || {},
-            assessment,
-          });
-        } catch (e) { scopeWarning = `rehab SOW: ${e.message}`; }
-      }
-
-      // Companion document: Comparable Sales Analysis (when comps back the ARV).
-      let compsPdfUrl = null;
-      let compsWarning = null;
-      try {
-        const cs = snapshot?.comps;
-        const sel = new Set(Array.isArray(cs?.selected) ? cs.selected : []);
-        const gr = cs?.grades || {};
-        const withCondition = (c) => ({ ...c, condition: gr[c.id]?.condition || null });
-        const picked = [
-          ...(cs?.result?.comps || []).filter((c) => sel.has(c.id)).map(withCondition),
-          // Comps captured from Zillow are ticked the same way pulled ones are
-          // and must reach the PDF, or the analysis silently omits the comps
-          // the user hand-picked — the ones most likely to carry the ARV.
-          ...(Array.isArray(cs?.captured) ? cs.captured : []).filter((c) => sel.has(c.id)).map(withCondition),
-          ...(Array.isArray(cs?.manual) ? cs.manual : []).map(withCondition),
-        ];
-        if (picked.length) {
-          compsPdfUrl = await storeCompsDocument({
-            offerId, locationId,
-            comps: picked,
-            arvBasis: String(cs?.arvBasis || ""),
-            arvBase: Math.round(Number(cs?.arvBase)) || 0,
-            arvAdjustments: (Array.isArray(cs?.adjustments) ? cs.adjustments : [])
-              .map((a) => ({ label: String(a?.label || "").slice(0, 60), pct: Number(a?.pct) || 0 }))
-              .filter((a) => a.pct !== 0)
-              .slice(0, 6),
-            subject: cs?.result?.info || null,
-            estimate: cs?.result?.estimate || null,
-            months: Number(cs?.months) || 0,
-            subjectSqft: Number(String(snapshot?.subjectSqft ?? "").replace(/[^\d.]/g, "")) || 0,
-            arv: calc.inputs.arv,
-            address: calc.inputs.address,
-            meta, company: calc.settings.company || {},
-          });
-        }
-      } catch (e) { compsWarning = `comps PDF: ${e.message}`; }
-
-      // Companion document: Seller Net Comparison (the "no buyer's commission"
-      // one-pager, sent separately from the offer letter).
-      let netSheetPdfUrl = null;
-      let netSheetWarning = null;
-      let netSheetFields = null;
-      try {
-        const net = netComparison(calc.offers.cash.amount, calc.settings);
-        if (net) {
-          netSheetFields = { sellerAgentPct: net.sellerPct, buyerAgentPct: net.buyerPct };
-          netSheetPdfUrl = await storeNetSheetDocument({
-            offerId, locationId, net,
-            address: calc.inputs.address,
-            meta, company: calc.settings.company || {},
-          });
-        }
-      } catch (e) { netSheetWarning = `net comparison: ${e.message}`; }
-
-      // 4. Persist the offer.
-      const offer = await store.createOffer({
-        id: offerId,
-        locationId,
-        contactId,
-        contactName: meta.contactName,
-        address: calc.inputs.address,
-        cashAmount: calc.offers.cash.amount,
-        imageUrl,
-        pdfUrl,
-        scopePdfUrl,
-        compsPdfUrl,
-        netSheetPdfUrl,
-        netSheet: netSheetPdfUrl ? { fields: netSheetFields, generatedAt: created.toISOString() } : null,
-        dateLabel: meta.dateLabel,
-        validLabel: meta.validLabel,
-        scope,
-        snapshot,
-        calc,
-        // A generated offer starts its lifecycle at "not sent". Sending it,
-        // or recording an outcome by hand, moves it from here.
-        status: "new",
-        statusHistory: [{ status: "new", ts: created.toISOString() }],
-      });
-
-      // 5. Associate with the GHL contact record. Each write is independent;
-      //    failures are reported + logged, not fatal (the offer itself is saved).
-      const ghl = { fields: false, note: false, tag: false };
-      const warnings = [...snapshotWarnings];
-      if (scopeWarning) warnings.push(scopeWarning);
-      if (compsWarning) warnings.push(compsWarning);
-      if (netSheetWarning) warnings.push(netSheetWarning);
-      const noteFailure = (step, e) => {
-        const detail = e?.data ? `${e.message} :: ${JSON.stringify(e.data).slice(0, 200)}` : e?.message;
-        console.error(`offers: GHL attach failed [${step}] contact=${contactId}:`, detail);
-        warnings.push(`${step}: ${e.message}`);
-      };
-      try {
-        const fieldValues = {
-          last_offer_amount: calc.offers.cash.amount,
-          last_offer_date: created.toISOString().slice(0, 10),
-          last_offer_doc_url: pdfUrl,
-          last_offer_image_url: imageUrl,
-          zillow_link: zillowUrl(calc.inputs.address),
-          offer_app_link: offerAppLink(locationId, contactId),
-        };
-        const fieldWrites = [];
-        for (const f of OFFER_FIELDS) {
-          if (!fieldValues[f.key]) continue; // e.g. no address → no Zillow link
-          const id = await findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType);
-          if (id) fieldWrites.push({ id, value: fieldValues[f.key] });
-        }
-        if (fieldWrites.length) {
-          await updateContact(client, contactId, { customFields: fieldWrites });
-          ghl.fields = true;
-        }
-      } catch (e) { noteFailure("custom fields", e); }
-      try {
-        await createContactNote(client, contactId, { body: offerNoteBody(offer) });
-        ghl.note = true;
-      } catch (e) { noteFailure("note", e); }
-      try {
-        await addContactTags(client, contactId, [OFFER_TAG]);
-        ghl.tag = true;
-      } catch (e) { noteFailure("tag", e); }
-      if (calc.offers.cash.amount > 0) {
-        await appendDealHistory(client, locationId, contactId, "agent_deal_history",
-          historyLine(created.toISOString(), calc.inputs.address, `we offered ${fmtMoney(calc.offers.cash.amount)}`));
-      }
-
-      // Persist the attach outcome on the offer so History can show it.
-      offer.ghl = ghl;
-      offer.warnings = warnings;
-      await store.updateOffer(offer.id, offer).catch(() => {});
-
-      // Creating from a draft consumes the draft.
-      const draftId = req.body?.draftId;
-      if (draftId) {
-        const d = await store.getOffer(draftId).catch(() => null);
-        if (d && d.locationId === locationId && d.status === "draft") {
-          await store.deleteOffer(draftId).catch(() => {});
-        }
-      }
-
-      res.json({ ok: true, offer, ghl, warnings });
+      res.json(await createOfferFromRequest({ locationId, client, body: req.body || {} }));
     } catch (err) { fail(res, err); }
   });
 
@@ -2859,6 +2633,102 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // advances to "evaluating"; any other existing status is left alone.
   // Auth is the standard location gate (location_id + location_key in the
   // webhook URL's query string).
+  /* ---------- automation: underwrite an inbound text into an offer ---------- */
+  // Target of a GHL Workflow: Inbound Message trigger → your filter → Webhook.
+  // The workflow decides WHICH texts are worth spending on; this endpoint
+  // trusts that decision and runs the whole underwrite in the background.
+  //
+  //   POST { location_id, location_key, contactId, message, dryRun }
+  //   → 202 { ok, jobId }
+  //
+  // Answers immediately on purpose: a full run takes 2–5 minutes (the Apify
+  // Zillow scrapes dominate) and GHL's webhook action will time out long
+  // before that. Progress is polled from the GET below and mirrored onto the
+  // contact as notes and uw-* tags.
+  router.post("/automations/underwrite", async (req, res) => {
+    try {
+      const b = req.body || {};
+      // GHL webhook payloads vary by trigger — accept every shape it sends.
+      b.location_id = b.location_id || b.locationId || b.location?.id || b.customData?.location_id;
+      const { locationId, client } = resolveLocation(req);
+
+      // Every other endpoint here is read-mostly or operator-driven. This one
+      // spends Apify credits and Anthropic tokens on nothing but a location id,
+      // which is guessable, so it insists on a real credential.
+      //
+      // Two ways to satisfy it, because the obvious one is a trap:
+      // GHL_LOCATION_KEYS is enforced by resolveLocation on EVERY request to
+      // that location, so switching it on to protect this one webhook 403s
+      // every custom menu link in the account until each URL gets ?key=
+      // appended. AUTO_UNDERWRITE_SECRET guards only this route and costs no
+      // migration — it belongs in the workflow's webhook body, nowhere else.
+      if (!LOCATION_KEYS[locationId] && !secretOk(b.secret)) {
+        return res.status(403).json({
+          error: AUTO_UNDERWRITE_SECRET
+            ? "bad or missing secret"
+            : "auto-underwrite needs a credential — set AUTO_UNDERWRITE_SECRET on the broker and send it as \"secret\" in the webhook body (or put this location in GHL_LOCATION_KEYS)",
+        });
+      }
+
+      const contactId = String(
+        b.contactId || b.contact_id || b.contact?.id || b.customData?.contact_id || ""
+      ).slice(0, 64);
+      if (!contactId) return res.status(400).json({ error: "contact_id required" });
+      const message = String(b.message || b.body || b.customData?.message || "").slice(0, 4000);
+      // An address the workflow already has — from a conversation bot that
+      // confirmed the property with the agent, or a contact custom field. When
+      // it's present the run trusts it and skips the extraction call entirely.
+      const address = String(b.address || b.property_address || b.customData?.address || "").trim();
+      const askingPrice = Number(String(b.askingPrice ?? b.asking_price ?? b.customData?.askingPrice ?? "")
+        .replace(/[^\d.]/g, "")) || 0;
+      // One or the other. An opportunity-created trigger has no message; an
+      // inbound-message trigger has no address. Both are valid front doors.
+      if (!message.trim() && !address) {
+        return res.status(400).json({ error: "message or address required" });
+      }
+
+      const saved = await store.getOfferSettings(locationId);
+      // Same double gate as sends, outreach imports and dispo blasts: the
+      // caller has to ask for a live run AND the broker has to be configured
+      // for it. A dry run still does all the work — it just saves a draft.
+      const dryRun = b.dryRun !== false || !AUTO_UNDERWRITE_ENABLED;
+
+      const { skipped, job } = await startUnderwrite({
+        client, locationId, saved, store, contactId, message, address, askingPrice, dryRun,
+        deps: { createOffer: createOfferFromRequest },
+      });
+      // A cap hit answers 200, not 4xx: a GHL workflow that gets an error
+      // retries, and retrying is exactly what the cap exists to stop.
+      if (skipped) return res.json({ ok: true, started: false, skipped });
+      res.status(202).json({ ok: true, started: true, jobId: job.id, dryRun: job.dryRun });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.get("/automations/underwrite", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const one = req.query.jobId ? getUnderwriteJob(String(req.query.jobId)) : null;
+      if (req.query.jobId) {
+        if (!one || one.locationId !== locationId) return res.status(404).json({ error: "no such job" });
+        return res.json({ ok: true, job: publicUnderwriteJob(one) });
+      }
+      res.json({
+        ok: true,
+        enabled: AUTO_UNDERWRITE_ENABLED,
+        jobs: listUnderwriteJobs(locationId).map(publicUnderwriteJob),
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/automations/underwrite/:id/cancel", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const job = getUnderwriteJob(req.params.id);
+      if (!job || job.locationId !== locationId) return res.status(404).json({ error: "no such job" });
+      res.json({ ok: true, canceled: cancelUnderwriteJob(job.id) });
+    } catch (err) { fail(res, err); }
+  });
+
   router.post("/automations/deal-interest", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);

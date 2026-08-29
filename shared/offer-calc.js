@@ -112,6 +112,21 @@ export const DEFAULT_OFFER_SETTINGS = {
   outreachCity: "",
   outreachState: "",
   outreachDaysOld: 180,      // only pull listings listed/updated in the last N days
+  // Auto-underwrite (an inbound agent text -> a full offer). The broker also
+  // needs AUTO_UNDERWRITE_ENABLED=true before anything is published; this is
+  // the spend ceiling, because each run costs Apify credits and two Claude
+  // vision calls. See ghl-broker/auto-underwrite.js.
+  autoUnderwriteDailyCap: 25,
+  // Where closed sales come from. "zillow" scrapes the sold map through Apify
+  // (the book the operator already reads by eye, and it carries the $/sqft
+  // spread the price proxy below needs); "realestateapi" uses county + MLS
+  // records. Zillow needs only the Apify token; RealEstateAPI needs its key.
+  compsSource: "zillow",
+  // How a comp's renovation condition is decided. "price" takes the top of the
+  // $/sqft spread inside an already-tight comp set as a stand-in for renovated
+  // — free and instant. "ai" reads each comp's sold listing photos, which is
+  // more accurate and costs a scrape plus a vision call per comp.
+  compsCondition: "price",
   // Printed on the offer document letterhead. The brand* fields additionally
   // drive the header on every investor-facing dataroom page — see brandFrom()
   // in ghl-broker/dataroom.js, which validates the colors as hex and falls back

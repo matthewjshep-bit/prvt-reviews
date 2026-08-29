@@ -12,8 +12,15 @@ import { fmtMoney } from "@shared/offer-calc.js";
 import {
   REHAB_CATALOG as CATALOG_SHARED, BED_TIERS as BED_TIERS_SHARED,
   BATH_TIERS as BATH_TIERS_SHARED, ALL_REHAB_ITEMS,
-  lineCost as sharedLineCost, sizeFactor, rehabBand, bandMidpoint, REHAB_LEVELS,
+  lineCost as sharedLineCost, rehabBand, bandMidpoint, REHAB_LEVELS,
 } from "@shared/rehab-catalog.js";
+// The checklist's state shape, what a scan does to it, and what it costs. Lives
+// in shared/ because the auto-underwrite pipeline runs the same scan on the
+// server — if the pane priced a scope its own way the offer and the scope-of-
+// work PDF could disagree about the repair number.
+import {
+  blankRehabState, applyScanSuggestion, priceScope, resizeRooms,
+} from "@shared/rehab-scope.js";
 import { scanRehab } from "./api.js";
 import { downscale } from "./image.js";
 
@@ -28,12 +35,6 @@ const parse = (v) => Number(String(v).replace(/[^\d.]/g, "")) || 0;
 // listing photos stays a few MB. Shared with the dataroom's photo upload.
 const fileToDataUrl = async (file, maxDim = 1400) =>
   (await downscale(file, maxDim, 0.8)).dataUrl;
-
-const resizeRooms = (rooms, n) => {
-  const next = rooms.slice(0, n);
-  while (next.length < n) next.push({ tier: "none", unit: 0 });
-  return next;
-};
 
 function RoomRow({ label, tiers, room, onChange }) {
   const tier = tiers.find((t) => t.id === room.tier) || tiers[0];
@@ -78,7 +79,7 @@ const AREA_GRADE_CLS = {
 
 export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApply, initialState, onStateChange }) {
   const [rows, setRows] = useState(() => ({
-    ...Object.fromEntries(ALL_ITEMS.map((i) => [i.id, { on: false, unit: i.unit, qty: 1 }])),
+    ...blankRehabState().rows,
     ...(initialState?.rows || {}),
   }));
   const [bedCount, setBedCount] = useState(initialState?.bedCount || 0);
@@ -112,51 +113,24 @@ export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApp
         yearBuilt: yearBuilt || undefined,
         images,
       });
-      const s = r.suggestion || {};
       setApplied(false);
-      // Tick suggested catalog items
-      setRows((prev) => {
-        const next = { ...prev };
-        for (const it of s.items || []) if (next[it.id]) next[it.id] = { ...next[it.id], on: true };
-        return next;
-      });
-      // Apply bathroom/bedroom tiers in order (expanding counts if photos show more rooms)
-      if ((s.bathrooms || []).length) {
-        const n = Math.min(10, Math.max(bathCount, s.bathrooms.length));
-        setBathCount(n);
-        setBathRooms((prev) => resizeRooms(prev, n).map((room, i) => {
-          const t = s.bathrooms[i] && BATH_TIERS.find((x) => x.id === s.bathrooms[i].tier);
-          return t ? { tier: t.id, unit: t.unit } : room;
-        }));
-      }
-      if ((s.bedrooms || []).length) {
-        const n = Math.min(10, Math.max(bedCount, s.bedrooms.length));
-        setBedCount(n);
-        setBedRooms((prev) => resizeRooms(prev, n).map((room, i) => {
-          const t = s.bedrooms[i] && BED_TIERS.find((x) => x.id === s.bedrooms[i].tier);
-          return t ? { tier: t.id, unit: t.unit } : room;
-        }));
-      }
-      // Custom items the catalog doesn't cover
-      if ((s.custom || []).length) {
-        setCustom((c) => [
-          ...c,
-          ...s.custom.filter((x) => Number(x.cost) > 0)
-            .map((x, i) => ({ id: `ai-${Date.now()}-${i}`, label: x.label, cost: Math.round(Number(x.cost)) })),
-        ]);
-      }
-      const labelOf = (id) => ALL_ITEMS.find((i) => i.id === id)?.label || id;
-      setAiResult({
-        summary: s.summary || "",
-        photosAnalyzed: r.photosAnalyzed,
-        areas: Array.isArray(s.areas) ? s.areas : [],
-        notes: [
-          ...(s.items || []).map((it) => ({ label: labelOf(it.id), note: it.note })),
-          ...(s.bathrooms || []).map((b, i) => ({ label: `Bathroom ${i + 1} — ${b.tier}`, note: b.note })),
-          ...(s.bedrooms || []).map((b, i) => ({ label: `Bedroom ${i + 1} — ${b.tier}`, note: b.note })),
-          ...(s.custom || []).map((c) => ({ label: c.label, note: c.note })),
-        ].filter((n) => n.note),
-      });
+      // One shared reducer decides what a scan does to the checklist: tick the
+      // suggested items (never untick), set room tiers in photo order, expand
+      // the room counts if the photos show more rooms than the county record
+      // claims, and append the custom lines. Fanned back out into the pane's
+      // individual pieces of state below.
+      const next = applyScanSuggestion(
+        { rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency, bucket, bucketAmount, aiResult },
+        r.suggestion,
+        { photosAnalyzed: r.photosAnalyzed },
+      );
+      setRows(next.rows);
+      setBathCount(next.bathCount);
+      setBathRooms(next.bathRooms);
+      setBedCount(next.bedCount);
+      setBedRooms(next.bedRooms);
+      setCustom(next.custom);
+      setAiResult(next.aiResult);
     } catch (e) { setScanError(e.message); }
     setScanning(false);
   }
@@ -191,31 +165,13 @@ export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApp
   // paint an exterior a third the size.
   const lineCost = (item, row) => sharedLineCost(item, row, sqftNum);
 
-  const { lines, subtotal, total } = useMemo(() => {
-    const lines = [];
-    bathRooms.forEach((room, i) => {
-      if (room.tier === "none" || room.unit <= 0) return;
-      const t = BATH_TIERS.find((x) => x.id === room.tier);
-      lines.push({ label: `Bathroom ${i + 1} — ${t?.label.toLowerCase() || room.tier}`, cost: Math.round(room.unit) });
-    });
-    bedRooms.forEach((room, i) => {
-      if (room.tier === "none" || room.unit <= 0) return;
-      const t = BED_TIERS.find((x) => x.id === room.tier);
-      lines.push({ label: `Bedroom ${i + 1} — ${t?.label.toLowerCase() || room.tier}`, cost: Math.round(room.unit) });
-    });
-    for (const item of ALL_ITEMS) {
-      const row = rows[item.id];
-      if (!row.on) continue;
-      const cost = Math.round(lineCost(item, row));
-      if (cost <= 0) continue;
-      const qty = item.mode === "qty" && parse(row.qty) > 1 ? ` ×${parse(row.qty)}` : "";
-      lines.push({ label: `${item.label}${qty}`, cost });
-    }
-    for (const c of custom) lines.push({ label: c.label, cost: c.cost });
-    const subtotal = lines.reduce((t, l) => t + l.cost, 0);
-    const total = Math.round((subtotal * (1 + (parse(contingency) || 0) / 100)) / 500) * 500;
-    return { lines, subtotal, total };
-  }, [rows, bedRooms, bathRooms, custom, contingency, sqftNum]);
+  // The priced scope. Shared with the broker so an auto-underwrite and a
+  // hand-built offer can never quote different repair numbers for the same
+  // scope — see shared/rehab-scope.js.
+  const { lines, subtotal, total } = useMemo(
+    () => priceScope({ rows, bedRooms, bathRooms, custom, contingency }, sqftNum),
+    [rows, bedRooms, bathRooms, custom, contingency, sqftNum]
+  );
 
   // The cheat-sheet band for this house size (null when sqft is unknown — a
   // guess would anchor the repair number on nothing).

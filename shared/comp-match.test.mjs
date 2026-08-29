@@ -152,3 +152,120 @@ test("mergeSelection takes arrays or Sets, and tolerates empties", () => {
   assert.deepEqual([...mergeSelection(null, null, null)], []);
   assert.deepEqual([...mergeSelection(new Set(["z-1"]), [], [])], [], "nothing to keep means nothing kept");
 });
+
+/* ---------------- condition by price proxy ---------------- */
+
+import { markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./comp-match.js";
+
+// A tight comp set: same beds/baths, all within ±20% of 1,400 sqft.
+const pool = (n, f) => Array.from({ length: n }, (_, i) => f(i));
+
+test("the top tier by $/sqft is marked renovated, the rest left unknown", () => {
+  const comps = [
+    { id: "a", price: 700000, sqft: 1400 },   // 500/sqft
+    { id: "b", price: 672000, sqft: 1400 },   // 480
+    { id: "c", price: 644000, sqft: 1400 },   // 460
+    { id: "d", price: 560000, sqft: 1400 },   // 400
+    { id: "e", price: 546000, sqft: 1400 },   // 390
+    { id: "f", price: 532000, sqft: 1400 },   // 380
+  ];
+  const out = markRenovatedByPrice(comps, { take: 3 });
+  assert.equal(out.applied, true);
+  assert.equal(out.pool, 6);
+  const byId = Object.fromEntries(out.comps.map((c) => [c.id, c]));
+  assert.deepEqual(["a", "b", "c"].map((k) => byId[k].condition), ["renovated", "renovated", "renovated"]);
+  // The losers are UNKNOWN, not "dated" — we have no evidence about them.
+  for (const k of ["d", "e", "f"]) assert.equal(byId[k].condition, undefined);
+});
+
+test("it ranks by $/sqft, so the biggest house doesn't win on size alone", () => {
+  // The 1,680 sqft comp has the highest PRICE but the lowest $/sqft. Ranking
+  // on price would pick it; ranking on $/sqft must not.
+  const comps = [
+    { id: "big", price: 672000, sqft: 1680 },   // 400/sqft — top price
+    { id: "nice", price: 630000, sqft: 1200 },  // 525/sqft — top $/sqft
+    { id: "c", price: 560000, sqft: 1400 },     // 400
+    { id: "d", price: 546000, sqft: 1400 },     // 390
+    { id: "e", price: 532000, sqft: 1400 },     // 380
+    { id: "f", price: 518000, sqft: 1400 },     // 370
+  ];
+  const out = markRenovatedByPrice(comps, { take: 1 });
+  const won = out.comps.filter((c) => c.condition === "renovated").map((c) => c.id);
+  assert.deepEqual(won, ["nice"]);
+});
+
+test("a pool too small to have a top tier refuses rather than pretending", () => {
+  // Marking the best 3 of 4 comps "renovated" is circular — it just restates
+  // which comps you have.
+  const comps = pool(4, (i) => ({ id: String(i), price: 600000 + i * 1000, sqft: 1400 }));
+  const out = markRenovatedByPrice(comps);
+  assert.equal(out.applied, false);
+  assert.equal(out.pool, 4);
+  assert.match(out.reason, /needs 6 to have a top tier/);
+  assert.deepEqual(out.comps, comps);                 // untouched
+  assert.ok(out.comps.every((c) => c.condition === undefined));
+});
+
+test("exactly the minimum pool is enough", () => {
+  const comps = pool(PRICE_PROXY_MIN_POOL, (i) => ({ id: String(i), price: 600000 + i * 10000, sqft: 1400 }));
+  assert.equal(markRenovatedByPrice(comps).applied, true);
+});
+
+test("unpriced comps don't count toward the pool", () => {
+  const comps = [
+    ...pool(5, (i) => ({ id: String(i), price: 600000 + i * 10000, sqft: 1400 })),
+    { id: "nop", price: 0, sqft: 1400 },
+  ];
+  const out = markRenovatedByPrice(comps);
+  assert.equal(out.applied, false);
+  assert.equal(out.pool, 5);
+});
+
+test("a comp with no sqft is ranked against the pool's typical size, not dropped", () => {
+  const comps = [
+    ...pool(5, (i) => ({ id: String(i), price: 500000, sqft: 1400 })),   // 357/sqft
+    { id: "nosqft", price: 900000, sqft: 0 },                            // ranks at 900k/1400
+  ];
+  const out = markRenovatedByPrice(comps, { take: 1 });
+  assert.equal(out.applied, true);
+  assert.equal(out.comps.find((c) => c.id === "nosqft").condition, "renovated");
+});
+
+test("the mark says where it came from, so nothing mistakes it for a photo grade", () => {
+  const comps = pool(6, (i) => ({ id: String(i), price: 600000 + i * 10000, sqft: 1400 }));
+  const won = markRenovatedByPrice(comps, { take: 2 }).comps.filter((c) => c.condition);
+  assert.equal(won.length, 2);
+  for (const c of won) {
+    assert.equal(c.conditionSource, "price");
+    assert.equal(typeof c.ppsf, "number");
+  }
+});
+
+test("take never exceeds the pool", () => {
+  const comps = pool(6, (i) => ({ id: String(i), price: 600000 + i * 10000, sqft: 1400 }));
+  const out = markRenovatedByPrice(comps, { take: 99 });
+  assert.equal(out.comps.filter((c) => c.condition === "renovated").length, 6);
+});
+
+test("marking does not mutate the comps it was handed", () => {
+  const comps = pool(6, (i) => ({ id: String(i), price: 600000 + i * 10000, sqft: 1400 }));
+  const snapshot = JSON.parse(JSON.stringify(comps));
+  markRenovatedByPrice(comps);
+  assert.deepEqual(comps, snapshot);
+});
+
+test("the marked set feeds deriveArv's graded pool", async () => {
+  // The contract that matters: deriveArv only switches to its graded pool when
+  // it finds >= 2 renovated/updated comps. The proxy has to satisfy that.
+  const { deriveArv } = await import("./arv.js");
+  const comps = pool(6, (i) => ({ id: String(i), price: 500000 + i * 40000, sqft: 1400 }));
+  const marked = markRenovatedByPrice(comps, { take: 4 }).comps;
+  const arv = deriveArv({ comps: marked, subjectSqft: 1400 });
+  assert.equal(arv.graded, true);
+  assert.match(arv.basis, /renovated\/updated/);
+  // The pool is 500k…700k in 40k steps; the top four are 580/620/660/700k.
+  // deriveArv takes their MEDIAN — 640k — not the max. That is the whole
+  // reason the proxy marks a tier rather than picking the single highest sale:
+  // one optimistic comp can't set the ARV on its own.
+  assert.equal(arv.arv, 640000);
+});

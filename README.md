@@ -39,6 +39,17 @@ stores both in R2, saves the offer, and writes it back onto the GHL contact
 (`last_offer_amount`, `last_offer_date`, `last_offer_doc_url` custom fields, a
 note with the full terms + document link, and an `offer-created` tag).
 
+## Auto-underwrite
+
+A GoHighLevel workflow can webhook an inbound agent text into a finished offer:
+`POST /api/offers/automations/underwrite` reads the address out of the message,
+pulls sold comps within half a mile (Zillow's sold map via Apify, or
+RealEstateAPI), takes the top of their $/sqft spread as renovated, derives the
+ARV from those only, scans the subject's photos into a priced scope of work, and
+creates a blended offer through the same code path the New Offer page uses. It never
+sends, and it saves a draft instead of an offer whenever the underwrite can't
+clear its quality gates. See RUNBOOK.md → Auto-underwrite.
+
 ## Offer math (defaults, all editable in Settings)
 
 Reverse engineered from lowballoffer.ai's shipped bundle (see the header of

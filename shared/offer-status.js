@@ -45,6 +45,38 @@ export const OPEN_STATUSES = new Set(["new", "sent", "countered"]);
 // Nothing more will happen here without a new offer.
 export const DEAD_STATUSES = new Set(["no_response", "passed"]);
 
+/* ---------- provenance: which offers a robot made ---------- */
+
+// An offer or draft built by the auto-underwrite pipeline carries an
+// `autoUnderwrite` stamp (see ghl-broker/auto-underwrite.js).
+//
+// Provenance is ORTHOGONAL to status, deliberately. It is tempting to make
+// "AI generated" another status value, but an auto-made offer travels the same
+// road as any other — not sent → sent → countered → passed — and folding the
+// two axes together would mean an AI offer that got sent had to stop being an
+// AI offer. So this is a second, independent question you can ask a row.
+export const isAiGenerated = (offer) => Boolean(offer?.autoUnderwrite);
+
+// Why a run stopped short of publishing, in the gate's own words. Empty for a
+// run that cleared everything.
+export const aiHoldReasons = (offer) => offer?.autoUnderwrite?.held || [];
+
+// Waiting on a pair of human eyes. Two shapes, one queue:
+//
+//   a HELD draft   — the run couldn't clear its quality gates and stopped
+//                    rather than publish a number nobody chose
+//   an UNSENT offer — the run cleared them and built the offer, but sending is
+//                    deliberately manual, so nothing has left the building
+//
+// The queue drains by itself, which is why there is no "reviewed" flag to
+// remember to set: fixing a draft turns it into an offer, and sending an offer
+// moves it to `sent`. Either way it falls out of here.
+export function needsAiReview(offer) {
+  if (!isAiGenerated(offer) || offer?.deal) return false;
+  const status = effectiveStatus(offer);
+  return status === "draft" || status === "new";
+}
+
 // Which tag a contact carries, most-advanced-wins. Used to collapse an agent's
 // many offers into the single tag GHL can hold per contact — see the ordering
 // note in syncAgentOfferTag. Higher rank beats lower.
@@ -135,6 +167,10 @@ export const STATUS_HISTORY_PHRASE = {
 export const OFFER_LIST_FIELDS = [
   "id", "locationId", "contactId", "contactName", "address", "cashAmount",
   "status", "statusAt", "statusNote", "deal", "sends", "ghl", "warnings",
+  // Small on purpose (scalars only — see auditTrail in auto-underwrite.js).
+  // It rides on the lean row so the auto-underwrite daily cap and the 24h
+  // dedupe can be answered without reading every offer document in full.
+  "autoUnderwrite",
   "createdAt", "updatedAt", "dateLabel", "validLabel",
   "pdfUrl", "imageUrl", "scopePdfUrl", "compsPdfUrl",
   "psaPdfUrl", "contractPdfUrl", "assignmentPdfUrl", "netSheetPdfUrl",

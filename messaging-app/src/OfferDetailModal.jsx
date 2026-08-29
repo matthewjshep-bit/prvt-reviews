@@ -18,7 +18,7 @@ import {
   Briefcase, ChevronLeft, ChevronRight, ExternalLink, FileSignature, FileText, Link2, Pencil, Send, X,
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { OFFER_STATUS } from "@shared/offer-status.js";
+import { OFFER_STATUS, aiHoldReasons } from "@shared/offer-status.js";
 import { ghlContactUrl, zillowUrl } from "./api.js";
 import { CHANNEL_LABELS } from "./SendModal.jsx";
 import { AttachWarning, StagePill, StatusPill } from "./ui.jsx";
@@ -38,6 +38,53 @@ function Row({ label, value }) {
     <div className="flex justify-between gap-4 text-sm">
       <span className="text-slate-500">{label}</span>
       <span className="font-medium">{value}</span>
+    </div>
+  );
+}
+
+// Where an auto-underwritten number came from.
+//
+// This is the whole reason a robot is allowed to build an offer at all: every
+// input it chose is shown, so the review is "do I agree with these four comps"
+// rather than "do I trust the machine". A held run leads with why it stopped —
+// that's the sentence the operator actually needs.
+function AiProvenance({ offer }) {
+  const uw = offer.autoUnderwrite;
+  if (!uw) return null;
+  const held = aiHoldReasons(offer);
+  return (
+    <div className={held.length ? "rounded-xl border border-amber-300 bg-amber-50 p-3.5" : "rounded-xl border border-violet-200 bg-violet-50 p-3.5"}>
+      <div className={`mb-1.5 ${CARD_LABEL} ${held.length ? "text-amber-700" : "text-violet-700"}`}>
+        {held.length ? "Auto-underwrite — held for review" : "Auto-underwritten"}
+      </div>
+
+      {held.length > 0 && (
+        <ul className="mb-2 list-inside list-disc text-xs text-amber-900">
+          {held.map((h, i) => <li key={i}>{h}</li>)}
+        </ul>
+      )}
+
+      <Row label="Property" value={uw.address || "—"} />
+      <Row
+        label="Address from"
+        value={uw.addressSource === "workflow" ? "the GHL workflow" : `the conversation (${uw.confidence || "?"} confidence)`}
+      />
+      <Row label="Comps used" value={uw.compsUsedCount != null ? `${uw.compsUsedCount} renovated` : "—"} />
+      <Row
+        label="Comps from"
+        value={`${uw.compsSource === "realestateapi" ? "RealEstateAPI" : "Zillow"}, condition by ${
+          uw.conditionSource === "ai" ? "photo scan" : "$/sqft"}`}
+      />
+      <Row label="Photos scanned" value={uw.photosAnalyzed ?? 0} />
+      {uw.mode && <Row label="Underwrite" value={uw.mode} />}
+      {uw.dryRun && <Row label="Mode" value="dry run" />}
+
+      {uw.arvBasis && (
+        <p className="mt-2 border-t border-black/5 pt-2 text-xs text-slate-600">ARV from {uw.arvBasis}</p>
+      )}
+      {uw.message && (
+        <p className="mt-2 text-xs italic text-slate-500">The text this came from: "{uw.message}"</p>
+      )}
     </div>
   );
 }
@@ -293,6 +340,7 @@ export default function OfferDetailModal({
                   <Row label="Monthly" value={`${fmtMoney(lo.monthly)} × ${lo.termMonths} mo`} />
                 </div>
               )}
+              <AiProvenance offer={offer} />
               {scope.length > 0 && <RehabScope scope={scope} />}
               {(offer.warnings || []).length > 0 && (
                 <ul className="list-inside list-disc rounded-lg bg-amber-50 p-3 text-xs text-amber-800">

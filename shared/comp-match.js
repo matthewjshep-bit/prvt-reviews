@@ -150,6 +150,74 @@ export function scoreComp(subject = {}, comp = {}, opts = {}) {
   return { score, max, pct: max ? score / max : 0, checks };
 }
 
+/* ---------- condition without opening the photos ---------- */
+
+// The pool has to be big enough for "the top of it" to mean anything. Calling
+// the best 4 of 4 comps renovated is circular — it just says "these are the
+// comps". Below this, the proxy refuses rather than pretending.
+export const PRICE_PROXY_MIN_POOL = 6;
+
+/**
+ * Mark the likeliest-renovated comps by price, for an ARV that doesn't need a
+ * vision model.
+ *
+ * Grading condition from listing photos is accurate and expensive — a scrape
+ * plus a multi-image model call per comp. Inside a set already filtered to the
+ * same beds and baths, ±20% floor area, and half a mile, most of what's left
+ * to explain the price spread IS condition. So the top of that spread is a
+ * defensible stand-in for "renovated".
+ *
+ * Two things make it honest rather than convenient:
+ *
+ *   1. It ranks by $/SQFT, not by price. Even inside a ±20% size band the
+ *      biggest house usually posts the biggest number, so ranking on price
+ *      would mostly re-discover square footage. Dividing it out leaves the
+ *      finish premium, which is the thing we're actually after.
+ *   2. The unpicked comps are left UNKNOWN, never labelled "dated". We have no
+ *      evidence about them; deriveArv ignores unknowns, which is correct.
+ *
+ * The marked comps carry `conditionSource: "price"` so nothing downstream — a
+ * PDF, a review panel, a person six weeks later — can mistake this for someone
+ * having looked at the kitchen.
+ *
+ * Returns { comps, applied, pool, reason }.
+ */
+export function markRenovatedByPrice(comps = [], { take = 4, minPool = PRICE_PROXY_MIN_POOL } = {}) {
+  const priced = comps.filter((c) => n(c.price) > 0);
+  if (priced.length < minPool) {
+    return {
+      comps,
+      applied: false,
+      pool: priced.length,
+      reason: `only ${priced.length} priced comps — the price proxy needs ${minPool} to have a top tier`,
+    };
+  }
+
+  // A comp with no sqft on record is ranked against the pool's typical size
+  // rather than dropped: it survived the ±20% filter, so this is the least
+  // wrong assumption available.
+  const sizes = priced.map((c) => n(c.sqft)).filter((x) => x > 0).sort((a, b) => a - b);
+  const typical = sizes.length ? sizes[Math.floor(sizes.length / 2)] : 0;
+  const ppsf = (c) => {
+    const s = n(c.sqft) > 0 ? n(c.sqft) : typical;
+    return s > 0 ? n(c.price) / s : n(c.price);
+  };
+
+  const ranked = [...priced].sort((a, b) => ppsf(b) - ppsf(a));
+  const winners = new Set(ranked.slice(0, Math.min(take, ranked.length)).map((c) => c.id));
+
+  return {
+    comps: comps.map((c) =>
+      winners.has(c.id)
+        ? { ...c, condition: "renovated", conditionSource: "price", ppsf: Math.round(ppsf(c)) }
+        : c
+    ),
+    applied: true,
+    pool: priced.length,
+    reason: `top ${winners.size} of ${priced.length} comps by $/sqft, taken as renovated`,
+  };
+}
+
 // Sort helper: best match first, then closest, then most recent sale. Used to
 // order the comps list and to decide which ones get preselected.
 export function compareByMatch(a, b) {

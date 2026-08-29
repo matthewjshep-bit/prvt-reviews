@@ -15,7 +15,9 @@
 import React, { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { DEAD_STATUSES, OFFER_STATUS, effectiveStatus, toListOffer } from "@shared/offer-status.js";
+import {
+  DEAD_STATUSES, OFFER_STATUS, effectiveStatus, isAiGenerated, needsAiReview, toListOffer,
+} from "@shared/offer-status.js";
 import {
   deleteOffer, getOffer, getSettings, ghlContactUrl, listOffers, promoteDeal,
   setOfferStatus, setOfferStatusBulk,
@@ -28,8 +30,9 @@ import NetSheetModal from "./NetSheetModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
+import UnderwriteStrip from "./UnderwriteStrip.jsx";
 import {
-  AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
+  AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
   SearchInput, SkeletonRows, StatusDots, StatusMenu, StatusPill, TableCard,
   rowActivation,
 } from "./ui.jsx";
@@ -68,6 +71,18 @@ const FILTERS = [
   { key: "dead", label: "Passed / no reply", test: (o) => !o.deal && DEAD_STATUSES.has(effectiveStatus(o)) },
   { key: "deals", label: "Deals", test: (o) => Boolean(o.deal) },
   { key: "drafts", label: "Drafts", test: (o) => o.status === "draft" },
+  // A different axis from the six above — those ask where an offer is in the
+  // funnel, this asks who made it and whether anyone has looked. It sits last
+  // and wears its own colour so it doesn't read as another funnel state, and
+  // it is hidden entirely for locations that never run the automation.
+  {
+    key: "ai",
+    label: "AI review",
+    tone: "ai",
+    title: "Auto-underwritten offers nobody has acted on yet — held drafts, and offers built but not sent",
+    test: needsAiReview,
+    onlyWhenUsed: true,
+  },
 ];
 
 const LIVE_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
@@ -268,9 +283,18 @@ export default function OffersHistory({ onEdit, onDeal }) {
           (o.createdAt || "").slice(0, 10),
           o.cashAmount != null ? String(o.cashAmount) : "",
           o.cashAmount != null ? fmtMoney(o.cashAmount) : "",
+          // So typing "ai" narrows to auto-underwritten rows, and "held" to the
+          // ones that stopped for review.
+          isAiGenerated(o) ? `ai auto-underwrite ${(o.autoUnderwrite.held || []).length ? "held review" : ""}` : "",
         ].some((v) => (v || "").toLowerCase().includes(needle)));
 
-  const chips = FILTERS.map((f) => ({ key: f.key, label: f.label, count: searched.filter(f.test).length }));
+  const usesAi = offers.some(isAiGenerated);
+  const chips = FILTERS
+    .filter((f) => !f.onlyWhenUsed || usesAi)
+    .map((f) => ({
+      key: f.key, label: f.label, tone: f.tone, title: f.title,
+      count: searched.filter(f.test).length,
+    }));
   const activeFilter = FILTERS.find((f) => f.key === filter) || FILTERS[0];
   const shown = searched.filter(activeFilter.test);
 
@@ -321,6 +345,10 @@ export default function OffersHistory({ onEdit, onDeal }) {
 
   return (
     <>
+      {/* Runs kicked off by a GHL workflow when an agent texts in. Renders
+          nothing when none are live or waiting on a human. */}
+      <UnderwriteStrip onReview={(offerId) => openEdit({ id: offerId })} />
+
       <div className="mb-3">
         <KpiRow items={kpis} />
       </div>
@@ -380,6 +408,10 @@ export default function OffersHistory({ onEdit, onDeal }) {
               const isOpen = needle ? true : expanded.has(g.key);
               const latest = g.offers[0];
               const addresses = [...new Set(g.offers.map((o) => o.address).filter(Boolean))];
+              // A collapsed group would otherwise hide the whole point of the
+              // AI queue: you'd click the chip, see agent names, and have to
+              // open each one to find which offer is waiting on you.
+              const aiPending = g.offers.filter(needsAiReview).length;
               return (
                 <React.Fragment key={g.key}>
                   <tr {...rowActivation(() => toggleGroup(g.key))}
@@ -399,6 +431,13 @@ export default function OffersHistory({ onEdit, onDeal }) {
                           </a>
                         ) : (
                           <span className="font-semibold">{g.contactName || "No contact"}</span>
+                        )}
+                        {aiPending > 0 && (
+                          <span
+                            className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-800"
+                            title={`${aiPending} auto-underwritten offer${aiPending === 1 ? "" : "s"} nobody has acted on yet`}>
+                            {aiPending} AI
+                          </span>
                         )}
                         <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
                           {g.offers.length} offer{g.offers.length === 1 ? "" : "s"}
@@ -455,7 +494,12 @@ export default function OffersHistory({ onEdit, onDeal }) {
                 <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">
                   {(o.createdAt || "").slice(0, 10)}
                 </td>
-                <td className="max-w-[20rem] truncate px-4 py-2.5" title={o.address || undefined}>{o.address || "—"}</td>
+                <td className="max-w-[20rem] px-4 py-2.5">
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate" title={o.address || undefined}>{o.address || "—"}</span>
+                    <AiPill offer={o} />
+                  </span>
+                </td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
                   {o.cashAmount != null ? fmtMoney(o.cashAmount) : "—"}
                 </td>

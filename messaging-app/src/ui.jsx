@@ -40,6 +40,42 @@ export function Pill({ label, cls = "bg-slate-100 text-slate-600", small, title,
   );
 }
 
+// Provenance badge for an offer the auto-underwrite pipeline built.
+//
+// It is a separate mark from the status pill on purpose — those two answer
+// different questions, and merging them would mean an AI offer stopped being
+// one the moment it was sent. Amber when the run held for review, violet when
+// it cleared its gates: at a glance, amber is "this one wants you".
+//
+// The title carries the whole audit trail, because "why should I trust this
+// number?" is the only question that matters about a robot's offer, and the
+// answer should be one hover away rather than three clicks.
+export function AiPill({ offer, small = true }) {
+  const uw = offer?.autoUnderwrite;
+  if (!uw) return null;
+  const held = uw.held || [];
+  const lines = [
+    `Auto-underwritten${uw.startedAt ? ` ${String(uw.startedAt).slice(0, 10)}` : ""}${uw.dryRun ? " (dry run)" : ""}`,
+    uw.address
+      ? `${uw.address} — ${uw.addressSource === "workflow" ? "address from the GHL workflow" : `read from the conversation (${uw.confidence || "?"} confidence)`}`
+      : "",
+    uw.extractionNote || "",
+    uw.arvBasis ? `ARV from ${uw.arvBasis}` : "",
+    uw.compsUsedCount != null
+      ? `${uw.compsUsedCount} renovated comps (${uw.compsSource === "realestateapi" ? "RealEstateAPI" : "Zillow"}, condition by ${uw.conditionSource === "ai" ? "photo scan" : "$/sqft"}) · ${uw.photosAnalyzed ?? 0} photos scanned`
+      : "",
+    held.length ? `\nHeld for review:\n${held.map((h) => `• ${h}`).join("\n")}` : "",
+  ].filter(Boolean);
+  return (
+    <Pill
+      label={held.length ? "AI · review" : "AI"}
+      small={small}
+      title={lines.join("\n")}
+      cls={held.length ? "bg-amber-100 text-amber-800" : "bg-violet-100 text-violet-800"}
+    />
+  );
+}
+
 // Deal stage. Lives here rather than in DealsView so History can show a stage
 // without importing from a sibling view.
 export const DEAL_STAGES = [
@@ -279,18 +315,27 @@ export function SearchInput({ value, onChange, placeholder = "Search…", classN
 
 // options: [{ key, label, count? }]. Counts are what make these worth the
 // space — "Passed 41" tells you something "Passed" alone doesn't.
+// A chip may carry `tone: "ai"` when it asks a different KIND of question from
+// its neighbours. The status chips are one axis (where is this in the funnel);
+// an AI chip is another (who made it), and a row of identical chips invites you
+// to read the second as more of the first.
+const CHIP_TONES = {
+  default: { on: "bg-blue-600 text-white", off: "bg-white text-slate-600 hover:bg-slate-100", count: "text-blue-100" },
+  ai: { on: "bg-violet-600 text-white", off: "bg-violet-50 text-violet-700 hover:bg-violet-100", count: "text-violet-200" },
+};
+
 export function FilterChips({ value, onChange, options, label = "Filter" }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={label}>
-      {options.map(({ key, label: text, count }) => {
+      {options.map(({ key, label: text, count, tone, title }) => {
         const on = value === key;
+        const t = CHIP_TONES[tone] || CHIP_TONES.default;
         return (
-          <button key={key} type="button" onClick={() => onChange(key)} aria-pressed={on}
-            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-              on ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-100"}`}>
+          <button key={key} type="button" onClick={() => onChange(key)} aria-pressed={on} title={title}
+            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${on ? t.on : t.off}`}>
             {text}
             {count != null && (
-              <span className={`ml-1.5 tabular-nums ${on ? "text-blue-100" : "text-slate-400"}`}>{count}</span>
+              <span className={`ml-1.5 tabular-nums ${on ? t.count : "text-slate-400"}`}>{count}</span>
             )}
           </button>
         );

@@ -8,7 +8,7 @@ import {
   CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
-import { getCompBookmarklet, regenerateCompToken, saveSettings, uploadPsaExhibit } from "./api.js";
+import { getCompBookmarklet, getUnderwrites, regenerateCompToken, saveSettings, uploadPsaExhibit } from "./api.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
 
@@ -234,6 +234,16 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   useEffect(() => {
     if (settings) setForm(effectiveSettings(settings));
   }, [settings]);
+
+  // Whether the broker will actually publish an auto-underwrite. This is env
+  // (AUTO_UNDERWRITE_ENABLED), not a setting, so it can only be reported — and
+  // it matters enough to report, because without it every run silently ends as
+  // a draft and the operator has no way to tell that from a quality hold.
+  const [underwriteEnabled, setUnderwriteEnabled] = useState(false);
+  useEffect(() => {
+    if (mode !== "offers") return;
+    getUnderwrites().then((r) => setUnderwriteEnabled(Boolean(r.enabled))).catch(() => {});
+  }, [mode]);
 
   // Zillow capture bookmarklet. The href is built server-side (one definition
   // of the loader URL) and fetched rather than derived from the settings blob.
@@ -477,6 +487,63 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       )}
 
       {mode === "offers" && (<>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Auto-underwrite</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          A GoHighLevel workflow can webhook an inbound agent text straight into a finished offer:
+          it reads the address, pulls comps within half a mile, has the AI grade each comp's
+          renovation condition from its sold photos, derives the ARV from the renovated ones only,
+          scans the subject's listing photos into a scope of work, and creates a <strong>blended</strong> offer.
+          Nothing is ever sent to the agent — the offer lands in History for you to review.
+          A run that can't find three renovated comps nearby, or enough photos to scan, stops and
+          saves a draft instead. Each run costs roughly $1–3 in Apify and Anthropic usage.
+        </p>
+        <div className="mb-3 flex items-center gap-2 text-xs">
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-semibold ${
+            underwriteEnabled ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-700"}`}>
+            {underwriteEnabled ? "Live on the broker" : "Dry run only"}
+          </span>
+          <span className="text-slate-500">
+            {underwriteEnabled
+              ? "AUTO_UNDERWRITE_ENABLED is set — runs publish real offers."
+              : "Set AUTO_UNDERWRITE_ENABLED=true on the broker to let runs publish. Until then every run saves a draft."}
+          </span>
+        </div>
+        <div className="mb-3 grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Comps from</span>
+            <select value={form.compsSource || "zillow"} onChange={(e) => set("compsSource")(e.target.value)}
+              className={INPUT_CLS}>
+              <option value="zillow">Zillow sold map (Apify)</option>
+              <option value="realestateapi">RealEstateAPI (county + MLS records)</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Renovated comps decided by</span>
+            <select value={form.compsCondition || "price"} onChange={(e) => set("compsCondition")(e.target.value)}
+              className={INPUT_CLS}>
+              <option value="price">Top of the $/sqft spread (free)</option>
+              <option value="ai">Reading each comp's sold photos (slow, ~$1)</option>
+            </select>
+          </label>
+        </div>
+        <p className="mb-3 text-xs text-slate-400">
+          Zillow needs only the Apify token above — no RealEstateAPI account. Because Zillow's sold map has
+          no subject record, the Comps pane won't auto-fill beds/baths/sqft for you; type them and the search
+          uses them. The price proxy takes the top of the $/sqft spread inside an already-tight comp set
+          (same beds/baths, ±20% size, half a mile) as a stand-in for renovated — it refuses when there
+          aren't at least 6 nearby sales to rank, rather than calling the best 3 of 3 "renovated".
+        </p>
+        <Txt label="Daily cap (runs per day)"
+          value={String(form.autoUnderwriteDailyCap ?? "")}
+          onChange={(v) => set("autoUnderwriteDailyCap")(v.replace(/[^\d]/g, ""))}
+          placeholder="25" />
+        <p className="mt-1 text-xs text-slate-400">
+          The spend ceiling. A misconfigured workflow that fires on every inbound text stops here
+          rather than at your Apify balance. Blank uses the default of 25.
+        </p>
+      </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">AI conversation sweep</h2>

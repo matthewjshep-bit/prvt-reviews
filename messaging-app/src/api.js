@@ -168,6 +168,14 @@ export const scanRehab = (address, { beds, baths, sqft, yearBuilt, images } = {}
 export const gradeComps = (address, comps) =>
   post(`/api/offers/comps/grade`, { address, comps });
 
+/* ---------- auto-underwrite (inbound text -> offer) ---------- */
+// Runs are started by a GHL workflow webhook, not from here — this only
+// watches them. A run takes 2-5 minutes, so History polls while any is live.
+export const getUnderwrites = () =>
+  fetch(`${API_BASE}/api/offers/automations/underwrite?${locq()}`).then(j);
+export const cancelUnderwrite = (jobId) =>
+  post(`/api/offers/automations/underwrite/${encodeURIComponent(jobId)}/cancel`, {});
+
 /* ---------- Zillow comp capture (bookmarklet inbox) ---------- */
 // Comps grabbed off Zillow land in a server-side inbox — the app runs in a GHL
 // iframe on a different origin from zillow.com, so the server is the only

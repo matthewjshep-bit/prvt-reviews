@@ -20,6 +20,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  isAiGenerated, aiHoldReasons, needsAiReview,
   DEAD_STATUSES,
   OFFER_STATUS,
   OFFER_STATUS_KEYS,
@@ -162,4 +163,68 @@ test("a list row keeps what the table draws and drops the weight", () => {
   assert.equal(effectiveStatus(toListOffer({ sends: [{}] })), "sent");
   // Re-trimming a row changes nothing (patching the list runs it again).
   assert.deepEqual(toListOffer(row), row);
+});
+
+
+/* ---------------- AI provenance ---------------- */
+
+const ai = (over = {}) => ({ autoUnderwrite: { jobId: "uw-1", passed: true }, ...over });
+
+test("provenance is the autoUnderwrite stamp, nothing else", () => {
+  assert.equal(isAiGenerated(ai()), true);
+  assert.equal(isAiGenerated({ status: "sent" }), false);
+  assert.equal(isAiGenerated(null), false);
+  assert.equal(isAiGenerated(undefined), false);
+});
+
+test("provenance survives the whole lifecycle — it is not a status", () => {
+  // The reason this isn't an OFFER_STATUSES entry: an AI offer that gets sent
+  // must not stop being an AI offer.
+  for (const status of ["draft", "new", "sent", "countered", "passed", "accepted"]) {
+    assert.equal(isAiGenerated(ai({ status })), true, status);
+  }
+});
+
+test("the review queue holds AI drafts and AI offers that haven't gone out", () => {
+  assert.equal(needsAiReview(ai({ status: "draft" })), true);
+  assert.equal(needsAiReview(ai({ status: "new" })), true);
+  assert.equal(needsAiReview(ai({})), true);            // no status → "new"
+});
+
+test("the queue drains through the normal flow — no reviewed flag to set", () => {
+  assert.equal(needsAiReview(ai({ status: "sent" })), false);
+  assert.equal(needsAiReview(ai({ status: "countered" })), false);
+  assert.equal(needsAiReview(ai({ status: "passed" })), false);
+  assert.equal(needsAiReview(ai({ status: "no_response" })), false);
+  assert.equal(needsAiReview(ai({ status: "accepted" })), false);
+});
+
+test("an AI offer promoted to a deal has plainly been reviewed", () => {
+  assert.equal(needsAiReview(ai({ status: "new", deal: { stage: "under_contract" } })), false);
+});
+
+test("a hand-built offer is never in the AI queue, whatever its status", () => {
+  for (const status of ["draft", "new", "sent"]) {
+    assert.equal(needsAiReview({ status }), false, status);
+  }
+});
+
+test("an AI offer with a send but no status still counts as sent, not as pending review", () => {
+  // effectiveStatus infers "sent" from a send record on rows that predate the
+  // status field; the queue has to respect that inference or it never empties.
+  assert.equal(needsAiReview(ai({ sends: [{ ts: "2026-08-26" }] })), false);
+});
+
+test("hold reasons come back verbatim, and empty for a clean run", () => {
+  assert.deepEqual(aiHoldReasons(ai({ autoUnderwrite: { held: ["only 2 renovated comps"] } })), ["only 2 renovated comps"]);
+  assert.deepEqual(aiHoldReasons(ai()), []);
+  assert.deepEqual(aiHoldReasons({}), []);
+  assert.deepEqual(aiHoldReasons(null), []);
+});
+
+test("the audit stamp survives the lean row — the table can see provenance", () => {
+  const row = toListOffer(ai({ id: "o1", status: "new", address: "1 Elm", snapshot: { huge: true } }));
+  assert.equal(isAiGenerated(row), true);
+  assert.equal(needsAiReview(row), true);
+  assert.equal(row.snapshot, undefined);
 });
