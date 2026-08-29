@@ -502,9 +502,16 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const fmtN = (n) => (Number(n) ? Number(n).toLocaleString("en-US") : "");
 
   const [mode, setMode] = useState(snap?.mode || "existing");
+  // The snapshot's contact when there is one, else the one stored on the row
+  // itself. Drafts used to read only the snapshot, so an auto-underwrite draft
+  // — which knows exactly whose agent it is, on the record — reopened with an
+  // empty Seller contact and a disabled Create button, for a contact the
+  // record could name all along.
   const [contact, setContact] = useState(
     snap?.contact ||
-    (fromOffer?.contactId ? { id: fromOffer.contactId, name: fromOffer.contactName || "", phone: "", email: "" } : null)
+    (restore?.contactId
+      ? { id: restore.contactId, name: restore.contactName || "", phone: "", email: "" }
+      : null)
   );
   const [newContact, setNewContact] = useState(snap?.newContact || { name: "", phone: "" });
   const BLANK_INPUTS = { address: "", askingPrice: "", arv: "", repairs: "", priceOverride: "" };

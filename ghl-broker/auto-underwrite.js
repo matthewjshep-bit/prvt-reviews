@@ -895,7 +895,11 @@ async function runUnderwrite(job, ctx) {
       },
       settings: { ...(saved || {}), underwriteMode: UW_MODE },
       scope,
-      snapshot: buildSnapshot({ extraction, partial }),
+      snapshot: buildSnapshot({
+        extraction,
+        partial,
+        contact: { id: job.contactId, name: job.contactName || "", phone: "", email: "" },
+      }),
     },
   });
 
@@ -928,7 +932,10 @@ async function finishHeld(job, ctx, { extraction, held, partial, cleared = false
   const warnings = job.warnings;
 
   const draft = {
-    ...buildSnapshot({ extraction, partial }),
+    ...buildSnapshot({
+      extraction, partial,
+      contact: { id: job.contactId, name: job.contactName || "", phone: "", email: "" },
+    }),
     cashPreview: null,
   };
   const record = {
@@ -964,11 +971,15 @@ async function finishHeld(job, ctx, { extraction, held, partial, cleared = false
 // upward. Getting this shape wrong doesn't error — it silently opens to an
 // empty comps board and drops the comps out of the comps PDF, which is the
 // one failure you'd only notice with an agent on the phone.
-function buildSnapshot({ extraction, partial }) {
+function buildSnapshot({ extraction, partial, contact = null }) {
   const { compsData, subject, subjectSqft, grades, rehabbed, arv, rehabState, scope, repairs } = partial;
   const center = subject?.lat != null ? { lat: subject.lat, lng: subject.lng } : null;
   return {
     mode: "existing",
+    // The agent this was underwritten for. Without it the editor opens on an
+    // empty Seller contact and cannot create the offer — the one step a review
+    // exists to finish.
+    contact,
     inputs: {
       address: extraction.address,
       arv: arv?.arv ?? 0,
