@@ -381,6 +381,17 @@ test("a blank supplied address falls back to the conversation rather than errori
   assert.equal(job.message, "you still buying 1234 NE 8th St?");
 });
 
+test("a contact alone is a valid trigger — the address can come off the record", async () => {
+  // GHL's default webhook payload is just the contact. Before Subject Property
+  // that was unusable and the route 400'd; now it's the normal Tier-1 shape,
+  // and the run resolves the address from the field itself.
+  _resetJobs();
+  const { job } = await startWith({ address: "", message: "" });
+  assert.ok(job, "started with neither an address nor a message");
+  assert.equal(job.suppliedAddress, "");
+  assert.equal(job.message, "");
+});
+
 test("a non-numeric asking price is dropped, not passed through as NaN", async () => {
   _resetJobs();
   const { job } = await startWith({ address: "1 Elm St", askingPrice: "not a number" });

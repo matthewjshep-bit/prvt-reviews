@@ -2704,11 +2704,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const address = String(b.address || b.property_address || b.customData?.address || "").trim();
       const askingPrice = Number(String(b.askingPrice ?? b.asking_price ?? b.customData?.askingPrice ?? "")
         .replace(/[^\d.]/g, "")) || 0;
-      // One or the other. An opportunity-created trigger has no message; an
-      // inbound-message trigger has no address. Both are valid front doors.
-      if (!message.trim() && !address) {
-        return res.status(400).json({ error: "message or address required" });
-      }
+      // Neither is required. This guard used to demand one of them, which was
+      // right before Subject Property existed and wrong after: a workflow that
+      // sends only the contact — GHL's default webhook payload, which is what
+      // you get when you paste a URL and set no custom body — is now a
+      // perfectly good trigger, because the run reads the address off the
+      // contact itself.
+      //
+      // If that field is empty too, the run holds with "no property address"
+      // and says so on the contact. A 400 here would instead surface in GHL's
+      // execution log as a failed webhook, which describes the workflow rather
+      // than the thing that's actually missing.
 
       const saved = await store.getOfferSettings(locationId);
       // Same double gate as sends, outreach imports and dispo blasts: the
