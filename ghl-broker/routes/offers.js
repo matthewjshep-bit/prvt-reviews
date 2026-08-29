@@ -1481,9 +1481,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!["TEXT", "NUMERICAL", "DATE"].includes(dataType)) {
         return res.status(400).json({ error: "dataType must be TEXT, NUMERICAL, or DATE" });
       }
-      const id = await findOrCreateCustomFieldByKey(client, locationId, key, name, dataType);
+      // A field the app owns knows which folder it belongs in; one typed in by
+      // hand doesn't, and lands unfiled exactly as before.
+      const siblingKey = registryByKey.get(key)?.folderSibling;
+      const id = await findOrCreateCustomFieldByKey(client, locationId, key, name, dataType, { siblingKey });
       if (!id) return res.status(502).json({ error: "GHL did not return a field id" });
-      res.json({ ok: true, id });
+      res.json({ ok: true, id, filedWith: siblingKey || null });
     } catch (err) { fail(res, err); }
   });
 
