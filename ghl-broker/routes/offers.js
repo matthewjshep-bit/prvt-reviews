@@ -2684,12 +2684,23 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // Say WHICH of the two it is. "bad or missing secret" sent the operator
         // to check their env vars, where the secret was set correctly all along
         // — the workflow simply wasn't sending one.
+        // Names only, never values. A 403 that just says "nothing arrived"
+        // leaves you guessing which of the caller's three transports the other
+        // system actually forwards; this says what it really sent, which is
+        // the one fact neither end can see on its own.
         return res.status(403).json({
           error: !AUTO_UNDERWRITE_SECRET
             ? "auto-underwrite needs a credential — set AUTO_UNDERWRITE_SECRET on the broker"
             : secretFrom(req)
             ? "the secret sent doesn't match AUTO_UNDERWRITE_SECRET on the broker"
             : "no secret was sent — add it to the webhook as an x-underwrite-secret header, a ?secret= query param, or \"secret\" in a custom JSON body",
+          received: {
+            queryKeys: Object.keys(req.query || {}),
+            bodyKeys: Object.keys(req.body || {}).slice(0, 30),
+            customDataKeys: Object.keys(req.body?.customData || {}).slice(0, 30),
+            hasSecretHeader: Boolean(req.get("x-underwrite-secret")),
+            contentType: req.get("content-type") || null,
+          },
         });
       }
 
