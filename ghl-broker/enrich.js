@@ -34,7 +34,32 @@ export const SHARED_ENRICH_FIELDS = [
   { key: "enrich_last_run", name: "AI Enrich Last Run", dataType: "TEXT", serverSet: true },
 ];
 
+// The property this agent is talking to us about RIGHT NOW.
+//
+// It starts life as the hook address — the listing that made us reach out — and
+// then follows the conversation: the moment an agent says "actually, what about
+// 7130 Bentley", this becomes 7130 Bentley. That is the whole point of it being
+// one field rather than a history: it answers "if I underwrote something for
+// this agent this minute, which house would it be?", and the auto-underwrite
+// reads exactly that.
+//
+// Exported on its own because two very different things write it — the outreach
+// import seeds it, the AI keeps it current — and they must not drift on the
+// key or the display name.
+export const SUBJECT_PROPERTY_FIELD = {
+  key: "subject_property",
+  name: "Subject Property",
+  dataType: "TEXT",
+  hint:
+    "the ONE property this agent is currently discussing with us — full street address with city and state when known. " +
+    "Update it when the agent turns the conversation to a different property, including one they raise themselves. " +
+    "Keep the existing value when the newest messages are about the same property, are small talk, or name no property at all. " +
+    "Never invent or complete an address that was not stated: an address here is underwritten automatically, " +
+    "so a wrong one values the wrong house. Empty only if no property has ever been discussed.",
+};
+
 export const AGENT_ENRICH_FIELDS = [
+  SUBJECT_PROPERTY_FIELD,
   { key: "agent_market_area", name: "Areas Served", dataType: "TEXT",
     hint: "cities, neighborhoods, or zip codes the agent works in, from texts or call transcripts — output a comma-separated list of place names as stated, e.g. 'Kent, Auburn, Federal Way' or zips; empty if none mentioned" },
   { key: "agent_deal_history", name: "Deal History", dataType: "TEXT", append: true,

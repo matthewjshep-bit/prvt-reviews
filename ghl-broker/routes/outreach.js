@@ -29,6 +29,12 @@ import { scoreListing, medianPricePerSqft, distressSignals } from "../outreach-s
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
 import { OUTREACH_FIELDS } from "../field-registry.js";
+import { SUBJECT_PROPERTY_FIELD } from "../enrich.js";
+
+// Subject Property is created and seeded here but OWNED by the conversation
+// (see its definition in enrich.js) — hence its own list rather than a new
+// entry in OUTREACH_FIELDS, which the import rewrites wholesale every time.
+const IMPORT_FIELDS = [...OUTREACH_FIELDS, SUBJECT_PROPERTY_FIELD];
 import {
   findDuplicateContact, createContact, getContact, updateContact,
   addContactTags, findOrCreateCustomFieldByKey, getLastMessageDate,
@@ -628,7 +634,7 @@ export default function createOutreachRouter({ resolveLocation }) {
       let fieldIds = null;
       if (!dryRun) {
         fieldIds = {};
-        for (const f of OUTREACH_FIELDS) {
+        for (const f of IMPORT_FIELDS) {
           fieldIds[f.key] = await withRetry(() =>
             findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType)
           );
@@ -660,11 +666,15 @@ export default function createOutreachRouter({ resolveLocation }) {
 
           let contactId;
           let action;
+          // Kept in scope past this block: the custom-field write below needs to
+          // know what the contact already had, so a re-import can't undo a
+          // Subject Property the conversation has since moved on.
+          let existing = null;
           if (match) {
             contactId = match.id;
             action = "updated";
             // Fill blanks only — never clobber an existing name/phone/email.
-            const existing = await withRetry(() => getContact(client, contactId));
+            existing = await withRetry(() => getContact(client, contactId));
             const patch = {};
             if (!existing.phone && a.phone) patch.phone = e164(a.phone);
             if (!existing.email && a.email) patch.email = a.email;
@@ -697,7 +707,20 @@ export default function createOutreachRouter({ resolveLocation }) {
             hook_url: hook.address ? zillowUrl(hook.address) || "" : "",
             brokerage: a.brokerage || "",
           };
-          const customFields = OUTREACH_FIELDS
+
+          // Subject Property is SEEDED, not set. Every other field here is a
+          // fact about the listing that made us reach out, and rewriting it on
+          // a re-import is harmless. This one is a fact about the conversation:
+          // once an agent has pointed us at a different house, putting the hook
+          // address back would silently re-aim the auto-underwrite at the wrong
+          // property. So it is written only when the contact has none.
+          const subjectId = fieldIds[SUBJECT_PROPERTY_FIELD.key];
+          const currentSubject = String(
+            (existing?.customFields || []).find((f) => f.id === subjectId)?.value ?? ""
+          ).trim();
+          if (!currentSubject && hook.address) values[SUBJECT_PROPERTY_FIELD.key] = hook.address;
+
+          const customFields = IMPORT_FIELDS
             .filter((f) => values[f.key] !== "" && values[f.key] != null)
             .map((f) => ({ id: fieldIds[f.key], value: values[f.key] }));
           if (customFields.length) await withRetry(() => updateContact(client, contactId, { customFields }));

@@ -67,7 +67,9 @@ function AiProvenance({ offer }) {
       <Row label="Property" value={uw.address || "—"} />
       <Row
         label="Address from"
-        value={uw.addressSource === "workflow" ? "the GHL workflow" : `the conversation (${uw.confidence || "?"} confidence)`}
+        value={uw.addressSource === "workflow" ? "the GHL workflow"
+          : uw.addressSource === "subject_property" ? "the Subject Property field"
+          : `the conversation (${uw.confidence || "?"} confidence)`}
       />
       <Row label="Comps used" value={uw.compsUsedCount != null ? `${uw.compsUsedCount} renovated` : "—"} />
       <Row

@@ -262,6 +262,29 @@ kitchen.
 **Wiring it.** There are two front doors. Use the first one if you have a
 qualifying bot; it is cheaper and more accurate.
 
+### Subject Property
+
+One contact field, `subject_property` ("Subject Property"), answers: *if I
+underwrote something for this agent right now, which house would it be?*
+
+- **Seeded** at outreach import from the hook address — the listing that made us
+  reach out.
+- **Kept current** by the AI conversation sweep (it is an agent enrich field) and
+  by any auto-underwrite run that reads an address from the conversation. Your
+  GHL conversation bot can write it too; the key is `subject_property`.
+- **Read** by the auto-underwrite when the webhook body carries no `address`.
+
+It is deliberately **not** in `OUTREACH_FIELDS`, which the import rewrites
+wholesale each time. A re-import seeds it only when the contact has none —
+putting the hook address back over a property the agent has since moved on from
+would silently re-aim the automation at the wrong house.
+
+Because it is a stored answer someone already committed to rather than a guess
+made this second, the field bypasses the high-confidence gate that a
+conversation-read address must clear. It shows in the offer's provenance panel
+as "Address from: the Subject Property field", so a review can still tell where
+the number came from.
+
 *Door 1 — a Tier-1 / qualified trigger (recommended).* If a conversation bot
 already qualifies the agent and captures the address, that bot IS the filter,
 and its capture is better evidence than a one-shot extraction re-reading the
@@ -272,7 +295,7 @@ over:
 ```json
 { "location_id": "{{location.id}}", "secret": "<AUTO_UNDERWRITE_SECRET>",
   "contactId": "{{contact.id}}",
-  "address": "{{contact.short_hand_property_address}}",
+  "address": "{{contact.subject_property}}",
   "askingPrice": "{{contact.hook_price}}",
   "dryRun": false }
 ```

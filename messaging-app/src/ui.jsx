@@ -57,7 +57,10 @@ export function AiPill({ offer, small = true }) {
   const lines = [
     `Auto-underwritten${uw.startedAt ? ` ${String(uw.startedAt).slice(0, 10)}` : ""}${uw.dryRun ? " (dry run)" : ""}`,
     uw.address
-      ? `${uw.address} — ${uw.addressSource === "workflow" ? "address from the GHL workflow" : `read from the conversation (${uw.confidence || "?"} confidence)`}`
+      ? `${uw.address} — ${
+          uw.addressSource === "workflow" ? "address from the GHL workflow"
+          : uw.addressSource === "subject_property" ? "address from the Subject Property field"
+          : `read from the conversation (${uw.confidence || "?"} confidence)`}`
       : "",
     uw.extractionNote || "",
     uw.arvBasis ? `ARV from ${uw.arvBasis}` : "",

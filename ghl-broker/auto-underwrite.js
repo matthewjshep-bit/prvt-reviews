@@ -38,7 +38,11 @@ import { rehabBand } from "./shared/rehab-catalog.js";
 import { fmtMoney } from "./shared/offer-calc.js";
 import { addressKey } from "./shared/us-address.js";
 import { buildTranscript } from "./enrich.js";
-import { getContact, createContactNote, addContactTags, removeContactTags } from "./ghl.js";
+import {
+  getContact, createContactNote, addContactTags, removeContactTags,
+  updateContact, findOrCreateCustomFieldByKey,
+} from "./ghl.js";
+import { SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 
 /* ---------- the dials ---------- */
 
@@ -345,6 +349,39 @@ export function evaluateGates({
   return { ok: held.length === 0, held };
 }
 
+/* ---------- the Subject Property field ---------- */
+
+// The contact's current Subject Property, off a contact record we already have.
+// Needs the field's id, which is created on demand like every other app field.
+async function readSubjectProperty(client, locationId, contact) {
+  if (!contact) return "";
+  try {
+    const id = await findOrCreateCustomFieldByKey(
+      client, locationId, SUBJECT_PROPERTY_FIELD.key, SUBJECT_PROPERTY_FIELD.name, SUBJECT_PROPERTY_FIELD.dataType
+    );
+    return String((contact.customFields || []).find((f) => f.id === id)?.value ?? "").trim();
+  } catch {
+    return "";   // the field not existing yet is not an error, it's day one
+  }
+}
+
+// Point Subject Property at what this run actually underwrote.
+//
+// Closes the loop: an agent who raises a new address in conversation gets the
+// field updated by the run itself, so the NEXT trigger — and anyone reading the
+// contact in GHL — sees the house we're actually working. Non-fatal; a run is
+// not worth failing over a field write.
+async function writeSubjectProperty(client, locationId, contactId, address, warnings) {
+  try {
+    const id = await findOrCreateCustomFieldByKey(
+      client, locationId, SUBJECT_PROPERTY_FIELD.key, SUBJECT_PROPERTY_FIELD.name, SUBJECT_PROPERTY_FIELD.dataType
+    );
+    await updateContact(client, contactId, { customFields: [{ id, value: address }] });
+  } catch (e) {
+    warnings.push(`subject property: ${e.message}`);
+  }
+}
+
 /* ---------- GHL writeback ---------- */
 
 const contactName = (c) =>
@@ -539,6 +576,16 @@ async function runUnderwrite(job, ctx) {
   // costs nothing. When it doesn't (an Inbound Message trigger, or a bot field
   // that hadn't been written yet when the workflow fired), fall back to reading
   // the conversation. The fallback is why an empty `address` is not an error.
+  // Where the address comes from, cheapest and most trustworthy first:
+  //
+  //   1. the workflow body — the bot confirmed it with the agent this minute
+  //   2. the Subject Property field — the standing answer to "which house is
+  //      this agent talking to us about", seeded from the hook at import and
+  //      kept current by the AI sweep and by runs like this one
+  //   3. the conversation itself — a model call, and the only one that can be
+  //      wrong, which is why it alone is gated on high confidence
+  const fieldAddress = job.suppliedAddress ? "" : await readSubjectProperty(client, locationId, contact);
+
   let extraction;
   if (job.suppliedAddress) {
     extraction = {
@@ -547,6 +594,14 @@ async function runUnderwrite(job, ctx) {
       confidence: "high",
       note: "Address supplied by the GHL workflow — already confirmed with the agent in conversation.",
       source: "workflow",
+    };
+  } else if (fieldAddress) {
+    extraction = {
+      address: fieldAddress,
+      askingPrice: job.suppliedAskingPrice,
+      confidence: "high",
+      note: "Address from the contact's Subject Property field.",
+      source: "subject_property",
     };
   } else {
     let transcript = "";
@@ -582,6 +637,12 @@ async function runUnderwrite(job, ctx) {
   // From here on the contact wears a uw-* tag, so any exit — including a crash
   // — owes it a terminal one. See the catch in startUnderwrite.
   job.announced = true;
+
+  // Only when this run knows better than the field does. Re-writing the same
+  // value would churn the contact's audit trail for nothing.
+  if (extraction.source !== "subject_property" && addressKey(extraction.address) !== addressKey(fieldAddress)) {
+    await writeSubjectProperty(client, locationId, job.contactId, extraction.address, warnings);
+  }
 
   const dupe = await findRecent({ store, locationId, contactId: job.contactId, address: extraction.address });
   if (dupe) {
