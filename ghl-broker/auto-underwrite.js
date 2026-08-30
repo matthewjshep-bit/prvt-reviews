@@ -714,6 +714,7 @@ async function runUnderwrite(job, ctx) {
       lat: geo.lat, lng: geo.lng,
       beds: facts?.beds ?? null, baths: facts?.baths ?? null,
       sqft: facts?.sqft ?? null, yearBuilt: facts?.yearBuilt ?? null,
+      homeType: facts?.homeType ?? null,
       stories: null, subdivision: null, material: null,
     };
     compsData = await pullZillowComps({
@@ -728,6 +729,10 @@ async function runUnderwrite(job, ctx) {
       bedTolerance: UW_POOL_BEDS_TOLERANCE,
       bathTolerance: UW_POOL_BATHS_TOLERANCE,
       sqftPct: UW_POOL_SQFT_PCT,
+      // Comp like for like: a condo is valued against condos. Null when the
+      // listing didn't say, which falls back to excluding the types that are
+      // wrong for a house.
+      homeType: subject.homeType,
       subject,
     });
   } else {
@@ -742,7 +747,7 @@ async function runUnderwrite(job, ctx) {
     });
     // County records beat a scraped listing for the subject's own facts.
     subject = { ...(compsData.subject || {}) };
-    for (const k of ["beds", "baths", "sqft", "yearBuilt"]) {
+    for (const k of ["beds", "baths", "sqft", "yearBuilt", "homeType"]) {
       if (subject[k] == null && facts?.[k] != null) subject[k] = facts[k];
     }
   }

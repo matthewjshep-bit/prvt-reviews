@@ -207,9 +207,24 @@ knowing:
   on unknowns rather than penalising them, so comps degrade in ranking, not in
   correctness — a comp scores "4/5" instead of "5/6".
 - Zillow's sold map returns condos, townhouses, multi-family and vacant land
-  alongside houses (9 of 33 within half a mile on that pull). `filterComps`
-  excludes those types, because a townhouse in the comp set is a different
-  product with a different buyer.
+  alongside houses (9 of 33 within half a mile on that pull). Comps are matched
+  to the **subject's own** `homeType`, read off its Zillow listing: a condo is
+  valued against condos, a house against houses. With the subject's type known,
+  a comp whose type Zillow didn't report is dropped — an unconfirmed match is
+  not a match, and nobody is watching an unattended run. When the subject's own
+  type is unknown, it falls back to excluding the types that are wrong for a
+  house rather than stopping.
+
+  The search URL asks Zillow for that type too (verified: 77 rows unfiltered →
+  63, all single-family), but that is only an optimization — `filterComps` is
+  what guarantees it.
+
+  Consequence worth knowing: **condo and townhouse subjects will hold far more
+  often.** Half a mile around that Tacoma address held 24 single-family sales
+  but only 1 condo and 6 townhouses, and the price proxy needs 6 to rank. That
+  is the correct outcome — a condo comped against houses is worse than no
+  number — but it means the automation is really a single-family tool until a
+  denser market says otherwise.
 - A search row's top-level `price` is an abbreviated LABEL — `"$1.23M"` — and
   the `unformattedPrice` the actor's docs advertise does not exist. The real
   number is `hdpData.homeInfo.price`. `parseMoney` understands the suffix and

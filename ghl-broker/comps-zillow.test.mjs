@@ -167,7 +167,8 @@ test("anything implausible for a house is rejected rather than trusted", () => {
 // 3 MULTI_FAMILY, 2 CONDO, 1 LOT. A townhouse in the comp set is a different
 // product with a different buyer, and it reached the ARV before this existed.
 
-const typed = (homeType) => filterComps([comp({ homeType })], { radiusMiles: 0.5, monthsBack: 12 }).length === 1;
+const typed = (homeType, opts = {}) =>
+  filterComps([comp({ homeType })], { radiusMiles: 0.5, monthsBack: 12, ...opts }).length === 1;
 
 test("condos, townhouses, multi-family and land are not comps for a house", () => {
   assert.equal(typed("SINGLE_FAMILY"), true);
@@ -216,4 +217,63 @@ test("an ISO sold date and an epoch sold date both parse", () => {
   const iso = "2026-08-25T07:00:00.000Z";
   assert.equal(new Date(Date.parse(iso)).toISOString().slice(0, 10), "2026-08-25");
   assert.equal(new Date(1756108800000).toISOString().slice(0, 10), "2025-08-25");
+});
+
+/* ---------- property type is matched, not assumed ---------- */
+// The old rule excluded the types that are wrong for a HOUSE, which quietly
+// assumed every subject was one. A condo comped against houses is not a comp.
+
+test("a known subject type is matched exactly, in both directions", () => {
+  assert.equal(typed("CONDO", { homeType: "CONDO" }), true);
+  assert.equal(typed("SINGLE_FAMILY", { homeType: "CONDO" }), false);
+  assert.equal(typed("TOWNHOUSE", { homeType: "TOWNHOUSE" }), true);
+  assert.equal(typed("CONDO", { homeType: "TOWNHOUSE" }), false);
+  assert.equal(typed("SINGLE_FAMILY", { homeType: "SINGLE_FAMILY" }), true);
+});
+
+test("with the subject's type known, a comp of unknown type is dropped", () => {
+  // Everywhere else an unknown datum is forgiving because a human is reading
+  // the list. Here nobody is, and "probably the same product" is not a match.
+  assert.equal(typed(null, { homeType: "SINGLE_FAMILY" }), false);
+  assert.equal(typed(undefined, { homeType: "CONDO" }), false);
+});
+
+test("with the subject's type unknown, the old house-shaped guess still applies", () => {
+  // Degrades rather than empties: this is the assumption the product is built
+  // around, and a listing that didn't report its type shouldn't stop a run.
+  assert.equal(typed("SINGLE_FAMILY"), true);
+  assert.equal(typed(null), true);
+  assert.equal(typed("CONDO"), false);
+  assert.equal(typed("LOT"), false);
+});
+
+test("the search URL asks Zillow for the subject's type only", () => {
+  // Verified live: 77 rows unfiltered -> 63, all SINGLE_FAMILY.
+  const f = state(soldSearchUrl({ ...SUBJECT, homeType: "SINGLE_FAMILY" })).filterState;
+  assert.equal(f.isSingleFamily.value, true);
+  assert.equal(f.isCondo.value, false);
+  assert.equal(f.isTownhouse.value, false);
+  assert.equal(f.isMultiFamily.value, false);
+  assert.equal(f.isLotLand.value, false);
+  assert.equal(f.isAllHomes.value, false, "all-homes must be off or the flags do nothing");
+});
+
+test("a condo subject asks for condos", () => {
+  const f = state(soldSearchUrl({ ...SUBJECT, homeType: "CONDO" })).filterState;
+  assert.equal(f.isCondo.value, true);
+  assert.equal(f.isSingleFamily.value, false);
+});
+
+test("no known type leaves the URL unnarrowed rather than guessing", () => {
+  const f = state(soldSearchUrl({ ...SUBJECT })).filterState;
+  assert.equal(f.isSingleFamily, undefined);
+  assert.equal(f.isAllHomes.value, true);
+});
+
+test("an unrecognized type name narrows nothing, and the JS filter still holds", () => {
+  const f = state(soldSearchUrl({ ...SUBJECT, homeType: "SOMETHING_NEW" })).filterState;
+  assert.equal(f.isAllHomes.value, true, "URL stays wide");
+  // But the exact match still refuses anything that isn't that type.
+  assert.equal(typed("SOMETHING_NEW", { homeType: "SOMETHING_NEW" }), true);
+  assert.equal(typed("SINGLE_FAMILY", { homeType: "SOMETHING_NEW" }), false);
 });

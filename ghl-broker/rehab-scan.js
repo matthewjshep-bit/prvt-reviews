@@ -129,6 +129,10 @@ export async function fetchZillowPhotos(address, apifyToken) {
       baths: Number(item.bathrooms) || null,
       sqft: Number(item.livingArea) || null,
       yearBuilt: Number(item.yearBuilt) || Number(item.resoFacts?.yearBuilt) || null,
+      // Zillow's own classification of the subject — SINGLE_FAMILY, CONDO,
+      // TOWNHOUSE, MULTI_FAMILY… Comps are matched against this rather than
+      // against an assumption that every subject is a house.
+      homeType: item.homeType || null,
     },
   };
 }

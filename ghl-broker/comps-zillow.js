@@ -57,7 +57,7 @@ const dozFor = (months) => (months <= 1 ? "30" : months <= 3 ? "90" : months <= 
  */
 export function soldSearchUrl({
   lat, lng, radiusMiles = 0.5, beds = 0, baths = 0, sqft = 0, monthsBack = 12,
-  bedTolerance = 0, sqftPct = 0.2,
+  bedTolerance = 0, sqftPct = 0.2, homeType = null,
 }) {
   const filterState = {
     // Sold only. The five for-sale flags are switched off explicitly because
@@ -82,6 +82,14 @@ export function soldSearchUrl({
     };
   }
   if (baths > 0) filterState.baths = { min: Math.max(1, Math.floor(baths)) };
+  // Ask Zillow for the subject's type only. Purely an optimization — if these
+  // keys are ever renamed the search widens and filterComps still cuts it back.
+  if (homeType && HOME_TYPE_FLAGS[homeType]) {
+    filterState.isAllHomes = { value: false };
+    for (const [type, flag] of Object.entries(HOME_TYPE_FLAGS)) {
+      filterState[flag] = { value: type === homeType };
+    }
+  }
   if (sqft > 0) {
     filterState.sqft = { min: Math.round(sqft * (1 - sqftPct)), max: Math.round(sqft * (1 + sqftPct)) };
   }
@@ -129,18 +137,35 @@ export function parseMoney(v) {
 // while a 1.23 would sail through every filter and gut the ARV.
 const plausible = (n) => Number.isFinite(n) && n >= 1000 && n < 1e9;
 
-// Zillow's homeType vocabulary. We only ever compare houses to houses: a
-// townhouse or a condo in the same block is a different product with a
-// different buyer, and one slipping into the comp set is exactly the kind of
-// thing that dies at the buyer's inspection. Observed live in a 78-row pull:
-// 64 SINGLE_FAMILY, 6 TOWNHOUSE, 3 MULTI_FAMILY, 2 CONDO, 1 LOT.
+// Zillow's homeType vocabulary. A townhouse and a house on the same block are
+// different products with different buyers, and one slipping into the comp set
+// is the kind of thing that dies at the buyer's inspection. Observed live in a
+// 78-row pull half a mile across: 64 SINGLE_FAMILY, 6 TOWNHOUSE, 3
+// MULTI_FAMILY, 2 CONDO, 1 LOT, 2 unknown.
 //
-// An exclude-list rather than an allow-list, so a type name we've never seen is
-// kept (consistent with how every other unknown is treated here) while the ones
-// we know are wrong are dropped.
+// Two modes, and which one applies depends on what we know about the SUBJECT:
+//
+//   known  — match it exactly. A condo is comped against condos. An unknown
+//            comp type is DROPPED, because "probably the same" is not a match
+//            and nobody is watching an unattended run.
+//   unknown — fall back to excluding the types that are wrong for a house,
+//            keeping unknowns. That is a guess, but it is the guess the whole
+//            product is built around, and it degrades rather than empties.
 const EXCLUDED_HOME_TYPES = new Set([
   "CONDO", "TOWNHOUSE", "MULTI_FAMILY", "APARTMENT", "LOT", "MANUFACTURED",
 ]);
+
+// filterState flags, by Zillow's own type names. Used to narrow the search URL
+// so fewer rows come back; the JS filter below is what actually guarantees it.
+const HOME_TYPE_FLAGS = {
+  SINGLE_FAMILY: "isSingleFamily",
+  CONDO: "isCondo",
+  TOWNHOUSE: "isTownhouse",
+  MULTI_FAMILY: "isMultiFamily",
+  APARTMENT: "isApartment",
+  MANUFACTURED: "isManufactured",
+  LOT: "isLotLand",
+};
 
 // Zillow's search rows carry the same fact in two or three places depending on
 // which surface served them, so read every one rather than trusting a shape.
@@ -197,7 +222,7 @@ function normalizeRow(r) {
 export async function pullZillowComps({
   apifyToken, lat, lng, beds = 0, baths = 0, sqft = 0,
   radiusMiles = 0.5, monthsBack = 12, limit = 200, subject = null,
-  bedTolerance = 0, bathTolerance = 0.5, sqftPct = 0.2,
+  bedTolerance = 0, bathTolerance = 0.5, sqftPct = 0.2, homeType = null,
 }) {
   if (!(Number.isFinite(lat) && Number.isFinite(lng))) {
     throw Object.assign(new Error("comps need the subject's coordinates"), { http: 400 });
@@ -208,7 +233,7 @@ export async function pullZillowComps({
     // trims rows the JS pass below would have kept and we never see them.
     beds, bedTolerance,
     baths: baths ? Math.max(0, baths - bathTolerance) : 0,
-    sqft, sqftPct,
+    sqft, sqftPct, homeType,
   });
 
   const r = await fetch(
@@ -254,7 +279,7 @@ export async function pullZillowComps({
     subject: subject || { lat, lng, beds: beds || null, baths: baths || null, sqft: sqft || null, yearBuilt: null },
     estimate: null, // no AVM on a Zillow search row
     comps: filterComps(comps, {
-      beds, baths, sqft, monthsBack, radiusMiles, bedTolerance, bathTolerance, sqftPct,
+      beds, baths, sqft, monthsBack, radiusMiles, bedTolerance, bathTolerance, sqftPct, homeType,
     }),
     // What the box actually held before our own filters ran — the difference
     // between "this neighbourhood is quiet" and "our bands are too tight" is
@@ -277,11 +302,17 @@ export async function pullZillowComps({
 export function filterComps(comps, {
   beds = 0, baths = 0, sqft = 0, monthsBack = 12, radiusMiles = 0.5,
   bedTolerance = 0, bathTolerance = 0.5, sqftPct = 0.2, houseTypesOnly = true,
+  homeType = null,
 }) {
   const cutoff = Date.now() - monthsBack * 30.44 * 86400000;
+  // Exact match when the subject's type is known — including dropping comps
+  // whose own type Zillow didn't report, since an unconfirmed match is not one.
+  const typeOk = homeType
+    ? (c) => c.homeType === homeType
+    : (c) => !houseTypesOnly || !c.homeType || !EXCLUDED_HOME_TYPES.has(c.homeType);
   return comps
     .filter((c) => c.distance != null && c.distance <= radiusMiles)
-    .filter((c) => !houseTypesOnly || !c.homeType || !EXCLUDED_HOME_TYPES.has(c.homeType))
+    .filter(typeOk)
     .filter((c) => !beds || c.beds == null || Math.abs(Math.round(c.beds) - Math.round(beds)) <= bedTolerance)
     .filter((c) => !baths || c.baths == null || Math.abs(c.baths - baths) <= bathTolerance)
     .filter((c) => !sqft || !c.sqft || (c.sqft >= sqft * (1 - sqftPct) && c.sqft <= sqft * (1 + sqftPct)))
