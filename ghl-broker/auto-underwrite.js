@@ -775,12 +775,22 @@ async function runUnderwrite(job, ctx) {
     // the scorecard rather than by another set of hand-tuned bands.
     const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(nearby.length * 0.35));
     proxy = markRenovatedByPrice(nearby, { take: tier });
-    rehabbed = proxy.comps
-      .filter((c) => ARV_CONDITIONS.has(c.condition))
-      .sort(compareByMatch)
-      .slice(0, UW_MAX_ARV_COMPS);
+    const markedRenovated = proxy.comps.filter((c) => ARV_CONDITIONS.has(c.condition));
+    rehabbed = [...markedRenovated].sort(compareByMatch).slice(0, UW_MAX_ARV_COMPS);
+    // Record the grade for EVERY comp the proxy judged, not just the handful
+    // that went on to carry the ARV. The tier is usually wider than
+    // UW_MAX_ARV_COMPS, so saving only the survivors threw away the verdict on
+    // the rest: they came back to the board as "cond?", indistinguishable from
+    // comps nothing had ever looked at. Tick one and it would join the ARV
+    // ungraded, quietly changing which pool deriveArv values off.
+    //
+    // Comps OUTSIDE the tier still get nothing, deliberately — being in the
+    // bottom two thirds of a $/sqft spread is not evidence that a house is
+    // dated, and claiming it would be inventing a fact.
     grades = Object.fromEntries(
-      rehabbed.map((c) => [c.id, { condition: c.condition, confidence: "medium", source: "price", note: proxy.reason }])
+      markedRenovated.map((c) => [c.id, {
+        condition: c.condition, confidence: "medium", source: "price", note: proxy.reason,
+      }])
     );
   } else {
     const candidates = nearby.slice(0, UW_GRADE_CANDIDATES);

@@ -5,7 +5,13 @@ import {
   evaluateGates, nearbyComps, countToday, findRecent, startUnderwrite, _resetJobs,
   listJobs, publicJob, cancelJob,
   UW_RADIUS_MILES, UW_MIN_REHABBED_COMPS, UW_MIN_SUBJECT_PHOTOS, UW_DEFAULT_DAILY_CAP,
+  UW_MAX_ARV_COMPS,
 } from "./auto-underwrite.js";
+import { markRenovatedByPrice } from "./shared/comp-match.js";
+
+// Mirrors the module-local Set in auto-underwrite.js. deriveArv treats exactly
+// these two as after-repair evidence.
+const ARV_CONDITIONS = new Set(["renovated", "updated"]);
 
 /* ---------- fixtures ---------- */
 
@@ -455,4 +461,53 @@ test("a timing-safe compare rejects a prefix, a suffix and a length change", () 
   assert.equal(eq("", secret), false);
   assert.equal(eq(null, secret), false);
   assert.equal(eq(undefined, secret), false);
+});
+
+/* ---------- what the board is told about condition ---------- */
+// The price proxy marks a TIER (max(4, 35% of the pool)), but only
+// UW_MAX_ARV_COMPS of them carry the ARV. Saving grades for the survivors
+// alone lost the verdict on the rest: they returned to the comps board as
+// "cond?" — indistinguishable from comps nothing had looked at — and ticking
+// one silently added an ungraded comp to the ARV pool.
+
+test("every comp the proxy judged keeps its grade, not just the ones used", () => {
+  // Mirrors the shipped shape: mark a tier, keep the best-matching few.
+  const pool = Array.from({ length: 18 }, (_, i) => ({
+    id: `c${i}`, price: 700000 - i * 20000, sqft: 1400,
+  }));
+  const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(pool.length * 0.35));
+  const marked = markRenovatedByPrice(pool, { take: tier }).comps;
+  const renovated = marked.filter((c) => ARV_CONDITIONS.has(c.condition));
+  const used = renovated.slice(0, UW_MAX_ARV_COMPS);
+
+  assert.equal(tier, 6, "18 comps earn a tier of 6");
+  assert.equal(renovated.length, 6);
+  assert.equal(used.length, 4);
+
+  const grades = Object.fromEntries(
+    renovated.map((c) => [c.id, { condition: c.condition, source: "price" }])
+  );
+  assert.equal(Object.keys(grades).length, 6, "all six judged comps are recorded");
+  for (const c of renovated) assert.ok(grades[c.id], `${c.id} kept its grade`);
+});
+
+test("comps below the tier are still left unknown, never called dated", () => {
+  // Being in the bottom two thirds of a $/sqft spread is not evidence about a
+  // house. Asserting "dated" there would be inventing a fact.
+  const pool = Array.from({ length: 18 }, (_, i) => ({
+    id: `c${i}`, price: 700000 - i * 20000, sqft: 1400,
+  }));
+  const marked = markRenovatedByPrice(pool, { take: 6 }).comps;
+  const unmarked = marked.filter((c) => !ARV_CONDITIONS.has(c.condition));
+  assert.equal(unmarked.length, 12);
+  for (const c of unmarked) assert.equal(c.condition, undefined);
+});
+
+test("a tier no wider than the ARV cap records exactly what it uses", () => {
+  // Small pools: tier floors at UW_MAX_ARV_COMPS, so judged and used coincide.
+  const pool = Array.from({ length: 7 }, (_, i) => ({ id: `c${i}`, price: 700000 - i * 20000, sqft: 1400 }));
+  const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(pool.length * 0.35));
+  assert.equal(tier, UW_MAX_ARV_COMPS);
+  const renovated = markRenovatedByPrice(pool, { take: tier }).comps.filter((c) => ARV_CONDITIONS.has(c.condition));
+  assert.equal(renovated.length, UW_MAX_ARV_COMPS);
 });
