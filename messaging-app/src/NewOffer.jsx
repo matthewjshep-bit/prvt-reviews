@@ -855,6 +855,22 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   // so it has to go the moment they move again.
   useEffect(() => { setSavedAt(null); }, [inputs, scope, effSettings]);
 
+  // Is the document behind this offer's link still the offer on screen?
+  //
+  // Sending sends the STORED documents, so this is what stands between "the
+  // agent gets the number I'm looking at" and "the agent gets the last one".
+  // It compares the CONTENT rather than watching for edits: the form re-seeds
+  // its letter terms from settings just after mount, which isn't an edit and
+  // must not read as one. It also catches the other way an offer goes stale —
+  // reopening one built under a wholesale fee that has since changed.
+  const storedCash = fromOffer?.cashAmount ?? fromOffer?.calc?.offers?.cash?.amount ?? null;
+  const liveCash = calc?.offers?.cash?.amount ?? null;
+  const storedAddress = fromOffer?.calc?.inputs?.address ?? fromOffer?.address ?? "";
+  const docBehind = Boolean(fromOffer) && (
+    (storedCash != null && liveCash != null && Math.round(storedCash) !== Math.round(liveCash)) ||
+    (storedAddress.trim() && inputs.address.trim() !== storedAddress.trim())
+  );
+
   /* ---------- draft autosave ---------- */
   // Comps claimed off Zillow are read-and-delete on the server: the instant the
   // comps pane claims them they exist nowhere but this component's state. So
@@ -1326,6 +1342,21 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
             {previewing ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
             Preview document
           </button>
+          {/* Sending is what the offer is FOR, so it belongs next to the save
+              rather than only on the create-success screen — which a revision
+              never reaches, since saving in place deliberately keeps you in
+              the form. It sends the stored documents, so it waits for the save
+              that produces them. */}
+          {fromOffer && (fromOffer.contactId || contact?.id) && (
+            <button type="button" onClick={() => setSendOpen(true)} disabled={docBehind}
+              title={docBehind
+                ? `Press Save changes first — the document behind this offer's link still reads ${
+                    storedCash != null ? fmtMoney(storedCash) : "the previous offer"}`
+                : "Text or email this offer to the agent"}
+              className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">
+              <Send size={16} /> Send
+            </button>
+          )}
           {/* An offer that already exists saves back onto itself; creating a
               second one is still possible, but it has to be asked for. */}
           {fromOffer ? (
@@ -1376,11 +1407,23 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               Open the revised PDF
             </a>
           )}
+          {(fromOffer?.contactId || contact?.id) && (
+            <button type="button" onClick={() => setSendOpen(true)}
+              className="ml-2 font-semibold underline hover:text-emerald-700">
+              Send it to {fromOffer?.contactName || contact?.name || "the agent"}
+            </button>
+          )}
           {saveWarnings.length > 0 && (
             <ul className="mt-1 list-inside list-disc text-xs text-amber-800">
               {saveWarnings.map((w, i) => <li key={i}>{w}</li>)}
             </ul>
           )}
+        </div>
+      )}
+
+      {lastSend && (
+        <div className="rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800">
+          Sent via {(lastSend.channels || []).map((c) => CHANNEL_LABELS[c] || c).join(" + ")} ✓
         </div>
       )}
 
@@ -1439,6 +1482,21 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         onOfferPage={(o) => setPeekSub({ kind: "page", offer: o })}
         onPromote={onDeal ? promoteFromPeek : undefined}
         onDealNav={onDeal} />
+    )}
+    {/* Sending the offer that's open in the form. The one on the create-success
+        screen is a different mount — that branch returns before this one. */}
+    {sendOpen && fromOffer && (
+      <SendModal offer={fromOffer} onClose={() => setSendOpen(false)}
+        onSent={(id, sends, fields) => {
+          setLastSend(sends?.[sends.length - 1] || { channels: [] });
+          // The send lands on the record, so the copies the app is holding —
+          // the agent's strip, the popout, History via onOfferSaved — have to
+          // learn about it. Without this, saving again wouldn't warn that the
+          // agent already has the document.
+          const updated = { ...fromOffer, sends, ...(fields || {}) };
+          setAgentOffers((list) => list.map((o) => (o.id === id ? { ...o, sends, ...(fields || {}) } : o)));
+          onOfferSaved?.(updated);
+        }} />
     )}
     {peekSub?.kind === "send" && (
       <SendModal offer={peekSub.offer} onClose={() => setPeekSub(null)}
