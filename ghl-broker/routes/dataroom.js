@@ -34,7 +34,7 @@ import { getContact, sendSms } from "../ghl.js";
 import {
   DEFAULT_EXPIRY_DAYS, brandFrom, buildSnapshot, dealCard, feedHeaders, hashToken,
   newToken, normalizeLinks, normalizePublicSections, normalizeSections, photoHeaders,
-  renderNotice, renderPortfolio, renderRoom, secureHeaders, teaserSections,
+  renderNotice, renderPortfolio, renderRoom, secureHeaders, syncDealNumbers, teaserSections,
 } from "../dataroom.js";
 
 // A location's portfolio is itself a dataroom row — offerId null, kind
@@ -248,6 +248,20 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
     return { locationId, client, room };
   }
 
+  // Level a room's price with its deal. The offers routes push new terms as
+  // they're saved; this is the reconcile for anything they missed, run when the
+  // operator opens the room. On a write it re-reads, so the response shows the
+  // operator exactly what investors will now see.
+  async function repriceFromDeal(locationId, room) {
+    if (!room?.offerId || !room?.snapshot?.numbers) return;
+    const offer = await store.getOffer(room.offerId);
+    if (!offer || offer.locationId !== locationId) return;
+    const settings = offer.deal ? {} : effectiveSettings(await store.getOfferSettings(locationId));
+    if (!(await syncDealNumbers({ store, offer, settings }))) return;
+    const fresh = await store.getDataroom(room.id);
+    if (fresh?.snapshot?.numbers) room.snapshot = fresh.snapshot;
+  }
+
   // The location's portfolio room, created on first use.
   async function ensurePortfolio(locationId) {
     const rooms = await store.listDatarooms(locationId, { limit: 500 });
@@ -347,6 +361,10 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
     try {
       const ctx = await loadRoom(req, res);
       if (!ctx) return;
+      // Catch up any room whose price predates this sync — rooms built before
+      // the deal terms were set, or before the offers routes started pushing
+      // them. The write only happens when the room is actually behind.
+      await repriceFromDeal(ctx.locationId, ctx.room);
       const room = await ensureShareLink(ctx.room);
       const invites = await store.listDataroomInvites(room.id);
       const events = await store.listDataroomEvents(room.id, { limit: 100 });

@@ -141,6 +141,17 @@ export const previewDocument = (inputs, settings, contactName) =>
 export const createOffer = ({ contactId, newContact, inputs, settings, scope, draftId, snapshot }) =>
   post(`/api/offers`, { contactId, newContact, inputs, settings, scope, draftId, snapshot });
 export const saveDraft = (id, draft) => post(`/api/offers/draft`, { id, draft });
+// Save an offer that already exists — same id, re-rendered documents, refreshed
+// contact fields. Answers the create shape plus { revised, staleDocs,
+// revisedAfterSend }. This is the difference between revising your offer on a
+// property and ending up owning four offers on it.
+export const updateOffer = (id, { inputs, settings, scope, snapshot }) =>
+  post(`/api/offers/${encodeURIComponent(id)}`, { inputs, settings, scope, snapshot }, "PUT");
+// The editor's autosave for an offer that already exists: workspace only. It
+// never renders a document, never touches the CRM, and can't move the offer's
+// money — which is what makes it safe on a debounce and on unmount.
+export const saveOfferWorkspace = (id, snapshot) =>
+  post(`/api/offers/${encodeURIComponent(id)}/workspace`, { snapshot }, "PATCH");
 // Property photos hang off the offer, so they outlive any one dataroom. Upload
 // is one photo per call: a whole batch in a single JSON body would be several
 // MB of base64 for the broker to parse in one blocking go.
@@ -153,6 +164,11 @@ export const uploadOfferPhoto = (offerId, { full, thumb, width, height }) =>
 // through the same downscale + upload path as a picked file.
 export const fetchOfferPhotoFromUrl = (offerId, url) =>
   post(`/api/offers/${encodeURIComponent(offerId)}/photos/from-url`, { url }).then((r) => r.dataUrl);
+// Expand a Google Drive folder link into the image URLs inside it. Answers
+// { files: [{name, url}], skipped, truncated } — the caller then runs each url
+// through fetchOfferPhotoFromUrl like any other link.
+export const expandDriveFolder = (offerId, url) =>
+  post(`/api/offers/${encodeURIComponent(offerId)}/photos/drive-folder`, { url });
 export const reorderOfferPhotos = (offerId, ids) =>
   post(`/api/offers/${encodeURIComponent(offerId)}/photos/reorder`, { ids }).then((r) => r.photos);
 // The console's own <img src>. The investor-facing photo URL needs a link

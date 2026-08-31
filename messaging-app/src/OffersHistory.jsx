@@ -556,7 +556,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
                   )}
                   <button type="button" onClick={() => openEdit(o)} className={`${BTN} mr-1`}
                     disabled={opening === o.id}
-                    title={draft ? "Continue editing draft" : "Reopen as a new working copy"}>
+                    title={draft ? "Continue editing draft" : "Open this offer to revise and save it"}>
                     <Pencil size={13} aria-hidden="true" /> Edit
                   </button>
                   <button type="button" onClick={() => remove(o)} className={BTN_ICON}

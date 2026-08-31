@@ -150,6 +150,38 @@ export function buildOfferSnapshot({ offer, settings = {}, sections, headline = 
   };
 }
 
+// Rebuild every agent-facing page for an offer that was just revised.
+//
+// The page's own freeze — "taken once, so editing the offer afterwards never
+// changes what an agent already opened" — was written when editing an offer
+// meant creating a different one. Now that a save re-renders the very PDFs this
+// page serves by offer id, staying frozen would mean printing last week's price
+// directly above this morning's attachment. So the page follows the offer; the
+// operator's own words (headline, note, section toggles) ride across untouched.
+//
+// Best-effort: a page that won't save must never fail the save that triggered
+// it. Never throws.
+export async function refreshOfferPages({ store, locationId, offer, settings = {} }) {
+  let refreshed = 0;
+  try {
+    for (const room of await store.listDatarooms(locationId, { offerId: offer.id })) {
+      if (room?.kind !== "offer") continue;
+      room.snapshot = buildOfferSnapshot({
+        offer, settings,
+        sections: room.snapshot?.sections,
+        headline: room.snapshot?.headline,
+        note: room.snapshot?.note,
+      });
+      room.address = offer.address || room.address;
+      await store.updateDataroom(room.id, room);
+      refreshed++;
+    }
+  } catch (e) {
+    console.error(`offer-page: refresh failed offer=${offer?.id}:`, e?.message);
+  }
+  return refreshed;
+}
+
 /* ============================================================= *
  * HTML
  * ============================================================= */

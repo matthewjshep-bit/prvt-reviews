@@ -108,6 +108,11 @@ export const DEFAULT_OFFER_SETTINGS = {
   // it kills every bookmarklet built from the old value.
   captureToken: "",
   rentcastApiKey: "",        // enables the Agent Outreach page (rentcast.io API key)
+  // Enables "paste a Google Drive folder" in the dataroom photo importer.
+  // A plain API key (not OAuth) is enough because the folders it reads are
+  // link-shared; it is only ever used to LIST a folder, never to download.
+  // See ghl-broker/drive-folder.js.
+  googleApiKey: "",
   outreachZips: "",          // default pull market: comma-separated zips (wins over city/state)
   outreachCity: "",
   outreachState: "",

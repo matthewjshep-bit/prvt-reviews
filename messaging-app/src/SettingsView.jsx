@@ -625,6 +625,23 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       </section>
       )}
 
+      {(mode === "offers" || mode === "dispo") && (
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Property photos from Google Drive</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Lets the dataroom photo box take a Drive <em>folder</em> link and import everything in it,
+          instead of one photo at a time. A plain API key is all it needs — no Google sign-in — because
+          it only ever reads folders you've shared "Anyone with the link".
+        </p>
+        <Txt label="Google API key" value={form.googleApiKey || ""} onChange={set("googleApiKey")} placeholder="AIza..." />
+        <p className="mt-1 text-xs text-slate-500">
+          console.cloud.google.com → APIs &amp; Services → <span className="font-mono">Enable APIs</span> →
+          Google Drive API, then Credentials → Create credentials → API key. Restrict it to the Drive API.
+          Leave any HTTP-referrer restriction off — the broker calls from a server, not a browser.
+        </p>
+      </section>
+      )}
+
       {mode === "offers" && (<>
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Company (printed on the document)</h2>

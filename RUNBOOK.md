@@ -132,6 +132,46 @@ Three things to know once it's live:
   the site's own analytics for "did anyone look at the board".
 - **The share link stays out of the feed on purpose.** If it ever shows up in
   `deals.json`, that's a regression — the test suite pins this.
+- **The price follows the deal; nothing else does.** A room's snapshot is
+  frozen at build time, but contract price / assignment fee / assignment
+  contract are re-pushed whenever the Deals tab saves new terms, and levelled
+  again when the operator opens the room. Comps, scope, photos and notes still
+  wait for **Refresh from the offer** — so a room can honestly show last
+  week's comps at this morning's price, and never the reverse.
+
+## Saving an offer vs. creating one
+
+The editor has two save buttons once an offer exists, and they do different
+things on purpose:
+
+- **Save changes** (`PUT /api/offers/:id`) revises the offer that's open. Same
+  id, so the letter and the companion PDFs are re-rendered over the same
+  storage keys and the link an agent already has resolves to the new document.
+  The URLs pick up a `?v=` stamp because those routes serve `immutable` for a
+  year — without it a revision is invisible to anyone who already opened the
+  old one.
+- **Save as new offer** (`POST /api/offers`) is the original create path: a
+  second offer on the same property, the first left untouched.
+
+What a save deliberately does **not** touch: the offer's status and history,
+its send ledger, its deal, and any PSA / purchase contract / assignment already
+generated — those are signable paperwork and are never rewritten behind you.
+The response lists any that now quote the old price so they can be regenerated
+on purpose. On the CRM side a save refreshes the contact's `last_offer_*`
+fields (unless a *newer* offer for that agent owns them) and writes one
+`agent_deal_history` line, only when the number actually moved. It never adds a
+second contact note — GHL notes are append-only.
+
+Two derived surfaces follow a save automatically: the agent-facing offer page
+(it publishes the very PDFs that were just re-rendered) and the investor
+dataroom's price. A dataroom's comps and scope stay frozen until the operator
+refreshes them, and the save response says how many rooms are behind.
+
+Editing comps or rehab on an open offer autosaves to `PATCH
+/api/offers/:id/workspace`, which writes the form workspace and nothing else —
+no calculation, no documents, no CRM. Before this existed that autosave minted
+a *draft* row beside the offer, which is how one property ended up with three
+rows in History.
 
 DB note: the schema (`ghl-broker/schema.pg.sql`) is applied idempotently on
 boot. Tables from the pre-overhaul card-studio era are left untouched; the file
@@ -480,6 +520,49 @@ them by **buy box**, and hands a shortlist to a GHL workflow.
    workflow on the trigger tag to send the deal. Live tagging requires
    `DISPO_BLASTS_ENABLED=true` on the broker; otherwise every blast is a
    dry-run preview.
+
+## Dataroom photos from a Google Drive folder
+
+The dataroom photo box takes a Drive **folder** link and imports everything in
+it, in filename order, instead of one photo at a time. Photo #1 becomes the
+deal's cover, so name them the way you want them ordered.
+
+**Setup** (once per location):
+
+1. console.cloud.google.com → pick or create a project → **APIs & Services** →
+   *Enable APIs* → **Google Drive API**. Skipping this is the most common
+   failure; the import says so explicitly when it happens.
+2. **Credentials** → *Create credentials* → **API key**. Restrict it to the
+   Drive API. Do **not** add an HTTP-referrer restriction — the broker calls
+   from a server, so there is no referrer to match. IP restriction works if you
+   want one (Render's outbound IPs).
+3. Settings → **Property photos from Google Drive** → paste the key.
+4. Share the folder itself as **"Anyone with the link"**. The key reads public
+   folders only; it is not a sign-in.
+
+**How it works.** Listing the folder needs the key and happens on the broker.
+Downloading each photo needs nothing — if the listing worked the folder is
+link-shared — so the key never reaches the browser. The broker answers with
+plain image URLs and the client pulls each one back through the same
+`/photos/from-url` endpoint a dragged image uses: one fetch path, one set of
+SSRF guards (`ghl-broker/fetch-image.js`), one place that decides sizes.
+
+Downloads go through Drive's thumbnail endpoint rather than the raw file. That
+is what makes an **iPhone HEIC importable** (Drive re-encodes to JPEG, which a
+browser canvas can actually decode), caps resolution server-side instead of
+shipping a 6MB photo only to downscale it to 1600px anyway, and dodges the
+virus-scan interstitial Drive serves for large files.
+
+**Limits and behaviour.** 100 photos per import, then it says it truncated.
+Subfolders are not descended into. Non-photos (a PSA PDF filed alongside) are
+counted and reported, not silently dropped, so "32 things in the folder, 30
+photos imported" reconciles. Nothing is stored server-side during expansion.
+
+**Also fixed by this:** a single-file `drive.google.com/file/d/<id>/view` link
+pasted anywhere that accepts a URL — the photo box and the PSA exhibit fields —
+now resolves to the file instead of failing as "not a direct image". Exhibits
+ask for the original bytes rather than a thumbnail, since a thumbnail of a PDF
+is a picture of its first page.
 
 ## Zillow comp capture (bookmarklet)
 

@@ -6,7 +6,8 @@ import { Check, ChevronDown, ChevronUp, ExternalLink, FileSignature, FileText, L
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
   addContactNote, createOffer, getContactDetail, getContactNotes, ghlContactUrl, listOffers,
-  previewDocument, promoteDeal, saveDraft, saveSettings, searchContacts, suggestAddresses, zillowUrl,
+  previewDocument, promoteDeal, saveDraft, saveOfferWorkspace, saveSettings, searchContacts,
+  suggestAddresses, updateOffer, zillowUrl,
 } from "./api.js";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
@@ -492,7 +493,7 @@ const legacyTermsToRows = (t, s) =>
     ...(String(t?.earnestMoney || "").trim() ? { earnestMoney: Number(String(t.earnestMoney).replace(/[^\d]/g, "")) || undefined } : {}),
   });
 
-export default function NewOffer({ settings, initialContactId, restore, onReset, onSettingsSaved, onOpenOffer, onDeal }) {
+export default function NewOffer({ settings, initialContactId, restore, onReset, onSettingsSaved, onOpenOffer, onOfferSaved, onDeal }) {
   // `restore` reopens a saved draft or an existing offer. Both carry a full
   // form snapshot (drafts in .draft, created offers in .snapshot) so the
   // comps workspace and rehab scope come back exactly as they were; very old
@@ -606,6 +607,10 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const [draftId, setDraftId] = useState(restore?.status === "draft" ? restore.id : null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftSaved, setDraftSaved] = useState(false);
+  // Saving an offer that already exists, as opposed to creating one.
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState(null);      // drives the "Saved" strip
+  const [saveWarnings, setSaveWarnings] = useState([]);
   const rehabStateRef = useRef(snap?.rehab || null);
   const compsStateRef = useRef(snap?.comps || null);
   const rehabInit =
@@ -780,6 +785,15 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     setPreviewing(false);
   }
 
+  // The whole form, in one place. Create, save and autosave all send this — a
+  // second copy of the field list is how the three quietly drift apart.
+  const formSnapshot = () => ({
+    mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, uwOverrides, letterTerms, offerExpires,
+    rehab: rehabStateRef.current,
+    comps: compsStateRef.current,
+  });
+  const draftBody = () => ({ ...formSnapshot(), cashPreview: calc?.offers?.cash?.amount ?? null });
+
   async function doCreate() {
     setError(""); setCreating(true); setLastSend(null);
     try {
@@ -791,25 +805,17 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         scope,
         draftId,
         // Full form snapshot so History → Edit restores comps + rehab intact.
-        snapshot: {
-          mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, uwOverrides, letterTerms, offerExpires,
-          rehab: rehabStateRef.current,
-          comps: compsStateRef.current,
-        },
+        snapshot: formSnapshot(),
       });
       setResult(r);
       setPreview(null);
       setDraftId(null);
+      // The form is now editing a real offer, even without a remount — so
+      // autosave must write to THAT offer instead of minting a draft beside it.
+      offerIdRef.current = r.offer.id;
     } catch (e) { setError(e.message); }
     setCreating(false);
   }
-
-  const draftBody = () => ({
-    mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, uwOverrides, letterTerms, offerExpires,
-    rehab: rehabStateRef.current,
-    comps: compsStateRef.current,
-    cashPreview: calc?.offers?.cash?.amount ?? null,
-  });
 
   async function doSaveDraft() {
     setError(""); setSavingDraft(true);
@@ -821,6 +827,33 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     } catch (e) { setError(e.message); }
     setSavingDraft(false);
   }
+
+  // Save this offer — the one that's open — rather than making another one.
+  // Same id, so the documents are re-rendered in place and the link the agent
+  // already has becomes the revised letter. Deliberately does NOT set `result`:
+  // that swaps the form for the create success screen, and the whole point here
+  // is that you can keep working.
+  async function doSave() {
+    const id = fromOffer?.id;
+    if (!id) return;
+    if ((fromOffer.sends || []).length && !window.confirm(
+      `This offer was already sent to ${fromOffer.contactName || "the agent"}. Saving replaces the document behind the link they have. Continue?`
+    )) return;
+    setError(""); setSaving(true);
+    try {
+      const r = await updateOffer(id, { inputs, settings: effSettings, scope, snapshot: formSnapshot() });
+      setSaveWarnings(r.warnings || []);
+      setSavedAt(new Date());
+      setPreview(null);
+      onOfferSaved?.(r.offer);
+      setAgentOffers((list) => list.map((o) => (o.id === r.offer.id ? r.offer : o)));
+    } catch (e) { setError(e.message); }
+    setSaving(false);
+  }
+
+  // The "Saved" strip describes the numbers as they stood when it was pressed,
+  // so it has to go the moment they move again.
+  useEffect(() => { setSavedAt(null); }, [inputs, scope, effSettings]);
 
   /* ---------- draft autosave ---------- */
   // Comps claimed off Zillow are read-and-delete on the server: the instant the
@@ -842,8 +875,16 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const draftIdRef = useRef(draftId);
   const draftBodyRef = useRef(draftBody);
   const blockAutosave = useRef(false);
+  // The offer this form is editing, when there is one. Fixed for the
+  // component's life — the parent keys NewOffer on the offer id — except after
+  // doCreate, which turns a blank form into an open offer without remounting.
+  const offerIdRef = useRef(fromOffer?.id || null);
+  const snapshotRef = useRef(formSnapshot);
   draftBodyRef.current = draftBody;
-  blockAutosave.current = Boolean(result) || creating;
+  snapshotRef.current = formSnapshot;
+  // `saving` too: a debounced workspace write must not race an explicit save
+  // and land the same snapshot on top of it out of order.
+  blockAutosave.current = Boolean(result) || creating || saving;
   useEffect(() => { draftIdRef.current = draftId; }, [draftId]);
 
   // Comps that can't be re-fetched, or a rehab scope built by hand.
@@ -864,10 +905,16 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     if (autosaveInFlight.current) { autosaveQueued.current = true; return; }
     autosaveInFlight.current = true;
     try {
-      const r = await saveDraft(draftIdRef.current, body);
-      if (r?.offer?.id && r.offer.id !== draftIdRef.current) {
-        draftIdRef.current = r.offer.id;
-        if (mountedRef.current) setDraftId(r.offer.id);
+      if (offerIdRef.current) {
+        // The workspace belongs to the offer that's open. Writing a draft here
+        // is what used to leave three rows on one property.
+        await saveOfferWorkspace(offerIdRef.current, snapshotRef.current());
+      } else {
+        const r = await saveDraft(draftIdRef.current, body);
+        if (r?.offer?.id && r.offer.id !== draftIdRef.current) {
+          draftIdRef.current = r.offer.id;
+          if (mountedRef.current) setDraftId(r.offer.id);
+        }
       }
       if (mountedRef.current) {
         setDraftSaved(true);
@@ -1279,21 +1326,63 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
             {previewing ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
             Preview document
           </button>
-          <button type="button" disabled={savingDraft} onClick={doSaveDraft}
-            className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">
-            {savingDraft ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-            {draftSaved ? "Draft saved ✓" : draftId ? "Update draft" : "Save draft"}
-          </button>
-          <button type="button" disabled={!canCreate || creating} onClick={doCreate}
-            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-blue-700">
-            {creating ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-            Create offer & attach to contact
-          </button>
+          {/* An offer that already exists saves back onto itself; creating a
+              second one is still possible, but it has to be asked for. */}
+          {fromOffer ? (
+            <>
+              <button type="button" disabled={!canCreate || creating} onClick={doCreate}
+                title="Leave this offer as it is and write a second one on the same property"
+                className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">
+                {creating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+                Save as new offer
+              </button>
+              <button type="button" disabled={!calc || saving} onClick={doSave}
+                title="Update this offer — same link, revised numbers"
+                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-blue-700">
+                {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                {savedAt ? "Saved ✓" : "Save changes"}
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" disabled={savingDraft} onClick={doSaveDraft}
+                className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">
+                {savingDraft ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                {draftSaved ? "Draft saved ✓" : draftId ? "Update draft" : "Save draft"}
+              </button>
+              <button type="button" disabled={!canCreate || creating} onClick={doCreate}
+                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-blue-700">
+                {creating ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                Create offer & attach to contact
+              </button>
+            </>
+          )}
         </div>
-        {!canCreate && calc && (
+        {!canCreate && calc && !fromOffer && (
           <div className="mt-1 text-right text-xs text-slate-400">Pick a contact in step 1 (or enter a phone) to create the offer.</div>
         )}
+        {fromOffer && draftSaved && !savedAt && (
+          <div className="mt-1 text-right text-xs text-slate-400">
+            Comps and scope saved to this offer — press Save changes to update the documents and the agent's record.
+          </div>
+        )}
       </div>
+
+      {savedAt && (
+        <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+          Saved{calc ? ` — the letter behind this offer's link now reads ${fmtMoney(calc.offers.cash.amount)}` : ""}.
+          {fromOffer?.pdfUrl && (
+            <a href={fromOffer.pdfUrl} target="_blank" rel="noreferrer" className="ml-2 font-semibold underline">
+              Open the revised PDF
+            </a>
+          )}
+          {saveWarnings.length > 0 && (
+            <ul className="mt-1 list-inside list-disc text-xs text-amber-800">
+              {saveWarnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
 
       {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
 

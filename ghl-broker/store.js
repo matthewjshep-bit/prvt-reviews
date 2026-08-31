@@ -116,8 +116,16 @@ const pgStore = {
     const { rows } = await query(`select doc from offers where id = $1`, [id]);
     return rows[0]?.doc || null;
   },
+  // The three columns beside `doc` are a mirror of it, and until an offer could
+  // be revised in place nothing ever made them disagree. listOffersSince reads
+  // cash_amount from the COLUMN (it feeds the dashboard's daily cash buckets),
+  // so a doc-only write would leave the table showing one number and the chart
+  // another, permanently. Every caller passes a whole doc, so mirror all three.
   async updateOffer(id, doc) {
-    const { rowCount } = await query(`update offers set doc = $2 where id = $1`, [id, doc]);
+    const { rowCount } = await query(
+      `update offers set doc = $2, contact_id = $3, address = $4, cash_amount = $5 where id = $1`,
+      [id, doc, doc.contactId || null, doc.address || null, doc.cashAmount || null]
+    );
     return rowCount > 0;
   },
   async deleteOffer(id) {

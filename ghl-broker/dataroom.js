@@ -159,9 +159,55 @@ export function pickedComps(snapshot) {
   ].filter((c) => c.price > 0).slice(0, 24);
 }
 
+// The money on the package, in one place: the deal's own terms once the offer
+// is under contract, the offer's cash number and the default fee before that.
+// `investorPrice` is the assignment contract — contract price + fee — which is
+// exactly what the deal page calls it and what the end buyer pays.
+//
+// Whole dollars throughout. The offer calc deliberately jitters cents onto the
+// cash offer so it reads as calculated rather than round, but those cents ride
+// through into contractPrice and read as sloppiness on a deal package.
+export function dealNumbers({ offer, settings = {} }) {
+  const deal = offer?.deal || null;
+  const contractPrice = Math.round(num(deal?.contractPrice) || num(offer?.cashAmount));
+  const assignmentFee = Math.round(deal ? num(deal.assignmentFee) : num(settings?.wholesaleFee));
+  return { contractPrice, assignmentFee, investorPrice: contractPrice + assignmentFee };
+}
+
+// Push the deal's money into every room built from this offer. The snapshot is
+// frozen on purpose — comps, scope, photos and notes stay as the investor first
+// saw them until the operator refreshes — but the price is the one number that
+// must never be behind the contract: quoting an investor a purchase price the
+// deal page has since moved off is how you assign a deal at the wrong number.
+// Only the three money fields move; everything else waits for the refresh.
+//
+// Best-effort by design: a room that won't save must never fail the deal edit
+// that triggered this. Never throws.
+export async function syncDealNumbers({ store, offer, settings = {} }) {
+  const next = dealNumbers({ offer, settings });
+  let synced = 0;
+  try {
+    for (const room of await store.listDatarooms(offer.locationId, { offerId: offer.id })) {
+      // Investor rooms only. An agent-facing offer page rides on the same table
+      // (kind "offer") and carries the offer's own numbers, not the deal's.
+      const n = room?.kind === "offer" ? null : room?.snapshot?.numbers;
+      if (!n) continue;
+      if (n.contractPrice === next.contractPrice && n.assignmentFee === next.assignmentFee) continue;
+      room.snapshot = { ...room.snapshot, numbers: { ...n, ...next } };
+      await store.updateDataroom(room.id, room);
+      synced++;
+    }
+  } catch (e) {
+    console.error(`dataroom: price sync failed offer=${offer?.id}:`, e?.message);
+  }
+  return synced;
+}
+
 // Build the frozen investor package from an offer. Taken once at creation so
 // later edits to the offer never change what an investor already opened;
-// the operator refreshes deliberately via PUT /api/datarooms/:id.
+// the operator refreshes deliberately via PUT /api/datarooms/:id. The one
+// exception is the price, which syncDealNumbers above keeps level with the
+// deal's assignment contract.
 // `links` is operator-authored, not derived from the offer — like headline and
 // notes, it must be passed back in on a refresh or rebuilding from the offer
 // would silently drop it.
@@ -171,12 +217,7 @@ export function buildSnapshot({ offer, settings = {}, sections, headline = "", n
   const snap = offer?.snapshot || null;
   const company = offer?.calc?.settings?.company || settings?.company || {};
 
-  // Whole dollars throughout. The offer calc deliberately jitters cents onto
-  // the cash offer so it reads as calculated rather than round, but those cents
-  // ride through into contractPrice and read as sloppiness on a deal package.
-  const contractPrice = Math.round(num(deal?.contractPrice) || num(offer?.cashAmount));
-  const assignmentFee = Math.round(deal ? num(deal.assignmentFee) : num(settings?.wholesaleFee));
-  const investorPrice = contractPrice + assignmentFee;
+  const { contractPrice, assignmentFee, investorPrice } = dealNumbers({ offer, settings });
   const arv = Math.round(num(inputs.arv));
   const repairs = Math.round(num(inputs.repairs) || (offer?.scope || []).reduce((t, s) => t + num(s.cost), 0));
 

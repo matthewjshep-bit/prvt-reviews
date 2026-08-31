@@ -700,6 +700,39 @@ ok("dry run previews the text", r.body?.send?.dryRun === true && r.body.send.pre
 ok("dry run sends nothing", r.body.send.sent === undefined);
 ok("text warns against forwarding", /don't forward/.test(r.body.send.preview.message));
 
+console.log("\n== the price follows the deal's terms ==");
+const { syncDealNumbers } = await import("./dataroom.js");
+// The operator re-cuts the deal on the Deals tab: 312,000 + 15,000 becomes
+// 430,000 + 27,500. What an investor is quoted must move with it.
+const reterm = async (contractPrice, assignmentFee) => {
+  const o = await store.getOffer(offer.id);
+  o.deal = { ...o.deal, contractPrice, assignmentFee };
+  await store.updateOffer(offer.id, o);
+  return o;
+};
+
+// 1. What the offers routes do when terms are saved.
+await syncDealNumbers({ store, offer: await reterm(430000, 27500) });
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+let n = r.body.dataroom.snapshot.numbers;
+ok("room re-prices to the assignment contract", n.investorPrice === 457500, n.investorPrice);
+ok("keeps the deal's two halves", n.contractPrice === 430000 && n.assignmentFee === 27500, `${n.contractPrice}/${n.assignmentFee}`);
+ok("the rest of the package stays frozen",
+  r.body.dataroom.snapshot.comps.items.length === 3 && r.body.dataroom.snapshot.headline === "Sumner 4/2.5 — assignable");
+let live = await fetch(r.body.dataroom.shareLink).then((x) => x.text());
+ok("the investor page shows the new price", live.includes("$457,500") && !live.includes("$327,000"));
+const pfeed = await (await fetch(FEED)).json();
+ok("the public feed agrees", (pfeed.deals || []).some((d) => d.price === 457500), JSON.stringify(pfeed.deals || []).slice(0, 160));
+
+// 2. A room left behind — built before the sync existed, or written past it —
+// is levelled the moment the operator opens it.
+await reterm(425000, 20000);
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+n = r.body.dataroom.snapshot.numbers;
+ok("opening the room reconciles a stale price", n.investorPrice === 445000, n.investorPrice);
+live = await fetch(r.body.dataroom.shareLink).then((x) => x.text());
+ok("and the reconcile is persisted, not cosmetic", live.includes("$445,000"), live.match(/\$4\d\d,\d\d\d/g)?.join(",") || "");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 server.close();
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });

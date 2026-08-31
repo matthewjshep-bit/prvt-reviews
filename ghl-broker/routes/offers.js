@@ -12,6 +12,8 @@
 //   POST   /api/offers                       create: calc + document + attach
 //   GET    /api/offers?contact_id=&limit=&lean=  list saved offers (lean=1 → table rows)
 //   GET    /api/offers/:id
+//   PUT    /api/offers/:id                    save an existing offer in place (same id, re-rendered docs)
+//   PATCH  /api/offers/:id/workspace          autosave the editor's comps/rehab workspace only
 //   DELETE /api/offers/:id
 //   PATCH  /api/offers/:id/status            record an offer outcome (sent/countered/no_response/passed/accepted)
 //   PATCH  /api/offers/status                bulk outcome for a selection of offers
@@ -72,6 +74,7 @@ import {
 } from "../auto-underwrite.js";
 import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
 import { fetchRemoteImage, sniffImageType, sniffPdf } from "../fetch-image.js";
+import { parseDriveFolderId, listDriveFolderImages, driveImageUrl, driveDirectUrl } from "../drive-folder.js";
 export { zillowUrl };
 import { jpegToPdf, jpegsToPdf } from "../pdf.js";
 import { mapPool } from "../map-pool.js";
@@ -88,6 +91,8 @@ import {
 } from "../enrich.js";
 import { OFFER_FIELDS, APP_FIELD_REGISTRY, registryByKey } from "../field-registry.js";
 import { fitSnapshot } from "../offer-snapshot.js";
+import { syncDealNumbers } from "../dataroom.js";
+import { refreshOfferPages } from "../offer-page.js";
 import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
@@ -421,11 +426,46 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const ctx = await loadOwnOffer(req, res);
       if (!ctx) return;
-      const { bytes, contentType } = await fetchRemoteImage(req.body?.url);
+      // A /file/d/<id>/view link is a web page, not an image — rewrite it to
+      // the bytes before the sniffer (correctly) turns the page away.
+      const { bytes, contentType } = await fetchRemoteImage(driveDirectUrl(req.body?.url));
       res.json({
         ok: true,
         contentType,
         dataUrl: `data:${contentType};base64,${bytes.toString("base64")}`,
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Expand a Google Drive FOLDER link into the direct image URLs inside it, so
+  // the operator can hand over a whole deal folder instead of pasting thirty
+  // links. Like /photos/from-url this stores NOTHING: it answers with URLs and
+  // the client then pulls each one back through that same endpoint, so there
+  // stays exactly one fetch path, one set of SSRF guards and one place that
+  // decides sizes.
+  //
+  // The API key never leaves the server. Listing needs it; downloading does
+  // not — if the listing succeeded the folder is link-shared, and its files
+  // are fetchable anonymously. See ../drive-folder.js.
+  router.post("/:id/photos/drive-folder", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const folderId = parseDriveFolderId(req.body?.url);
+      if (!folderId) return res.status(400).json({ error: "that isn't a Google Drive folder link" });
+
+      const saved = await store.getOfferSettings(ctx.locationId);
+      const apiKey = String(saved?.googleApiKey || "").trim();
+      if (!apiKey) {
+        return res.status(400).json({ error: "Google API key not configured — add it in Settings to import Drive folders" });
+      }
+
+      const { files, skipped, truncated } = await listDriveFolderImages(folderId, apiKey);
+      res.json({
+        ok: true,
+        skipped,
+        truncated,
+        files: files.map((f) => ({ name: f.name, url: driveImageUrl(f.id) })),
       });
     } catch (err) { fail(res, err); }
   });
@@ -1605,6 +1645,20 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // Is this offer the newest thing we've sent this agent? Drafts don't count —
+  // they were never offered. Used to decide whether a revision may rewrite the
+  // contact's last_offer_* fields. Fails open: if the lookup breaks, the write
+  // goes ahead, which is the behaviour every offer had before revisions existed.
+  async function isNewestOfferForContact(locationId, contactId, offer) {
+    if (!contactId) return true;
+    try {
+      const rows = await store.listOffers(locationId, { contactId, limit: 200, lean: true });
+      const mine = Date.parse(offer.createdAt || "") || 0;
+      return !rows.some((o) =>
+        o.id !== offer.id && o.status !== "draft" && (Date.parse(o.createdAt || "") || 0) > mine);
+    } catch { return true; }
+  }
+
   /* ---------- create: calculate + document + attach to contact ---------- */
   // The whole create path — calculate, render every document, persist, write
   // the contact back — as a plain function. The route below is a thin wrapper,
@@ -1614,7 +1668,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   //
   // It stays inside this closure deliberately — renderDocument, storeDocuments,
   // storeScopeDocument, offerNoteBody and appendDealHistory all live here.
-  async function createOfferFromRequest({ locationId, client, body = {} }) {
+  //
+  // Pass `existing` and it revises that offer instead of minting one: same id,
+  // so every document overwrites in place and the link an agent already holds
+  // resolves to the new letter. One pipeline, two outcomes — forking it would
+  // guarantee the two drift, and a revised offer has to be the same artifact as
+  // a fresh one (same PDFs, same fields) or History stops telling the truth.
+  async function createOfferFromRequest({ locationId, client, body = {}, existing = null }) {
+    const revising = Boolean(existing);
     const { contactId: bodyContactId, newContact, inputs, settings: settingsOverride } = body || {};
     // Rehab scope of work (internal — saved + noted, never on the letter).
     const scope = Array.isArray(body.scope)
@@ -1628,11 +1689,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // a time rather than discarded whole — see ghl-broker/offer-snapshot.js
     // for the shedding order and why comps outrank everything in it.
     const fitted = fitSnapshot(body.snapshot);
-    const snapshot = fitted.snapshot;
-    const snapshotWarnings = fitted.warnings;
+    const snapshotWarnings = [...fitted.warnings];
+    let snapshot = fitted.snapshot;
+    // A revision that arrives without a usable snapshot must not wipe the one
+    // already on the offer: captured comps are read-and-delete, so that field
+    // is the only copy that exists anywhere.
+    if (revising && !snapshot && existing.snapshot) {
+      snapshot = existing.snapshot;
+      snapshotWarnings.push("the workspace didn't fit — kept the comps and rehab state already on the offer");
+    }
 
-    // 1. Resolve the contact (existing id, or find/create by phone).
-    let contactId = bodyContactId || "";
+    // 1. Resolve the contact (existing id, or find/create by phone). A revision
+    //    keeps the contact it was written for — the route refuses a swap, so
+    //    the old agent's fields and tag can't end up pointing at someone
+    //    else's offer.
+    let contactId = revising ? existing.contactId || "" : bodyContactId || "";
     if (!contactId && newContact?.phone) {
       contactId = await findOrCreateContactByPhone(client, locationId, newContact.phone, newContact.name || "");
     }
@@ -1655,8 +1726,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     };
     const { jpeg, width, height } = await renderDocument(calc, meta, locationId);
     const pdf = jpegToPdf(jpeg, width, height);
-    const offerId = crypto.randomUUID();
-    const { imageUrl, pdfUrl } = await storeDocuments(offerId, locationId, jpeg, pdf, calc.inputs.address);
+    // The id IS the document key (offers/<location>/<id>.pdf), so reusing it is
+    // what makes a save overwrite in place rather than mint a parallel file.
+    const offerId = revising ? existing.id : crypto.randomUUID();
+    // ...but those routes serve `immutable, max-age=31536000`, so a viewer who
+    // already opened the old one would keep it for a year. Version every URL a
+    // revision regenerates, exactly as the PSA and net sheet already do. One
+    // stamp for all of them, so they move together.
+    const stamp = Date.now();
+    const bust = (url) => (revising && url ? `${url}${url.includes("?") ? "&" : "?"}v=${stamp}` : url);
+    const stored = await storeDocuments(offerId, locationId, jpeg, pdf, calc.inputs.address);
+    const imageUrl = bust(stored.imageUrl);
+    const pdfUrl = bust(stored.pdfUrl);
 
     // Companion document: Rehab Scope of Work (when a scope was applied).
     let scopePdfUrl = null;
@@ -1673,13 +1754,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
               areas: Array.isArray(ai.areas) ? ai.areas : [],
             }
           : null;
-        scopePdfUrl = await storeScopeDocument({
+        scopePdfUrl = bust(await storeScopeDocument({
           offerId, locationId, scope,
           total: calc.inputs.repairs,
           address: calc.inputs.address,
           meta, company: calc.settings.company || {},
           assessment,
-        });
+        }));
       } catch (e) { scopeWarning = `rehab SOW: ${e.message}`; }
     }
 
@@ -1700,7 +1781,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ...(Array.isArray(cs?.manual) ? cs.manual : []).map(withCondition),
       ];
       if (picked.length) {
-        compsPdfUrl = await storeCompsDocument({
+        compsPdfUrl = bust(await storeCompsDocument({
           offerId, locationId,
           comps: picked,
           arvBasis: String(cs?.arvBasis || ""),
@@ -1716,7 +1797,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           arv: calc.inputs.arv,
           address: calc.inputs.address,
           meta, company: calc.settings.company || {},
-        });
+        }));
       }
     } catch (e) { compsWarning = `comps PDF: ${e.message}`; }
 
@@ -1729,18 +1810,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const net = netComparison(calc.offers.cash.amount, calc.settings);
       if (net) {
         netSheetFields = { sellerAgentPct: net.sellerPct, buyerAgentPct: net.buyerPct };
-        netSheetPdfUrl = await storeNetSheetDocument({
+        netSheetPdfUrl = bust(await storeNetSheetDocument({
           offerId, locationId, net,
           address: calc.inputs.address,
           meta, company: calc.settings.company || {},
-        });
+        }));
       }
     } catch (e) { netSheetWarning = `net comparison: ${e.message}`; }
 
-    // 4. Persist the offer.
-    const offer = await store.createOffer({
-      id: offerId,
-      locationId,
+    // 4. Persist the offer. Everything this run recomputed, and nothing else —
+    //    on a revision the spread below carries the rest of the record across.
+    const fresh = {
       contactId,
       contactName: meta.contactName,
       address: calc.inputs.address,
@@ -1756,11 +1836,42 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       scope,
       snapshot,
       calc,
-      // A generated offer starts its lifecycle at "not sent". Sending it,
-      // or recording an outcome by hand, moves it from here.
-      status: "new",
-      statusHistory: [{ status: "new", ts: created.toISOString() }],
-    });
+    };
+    let offer;
+    if (revising) {
+      // `...existing` first, `...fresh` over it: the lifecycle — status and its
+      // history, the send ledger, the deal, the PSA / contract / assignment and
+      // their PDFs, the auto-underwrite provenance — is inherited rather than
+      // listed, so a field added to an offer next year survives a save without
+      // anyone remembering to come back here.
+      offer = {
+        ...existing,
+        ...fresh,
+        id: existing.id,
+        locationId,
+        createdAt: existing.createdAt,
+        updatedAt: created.toISOString(),
+        // The letter is re-dated, so the printed "valid through" moved. Without
+        // this, offerExpiresAt() would keep deriving the old date off createdAt
+        // and mark the offer expired while the document says otherwise.
+        expiresAt: validUntil.toISOString(),
+        revisions: [
+          ...(existing.revisions || []),
+          { ts: created.toISOString(), from: Math.round(Number(existing.cashAmount) || 0), to: fresh.cashAmount },
+        ].slice(-20),
+      };
+      await store.updateOffer(offer.id, offer);
+    } else {
+      offer = await store.createOffer({
+        id: offerId,
+        locationId,
+        ...fresh,
+        // A generated offer starts its lifecycle at "not sent". Sending it,
+        // or recording an outcome by hand, moves it from here.
+        status: "new",
+        statusHistory: [{ status: "new", ts: created.toISOString() }],
+      });
+    }
 
     // 5. Associate with the GHL contact record. Each write is independent;
     //    failures are reported + logged, not fatal (the offer itself is saved).
@@ -1774,37 +1885,86 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       console.error(`offers: GHL attach failed [${step}] contact=${contactId}:`, detail);
       warnings.push(`${step}: ${e.message}`);
     };
-    try {
-      const fieldValues = {
-        last_offer_amount: calc.offers.cash.amount,
-        last_offer_date: created.toISOString().slice(0, 10),
-        last_offer_doc_url: pdfUrl,
-        last_offer_image_url: imageUrl,
-        zillow_link: zillowUrl(calc.inputs.address),
-        offer_app_link: offerAppLink(locationId, contactId),
-      };
-      const fieldWrites = [];
-      for (const f of OFFER_FIELDS) {
-        if (!fieldValues[f.key]) continue; // e.g. no address → no Zillow link
-        const id = await findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType);
-        if (id) fieldWrites.push({ id, value: fieldValues[f.key] });
-      }
-      if (fieldWrites.length) {
-        await updateContact(client, contactId, { customFields: fieldWrites });
-        ghl.fields = true;
-      }
-    } catch (e) { noteFailure("custom fields", e); }
-    try {
-      await createContactNote(client, contactId, { body: offerNoteBody(offer) });
-      ghl.note = true;
-    } catch (e) { noteFailure("note", e); }
-    try {
-      await addContactTags(client, contactId, [OFFER_TAG]);
-      ghl.tag = true;
-    } catch (e) { noteFailure("tag", e); }
-    if (calc.offers.cash.amount > 0) {
+    // The contact's fields are named last_offer_* — they describe the agent's
+    // most recent offer, not this one. Revising an older offer must not drag
+    // them backwards over a newer offer on another property.
+    const holdsTheFields = !revising || (await isNewestOfferForContact(locationId, contactId, offer));
+    if (!holdsTheFields) {
+      warnings.push("contact fields left alone — a newer offer for this agent holds them");
+    }
+    if (holdsTheFields) {
+      try {
+        const fieldValues = {
+          last_offer_amount: calc.offers.cash.amount,
+          last_offer_date: created.toISOString().slice(0, 10),
+          last_offer_doc_url: pdfUrl,
+          last_offer_image_url: imageUrl,
+          zillow_link: zillowUrl(calc.inputs.address),
+          offer_app_link: offerAppLink(locationId, contactId),
+        };
+        const fieldWrites = [];
+        for (const f of OFFER_FIELDS) {
+          if (!fieldValues[f.key]) continue; // e.g. no address → no Zillow link
+          const id = await findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType);
+          if (id) fieldWrites.push({ id, value: fieldValues[f.key] });
+        }
+        if (fieldWrites.length) {
+          await updateContact(client, contactId, { customFields: fieldWrites });
+          ghl.fields = true;
+        }
+      } catch (e) { noteFailure("custom fields", e); }
+    }
+    // The note and the tag happen once, at creation. GHL notes are append-only
+    // — there is no edit — so re-noting every save would bury the contact under
+    // one note per keystroke-session, and the tag is already on them.
+    if (revising) {
+      ghl.note = existing.ghl?.note ?? false;
+      ghl.tag = existing.ghl?.tag ?? false;
+    } else {
+      try {
+        await createContactNote(client, contactId, { body: offerNoteBody(offer) });
+        ghl.note = true;
+      } catch (e) { noteFailure("note", e); }
+      try {
+        await addContactTags(client, contactId, [OFFER_TAG]);
+        ghl.tag = true;
+      } catch (e) { noteFailure("tag", e); }
+    }
+    // The ledger is what AI enrichment reads to know what we've offered, so a
+    // new number belongs in it — but only a new one. Re-saving after moving a
+    // comp shouldn't write a line at all.
+    const amountMoved = !revising || calc.offers.cash.amount !== Math.round(Number(existing.cashAmount) || 0);
+    if (calc.offers.cash.amount > 0 && amountMoved) {
       await appendDealHistory(client, locationId, contactId, "agent_deal_history",
-        historyLine(created.toISOString(), calc.inputs.address, `we offered ${fmtMoney(calc.offers.cash.amount)}`));
+        historyLine(created.toISOString(), calc.inputs.address,
+          revising
+            ? `we revised our offer to ${fmtMoney(calc.offers.cash.amount)}`
+            : `we offered ${fmtMoney(calc.offers.cash.amount)}`));
+    }
+
+    // A revision re-renders the documents the agent's own page publishes, so
+    // that page has to be rebuilt or it prints last week's price above this
+    // morning's PDF. Investor rooms are a different contract — frozen until the
+    // operator refreshes — but their money still follows, exactly as it does
+    // when a deal's terms change.
+    const stale = [];
+    if (revising) {
+      await refreshOfferPages({ store, locationId, offer, settings: calc.settings });
+      await syncDealNumbers({ store, offer, settings: calc.settings });
+      // Signable paperwork is never regenerated behind the operator's back: a
+      // PSA may already be signed. Say which ones no longer match instead.
+      for (const [key, label] of [["psa", "purchase & sale agreement"], ["contract", "purchase contract"], ["assignment", "assignment contract"]]) {
+        const priced = Number(String(offer[key]?.fields?.price ?? "").replace(/[^\d.]/g, ""));
+        if (offer[key] && Number.isFinite(priced) && priced && priced !== offer.cashAmount) stale.push(label);
+      }
+      if (stale.length) {
+        warnings.push(`${stale.join(" and ")} still quote${stale.length > 1 ? "" : "s"} the old price — regenerate from the offer's documents`);
+      }
+      const rooms = await store.listDatarooms(locationId, { offerId: offer.id }).catch(() => []);
+      const frozen = rooms.filter((r) => r?.kind !== "offer" && r?.snapshot?.numbers).length;
+      if (frozen) {
+        warnings.push(`${frozen} investor dataroom${frozen > 1 ? "s" : ""} still show${frozen > 1 ? "" : "s"} the previous comps and scope — refresh from the Dataroom tab`);
+      }
     }
 
     // Persist the attach outcome on the offer so History can show it.
@@ -1821,13 +1981,52 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
     }
 
-    return { ok: true, offer, ghl, warnings };
+    return { ok: true, offer, ghl, warnings, ...(revising ? { revised: true, staleDocs: stale } : {}) };
   }
 
   router.post("/", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
       res.json(await createOfferFromRequest({ locationId, client, body: req.body || {} }));
+    } catch (err) { fail(res, err); }
+  });
+
+  // Save an offer in place. Same id, same document URLs, revised numbers — the
+  // letter behind the link an agent already has becomes the new one. This is
+  // the difference between revising your offer on a property and owning four
+  // offers on it.
+  //
+  // Registered after PUT /settings, so that path still wins; nothing else in
+  // this router claims a one-segment PUT.
+  router.put("/:id", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const existing = await store.getOffer(req.params.id);
+      if (!existing || existing.locationId !== locationId) {
+        return res.status(404).json({ error: "offer not found" });
+      }
+      // A draft has no document and nothing in the CRM to keep level; it stays
+      // on its own route, which already saves in place.
+      if (existing.status === "draft") {
+        return res.status(400).json({ error: "this is still a draft — keep saving it as a draft, or create the offer" });
+      }
+      const body = req.body || {};
+      // Writing this offer for someone else would leave the first agent tagged,
+      // noted, and holding fields that point at an offer no longer theirs.
+      const wanted = String(body.contactId || "").trim();
+      if (wanted && existing.contactId && wanted !== existing.contactId) {
+        return res.status(400).json({
+          error: `this offer belongs to ${existing.contactName || "another contact"} — use "Save as new offer" to write one for someone else`,
+        });
+      }
+      if (!body.inputs || typeof body.inputs !== "object") {
+        return res.status(400).json({ error: "inputs required" });
+      }
+      const out = await createOfferFromRequest({ locationId, client, body, existing });
+      // The client asks before overwriting a document that already went out;
+      // it needs to know there was one.
+      out.revisedAfterSend = (existing.sends || []).length > 0;
+      res.json(out);
     } catch (err) { fail(res, err); }
   });
 
@@ -2120,7 +2319,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
     const loaded = await Promise.all(wanted.map(async (e) => {
       try {
-        const { bytes, contentType } = await fetchRemoteImage(e.url, { allowPdf: true, maxBytes: 8 * 1024 * 1024 });
+        // `original`, not the JPEG rendering: a thumbnail of a PDF exhibit
+        // would be a picture of its first page.
+        const { bytes, contentType } = await fetchRemoteImage(driveDirectUrl(e.url, { original: true }), { allowPdf: true, maxBytes: 8 * 1024 * 1024 });
         return { kind: e.kind, title: e.title, bytes, contentType };
       } catch {
         return null;
@@ -2444,6 +2645,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       historyLine(ts, offer.address, "under contract"));
 
     await store.updateOffer(offer.id, offer);
+    // Any investor room already built from this offer now quotes the deal's
+    // assignment contract rather than the bare cash offer.
+    await syncDealNumbers({ store, offer, settings });
     // The agent is no longer "countered"/"passed" once they're under contract.
     await syncAgentOfferTag(client, locationId, offer.contactId);
     return { offer, warnings };
@@ -2451,6 +2655,31 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
   // Record an offer outcome. Body: { status, note? }. Picking "accepted" runs
   // the promote path so an acceptance can only ever be recorded one way.
+  // The editor's scratch space for an offer that already exists. Autosave lands
+  // here so that touching comps or rehab on an open offer can't mint a stray
+  // draft row beside it — the bug that left three rows on one property.
+  //
+  // It writes the workspace and nothing else: no calculation, no documents, no
+  // CRM. That is what makes it safe on a debounce, on tab-hide and on unmount,
+  // and it means an offer's money can only ever move on a deliberate save.
+  router.patch("/:id/workspace", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const { offer } = ctx;
+      if (offer.status === "draft") {
+        return res.status(400).json({ error: "drafts autosave through POST /api/offers/draft" });
+      }
+      const fitted = fitSnapshot(req.body?.snapshot);
+      if (!fitted.snapshot) return res.status(400).json({ error: "snapshot required" });
+      offer.snapshot = fitted.snapshot;
+      offer.workspaceAt = new Date().toISOString();
+      offer.updatedAt = offer.workspaceAt;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, savedAt: offer.workspaceAt, warnings: fitted.warnings });
+    } catch (err) { fail(res, err); }
+  });
+
   router.patch("/:id/status", async (req, res) => {
     try {
       const ctx = await loadDealOffer(req, res, { requireDeal: false });
@@ -2577,6 +2806,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (b.fellThroughReason !== undefined) deal.fellThroughReason = dealStr(b.fellThroughReason, 200);
       deal.updatedAt = new Date().toISOString();
       await store.updateOffer(offer.id, offer);
+      // Re-price the investor package off the new terms. The rest of its
+      // snapshot stays frozen until the operator refreshes it deliberately.
+      if (b.contractPrice !== undefined || b.assignmentFee !== undefined) {
+        await syncDealNumbers({ store, offer });
+      }
       if (stageChanged) {
         await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
           historyLine(deal.updatedAt, offer.address, deal.stage.replace(/_/g, " "),
@@ -2604,6 +2838,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // before it (sent if the docs went out, otherwise not sent).
       recordStatus(offer, statusAfterUnpromote(offer));
       await store.updateOffer(offer.id, offer);
+      // There is no assignment contract any more — an investor room falls back
+      // to the offer's own cash number and the default fee.
+      await syncDealNumbers({ store, offer, settings: effectiveSettings(await store.getOfferSettings(locationId)) });
       await syncAgentOfferTag(client, locationId, offer.contactId);
       for (const inv of investors) {
         await syncInvestorDealTag(client, locationId, inv.contactId);

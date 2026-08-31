@@ -18,14 +18,24 @@ import {
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
-  createDataroom, createDataroomInvite, deleteOfferPhoto, fetchOfferPhotoFromUrl, getDataroom,
-  getDataroomPortfolio,
+  createDataroom, createDataroomInvite, deleteOfferPhoto, expandDriveFolder,
+  fetchOfferPhotoFromUrl, getDataroom, getDataroomPortfolio,
   listDatarooms, listOfferPhotos, offerPhotoUrl, reissueDataroomInvite, reorderOfferPhotos,
   revokeDataroom, revokeDataroomInvite, rotateDataroomShareLink, searchContacts,
   sendDataroomInvite, updateDataroom, uploadOfferPhoto,
 } from "./api.js";
 import { propertyPhotoVariants } from "./image.js";
 import { CopyButton } from "./ui.jsx";
+
+// One ceiling for every way photos arrive — picked, dropped, pasted, or named
+// by a Drive folder. Uploads are sequential, so this is a patience limit.
+const MAX_PHOTOS_PER_IMPORT = 100;
+
+// Client-side twin of parseDriveFolderId in ghl-broker/drive-folder.js, and
+// only a shape check: it decides whether a link is worth asking the broker to
+// expand. The broker re-parses and is the one that actually decides.
+const isDriveFolderUrl = (u) =>
+  /^https?:\/\/(www\.)?drive\.google\.com\/(.*\/)?folders\/[A-Za-z0-9_-]{10,}/.test(String(u).trim());
 
 const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 const INPUT_CLS =
@@ -176,7 +186,7 @@ function PhotosPane({ offerId, busy, setBusy, onError }) {
   };
 
   async function addFiles(files) {
-    const list = [...files].filter((f) => f.type.startsWith("image/")).slice(0, 40);
+    const list = [...files].filter((f) => f.type.startsWith("image/")).slice(0, MAX_PHOTOS_PER_IMPORT);
     if (!list.length) return;
     setBusy(true);
     onError("");
@@ -198,15 +208,60 @@ function PhotosPane({ offerId, busy, setBusy, onError }) {
     if (failures.length) onError(`${failures.length} photo(s) failed — ${failures[0]}`);
   }
 
-  // Images dragged in from another browser tab, or pasted as links. A
-  // cross-origin drag hands over a URL rather than the file, and the browser
-  // can't fetch that URL itself (CORS), so the broker pulls the bytes and we
-  // resize them through the very same path a picked file takes.
+  // A Google Drive FOLDER link stands for every photo inside it, so it has to
+  // be expanded into ordinary image links before we know how big this import
+  // even is. Expansion is the one step needing the Google API key, which is why
+  // it happens on the broker. Anything that isn't a folder link passes through.
+  //
+  // A folder that won't expand is reported and skipped rather than aborting the
+  // batch — a drop can carry several links, and one bad one shouldn't cost the
+  // others.
+  async function expandFolders(urls, notes) {
+    const out = [];
+    for (const url of urls) {
+      if (!isDriveFolderUrl(url)) { out.push(url); continue; }
+      try {
+        const r = await expandDriveFolder(offerId, url);
+        out.push(...r.files.map((f) => f.url));
+        if (r.skipped) notes.push(`${r.skipped} item(s) in that folder aren't photos and were left behind`);
+        // r.files.length, not our own cap: either end can be the one that
+        // truncated, and quoting the wrong number is worse than no number.
+        if (r.truncated) notes.push(`that folder holds more than ${r.files.length} photos — only the first ${r.files.length} came in`);
+      } catch (e) {
+        notes.push(e.message);
+      }
+    }
+    return out;
+  }
+
+  // Images dragged in from another browser tab, pasted as links, or named
+  // wholesale by a Drive folder link. A cross-origin drag hands over a URL
+  // rather than the file, and the browser can't fetch that URL itself (CORS),
+  // so the broker pulls the bytes and we resize them through the very same
+  // path a picked file takes.
   async function addUrls(urls) {
-    const list = [...new Set(urls.map((u) => u.trim()).filter(Boolean))].slice(0, 40);
-    if (!list.length) return;
+    const given = [...new Set(urls.map((u) => u.trim()).filter(Boolean))];
+    if (!given.length) return;
     setBusy(true);
     onError("");
+
+    // Reading a folder is a network round trip of its own, and a silent pause
+    // before a progress bar appears reads as a hang.
+    const notes = [];
+    if (given.some(isDriveFolderUrl)) setUploading({ done: 0, total: 0, label: "Reading the Drive folder…" });
+    const expanded = [...new Set(await expandFolders(given, notes))];
+    const list = expanded.slice(0, MAX_PHOTOS_PER_IMPORT);
+    if (expanded.length > list.length) {
+      notes.push(`${expanded.length} photos is more than the ${MAX_PHOTOS_PER_IMPORT} this takes at once — the rest were left behind`);
+    }
+
+    if (!list.length) {
+      setUploading(null);
+      setBusy(false);
+      onError(notes[0] || "nothing to import from that link");
+      return;
+    }
+
     setUploading({ done: 0, total: list.length });
     const failures = [];
     for (const [i, url] of list.entries()) {
@@ -223,8 +278,12 @@ function PhotosPane({ offerId, busy, setBusy, onError }) {
     setUploading(null);
     setBusy(false);
     // One bad link is the common case (an album page, a private photo), so lead
-    // with why rather than a count.
-    if (failures.length) onError(failures.length === 1 ? failures[0] : `${failures.length} links failed — ${failures[0]}`);
+    // with why rather than a count. Folder notes ride along behind it — they
+    // explain a smaller-than-expected import, which otherwise looks like a bug.
+    if (failures.length) {
+      notes.unshift(failures.length === 1 ? failures[0] : `${failures.length} links failed — ${failures[0]}`);
+    }
+    if (notes.length) onError(notes.join(" · "));
   }
 
   // A drop can carry real files (from the desktop) or just a URL (from another
@@ -263,7 +322,7 @@ function PhotosPane({ offerId, busy, setBusy, onError }) {
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className={`${LABEL_CLS} mb-0`}>Property photos</span>
         <span className="text-xs text-slate-500">
-          {uploading ? `Uploading ${uploading.done}/${uploading.total}…`
+          {uploading ? (uploading.label || `Uploading ${uploading.done}/${uploading.total}…`)
             : photos?.length ? `${photos.length} photo${photos.length === 1 ? "" : "s"} · first one is the cover`
             : ""}
         </span>
@@ -333,7 +392,7 @@ function PhotosPane({ offerId, busy, setBusy, onError }) {
             <div className="flex flex-wrap items-center gap-2">
               <input
                 className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
-                placeholder={dragging ? "Drop it anywhere in this box" : "…or paste an image link"}
+                placeholder={dragging ? "Drop it anywhere in this box" : "…or paste an image link, or a Drive folder"}
                 value={photoUrl} disabled={busy}
                 onChange={(e) => setPhotoUrl(e.target.value)}
                 onKeyDown={(e) => {
@@ -355,6 +414,10 @@ function PhotosPane({ offerId, busy, setBusy, onError }) {
             not yours to republish. Resized in your browser before upload. A link has to point at the image
             itself, not at an album page — in Google Photos, open the photo, right-click it and copy the
             image address.
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            A Google Drive folder link brings in everything inside it, named order first. The folder has to
+            be shared "Anyone with the link", and Settings needs a Google API key.
           </p>
         </>
       )}
@@ -905,7 +968,8 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
                   <RefreshCw size={12} /> Refresh from the offer
                 </button>
                 <span className="text-xs text-slate-500">
-                  Built {shortDateTime(room.snapshot?.builtAt)} — edits to the offer don't reach investors until you refresh.
+                  Built {shortDateTime(room.snapshot?.builtAt)} — the price follows the deal's terms on its own; comps,
+                  scope and photos don't reach investors until you refresh.
                 </span>
               </div>
             </div>

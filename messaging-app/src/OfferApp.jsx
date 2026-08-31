@@ -256,6 +256,10 @@ export default function OfferApp() {
             // that offer (the key is the offer id) — same path as History →
             // Edit, so the outgoing form still flushes its draft on unmount.
             onOpenOffer={(o) => { setEditing(o); try { window.scrollTo({ top: 0 }); } catch { /* noop */ } }}
+            // A save in place keeps the same id, so the key doesn't change and
+            // the form isn't remounted — this only re-points `restore` at the
+            // saved row, which is what the Offer details popout reads.
+            onOfferSaved={(o) => setEditing((cur) => (cur && cur.id === o.id ? o : cur))}
             onDeal={() => setView("deals")}
           />
         )}
