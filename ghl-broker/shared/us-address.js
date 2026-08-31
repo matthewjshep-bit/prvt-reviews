@@ -67,6 +67,96 @@ function transform(raw, { suffixes }) {
   return parts.join(", ");
 }
 
+// "Washington" / "wa" / "WA." → "WA"; anything that isn't a state → "".
+// Deliberately strict: this decides whether a geocoder's answer is allowed to
+// count, and a loose match there sends a comp search to the wrong state.
+export function stateAbbr(raw) {
+  const s = String(raw || "").trim().replace(/\.$/, "");
+  if (!s) return "";
+  const byName = STATES[s.toLowerCase()] || (/^district of columbia$/i.test(s) ? "DC" : "");
+  if (byName) return byName;
+  const up = s.toUpperCase();
+  return ABBREVIATIONS.has(up) ? up : "";
+}
+
+const ABBREVIATIONS = new Set([...Object.values(STATES), "DC"]);
+
+// A secondary unit is a fact about the mailbox, not about the parcel, and most
+// geocoders either ignore it or choke on it. Split it off so callers can try
+// the address without it.
+const UNIT_TAIL = /[\s,]+(?:#\s*[\w-]+|(?:apt|apartment|unit|ste|suite|bldg|building|lot|trlr|fl|floor|rm|room)\.?\s*#?\s*[\w-]+)$/i;
+
+export function splitUnit(streetLine) {
+  const s = String(streetLine || "").trim();
+  const m = s.match(UNIT_TAIL);
+  return m ? { street: s.slice(0, m.index).trim(), unit: m[0].trim().replace(/^[,\s]+/, "") } : { street: s, unit: "" };
+}
+
+/**
+ * Pull apart a free-form US address into the pieces a picky geocoder's answer
+ * can be CHECKED against: { houseNo, street, unit, city, state, zip }.
+ *
+ * Conservative on purpose — every field is optional, and a field we're not sure
+ * about is better left empty than guessed. An empty field costs a validation
+ * signal; a wrong one rejects the correct answer. The sharpest edge here is
+ * "NE": Nebraska and a street directional share a spelling, so a state is only
+ * read off a segment that cannot be the street line.
+ */
+export function parseUsAddress(raw) {
+  const out = { houseNo: "", street: "", unit: "", city: "", state: "", zip: "" };
+  const cleaned = String(raw || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[,\s]+(?:usa|u\.s\.a\.|u\.s\.|united states(?: of america)?)\.?$/i, "")
+    .trim();
+  const segs = cleaned.split(",").map((p) => p.trim()).filter(Boolean);
+  if (!segs.length) return out;
+
+  // ZIP, from the END only. A house number is five digits often enough
+  // ("14808 Larch Way") that a free-floating \d{5} would eat it.
+  const zip = segs[segs.length - 1].match(/(?:^|[\s,])(\d{5})(?:-\d{4})?$/);
+  if (zip && segs.length > 1) {
+    out.zip = zip[1];
+    segs[segs.length - 1] = segs[segs.length - 1].slice(0, zip.index).trim();
+    if (!segs[segs.length - 1]) segs.pop();
+  }
+
+  // State: its own segment ("…, WA"), or glued to the city ("…, Lynnwood WA").
+  // Never off segment 0 — that is the street line, where "NE" is a direction.
+  if (segs.length > 1) {
+    const tail = segs[segs.length - 1];
+    const whole = stateAbbr(tail);
+    if (whole) {
+      out.state = whole;
+      segs.pop();
+    } else {
+      const words = tail.split(" ");
+      for (const take of [2, 1]) {          // "New York" before "York"
+        if (words.length <= take) continue;
+        const abbr = stateAbbr(words.slice(-take).join(" "));
+        if (abbr) {
+          out.state = abbr;
+          segs[segs.length - 1] = words.slice(0, -take).join(" ");
+          break;
+        }
+      }
+    }
+  }
+
+  if (segs.length > 1) out.city = segs[segs.length - 1];
+
+  const { street, unit } = splitUnit(segs[0] || "");
+  out.unit = unit;
+  const house = street.match(/^(\d+[A-Za-z]?(?:-\d+)?)\s+(.+)$/);
+  if (house) {
+    out.houseNo = house[1];
+    out.street = house[2];
+  } else {
+    out.street = street;
+  }
+  return out;
+}
+
 // Full USPS normalization: directionals + street suffixes + state.
 export function normalizeUsAddress(raw) {
   return transform(raw, { suffixes: true });

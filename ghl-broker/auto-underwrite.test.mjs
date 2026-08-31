@@ -54,6 +54,23 @@ test("three rehabbed comps is exactly enough", () => {
   assert.equal(gate({ rehabbedComps: comps(UW_MIN_REHABBED_COMPS) }).ok, true);
 });
 
+test("a subject placed only at the centre of a ZIP holds for review", () => {
+  // The geocoder answers even when all it could find was the ZIP code. Every
+  // number downstream is measured from that point, so it is a review.
+  const g = gate({ geocode: { precision: "zip", matched: "98056" } });
+  assert.equal(g.ok, false);
+  assert.match(g.held[0], /could only be placed at the centre of its ZIP code/);
+});
+
+test("a city centroid holds too, and names the city", () => {
+  assert.match(gate({ geocode: { precision: "city" } }).held[0], /centre of its city/);
+});
+
+test("a street-level or better fix publishes", () => {
+  assert.equal(gate({ geocode: { precision: "street" } }).ok, true);
+  assert.equal(gate({ geocode: { precision: "address" } }).ok, true);
+});
+
 test("an ARV that fell back to ungraded comps is refused", () => {
   // deriveArv degrades to every comp when it can't find two graded ones. That
   // is right for a human who can see it happen, and wrong unattended.

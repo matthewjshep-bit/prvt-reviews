@@ -1,0 +1,346 @@
+// geocode.js — free-form US address → coordinates.
+//
+// Photon (the free Komoot/OSM instance) used to be the whole of this, and OSM
+// is missing a great many ordinary American houses. "14808 Larch Way,
+// Lynnwood, WA 98087" is a real, listed, unremarkable property and Photon
+// returns *zero* features for it — which failed the entire auto-underwrite
+// with "couldn't locate 14808 Larch Way, Lynnwood, WA 98087 on the map"
+// before a single comp had been pulled.
+//
+// So the lookup is a ladder now, ordered by how much the answer can be
+// trusted:
+//
+//   1. Census (TIGER) — the US government's own address ranges. Free, no key,
+//      ~400ms, and forgiving about format: spelled-out streets, a missing ZIP,
+//      a missing city, a unit number and a trailing "USA" all still resolve.
+//   2. Photon — for what TIGER hasn't got: new-construction streets, and the
+//      buildings and landmarks people name instead of an address.
+//   3. A ZIP, then a city, centroid — a deliberate and clearly LABELLED
+//      downgrade, so that "we couldn't pin the house" stops being the same
+//      thing as "we have no idea where this is".
+//
+// Every hit carries a `precision`, because the callers differ: centring a map
+// on a ZIP centroid is fine, and searching comps in a half-mile circle around
+// one is not. Callers that can't defend a coarse answer ask for a floor via
+// `minPrecision` (or read `geo.precision` and hold the run for review).
+//
+// Photon answers are validated against the typed address before they're
+// believed — its first result for a half-matched US query has been a road in
+// Brazil and a river in Tanzania.
+
+import {
+  addressQueryVariants, normalizeUsAddress, parseUsAddress, splitUnit, stateAbbr,
+} from "./shared/us-address.js";
+
+/* ---------- how good is this fix ---------- */
+
+// address — a parcel, or an interpolation inside the right house-number range
+//           on the right block. Safe to search comps around.
+// street  — right street, unknown number. Fine for a map; usable for comps
+//           only because the search radius dwarfs the error.
+// zip/city — a centroid, which in a spread-out suburb is a mile from the
+//           house. Named honestly so callers can refuse it.
+export const PRECISION = { address: 3, street: 2, zip: 1, city: 0 };
+
+export const precisionRank = (p) => (p in PRECISION ? PRECISION[p] : -1);
+
+// Does this fix clear the bar the caller set?
+export const atLeast = (geo, level) => !!geo && precisionRank(geo.precision) >= precisionRank(level);
+
+const CENSUS_TIMEOUT = 6000;
+const PHOTON_TIMEOUT = 4000;
+
+// Successful lookups only: an address doesn't move, but a failure is usually
+// the network having a bad minute and shouldn't be remembered for a day.
+const cache = new Map();
+const CACHE_TTL = 24 * 3600 * 1000;
+
+/**
+ * geocodeAddress(raw, { minPrecision })
+ *
+ * → { lat, lng, precision, source, matched } | null
+ *
+ * `minPrecision` is a floor, not a hint: a coarser fix returns null rather
+ * than being quietly handed back.
+ */
+export async function geocodeAddress(raw, { minPrecision = "city" } = {}) {
+  const q = String(raw || "").trim();
+  if (q.length < 4) return null;
+
+  const key = q.toLowerCase().replace(/\s+/g, " ");
+  const hit = cache.get(key);
+  let found = hit && Date.now() - hit.ts < CACHE_TTL ? hit.geo : null;
+  if (!found) {
+    found = await lookup(q);
+    if (found) cache.set(key, { ts: Date.now(), geo: found });
+  }
+  return atLeast(found, minPrecision) ? found : null;
+}
+
+async function lookup(q) {
+  const want = parseUsAddress(q);
+  const variants = queryLadder(q);
+
+  // Each variant is checked against ITSELF, not against the raw text: the
+  // ladder rewrites "Sixth Street South" to "6th St S" on purpose, and an
+  // answer matching the rewrite is a match, not a mismatch.
+  //
+  // Census first, and only when there's a house number to match — its one-line
+  // matcher wants a street address, not a place name.
+  if (want.houseNo) {
+    for (const v of variants) {
+      const geo = await censusGeocode(v, parseUsAddress(v));
+      if (geo) return geo;
+    }
+  }
+
+  for (const v of variants) {
+    const geo = await photonGeocode(v, parseUsAddress(v));
+    if (geo) return geo;
+  }
+
+  return coarseCenter(want);
+}
+
+// The formats to try. Three rewrites of the address — as typed, without its
+// unit number, with spelled-out ordinals turned into numbers — each in the
+// three spellings addressQueryVariants produces (RealEstateAPI is not the only
+// matcher that's picky about "Ave" vs "Avenue").
+//
+// Breadth-first: every rewrite is offered in its USPS form before any of them
+// is offered spelled out, because the USPS form is what address files hold.
+// Capped, because each rung is a round trip.
+const MAX_VARIANTS = 6;
+
+function queryLadder(raw) {
+  const parts = String(raw).split(",");
+  const { street, unit } = splitUnit(parts[0] || "");
+  const withoutUnit = unit ? [street, ...parts.slice(1)].join(",") : "";
+  const forms = [raw, withoutUnit, numberedStreet(raw), numberedStreet(withoutUnit)]
+    .filter(Boolean)
+    .map((f) => addressQueryVariants(f));
+
+  const out = [];
+  for (let i = 0; i < 3; i++) {
+    for (const spellings of forms) if (spellings[i]) out.push(spellings[i]);
+  }
+  return [...new Set(out)].slice(0, MAX_VARIANTS);
+}
+
+// Address files hold "6th St S"; people write "Sixth Street South". Offered as
+// an EXTRA rung rather than a rewrite, so a street genuinely named for a word
+// ("Second Chance Ln") still gets tried as typed first.
+const SPELLED_ORDINALS = {
+  first: "1st", second: "2nd", third: "3rd", fourth: "4th", fifth: "5th",
+  sixth: "6th", seventh: "7th", eighth: "8th", ninth: "9th", tenth: "10th",
+  eleventh: "11th", twelfth: "12th", thirteenth: "13th", fourteenth: "14th",
+  fifteenth: "15th", sixteenth: "16th", seventeenth: "17th", eighteenth: "18th",
+  nineteenth: "19th", twentieth: "20th",
+};
+
+function numberedStreet(addr) {
+  const parts = String(addr).split(",");
+  const street = (parts[0] || "").replace(/[A-Za-z]+/g, (w) => SPELLED_ORDINALS[w.toLowerCase()] || w);
+  return street === parts[0] ? "" : [street, ...parts.slice(1)].join(",");
+}
+
+/* ---------- providers ---------- */
+
+async function getJson(url, timeoutMs) {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null; // every provider here is best-effort; the ladder continues
+  }
+}
+
+// US Census Geocoder — public, unauthenticated, TIGER address ranges.
+// Public_AR_Current is the benchmark that tracks the latest vintage.
+async function censusGeocode(q, want) {
+  const j = await getJson(
+    "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress" +
+      `?address=${encodeURIComponent(q)}&benchmark=Public_AR_Current&format=json`,
+    CENSUS_TIMEOUT
+  );
+  for (const m of j?.result?.addressMatches || []) {
+    const lat = Number(m?.coordinates?.y);
+    const lng = Number(m?.coordinates?.x);
+    if (!inUnitedStates(lat, lng)) continue;
+    if (!censusAgrees(want, m.matchedAddress)) continue;
+    return { lat, lng, precision: "address", source: "census", matched: censusLabel(m.matchedAddress) };
+  }
+  return null;
+}
+
+// TIGER will reach for a neighbouring street when the one you asked for has no
+// range covering that number: "1234 NE 8th Street, Renton, WA" comes back as
+// "1234 N 8TH ST, RENTON, WA 98057", a different street in a different ZIP.
+// Left alone that is a confident answer to a question nobody asked, so the
+// match has to still be the address that was typed.
+function censusAgrees(want, matchedAddress) {
+  if (!matchedAddress) return true;
+  const got = parseUsAddress(matchedAddress);
+  if (want.houseNo && got.houseNo && !sameText(want.houseNo, got.houseNo)) return false;
+  if (want.state && got.state && want.state !== got.state) return false;
+  if (trustworthyStreet(want) && want.street && got.street && streetKey(want.street) !== streetKey(got.street)) return false;
+  return true;
+}
+
+// Segment 0 is reliably the street line only when some LATER segment carried a
+// city, state or ZIP. "14808 larch way lynnwood wa" has no commas at all, so
+// its "street" is the whole run of words and checking it would reject the
+// right answer.
+const trustworthyStreet = (want) => !!(want.city || want.state || want.zip);
+
+async function photonGeocode(q, want) {
+  const j = await getJson(
+    `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8&lang=en`,
+    PHOTON_TIMEOUT
+  );
+  let best = null;
+  for (const f of j?.features || []) {
+    const scored = scoreFeature(f, want);
+    if (scored && (!best || scored.score > best.score)) best = scored;
+  }
+  if (!best) return null;
+
+  // With no state and no ZIP in the typed address there is nothing regional to
+  // check an answer against, so the answer has to match on its own terms: the
+  // right number on the right street, or nothing.
+  const floor = want.state || want.zip ? 3 : 7;
+  return best.score >= floor ? best.geo : null;
+}
+
+// Only the last resort, and it says so in `precision`.
+async function coarseCenter(want) {
+  if (want.zip) {
+    const geo = await photonPlace(`${want.zip}, ${want.state || "US"}`, (p) =>
+      p.postcode === want.zip || p.name === want.zip
+    );
+    if (geo) return { ...geo, precision: "zip", matched: want.zip };
+  }
+  if (want.city && want.state) {
+    const geo = await photonPlace(`${want.city}, ${want.state}`, (p) =>
+      sameText(p.city, want.city) || sameText(p.name, want.city)
+    );
+    if (geo) return { ...geo, precision: "city", matched: `${want.city}, ${want.state}` };
+  }
+  return null;
+}
+
+async function photonPlace(q, accept) {
+  const j = await getJson(
+    `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&lang=en`,
+    PHOTON_TIMEOUT
+  );
+  for (const f of j?.features || []) {
+    const p = f.properties || {};
+    if (!isUs(p)) continue;
+    if (!accept(p)) continue;
+    const [lng, lat] = f.geometry?.coordinates || [];
+    if (!inUnitedStates(lat, lng)) continue;
+    return { lat, lng, source: "photon" };
+  }
+  return null;
+}
+
+/* ---------- validating a Photon feature ---------- */
+
+// Scores what actually agrees with the typed address, and subtracts for what
+// contradicts it. Returns null for anything disqualifying — a feature outside
+// the US, or in a state the address didn't name.
+function scoreFeature(f, want) {
+  const p = f.properties || {};
+  if (!isUs(p)) return null;
+
+  const [lng, lat] = f.geometry?.coordinates || [];
+  if (!inUnitedStates(lat, lng)) return null;
+
+  const state = stateAbbr(p.state || "");
+  if (want.state && state && state !== want.state) return null;
+
+  // The wrong street disqualifies outright, however well the rest lines up.
+  // Photon offered "1234 8th Avenue South, Edmonds" for "1234 NE 8th Street,
+  // Renton" — same house number, same state, twenty miles away.
+  const streetKnown = trustworthyStreet(want) && want.street;
+  const streetMatches = streetKnown && p.street && streetKey(p.street) === streetKey(want.street);
+  if (streetKnown && p.street && !streetMatches) return null;
+
+  let score = 0;
+  let precision = "city";
+
+  if (want.zip && p.postcode) score += String(p.postcode).slice(0, 5) === want.zip ? 2 : -2;
+  if (want.city && p.city && sameText(p.city, want.city)) score += 2;
+  if (want.state && state === want.state) score += 1;
+
+  if (want.street && p.street && streetKey(p.street) === streetKey(want.street)) {
+    score += 3;
+    precision = "street";
+  }
+  if (want.houseNo && p.housenumber) {
+    if (sameText(p.housenumber, want.houseNo)) {
+      score += 4;
+      // A house number is only an address when it sits on a street we
+      // recognised; on its own it's a number that happens to agree.
+      if (precision === "street" || !want.street) precision = "address";
+    } else {
+      score -= 1;
+    }
+  }
+  if (precision === "city" && want.zip && String(p.postcode || "").slice(0, 5) === want.zip) {
+    precision = "zip";
+  }
+
+  return { score, geo: { lat, lng, precision, source: "photon", matched: photonLabel(p) } };
+}
+
+// TIGER shouts: "14808 LARCH WAY, LYNNWOOD, WA, 98087". This is shown to
+// people — in the review note, in the comps pane, as an autocomplete
+// suggestion — so give it back the shape an address is written in.
+export function censusLabel(matchedAddress) {
+  const segs = String(matchedAddress || "").split(",").map((x) => x.trim()).filter(Boolean);
+  if (!segs.length) return null;
+  const zip = /^\d{5}(-\d{4})?$/.test(segs[segs.length - 1]) ? segs.pop() : "";
+  const state = segs.length > 1 && stateAbbr(segs[segs.length - 1]) ? segs.pop().toUpperCase() : "";
+  const head = segs.map(titleCase).join(", ");
+  return [head, [state, zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+}
+
+const titleCase = (s) =>
+  String(s).toLowerCase().replace(/[A-Za-z0-9']+/g, (w) => {
+    if (/^[nsew]$|^[ns][ew]$/.test(w)) return w.toUpperCase();   // directionals
+    if (/^\d+(st|nd|rd|th)$/.test(w)) return w;                  // 128th, not 128Th
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  });
+
+const isUs = (p) => String(p.countrycode || "").toUpperCase() === "US";
+
+// A sanity box around the 50 states — it exists to catch a provider handing
+// back a point in another hemisphere, not to police borders.
+const inUnitedStates = (lat, lng) =>
+  Number.isFinite(lat) && Number.isFinite(lng) &&
+  lat > 15 && lat < 72 && lng < -64 && lng > -172;
+
+const sameText = (a, b) =>
+  String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase() && !!String(a || "").trim();
+
+// "166th Avenue Northeast" and "166th Ave NE" are the same street; the shared
+// USPS normalizer already knows that, so compare through it.
+const streetKey = (s) => normalizeUsAddress(String(s || "")).toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const photonLabel = (p) =>
+  [
+    [p.housenumber, p.street].filter(Boolean).join(" ") || p.name,
+    p.city || p.district || p.county,
+    [stateAbbr(p.state || "") || p.state, p.postcode].filter(Boolean).join(" "),
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+/* ---------- test seam ---------- */
+
+export function _resetGeocodeCache() {
+  cache.clear();
+}

@@ -63,7 +63,8 @@ import {
 } from "../shared/contract-template.js";
 import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
 import { addressKey, addressQueryVariants, zillowUrl } from "../shared/us-address.js";
-import { pullComps, photonGeocode } from "../comps-pull.js";
+import { pullComps } from "../comps-pull.js";
+import { geocodeAddress } from "../geocode.js";
 import { pullZillowComps } from "../comps-zillow.js";
 import { gradeComps, needsScrape } from "../comps-grade.js";
 import {
@@ -1122,31 +1123,40 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
-  /* ---------- address autocomplete (OSM/Photon, no API key) ---------- */
+  /* ---------- address autocomplete (OSM/Photon, confirmed by Census) ---------- */
   router.get("/address-suggest", async (req, res) => {
     try {
       resolveLocation(req);
       const q = String(req.query.query || "").trim();
       if (q.length < 4) return res.json({ suggestions: [] });
-      const r = await fetch(
-        `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8&lang=en`,
-        { signal: AbortSignal.timeout(4000) }
-      );
-      if (!r.ok) return res.json({ suggestions: [] });
-      const j = await r.json();
       const suggestions = [];
-      for (const f of j.features || []) {
-        const p = f.properties || {};
-        if ((p.countrycode || "").toLowerCase() !== "us") continue;
-        if (!p.housenumber || !p.street) continue; // real street addresses only
-        const street = `${p.housenumber} ${p.street}`;
-        const label = [
-          street,
-          p.city || p.district || p.county,
-          [p.state, p.postcode].filter(Boolean).join(" "),
-        ].filter(Boolean).join(", ");
-        if (!suggestions.includes(label)) suggestions.push(label);
-        if (suggestions.length >= 6) break;
+      try {
+        const r = await fetch(
+          `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8&lang=en`,
+          { signal: AbortSignal.timeout(4000) }
+        );
+        const j = r.ok ? await r.json() : null;
+        for (const f of j?.features || []) {
+          const p = f.properties || {};
+          if ((p.countrycode || "").toLowerCase() !== "us") continue;
+          if (!p.housenumber || !p.street) continue; // real street addresses only
+          const street = `${p.housenumber} ${p.street}`;
+          const label = [
+            street,
+            p.city || p.district || p.county,
+            [p.state, p.postcode].filter(Boolean).join(" "),
+          ].filter(Boolean).join(", ");
+          if (!suggestions.includes(label)) suggestions.push(label);
+          if (suggestions.length >= 6) break;
+        }
+      } catch { /* Photon down — the confirmation below still stands a chance */ }
+      // OSM has no node for a great many ordinary US houses, so a perfectly
+      // real address can autocomplete to nothing and look like a typo. When
+      // what's typed already looks like a whole street address, ask the
+      // geocoder to confirm it and offer the address it actually resolved.
+      if (!suggestions.length && /^\s*\d+\s+\S+/.test(q)) {
+        const geo = await geocodeAddress(q, { minPrecision: "address" });
+        if (geo?.matched) suggestions.push(geo.matched);
       }
       res.json({ suggestions });
     } catch {
@@ -1160,7 +1170,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       resolveLocation(req);
       const q = String(req.query.query || "").trim();
       if (q.length < 4) return res.json({ result: null });
-      res.json({ result: await photonGeocode(q) });
+      res.json({ result: await geocodeAddress(q) });
     } catch {
       res.json({ result: null });
     }
@@ -1186,13 +1196,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const baths = Math.max(0, parseFloat(req.query.baths) || 0);
 
       let data;
+      let geo = null;
       if (source === "zillow") {
         if (!apifyToken) return res.json({ enabled: false, comps: [], estimate: null, subject: null });
         // Zillow's sold map has no subject record, so the centre comes from a
         // free geocode and the facts come from whatever the pane already knows.
         // Typing beds/baths/sqft therefore does more work here than it did
         // against the county-record provider, which filled them in for you.
-        const geo = await photonGeocode(address);
+        geo = await geocodeAddress(address);
         if (!geo) return res.status(404).json({ error: "couldn't locate that address on the map" });
         data = await pullZillowComps({
           apifyToken, lat: geo.lat, lng: geo.lng,
@@ -1216,6 +1227,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       res.json({
         ...data,
         source,
+        // Zillow comps are searched in a circle around a geocode. When that
+        // geocode is only a ZIP or city centroid the board is still worth
+        // looking at, but the operator has to be told it isn't centred on the
+        // house — the pane says so above the comps.
+        geo: geo ? { precision: geo.precision, matched: geo.matched || null } : null,
         gradeEnabled: Boolean(String(saved?.aiApiKey || "").trim() && apifyToken),
       });
     } catch (err) { fail(res, err); }

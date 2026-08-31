@@ -1,5 +1,4 @@
-// comps-pull.js — closed-sale comparables from RealEstateAPI v3, plus the
-// address→coordinates fallback the pull depends on.
+// comps-pull.js — closed-sale comparables from RealEstateAPI v3.
 //
 // Extracted from the GET /api/offers/comps route so the auto-underwrite
 // pipeline can pull comps without going back out over HTTP to its own server.
@@ -20,28 +19,11 @@
 // produce an ARV nobody chose to accept.
 
 import { addressQueryVariants } from "./shared/us-address.js";
+import { geocodeAddress } from "./geocode.js";
 import { YEAR_BUILT_TOLERANCE } from "./shared/comp-match.js";
 
 const compsCache = new Map();
 const CACHE_TTL = 24 * 3600 * 1000;
-
-// Free-form address → coordinates. Best-effort: a null just means the caller
-// falls back to whatever the provider's own address matcher produced.
-export async function photonGeocode(q) {
-  try {
-    const r = await fetch(
-      `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=en`,
-      { signal: AbortSignal.timeout(4000) }
-    );
-    if (!r.ok) return null;
-    const f = ((await r.json()).features || [])[0];
-    if (!f?.geometry?.coordinates) return null;
-    const [lng, lat] = f.geometry.coordinates;
-    return { lat, lng };
-  } catch {
-    return null;
-  }
-}
 
 /**
  * pullComps({ apiKey, address, months, sqft, beds, baths, widen })
@@ -122,7 +104,10 @@ export async function pullComps({
   let subjectRef = null;
   if (!j || noRecord(j)) {
     try {
-      const geo = await photonGeocode(address);
+      // A parcel lookup inside a 0.05-mile circle is only meaningful around a
+      // real street address — a ZIP centroid would confidently return whatever
+      // house happens to sit near the middle of the ZIP.
+      const geo = await geocodeAddress(address, { minPrecision: "street" });
       if (geo) {
         const sr = await fetch("https://api.realestateapi.com/v2/PropertySearch", {
           method: "POST",

@@ -27,7 +27,8 @@
 // precisely so a crash loop can't reset them.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { pullComps, photonGeocode } from "./comps-pull.js";
+import { pullComps } from "./comps-pull.js";
+import { geocodeAddress, precisionRank, PRECISION } from "./geocode.js";
 import { pullZillowComps } from "./comps-zillow.js";
 import { gradeComps } from "./comps-grade.js";
 import { fetchZillowPhotos, fetchListingPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
@@ -285,6 +286,7 @@ export function nearbyComps({ compsData, subjectFacts, subjectAddress = "", radi
  */
 export function evaluateGates({
   extraction, subject, rehabbedComps = [], arv, photosAnalyzed = 0, scan, repairs = 0, proxy = null,
+  geocode = null,
 }) {
   const held = [];
 
@@ -304,6 +306,19 @@ export function evaluateGates({
   // announces itself, so this gate does.
   else if (!(Number(subject.sqft) > 0)) {
     held.push("the subject's square footage is unknown — comps can't be size-matched and the ARV can't be size-adjusted");
+  }
+
+  // The geocoder answers even when all it could find was a ZIP code or a town,
+  // and says which. Everything downstream — the comp radius, the ARV, the
+  // offer — is measured from that point, so a centroid is a review, not a
+  // publish. Its own gate rather than part of the chain above: an address
+  // nobody could pin usually has an unknown floor area too, and a reviewer
+  // should be told both.
+  if (geocode && precisionRank(geocode.precision) < PRECISION.street) {
+    held.push(
+      `"${extraction.address}" could only be placed at the centre of its ` +
+      `${geocode.precision === "zip" ? "ZIP code" : "city"} — the comp search is centred on a guess`
+    );
   }
 
   // When the price proxy declined, say THAT rather than "0 renovated comps".
@@ -703,12 +718,24 @@ async function runUnderwrite(job, ctx) {
 
   let compsData;
   let subject;
+  let geocode = null;
   if (compsSource === "zillow") {
     // Zillow search has no notion of a subject property, so we own that record:
     // coordinates from a free geocode, facts from the listing above.
-    const geo = await photonGeocode(extraction.address);
+    const geo = await geocodeAddress(extraction.address);
     if (!geo) {
       throw Object.assign(new Error(`couldn't locate ${extraction.address} on the map`), { http: 404 });
+    }
+    // A centroid can sit a mile from the house, so the run continues — the
+    // comps are still pulled, graded and priced, which is the expensive part
+    // and the part a reviewer wants to see — but the gate below refuses to
+    // publish an offer measured from a guess. See evaluateGates.
+    geocode = geo;
+    if (precisionRank(geo.precision) < PRECISION.street) {
+      warnings.push(
+        `${extraction.address} only resolved to its ${geo.precision === "zip" ? "ZIP code" : "city"} — ` +
+        `comps are centred on ${geo.matched || "an approximate point"}`
+      );
     }
     subject = {
       lat: geo.lat, lng: geo.lng,
@@ -875,7 +902,7 @@ async function runUnderwrite(job, ctx) {
   /* --- the gates --- */
   const gate = evaluateGates({
     extraction, subject, rehabbedComps: rehabbed, arv,
-    photosAnalyzed: photos.length, scan, repairs, proxy,
+    photosAnalyzed: photos.length, scan, repairs, proxy, geocode,
   });
 
   const partial = {

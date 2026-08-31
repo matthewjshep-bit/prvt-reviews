@@ -238,10 +238,17 @@ both the sold-comp search and the subject's own listing. Two consequences worth
 knowing:
 
 - Zillow's sold map has **no subject record**, so the search centre comes from a
-  free Photon geocode and the subject's facts come from its Zillow listing. In
-  the manual Comps pane that means beds/baths/sqft are no longer auto-filled for
-  you — type them, and the search uses them. Switch the source back to
-  `realestateapi` if you want that prefill.
+  free geocode (`ghl-broker/geocode.js`) and the subject's facts come from its
+  Zillow listing. In the manual Comps pane that means beds/baths/sqft are no
+  longer auto-filled for you — type them, and the search uses them. Switch the
+  source back to `realestateapi` if you want that prefill.
+- **When an address won't geocode.** The geocoder asks the US Census (TIGER)
+  first and OSM/Photon second, both free and keyless, and tries several
+  spellings of the address at each. If neither can pin the house it falls back
+  to the centre of the ZIP or the city and *labels* that — an auto-underwrite
+  centred on a centroid always holds for review, and the Comps pane says so
+  above the board. Photon alone used to be the whole of this, and it has no node
+  for a great many ordinary US houses, which failed those runs outright.
 - Zillow rows carry **no `yearBuilt` at all** (verified: 0 of 78 on a live
   pull), so the ±10-year era criterion goes quiet. The match scorecard abstains
   on unknowns rather than penalising them, so comps degrade in ranking, not in

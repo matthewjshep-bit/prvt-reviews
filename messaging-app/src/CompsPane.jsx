@@ -527,6 +527,14 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                   : <>No property record found for this address — automatic comps unavailable. Add comps manually below.</>}
               </div>
             )}
+            {state?.geo && state.geo.precision !== "address" && state.geo.precision !== "street" && (
+              <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                That address couldn't be pinned to a street address — the search is centred on the middle of
+                {state.geo.precision === "zip" ? " its ZIP code" : " the city"}
+                {state.geo.matched ? <> (<b>{state.geo.matched}</b>)</> : null}, which can be a mile off. Check the
+                comps are the right neighbourhood before ticking any.
+              </div>
+            )}
             {state?.enabled && state.widened && allComps.length > 0 && (
               <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 Not enough matching sales within a mile — the search was widened to <b>{state.widened}</b>. Time is
