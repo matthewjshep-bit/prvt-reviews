@@ -968,8 +968,8 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
                   <RefreshCw size={12} /> Refresh from the offer
                 </button>
                 <span className="text-xs text-slate-500">
-                  Built {shortDateTime(room.snapshot?.builtAt)} — the price follows the deal's terms on its own; comps,
-                  scope and photos don't reach investors until you refresh.
+                  Built {shortDateTime(room.snapshot?.builtAt)} — price, ARV and rehab follow the offer on their own;
+                  comps, scope and photos don't reach investors until you refresh.
                 </span>
               </div>
             </div>

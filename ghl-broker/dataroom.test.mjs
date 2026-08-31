@@ -733,6 +733,44 @@ ok("opening the room reconciles a stale price", n.investorPrice === 445000, n.in
 live = await fetch(r.body.dataroom.shareLink).then((x) => x.text());
 ok("and the reconcile is persisted, not cosmetic", live.includes("$445,000"), live.match(/\$4\d\d,\d\d\d/g)?.join(",") || "");
 
+console.log("\n== ARV and rehab follow the offer too ==");
+// The strip's "Spread at ARV" is computed from price, ARV and rehab together,
+// so a price that moves without them leaves a spread reconciling to neither.
+const revalue = async (patch) => {
+  const o = await store.getOffer(offer.id);
+  o.calc = { ...o.calc, inputs: { ...o.calc.inputs, ...patch } };
+  await store.updateOffer(offer.id, o);
+  return o;
+};
+
+await syncDealNumbers({ store, offer: await revalue({ arv: 560000, repairs: 71000 }) });
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+n = r.body.dataroom.snapshot.numbers;
+ok("ARV follows the offer page", n.arv === 560000, n.arv);
+ok("rehab follows the offer page", n.repairs === 71000, n.repairs);
+live = await fetch(r.body.dataroom.shareLink).then((x) => x.text());
+ok("the investor page shows the new ARV", live.includes("$560,000"));
+// 560,000 - 445,000 - 71,000 = 44,000. The spread has to agree with the three
+// figures printed beside it, which is the whole point of syncing them together.
+ok("and a spread that reconciles to them", live.includes("$44,000"),
+  live.match(/\$\d\d?,?\d\d\d,?\d*/g)?.join(",") || "");
+ok("the rest of the package is still frozen",
+  r.body.dataroom.snapshot.comps.items.length === 3 && r.body.dataroom.snapshot.headline === "Sumner 4/2.5 — assignable");
+
+// A rehab figure the offer doesn't name is the frozen scope table's total.
+// Moving it while those line items sit still would make the two disagree.
+await syncDealNumbers({ store, offer: await revalue({ repairs: 0 }) });
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+ok("a scope-derived rehab total stays put", r.body.dataroom.snapshot.numbers.repairs === 71000,
+  r.body.dataroom.snapshot.numbers.repairs);
+
+// An offer that carries no ARV must not blank one an investor has already seen.
+const noCalc = await store.getOffer(offer.id);
+await syncDealNumbers({ store, offer: { ...noCalc, calc: null, scope: [] } });
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+ok("a missing ARV never blanks the room's", r.body.dataroom.snapshot.numbers.arv === 560000,
+  r.body.dataroom.snapshot.numbers.arv);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 server.close();
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });

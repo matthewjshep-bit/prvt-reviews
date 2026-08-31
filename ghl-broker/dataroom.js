@@ -169,22 +169,55 @@ export function pickedComps(snapshot) {
 // through into contractPrice and read as sloppiness on a deal package.
 export function dealNumbers({ offer, settings = {} }) {
   const deal = offer?.deal || null;
+  const inputs = offer?.calc?.inputs || {};
   const contractPrice = Math.round(num(deal?.contractPrice) || num(offer?.cashAmount));
   const assignmentFee = Math.round(deal ? num(deal.assignmentFee) : num(settings?.wholesaleFee));
-  return { contractPrice, assignmentFee, investorPrice: contractPrice + assignmentFee };
+  // ARV and rehab are the offer's own, not the deal's. Rehab falls back to the
+  // scope's line items when the offer doesn't name a figure outright —
+  // `repairsFromScope` says which of the two it was, because only an
+  // outright figure is safe to sync into a room whose scope table is frozen.
+  const arv = Math.round(num(inputs.arv));
+  const namedRepairs = Math.round(num(inputs.repairs));
+  const scopeRepairs = Math.round((offer?.scope || []).reduce((t, s) => t + num(s.cost), 0));
+  return {
+    contractPrice,
+    assignmentFee,
+    investorPrice: contractPrice + assignmentFee,
+    arv,
+    repairs: namedRepairs || scopeRepairs,
+    repairsFromScope: !namedRepairs && scopeRepairs > 0,
+  };
 }
 
-// Push the deal's money into every room built from this offer. The snapshot is
-// frozen on purpose — comps, scope, photos and notes stay as the investor first
-// saw them until the operator refreshes — but the price is the one number that
-// must never be behind the contract: quoting an investor a purchase price the
-// deal page has since moved off is how you assign a deal at the wrong number.
-// Only the three money fields move; everything else waits for the refresh.
+// Push the offer's money into every room built from it. The snapshot is frozen
+// on purpose — comps, scope, photos and notes stay as the investor first saw
+// them until the operator refreshes — but the figures on the headline strip
+// must never be behind the offer: quoting an investor a purchase price the deal
+// page has since moved off is how you assign a deal at the wrong number.
+//
+// Price, ARV and rehab move together, because the strip's "Spread at ARV" is
+// computed from all three at render time. Syncing price alone would leave that
+// spread reconciling to neither vintage — a wrong number in front of a buyer.
+// Everything else still waits for a deliberate refresh.
 //
 // Best-effort by design: a room that won't save must never fail the deal edit
 // that triggered this. Never throws.
 export async function syncDealNumbers({ store, offer, settings = {} }) {
   const next = dealNumbers({ offer, settings });
+  const moves = {
+    contractPrice: next.contractPrice,
+    assignmentFee: next.assignmentFee,
+    investorPrice: next.investorPrice,
+  };
+  // Only overwrite a figure the offer actually carries. An offer with no calc
+  // inputs must not blank an ARV an investor has already seen — a missing
+  // number reads as a withdrawn one, which is worse than a stale one.
+  if (next.arv > 0) moves.arv = next.arv;
+  // A scope-derived rehab total belongs to the scope table printed beside it,
+  // and that table stays frozen. Moving the total while its line items sit
+  // still would make the two openly disagree, so it waits for the refresh.
+  if (next.repairs > 0 && !next.repairsFromScope) moves.repairs = next.repairs;
+
   let synced = 0;
   try {
     for (const room of await store.listDatarooms(offer.locationId, { offerId: offer.id })) {
@@ -192,13 +225,13 @@ export async function syncDealNumbers({ store, offer, settings = {} }) {
       // (kind "offer") and carries the offer's own numbers, not the deal's.
       const n = room?.kind === "offer" ? null : room?.snapshot?.numbers;
       if (!n) continue;
-      if (n.contractPrice === next.contractPrice && n.assignmentFee === next.assignmentFee) continue;
-      room.snapshot = { ...room.snapshot, numbers: { ...n, ...next } };
+      if (Object.keys(moves).every((k) => n[k] === moves[k])) continue;
+      room.snapshot = { ...room.snapshot, numbers: { ...n, ...moves } };
       await store.updateDataroom(room.id, room);
       synced++;
     }
   } catch (e) {
-    console.error(`dataroom: price sync failed offer=${offer?.id}:`, e?.message);
+    console.error(`dataroom: number sync failed offer=${offer?.id}:`, e?.message);
   }
   return synced;
 }
@@ -206,8 +239,8 @@ export async function syncDealNumbers({ store, offer, settings = {} }) {
 // Build the frozen investor package from an offer. Taken once at creation so
 // later edits to the offer never change what an investor already opened;
 // the operator refreshes deliberately via PUT /api/datarooms/:id. The one
-// exception is the price, which syncDealNumbers above keeps level with the
-// deal's assignment contract.
+// exception is the headline money — price, ARV and rehab — which
+// syncDealNumbers above keeps level with the offer.
 // `links` is operator-authored, not derived from the offer — like headline and
 // notes, it must be passed back in on a refresh or rebuilding from the offer
 // would silently drop it.
@@ -217,9 +250,7 @@ export function buildSnapshot({ offer, settings = {}, sections, headline = "", n
   const snap = offer?.snapshot || null;
   const company = offer?.calc?.settings?.company || settings?.company || {};
 
-  const { contractPrice, assignmentFee, investorPrice } = dealNumbers({ offer, settings });
-  const arv = Math.round(num(inputs.arv));
-  const repairs = Math.round(num(inputs.repairs) || (offer?.scope || []).reduce((t, s) => t + num(s.cost), 0));
+  const { contractPrice, assignmentFee, investorPrice, arv, repairs } = dealNumbers({ offer, settings });
 
   const subject = snap?.comps?.result?.info || snap?.subjectInfo || null;
 
