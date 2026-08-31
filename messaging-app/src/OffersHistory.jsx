@@ -16,7 +16,8 @@ import React, { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
-  DEAD_STATUSES, OFFER_STATUS, effectiveStatus, isAiGenerated, needsAiReview, toListOffer,
+  DEAD_STATUSES, OFFER_STATUS, OFFER_STATUS_KEYS, effectiveStatus, isAiGenerated, needsAiReview,
+  toListOffer,
 } from "@shared/offer-status.js";
 import {
   deleteOffer, getOffer, getSettings, ghlContactUrl, listOffers, promoteDeal,
@@ -33,8 +34,8 @@ import OfferDetailModal from "./OfferDetailModal.jsx";
 import UnderwriteStrip from "./UnderwriteStrip.jsx";
 import {
   AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
-  SearchInput, SkeletonRows, StatusDots, StatusMenu, StatusPill, TableCard,
-  rowActivation,
+  SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, StatusPill, TableCard,
+  compareBy, rowActivation, useSort,
 } from "./ui.jsx";
 
 // Compact "what went out" label for a sends entry: "text+email · 07-29".
@@ -85,6 +86,29 @@ const FILTERS = [
   },
 ];
 
+/* ---------- sorting ---------- */
+
+// What each sortable column reads off a row, and which way round it should
+// start. Dates and money open on the biggest/most recent, because that is the
+// question being asked when you click them; names open A→Z.
+//
+// Status sorts by FUNNEL POSITION, not alphabetically: draft → not sent → sent
+// → countered → no response → passed → accepted. "Countered" landing between
+// "sent" and "passed" is the useful order; landing next to "draft" because
+// both start with a letter near C is not.
+const SORTS = {
+  agent: { natural: "asc", of: (o) => o.contactName || "" },
+  date: { natural: "desc", of: (o) => o.createdAt || "" },
+  property: { natural: "asc", of: (o) => o.address || "" },
+  cash: { natural: "desc", of: (o) => (o.cashAmount != null ? Number(o.cashAmount) : null) },
+  status: { natural: "asc", of: (o) => OFFER_STATUS_KEYS.indexOf(effectiveStatus(o)) },
+};
+
+// One agent, one group. Offers with no contact record still collapse together
+// by name, and everything nameless lands in one bucket rather than one group
+// each.
+const groupKeyOf = (o) => o.contactId || (o.contactName ? `name:${o.contactName}` : "none");
+
 const LIVE_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
 
 export default function OffersHistory({ onEdit, onDeal }) {
@@ -102,6 +126,8 @@ export default function OffersHistory({ onEdit, onDeal }) {
   const [settings, setSettings] = useState(null); // fetched lazily for contract prefills
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("waiting"); // open on the offers you're owed a reply on
+  const [sort, toggleSort] = useSort({ key: "date", dir: "desc" }); // newest first, as the API returns them
+  const [queueIds, setQueueIds] = useState(null); // the rows the popout's arrows walk, frozen at open
   const [expanded, setExpanded] = useState(() => new Set()); // group keys open
   const [picked, setPicked] = useState(() => new Set()); // offer ids selected for bulk
   const [statusBusy, setStatusBusy] = useState(null); // offer id whose status is in flight
@@ -306,7 +332,13 @@ export default function OffersHistory({ onEdit, onDeal }) {
       count: searched.filter(f.test).length,
     }));
   const activeFilter = FILTERS.find((f) => f.key === filter) || FILTERS[0];
-  const shown = searched.filter(activeFilter.test);
+  // Sorted BEFORE grouping, which is what makes the groups follow the sort:
+  // an agent lands wherever their leading offer lands, exactly as they used to
+  // land by their most recent one (see the grouping note below).
+  const shown = searched
+    .filter(activeFilter.test)
+    .slice()
+    .sort(compareBy(sort.key, sort.dir, (o, key) => (SORTS[key] || SORTS.date).of(o)));
 
   // KPIs run over every offer for the location, not the filtered view — they're
   // the state of the business, not of the current query.
@@ -327,12 +359,13 @@ export default function OffersHistory({ onEdit, onDeal }) {
     { label: "Live deals", value: liveDeals, hint: "Under contract, buyer found, or assigned" },
   ];
 
-  // Group offers by agent. Offers arrive newest-first, so first appearance
-  // orders the groups by each agent's most recent offer.
+  // Group offers by agent. First appearance orders the groups, so they inherit
+  // whatever the column sort just decided: newest-first by default, and by
+  // price (or address, or funnel position) the moment you click that header.
   const groups = [];
   const byKey = new Map();
   for (const o of shown) {
-    const key = o.contactId || (o.contactName ? `name:${o.contactName}` : "none");
+    const key = groupKeyOf(o);
     let g = byKey.get(key);
     if (!g) {
       g = { key, contactId: o.contactId, contactName: o.contactName, offers: [] };
@@ -352,6 +385,18 @@ export default function OffersHistory({ onEdit, onDeal }) {
     setPicked((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const clearFilters = () => { setQ(""); setFilter("all"); };
+
+  // Opening a row hands the popout the list it came out of, in the order the
+  // table is showing it, so its arrows walk the filter you are working. It is
+  // FROZEN at open: recording an outcome from inside the popout drops that
+  // offer out of "Awaiting reply", and a queue that re-derived itself would
+  // renumber under you and skip the row you were about to reach.
+  const rowsInOrder = groups.flatMap((g) => g.offers);
+  const openRow = (o) => { setQueueIds(rowsInOrder.map((x) => x.id)); openDetail(o); };
+  const closeDetail = () => { setSelected(null); setQueueIds(null); };
+  // Arrowing to another agent's offer opens their group underneath, so closing
+  // the popout leaves you looking at the row you stopped on.
+  const stepTo = (o) => { setExpanded((prev) => new Set(prev).add(groupKeyOf(o))); openDetail(o); };
 
   return (
     <>
@@ -404,11 +449,11 @@ export default function OffersHistory({ onEdit, onDeal }) {
                 <input type="checkbox" checked={allPicked} onChange={toggleAll}
                   disabled={!selectable.length} aria-label="Select all shown offers" />
               </th>
-              <th scope="col" className="px-4 py-2.5">Agent</th>
-              <th scope="col" className="px-4 py-2.5">Date</th>
-              <th scope="col" className="px-4 py-2.5">Property</th>
-              <th scope="col" className="px-4 py-2.5 text-right">Cash offer</th>
-              <th scope="col" className="px-4 py-2.5">Status</th>
+              <SortHeader label="Agent" sortKey="agent" sort={sort} onSort={toggleSort} naturalDir={SORTS.agent.natural} />
+              <SortHeader label="Date" sortKey="date" sort={sort} onSort={toggleSort} naturalDir={SORTS.date.natural} />
+              <SortHeader label="Property" sortKey="property" sort={sort} onSort={toggleSort} naturalDir={SORTS.property.natural} />
+              <SortHeader label="Cash offer" sortKey="cash" sort={sort} onSort={toggleSort} naturalDir={SORTS.cash.natural} align="right" />
+              <SortHeader label="Status" sortKey="status" sort={sort} onSort={toggleSort} naturalDir={SORTS.status.natural} />
               <th scope="col" className="w-44 px-4 py-2.5">Document</th>
               <th scope="col" className="sticky right-0 bg-white px-4 py-2.5"><span className="sr-only">Actions</span></th>
             </tr>
@@ -416,7 +461,9 @@ export default function OffersHistory({ onEdit, onDeal }) {
           <tbody>
             {groups.map((g) => {
               const isOpen = needle ? true : expanded.has(g.key);
-              const latest = g.offers[0];
+              // The offer that put this agent where they are in the list —
+              // their newest by default, their priciest when you sort by cash.
+              const lead = g.offers[0];
               const addresses = [...new Set(g.offers.map((o) => o.address).filter(Boolean))];
               // A collapsed group would otherwise hide the whole point of the
               // AI queue: you'd click the chip, see agent names, and have to
@@ -455,14 +502,14 @@ export default function OffersHistory({ onEdit, onDeal }) {
                       </span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">
-                      {(latest.createdAt || "").slice(0, 10)}
+                      {(lead.createdAt || "").slice(0, 10)}
                     </td>
                     <td className="max-w-[22rem] truncate px-4 py-2.5 text-slate-600"
                       title={addresses.length === 1 ? addresses[0] : undefined}>
                       {addresses.length === 1 ? addresses[0] : addresses.length ? `${addresses.length} properties` : "—"}
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
-                      {latest.cashAmount != null ? fmtMoney(latest.cashAmount) : "—"}
+                      {lead.cashAmount != null ? fmtMoney(lead.cashAmount) : "—"}
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5">
                       <StatusDots offers={g.offers} />
@@ -485,7 +532,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
                     const draft = o.status === "draft";
                     return (
               <tr key={o.id}
-                {...rowActivation(() => (draft ? openEdit(o) : openDetail(o)))}
+                {...rowActivation(() => (draft ? openEdit(o) : openRow(o)))}
                 aria-label={`${o.address || "Offer"} — ${OFFER_STATUS[effectiveStatus(o)]?.label || ""}`}
                 aria-busy={opening === o.id || undefined}
                 className={`group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 ${
@@ -580,21 +627,27 @@ export default function OffersHistory({ onEdit, onDeal }) {
         // whole relationship, not the slice the current chip left standing.
         // These are lean rows: the rail only shows address, date and status,
         // and picking one re-enters through openDetail, which hydrates it.
-        const key = selected.contactId || (selected.contactName ? `name:${selected.contactName}` : "none");
-        const siblings = offers.filter(
-          (o) => (o.contactId || (o.contactName ? `name:${o.contactName}` : "none")) === key);
+        const key = groupKeyOf(selected);
+        const siblings = offers.filter((o) => groupKeyOf(o) === key);
+        // The frozen queue, re-read off the live list so a status recorded in
+        // the popout shows on the row you'll arrow back to. A deleted offer
+        // simply falls out.
+        const byId = new Map(offers.map((o) => [o.id, o]));
+        const queue = (queueIds || []).map((id) => byId.get(id)).filter(Boolean);
         return (
           <OfferDetailModal offer={selected} siblings={siblings}
-            onSelect={openDetail}
-            onClose={() => setSelected(null)}
-            onEdit={(o) => { setSelected(null); onEdit?.(o); }}
+            queue={queue.length > 1 ? queue : null}
+            queueLabel={activeFilter.key === "all" ? "" : activeFilter.label}
+            onSelect={stepTo}
+            onClose={closeDetail}
+            onEdit={(o) => { closeDetail(); onEdit?.(o); }}
             onSend={(o) => setSending(o)}
             onPsa={openPsa}
             onContract={openContract}
             onAssignment={openAssignment}
             onNetSheet={openNetSheet}
             onOfferPage={(o) => setOfferPaging(o)}
-            onPromote={(o) => { setSelected(null); promote(o); }}
+            onPromote={(o) => { closeDetail(); promote(o); }}
             onDealNav={onDeal} />
         );
       })()}

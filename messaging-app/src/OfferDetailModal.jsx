@@ -176,7 +176,7 @@ function AgentRail({ offers, currentId, contactName, onSelect }) {
 }
 
 export default function OfferDetailModal({
-  offer, siblings = [], contactName,
+  offer, siblings = [], contactName, queue = null, queueLabel = "",
   onClose, onSelect, onEdit, onSend, onPsa, onContract, onAssignment, onNetSheet,
   onPromote, onDealNav, onOfferPage,
 }) {
@@ -189,13 +189,23 @@ export default function OfferDetailModal({
   // The agent's offers, newest first, with this one guaranteed present even if
   // the caller's list hasn't caught up with a just-created offer.
   const rail = siblings.some((o) => o.id === offer.id) ? siblings : [offer, ...siblings];
-  const index = rail.findIndex((o) => o.id === offer.id);
-  const prev = index > 0 ? rail[index - 1] : null;
-  const next = index >= 0 && index < rail.length - 1 ? rail[index + 1] : null;
-  const canNavigate = Boolean(onSelect) && rail.length > 1;
 
-  // Esc closes; ←/→ walk the agent's offers. A modal you can only leave by
-  // aiming at a 32px × is a modal that feels like a trap.
+  // What the arrows walk. The QUEUE — the rows of the list you opened this
+  // from, in the order that list shows them — when the open offer is in it,
+  // because working a filter is walking a list: 37 awaiting reply is 37
+  // arrow presses, not 37 rounds of close-the-window-find-the-next-row.
+  // Otherwise the agent's own offers, which is what the rail below shows and
+  // what the editor's peek passes.
+  const inQueue = Boolean(queue?.some((o) => o.id === offer.id));
+  const walk = inQueue ? queue : rail;
+  const index = walk.findIndex((o) => o.id === offer.id);
+  const prev = index > 0 ? walk[index - 1] : null;
+  const next = index >= 0 && index < walk.length - 1 ? walk[index + 1] : null;
+  const canNavigate = Boolean(onSelect) && walk.length > 1;
+  const walkLabel = inQueue ? (queueLabel || "this list").toLowerCase() : "";
+
+  // Esc closes; ←/→ walk the list. A modal you can only leave by aiming at a
+  // 32px × is a modal that feels like a trap.
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") { onClose?.(); return; }
@@ -223,11 +233,13 @@ export default function OfferDetailModal({
             {canNavigate && (
               <span className="mt-0.5 flex items-center gap-1">
                 <button type="button" className={navBtn} disabled={!prev} onClick={() => prev && onSelect(prev)}
-                  aria-label="Previous offer for this agent" title="Previous offer (←)">
+                  aria-label={`Previous offer${walkLabel ? ` in ${walkLabel}` : ""}`}
+                  title={prev ? `← ${prev.address || "Previous offer"}` : "No earlier offer in this list"}>
                   <ChevronLeft size={16} />
                 </button>
                 <button type="button" className={navBtn} disabled={!next} onClick={() => next && onSelect(next)}
-                  aria-label="Next offer for this agent" title="Next offer (→)">
+                  aria-label={`Next offer${walkLabel ? ` in ${walkLabel}` : ""}`}
+                  title={next ? `→ ${next.address || "Next offer"}` : "No later offer in this list"}>
                   <ChevronRight size={16} />
                 </button>
               </span>
@@ -258,7 +270,9 @@ export default function OfferDetailModal({
                 {canNavigate && index >= 0 && (
                   <>
                     <span aria-hidden="true">·</span>
-                    <span className="text-xs">offer {index + 1} of {rail.length}</span>
+                    <span className="text-xs">
+                      {index + 1} of {walk.length}{walkLabel ? ` in ${walkLabel}` : " for this agent"}
+                    </span>
                   </>
                 )}
               </div>

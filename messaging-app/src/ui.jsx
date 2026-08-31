@@ -13,7 +13,7 @@
 
 import React, { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Copy, Loader2, Search, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, Loader2, Search, X } from "lucide-react";
 import {
   OFFER_STATUS, OFFER_STATUS_KEYS, SETTABLE_STATUSES, effectiveStatus, isExpired,
 } from "@shared/offer-status.js";
@@ -361,6 +361,59 @@ export function KpiRow({ items, cols = "sm:grid-cols-4" }) {
       ))}
     </div>
   );
+}
+
+/* ---------- sortable column headers ---------- */
+
+// useSort — the state behind a sortable table. Clicking the column you are
+// already sorting by flips the direction; clicking a new one starts at that
+// column's own natural direction, because "sort by date" means newest first
+// and "sort by agent" means A first, and making the operator click twice to
+// get the obvious one is the kind of small tax that adds up at 10 offers a day.
+export function useSort(initial) {
+  const [sort, setSort] = useState(initial);
+  const toggle = (key, naturalDir = "asc") =>
+    setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: naturalDir }));
+  return [sort, toggle];
+}
+
+// A <th> you can click. The whole cell is the button — a 13px chevron is not a
+// tap target — and every sortable column carries a faint double chevron so it
+// reads as sortable before you hover it.
+export function SortHeader({ label, sortKey, sort, onSort, naturalDir = "asc", align = "left", className = "" }) {
+  const active = sort?.key === sortKey;
+  const Icon = !active ? ChevronsUpDown : sort.dir === "asc" ? ChevronUp : ChevronDown;
+  return (
+    <th scope="col"
+      aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+      className={`px-4 py-2.5 ${align === "right" ? "text-right" : ""} ${className}`}>
+      <button type="button" onClick={() => onSort(sortKey, naturalDir)}
+        title={`Sort by ${label.toLowerCase()}`}
+        className={`inline-flex items-center gap-1 whitespace-nowrap uppercase tracking-wide transition-colors hover:text-slate-800 ${
+          align === "right" ? "flex-row-reverse" : ""} ${active ? "text-slate-800" : ""}`}>
+        {label}
+        <Icon size={13} aria-hidden="true" className={active ? "text-slate-500" : "text-slate-300"} />
+      </button>
+    </th>
+  );
+}
+
+// Comparators for the values these tables actually hold. Every one puts
+// missing values LAST in both directions: a row with no amount is not the
+// cheapest offer you have, it is a row with no amount.
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+export function compareBy(key, dir, pick) {
+  const sign = dir === "asc" ? 1 : -1;
+  return (a, b) => {
+    const av = pick(a, key);
+    const bv = pick(b, key);
+    const aEmpty = av == null || av === "";
+    const bEmpty = bv == null || bv === "";
+    if (aEmpty || bEmpty) return aEmpty && bEmpty ? 0 : aEmpty ? 1 : -1;
+    if (typeof av === "number" && typeof bv === "number") return (av - bv) * sign;
+    return collator.compare(String(av), String(bv)) * sign;
+  };
 }
 
 /* ---------- containers & states ---------- */
