@@ -109,14 +109,20 @@ async function lookup(q) {
 //
 // Breadth-first: every rewrite is offered in its USPS form before any of them
 // is offered spelled out, because the USPS form is what address files hold.
-// Capped, because each rung is a round trip.
-const MAX_VARIANTS = 6;
+// Capped, because each rung is a round trip. Eight rather than six since the
+// missing-comma rewrite joined: an address needing that one usually needs no
+// other, and the cap is only ever reached by an address nothing can resolve.
+const MAX_VARIANTS = 8;
 
 function queryLadder(raw) {
   const parts = String(raw).split(",");
   const { street, unit } = splitUnit(parts[0] || "");
   const withoutUnit = unit ? [street, ...parts.slice(1)].join(",") : "";
-  const forms = [raw, withoutUnit, numberedStreet(raw), numberedStreet(withoutUnit)]
+  const forms = [
+    raw, withoutUnit,
+    numberedStreet(raw), numberedStreet(withoutUnit),
+    ...commaBeforeCity(raw), ...commaBeforeCity(withoutUnit),
+  ]
     .filter(Boolean)
     .map((f) => addressQueryVariants(f));
 
@@ -142,6 +148,67 @@ function numberedStreet(addr) {
   const parts = String(addr).split(",");
   const street = (parts[0] || "").replace(/[A-Za-z]+/g, (w) => SPELLED_ORDINALS[w.toLowerCase()] || w);
   return street === parts[0] ? "" : [street, ...parts.slice(1)].join(",");
+}
+
+// The comma nobody typed before the city.
+//
+// "17118 Riverview Way E Enumclaw, WA 98022" is how an address arrives from a
+// text message or a hand-filled CRM field, and it parses with the CITY stuck to
+// the end of the street: street "Riverview Way E Enumclaw". Both providers
+// answer it correctly — TIGER returns "17118 RIVERVIEW WAY E, ENUMCLAW, WA,
+// 98022" — and then censusAgrees compares "Riverview Way E Enumclaw" against
+// "Riverview Way E", calls it a different street, and throws the right answer
+// away. The ladder fell through to the ZIP centroid: downtown Enumclaw, twenty
+// miles from a house up the river, which is where the auto-underwrite then
+// searched for comps and found none.
+//
+// So the split is offered as an extra RUNG rather than by loosening the street
+// check — the check is what keeps TIGER from answering with a neighbouring
+// street, and a wrong rewrite here costs one round trip instead of a confident
+// wrong address.
+//
+// It only fires where it can be defended: a street-type word, an optional
+// directional after it, and at least one word still left over. A well-formed
+// "1234 Park Avenue South, Seattle, WA" has nothing left over and is left
+// alone, which is why this never fights with an address that was typed right.
+//
+// The last two street-type words are both offered, because plenty of cities
+// are named after one: "1234 Main St Federal Way, WA" cuts after "Way" to
+// nothing, and after "St" to the city it actually is. Best guess first.
+const STREET_TYPES = new Set([
+  "aly", "alley", "ave", "avenue", "blvd", "boulevard", "cir", "circle", "ct", "court",
+  "cv", "cove", "dr", "drive", "expy", "expressway", "hwy", "highway", "ln", "lane",
+  "loop", "pkwy", "parkway", "pl", "place", "plz", "plaza", "rd", "road", "row", "run",
+  "sq", "square", "st", "street", "ter", "terrace", "trl", "trail", "walk", "way",
+  "xing", "crossing",
+]);
+
+const DIRECTIONAL_WORDS = new Set([
+  "n", "s", "e", "w", "ne", "nw", "se", "sw",
+  "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest",
+]);
+
+const word = (w) => String(w).toLowerCase().replace(/\.$/, "");
+
+function commaBeforeCity(addr) {
+  const parts = String(addr || "").split(",");
+  const { street, unit } = splitUnit(parts[0] || "");
+  if (unit) return []; // dropping the unit is its own rung; don't compound them
+
+  const words = street.trim().split(/\s+/).filter(Boolean);
+  const types = [];
+  for (let i = words.length - 1; i >= 0 && types.length < 2; i--) {
+    if (STREET_TYPES.has(word(words[i]))) types.push(i);
+  }
+
+  const out = [];
+  for (let cut of types) {
+    if (cut + 1 < words.length && DIRECTIONAL_WORDS.has(word(words[cut + 1]))) cut += 1;
+    const city = words.slice(cut + 1).join(" ");
+    if (!city) continue; // the street ended where it should have — no run-on
+    out.push([words.slice(0, cut + 1).join(" "), city, ...parts.slice(1)].join(", "));
+  }
+  return out;
 }
 
 /* ---------- providers ---------- */

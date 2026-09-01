@@ -149,6 +149,69 @@ test("\"Sixth Street South\" is offered to the address files as \"6th St S\"", a
   } finally { s.restore(); }
 });
 
+/* ---------- the comma nobody typed ---------- */
+
+// The live failure this rung was written for: the auto-underwrite held on
+// "17118 Riverview Way E Enumclaw, WA 98022" with "could only be placed at the
+// centre of its ZIP code" and pulled zero comps, because the ZIP centroid is
+// downtown Enumclaw and the house is twenty miles up the river.
+const RIVERVIEW = "17118 Riverview Way E Enumclaw, WA 98022";
+const RIVERVIEW_TIGER = ["17118 RIVERVIEW WAY E, ENUMCLAW, WA, 98022", 47.101105, -121.600087];
+
+test("a city glued to the street still resolves to the house", async () => {
+  // Census answers the run-on query correctly; it's our own street check that
+  // used to reject the answer. Only the re-split query is stubbed, so this
+  // fails if the rung stops being offered.
+  const s = stubProviders({
+    census: { "17118 Riverview Way E, Enumclaw, WA 98022": RIVERVIEW_TIGER },
+  });
+  try {
+    const geo = await geocodeAddress(RIVERVIEW);
+    assert.equal(geo.precision, "address");
+    assert.equal(geo.matched, "17118 Riverview Way E, Enumclaw, WA 98022");
+    assert.ok(Math.abs(geo.lat - 47.101105) < 1e-6);
+  } finally { s.restore(); }
+});
+
+test("an address with no commas at all is re-split too", async () => {
+  const s = stubProviders({
+    census: { "17118 Riverview Way E, Enumclaw WA 98022": RIVERVIEW_TIGER },
+  });
+  try {
+    const geo = await geocodeAddress("17118 Riverview Way E Enumclaw WA 98022");
+    assert.equal(geo.precision, "address");
+  } finally { s.restore(); }
+});
+
+test("a well-formed address is never re-split", async () => {
+  // Nothing follows the directional, so there is no city to cut off. The
+  // rung has to stay quiet here or every correct address grows a round trip.
+  const s = stubProviders({});
+  try {
+    await geocodeAddress("1234 Park Avenue South, Seattle, WA 98144");
+    const asked = s.calls.filter((c) => c.which === "census").map((c) => c.q);
+    // A cut in the wrong place — after "Avenue", treating "South" as the city —
+    // would show up as a fourth comma segment.
+    assert.ok(
+      asked.every((q) => q.split(",").length <= 3),
+      `re-split an address that didn't need it: ${asked.join(" | ")}`
+    );
+    assert.equal(asked.length, 3, "only the three spellings, no extra rung");
+  } finally { s.restore(); }
+});
+
+test("the re-split doesn't let TIGER answer with a different street", async () => {
+  // The rung is an extra query, not a loosening of the check: the answer it
+  // gets is still validated against the street that was asked for.
+  const q = "1234 NE 8th St Renton, WA 98056";
+  const s = stubProviders({
+    census: { "1234 NE 8th St, Renton, WA 98056": ["1234 N 8TH ST, RENTON, WA, 98057", 47.49, -122.2] },
+  });
+  try {
+    assert.equal(await geocodeAddress(q), null);
+  } finally { s.restore(); }
+});
+
 /* ---------- honest downgrades ---------- */
 
 test("an address nobody can pin falls back to its ZIP, and says so", async () => {

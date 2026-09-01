@@ -178,6 +178,8 @@ const EXTRACT_SYSTEM =
   "property the agent wants an offer on. Rules: " +
   "Return the full street address including city and state when they are recoverable — from the message itself, " +
   "or from earlier messages in the thread when the newest message is a follow-up (\"what about that one?\"). " +
+  "Write it as \"street, city, ST ZIP\" with the commas in place, even when the agent didn't use any: the comma " +
+  "before the city is what tells everything downstream where the street name ends. " +
   "Return an empty address rather than a guess: a wrong address underwrites a different house and nobody catches it. " +
   "confidence is 'high' only when the street number, street name and city are all explicit somewhere in the thread, " +
   "and the newest message is unambiguously about that property. Use 'medium' when you had to infer which property " +
@@ -286,7 +288,7 @@ export function nearbyComps({ compsData, subjectFacts, subjectAddress = "", radi
  */
 export function evaluateGates({
   extraction, subject, rehabbedComps = [], arv, photosAnalyzed = 0, scan, repairs = 0, proxy = null,
-  geocode = null,
+  geocode = null, compsPool = null,
 }) {
   const held = [];
 
@@ -324,6 +326,7 @@ export function evaluateGates({
   // When the price proxy declined, say THAT rather than "0 renovated comps".
   // The two look identical from the outside and have completely different
   // fixes: one wants a wider net, the other wants someone to look at photos.
+  const compsBefore = held.length;
   if (proxy && !proxy.applied) {
     held.push(`${proxy.reason} — not enough nearby sales to tell renovated from tired by price`);
   } else {
@@ -333,6 +336,21 @@ export function evaluateGates({
         `only ${n} renovated/updated comp${n === 1 ? "" : "s"} within ${UW_RADIUS_MILES} mi — ${UW_MIN_REHABBED_COMPS} required`
       );
     }
+  }
+
+  // Whichever of those two fired, "0 comps" has three completely different
+  // causes and the note read identically for all of them: the search was
+  // centred on the wrong place, nothing sold near the right one, or plenty did
+  // and our own bed/bath/size bands cut every one. The pull already counts what
+  // the box held before filtering — say it, so the next question is answerable
+  // without paying for another run.
+  if (held.length > compsBefore && compsPool && compsPool.pulled != null) {
+    held.push(
+      compsPool.pulled === 0
+        ? `nothing sold within ${UW_RADIUS_MILES} mi of that point in the last 12 months`
+        : `${compsPool.pulled} sold home${compsPool.pulled === 1 ? "" : "s"} in the search box, ` +
+          `${compsPool.kept ?? 0} of them inside ${UW_RADIUS_MILES} mi and within the bed/bath/size bands`
+    );
   }
 
   if (!arv) {
@@ -903,6 +921,7 @@ async function runUnderwrite(job, ctx) {
   const gate = evaluateGates({
     extraction, subject, rehabbedComps: rehabbed, arv,
     photosAnalyzed: photos.length, scan, repairs, proxy, geocode,
+    compsPool: { pulled: compsData?.pulled ?? null, kept: nearby.length },
   });
 
   const partial = {

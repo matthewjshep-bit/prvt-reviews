@@ -50,6 +50,33 @@ test("one rehabbed comp reads as singular", () => {
   assert.match(gate({ rehabbedComps: comps(1) }).held[0], /only 1 renovated\/updated comp within/);
 });
 
+test("a comp hold says what the search box actually held", () => {
+  // "0 comps" used to read the same whether nothing sold nearby or our own
+  // bands ate everything — two problems with opposite fixes.
+  const g = gate({ rehabbedComps: comps(0), compsPool: { pulled: 23, kept: 0 } });
+  assert.equal(g.ok, false);
+  assert.match(g.held.join(" · "), /23 sold homes in the search box, 0 of them inside 0\.5 mi/);
+});
+
+test("an empty box says so, rather than counting to zero twice", () => {
+  const g = gate({ rehabbedComps: comps(0), compsPool: { pulled: 0, kept: 0 } });
+  assert.match(g.held.join(" · "), /nothing sold within 0\.5 mi of that point/);
+});
+
+test("the box count rides along with the price proxy's refusal too", () => {
+  const g = gate({
+    proxy: { applied: false, reason: "only 2 priced comps — the price proxy needs 6 to have a top tier" },
+    compsPool: { pulled: 9, kept: 2 },
+  });
+  assert.match(g.held.join(" · "), /9 sold homes in the search box, 2 of them/);
+});
+
+test("a run that found its comps says nothing about the box", () => {
+  const g = gate({ compsPool: { pulled: 31, kept: 12 } });
+  assert.equal(g.ok, true);
+  assert.deepEqual(g.held, []);
+});
+
 test("three rehabbed comps is exactly enough", () => {
   assert.equal(gate({ rehabbedComps: comps(UW_MIN_REHABBED_COMPS) }).ok, true);
 });
