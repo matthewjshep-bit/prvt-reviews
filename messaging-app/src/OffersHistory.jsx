@@ -239,7 +239,9 @@ export default function OffersHistory({ onEdit, onDeal }) {
     try {
       const r = await setOfferStatus(o.id, status);
       patchOffer(r.offer);
-      if (r.promoted) onDeal?.();
+      // Promotion navigates to the Deals tab — leaving the popout open over it
+      // would strand you on top of the thing you just landed on.
+      if (r.promoted) { closeDetail(); onDeal?.(); }
     } catch (e) { setError(e.message); }
     setStatusBusy(null);
   }
@@ -648,6 +650,8 @@ export default function OffersHistory({ onEdit, onDeal }) {
             onNetSheet={openNetSheet}
             onOfferPage={(o) => setOfferPaging(o)}
             onPromote={(o) => { closeDetail(); promote(o); }}
+            onStatus={changeStatus}
+            statusBusy={statusBusy === selected.id}
             onDealNav={onDeal} />
         );
       })()}

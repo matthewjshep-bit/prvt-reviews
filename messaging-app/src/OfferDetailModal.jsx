@@ -21,7 +21,7 @@ import { fmtMoney } from "@shared/offer-calc.js";
 import { OFFER_STATUS, aiHoldReasons } from "@shared/offer-status.js";
 import { ghlContactUrl, zillowUrl } from "./api.js";
 import { CHANNEL_LABELS } from "./SendModal.jsx";
-import { AttachWarning, StagePill, StatusPill } from "./ui.jsx";
+import { AttachWarning, StagePill, StatusMenu, StatusPill } from "./ui.jsx";
 
 const CARD = "rounded-xl border border-slate-200 bg-white p-3.5";
 const CARD_LABEL = "text-[11px] font-bold uppercase tracking-wider text-slate-500";
@@ -178,7 +178,7 @@ function AgentRail({ offers, currentId, contactName, onSelect }) {
 export default function OfferDetailModal({
   offer, siblings = [], contactName, queue = null, queueLabel = "",
   onClose, onSelect, onEdit, onSend, onPsa, onContract, onAssignment, onNetSheet,
-  onPromote, onDealNav, onOfferPage,
+  onPromote, onDealNav, onOfferPage, onStatus, statusBusy = false,
 }) {
   const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
   const history = offer.statusHistory || [];
@@ -208,6 +208,9 @@ export default function OfferDetailModal({
   // 32px × is a modal that feels like a trap.
   useEffect(() => {
     const onKey = (e) => {
+      // A dropdown open inside the window (the status menu) owns the keyboard
+      // while it's up: Escape closes the menu, not the window behind it.
+      if (document.querySelector('[role="menu"]')) return;
       if (e.key === "Escape") { onClose?.(); return; }
       if (!canNavigate || e.target.closest?.("input, textarea, select")) return;
       if (e.key === "ArrowLeft" && prev) onSelect(prev);
@@ -265,7 +268,15 @@ export default function OfferDetailModal({
                   </a>
                 )}
                 <span aria-hidden="true">·</span>
-                <StatusPill offer={offer} small />
+                {/* The outcome is a control here, exactly as it is in the
+                    Offers table: the window is where you read what came back,
+                    so it's where you should be able to record it. A draft has
+                    no outcome to set (the server rejects one), so it stays a
+                    label until the offer is created. */}
+                {onStatus && !draft
+                  ? <StatusMenu offer={offer} busy={statusBusy} onDealNav={onDealNav}
+                      onSelect={(status) => onStatus(offer, status)} />
+                  : <StatusPill offer={offer} small />}
                 <AttachWarning offer={offer} />
                 {canNavigate && index >= 0 && (
                   <>

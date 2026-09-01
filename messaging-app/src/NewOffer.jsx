@@ -7,7 +7,7 @@ import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } f
 import {
   addContactNote, createOffer, getContactDetail, getContactNotes, ghlContactUrl, listOffers,
   previewDocument, promoteDeal, saveDraft, saveOfferWorkspace, saveSettings, searchContacts,
-  suggestAddresses, updateOffer, zillowUrl,
+  setOfferStatus, suggestAddresses, updateOffer, zillowUrl,
 } from "./api.js";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
@@ -20,7 +20,7 @@ import NetSheetModal from "./NetSheetModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
-import { StatusPill } from "./ui.jsx";
+import { StatusMenu, StatusPill } from "./ui.jsx";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -640,6 +640,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const [agentOffers, setAgentOffers] = useState([]);
   const [peek, setPeek] = useState(null);        // offer whose popout is open
   const [peekSub, setPeekSub] = useState(null);  // { kind, offer } layered over it
+  const [statusBusy, setStatusBusy] = useState(false); // an outcome is in flight
 
   useEffect(() => {
     const id = contact?.id;
@@ -668,6 +669,26 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     }
   }
 
+  // Record an outcome — sent, countered, passed — without leaving the form.
+  //
+  // Same single endpoint the Offers table uses, deliberately: the ledger entry,
+  // the agent_deal_history line in GHL and the contact's status tag are written
+  // in exactly one place, so a status set from here is indistinguishable from
+  // one set from the table. "accepted" promotes to a deal server-side and comes
+  // back flagged, which is why this can land you on the Deals tab.
+  async function changeOfferStatus(o, status) {
+    if (!o?.id || statusBusy) return;
+    setStatusBusy(true);
+    setError("");
+    try {
+      const r = await setOfferStatus(o.id, status);
+      patchPeek(r.offer);
+      onOfferSaved?.(r.offer); // the shell holds the offer being edited
+      if (r.promoted) { setPeek(null); onDeal?.(); }
+    } catch (e) { setError(e.message); }
+    setStatusBusy(false);
+  }
+
   // One patcher for every copy of an offer the popout is holding.
   const patchPeek = (updated) => {
     if (!updated) return;
@@ -675,6 +696,13 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     setPeekSub((s) => (s && s.offer.id === updated.id ? { ...s, offer: updated } : s));
     setAgentOffers((list) => list.map((o) => (o.id === updated.id ? updated : o)));
   };
+
+  // The offer being edited, as freshly as we know it. `restore` is a prop and
+  // can lag a status recorded here by a render; the agent strip is refetched
+  // and patched, so prefer its copy.
+  const liveOffer = fromOffer
+    ? agentOffers.find((o) => o.id === fromOffer.id) || fromOffer
+    : null;
 
   // Money fields format with thousands separators as you type; the calc
   // engine strips $ , and spaces, so the formatted string feeds it directly.
@@ -1159,11 +1187,22 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* Where this offer stands, settable in place. An agent's "we're
+              passing" arrives while you're mid-revision on the next number —
+              recording it shouldn't cost you a trip to the Offers tab and the
+              form you had open. */}
+          {liveOffer && (
+            <span className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-sm">
+              <span className="text-xs font-medium text-slate-500">Status</span>
+              <StatusMenu offer={liveOffer} busy={statusBusy} onDealNav={onDeal}
+                onSelect={(status) => changeOfferStatus(liveOffer, status)} />
+            </span>
+          )}
           {/* The editor shows the working copy; this is the offer as it went
               out — the document, what was sent, what came back, and every
               action that follows it. */}
           {fromOffer && (
-            <button type="button" onClick={() => setPeek(agentOffers.find((o) => o.id === fromOffer.id) || fromOffer)}
+            <button type="button" onClick={() => setPeek(liveOffer)}
               title="Open the full offer window — document, send history, contract and offer page"
               className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
               <Maximize2 size={14} /> Offer details
@@ -1481,6 +1520,8 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         onNetSheet={(o) => setPeekSub({ kind: "netsheet", offer: o })}
         onOfferPage={(o) => setPeekSub({ kind: "page", offer: o })}
         onPromote={onDeal ? promoteFromPeek : undefined}
+        onStatus={changeOfferStatus}
+        statusBusy={statusBusy}
         onDealNav={onDeal} />
     )}
     {/* Sending the offer that's open in the form. The one on the create-success
