@@ -277,27 +277,65 @@ function censusAgrees(want, matchedAddress) {
   const got = parseUsAddress(matchedAddress);
   if (want.houseNo && got.houseNo && !sameText(want.houseNo, got.houseNo)) return false;
   if (want.state && got.state && want.state !== got.state) return false;
-  if (trustworthyStreet(want) && want.street && got.street && !sameStreet(want.street, got.street)) return false;
+  if (trustworthyStreet(want) && want.street && got.street) {
+    if (!sameStreet(want.street, got.street)) return false;
+    if (!streetIsExact(want.street, got.street) && !relaxedMatchIsLocal(want, got)) return false;
+  }
   return true;
 }
 
 // Is the street we were answered with the street we asked about?
 //
-// Strict, with one exception: a street typed WITHOUT its type word. "2614 S
-// 54th" is not a different street from "2614 S 54th St" — the agent just
-// didn't write the "St", which they mostly don't. So when our side names no
-// type, both are compared with their type words removed. When our side DOES
-// name one it has to match, which is what keeps TIGER from answering "NE 8th
-// Street" with "N 8th St" and being believed.
-function sameStreet(want, got) {
-  if (streetKey(want) === streetKey(got)) return true;
-  if (hasStreetType(want)) return false;
-  return streetKey(withoutStreetType(want)) === streetKey(withoutStreetType(got));
+// A street name is three separable things, and a matcher can only disagree
+// with us about the ones we actually wrote down:
+//
+//   core   the name itself — "54th", "Moller", "Larch"
+//   type   St, Ave, Dr, Way…
+//   dirs   N, NE, SW…
+//
+// The core has to match, always. A type or a direction has to match only if we
+// NAMED one: "Moller Dr" is not a different street from "Moller Dr NW", and
+// "2614 S 54th" is not a different street from "2614 S 54th St" — the agent
+// just didn't write the rest, which they mostly don't. Leaving a part out is
+// not disagreement; writing a different one is, which is what keeps TIGER from
+// answering "NE 8th Street" with "N 8th St" and being believed.
+//
+// The caller pairs this with a town check (see relaxedMatchIsLocal): letting an
+// answer supply the half we left off is only safe if it's the same place.
+export function sameStreet(want, got) {
+  const w = streetParts(want);
+  const g = streetParts(got);
+  if (w.core !== g.core) return false;
+  if (w.type && w.type !== g.type) return false;
+  if (w.dirs && w.dirs !== g.dirs) return false;
+  return true;
 }
 
-const streetWords = (s) => String(s || "").trim().split(/\s+/).filter(Boolean);
-const hasStreetType = (s) => streetWords(s).some((w) => STREET_TYPES.has(word(w)));
-const withoutStreetType = (s) => streetWords(s).filter((w) => !STREET_TYPES.has(word(w))).join(" ");
+export const streetIsExact = (want, got) => streetKey(want) === streetKey(got);
+
+// Normalized first, so "Drive"/"Dr" and "Northwest"/"NW" are one token each.
+function streetParts(s) {
+  const core = [];
+  const type = [];
+  const dirs = [];
+  for (const w of normalizeUsAddress(String(s || "")).split(/\s+/).filter(Boolean)) {
+    const k = word(w).replace(/[^a-z0-9]/g, "");
+    if (!k) continue;
+    if (STREET_TYPES.has(k)) type.push(k);
+    else if (DIRECTIONAL_WORDS.has(k)) dirs.push(k);
+    else core.push(k);
+  }
+  return { core: core.join(" "), type: type.join(" "), dirs: dirs.join(" ") };
+}
+
+// A relaxed street match — one where the answer supplied a type or a direction
+// we never typed — has to land in the town we named. Without this, "Moller Dr"
+// could be answered with a Moller Drive in the next county.
+function relaxedMatchIsLocal(want, got) {
+  if (want.city && got.city && sameText(want.city, got.city)) return true;
+  if (want.zip && got.zip && String(want.zip) === String(got.zip)) return true;
+  return false;
+}
 
 // Segment 0 is reliably the street line only when some LATER segment carried a
 // city, state or ZIP. "14808 larch way lynnwood wa" has no commas at all, so
@@ -375,8 +413,15 @@ function scoreFeature(f, want) {
   // The wrong street disqualifies outright, however well the rest lines up.
   // Photon offered "1234 8th Avenue South, Edmonds" for "1234 NE 8th Street,
   // Renton" — same house number, same state, twenty miles away.
+  //
+  // Same one-way tolerance as the Census check, and for the same reason: OSM
+  // holds "10511 Moller Drive Northwest, Gig Harbor" and the agent typed
+  // "10511 Moller Dr", and refusing that answer left the run on a city
+  // centroid twenty miles from the house.
   const streetKnown = trustworthyStreet(want) && want.street;
-  const streetMatches = streetKnown && p.street && streetKey(p.street) === streetKey(want.street);
+  const streetMatches = streetKnown && p.street && sameStreet(want.street, p.street)
+    && (streetIsExact(want.street, p.street)
+        || relaxedMatchIsLocal(want, { city: p.city, zip: String(p.postcode || "").slice(0, 5) }));
   if (streetKnown && p.street && !streetMatches) return null;
 
   let score = 0;
@@ -386,7 +431,10 @@ function scoreFeature(f, want) {
   if (want.city && p.city && sameText(p.city, want.city)) score += 2;
   if (want.state && state === want.state) score += 1;
 
-  if (want.street && p.street && streetKey(p.street) === streetKey(want.street)) {
+  // streetMatches, not an exact-string test: a street the agent typed without
+  // its "NW" still scores as the street it is, or the house below never gets
+  // to count as an address.
+  if (streetMatches) {
     score += 3;
     precision = "street";
   }

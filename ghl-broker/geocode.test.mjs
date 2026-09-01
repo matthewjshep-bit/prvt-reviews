@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { geocodeAddress, censusLabel, atLeast, _resetGeocodeCache } from "./geocode.js";
+import { geocodeAddress, censusLabel, atLeast, sameStreet, _resetGeocodeCache } from "./geocode.js";
 
 /* ---------- a stub for both providers ---------- */
 
@@ -264,6 +264,68 @@ test("the re-split doesn't let TIGER answer with a different street", async () =
   try {
     assert.equal(await geocodeAddress(q), null);
   } finally { s.restore(); }
+});
+
+/* ---------- the direction nobody typed ---------- */
+
+// The live failure: "10511 Moller Dr, Gig Harbor, WA" held on a CITY centroid
+// — twenty miles of Gig Harbor away from the house — because the street is
+// Moller Dr NW and both providers were refused for saying so.
+const MOLLER = "10511 Moller Dr, Gig Harbor, WA";
+
+test("a street typed without its direction still resolves to the house", async () => {
+  const s = stubProviders({
+    census: { [MOLLER]: ["10511 MOLLER DR NW, GIG HARBOR, WA, 98332", 47.353808, -122.562479] },
+  });
+  try {
+    const geo = await geocodeAddress(MOLLER);
+    assert.equal(geo.precision, "address");
+    assert.equal(geo.matched, "10511 Moller Dr NW, Gig Harbor, WA 98332");
+  } finally { s.restore(); }
+});
+
+test("Photon's copy of that house is no longer thrown away either", async () => {
+  // OSM had it all along — housenumber 10511 on "Moller Drive Northwest" —
+  // and the street check refused it for the missing NW.
+  const s = stubProviders({
+    photon: {
+      [MOLLER]: [feature(47.3538, -122.5625, {
+        housenumber: "10511", street: "Moller Drive Northwest",
+        city: "Gig Harbor", state: "Washington", postcode: "98332",
+      })],
+    },
+  });
+  try {
+    const geo = await geocodeAddress(MOLLER);
+    assert.equal(geo.source, "photon");
+    assert.equal(geo.precision, "address");
+  } finally { s.restore(); }
+});
+
+test("the answer still has to be in the town that was named", async () => {
+  // Letting an answer supply the half we left off is only safe locally: a
+  // Moller Drive in another city is a different street.
+  const s = stubProviders({
+    census: { [MOLLER]: ["10511 MOLLER DR NW, OLYMPIA, WA, 98501", 47.03, -122.9] },
+  });
+  try {
+    assert.equal(await geocodeAddress(MOLLER), null);
+  } finally { s.restore(); }
+});
+
+test("sameStreet: leaving a part out is not disagreeing about it", () => {
+  // What we didn't write, the answer may supply.
+  assert.equal(sameStreet("Moller Dr", "Moller Dr NW"), true);
+  assert.equal(sameStreet("S 54th", "S 54th St"), true);
+  assert.equal(sameStreet("Moller", "Moller Drive Northwest"), true);
+  // Spelling is not a difference.
+  assert.equal(sameStreet("166th Avenue Northeast", "166th Ave NE"), true);
+  // What we DID write has to match.
+  assert.equal(sameStreet("NE 8th St", "N 8th St"), false);
+  assert.equal(sameStreet("Moller Dr NW", "Moller Dr SE"), false);
+  assert.equal(sameStreet("Main St", "Main Ave"), false);
+  // And the name itself always has to.
+  assert.equal(sameStreet("Larch Way", "Birch Way"), false);
 });
 
 /* ---------- honest downgrades ---------- */
