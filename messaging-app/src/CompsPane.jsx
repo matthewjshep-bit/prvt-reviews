@@ -525,6 +525,18 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                       parse(subjectSqft) > 0 ? `${parse(subjectSqft).toLocaleString()} sqft` : state.info?.sqft ? `${state.info.sqft.toLocaleString()} sqft` : "",
                     ].filter(Boolean).join(" / ")} in the sold window. Widen the window, adjust beds/baths/sqft and reload — or add comps manually below.</>
                   : <>No property record found for this address — automatic comps unavailable. Add comps manually below.</>}
+                {/* "There are definitely comps around here" is the right
+                    instinct and the pane couldn't answer it. This is the exact
+                    search the run made — open it and Zillow says whether the
+                    box was empty or the scrape came back empty. */}
+                {state.searchUrl && (
+                  <>
+                    {" "}
+                    <a href={state.searchUrl} target="_blank" rel="noreferrer" className="font-semibold underline">
+                      See this exact search on Zillow ↗
+                    </a>
+                  </>
+                )}
               </div>
             )}
             {state?.geo && state.geo.precision !== "address" && state.geo.precision !== "street" && (

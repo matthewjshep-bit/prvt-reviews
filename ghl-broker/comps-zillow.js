@@ -285,6 +285,14 @@ export async function pullZillowComps({
     // between "this neighbourhood is quiet" and "our bands are too tight" is
     // otherwise invisible from the outside.
     pulled: comps.length,
+    // And what the scrape returned before we tried to READ any of it. A run
+    // that reports zero comps has three unrelated causes and they need
+    // different people to fix them: an empty box (quiet street), rows we
+    // couldn't parse (Zillow changed shape, or the actor is handing back
+    // markers with no price), and rows we filtered out (bands too tight).
+    // Without this count the first two are indistinguishable, and the note
+    // blames the neighbourhood for a scrape that never worked.
+    rows: rows.length,
   };
 }
 

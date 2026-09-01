@@ -149,9 +149,20 @@ function Detail({ job }) {
     return <span className="text-xs text-red-700">{job.error || "failed"}</span>;
   }
   if (job.status === "held") {
+    // The warnings are the half of the story the gates can't tell. A gate says
+    // "0 listing photos"; the warning beside it says "Zillow lookup failed
+    // (Apify 402)" — a house with no pictures and an account out of credits
+    // read identically until you can see both. They were being collected and
+    // shown to nobody.
+    const warnings = job.warnings || [];
     return (
-      <span className="text-xs text-amber-800">
+      <span className="block text-xs text-amber-800">
         {(job.held || []).join(" · ") || "held for review"}
+        {warnings.length > 0 && (
+          <span className="mt-0.5 block text-slate-500">
+            {warnings.join(" · ")}
+          </span>
+        )}
       </span>
     );
   }

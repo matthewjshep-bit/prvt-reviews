@@ -345,12 +345,7 @@ export function evaluateGates({
   // the box held before filtering — say it, so the next question is answerable
   // without paying for another run.
   if (held.length > compsBefore && compsPool && compsPool.pulled != null) {
-    held.push(
-      compsPool.pulled === 0
-        ? `nothing sold within ${UW_RADIUS_MILES} mi of that point in the last 12 months`
-        : `${compsPool.pulled} sold home${compsPool.pulled === 1 ? "" : "s"} in the search box, ` +
-          `${compsPool.kept ?? 0} of them inside ${UW_RADIUS_MILES} mi and within the bed/bath/size bands`
-    );
+    held.push(compsPoolReason(compsPool));
   }
 
   if (!arv) {
@@ -380,6 +375,33 @@ export function evaluateGates({
   }
 
   return { ok: held.length === 0, held };
+}
+
+/**
+ * Why the comps came up short, in the terms of whoever has to fix it. Pure.
+ *
+ * "0 comps" has three unrelated causes and they used to read identically:
+ *
+ *   the scrape returned nothing   → an empty box, or a search that didn't work
+ *   it returned rows we can't read → Zillow changed shape; a code fix
+ *   it returned usable rows we cut → the bands, or the radius
+ *
+ * `rows` is null for the county-record source, which has no scrape to count,
+ * so that path keeps the wording it always had.
+ */
+export function compsPoolReason({ rows = null, pulled = 0, kept = 0 } = {}) {
+  const radius = `${UW_RADIUS_MILES} mi`;
+  if (pulled > 0) {
+    return `${pulled} sold home${pulled === 1 ? "" : "s"} in the search box, ` +
+      `${kept ?? 0} of them inside ${radius} and within the bed/bath/size bands`;
+  }
+  if (rows == null) return `nothing sold within ${radius} of that point in the last 12 months`;
+  if (rows === 0) {
+    return `the Zillow sold search returned nothing at all for that box — either nothing sold ` +
+      `within ${radius} in the last 12 months, or the search itself didn't run`;
+  }
+  return `Zillow returned ${rows} sold row${rows === 1 ? "" : "s"} for that box and not one carried a ` +
+    `usable price and position — that is a scrape problem, not a quiet neighbourhood`;
 }
 
 /**
@@ -961,7 +983,7 @@ async function runUnderwrite(job, ctx) {
   const gate = evaluateGates({
     extraction, subject, rehabbedComps: rehabbed, arv,
     photosAnalyzed: photos.length, scan, repairs, proxy, geocode,
-    compsPool: { pulled: compsData?.pulled ?? null, kept: nearby.length },
+    compsPool: { rows: compsData?.rows ?? null, pulled: compsData?.pulled ?? null, kept: nearby.length },
   });
 
   const partial = {
@@ -1166,11 +1188,17 @@ function doneNote(job, arv, repairs) {
 }
 
 function heldNote(job, held) {
+  // The warnings are the half of the story the gates can't tell. A gate says
+  // "0 listing photos"; the warning beside it says "Zillow lookup failed
+  // (Apify 402)", which is the difference between a house with no pictures and
+  // an account out of credits. They were collected and then shown to nobody.
+  const warnings = (job.warnings || []).slice(0, 6);
   return [
     `Auto-underwrite held for review — ${job.address || "no address found"}.`,
     ``,
     `Why:`,
     ...held.map((h) => `  • ${h}`),
+    ...(warnings.length ? [``, `What went wrong along the way:`, ...warnings.map((w) => `  • ${w}`)] : []),
     ``,
     job.arv ? `ARV so far: ${fmtMoney(job.arv)} (${job.arvBasis})` : "",
     job.repairs ? `Scope so far: ${fmtMoney(job.repairs)} from ${job.photosAnalyzed} photos` : "",

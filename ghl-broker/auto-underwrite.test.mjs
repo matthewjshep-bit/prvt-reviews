@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import {
-  evaluateGates, nearbyComps, countToday, findRecent, startUnderwrite, addressToWorkFrom, _resetJobs,
+  evaluateGates, nearbyComps, countToday, findRecent, startUnderwrite, addressToWorkFrom,
+  compsPoolReason, _resetJobs,
   listJobs, publicJob, cancelJob,
   UW_RADIUS_MILES, UW_MIN_REHABBED_COMPS, UW_MIN_SUBJECT_PHOTOS, UW_DEFAULT_DAILY_CAP,
   UW_MAX_ARV_COMPS,
@@ -329,6 +330,34 @@ test("findRecent ignores a different address, a different agent, and anything ol
   assert.equal(await miss([row({ contactId: "c2" })]), null);
   assert.equal(await miss([row({ createdAt: iso(30 * 3600_000) })]), null);
   assert.equal(await miss([row({ autoUnderwrite: undefined })]), null);   // a hand-built offer isn't a dupe
+});
+
+/* ---------- why the comps came up short ---------- */
+
+test("an empty scrape is not a quiet neighbourhood", () => {
+  // The Kirkland run: the address geocoded to the right house and the search
+  // still came back with nothing. Blaming the neighbourhood sent the operator
+  // looking at comp bands for a problem that wasn't there.
+  const r = compsPoolReason({ rows: 0, pulled: 0, kept: 0 });
+  assert.match(r, /returned nothing at all/);
+  assert.match(r, /the search itself didn't run/);
+});
+
+test("rows we couldn't read are named as a scrape problem", () => {
+  const r = compsPoolReason({ rows: 42, pulled: 0, kept: 0 });
+  assert.match(r, /42 sold rows/);
+  assert.match(r, /scrape problem, not a quiet neighbourhood/);
+});
+
+test("comps we pulled and then cut are reported as our own bands", () => {
+  const r = compsPoolReason({ rows: 60, pulled: 31, kept: 4 });
+  assert.match(r, /31 sold homes in the search box, 4 of them inside/);
+});
+
+test("the county-record source keeps the wording it always had", () => {
+  // It has no scrape to count, so `rows` is null and nothing is claimed
+  // about one.
+  assert.match(compsPoolReason({ rows: null, pulled: 0, kept: 0 }), /^nothing sold within/);
 });
 
 /* ---------- the address the run works from ---------- */
