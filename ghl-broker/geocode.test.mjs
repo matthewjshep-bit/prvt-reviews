@@ -196,7 +196,61 @@ test("a well-formed address is never re-split", async () => {
       asked.every((q) => q.split(",").length <= 3),
       `re-split an address that didn't need it: ${asked.join(" | ")}`
     );
-    assert.equal(asked.length, 3, "only the three spellings, no extra rung");
+    // The only extra rungs a well-formed address earns are its own three
+    // spellings offered again without the ZIP.
+    assert.equal(
+      new Set(asked.map((q) => q.replace(/\s+\d{5}$/, ""))).size, 3,
+      `an unexpected rewrite was tried: ${asked.join(" | ")}`
+    );
+  } finally { s.restore(); }
+});
+
+/* ---------- the street type nobody typed ---------- */
+
+// The live failure this rung was written for: "2614 S 54th, Tacoma, WA 98409"
+// held with zero comps and "could only be placed at the centre of its ZIP
+// code". TIGER matches more strictly once a ZIP is present, so the street
+// missing its "St" was refused with the ZIP and answered without it.
+const S54 = "2614 S 54th, Tacoma, WA 98409";
+const S54_TIGER = ["2614 S 54TH ST, TACOMA, WA, 98409", 47.207683, -122.471244];
+
+test("a street typed without its type still resolves to the house", async () => {
+  // Only the ZIP-less query is stubbed — exactly how Census behaves here — so
+  // this fails if that rung stops being offered.
+  const s = stubProviders({ census: { "2614 S 54th, Tacoma, WA": S54_TIGER } });
+  try {
+    const geo = await geocodeAddress(S54);
+    assert.equal(geo.precision, "address");
+    assert.equal(geo.matched, "2614 S 54th St, Tacoma, WA 98409");
+    assert.ok(Math.abs(geo.lat - 47.207683) < 1e-6);
+  } finally { s.restore(); }
+});
+
+test("the ZIP-bearing form is always asked first", async () => {
+  const s = stubProviders({ census: { [S54]: S54_TIGER, "2614 S 54th, Tacoma, WA": S54_TIGER } });
+  try {
+    await geocodeAddress(S54);
+    assert.equal(s.calls[0].q, S54, "dropping the ZIP is a fallback, not the first move");
+  } finally { s.restore(); }
+});
+
+test("a street that DID name its type is still held to it", async () => {
+  // The tolerance only runs one way. "NE 8th St" asked for a type, so an
+  // answer on "N 8th St" is a different street and stays refused.
+  const s = stubProviders({
+    census: { "1234 NE 8th St, Renton, WA": ["1234 N 8TH ST, RENTON, WA, 98057", 47.49, -122.2] },
+  });
+  try {
+    assert.equal(await geocodeAddress("1234 NE 8th St, Renton, WA 98056"), null);
+  } finally { s.restore(); }
+});
+
+test("dropping the ZIP doesn't let the answer wander to another street", async () => {
+  const s = stubProviders({
+    census: { "2614 S 54th, Tacoma, WA": ["2614 S PROSPECT ST, TACOMA, WA, 98409", 47.24, -122.46] },
+  });
+  try {
+    assert.equal(await geocodeAddress(S54), null);
   } finally { s.restore(); }
 });
 

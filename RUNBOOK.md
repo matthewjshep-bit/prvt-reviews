@@ -249,6 +249,20 @@ knowing:
   centred on a centroid always holds for review, and the Comps pane says so
   above the board. Photon alone used to be the whole of this, and it has no node
   for a great many ordinary US houses, which failed those runs outright.
+- **A centroid is the symptom of a bad address parse, not of a bad house.**
+  Every "zero comps, no ARV" run so far has traced back to one: the search was
+  centred half a mile to twenty miles off and the comps around it are somebody
+  else's neighbourhood. The rewrites on the ladder each exist for a live
+  failure — a missing comma before the city ("Riverview Way E Enumclaw"), a
+  street with no type ("2614 S 54th"), a unit number, a spelled-out ordinal.
+  When a run holds on a centroid, look at the address FIRST: paste it into the
+  Comps pane, and if that comes back on the wrong part of the map the fix
+  belongs in `queryLadder`, not in the comp bands.
+- **The run works from the address that resolved, not the one that was typed.**
+  TIGER answers "2614 S 54th" with "2614 S 54TH ST", and that canonical form is
+  what then goes to Zillow, onto the Subject Property field, into the duplicate
+  check and onto the letter. The contact note says so ("resolved from …") so the
+  agent's own words are still on the record.
 - Zillow rows carry **no `yearBuilt` at all** (verified: 0 of 78 on a live
   pull), so the ±10-year era criterion goes quiet. The match scorecard abstains
   on unknowns rather than penalising them, so comps degrade in ranking, not in

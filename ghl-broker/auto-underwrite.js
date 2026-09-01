@@ -28,7 +28,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { pullComps } from "./comps-pull.js";
-import { geocodeAddress, precisionRank, PRECISION } from "./geocode.js";
+import { geocodeAddress, atLeast, precisionRank, PRECISION } from "./geocode.js";
 import { pullZillowComps } from "./comps-zillow.js";
 import { gradeComps } from "./comps-grade.js";
 import { fetchZillowPhotos, fetchListingPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
@@ -382,6 +382,23 @@ export function evaluateGates({
   return { ok: held.length === 0, held };
 }
 
+/**
+ * Which address the run works from, given what was typed and what the
+ * geocoder made of it. Pure.
+ *
+ * Adopts the geocoder's canonical form only when it actually resolved to a
+ * street or a parcel — a ZIP centroid has no address to canonicalise to — and
+ * only when it says something the typed one didn't. `typedAddress` is empty
+ * when nothing changed, so nothing downstream reports a rewrite that never
+ * happened.
+ */
+export function addressToWorkFrom(typed, geo) {
+  const same = { address: typed, typedAddress: "" };
+  if (!atLeast(geo, "street") || !geo.matched) return same;
+  if (addressKey(geo.matched) === addressKey(typed)) return same;
+  return { address: geo.matched, typedAddress: typed };
+}
+
 /* ---------- the Subject Property field ---------- */
 
 // One resolver, so a run that creates the field can't file it somewhere the
@@ -664,11 +681,34 @@ async function runUnderwrite(job, ctx) {
     return finishHeld(job, ctx, { extraction, held: ["no property address in the message"], partial: {} });
   }
 
+  // Resolve the address BEFORE anything is looked up with it, and work from
+  // the address that resolved.
+  //
+  // An agent texts "2614 S 54th" — no "St", which is how people write. That
+  // string then went to Zillow for the listing, to the comp search for a
+  // centre, onto the contact record and into the letter. Here it is resolved
+  // once, and when it comes back as a real parcel the canonical form is what
+  // the rest of the run uses: Zillow matches more listings with it, the
+  // documents print it, and the duplicate check compares like with like. The
+  // typed form is kept beside it, because the operator asked about that one.
+  //
+  // Below street precision nothing is adopted — a ZIP centroid has no address
+  // to canonicalise to, and the gate at the end holds the run for review.
+  const resolved = await geocodeAddress(extraction.address);
+  const chosen = addressToWorkFrom(extraction.address, resolved);
+  extraction.address = chosen.address;
+  if (chosen.typedAddress) {
+    extraction.typedAddress = chosen.typedAddress;
+    job.typedAddress = chosen.typedAddress;
+  }
+  job.address = extraction.address;
+
   // Announce only once we know what we're working on — a note that says
   // "started" with no address is noise on the contact record.
   await setTag(client, job.contactId, UW_TAGS.running, warnings);
   await note(client, job.contactId,
     `Auto-underwrite started for ${extraction.address}` +
+    (extraction.typedAddress ? ` (resolved from "${extraction.typedAddress}")` : "") +
     (extraction.source === "conversation" ? " (read from the conversation)" : "") + "." +
     (extraction.askingPrice ? ` Asking ${fmtMoney(extraction.askingPrice)}.` : ""),
     warnings);
@@ -740,7 +780,7 @@ async function runUnderwrite(job, ctx) {
   if (compsSource === "zillow") {
     // Zillow search has no notion of a subject property, so we own that record:
     // coordinates from a free geocode, facts from the listing above.
-    const geo = await geocodeAddress(extraction.address);
+    const geo = resolved;
     if (!geo) {
       throw Object.assign(new Error(`couldn't locate ${extraction.address} on the map`), { http: 404 });
     }

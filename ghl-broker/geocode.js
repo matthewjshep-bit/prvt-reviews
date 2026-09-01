@@ -107,6 +107,21 @@ async function lookup(q) {
 // three spellings addressQueryVariants produces (RealEstateAPI is not the only
 // matcher that's picky about "Ave" vs "Avenue").
 //
+// Each rewrite is then offered twice, with its ZIP and without. That second
+// pass is not padding — TIGER matches an address MORE strictly once a ZIP is
+// present, and a street missing its type is exactly what that strictness
+// throws out:
+//
+//   "2614 S 54th, Tacoma, WA 98409"  → no match
+//   "2614 S 54th, Tacoma, WA"        → 2614 S 54TH ST, TACOMA, WA 98409
+//
+// Agents text street names without the "St" all day, and before this the run
+// fell back to the ZIP centroid — half a mile away, by the rail yard — and
+// searched for comps around that. Dropping the ZIP spends one disambiguator
+// and keeps the city and the state; the house number and the street on the
+// answer are still checked (see censusAgrees), and the ZIP-bearing form is
+// always tried first.
+//
 // Breadth-first: every rewrite is offered in its USPS form before any of them
 // is offered spelled out, because the USPS form is what address files hold.
 // Capped, because each rung is a round trip. Eight rather than six since the
@@ -123,6 +138,10 @@ function queryLadder(raw) {
     numberedStreet(raw), numberedStreet(withoutUnit),
     ...commaBeforeCity(raw), ...commaBeforeCity(withoutUnit),
   ]
+    .filter(Boolean)
+    // Each rewrite keeps its ZIP-less twin next to it, so the cap trims whole
+    // rewrites off the end rather than every fallback at once.
+    .flatMap((f) => [f, withoutZip(f)])
     .filter(Boolean)
     .map((f) => addressQueryVariants(f));
 
@@ -190,6 +209,13 @@ const DIRECTIONAL_WORDS = new Set([
 
 const word = (w) => String(w).toLowerCase().replace(/\.$/, "");
 
+// "…, Tacoma, WA 98409" → "…, Tacoma, WA". Empty when there was no ZIP to
+// drop, so the rung never duplicates the form it came from.
+function withoutZip(addr) {
+  const cut = String(addr || "").replace(/(?:^|[\s,])\d{5}(?:-\d{4})?\s*$/, "").trim().replace(/,$/, "");
+  return cut && cut !== String(addr || "").trim() ? cut : "";
+}
+
 function commaBeforeCity(addr) {
   const parts = String(addr || "").split(",");
   const { street, unit } = splitUnit(parts[0] || "");
@@ -251,9 +277,27 @@ function censusAgrees(want, matchedAddress) {
   const got = parseUsAddress(matchedAddress);
   if (want.houseNo && got.houseNo && !sameText(want.houseNo, got.houseNo)) return false;
   if (want.state && got.state && want.state !== got.state) return false;
-  if (trustworthyStreet(want) && want.street && got.street && streetKey(want.street) !== streetKey(got.street)) return false;
+  if (trustworthyStreet(want) && want.street && got.street && !sameStreet(want.street, got.street)) return false;
   return true;
 }
+
+// Is the street we were answered with the street we asked about?
+//
+// Strict, with one exception: a street typed WITHOUT its type word. "2614 S
+// 54th" is not a different street from "2614 S 54th St" — the agent just
+// didn't write the "St", which they mostly don't. So when our side names no
+// type, both are compared with their type words removed. When our side DOES
+// name one it has to match, which is what keeps TIGER from answering "NE 8th
+// Street" with "N 8th St" and being believed.
+function sameStreet(want, got) {
+  if (streetKey(want) === streetKey(got)) return true;
+  if (hasStreetType(want)) return false;
+  return streetKey(withoutStreetType(want)) === streetKey(withoutStreetType(got));
+}
+
+const streetWords = (s) => String(s || "").trim().split(/\s+/).filter(Boolean);
+const hasStreetType = (s) => streetWords(s).some((w) => STREET_TYPES.has(word(w)));
+const withoutStreetType = (s) => streetWords(s).filter((w) => !STREET_TYPES.has(word(w))).join(" ");
 
 // Segment 0 is reliably the street line only when some LATER segment carried a
 // city, state or ZIP. "14808 larch way lynnwood wa" has no commas at all, so

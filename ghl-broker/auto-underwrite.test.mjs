@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import {
-  evaluateGates, nearbyComps, countToday, findRecent, startUnderwrite, _resetJobs,
+  evaluateGates, nearbyComps, countToday, findRecent, startUnderwrite, addressToWorkFrom, _resetJobs,
   listJobs, publicJob, cancelJob,
   UW_RADIUS_MILES, UW_MIN_REHABBED_COMPS, UW_MIN_SUBJECT_PHOTOS, UW_DEFAULT_DAILY_CAP,
   UW_MAX_ARV_COMPS,
@@ -329,6 +329,40 @@ test("findRecent ignores a different address, a different agent, and anything ol
   assert.equal(await miss([row({ contactId: "c2" })]), null);
   assert.equal(await miss([row({ createdAt: iso(30 * 3600_000) })]), null);
   assert.equal(await miss([row({ autoUnderwrite: undefined })]), null);   // a hand-built offer isn't a dupe
+});
+
+/* ---------- the address the run works from ---------- */
+
+test("a street typed without its type is replaced by the one that resolved", () => {
+  // "2614 S 54th" went to Zillow, to the comp search, onto the contact record
+  // and into the letter. What resolved was 2614 S 54th St.
+  const r = addressToWorkFrom("2614 S 54th, Tacoma, WA 98409", {
+    precision: "address", matched: "2614 S 54th St, Tacoma, WA 98409",
+  });
+  assert.equal(r.address, "2614 S 54th St, Tacoma, WA 98409");
+  assert.equal(r.typedAddress, "2614 S 54th, Tacoma, WA 98409", "what the agent said is kept");
+});
+
+test("the same address in another spelling is not a rewrite", () => {
+  // addressKey normalises both sides, so this must not churn the contact
+  // record or claim in the note that anything was resolved.
+  const r = addressToWorkFrom("741 North 128th Street, Seattle, WA 98133", {
+    precision: "address", matched: "741 N 128th St, Seattle, WA 98133",
+  });
+  assert.equal(r.address, "741 North 128th Street, Seattle, WA 98133");
+  assert.equal(r.typedAddress, "");
+});
+
+test("a centroid has no address to adopt", () => {
+  for (const geo of [
+    { precision: "zip", matched: "98409" },
+    { precision: "city", matched: "Tacoma, WA" },
+    null,
+  ]) {
+    const r = addressToWorkFrom("2614 S 54th, Tacoma, WA 98409", geo);
+    assert.equal(r.address, "2614 S 54th, Tacoma, WA 98409");
+    assert.equal(r.typedAddress, "");
+  }
 });
 
 /* ---------- startUnderwrite's front door ---------- */
