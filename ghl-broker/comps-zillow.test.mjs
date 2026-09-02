@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { boundsAround, soldSearchUrl, filterComps } from "./comps-zillow.js";
+import { boundsAround, soldSearchUrl, filterComps, normalizeRow, pullZillowComps } from "./comps-zillow.js";
 
 const SUBJECT = { lat: 47.49, lng: -122.19 };
 const state = (url) => JSON.parse(decodeURIComponent(new URL(url).search.replace("?searchQueryState=", "")));
@@ -276,4 +276,130 @@ test("an unrecognized type name narrows nothing, and the JS filter still holds",
   // But the exact match still refuses anything that isn't that type.
   assert.equal(typed("SOMETHING_NEW", { homeType: "SOMETHING_NEW" }), true);
   assert.equal(typed("SINGLE_FAMILY", { homeType: "SOMETHING_NEW" }), false);
+});
+
+/* ---------- reading a row, whichever shape the actor is in ---------- */
+
+// On 2026-09-02 the actor renamed every field this reads (build 0.0.90): money
+// became an object under a new key, coordinates moved, the address became an
+// object. Nothing announced it — runs simply started reporting "N sold rows
+// and not one carried a usable price", 21 of them around one Issaquah address.
+// Shapes below are the vendor's own schema examples.
+
+const NEW_SHAPE = {
+  zpid: "2064142765",
+  listingAddress: {
+    street: "130 Example St", unit: null, city: "New York", state: "NY",
+    zipCode: "10005", full: "130 Example St, New York, NY 10005",
+  },
+  coordinates: { latitude: 40.7057, longitude: -74.0073 },
+  listingStatus: "sold",
+  homeType: "SINGLE_FAMILY",
+  listingPrice: { amount: 995000, currency: "USD", formatted: "$995,000" },
+  listingSoldPrice: { amount: 840000, currency: "USD", formatted: "$840,000" },
+  bedrooms: 3, bathrooms: 2, livingArea: 1175,
+  dateSold: "2026-05-06T07:00:00.000Z",
+  propertyUrl: "https://www.zillow.com/homedetails/130-Example-St/2064142765_zpid/",
+  mainImage: "https://photos.zillowstatic.com/fp/example-p_e.jpg",
+};
+
+const OLD_SHAPE = {
+  zpid: 2064142765,
+  address: "130 Example St, New York, NY 10005",
+  latLong: { latitude: 40.7057, longitude: -74.0073 },
+  hdpData: { homeInfo: { price: 840000, bedrooms: 3, bathrooms: 2, livingArea: 1175, homeType: "SINGLE_FAMILY" } },
+  dateSold: "2026-05-06T07:00:00.000Z",
+  detailUrl: "/homedetails/130-Example-St/2064142765_zpid/",
+  imgSrc: "https://photos.zillowstatic.com/fp/example-p_e.jpg",
+};
+
+test("the curated shape reads — this is the row the runs were dropping", () => {
+  const c = normalizeRow(NEW_SHAPE);
+  assert.equal(c.price, 840000, "the SOLD price, not the last list price");
+  assert.equal(c.lat, 40.7057);
+  assert.equal(c.lng, -74.0073);
+  assert.equal(c.saleDate, "2026-05-06");
+  assert.equal(c.beds, 3);
+  assert.equal(c.baths, 2);
+  assert.equal(c.sqft, 1175);
+  assert.equal(c.homeType, "SINGLE_FAMILY");
+  assert.equal(c.address, "130 Example St, New York, NY 10005");
+  assert.match(c.url, /^https:\/\/www\.zillow\.com\/homedetails/);
+  // The three the pull filters on. All of them failed, so every row went.
+  assert.ok(c.price > 0 && c.lat != null && c.lng != null);
+});
+
+test("the old shape still reads — an account on a pinned build keeps working", () => {
+  const c = normalizeRow(OLD_SHAPE);
+  assert.equal(c.price, 840000);
+  assert.equal(c.lat, 40.7057);
+  assert.equal(c.sqft, 1175);
+  assert.equal(c.address, "130 Example St, New York, NY 10005");
+  assert.match(c.url, /^https:\/\/www\.zillow\.com\/homedetails/);
+});
+
+test("both shapes describe the same comp", () => {
+  const a = normalizeRow(NEW_SHAPE);
+  const b = normalizeRow(OLD_SHAPE);
+  for (const k of ["price", "lat", "lng", "saleDate", "beds", "baths", "sqft", "homeType", "address", "url", "photo"]) {
+    assert.deepEqual(a[k], b[k], k);
+  }
+});
+
+test("an address object with no `full` is still assembled", () => {
+  const c = normalizeRow({
+    ...NEW_SHAPE,
+    listingAddress: { street: "130 Example St", unit: "APT 12D", city: "New York", state: "NY", zipCode: "10005" },
+  });
+  assert.equal(c.address, "130 Example St APT 12D, New York, NY 10005");
+});
+
+test("a card with no sold price falls back to what it is asking", () => {
+  const { listingSoldPrice, ...noSold } = NEW_SHAPE;
+  assert.equal(normalizeRow(noSold).price, 995000);
+});
+
+test("a money object that arrives empty is a zero, not a crash", () => {
+  const c = normalizeRow({ ...NEW_SHAPE, listingSoldPrice: {}, listingPrice: { amount: null } });
+  assert.equal(c.price, 0);
+});
+
+/* ---------- the whole pull, on the shape that broke it ---------- */
+
+test("a boxful of curated rows comes back as comps, not as zero", async () => {
+  // The exact failure, end to end: rows arrive, and every one of them used to
+  // be dropped between the dataset and the board.
+  const near = (i) => ({
+    ...NEW_SHAPE,
+    zpid: `z${i}`,
+    coordinates: { latitude: 47.49 + i * 0.001, longitude: -122.19 + i * 0.001 },
+    listingSoldPrice: { amount: 600000 + i * 1000, currency: "USD", formatted: "$600,000" },
+    livingArea: 1400,
+    bedrooms: 3,
+    bathrooms: 2,
+    dateSold: new Date(Date.now() - 30 * 86400000).toISOString(),
+  });
+  const rows = [near(0), near(1), near(2)];
+
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => rows });
+  try {
+    const out = await pullZillowComps({
+      apifyToken: "t", lat: 47.49, lng: -122.19,
+      beds: 3, baths: 2, sqft: 1400, radiusMiles: 0.5, monthsBack: 12,
+    });
+    assert.equal(out.rows, 3, "what the scrape returned");
+    assert.equal(out.pulled, 3, "what survived being read — this was 0");
+    assert.equal(out.comps.length, 3, "what survived the bands");
+    assert.equal(out.comps[0].price, 600000);
+    assert.ok(out.comps.every((c) => c.distance != null));
+  } finally { globalThis.fetch = real; }
+});
+
+test("rows that really are unreadable still report as such", () => {
+  // The diagnosis has to keep working — `rows` above `pulled` is what told us
+  // this was a scrape problem and not a quiet neighbourhood.
+  const junk = normalizeRow({ zpid: "z9", listingPrice: { amount: null } });
+  assert.equal(junk.price, 0);
+  assert.equal(junk.lat, null);
 });

@@ -114,20 +114,28 @@ export async function fetchZillowPhotos(address, apifyToken) {
       { http: 404 }
     );
   }
-  const rawPhotos = item.photos?.length ? item.photos : item.responsivePhotos || [];
+  // The detail actor was rebuilt on 2026-09-02 alongside the search one, with
+  // the same rename: the carousel is `listingPhotos` ([{url, caption}]), the
+  // status is `listingStatus`, and the price is a money object. The old names
+  // stay behind the new ones so a pinned build still works. Reading only the
+  // old ones is why runs reported "0 listing photos" for houses that plainly
+  // had them, and then blamed the house.
+  const rawPhotos = item.listingPhotos?.length
+    ? item.listingPhotos
+    : item.photos?.length ? item.photos : item.responsivePhotos || [];
   const photos = rawPhotos.map(bestPhotoUrl).filter(Boolean).slice(0, MAX_PHOTOS);
   return {
     photos,
     photosCount: rawPhotos.length,
     listing: {
-      status: item.homeStatus || null,
-      listPrice: item.price || null,
+      status: item.listingStatus || item.homeStatus || null,
+      listPrice: item.listingPrice?.amount ?? item.price ?? null,
       remarks: (item.description || "").slice(0, 1500) || null,
     },
     facts: {
       beds: Number(item.bedrooms) || null,
       baths: Number(item.bathrooms) || null,
-      sqft: Number(item.livingArea) || null,
+      sqft: Number(item.livingArea ?? item.area) || null,
       yearBuilt: Number(item.yearBuilt) || Number(item.resoFacts?.yearBuilt) || null,
       // Zillow's own classification of the subject — SINGLE_FAMILY, CONDO,
       // TOWNHOUSE, MULTI_FAMILY… Comps are matched against this rather than

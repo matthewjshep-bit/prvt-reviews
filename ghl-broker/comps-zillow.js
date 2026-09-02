@@ -169,15 +169,28 @@ const HOME_TYPE_FLAGS = {
 
 // Zillow's search rows carry the same fact in two or three places depending on
 // which surface served them, so read every one rather than trusting a shape.
-function normalizeRow(r) {
+export function normalizeRow(r) {
+  // Two output shapes, and the newer one is a rename of every field this
+  // touches. On 2026-09-02 the actor (build 0.0.90) moved to a curated schema:
+  // `price` → `listingPrice.amount`, `latLong` → `coordinates`, `address` →
+  // `listingAddress` (an object), `detailUrl` → `propertyUrl`, `imgSrc` →
+  // `mainImage`. Nothing announced it; the run just started reporting rows it
+  // couldn't read — 21 sold homes around an Issaquah address, not one of them
+  // usable, because the price it was looking for no longer existed.
+  //
+  // Curated names lead, raw names stay behind them: an account pinned to an
+  // older build keeps working, and so does the Zillow bookmarklet's capture.
   const home = r?.hdpData?.homeInfo || {};
-  const lat = num(r.latLong?.latitude ?? home.latitude ?? r.coordinates?.latitude);
-  const lng = num(r.latLong?.longitude ?? home.longitude ?? r.coordinates?.longitude);
-  // hdpData.homeInfo.price is the only NUMERIC price on a search row, so it
-  // leads. `unformattedPrice` is documented but absent in practice; the
-  // top-level `price` is the abbreviated label and is the last resort, which is
-  // why parseMoney has to understand "M" and "K".
-  const price = parseMoney(home.price ?? r.unformattedPrice ?? r.listingSoldPrice?.amount ?? r.price);
+  const lat = num(r.coordinates?.latitude ?? r.latLong?.latitude ?? home.latitude);
+  const lng = num(r.coordinates?.longitude ?? r.latLong?.longitude ?? home.longitude);
+  // On a SOLD search the sale price is the comp — listingPrice is whatever the
+  // card last asked. hdpData.homeInfo.price was the only numeric price on the
+  // old shape; the top-level `price` is an abbreviated label, which is why
+  // parseMoney has to understand "M" and "K".
+  const price = parseMoney(
+    r.listingSoldPrice?.amount ?? r.listingPrice?.amount ??
+    home.price ?? r.unformattedPrice ?? r.soldPrice ?? r.price
+  );
   // Two shapes in the wild: an ISO string at the top level, epoch ms inside
   // homeInfo. Plus the "Sold 08/15/25" card text as a last resort.
   const soldRaw = r.dateSold ?? home.dateSold;
@@ -186,18 +199,19 @@ function normalizeRow(r) {
   else if (soldRaw) soldMs = Date.parse(soldRaw) || null;
   if (!soldMs) soldMs = Date.parse(String(r.variableData?.text || "").replace(/^\D+/, "")) || null;
   const saleDate = soldMs ? new Date(soldMs).toISOString().slice(0, 10) : "";
+  const url = r.propertyUrl || r.detailUrl || "";
   return {
     id: String(r.zpid || home.zpid || `${lat},${lng}`),
-    address: r.address || [r.addressStreet, r.addressCity, r.addressState].filter(Boolean).join(", "),
+    address: rowAddress(r),
     price: price || 0,
     saleDate,
-    sqft: num(r.area ?? r.livingArea ?? home.livingArea) || 0,
-    beds: num(r.beds ?? r.bedrooms ?? home.bedrooms),
-    baths: num(r.baths ?? r.bathrooms ?? home.bathrooms),
+    sqft: num(r.livingArea ?? r.area ?? home.livingArea) || 0,
+    beds: num(r.bedrooms ?? r.beds ?? home.bedrooms),
+    baths: num(r.bathrooms ?? r.baths ?? home.bathrooms),
     // Absent from every row of a live 78-comp pull. The match scorecard
     // abstains on unknowns rather than penalising them, so era simply stops
     // being one of the criteria on this source.
-    yearBuilt: num(home.yearBuilt),
+    yearBuilt: num(r.yearBuilt ?? home.yearBuilt),
     homeType: r.homeType ?? home.homeType ?? null,
     stories: null,
     subdivision: null,
@@ -205,10 +219,23 @@ function normalizeRow(r) {
     lat,
     lng,
     distance: null, // computed below — a Zillow row has no distance field
-    url: r.detailUrl ? (String(r.detailUrl).startsWith("http") ? r.detailUrl : `https://www.zillow.com${r.detailUrl}`) : null,
-    photo: r.imgSrc || null,
+    url: url ? (String(url).startsWith("http") ? url : `https://www.zillow.com${url}`) : null,
+    photo: (typeof r.mainImage === "string" ? r.mainImage : r.mainImage?.url) || r.imgSrc || null,
     source: "zillow",
   };
+}
+
+// `address` used to be a string and is now an object under a different name.
+// Both, plus the loose addressStreet/City/State trio, land here.
+function rowAddress(r) {
+  const a = r.listingAddress || (r.address && typeof r.address === "object" ? r.address : null);
+  if (a) {
+    return a.full ||
+      [[a.street, a.unit].filter(Boolean).join(" "), a.city, [a.state, a.zipCode].filter(Boolean).join(" ")]
+        .filter(Boolean).join(", ");
+  }
+  if (typeof r.address === "string" && r.address) return r.address;
+  return [r.addressStreet, r.addressCity, r.addressState].filter(Boolean).join(", ");
 }
 
 /**

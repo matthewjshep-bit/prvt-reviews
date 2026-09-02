@@ -242,6 +242,25 @@ knowing:
   Zillow listing. In the manual Comps pane that means beds/baths/sqft are no
   longer auto-filled for you — type them, and the search uses them. Switch the
   source back to `realestateapi` if you want that prefill.
+- **When every run suddenly returns nothing.** The Zillow data comes from two
+  Apify actors (`maxcopell/zillow-scraper` for the sold search,
+  `maxcopell/zillow-detail-scraper` for the subject's listing and each comp's
+  photos), and their OUTPUT SCHEMA is not a stable interface. On 2026-09-02
+  both were rebuilt with every field renamed — `price` → `listingPrice.amount`,
+  `latLong` → `coordinates`, `address` → `listingAddress` (an object),
+  `photos` → `listingPhotos`, `homeStatus` → `listingStatus` — and every run
+  from that minute reported zero comps and zero photos. Nothing errored: the
+  rows arrived and could not be read.
+
+  The tell is in the hold reason. "Zillow returned 21 sold rows for that box
+  and not one carried a usable price and position" means the shape moved;
+  "returned nothing at all" means the box was empty or the search didn't run.
+  Check `https://api.apify.com/v2/acts/maxcopell~zillow-scraper` for
+  `modifiedAt` — no token needed — and the store page carries the current
+  field list. normalizeRow and fetchZillowPhotos read the curated names first
+  and the old ones behind them, so both shapes work; add the new name in front
+  when it moves again.
+
 - **When an address won't geocode.** The geocoder asks the US Census (TIGER)
   first and OSM/Photon second, both free and keyless, and tries several
   spellings of the address at each. If neither can pin the house it falls back
