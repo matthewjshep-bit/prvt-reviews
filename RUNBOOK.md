@@ -261,6 +261,28 @@ knowing:
   and the old ones behind them, so both shapes work; add the new name in front
   when it moves again.
 
+  It moved again the next morning (0.0.91, 2026-09-03T08:48Z), and the store
+  page's example row did NOT show it: in map-marker mode the money objects
+  arrive as `listingSoldPrice: {currency}` and `listingPrice: {currency,
+  formatted: "$345,000"}` — no `amount` on either. 57 rows, 57 zeros, with the
+  rename fix deployed. The parser now reads a money object as its amount and
+  then as its label. The lesson is the method, not the field: don't verify
+  against the vendor's documented example, verify against the LAST RUN. With
+  the Apify token (Settings, or `apifyToken` from `GET /api/offers/settings`),
+  `GET https://api.apify.com/v2/actor-runs?token=…&desc=1` lists the recent
+  runs and `GET /v2/datasets/<defaultDatasetId>/items?token=…` is exactly what
+  the broker was handed. Costs nothing and takes a minute.
+- **When the AI scan fails with "disallowed by the website's robots.txt".**
+  Anthropic fetches a `url` image source itself and honours robots.txt;
+  Zillow's photo CDN (`photos.zillowstatic.com`) forbids it, so every scan of
+  a Zillow-sourced listing 400'd before a photo was looked at, and comp grading
+  came back "unknown" for every comp by the same path. Since 2026-09-03 the
+  broker downloads the photos and sends them inline as base64
+  (`loadImageBlocks` in `rehab-scan.js`), preferring Zillow's 1024px `-p_f`
+  rendition (~200 KB) over the carousel's 1536px one (~650 KB) so forty of
+  them fit the API's 32 MB request cap. If the error ever comes back, a
+  `source: {type: "url"}` image block has crept in somewhere.
+
 - **When an address won't geocode.** The geocoder asks the US Census (TIGER)
   first and OSM/Photon second, both free and keyless, and tries several
   spellings of the address at each. If neither can pin the house it falls back

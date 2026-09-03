@@ -187,8 +187,15 @@ export function normalizeRow(r) {
   // card last asked. hdpData.homeInfo.price was the only numeric price on the
   // old shape; the top-level `price` is an abbreviated label, which is why
   // parseMoney has to understand "M" and "K".
+  //
+  // And the money objects are not reliably filled in. The next rebuild, a day
+  // later (0.0.91, 2026-09-03), ships a map-marker row as
+  // `listingSoldPrice: {currency}` and `listingPrice: {currency, formatted:
+  // "$345,000"}` — no `amount` on either — and 57 sold rows around a Spokane
+  // address parsed to 57 zeros with the fix for the first rename deployed. So
+  // a money object is read as its amount, then as its label.
   const price = parseMoney(
-    r.listingSoldPrice?.amount ?? r.listingPrice?.amount ??
+    money(r.listingSoldPrice) ?? money(r.listingPrice) ??
     home.price ?? r.unformattedPrice ?? r.soldPrice ?? r.price
   );
   // Two shapes in the wild: an ISO string at the top level, epoch ms inside
@@ -197,7 +204,7 @@ export function normalizeRow(r) {
   let soldMs = null;
   if (typeof soldRaw === "number") soldMs = soldRaw;
   else if (soldRaw) soldMs = Date.parse(soldRaw) || null;
-  if (!soldMs) soldMs = Date.parse(String(r.variableData?.text || "").replace(/^\D+/, "")) || null;
+  if (!soldMs) soldMs = Date.parse(String(r.variableData?.text || r.marketingTagline || "").replace(/^\D+/, "")) || null;
   const saleDate = soldMs ? new Date(soldMs).toISOString().slice(0, 10) : "";
   const url = r.propertyUrl || r.detailUrl || "";
   return {
@@ -224,6 +231,11 @@ export function normalizeRow(r) {
     source: "zillow",
   };
 }
+
+// A curated money object, or whatever else sits in the field: `amount` when
+// the actor filled it in, the display label when it didn't, and null for an
+// empty shell so the next candidate gets a look. parseMoney reads the label.
+const money = (m) => (m && typeof m === "object" ? (m.amount ?? m.formatted ?? null) : m);
 
 // `address` used to be a string and is now an object under a different name.
 // Both, plus the loose addressStreet/City/State trio, land here.

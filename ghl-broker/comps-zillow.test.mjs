@@ -403,3 +403,81 @@ test("rows that really are unreadable still report as such", () => {
   assert.equal(junk.price, 0);
   assert.equal(junk.lat, null);
 });
+
+/* ---------- the shape that arrived the day after the fix above ---------- */
+
+// Build 0.0.91, 2026-09-03. Same field names as NEW_SHAPE, but the money
+// objects came through as shells: `listingSoldPrice: {currency}` and
+// `listingPrice: {currency, formatted: "$345,000"}`, with no `amount` on
+// either. This is a real row — 3427 E Jackson Ave, one of 57 around a Spokane
+// subject — and every one of the 57 parsed to price 0 with the rename fix
+// already deployed. The map-marker mode carries the display label only.
+const LIVE_SHAPE_0_0_91 = {
+  zpid: "23518413",
+  zestimate: 344600,
+  listingPrice: { currency: "USD", formatted: "$345,000" },
+  listingAddress: { state: "WA", country: "USA", full: "3427 E Jackson Ave, Spokane, WA 99217" },
+  coordinates: { latitude: 47.68077, longitude: -117.35935 },
+  listingStatus: "sold",
+  propertyUrl: "https://www.zillow.com/homedetails/3427-E-Jackson-Ave-Spokane-WA-99217/23518413_zpid/",
+  listingSoldPrice: { currency: "USD" },
+  cardType: "home",
+  homeType: "SINGLE_FAMILY",
+  bedrooms: 4, bathrooms: 2, livingArea: 1776, livingAreaUnit: "sqft",
+  mainImage: "https://photos.zillowstatic.com/fp/ea19bd670c0b1420f0f4e97782aec883-p_e.jpg",
+  listingPhotos: [], photoCount: 0,
+  marketingTagline: "Sold 08/26/26",
+  dateSold: "2026-08-26T07:00:00.000Z",
+  isValid: true,
+};
+
+test("a money object with only a label still prices the comp", () => {
+  const c = normalizeRow(LIVE_SHAPE_0_0_91);
+  assert.equal(c.price, 345000, "read from listingPrice.formatted");
+  assert.equal(c.lat, 47.68077);
+  assert.equal(c.lng, -117.35935);
+  assert.equal(c.saleDate, "2026-08-26");
+  assert.equal(c.sqft, 1776);
+  assert.equal(c.beds, 4);
+  assert.equal(c.baths, 2);
+  assert.equal(c.address, "3427 E Jackson Ave, Spokane, WA 99217");
+  assert.ok(c.price > 0 && c.lat != null && c.lng != null, "the three the pull filters on");
+});
+
+test("inside a money object the amount leads the label, and the sold price leads the list price", () => {
+  const priced = (sold, list) => normalizeRow({ ...LIVE_SHAPE_0_0_91, listingSoldPrice: sold, listingPrice: list }).price;
+  assert.equal(priced({ amount: 300000, formatted: "$999,999" }, { formatted: "$345,000" }), 300000);
+  assert.equal(priced({ formatted: "$310,000" }, { amount: 345000 }), 310000);
+  assert.equal(priced({ currency: "USD" }, { amount: 345000, formatted: "$1" }), 345000);
+  assert.equal(priced({ currency: "USD" }, { currency: "USD", formatted: "$1.2M" }), 1200000);
+  assert.equal(priced(null, null), 0);
+});
+
+test("the sale date falls back to the card's tagline when dateSold is missing", () => {
+  const { dateSold, ...noDate } = LIVE_SHAPE_0_0_91;
+  assert.equal(normalizeRow(noDate).saleDate, "2026-08-26");
+});
+
+test("a boxful of 0.0.91 rows comes back as comps — the second time this was zero", async () => {
+  const near = (i) => ({
+    ...LIVE_SHAPE_0_0_91,
+    zpid: `z${i}`,
+    coordinates: { latitude: 47.49 + i * 0.001, longitude: -122.19 + i * 0.001 },
+    listingPrice: { currency: "USD", formatted: `$${(600 + i).toLocaleString()},000` },
+    livingArea: 1400, bedrooms: 3, bathrooms: 2,
+    dateSold: new Date(Date.now() - 30 * 86400000).toISOString(),
+  });
+  const rows = [near(0), near(1), near(2)];
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => rows });
+  try {
+    const out = await pullZillowComps({
+      apifyToken: "t", lat: 47.49, lng: -122.19,
+      beds: 3, baths: 2, sqft: 1400, radiusMiles: 0.5, monthsBack: 12,
+    });
+    assert.equal(out.rows, 3);
+    assert.equal(out.pulled, 3, "what survived being read — this was 0 again");
+    assert.equal(out.comps.length, 3);
+    assert.equal(out.comps[0].price, 600000);
+  } finally { globalThis.fetch = real; }
+});

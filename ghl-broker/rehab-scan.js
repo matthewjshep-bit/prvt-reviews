@@ -7,6 +7,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ALL_REHAB_ITEMS, BATH_TIERS, BED_TIERS, lineCost, rehabBand } from "./shared/rehab-catalog.js";
 import { addressQueryVariants } from "./shared/us-address.js";
+import { mapPool } from "./map-pool.js";
 
 const MAX_PHOTOS = 40;
 
@@ -143,6 +144,78 @@ export async function fetchZillowPhotos(address, apifyToken) {
       homeType: item.homeType || null,
     },
   };
+}
+
+/* ---------- getting the pictures into the request ---------- */
+
+// Anthropic fetches a `url` image source itself — and honours robots.txt when
+// it does. Zillow's photo CDN disallows it, so from the day the subject's
+// photos started coming from Zillow every scan died with "This URL is
+// disallowed by the website's robots.txt file" before a photo was looked at,
+// and comp grading through the same path was silently "unknown" for every
+// comp. The bytes are fetched here and sent inline as base64 instead — the
+// same shape an uploaded photo already arrived in.
+//
+// Two budgets, both the API's: 5 MB per image and 32 MB per request. Base64
+// adds a third on top, which is why the request budget sits well under.
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024;
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+// Zillow keeps several renditions of every photo under one hash. The carousel
+// hands out the 1536px one at ~650 KB — forty of those overflow the request —
+// while `-p_f` is the same picture at 1024px and a third of the bytes, plenty
+// to tell a new kitchen from a tired one. A hash without that rendition 404s
+// and the loader falls back to the original.
+export function lighterZillowRendition(url) {
+  const m = String(url).match(/^(https:\/\/photos\.zillowstatic\.com\/fp\/[0-9a-f]+)-uncropped_scaled_within_\d+_\d+\.jpg$/i);
+  return m ? `${m[1]}-p_f.jpg` : null;
+}
+
+async function fetchImage(url) {
+  const r = await fetch(url, { headers: { Accept: "image/*" }, signal: AbortSignal.timeout(20000) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const type = String(r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  if (!IMAGE_TYPES.has(type)) throw new Error(`not an image (${type || "no content-type"})`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length > MAX_IMAGE_BYTES) throw new Error(`${buf.length} bytes, over the per-image cap`);
+  return { bytes: buf.length, block: { type: "image", source: { type: "base64", media_type: type, data: buf.toString("base64") } } };
+}
+
+/**
+ * loadImageBlocks(photos, { budget }) → image content blocks, in photo order.
+ *
+ * `photos` are public URLs or data: URLs. A photo that can't be fetched is
+ * dropped rather than failing the scan — one dead link out of forty is no
+ * reason to skip the house. The list is then cut to the byte budget from the
+ * end, so a listing's leading shots (exterior, kitchen) are the ones kept.
+ */
+export async function loadImageBlocks(photos, { budget = MAX_REQUEST_IMAGE_BYTES, concurrency = 6 } = {}) {
+  const loaded = await mapPool(photos, concurrency, async (p) => {
+    if (typeof p !== "string" || !p) return null;
+    if (p.startsWith("data:")) {
+      const semi = p.indexOf(";");
+      const comma = p.indexOf(",");
+      const data = p.slice(comma + 1);
+      return {
+        bytes: Math.floor(data.length * 0.75),
+        block: { type: "image", source: { type: "base64", media_type: p.slice(5, semi), data } },
+      };
+    }
+    for (const url of [lighterZillowRendition(p), p].filter(Boolean)) {
+      try { return await fetchImage(url); } catch { /* the next rendition, then give up on this one */ }
+    }
+    return null;
+  });
+  const out = [];
+  let used = 0;
+  for (const img of loaded) {
+    if (!img) continue;
+    if (used + img.bytes > budget) break;
+    used += img.bytes;
+    out.push(img.block);
+  }
+  return out;
 }
 
 // Property areas every scan must grade — a complete assessment, not just a
@@ -314,18 +387,17 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }
   const bathCount = Math.ceil(Number(subject?.baths)) || 0;
   const bedCount = Math.round(Number(subject?.beds)) || 0;
 
-  // Photos may be public URLs (MLS CDN) or data URLs (user-uploaded).
-  const toImageBlock = (p) => {
-    if (p.startsWith("data:")) {
-      const semi = p.indexOf(";");
-      const comma = p.indexOf(",");
-      return {
-        type: "image",
-        source: { type: "base64", media_type: p.slice(5, semi), data: p.slice(comma + 1) },
-      };
-    }
-    return { type: "image", source: { type: "url", url: p } };
-  };
+  // Photos may be public URLs (a listing CDN) or data URLs (user-uploaded);
+  // either way they go over as bytes — see loadImageBlocks. A scan with no
+  // pictures at all would be a scope of work invented from the remarks, so
+  // that is an error rather than a cheaper call.
+  const images = await loadImageBlocks(photos.slice(0, MAX_PHOTOS));
+  if (photos.length && !images.length) {
+    throw Object.assign(
+      new Error(`none of the ${photos.length} listing photos could be downloaded — the scope of work can't be scanned`),
+      { http: 502 }
+    );
+  }
 
   const roomInstructions = [
     yearBuilt
@@ -352,7 +424,7 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }
   ].filter(Boolean).join("\n");
 
   const content = [
-    ...photos.slice(0, MAX_PHOTOS).map(toImageBlock),
+    ...images,
     {
       type: "text",
       text:
@@ -482,18 +554,21 @@ export async function gradeCompConditions({ subjectAddress, comps, aiApiKey }) {
     },
   };
 
+  // Every comp gets an equal slice of the request's image budget, so a
+  // photo-heavy comp early in the list can't crowd out the ones after it.
+  const perComp = Math.floor(MAX_REQUEST_IMAGE_BYTES / Math.max(1, comps.length));
   const content = [];
   for (const c of comps) {
+    const images = await loadImageBlocks((c.photos || []).slice(0, 6), { budget: perComp });
     const header = [
       `COMP ${c.id} — ${c.address}.`,
       c.saleDate || c.price ? `Sold${c.saleDate ? ` ${c.saleDate}` : ""}${c.price ? ` for $${Number(c.price).toLocaleString()}` : ""}.` : "",
       c.beds != null || c.sqft ? `${c.beds ?? "?"}/${c.baths ?? "?"} · ${c.sqft ? `${Number(c.sqft).toLocaleString()} sqft` : "sqft unknown"}.` : "",
       c.description ? `Listing description: "${String(c.description).slice(0, 800)}"` : "No listing description available.",
+      images.length ? "" : "Its listing photos could not be loaded — grade it unknown unless the description is decisive.",
     ].filter(Boolean).join(" ");
     content.push({ type: "text", text: header });
-    for (const url of (c.photos || []).slice(0, 6)) {
-      content.push({ type: "image", source: { type: "url", url } });
-    }
+    content.push(...images);
   }
   content.push({
     type: "text",

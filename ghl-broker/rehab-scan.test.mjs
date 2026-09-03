@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fetchZillowPhotos } from "./rehab-scan.js";
+import { fetchZillowPhotos, lighterZillowRendition, loadImageBlocks } from "./rehab-scan.js";
 
 // The detail actor was rebuilt on 2026-09-02 with the same rename as the search
 // one: the carousel became `listingPhotos`, the status `listingStatus`, the
@@ -87,5 +87,118 @@ test("the actor's miss sentinel is still an error, not an empty house", async ()
       () => fetchZillowPhotos("nowhere", "token"),
       /Address not found/
     );
+  } finally { restore(); }
+});
+
+/* ---------- the photos go over as bytes, not links ---------- */
+
+// Anthropic fetches a `url` image source itself and honours robots.txt when
+// it does; Zillow's photo CDN disallows it. Every scan of a Zillow-sourced
+// listing failed with "This URL is disallowed by the website's robots.txt
+// file" — the auto-underwrite's terminal error on 2026-09-03 — and comp
+// grading through the same path had been coming back "unknown" for every
+// comp. The loader below downloads the pictures and inlines them.
+
+const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+
+// A fake CDN: `-p_f.jpg` exists for hash "aaaa" but not "bbbb", one URL is an
+// HTML error page, and everything else is a small jpeg. Records what was asked.
+function stubCdn({ bigBytes = 0 } = {}) {
+  const real = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    asked.push(url);
+    const res = (ok, status, type, bytes) => ({
+      ok, status,
+      headers: { get: (k) => (k.toLowerCase() === "content-type" ? type : null) },
+      arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    });
+    if (/bbbb-p_f\.jpg$/.test(url)) return res(false, 404, "text/html", new Uint8Array(0));
+    if (/error\.html$/.test(url)) return res(true, 200, "text/html; charset=utf-8", new Uint8Array([60, 104]));
+    if (/big\.jpg$/.test(url)) return res(true, 200, "image/jpeg", new Uint8Array(bigBytes));
+    return res(true, 200, "image/jpeg; charset=binary", JPEG);
+  };
+  return { asked, restore: () => { globalThis.fetch = real; } };
+}
+
+test("a carousel URL has a lighter rendition; other URLs do not", () => {
+  assert.equal(
+    lighterZillowRendition("https://photos.zillowstatic.com/fp/aaaa-uncropped_scaled_within_1536_1152.jpg"),
+    "https://photos.zillowstatic.com/fp/aaaa-p_f.jpg"
+  );
+  assert.equal(lighterZillowRendition("https://photos.zillowstatic.com/fp/aaaa-p_e.jpg"), null);
+  assert.equal(lighterZillowRendition("https://cdn.example.com/mls/123.jpg"), null);
+  assert.equal(lighterZillowRendition("data:image/jpeg;base64,abcd"), null);
+});
+
+test("photos come back as base64 blocks, in order, with the fetched media type", async () => {
+  const { asked, restore } = stubCdn();
+  try {
+    const blocks = await loadImageBlocks([
+      "https://photos.zillowstatic.com/fp/aaaa-uncropped_scaled_within_1536_1152.jpg",
+      "https://cdn.example.com/mls/second.jpg",
+    ]);
+    assert.equal(blocks.length, 2);
+    for (const b of blocks) {
+      assert.equal(b.type, "image");
+      assert.equal(b.source.type, "base64", "never a url source — that is the robots.txt path");
+      assert.equal(b.source.media_type, "image/jpeg", "parameters stripped from the content-type");
+      assert.equal(b.source.data, Buffer.from(JPEG).toString("base64"));
+    }
+    assert.deepEqual(asked, [
+      "https://photos.zillowstatic.com/fp/aaaa-p_f.jpg",
+      "https://cdn.example.com/mls/second.jpg",
+    ], "the lighter rendition is what gets fetched for a Zillow carousel photo");
+  } finally { restore(); }
+});
+
+test("a hash without the lighter rendition falls back to the original", async () => {
+  const { asked, restore } = stubCdn();
+  try {
+    const blocks = await loadImageBlocks(["https://photos.zillowstatic.com/fp/bbbb-uncropped_scaled_within_1536_1152.jpg"]);
+    assert.equal(blocks.length, 1);
+    assert.deepEqual(asked, [
+      "https://photos.zillowstatic.com/fp/bbbb-p_f.jpg",
+      "https://photos.zillowstatic.com/fp/bbbb-uncropped_scaled_within_1536_1152.jpg",
+    ]);
+  } finally { restore(); }
+});
+
+test("a dead link or an error page is dropped, not sent and not fatal", async () => {
+  const { restore } = stubCdn();
+  try {
+    const blocks = await loadImageBlocks([
+      "https://cdn.example.com/error.html",
+      "https://cdn.example.com/ok.jpg",
+    ]);
+    assert.equal(blocks.length, 1);
+  } finally { restore(); }
+});
+
+test("an uploaded data: URL passes straight through as base64", async () => {
+  const { asked, restore } = stubCdn();
+  try {
+    const blocks = await loadImageBlocks(["data:image/png;base64,iVBORw0KGgo="]);
+    assert.deepEqual(blocks, [{ type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } }]);
+    assert.deepEqual(asked, [], "nothing fetched");
+  } finally { restore(); }
+});
+
+test("the request budget trims from the end, keeping the leading photos", async () => {
+  const { restore } = stubCdn({ bigBytes: 3000 });
+  try {
+    const blocks = await loadImageBlocks(
+      ["https://cdn.example.com/1-big.jpg", "https://cdn.example.com/2-big.jpg", "https://cdn.example.com/3-big.jpg"],
+      { budget: 6500 }
+    );
+    assert.equal(blocks.length, 2, "two fit, the third would overflow");
+  } finally { restore(); }
+});
+
+test("an image over the per-image cap is skipped rather than sent", async () => {
+  const { restore } = stubCdn({ bigBytes: 5 * 1024 * 1024 + 1 });
+  try {
+    const blocks = await loadImageBlocks(["https://cdn.example.com/1-big.jpg", "https://cdn.example.com/ok.jpg"]);
+    assert.equal(blocks.length, 1);
   } finally { restore(); }
 });
