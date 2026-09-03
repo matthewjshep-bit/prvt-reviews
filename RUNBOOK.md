@@ -501,6 +501,79 @@ call carrying ~36 images, which is what takes a run to $1–3 and 3–5 minutes.
 That is the dial to turn if the price proxy is producing ARVs you don't trust in
 a particular market.
 
+## Reply agent (inbound text → drafted reply)
+
+An agent texts back — "would you do 410?", "seller went another way", "can you
+send proof of funds?", "still interested?" — and a drafted reply is waiting at
+the top of History a few seconds later, with the reason it needs you beside
+it. You send it, edit it first, or dismiss it. **Nothing is ever sent by
+itself in this version.**
+
+Why not GHL's Conversation AI: it is a generic bot working from a knowledge
+base. It has never seen the offer we sent this agent, at what price, on which
+house, or what happened to it — and every reply to a listing agent is really a
+reply about a specific offer. The broker knows them all, so the draft is built
+from the thread **and** the offer book, and the model is forbidden from using
+a number that isn't in one of the two.
+
+**Prerequisites.** Settings needs the Anthropic key. Sending uses
+`CARD_SENDS_ENABLED=true` on the broker, the same gate an offer text has;
+without it, Send previews and changes nothing. The webhook uses the same
+`AUTO_UNDERWRITE_SECRET` as the underwriter (one credential for both
+automations). Turn GHL's own Conversation AI **off** for contacts the workflow
+routes here, or the two will answer the same text.
+
+**Wiring.** A GHL Workflow: trigger **Inbound Message**, your filter (a tag
+such as `agent`, or the same Tier-1 filter the underwriter uses), then a
+**Webhook** action, `POST`, to
+`https://offers.shepflips.com/api/offers/automations/reply`, body:
+
+```json
+{ "location_id": "{{location.id}}", "secret": "<AUTO_UNDERWRITE_SECRET>",
+  "contactId": "{{contact.id}}", "message": "{{message.body}}",
+  "channel": "{{message.type}}" }
+```
+
+`channel` is optional; anything containing "email" drafts an email, everything
+else a text. It answers `202` at once and drafts in the background (a few
+seconds — one Claude call). One open draft per agent: a second text before the
+first was answered supersedes it, because the reply is to the conversation, not
+to a message.
+
+**What the model is given.** The agent's name and tags, your standing
+instructions from Settings (who signs, how you close, what never to discuss),
+the last ~60 messages of the thread, and the agent's offers newest first —
+address, our amount, asking, status, when it was sent and how. If an
+auto-underwrite is running for that agent right now it is told so, and may say
+"numbers coming shortly" without a number.
+
+**What it may not do.** Accept a counter, move an offer, confirm a showing or
+inspection time, promise proof of funds, agree to terms, or tell the agent it
+is a bot. Those come back as a holding reply ("let me run that by my partner
+and get back to you this afternoon") and flagged. And the one rule that is not
+a judgment call: `evaluateReplyGates` in `ghl-broker/reply-agent.js` rejects
+any draft that names a dollar figure not in the offer book or the agent's own
+message. A made-up number to a listing agent is the worst thing this could do.
+
+**Watching it.** The **Replies to send** strip at the top of History: each row
+shows what the agent said, the model's one-line read of it, the draft in an
+editable box, and either "would have been safe to send on its own" or the
+reasons it needs you. The contact also gets a note with the draft and a
+`reply-draft` tag, cleared when you send or dismiss. Sent drafts record what
+actually went out (`sentText`) beside what the model wrote, so an edit rate is
+a query away.
+
+**Graduating it.** The gate result is stored on every draft as `autoSendable`
+plus `flags`. After a few weeks, count how often `autoSendable` was true AND
+you sent the draft unedited; if that number is high for questions, passes and
+check-ins, that is the evidence for letting those intents go out on their own.
+`AUTO_SENDABLE_INTENTS` is the short list that would have to earn each
+addition; counters, calls, showings and proof of funds are deliberately never
+on it.
+
+**Cost.** One Claude text call per inbound message, roughly $0.02–0.05. Daily
+cap in Settings (default 60), counted from the database.
+
 ## Agent Outreach
 
 **Separate app, same Netlify site.** Agent Outreach lives at the `/agents`
@@ -678,6 +751,11 @@ Notes for whoever maintains this:
   `GHL_LOCATION_KEYS`, a per-location daily cap (Settings, default 25) counted
   from the database rather than memory so a crash loop can't reset it, and a
   24-hour dedupe on contact + address. An auto-underwrite never sends.
+- **The reply agent never sends on its own.** Every draft waits for a person;
+  the Send button is dry-run unless `CARD_SENDS_ENABLED=true` (the offer-send
+  gate). The webhook needs the same credential as the underwriter, drafts are
+  capped per day from the database, and a draft naming a dollar figure that
+  isn't in the offer book is flagged before anyone sees it.
 - The broker rejects any `location_id` that doesn't match `GHL_LOCATION_ID`.
 - Generated documents are stored in Postgres and served at /api/offers/:id/doc.(pdf|jpg) — no storage config needed; links survive redeploys. Setting the R2_* vars switches storage to R2.
 - Offer creation degrades gracefully: if a GHL write fails (fields/note/tag),

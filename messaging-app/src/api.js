@@ -192,6 +192,17 @@ export const getUnderwrites = () =>
 export const cancelUnderwrite = (jobId) =>
   post(`/api/offers/automations/underwrite/${encodeURIComponent(jobId)}/cancel`, {});
 
+/* ---------- reply agent (inbound text -> drafted reply) ---------- */
+// Drafts are started by a GHL workflow webhook, not from here. The outbox
+// lists every draft waiting on a person; Send goes out through GHL as a normal
+// text from our number (dry-run unless the broker has CARD_SENDS_ENABLED).
+export const getReplyDrafts = () =>
+  fetch(`${API_BASE}/api/offers/automations/reply?${locq()}`).then(j);
+export const sendReplyDraft = (id, text) =>
+  post(`/api/offers/automations/reply/${encodeURIComponent(id)}/send`, { text, dryRun: false });
+export const dismissReplyDraft = (id) =>
+  post(`/api/offers/automations/reply/${encodeURIComponent(id)}/dismiss`, {});
+
 /* ---------- Zillow comp capture (bookmarklet inbox) ---------- */
 // Comps grabbed off Zillow land in a server-side inbox — the app runs in a GHL
 // iframe on a different origin from zillow.com, so the server is the only

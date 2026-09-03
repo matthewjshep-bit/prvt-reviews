@@ -546,6 +546,36 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Reply agent</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          A GoHighLevel workflow can webhook an inbound listing-agent text to the broker, which reads the
+          thread <em>and</em> your offer book for that agent — what you offered, on which house, at what
+          price, and what happened to it — and drafts the reply you would send. Unlike GHL&apos;s own
+          Conversation AI it can quote your actual offer, and it is not allowed to invent a number.
+          <strong> Nothing is ever sent by itself:</strong> every draft waits at the top of History for
+          you to send (edited or not) or dismiss. Counters, showings, proof-of-funds requests and
+          &ldquo;call me&rdquo; are drafted as holding replies and flagged. Sending goes out through GHL as
+          a normal text from your number, in the same thread. Uses the Anthropic key above
+          (~$0.02–0.05 per draft).
+        </p>
+        <Txt label="Daily cap (drafts per day)"
+          value={String(form.replyAgentDailyCap ?? "")}
+          onChange={(v) => set("replyAgentDailyCap")(v.replace(/[^\d]/g, ""))}
+          placeholder="60" />
+        <label className="mt-3 block">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Standing instructions</span>
+          <textarea className={`${INPUT_CLS} min-h-[6rem]`}
+            value={form.replyAgentInstructions || ""}
+            onChange={(e) => set("replyAgentInstructions")(e.target.value)}
+            placeholder={"Sign off as Matt. We buy as-is, cash, close in 14–21 days, no financing or inspection contingency. Never discuss our assignment fee or who the end buyer is. If they ask for proof of funds, say we'll send it with the contract."} />
+        </label>
+        <p className="mt-1 text-xs text-slate-400">
+          Your voice and your rules, in plain English. The model treats these as facts it may use and
+          lines it may not cross. Leave blank to start and add a line each time a draft gets something wrong.
+        </p>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">AI conversation sweep</h2>
         <p className="mb-3 text-xs text-slate-500">
           Scans every agent/investor contact with conversation activity in the window and auto-fills

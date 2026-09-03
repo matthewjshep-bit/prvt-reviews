@@ -125,6 +125,12 @@ export const DEFAULT_OFFER_SETTINGS = {
   // the spend ceiling, because each run costs Apify credits and two Claude
   // vision calls. See ghl-broker/auto-underwrite.js.
   autoUnderwriteDailyCap: 25,
+  // Reply agent (an inbound agent text -> a drafted reply waiting in the app).
+  // Nothing is ever sent by itself in this version; the cap bounds Claude
+  // spend, and the instructions are the operator's standing voice and rules —
+  // who signs, how we close, what never to discuss. See ghl-broker/reply-agent.js.
+  replyAgentDailyCap: 60,
+  replyAgentInstructions: "",
   // Where closed sales come from. "zillow" scrapes the sold map through Apify
   // (the book the operator already reads by eye, and it carries the $/sqft
   // spread the price proxy below needs); "realestateapi" uses county + MLS

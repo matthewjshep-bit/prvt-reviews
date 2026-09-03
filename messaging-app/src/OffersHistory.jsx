@@ -32,6 +32,7 @@ import EnrichModal from "./EnrichModal.jsx";
 import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
 import UnderwriteStrip from "./UnderwriteStrip.jsx";
+import ReplyStrip from "./ReplyStrip.jsx";
 import {
   AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
   SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, StatusPill, TableCard,
@@ -405,6 +406,9 @@ export default function OffersHistory({ onEdit, onDeal }) {
       {/* Runs kicked off by a GHL workflow when an agent texts in. Renders
           nothing when none are live or waiting on a human. */}
       <UnderwriteStrip onReview={(offerId) => openEdit({ id: offerId })} />
+      {/* Replies the reply agent drafted to inbound agent texts, waiting for a
+          person to send or dismiss. Renders nothing when the outbox is empty. */}
+      <ReplyStrip />
 
       <div className="mb-3">
         <KpiRow items={kpis} />

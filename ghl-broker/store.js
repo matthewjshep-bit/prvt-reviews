@@ -280,6 +280,46 @@ const pgStore = {
     return doc;
   },
 
+  /* ---- reply drafts (the reply agent's outbox, awaiting a human) ---- */
+  async createReplyDraft(doc) {
+    const id = doc.id || uuid();
+    const ts = nowIso();
+    const full = { ...doc, id, createdAt: ts, updatedAt: doc.updatedAt || ts };
+    await query(
+      `insert into reply_drafts (id, location_id, contact_id, status, doc, created_at, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7)`,
+      [id, full.locationId, full.contactId || null, full.status || "draft", full, ts, full.updatedAt]
+    );
+    return full;
+  },
+  // Newest first. `since` bounds by creation (the daily cap), `status` and
+  // `contactId` narrow — both optional so the outbox and the cap share a query.
+  async listReplyDrafts(locationId, { status = null, contactId = null, since = null, limit = 100 } = {}) {
+    const params = [locationId];
+    let where = "";
+    if (status) { params.push(status); where += ` and status = $${params.length}`; }
+    if (contactId) { params.push(contactId); where += ` and contact_id = $${params.length}`; }
+    if (since) { params.push(since); where += ` and created_at >= $${params.length}`; }
+    params.push(limit);
+    const { rows } = await query(
+      `select doc from reply_drafts where location_id = $1${where}
+       order by created_at desc limit $${params.length}`,
+      params
+    );
+    return rows.map((r) => r.doc);
+  },
+  async getReplyDraft(id) {
+    const { rows } = await query(`select doc from reply_drafts where id = $1`, [id]);
+    return rows[0]?.doc || null;
+  },
+  async updateReplyDraft(id, doc) {
+    const { rowCount } = await query(
+      `update reply_drafts set doc = $2, status = $3, updated_at = $4 where id = $1`,
+      [id, doc, doc.status || "draft", doc.updatedAt || nowIso()]
+    );
+    return rowCount > 0;
+  },
+
   /* ---- agent outreach batches ---- */
   async createOutreachBatch(locationId, { name, autoNamed = true } = {}) {
     const id = uuid();
@@ -735,6 +775,7 @@ const fileStore = (() => {
       data.dealDocs = data.dealDocs || {};
       data.compCaptures = data.compCaptures || {};
       data.investors = data.investors || {};
+      data.replyDrafts = data.replyDrafts || {};
       adoptLegacyOutreachRows();
     }
     return data;
@@ -985,6 +1026,37 @@ const fileStore = (() => {
         fs.rmSync(path.join(dir, `${photoId}.${variant}`), { force: true });
         fs.rmSync(path.join(dir, `${photoId}.${variant}.meta`), { force: true });
       }
+      persist();
+      return true;
+    },
+
+    async createReplyDraft(doc) {
+      ensure();
+      const id = doc.id || uuid();
+      const ts = nowIso();
+      const full = { ...doc, id, createdAt: ts, updatedAt: doc.updatedAt || ts };
+      data.replyDrafts[id] = full;
+      persist();
+      return full;
+    },
+    async listReplyDrafts(locationId, { status = null, contactId = null, since = null, limit = 100 } = {}) {
+      ensure();
+      return Object.values(data.replyDrafts)
+        .filter((d) => d.locationId === locationId)
+        .filter((d) => !status || d.status === status)
+        .filter((d) => !contactId || d.contactId === contactId)
+        .filter((d) => !since || (d.createdAt || "") >= since)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .slice(0, limit);
+    },
+    async getReplyDraft(id) {
+      ensure();
+      return data.replyDrafts[id] || null;
+    },
+    async updateReplyDraft(id, doc) {
+      ensure();
+      if (!data.replyDrafts[id]) return false;
+      data.replyDrafts[id] = doc;
       persist();
       return true;
     },

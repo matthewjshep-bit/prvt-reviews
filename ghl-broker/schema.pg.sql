@@ -275,3 +275,22 @@ create index if not exists dataroom_events_room_idx on dataroom_events (dataroom
 --   drop table if exists template_versions, templates, renders, assets,
 --     connections, home_sends, campaigns, journey_enrollments, journeys,
 --     data_source_tests cascade;
+
+-- The reply agent's outbox. One row per drafted reply to a listing agent's
+-- inbound text (see ghl-broker/reply-agent.js). `doc` carries the inbound
+-- message, the draft, the model's read of the intent, and the gate result;
+-- `status` is mirrored out of it so the open outbox and the daily cap are one
+-- indexed query rather than a scan: 'draft' | 'sent' | 'dismissed' |
+-- 'superseded'. Drafts live here rather than in memory because a draft that
+-- vanishes on a redeploy is a text an agent sent that nobody answers.
+create table if not exists reply_drafts (
+  id           uuid primary key,
+  location_id  text not null,
+  contact_id   text,
+  status       text not null default 'draft',
+  doc          jsonb not null,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+create index if not exists reply_drafts_loc_idx on reply_drafts (location_id, status, created_at desc);
+create index if not exists reply_drafts_contact_idx on reply_drafts (location_id, contact_id, created_at desc);

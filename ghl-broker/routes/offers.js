@@ -42,6 +42,10 @@
 //   POST   /api/offers/:id/deal/investors     link a disposition investor (GHL contact)
 //   POST   /api/offers/:id/deal/suggest-investors   AI-suggest investors from conversation history
 //   POST   /api/offers/automations/deal-interest    GHL workflow webhook: Conversation AI flags interest → link investor to the deal they messaged about
+//   POST   /api/offers/automations/reply            GHL workflow webhook: inbound agent text → AI-drafted reply, waiting for a human
+//   GET    /api/offers/automations/reply            open drafts + live drafting jobs
+//   POST   /api/offers/automations/reply/:id/send   send a draft (edited text allowed); dry-run unless CARD_SENDS_ENABLED
+//   POST   /api/offers/automations/reply/:id/dismiss
 //   PATCH  /api/offers/:id/deal/investors/:contactId    evaluation status
 //   DELETE /api/offers/:id/deal/investors/:contactId    unlink
 //   POST   /api/offers/deals/sync-investor-tags   backfill the on-deal GHL tag for all deal investors
@@ -73,6 +77,10 @@ import {
   AUTO_UNDERWRITE_ENABLED,
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT,
 } from "../auto-underwrite.js";
+import {
+  startReply, listJobs as listReplyJobs, publicJob as publicReplyJob,
+  sendReplyDraft, dismissReplyDraft,
+} from "../reply-agent.js";
 import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
 import { fetchRemoteImage, sniffImageType, sniffPdf } from "../fetch-image.js";
 import { parseDriveFolderId, listDriveFolderImages, driveImageUrl, driveDirectUrl } from "../drive-folder.js";
@@ -3023,6 +3031,88 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const job = getUnderwriteJob(req.params.id);
       if (!job || job.locationId !== locationId) return res.status(404).json({ error: "no such job" });
       res.json({ ok: true, canceled: cancelUnderwriteJob(job.id) });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- automation: draft a reply to an inbound agent text ---------- */
+  // Target of a GHL Workflow: Inbound Message trigger → your filter → Webhook.
+  // Same trust model as the underwriter: the workflow decides WHICH texts get
+  // a draft, this endpoint drafts one in the background and answers at once.
+  //
+  //   POST { location_id, secret, contactId, message, channel? }
+  //   → 202 { ok, jobId }
+  //
+  // Nothing is sent from here. The draft lands in the outbox (GET below) and
+  // on the contact as a note + `reply-draft` tag; a person sends it from the
+  // app. Same credential rule as the underwriter, and the same reason: this
+  // spends Anthropic tokens on nothing but a location id.
+  router.post("/automations/reply", async (req, res) => {
+    try {
+      const b = req.body || {};
+      b.location_id = b.location_id || b.locationId || b.location?.id || b.customData?.location_id;
+      const { locationId, client } = resolveLocation(req);
+      if (!LOCATION_KEYS[locationId] && !secretOk(secretFrom(req))) {
+        return res.status(403).json({
+          error: !AUTO_UNDERWRITE_SECRET
+            ? "the reply agent needs a credential — set AUTO_UNDERWRITE_SECRET on the broker"
+            : secretFrom(req)
+            ? "the secret sent doesn't match AUTO_UNDERWRITE_SECRET on the broker"
+            : "no secret was sent — add it to the webhook as an x-underwrite-secret header, a ?secret= query param, or \"secret\" in a custom JSON body",
+        });
+      }
+      const contactId = String(
+        b.contactId || b.contact_id || b.contact?.id || b.customData?.contact_id || ""
+      ).slice(0, 64);
+      if (!contactId) return res.status(400).json({ error: "contact_id required" });
+      const message = String(b.message || b.body || b.customData?.message || "").slice(0, 4000);
+      if (!message.trim()) return res.status(400).json({ error: "message required — pass {{message.body}}" });
+      // GHL names the channel in several places depending on the trigger.
+      const rawChannel = String(b.channel || b.messageType || b.type || b.customData?.channel || "").toLowerCase();
+      const channel = rawChannel.includes("email") ? "email" : "sms";
+
+      const saved = await store.getOfferSettings(locationId);
+      const { skipped, job } = await startReply({ client, locationId, saved, store, contactId, message, channel });
+      // A cap hit answers 200, not 4xx — a GHL workflow that gets an error
+      // retries, and retrying is exactly what the cap exists to stop.
+      if (skipped) return res.json({ ok: true, started: false, skipped });
+      res.status(202).json({ ok: true, started: true, jobId: job.id });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The outbox: every draft waiting on a person, plus anything being drafted
+  // right now, plus whether Send would actually send.
+  router.get("/automations/reply", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const drafts = await store.listReplyDrafts(locationId, { status: "draft", limit: 50 });
+      res.json({
+        ok: true,
+        sendsEnabled: CARD_SENDS_ENABLED,
+        drafts,
+        jobs: listReplyJobs(locationId).map(publicReplyJob),
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Body: { text?, dryRun }. `text` is what goes out — the operator's edit
+  // wins over the model's draft. Dry-run unless dryRun:false AND the broker
+  // has CARD_SENDS_ENABLED, the same double gate an offer send has.
+  router.post("/automations/reply/:id/send", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      const live = b.dryRun === false && CARD_SENDS_ENABLED;
+      const out = await sendReplyDraft({
+        client, store, locationId, draftId: String(req.params.id), text: b.text, live,
+      });
+      res.json({ ...out, sendsEnabled: CARD_SENDS_ENABLED });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/automations/reply/:id/dismiss", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      res.json(await dismissReplyDraft({ client, store, locationId, draftId: String(req.params.id) }));
     } catch (err) { fail(res, err); }
   });
 
