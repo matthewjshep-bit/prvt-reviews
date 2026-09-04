@@ -614,11 +614,17 @@ Acquisitions pipeline stages); the dispositions bot, which had been a copy of
 the acquisitions prompt, is written properly for the first time (interested →
 `investor-active` + link to the deal + a suggested dataroom link; wants to
 buy / walk it → ask-first `investor-hot` + link). Every auto-send stays off
-until a person ticks it. **Triggers to keep in GHL:** your existing "Tier 1
-opportunity" workflow should trigger on the `tier-1` tag (it can also start
-the auto-underwrite — see Door 1 above); the Tier 2/3 nurture workflows on
-`tier-2` / `tier-3`; a DND workflow on `stop bot` or `dnc`. Nothing in GHL
-needs to classify, tag tiers or reply any more — switch those bots off.
+until a person ticks it. **Workflows.** The bots used to drop a contact
+straight into the GHL workflows `TIER 1` / `TIER 2` / `TIER 3` (Agent
+Wholesale Automations) and `Tier 1 Disposition` / `Tier 2 Disposition`. The
+starter does the same — `add_to_workflow` on the tier rules, alongside the
+tags — by matching those names, which needs the `workflows.readonly` scope on
+the Private Integration so the list is visible (`matchStarterWorkflows` in
+`shared/conversation-ai.js`; without the scope the rules are tags only and
+the action editor takes a pasted workflow id). Enrolling a contact needs only
+`contacts.write`. A DND workflow on `stop bot` or `dnc` is worth adding.
+Nothing in GHL needs to classify, tag tiers or reply any more — switch those
+bots off.
 
 **What the model is given.** The persona (name, role, voice, length, sign-off),
 the house rules, the party's playbook (standing instructions, "it may / it may

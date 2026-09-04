@@ -209,3 +209,28 @@ test("the starter playbook is a valid config with the real tags, and every auto-
   assert.ok(c.rules.some((r) => /off-market/.test(r)));
   assert.equal(detectOptOut("Unsubscribe", c.optOut), true);
 });
+
+import { matchStarterWorkflows } from "./conversation-ai.js";
+
+test("the starter wires the five GHL workflows by name when it can see them, and not otherwise", () => {
+  const list = [
+    { id: "w1", name: "TIER 1" }, { id: "w2", name: "TIER 2" }, { id: "w3", name: "TIER 3" },
+    { id: "d1", name: "Tier 1 Disposition" }, { id: "d2", name: "Tier 2 Disposition" },
+    { id: "x", name: "AGENT - SMS blast campaign" }, { id: "y", name: "Tier 1 something else" },
+  ];
+  const m = matchStarterWorkflows(list);
+  assert.deepEqual(Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v.id])), { tier1: "w1", tier2: "w2", tier3: "w3", dispoTier1: "d1", dispoTier2: "d2" });
+  const c = starterConfig({ signer: "Matt", workflows: list });
+  const wfIn = (party, intent) => c.parties[party].intentRules[intent].actions.filter((a) => a.type === "add_to_workflow").map((a) => a.workflowId);
+  assert.deepEqual(wfIn("agent", "deal_available"), ["w1"]);
+  assert.deepEqual(wfIn("agent", "new_property"), ["w1"]);
+  assert.deepEqual(wfIn("agent", "investor_open"), ["w2"]);
+  assert.deepEqual(wfIn("agent", "rejection"), ["w3"]);
+  assert.deepEqual(wfIn("investor", "interested"), ["d1"]);
+  assert.deepEqual(wfIn("investor", "wants_to_buy"), ["d1"]);
+  assert.deepEqual(wfIn("investor", "looking_for_deals"), ["d2"]);
+  assert.deepEqual(wfIn("investor", "buybox_update"), ["d2"]);
+  assert.equal(c.parties.agent.intentRules.deal_available.actions[0].type, "add_tags", "the tags still come first");
+  const bare = starterConfig({ signer: "Matt" });
+  assert.deepEqual(bare.parties.agent.intentRules.deal_available.actions.map((a) => a.type), ["add_tags", "remove_tags"]);
+});

@@ -88,12 +88,21 @@ export default function ConversationAi({ settings }) {
           </span>
         )}
         {seeded && <span className="text-xs text-slate-500">Carried over from the old Reply agent settings — save once to keep it.</span>}
+        {workflows.scopeMissing && (
+          <span className="text-xs text-amber-700" title={workflows.error}>
+            Add the workflows.readonly scope to your Private Integration so the starter can wire your TIER workflows by name.
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <button type="button" className={BTN}
             title="Replace the persona, rules, examples, routing, texting rules, opt-outs and both playbooks with the Shep Flips starter (your three GHL bots, consolidated). The on/off switch, the cap and the auto-send timing stay as they are; every auto-send stays off until you tick it."
             onClick={() => {
               if (!window.confirm("Load the Shep Flips starter playbook? It replaces the persona, rules, examples, routing, texting rules, opt-outs and both playbooks. Nothing is saved until you press Save.")) return;
-              const st = starterConfig({ signer: settings?.company?.signer || settings?.company?.name || "", company: settings?.company?.name || "Shep Flips" });
+              const st = starterConfig({
+                signer: settings?.company?.signer || settings?.company?.name || "",
+                company: settings?.company?.name || "Shep Flips",
+                workflows: workflows.list,   // TIER 1/2/3 and Tier 1/2 Disposition are wired by name when the list is visible
+              });
               patch({ ...st, enabled: form.enabled, dailyCap: form.dailyCap, autoSend: form.autoSend });
             }}>
             Load starter playbook

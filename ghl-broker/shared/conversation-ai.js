@@ -479,10 +479,33 @@ export function draftStats(rows = []) {
 // routing, style, opt-out, media and both playbooks; it leaves the on/off
 // switch, the cap and the auto-send timing alone, and every auto-send stays
 // OFF until a person ticks it.
-export function starterConfig({ signer = "", company = "Shep Flips" } = {}) {
+// The GHL workflows the starter wires by NAME when it can see them (the
+// token needs workflows.readonly for the list). These are the five the GHL
+// bots used to drop contacts into; the match is case-insensitive on the
+// whole name so "TIER 1" and "Tier 1 Disposition" land on different rules.
+export const STARTER_WORKFLOWS = {
+  tier1: /^tier\s*1$/i,
+  tier2: /^tier\s*2$/i,
+  tier3: /^tier\s*3$/i,
+  dispoTier1: /^tier\s*1\s*dispo/i,
+  dispoTier2: /^tier\s*2\s*dispo/i,
+};
+
+export function matchStarterWorkflows(workflows = []) {
+  const out = {};
+  for (const [key, rx] of Object.entries(STARTER_WORKFLOWS)) {
+    const w = (workflows || []).find((x) => rx.test(String(x?.name || "").trim()));
+    if (w?.id) out[key] = { id: String(w.id), name: String(w.name || "") };
+  }
+  return out;
+}
+
+export function starterConfig({ signer = "", company = "Shep Flips", workflows = [] } = {}) {
   const first = String(signer || "").trim().split(/\s+/)[0] || "Matt";
-  const tierRule = (tier, remove) => ({ mode: "auto", actions: [
-    { type: "add_tags", tags: [tier] }, ...(remove.length ? [{ type: "remove_tags", tags: remove }] : []),
+  const wf = matchStarterWorkflows(workflows);
+  const enroll = (key) => (wf[key] ? [{ type: "add_to_workflow", workflowId: wf[key].id, workflowName: wf[key].name }] : []);
+  const tierRule = (tier, remove, key) => ({ mode: "auto", actions: [
+    { type: "add_tags", tags: [tier] }, ...(remove.length ? [{ type: "remove_tags", tags: remove }] : []), ...enroll(key),
   ] });
   return normalizeConversationAi({
     persona: {
@@ -560,10 +583,10 @@ export function starterConfig({ signer = "", company = "Shep Flips" } = {}) {
           "Mention off-market deals. Promise proof of funds. Send a link.",
         autoSend: { enabled: false, intents: [] },
         intentRules: {
-          deal_available: tierRule("tier-1", ["tier-2", "tier-3"]),
-          new_property: tierRule("tier-1", ["tier-2", "tier-3"]),
-          investor_open: tierRule("tier-2", ["tier-3"]),
-          rejection: tierRule("tier-3", []),
+          deal_available: tierRule("tier-1", ["tier-2", "tier-3"], "tier1"),
+          new_property: tierRule("tier-1", ["tier-2", "tier-3"], "tier1"),
+          investor_open: tierRule("tier-2", ["tier-3"], "tier2"),
+          rejection: tierRule("tier-3", [], "tier3"),
         },
       },
       investor: {
@@ -589,15 +612,18 @@ export function starterConfig({ signer = "", company = "Shep Flips" } = {}) {
           "Lower a price or agree to terms. Promise a deal to one buyer. Confirm a walkthrough time. Quote our fee, " +
           "contract price or margin. Send a link yourself. Describe a property that isn't in the context.",
         autoSend: { enabled: false, intents: [] },
+        // Dispositions pipeline: Tier 1 = interested in THIS property, Tier 2 =
+        // interested in working together. The tier workflows carry the
+        // follow-up; the tags keep the book's filters honest.
         intentRules: {
           interested: { mode: "auto", actions: [
             { type: "add_tags", tags: ["investor-active"] }, { type: "remove_tags", tags: ["investor-stale"] },
-            { type: "link_deal_evaluating" }, { type: "suggest_dataroom_invite" },
+            ...enroll("dispoTier1"), { type: "link_deal_evaluating" }, { type: "suggest_dataroom_invite" },
           ] },
-          looking_for_deals: { mode: "auto", actions: [{ type: "add_tags", tags: ["investor-active"] }, { type: "remove_tags", tags: ["investor-stale"] }] },
-          buybox_update: { mode: "auto", actions: [{ type: "add_tags", tags: ["investor-active"] }] },
-          wants_to_buy: { mode: "ask", actions: [{ type: "add_tags", tags: ["investor-hot"] }, { type: "link_deal_evaluating" }] },
-          wants_walkthrough: { mode: "ask", actions: [{ type: "add_tags", tags: ["investor-hot"] }, { type: "link_deal_evaluating" }] },
+          looking_for_deals: { mode: "auto", actions: [{ type: "add_tags", tags: ["investor-active"] }, { type: "remove_tags", tags: ["investor-stale"] }, ...enroll("dispoTier2")] },
+          buybox_update: { mode: "auto", actions: [{ type: "add_tags", tags: ["investor-active"] }, ...enroll("dispoTier2")] },
+          wants_to_buy: { mode: "ask", actions: [{ type: "add_tags", tags: ["investor-hot"] }, ...enroll("dispoTier1"), { type: "link_deal_evaluating" }] },
+          wants_walkthrough: { mode: "ask", actions: [{ type: "add_tags", tags: ["investor-hot"] }, ...enroll("dispoTier1"), { type: "link_deal_evaluating" }] },
         },
       },
     },
