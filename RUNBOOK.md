@@ -54,9 +54,14 @@ CARD_SERVICE_URL=https://prvt-reviews.onrender.com
 PUBLIC_BASE_URL=https://offers.shepflips.com    # agent-facing links
 DATAROOM_BASE_URL=https://deals.shepflips.com   # investor-facing links
 DATABASE_URL=postgres://...       # Render Postgres; schema auto-applies on boot
-# R2_* — optional for documents (without it they live in Postgres), REQUIRED for
-# property videos: a walkthrough is hundreds of MB and streams from the bucket
-# through the broker. When set, documents go to Cloudflare R2 instead of Postgres.
+# R2_* — Cloudflare R2. Property videos REQUIRE the first four (account id,
+# access key, secret, bucket): a walkthrough is hundreds of MB and streams from
+# the bucket through the broker. R2_PUBLIC_BASE is separate and optional: set it
+# and generated documents move from Postgres to R2 under that hostname; leave it
+# unset and they stay where they are. Setup: Cloudflare dashboard → R2 → create
+# a bucket (any name; keep it private) → Manage R2 API Tokens → token with
+# Object Read & Write on that bucket → copy the account id, key and secret.
+# R2_ACCOUNT_ID=...  R2_ACCESS_KEY_ID=...  R2_SECRET_ACCESS_KEY=...  R2_BUCKET=...
 # R2_PUBLIC_BASE is the hostname on every offer PDF an agent opens — connect a
 # custom domain (docs.shepflips.com) to the bucket and keep the old one attached
 # so already-issued document URLs keep resolving.

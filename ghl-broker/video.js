@@ -16,7 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dbEnabled } from "./db.js";
 import {
-  abortMultipart, completeMultipart, createMultipart, deleteObject, r2Enabled, readObject, uploadPart,
+  abortMultipart, completeMultipart, createMultipart, deleteObject, r2Missing, r2StoreEnabled, readObject, uploadPart,
 } from "./r2.js";
 
 // Container → file extension. Browsers decide what they can PLAY by codec, not
@@ -30,9 +30,13 @@ export const MAX_VIDEOS_PER_OFFER = 10;
 export const PART_BYTES = 8 * 1024 * 1024;
 export const MAX_PARTS = Math.ceil(MAX_VIDEO_BYTES / PART_BYTES);
 
-export const videoStorageReady = r2Enabled || !dbEnabled;
+// Credentials and a bucket are all video needs — not R2_PUBLIC_BASE, which is
+// about document URLs and would move the PDFs too. The hint names exactly the
+// variables still missing, so the fix is one trip to the Render dashboard.
+export const videoStorageReady = r2StoreEnabled || !dbEnabled;
 export const VIDEO_STORAGE_HINT =
-  "Video storage isn't set up on this server — add the R2_* variables (see RUNBOOK.md) to enable video uploads.";
+  `Video storage isn't set up on this server — set ${r2Missing.length ? r2Missing.join(", ") : "the R2_* variables"} ` +
+  "on the Render service (a Cloudflare R2 bucket; see RUNBOOK.md) to enable video uploads.";
 
 // The local fallback's root. Same default as store.js so a dev checkout keeps
 // everything under one data/ folder; keys carry their own videos/ prefix.

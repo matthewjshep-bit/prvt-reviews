@@ -82,8 +82,9 @@ Storage: Postgres when `DATABASE_URL` is set (schema auto-applies on boot),
 otherwise a local JSON file (dev only). Generated documents go to R2 when the
 `R2_*` vars are set, otherwise to local `uploads/` (dev only). Property videos
 go to R2 in uniform parts as the browser sends them (`video.js`) and stream
-back through the token-gated dataroom routes with Range support; without R2
-they land under `data/` in dev and are refused in production.
+back through the token-gated dataroom routes with Range support; they need
+only the R2 credentials and bucket, not `R2_PUBLIC_BASE`. Without R2 they
+land under `data/` in dev and are refused in production.
 
 Key files: `broker.js` (entry + CORS + location guard), `routes/offers.js`
 (the whole product API), `shared/offer-calc.js` (vendored calc engine —

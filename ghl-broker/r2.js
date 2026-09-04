@@ -14,9 +14,15 @@ const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
 const R2_BUCKET = process.env.R2_BUCKET || "";
 const R2_PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/$/, "");
 
-export const r2Enabled = Boolean(
-  R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET && R2_PUBLIC_BASE
-);
+// Two switches, because they answer different questions. The raw object store
+// (videos, below) needs only credentials and a bucket. Public assets also need
+// R2_PUBLIC_BASE — the hostname printed on every document URL — and setting it
+// is what moves generated documents out of Postgres. So an operator can turn on
+// video with four variables without changing where their PDFs live.
+const R2_CREDENTIAL_VARS = { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET };
+export const r2Missing = Object.entries(R2_CREDENTIAL_VARS).filter(([, v]) => !v).map(([k]) => k);
+export const r2StoreEnabled = r2Missing.length === 0;
+export const r2Enabled = r2StoreEnabled && Boolean(R2_PUBLIC_BASE);
 
 let s3 = null;
 async function client() {
@@ -74,7 +80,7 @@ const localPath = (localDir, key) =>
 const partsDir = (localDir, uploadId) => path.join(localDir, ".multipart", String(uploadId).replace(/[^A-Za-z0-9-]/g, ""));
 
 export async function createMultipart(key, contentType, { localDir }) {
-  if (r2Enabled) {
+  if (r2StoreEnabled) {
     const { CreateMultipartUploadCommand } = await import("@aws-sdk/client-s3");
     const r = await (await client()).send(new CreateMultipartUploadCommand({
       Bucket: R2_BUCKET, Key: key, ContentType: contentType, CacheControl: "private, max-age=86400",
@@ -87,7 +93,7 @@ export async function createMultipart(key, contentType, { localDir }) {
 }
 
 export async function uploadPart(key, uploadId, partNumber, body, { localDir }) {
-  if (r2Enabled) {
+  if (r2StoreEnabled) {
     const { UploadPartCommand } = await import("@aws-sdk/client-s3");
     const r = await (await client()).send(new UploadPartCommand({
       Bucket: R2_BUCKET, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: body,
@@ -104,7 +110,7 @@ export async function uploadPart(key, uploadId, partNumber, body, { localDir }) 
 // the finished object, which is the one number the upload's own bookkeeping
 // can't be trusted for.
 export async function completeMultipart(key, uploadId, parts, { localDir }) {
-  if (r2Enabled) {
+  if (r2StoreEnabled) {
     const { CompleteMultipartUploadCommand, HeadObjectCommand } = await import("@aws-sdk/client-s3");
     const s3 = await client();
     await s3.send(new CompleteMultipartUploadCommand({
@@ -124,7 +130,7 @@ export async function completeMultipart(key, uploadId, parts, { localDir }) {
 }
 
 export async function abortMultipart(key, uploadId, { localDir }) {
-  if (r2Enabled) {
+  if (r2StoreEnabled) {
     const { AbortMultipartUploadCommand } = await import("@aws-sdk/client-s3");
     await (await client()).send(new AbortMultipartUploadCommand({ Bucket: R2_BUCKET, Key: key, UploadId: uploadId }));
     return;
@@ -133,7 +139,7 @@ export async function abortMultipart(key, uploadId, { localDir }) {
 }
 
 export async function deleteObject(key, { localDir }) {
-  if (r2Enabled) {
+  if (r2StoreEnabled) {
     const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
     await (await client()).send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
     return;
@@ -167,7 +173,7 @@ function parseRange(header, size) {
 // slice, 416 for an unsatisfiable range, 404 for no such key. `body` is a
 // Readable to pipe straight into the response — bytes never sit in memory.
 export async function readObject(key, { range, localDir }) {
-  if (r2Enabled) {
+  if (r2StoreEnabled) {
     const { GetObjectCommand } = await import("@aws-sdk/client-s3");
     try {
       const r = await (await client()).send(new GetObjectCommand({

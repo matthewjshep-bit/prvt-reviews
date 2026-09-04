@@ -16,7 +16,7 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "offer-videos-test-
 const { default: express } = await import("express");
 const { store } = await import("./store.js");
 const { default: createOffersRouter } = await import("./routes/offers.js");
-const { PART_BYTES, videoLocalRoot } = await import("./video.js");
+const { PART_BYTES, VIDEO_STORAGE_HINT, videoLocalRoot, videoStorageReady } = await import("./video.js");
 
 const LOC = "loc-video-test";
 const OTHER = "loc-someone-else";
@@ -68,6 +68,15 @@ async function uploadWhole() {
   assert.equal(done.status, 200, JSON.stringify(done.body));
   return done.body.video;
 }
+
+test("the storage hint names what to set, and only that", () => {
+  // No R2 in the test environment, so every credential variable is missing and
+  // the message has to say so — and must not ask for the documents hostname,
+  // which video doesn't need.
+  assert.ok(videoStorageReady, "the JSON backend falls back to local disk");
+  for (const k of ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"]) assert.ok(VIDEO_STORAGE_HINT.includes(k), k);
+  assert.ok(!VIDEO_STORAGE_HINT.includes("R2_PUBLIC_BASE"));
+});
 
 test("begin refuses what it can't store", async () => {
   let r = await json("POST", `/api/offers/${offer.id}/videos`, { location_id: LOC, name: "x.avi", contentType: "video/x-msvideo", sizeBytes: 10 });
