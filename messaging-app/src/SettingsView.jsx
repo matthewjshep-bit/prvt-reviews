@@ -11,6 +11,7 @@ import {
 import { getCompBookmarklet, getUnderwrites, regenerateCompToken, saveSettings, uploadPsaExhibit } from "./api.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
+import ConversationTryIt from "./ConversationTryIt.jsx";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -554,6 +555,9 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           and standing instructions that used to sit here were carried over the first time the tab opened. It still
           uses the Anthropic key above.
         </p>
+        <div className="mt-3">
+          <ConversationTryIt compact />
+        </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">

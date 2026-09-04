@@ -334,19 +334,22 @@ export async function assembleConversation({
     : resolveParty({ explicit: explicitParty, tags, routing: config.routing });
   const party = resolved.party;
 
-  let transcript = "";
-  if (fakeThread) {
-    transcript = renderFakeThread(fakeThread, channel);
-  } else if (contactId) {
+  // The real thread when there is a contact, and after it whatever the test
+  // window typed — so a test on a real contact is "their conversation so far,
+  // then this", which is exactly what a live run would see next.
+  let real = "";
+  if (contactId) {
     try {
       const t = await buildTranscript(client, locationId, contactId, {
         maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 60, maxChars: 14000, maxCallTranscripts: 0,
       });
-      transcript = t.text || "";
+      real = t.text || "";
     } catch (e) {
       warnings.push(`thread: ${e.message?.slice(0, 120) || "could not be read"}`);
     }
   }
+  const typed = fakeThread ? renderFakeThread(fakeThread, channel) : "";
+  const transcript = [real, typed].filter(Boolean).join("\n");
 
   const custom = contact ? await loadContactContext({ client, locationId, contact }) : {};
 

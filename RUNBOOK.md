@@ -639,13 +639,18 @@ for an agent's new property, text an investor a dataroom link. A rule runs
 click. A dataroom link is always ask-first. Every outcome is recorded on the
 draft and in the contact note.
 
-**Try it.** The tab's try-it panel runs the whole pipeline on a real contact
-(their real thread and records) or a typed thread, and shows who the broker
-thinks they are, what the model saw, the intent, the draft, why it would or
-wouldn't send itself, and the actions that would fire. Nothing is saved,
-sent, tagged or scheduled, and it doesn't count against the daily cap. This is
-where the page gets tuned: when a draft is wrong, add a line to the playbook
-and run it again.
+**Try it.** A chat window, on the tab and inside Settings → Conversation AI,
+in the shape of GHL's own "Test your agent": pick a real contact (every reply
+then has their real thread, offers, deals and buy box behind it) or talk to
+it cold as an agent or an investor, text as the lead would, and read the
+reply turn by turn. Under each reply: the intent, whether it would have sent
+itself and if not why, the actions it would have fired, and a "details"
+toggle with what the model saw. The typed turns are appended to the
+contact's real thread on each call, so a test is "their conversation so far,
+then this". Nothing is saved, sent, tagged or scheduled, it never reaches
+the contact, and it doesn't count against the daily cap. This is where the
+page gets tuned: when a reply is wrong, add a line to the playbook and ask
+again.
 
 **Graduating an intent.** The history table on the tab shows, per party and
 intent, how many drafts the gates would have let go (*auto-sendable*) and how

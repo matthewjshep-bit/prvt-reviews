@@ -642,3 +642,27 @@ test("a preview can be run on a typed thread with no contact at all", async () =
   assert.equal(r.partySource, "try-it");
   assert.match(r.draft.reply, /ok\.$/);
 });
+
+test("a test on a real contact carries their real thread, then the typed turns", async () => {
+  const client = {
+    call: async (path, opts = {}) => {
+      if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Dana", tags: ["agent"] } };
+      if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+      if (path.startsWith("/conversations/cv1/messages")) {
+        return { messages: [{ id: "m1", type: "TYPE_SMS", direction: "inbound", body: "earlier real text", dateAdded: new Date().toISOString() }] };
+      }
+      throw new Error(`unexpected ${path}`);
+    },
+  };
+  let seen;
+  const r = await previewConversation({
+    client, locationId: "LOC", saved: SAVED, store: fakeStore(), contactId: "c1", message: "and now?",
+    fakeThread: [{ dir: "THEM", text: "typed turn one" }, { dir: "US", text: "our typed answer" }],
+    deps: { draft: async (args) => { seen = args; return DRAFT; } },
+  });
+  assert.equal(r.party, "agent");
+  const real = seen.transcript.indexOf("earlier real text");
+  const typed = seen.transcript.indexOf("THEM sms: typed turn one");
+  assert.ok(real >= 0 && typed > real, "real first, typed after");
+  assert.match(seen.transcript, /US sms: our typed answer/);
+});
