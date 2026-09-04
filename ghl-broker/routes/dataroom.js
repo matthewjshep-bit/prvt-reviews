@@ -32,10 +32,11 @@ import { store } from "../store.js";
 import { effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { getContact, sendSms } from "../ghl.js";
 import {
-  DEFAULT_EXPIRY_DAYS, brandFrom, buildSnapshot, dealCard, feedHeaders, hashToken,
+  DEFAULT_EXPIRY_DAYS, OVERRIDABLE, applyNumberOverrides, brandFrom, buildSnapshot, dealCard, dealMoves, feedHeaders, hashToken,
   newToken, normalizeLinks, normalizePublicSections, normalizeSections, photoHeaders,
   renderNotice, renderPortfolio, renderRoom, secureHeaders, syncDealNumbers, teaserSections, GALLERY_JS,
 } from "../dataroom.js";
+import { streamVideo } from "../video.js";
 
 // A location's portfolio is itself a dataroom row — offerId null, kind
 // "portfolio" — so it inherits the share token, revocation and view counting
@@ -428,8 +429,10 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
           headline: b.headline ?? room.snapshot?.headline,
           notes: b.notes ?? room.snapshot?.notes,
           // Links are the operator's, not the offer's — a refresh rebuilds
-          // everything else from the offer but must carry these across.
+          // everything else from the offer but must carry these across. So
+          // are the figures pinned on the room.
           links: b.links ?? room.snapshot?.links,
+          overrides: room.snapshot?.overrides,
         });
         room.address = offer.address || room.address;
       } else {
@@ -437,6 +440,42 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
         if (b.headline !== undefined) room.snapshot.headline = str(b.headline, 120);
         if (b.notes !== undefined) room.snapshot.notes = str(b.notes, 2000);
         if (b.links !== undefined) room.snapshot.links = normalizeLinks(b.links);
+        // The headline figures, edited on the room itself: { investorPrice, arv,
+        // repairs }, any subset. A positive amount pins that figure here, where
+        // the offer sync leaves it alone; null (or 0) unpins it and the offer's
+        // own number comes back. A pinned price can't sit below the contract
+        // price — the fee would be negative, and the breakdown card would say so.
+        if (b.numbers && typeof b.numbers === "object") {
+          const overrides = { ...(room.snapshot.overrides || {}) };
+          for (const k of OVERRIDABLE) {
+            if (!(k in b.numbers)) continue;
+            const v = b.numbers[k] == null || b.numbers[k] === "" ? 0 : Math.round(Number(b.numbers[k]));
+            if (!Number.isFinite(v) || v < 0 || v > 100_000_000) return res.status(400).json({ error: `that isn't a usable ${k === "investorPrice" ? "price" : k === "arv" ? "ARV" : "rehab figure"}` });
+            if (v > 0) overrides[k] = v; else delete overrides[k];
+          }
+          const offer = room.offerId ? await store.getOffer(room.offerId) : null;
+          const contract = Number(room.snapshot?.numbers?.contractPrice) || 0;
+          if (overrides.investorPrice > 0 && contract > 0 && overrides.investorPrice < contract) {
+            return res.status(400).json({ error: `the price can't be below your contract price of ${fmtMoney(contract)}` });
+          }
+          // Start from what the offer says today — the same moves the sync
+          // makes — so unpinning a figure returns it to the offer's number
+          // rather than to whatever was pinned before. A rehab total the offer
+          // doesn't name belongs to the frozen scope table printed beside it,
+          // so unpinning rehab falls back to that table's own sum.
+          let base = room.snapshot.numbers || {};
+          if (offer && offer.locationId === locationId) {
+            const moves = dealMoves({ offer, settings: effectiveSettings(await store.getOfferSettings(locationId)) });
+            base = { ...base, ...moves };
+            if ("repairs" in b.numbers && !overrides.repairs && !moves.repairs) {
+              const frozen = Math.round((room.snapshot.scope || []).reduce((t, s) => t + (Number(s?.cost) || 0), 0));
+              if (frozen > 0) base.repairs = frozen;
+            }
+          }
+          const pinned = applyNumberOverrides(base, overrides);
+          room.snapshot.numbers = pinned.numbers;
+          room.snapshot.overrides = pinned.overrides;
+        }
       }
       // What the tokenless public teaser page may show (documents and the fee
       // breakdown are locked off inside normalizePublicSections).
@@ -662,6 +701,40 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
       message: "It may have expired, been replaced, or been turned off by the sender.",
     });
 
+  // Investors only ever see finished uploads; a half-sent video is nothing yet.
+  const readyVideos = (rows) => rows.filter((v) => v.status === "ready");
+
+  // Video bytes for a room, streamed from R2 with Range support (video.js).
+  // Same proof as photos — the id has to belong to THIS room's offer — and
+  // the same silence in the access log, for a stronger reason: a player
+  // fetches a video as dozens of slices, and each would be a row.
+  async function sendRoomVideo(req, res, room, videoId) {
+    if (!room.offerId) return gone(res);
+    const video = readyVideos(await store.listOfferVideos(room.offerId)).find((v) => v.id === videoId);
+    if (!video) return gone(res);
+    res.set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
+    res.set("Referrer-Policy", "no-referrer");
+    res.set("X-Content-Type-Options", "nosniff");
+    res.set("Cache-Control", "private, max-age=86400");
+    const served = await streamVideo(req, res, { key: video.storageKey, contentType: video.contentType, etag: `"${video.id}"` });
+    if (!served) gone(res);
+  }
+  async function sendRoomPoster(req, res, room, videoId, variant) {
+    if (!room.offerId || (variant !== "full" && variant !== "thumb")) return gone(res);
+    const video = readyVideos(await store.listOfferVideos(room.offerId)).find((v) => v.id === videoId);
+    if (!video) return gone(res);
+    const etag = `"${video.id}-poster-${variant}"`;
+    if (req.headers["if-none-match"] === etag) {
+      photoHeaders(res, etag);
+      return res.status(304).end();
+    }
+    const stored = await store.readVideoPoster(video.id, variant);
+    if (!stored?.bytes) return gone(res);
+    photoHeaders(res, etag);
+    res.set("Content-Type", stored.contentType || "image/jpeg");
+    res.send(stored.bytes);
+  }
+
   // Resolve a token to { invite, room }, enforcing revocation and expiry.
   // Every failure returns the same notice — a prober learns nothing about
   // whether a token existed.
@@ -851,7 +924,7 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
     try {
       const room = await resolveTeaser(req, res);
       if (!room) return;
-      secureHeaders(res, { scripts: [GALLERY_JS] });
+      secureHeaders(res, { scripts: [GALLERY_JS], media: true });
       // The marketing site embedding the feed is what should rank, not the
       // broker's bare teaser page.
       res.set("X-Robots-Tag", "noindex");
@@ -865,6 +938,7 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
         teaser: true,
         publicPath: `/d/deal/${encodeURIComponent(room.id)}`,
         photos: mask.photos && room.offerId ? await store.listOfferPhotos(room.offerId) : [],
+        videos: mask.photos && room.offerId ? readyVideos(await store.listOfferVideos(room.offerId)) : [],
         // Live settings, not the frozen snapshot: a rebrand reaches every
         // page at once without rebuilding rooms.
         brand: brandFrom(await companyFor(room.locationId, [room])),
@@ -902,6 +976,30 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
     }
   });
 
+  router.get("/deal/:roomId/video/:videoId", async (req, res) => {
+    try {
+      const room = await resolveTeaser(req, res);
+      if (!room) return;
+      if (!teaserSections(room).photos) return gone(res);
+      await sendRoomVideo(req, res, room, req.params.videoId);
+    } catch (err) {
+      console.error("dataroom teaser video failed:", err.message);
+      if (!res.headersSent) gone(res); else res.destroy();
+    }
+  });
+
+  router.get("/deal/:roomId/video/:videoId/poster/:variant?", async (req, res) => {
+    try {
+      const room = await resolveTeaser(req, res);
+      if (!room) return;
+      if (!teaserSections(room).photos) return gone(res);
+      await sendRoomPoster(req, res, room, req.params.videoId, req.params.variant || "full");
+    } catch (err) {
+      console.error("dataroom teaser poster failed:", err.message);
+      gone(res);
+    }
+  });
+
   /* ---- the package, or the portfolio of every live deal ---- */
   router.get("/:token", async (req, res) => {
     try {
@@ -911,7 +1009,7 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
       // The photo viewer is the one script an investor page runs; allowing it
       // by hash here is what lets renderRoom's <script> execute. The portfolio
       // page shares this route and embeds no script, so the allowance is moot there.
-      secureHeaders(res, { scripts: [GALLERY_JS] });
+      secureHeaders(res, { scripts: [GALLERY_JS], media: true });
 
       const viewCount = (invite.viewCount || 0) + 1;
       await store.updateDataroomInvite(invite.id, {
@@ -941,6 +1039,8 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
         snap: room.snapshot, token, invite, viewCount,
         photos: room.snapshot?.sections?.photos === false || !room.offerId
           ? [] : await store.listOfferPhotos(room.offerId),
+        videos: room.snapshot?.sections?.photos === false || !room.offerId
+          ? [] : readyVideos(await store.listOfferVideos(room.offerId)),
         backLink: await portfolioLinkFor(room),
         brand: brandFrom(await companyFor(room.locationId, [room])),
       }));
@@ -991,6 +1091,31 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
       // `view` event already records that someone opened this.
     } catch (err) {
       console.error("dataroom photo failed:", err.message);
+      gone(res);
+    }
+  });
+
+  /* ---- property videos, behind the same token ---- */
+  router.get("/:token/video/:videoId", async (req, res) => {
+    try {
+      const ctx = await resolveInvite(req, res);
+      if (!ctx) return;
+      if (isPortfolio(ctx.room)) return gone(res);
+      await sendRoomVideo(req, res, ctx.room, req.params.videoId);
+    } catch (err) {
+      console.error("dataroom video failed:", err.message);
+      if (!res.headersSent) gone(res); else res.destroy();
+    }
+  });
+
+  router.get("/:token/video/:videoId/poster/:variant?", async (req, res) => {
+    try {
+      const ctx = await resolveInvite(req, res);
+      if (!ctx) return;
+      if (isPortfolio(ctx.room)) return gone(res);
+      await sendRoomPoster(req, res, ctx.room, req.params.videoId, req.params.variant || "full");
+    } catch (err) {
+      console.error("dataroom poster failed:", err.message);
       gone(res);
     }
   });

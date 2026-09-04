@@ -160,7 +160,11 @@ scrollbar that phones and macOS hide. Tapping any photo, the hero included, open
 a full-screen viewer: ink at 97% behind the image, flat ring buttons for
 prev/next/close, swipe and arrow keys, a "12 / 67" counter, the caption when
 there is one, and the phone's back gesture closes it instead of leaving the
-room. Portfolio
+room. A walkthrough video sits in the same grid as a poster tile with a play
+badge and its running time — always in front of the fold, since it is usually
+the most telling thing in the package — and plays inside the viewer on the
+native controls; without scripting the tile opens the stream itself, which
+every browser plays on its own. Portfolio
 cards lead with the same photo as a 3:2 thumbnail with the price badged over its
 lower-left. Deals without photos get a flat `#F1F5F9` placeholder reading "Photos
 coming soon" — never a broken image, and never a stretched one: every photo is

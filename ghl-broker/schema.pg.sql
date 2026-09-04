@@ -71,6 +71,41 @@ create table if not exists offer_photo_bytes (
   primary key (photo_id, variant)
 );
 
+-- Property videos: the walkthrough the operator shot on their phone. The BYTES
+-- are deliberately not here — a two-minute clip is a few hundred MB — they
+-- live in R2 under storage_key (video.js) and stream to investors through the
+-- token-gated dataroom routes with Range support. status is 'uploading' while
+-- the browser is still sending parts and 'ready' once the object is complete;
+-- investor pages list ready rows only. Posters are the small JPEGs the browser
+-- grabbed from the first second, kept like photo variants so a gallery tile
+-- costs a thumbnail, not a video.
+create table if not exists offer_videos (
+  id            uuid primary key,
+  offer_id      uuid not null,
+  location_id   text not null,
+  status        text not null default 'uploading',
+  name          text,
+  content_type  text not null,
+  size_bytes    bigint,
+  storage_key   text not null,
+  upload_id     text,
+  caption       text,
+  sort          int not null default 0,
+  width         int,
+  height        int,
+  duration_s    real,
+  created_at    timestamptz not null default now()
+);
+create index if not exists offer_videos_offer_idx on offer_videos (offer_id, sort);
+
+create table if not exists offer_video_posters (
+  video_id      uuid not null references offer_videos (id) on delete cascade,
+  variant       text not null,
+  content_type  text not null,
+  bytes         bytea not null,
+  primary key (video_id, variant)
+);
+
 -- Deal attachments: files the operator uploads against a deal (signed purchase
 -- & sale, addenda, title work, inspection reports). Distinct from
 -- offer_documents, which holds the ONE generated PDF/JPEG per kind — these are

@@ -179,6 +179,29 @@ export const deleteOfferPhoto = (offerId, photoId) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(offerId)}/photos/${encodeURIComponent(photoId)}?${locq()}`,
     { method: "DELETE" }).then(j).then((r) => r.photos);
 
+// Property videos. A walkthrough is far too big for one JSON body, so it goes
+// up in parts: begin (the broker opens the upload and names the part size),
+// PUT each raw part, then complete with the poster and dimensions the browser
+// read locally (video.js). A failed upload is deleted like a finished one.
+const videoPath = (offerId, rest = "") => `/api/offers/${encodeURIComponent(offerId)}/videos${rest}`;
+export const listOfferVideos = (offerId) =>
+  fetch(`${API_BASE}${videoPath(offerId)}?${locq()}`).then(j).then((r) => r.videos);
+export const beginOfferVideo = (offerId, { name, contentType, sizeBytes }) =>
+  post(videoPath(offerId), { name, contentType, sizeBytes });
+export const uploadOfferVideoPart = (offerId, videoId, n, blob) =>
+  fetch(`${API_BASE}${videoPath(offerId, `/${encodeURIComponent(videoId)}/parts/${n}`)}?${locq()}`, {
+    method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: blob,
+  }).then(j).then((r) => r.etag);
+export const completeOfferVideo = (offerId, videoId, body) =>
+  post(videoPath(offerId, `/${encodeURIComponent(videoId)}/complete`), body).then((r) => r.video);
+export const deleteOfferVideo = (offerId, videoId) =>
+  fetch(`${API_BASE}${videoPath(offerId, `/${encodeURIComponent(videoId)}`)}?${locq()}`, { method: "DELETE" })
+    .then(j).then((r) => r.videos);
+export const offerVideoPosterUrl = (offerId, videoId, variant = "thumb") =>
+  `${API_BASE}${videoPath(offerId, `/${encodeURIComponent(videoId)}/poster/${variant}`)}?${locq()}`;
+export const offerVideoStreamUrl = (offerId, videoId) =>
+  `${API_BASE}${videoPath(offerId, `/${encodeURIComponent(videoId)}/stream`)}?${locq()}`;
+
 export const scanRehab = (address, { beds, baths, sqft, yearBuilt, images } = {}) =>
   post(`/api/offers/scan-rehab`, { address, beds, baths, sqft, yearBuilt, images });
 export const gradeComps = (address, comps) =>

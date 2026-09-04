@@ -26,6 +26,7 @@
     "test:subject": "node --test subject-property.test.mjs outreach-import.test.mjs",
     "test:drive": "node --test drive-folder.test.mjs",
     "test:offer-update": "node --test offer-update.test.mjs",
+    "test:videos": "node --test offer-videos.test.mjs",
     "test:all": "node --test *.test.mjs ../shared/*.test.mjs"
   },
   "dependencies": {

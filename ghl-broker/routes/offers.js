@@ -89,6 +89,11 @@ import { jpegToPdf, jpegsToPdf } from "../pdf.js";
 import { mapPool } from "../map-pool.js";
 import { uploadAsset, r2Enabled } from "../r2.js";
 import {
+  MAX_PARTS, MAX_VIDEOS_PER_OFFER, MAX_VIDEO_BYTES, PART_BYTES, VIDEO_STORAGE_HINT, VIDEO_TYPES,
+  abortVideoUpload, beginVideoUpload, deleteVideoObject, finishVideoUpload, putVideoPart, sniffVideoType,
+  streamVideo, videoKey, videoStorageReady,
+} from "../video.js";
+import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
   customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField, getContactNotes,
@@ -520,6 +525,158 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const ok = await store.deleteOfferPhoto(ctx.offer.id, req.params.photoId);
       if (!ok) return res.status(404).json({ error: "photo not found" });
       res.json({ ok: true, photos: await store.listOfferPhotos(ctx.offer.id) });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---- property videos ----------------------------------------------------
+   * A phone walkthrough is a few hundred MB, so it never travels as one JSON
+   * body. The browser asks to begin, PUTs uniform 8MB parts (a request each, so
+   * a dropped connection retries one part rather than the file), then completes
+   * with the poster frame and dimensions it read locally. Each part goes
+   * straight to R2 (video.js); the broker keeps only the row. The investor read
+   * path is in routes/dataroom.js behind a link token, like photos.
+   * ------------------------------------------------------------------------ */
+
+  router.get("/:id/videos", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      res.json({ videos: await store.listOfferVideos(ctx.offer.id) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/:id/videos", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      if (!videoStorageReady) return res.status(503).json({ error: VIDEO_STORAGE_HINT });
+      const contentType = String(req.body?.contentType || "");
+      if (!VIDEO_TYPES[contentType]) return res.status(400).json({ error: "a video has to be an MP4, MOV (QuickTime) or WebM file" });
+      const sizeBytes = parseInt(req.body?.sizeBytes, 10);
+      if (!(sizeBytes > 0)) return res.status(400).json({ error: "the video's size is missing" });
+      if (sizeBytes > MAX_VIDEO_BYTES) {
+        return res.status(413).json({ error: `that video is too large (max ${Math.round(MAX_VIDEO_BYTES / 1048576)}MB)` });
+      }
+      const existing = await store.listOfferVideos(ctx.offer.id);
+      if (existing.length >= MAX_VIDEOS_PER_OFFER) {
+        return res.status(400).json({ error: `a deal can carry at most ${MAX_VIDEOS_PER_OFFER} videos — delete one first` });
+      }
+      // The id is minted here because the storage key is built from it.
+      const id = crypto.randomUUID();
+      const storageKey = videoKey(ctx.locationId, ctx.offer.id, id, contentType);
+      const { uploadId } = await beginVideoUpload(storageKey, contentType);
+      const video = await store.createOfferVideo(ctx.offer.id, ctx.locationId, {
+        id, name: String(req.body?.name || "").replace(/[\u0000-\u001f]/g, "").slice(0, 120),
+        contentType, sizeBytes, storageKey, uploadId,
+      });
+      res.json({ ok: true, video, partBytes: PART_BYTES });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Parts are raw bytes, not JSON: express.json leaves them alone (wrong
+  // content type) and this route-level parser takes them, capped just above
+  // the agreed part size so an off-by-one client fails loudly rather than
+  // being silently truncated.
+  const partBody = express.raw({ type: () => true, limit: PART_BYTES + 4096 });
+  router.put("/:id/videos/:videoId/parts/:n", partBody, async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const video = await store.getOfferVideo(ctx.offer.id, req.params.videoId);
+      if (!video || video.status !== "uploading") return res.status(404).json({ error: "upload not found" });
+      const n = parseInt(req.params.n, 10);
+      if (!(n >= 1 && n <= MAX_PARTS)) return res.status(400).json({ error: "bad part number" });
+      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      if (!body.length) return res.status(400).json({ error: "that part is empty" });
+      if (body.length > PART_BYTES) return res.status(413).json({ error: "that part is larger than the agreed size" });
+      // Trust the bytes, not the declared type — same rule as photos, checked
+      // on the part that carries the file header.
+      if (n === 1 && !sniffVideoType(body)) return res.status(400).json({ error: "that file doesn't look like a video" });
+      const { etag } = await putVideoPart(video.storageKey, video.uploadId, n, body);
+      res.json({ ok: true, etag });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/:id/videos/:videoId/complete", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const video = await store.getOfferVideo(ctx.offer.id, req.params.videoId);
+      if (!video || video.status !== "uploading") return res.status(404).json({ error: "upload not found" });
+      const parts = (Array.isArray(req.body?.parts) ? req.body.parts : [])
+        .map((p) => ({ partNumber: parseInt(p?.n, 10), etag: String(p?.etag || "") }))
+        .filter((p) => p.partNumber >= 1 && p.etag)
+        .sort((a, b) => a.partNumber - b.partNumber);
+      if (!parts.length || parts.some((p, i) => p.partNumber !== i + 1)) {
+        return res.status(400).json({ error: "the upload is missing parts — try that video again" });
+      }
+      // The poster is what the gallery tile shows and what the viewer paints
+      // before playback; without one the tile would be a black box.
+      const posters = {
+        full: decodeDataUri(req.body?.poster?.full, "poster"),
+        thumb: decodeDataUri(req.body?.poster?.thumb, "poster thumbnail"),
+      };
+      const { size } = await finishVideoUpload(video.storageKey, video.uploadId, parts);
+      if (size > MAX_VIDEO_BYTES) {
+        await deleteVideoObject(video.storageKey).catch(() => {});
+        await store.deleteOfferVideo(ctx.offer.id, video.id);
+        return res.status(413).json({ error: `that video is too large (max ${Math.round(MAX_VIDEO_BYTES / 1048576)}MB)` });
+      }
+      const done = await store.finishOfferVideo(ctx.offer.id, video.id, {
+        sizeBytes: size,
+        width: parseInt(req.body?.width, 10) || null,
+        height: parseInt(req.body?.height, 10) || null,
+        durationS: Number.isFinite(Number(req.body?.durationS)) ? Number(req.body.durationS) : null,
+        posters,
+      });
+      res.json({ ok: true, video: done });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The operator's own poster and playback, gated by location like the photo
+  // view above. The investor routes live in routes/dataroom.js behind a token.
+  router.get("/:id/videos/:videoId/poster/:variant", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const variant = req.params.variant === "thumb" ? "thumb" : "full";
+      const video = await store.getOfferVideo(ctx.offer.id, req.params.videoId);
+      if (!video || video.status !== "ready") return res.status(404).type("text/plain").send("not found");
+      const stored = await store.readVideoPoster(video.id, variant);
+      if (!stored?.bytes) return res.status(404).type("text/plain").send("not found");
+      res.set("Content-Type", stored.contentType || "image/jpeg");
+      res.set("Cache-Control", "private, max-age=86400");
+      res.set("ETag", `"${video.id}-poster-${variant}"`);
+      res.send(stored.bytes);
+    } catch (err) { fail(res, err); }
+  });
+
+  router.get("/:id/videos/:videoId/stream", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const video = await store.getOfferVideo(ctx.offer.id, req.params.videoId);
+      if (!video || video.status !== "ready") return res.status(404).type("text/plain").send("not found");
+      res.set("Cache-Control", "private, max-age=86400");
+      res.set("X-Content-Type-Options", "nosniff");
+      const served = await streamVideo(req, res, { key: video.storageKey, contentType: video.contentType, etag: `"${video.id}"` });
+      if (!served) res.status(404).type("text/plain").send("not found");
+    } catch (err) { if (!res.headersSent) fail(res, err); else res.destroy(); }
+  });
+
+  // Row first, bytes second: the investor page stops listing the video the
+  // instant the row is gone, and a failed bucket delete is only a stray object.
+  router.delete("/:id/videos/:videoId", async (req, res) => {
+    try {
+      const ctx = await loadOwnOffer(req, res);
+      if (!ctx) return;
+      const video = await store.deleteOfferVideo(ctx.offer.id, req.params.videoId);
+      if (!video) return res.status(404).json({ error: "video not found" });
+      try {
+        if (video.status === "uploading" && video.uploadId) await abortVideoUpload(video.storageKey, video.uploadId);
+        else await deleteVideoObject(video.storageKey);
+      } catch (e) { console.warn("video bytes not removed:", video.storageKey, e.message); }
+      res.json({ ok: true, videos: await store.listOfferVideos(ctx.offer.id) });
     } catch (err) { fail(res, err); }
   });
 
@@ -2095,6 +2252,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { locationId } = resolveLocation(req);
       const offer = await store.getOffer(req.params.id);
       if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
+      // Video bytes live in R2, which the store can't reach: clear them here
+      // before the rows go, or every deleted deal leaves its walkthrough behind.
+      for (const v of await store.listOfferVideos(offer.id)) {
+        try {
+          if (v.status === "uploading" && v.uploadId) await abortVideoUpload(v.storageKey, v.uploadId);
+          else await deleteVideoObject(v.storageKey);
+        } catch (e) { console.warn("video bytes not removed:", v.storageKey, e.message); }
+      }
       await store.deleteOffer(req.params.id);
       res.json({ ok: true });
     } catch (err) { fail(res, err); }

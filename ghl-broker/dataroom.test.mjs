@@ -271,6 +271,55 @@ ok("eight thumbnails stay in front of the fold", fold > 0 && pgh.indexOf('data-g
 for (const id of extra) await store.deleteOfferPhoto(offer.id, id);
 pgh = await (await fetch(dealShare, { redirect: "manual" })).text();
 ok("with two photos there is nothing to fold", !pgh.includes('<details class="more">') && pgh.includes("2 photos"));
+
+console.log("\n== videos: stored in parts, streamed in slices ==");
+// Seeded the way the upload route does it (video.js), against the local-disk
+// object store the JSON backend gets. What matters here is the investor read
+// path: gating, Range, and that nothing half-uploaded ever shows.
+const { beginVideoUpload, putVideoPart, finishVideoUpload, videoKey } = await import("./video.js");
+const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypisom"), Buffer.alloc(4000, 7)]);
+const vidId = crypto.randomUUID();
+const vKey = videoKey(LOC, offer.id, vidId, "video/mp4");
+const { uploadId } = await beginVideoUpload(vKey, "video/mp4");
+const { etag: partTag } = await putVideoPart(vKey, uploadId, 1, MP4);
+await store.createOfferVideo(offer.id, LOC, { id: vidId, name: "walkthrough.mp4", contentType: "video/mp4", sizeBytes: MP4.length, storageKey: vKey, uploadId });
+pgh = await (await fetch(dealShare, { redirect: "manual" })).text();
+ok("an unfinished upload never reaches investors", !pgh.includes(vidId));
+let vr = await fetch(`${dealShare}/video/${vidId}`, { redirect: "manual" });
+ok("nor does its stream", vr.status === 404, vr.status);
+const { size: vSize } = await finishVideoUpload(vKey, uploadId, [{ partNumber: 1, etag: partTag }]);
+await store.finishOfferVideo(offer.id, vidId, {
+  sizeBytes: vSize, width: 1920, height: 1080, durationS: 84.2,
+  posters: { full: { bytes: JPEG, contentType: "image/jpeg" }, thumb: { bytes: JPEG, contentType: "image/jpeg" } },
+});
+const dealTok = dealShare.split("/d/")[1];
+vr = await fetch(dealShare, { redirect: "manual" });
+pgh = await vr.text();
+ok("the video is a gallery tile with its poster", pgh.includes(`data-video="/d/${dealTok}/video/${vidId}"`) && pgh.includes(`/video/${vidId}/poster/thumb`));
+ok("the tile shows the running time", pgh.includes("1:24"));
+ok("the card says so", pgh.includes("Photos &amp; video") && pgh.includes("2 photos · 1 video"));
+ok("videos come before the fold and after the hero", pgh.indexOf(`data-gal="1"${""}`) > 0 && /data-gal="1" data-video=/.test(pgh));
+ok("CSP lets the page play same-origin media", (vr.headers.get("content-security-policy") || "").includes("media-src 'self'"));
+ok("the viewer has a player", pgh.includes("<video controls playsinline"));
+vr = await fetch(`${dealShare}/video/${vidId}`, { headers: { range: "bytes=4-7" }, redirect: "manual" });
+ok("a Range request gets a 206 slice", vr.status === 206 && vr.headers.get("content-range") === `bytes 4-7/${MP4.length}`, vr.status + " " + vr.headers.get("content-range"));
+ok("and exactly those bytes", Buffer.from(await vr.arrayBuffer()).toString("ascii") === "ftyp");
+vr = await fetch(`${dealShare}/video/${vidId}`, { redirect: "manual" });
+ok("a plain request gets the whole file and announces ranges",
+  vr.status === 200 && vr.headers.get("accept-ranges") === "bytes" && vr.headers.get("content-type") === "video/mp4"
+  && (await vr.arrayBuffer()).byteLength === MP4.length, vr.status);
+vr = await fetch(`${dealShare}/video/${vidId}`, { headers: { range: "bytes=99999-" }, redirect: "manual" });
+ok("an impossible range is refused, not served", vr.status === 416, vr.status);
+vr = await fetch(`${dealShare}/video/${vidId}/poster/thumb`, { redirect: "manual" });
+ok("the poster serves like a photo", vr.status === 200 && vr.headers.get("content-type") === "image/jpeg", vr.status);
+vr = await fetch(`${otherShare}/video/${vidId}`, { redirect: "manual" });
+ok("another deal's token can't stream it", vr.status === 404, vr.status);
+vr = await fetch(`${portfolioLink}/video/${vidId}`, { redirect: "manual" });
+ok("the portfolio token can't either", vr.status === 404, vr.status);
+vr = await fetch(`${B}/d/deal/${room.id}/video/${vidId}`, { headers: { range: "bytes=0-1" }, redirect: "manual" });
+ok("the public teaser streams it too", vr.status === 206, vr.status);
+vr = await fetch(`${B}/d/deal/${room.id}/video/${vidId}/poster/full`, { redirect: "manual" });
+ok("with its poster", vr.status === 200, vr.status);
 ph = await (await fetch(portfolioLink, { redirect: "manual" })).text();
 ok("portfolio card shows a thumbnail", ph.includes(`/photo/${photoA1}/thumb`));
 ok("portfolio thumb is served under the deal's own token",
@@ -298,6 +347,8 @@ await jget(`${B}/api/datarooms/${room.id}/revoke`, {
 });
 iv = await fetch(`${dealShare}/photo/${photoA2}/thumb`, { redirect: "manual" });
 ok("a revoked room serves no photos", iv.status === 404, iv.status);
+iv = await fetch(`${dealShare}/video/${vidId}`, { redirect: "manual" });
+ok("and no videos", iv.status === 404, iv.status);
 await jget(`${B}/api/datarooms/${room.id}/revoke`, {
   method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ location_id: LOC, revoked: false }),
@@ -810,6 +861,74 @@ await syncDealNumbers({ store, offer: { ...noCalc, calc: null, scope: [] } });
 r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
 ok("a missing ARV never blanks the room's", r.body.dataroom.snapshot.numbers.arv === 560000,
   r.body.dataroom.snapshot.numbers.arv);
+
+console.log("\n== the operator pins a figure on the room ==");
+// The strip's numbers can be edited on the room itself. A typed figure is
+// pinned: the offer sync moves around it, a refresh carries it, and the
+// console's "follow the offer" is the only thing that lets the offer back in.
+const { dealNumbers } = await import("./dataroom.js");
+const putNumbers = (numbers) => jget(`${B}/api/datarooms/${room.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, numbers }),
+});
+const offerNow = () => store.getOffer(offer.id);
+// The update response carries the room, not its share link; fetch that once.
+const pinLink = (await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`)).body.dataroom.shareLink;
+
+r = await putNumbers({ arv: 600000 });
+n = r.body.dataroom.snapshot.numbers;
+ok("a typed ARV lands on the room", r.status === 200 && n.arv === 600000, JSON.stringify(r.body).slice(0, 200));
+ok("and is recorded as pinned", r.body.dataroom.snapshot.overrides?.arv === 600000);
+ok("price and rehab are untouched", n.investorPrice === 445000 && n.repairs === 71000, `${n.investorPrice}/${n.repairs}`);
+live = await fetch(pinLink).then((x) => x.text());
+// 600,000 - 445,000 - 71,000 = 84,000
+ok("the investor page shows it, with a spread that reconciles", live.includes("$600,000") && live.includes("$84,000"),
+  live.match(/\$\d\d?\d?,\d\d\d/g)?.join(",") || "");
+
+await syncDealNumbers({ store, offer: await revalue({ arv: 580000 }) });
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+ok("the offer's ARV moving doesn't dislodge the pin", r.body.dataroom.snapshot.numbers.arv === 600000, r.body.dataroom.snapshot.numbers.arv);
+await syncDealNumbers({ store, offer: await reterm(425000, 25000) });
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+n = r.body.dataroom.snapshot.numbers;
+ok("while an unpinned price still follows the deal", n.investorPrice === 450000 && n.arv === 600000, `${n.investorPrice}/${n.arv}`);
+
+r = await putNumbers({ investorPrice: 400000 });
+ok("a price below the contract price is refused", r.status === 400 && /contract price/.test(r.body.error || ""), r.status);
+r = await putNumbers({ investorPrice: 465000 });
+n = r.body.dataroom.snapshot.numbers;
+ok("a typed price is what the investor pays", n.investorPrice === 465000, n.investorPrice);
+ok("and the fee absorbs the difference, the contract stays", n.contractPrice === 425000 && n.assignmentFee === 40000, `${n.contractPrice}/${n.assignmentFee}`);
+live = await fetch(pinLink).then((x) => x.text());
+ok("the page quotes the pinned price", live.includes("$465,000") && !live.includes("$450,000"));
+ok("the public feed agrees", ((await (await fetch(FEED)).json()).deals || []).some((d) => d.price === 465000));
+await syncDealNumbers({ store, offer: await reterm(430000, 25000) });
+r = await jget(`${B}/api/datarooms/${room.id}?location_id=${LOC}`);
+n = r.body.dataroom.snapshot.numbers;
+ok("a re-termed contract slides under the pinned price", n.investorPrice === 465000 && n.contractPrice === 430000 && n.assignmentFee === 35000,
+  `${n.investorPrice}/${n.contractPrice}/${n.assignmentFee}`);
+
+r = await jget(`${B}/api/datarooms/${room.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, refresh: true }),
+});
+n = r.body.dataroom.snapshot.numbers;
+ok("a refresh from the offer keeps the pins", n.arv === 600000 && n.investorPrice === 465000 && r.body.dataroom.snapshot.overrides?.arv === 600000,
+  JSON.stringify(r.body.dataroom.snapshot.overrides));
+
+r = await putNumbers({ arv: null });
+n = r.body.dataroom.snapshot.numbers;
+const offerArv = dealNumbers({ offer: await offerNow() }).arv;
+ok("unpinning returns the offer's own ARV", n.arv === offerArv && offerArv === 580000 && !r.body.dataroom.snapshot.overrides?.arv, `${n.arv} vs ${offerArv}`);
+ok("without disturbing the other pin", n.investorPrice === 465000);
+r = await putNumbers({ investorPrice: 0 });
+n = r.body.dataroom.snapshot.numbers;
+ok("unpinning the price goes back to contract plus fee", n.investorPrice === 455000 && n.assignmentFee === 25000, `${n.investorPrice}/${n.assignmentFee}`);
+ok("nothing is pinned any more", Object.keys(r.body.dataroom.snapshot.overrides || {}).length === 0);
+r = await putNumbers({ repairs: "sixty" });
+ok("garbage is refused", r.status === 400, r.status);
+r = await putNumbers({ repairs: 60000, contractPrice: 1 });
+ok("the contract price can't be edited from the room", r.body.dataroom.snapshot.numbers.contractPrice === 430000 && r.body.dataroom.snapshot.numbers.repairs === 60000);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 server.close();

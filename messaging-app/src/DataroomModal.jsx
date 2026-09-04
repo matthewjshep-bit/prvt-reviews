@@ -13,18 +13,20 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ArrowLeft, Eye, ImagePlus, Loader2, Lock, Plus, RefreshCw, Send, ShieldOff,
-  Star, Trash2, X,
+  ArrowLeft, Eye, ImagePlus, Loader2, Lock, Play, Plus, RefreshCw, Send, ShieldOff,
+  Star, Trash2, Video, X,
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
-  createDataroom, createDataroomInvite, deleteOfferPhoto, expandDriveFolder,
-  fetchOfferPhotoFromUrl, getDataroom, getDataroomPortfolio,
-  listDatarooms, listOfferPhotos, offerPhotoUrl, reissueDataroomInvite, reorderOfferPhotos,
+  beginOfferVideo, completeOfferVideo, createDataroom, createDataroomInvite, deleteOfferPhoto,
+  deleteOfferVideo, expandDriveFolder, fetchOfferPhotoFromUrl, getDataroom, getDataroomPortfolio,
+  listDatarooms, listOfferPhotos, listOfferVideos, offerPhotoUrl, offerVideoPosterUrl,
+  offerVideoStreamUrl, reissueDataroomInvite, reorderOfferPhotos,
   revokeDataroom, revokeDataroomInvite, rotateDataroomShareLink, searchContacts,
-  sendDataroomInvite, updateDataroom, uploadOfferPhoto,
+  sendDataroomInvite, updateDataroom, uploadOfferPhoto, uploadOfferVideoPart,
 } from "./api.js";
 import { propertyPhotoVariants } from "./image.js";
+import { probeVideo } from "./video.js";
 import { CopyButton } from "./ui.jsx";
 
 // One ceiling for every way photos arrive — picked, dropped, pasted, or named
@@ -61,7 +63,7 @@ const SECTIONS = [
 const PUBLIC_SECTIONS = [
   ["summary", "Headline numbers"],
   ["equity", "Spread at ARV"],
-  ["photos", "Photos"],
+  ["photos", "Photos & video"],
   ["comps", "Comparable sales"],
   ["scope", "Rehab scope"],
   ["terms", "Terms"],
@@ -152,6 +154,222 @@ function FreshLink({ item, onSend, onDismiss, busy }) {
           className="mt-2 flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
           <Send size={13} /> Text it to {item.name?.split(" ")[0] || "them"}
         </button>
+      )}
+    </div>
+  );
+}
+
+// The three figures on the investor's headline strip, editable right here. Each
+// follows the offer until the operator types a number, which pins it on the
+// room: the offer can move and the room keeps saying what was typed. "Follow
+// the offer" unpins it. Spread is never typed — it's the other three, and
+// showing it live is how the operator sees what a change does before an
+// investor does. Contract price isn't offered: that's the signed agreement,
+// and a pinned purchase price moves the fee, not the contract.
+const HEADLINE_FIGURES = [
+  ["investorPrice", "Purchase price", "What the investor pays — contract price plus your fee"],
+  ["arv", "After-repair value", ""],
+  ["repairs", "Est. rehab", ""],
+];
+
+function MoneyField({ value, pinned, disabled, onSave, onUnpin, label, hint }) {
+  const [text, setText] = useState("");
+  const [editing, setEditing] = useState(false);
+  const shown = editing ? text : (value > 0 ? fmtMoney(value) : "");
+  const commit = () => {
+    setEditing(false);
+    const v = Math.round(Number(String(text).replace(/[^0-9.]/g, "")));
+    if (!Number.isFinite(v) || v === Math.round(Number(value) || 0)) return;
+    onSave(v);
+  };
+  return (
+    <div>
+      <span className={LABEL_CLS}>{label}</span>
+      <input className={`${INPUT_CLS} tabular-nums`} inputMode="numeric" value={shown} disabled={disabled}
+        placeholder="—"
+        onFocus={() => { setText(value > 0 ? String(Math.round(value)) : ""); setEditing(true); }}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } if (e.key === "Escape") { setEditing(false); e.target.blur(); } }} />
+      <span className="mt-0.5 block text-[11px] text-slate-500">
+        {pinned ? (
+          <>
+            <span className="font-semibold text-amber-700">Set here</span>
+            {" · "}
+            <button type="button" disabled={disabled} onClick={onUnpin} className="text-blue-700 hover:underline disabled:opacity-50">
+              Follow the offer
+            </button>
+          </>
+        ) : (hint || "Follows the offer")}
+      </span>
+    </div>
+  );
+}
+
+function HeadlineNumbers({ room, busy, onSave }) {
+  const n = room?.snapshot?.numbers || {};
+  const pins = room?.snapshot?.overrides || {};
+  const spread = Math.round((Number(n.arv) || 0) - (Number(n.investorPrice) || 0) - (Number(n.repairs) || 0));
+  return (
+    <div className="mt-3">
+      <span className={LABEL_CLS}>Headline numbers</span>
+      <div className="grid gap-3 sm:grid-cols-4">
+        {HEADLINE_FIGURES.map(([key, label, hint]) => (
+          <MoneyField key={key} label={label} hint={hint} value={n[key]} pinned={pins[key] > 0} disabled={busy}
+            onSave={(v) => onSave({ numbers: { [key]: v } })}
+            onUnpin={() => onSave({ numbers: { [key]: null } })} />
+        ))}
+        <div>
+          <span className={LABEL_CLS}>Spread at ARV</span>
+          <div className={`rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold tabular-nums ${spread > 0 ? "text-emerald-700" : "text-slate-400"}`}>
+            {n.arv > 0 && n.investorPrice > 0 ? fmtMoney(spread) : "—"}
+          </div>
+          <span className="mt-0.5 block text-[11px] text-slate-500">ARV minus price and rehab</span>
+        </div>
+      </div>
+      {n.contractPrice > 0 && (
+        <p className="mt-1.5 text-xs text-slate-500">
+          Contract price {fmtMoney(n.contractPrice)} · your fee {fmtMoney(n.assignmentFee)}. Typing a purchase price moves the fee, not the contract.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// Videos for one deal — the walkthrough the operator shot on their phone. They
+// belong to the offer like photos do, and the investor page reads them live,
+// where they sit in the gallery as poster tiles and play inside the viewer.
+//
+// A clip is a few hundred MB, so it goes up in parts: one request per part,
+// which means a flaky connection retries a part rather than the file, and the
+// bar below shows real progress rather than a spinner.
+const VIDEO_ACCEPT = "video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm";
+const fmtClock = (secs) => {
+  const t = Math.max(0, Math.round(Number(secs) || 0));
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+};
+
+function VideosPane({ offerId, busy, setBusy, onError }) {
+  const [videos, setVideos] = useState(null);
+  const [progress, setProgress] = useState(null); // { name, pct } | { name, label }
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setVideos(null);
+    listOfferVideos(offerId)
+      .then((v) => { if (!cancelled) setVideos(v); })
+      .catch(() => { if (!cancelled) setVideos([]); });
+    return () => { cancelled = true; };
+  }, [offerId]);
+
+  async function addFile(file) {
+    if (!file) return;
+    setBusy(true);
+    onError("");
+    let started = null;
+    try {
+      setProgress({ name: file.name, label: "Reading the video…" });
+      const meta = await probeVideo(file);
+      // Safari reports .mov as video/quicktime; some browsers report nothing
+      // at all for it, so fall back to the extension.
+      const contentType = file.type
+        || (/\.mov$/i.test(file.name) ? "video/quicktime" : /\.webm$/i.test(file.name) ? "video/webm" : "video/mp4");
+      const { video, partBytes } = await beginOfferVideo(offerId, { name: file.name, contentType, sizeBytes: file.size });
+      started = video;
+      const total = Math.ceil(file.size / partBytes);
+      const parts = [];
+      for (let n = 1; n <= total; n++) {
+        const slice = file.slice((n - 1) * partBytes, Math.min(file.size, n * partBytes));
+        // One retry per part: a dropped connection mid-upload is the common
+        // failure, and recovering costs one part, not the file.
+        let etag;
+        try { etag = await uploadOfferVideoPart(offerId, video.id, n, slice); }
+        catch { etag = await uploadOfferVideoPart(offerId, video.id, n, slice); }
+        parts.push({ n, etag });
+        setProgress({ name: file.name, pct: Math.round((n / total) * 100) });
+      }
+      setProgress({ name: file.name, label: "Finishing…" });
+      await completeOfferVideo(offerId, video.id, { parts, ...meta });
+      started = null;
+      setVideos(await listOfferVideos(offerId));
+    } catch (e) {
+      // A half-sent video is worse than none: the list would show a ghost.
+      if (started) await deleteOfferVideo(offerId, started.id).catch(() => {});
+      onError(e.message);
+    } finally {
+      setProgress(null);
+      setBusy(false);
+    }
+  }
+
+  const remove = async (id) => {
+    setBusy(true);
+    onError("");
+    try { setVideos(await deleteOfferVideo(offerId, id)); } catch (e) { onError(e.message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="mb-4 rounded-xl border border-slate-200 p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className={`${LABEL_CLS} mb-0`}>Property videos</span>
+        <span className="text-xs text-slate-500">
+          {progress ? (progress.label || `Uploading ${progress.name} · ${progress.pct}%`)
+            : videos?.length ? `${videos.length} video${videos.length === 1 ? "" : "s"} · shown with the photos`
+            : ""}
+        </span>
+      </div>
+      {progress?.pct != null && (
+        <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+          <div className="h-full rounded-full bg-blue-600 transition-[width]" style={{ width: `${progress.pct}%` }} />
+        </div>
+      )}
+      {videos === null ? (
+        <div className="flex justify-center py-4"><Loader2 size={16} className="animate-spin text-slate-400" /></div>
+      ) : (
+        <>
+          {videos.length > 0 && (
+            <div className="mb-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
+              {videos.map((v) => (
+                <div key={v.id} className="group relative overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+                  {v.status === "ready" ? (
+                    <a href={offerVideoStreamUrl(offerId, v.id)} target="_blank" rel="noopener noreferrer" title="Play in a new tab">
+                      <img src={offerVideoPosterUrl(offerId, v.id, "thumb")} alt="" loading="lazy"
+                        className="block aspect-[3/2] w-full object-cover" />
+                      <span className="absolute bottom-1 left-1 flex items-center gap-1 rounded bg-slate-900/85 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-white">
+                        <Play size={9} className="fill-current" />{v.durationS ? fmtClock(v.durationS) : "Video"}
+                      </span>
+                    </a>
+                  ) : (
+                    <div className="flex aspect-[3/2] items-center justify-center px-2 text-center text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                      Upload didn't finish
+                    </div>
+                  )}
+                  <div className="absolute inset-x-0 top-0 flex justify-end bg-slate-900/70 p-1 opacity-0 transition group-hover:opacity-100">
+                    <button type="button" disabled={busy} title="Delete this video" onClick={() => remove(v.id)}
+                      className="rounded px-1 text-white hover:bg-red-500/70 disabled:opacity-30"><Trash2 size={12} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" disabled={busy} className={BTN_CLS} onClick={() => fileRef.current?.click()}>
+              {progress ? <Loader2 size={13} className="animate-spin" /> : <Video size={13} />}
+              {videos.length ? "Add another video" : "Add a video"}
+            </button>
+            <input ref={fileRef} type="file" accept={VIDEO_ACCEPT} className="hidden"
+              onChange={(e) => { addFile(e.target.files?.[0]); e.target.value = ""; }} />
+            <span className="text-xs text-slate-500">MP4, MOV or WebM · up to 500 MB</span>
+          </div>
+
+          <p className="mt-2 text-xs text-slate-500">
+            A walkthrough shows up with the photos and plays inside the viewer on the investor page. For the widest
+            playback, shoot in "Most Compatible" (H.264) or export as MP4 — an iPhone's default HEVC clip won't play
+            on every Android phone or PC.
+          </p>
+        </>
       )}
     </div>
   );
@@ -809,6 +1027,7 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
             </div>
 
             <PhotosPane offerId={offer.id} busy={busy} setBusy={setBusy} onError={setError} />
+            <VideosPane offerId={offer.id} busy={busy} setBusy={setBusy} onError={setError} />
 
             {fresh.map((item) => (
               <FreshLink key={item.inviteId + item.link} item={item} busy={busy}
@@ -913,6 +1132,7 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
                   Investors will see your contract price and assignment fee.
                 </p>
               )}
+              <HeadlineNumbers room={room} busy={busy} onSave={saveText} />
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <div>
                   <span className={LABEL_CLS}>Headline</span>
@@ -968,8 +1188,8 @@ export default function DataroomModal({ offer, deals = [], onSwitch, onBackToDea
                   <RefreshCw size={12} /> Refresh from the offer
                 </button>
                 <span className="text-xs text-slate-500">
-                  Built {shortDateTime(room.snapshot?.builtAt)} — price, ARV and rehab follow the offer on their own;
-                  comps, scope and photos don't reach investors until you refresh.
+                  Built {shortDateTime(room.snapshot?.builtAt)} — price, ARV and rehab follow the offer on their own
+                  unless you've set them above; comps, scope and photos don't reach investors until you refresh.
                 </span>
               </div>
             </div>

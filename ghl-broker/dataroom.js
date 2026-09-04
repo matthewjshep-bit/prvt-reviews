@@ -189,6 +189,41 @@ export function dealNumbers({ offer, settings = {} }) {
   };
 }
 
+// Figures the operator has set on the room itself, overriding what the offer
+// says: { investorPrice, arv, repairs }, each a positive whole-dollar amount,
+// present only while pinned. They live beside `numbers` rather than in it so
+// the sync below can tell "set here" from "last synced" — and so the console
+// can show which is which and offer a way back to following the offer.
+export const OVERRIDABLE = ["investorPrice", "arv", "repairs"];
+export function normalizeNumberOverrides(o) {
+  const out = {};
+  for (const k of OVERRIDABLE) {
+    const v = Math.round(num(o?.[k]));
+    if (v > 0 && v <= 100_000_000) out[k] = v;
+  }
+  return out;
+}
+
+// Lay the operator's pins over a set of numbers. A pinned purchase price is
+// what the investor is quoted, and the breakdown card prints contract price +
+// fee = price, so the fee absorbs the difference; a pin that has fallen below
+// the contract price no longer describes a deal that exists and is dropped.
+export function applyNumberOverrides(numbers, overrides = {}) {
+  const n = { ...numbers };
+  const o = { ...overrides };
+  if (o.arv > 0) n.arv = o.arv;
+  if (o.repairs > 0) n.repairs = o.repairs;
+  if (o.investorPrice > 0) {
+    if (num(n.contractPrice) > 0 && o.investorPrice < num(n.contractPrice)) {
+      delete o.investorPrice;
+    } else {
+      n.investorPrice = o.investorPrice;
+      if (num(n.contractPrice) > 0) n.assignmentFee = o.investorPrice - num(n.contractPrice);
+    }
+  }
+  return { numbers: n, overrides: o };
+}
+
 // Push the offer's money into every room built from it. The snapshot is frozen
 // on purpose — comps, scope, photos and notes stay as the investor first saw
 // them until the operator refreshes — but the figures on the headline strip
@@ -200,9 +235,13 @@ export function dealNumbers({ offer, settings = {} }) {
 // spread reconciling to neither vintage — a wrong number in front of a buyer.
 // Everything else still waits for a deliberate refresh.
 //
+// A figure the operator has pinned on the room (snapshot.overrides) is theirs:
+// the sync moves around it, and only a deliberate unpin in the console lets the
+// offer's number back in.
+//
 // Best-effort by design: a room that won't save must never fail the deal edit
 // that triggered this. Never throws.
-export async function syncDealNumbers({ store, offer, settings = {} }) {
+export function dealMoves({ offer, settings = {} }) {
   const next = dealNumbers({ offer, settings });
   const moves = {
     contractPrice: next.contractPrice,
@@ -217,7 +256,11 @@ export async function syncDealNumbers({ store, offer, settings = {} }) {
   // and that table stays frozen. Moving the total while its line items sit
   // still would make the two openly disagree, so it waits for the refresh.
   if (next.repairs > 0 && !next.repairsFromScope) moves.repairs = next.repairs;
+  return moves;
+}
 
+export async function syncDealNumbers({ store, offer, settings = {} }) {
+  const moves = dealMoves({ offer, settings });
   let synced = 0;
   try {
     for (const room of await store.listDatarooms(offer.locationId, { offerId: offer.id })) {
@@ -225,8 +268,9 @@ export async function syncDealNumbers({ store, offer, settings = {} }) {
       // (kind "offer") and carries the offer's own numbers, not the deal's.
       const n = room?.kind === "offer" ? null : room?.snapshot?.numbers;
       if (!n) continue;
-      if (Object.keys(moves).every((k) => n[k] === moves[k])) continue;
-      room.snapshot = { ...room.snapshot, numbers: { ...n, ...moves } };
+      const { numbers, overrides } = applyNumberOverrides({ ...n, ...moves }, room.snapshot.overrides);
+      if (Object.keys(numbers).every((k) => n[k] === numbers[k])) continue;
+      room.snapshot = { ...room.snapshot, numbers, overrides };
       await store.updateDataroom(room.id, room);
       synced++;
     }
@@ -243,14 +287,18 @@ export async function syncDealNumbers({ store, offer, settings = {} }) {
 // syncDealNumbers above keeps level with the offer.
 // `links` is operator-authored, not derived from the offer — like headline and
 // notes, it must be passed back in on a refresh or rebuilding from the offer
-// would silently drop it.
-export function buildSnapshot({ offer, settings = {}, sections, headline = "", notes = "", links = [] }) {
+// would silently drop it. So are `overrides`, the figures pinned on the room.
+export function buildSnapshot({ offer, settings = {}, sections, headline = "", notes = "", links = [], overrides = {} }) {
   const inputs = offer?.calc?.inputs || {};
   const deal = offer?.deal || null;
   const snap = offer?.snapshot || null;
   const company = offer?.calc?.settings?.company || settings?.company || {};
 
-  const { contractPrice, assignmentFee, investorPrice, arv, repairs } = dealNumbers({ offer, settings });
+  const base = dealNumbers({ offer, settings });
+  const pinned = applyNumberOverrides(
+    { investorPrice: base.investorPrice, arv: base.arv, repairs: base.repairs, contractPrice: base.contractPrice, assignmentFee: base.assignmentFee },
+    normalizeNumberOverrides(overrides)
+  );
 
   const subject = snap?.comps?.result?.info || snap?.subjectInfo || null;
 
@@ -275,7 +323,8 @@ export function buildSnapshot({ offer, settings = {}, sections, headline = "", n
       yearBuilt: Math.round(num(subject?.yearBuilt)) || null,
       zillow: zillowUrl(inputs.address || offer?.address || "") || "",
     },
-    numbers: { investorPrice, arv, repairs, contractPrice, assignmentFee },
+    numbers: pinned.numbers,
+    overrides: pinned.overrides,
     terms: {
       closingDate: clean(deal?.closingDate, 40),
       inspectionDate: clean(deal?.inspectionDate, 40),
@@ -318,7 +367,10 @@ const money = (n) => (num(n) > 0 ? fmtMoney(Math.round(num(n))) : "—");
 // at the full-size image, so with scripting off the links simply open in a new
 // tab. With it on, a tap opens the overlay in the markup photoViewer() emits:
 // prev/next, swipe, arrow keys, Escape, a counter, and the phone's back gesture
-// closes it instead of leaving the room.
+// closes it instead of leaving the room. A link carrying data-video is a
+// walkthrough: the viewer swaps the image for the <video> element with native
+// controls and starts it; without the script the same link opens the stream
+// in a tab, which every browser plays on its own.
 //
 // It is allowed by CONTENT HASH, not by 'unsafe-inline' or a nonce: the CSP
 // names the SHA-256 of this exact string, so nothing else inline can ever run,
@@ -330,20 +382,38 @@ export const GALLERY_JS = `(function () {
   if (!lb || !d.querySelector("a[data-gal]")) return;
   var links = [].slice.call(d.querySelectorAll("a[data-gal]"))
     .sort(function (a, b) { return a.dataset.gal - b.dataset.gal; });
-  var img = lb.querySelector("img"), cap = lb.querySelector(".lb-c"), idx = lb.querySelector(".lb-i");
+  var img = lb.querySelector("img"), vid = lb.querySelector("video");
+  var cap = lb.querySelector(".lb-c"), idx = lb.querySelector(".lb-i");
   var btns = [].slice.call(lb.querySelectorAll("button"));
   var cur = -1, opener = null, pushed = false;
   h.classList.add("gal");
 
   function preload(i) {
-    if (i >= 0 && i < links.length) { var p = new Image(); p.src = links[i].href; }
+    if (i >= 0 && i < links.length && !links[i].dataset.video) { var p = new Image(); p.src = links[i].href; }
   }
-  function show(i) {
+  function stopVideo() {
+    if (!vid) return;
+    try { vid.pause(); } catch (e) { /* not playing */ }
+    vid.removeAttribute("src"); vid.removeAttribute("poster"); vid.load();
+    vid.hidden = true;
+  }
+  function show(i, play) {
     cur = (i + links.length) % links.length;
     var a = links[cur], text = a.dataset.cap || "";
-    lb.classList.add("loading");
-    img.src = a.href;
-    img.alt = text;
+    stopVideo();
+    if (a.dataset.video && vid) {
+      lb.classList.remove("loading");
+      img.hidden = true; img.removeAttribute("src");
+      if (a.dataset.poster) vid.poster = a.dataset.poster;
+      vid.src = a.dataset.video;
+      vid.hidden = false;
+      if (play) { var pr = vid.play(); if (pr && pr.catch) pr.catch(function () { /* wants a tap */ }); }
+    } else {
+      img.hidden = false;
+      lb.classList.add("loading");
+      img.src = a.href;
+      img.alt = text;
+    }
     cap.textContent = text;
     idx.textContent = (cur + 1) + " / " + links.length;
     preload(cur + 1); preload(cur - 1);
@@ -352,7 +422,7 @@ export const GALLERY_JS = `(function () {
     opener = from || null;
     lb.hidden = false;
     h.classList.add("lb-open");
-    show(i);
+    show(i, true);
     try { history.pushState({ lb: 1 }, ""); pushed = true; } catch (e) { pushed = false; }
     lb.querySelector(".lb-x").focus();
   }
@@ -360,6 +430,7 @@ export const GALLERY_JS = `(function () {
     if (lb.hidden) return;
     lb.hidden = true;
     h.classList.remove("lb-open");
+    stopVideo();
     img.removeAttribute("src");
     if (opener && opener.focus) opener.focus();
     opener = null;
@@ -392,6 +463,7 @@ export const GALLERY_JS = `(function () {
 
   d.addEventListener("keydown", function (e) {
     if (lb.hidden) return;
+    if (vid && e.target === vid && e.key !== "Escape") return; /* the player owns its keys */
     if (e.key === "Escape") { e.preventDefault(); close(); }
     else if (e.key === "ArrowLeft") { e.preventDefault(); show(cur - 1); }
     else if (e.key === "ArrowRight") { e.preventDefault(); show(cur + 1); }
@@ -404,6 +476,7 @@ export const GALLERY_JS = `(function () {
 
   var tx = null, ty = null;
   lb.addEventListener("touchstart", function (e) {
+    if (vid && vid.contains(e.target)) { tx = ty = null; return; } /* scrubbing isn't swiping */
     var t = e.changedTouches[0]; tx = t.clientX; ty = t.clientY;
   }, { passive: true });
   lb.addEventListener("touchend", function (e) {
@@ -433,7 +506,9 @@ const cspHash = (src) => {
 // `scripts` is the list of inline script SOURCES the page will embed (see
 // GALLERY_JS). Each is allowed by its hash and nothing else is, so a page that
 // passes none stays entirely script-free — the notices and the offer page do.
-export function secureHeaders(res, { scripts = [] } = {}) {
+// `media` lets the page play same-origin <video>: the room pages, whose
+// walkthroughs stream from this host behind the same token as the page.
+export function secureHeaders(res, { scripts = [], media = false } = {}) {
   res.set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
   res.set("Referrer-Policy", "no-referrer");
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
@@ -444,7 +519,8 @@ export function secureHeaders(res, { scripts = [] } = {}) {
     "Content-Security-Policy",
     "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; " +
     "form-action 'self'; frame-ancestors 'none'; base-uri 'none'" +
-    (scripts.length ? `; script-src ${scripts.map(cspHash).join(" ")}` : "")
+    (scripts.length ? `; script-src ${scripts.map(cspHash).join(" ")}` : "") +
+    (media ? "; media-src 'self'" : "")
   );
 }
 
@@ -571,8 +647,15 @@ tr:last-child td{border-bottom:0}
 .shots{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
 .shots a{display:block;border-radius:8px;overflow:hidden;border:1px solid #E2E8F0;background:#F1F5F9;line-height:0}
 .shots img{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover}
+/* A video tile is its poster with a play badge and the running time. */
+.shots a{position:relative}
+.shots .play{position:absolute;left:6px;bottom:6px;display:inline-flex;align-items:center;gap:5px;
+  background:rgba(15,23,42,.84);color:#fff;font-size:11px;font-weight:700;line-height:1;padding:4px 7px;
+  border-radius:6px;font-variant-numeric:tabular-nums}
+.shots .play svg{width:9px;height:9px;fill:#fff}
 @media(max-width:520px){.shots{grid-template-columns:repeat(2,minmax(0,1fr))}}
 html.gal a[data-gal]{cursor:zoom-in}
+html.gal a[data-video]{cursor:pointer}
 .more{margin:8px 0 0}
 .more summary{list-style:none;display:block;text-align:center;cursor:pointer;font-size:13px;font-weight:600;
   color:#0F172A;background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:9px 16px;margin:0 0 8px}
@@ -592,6 +675,8 @@ html.lb-open{overflow:hidden}
   object-fit:contain;border-radius:4px;transition:opacity .2s}
 .lb-f img:not([src]){visibility:hidden}
 .lb.loading .lb-f img{opacity:.35}
+.lb-f video{display:block;max-width:100%;max-height:100%;min-height:0;width:auto;height:auto;background:#000;border-radius:4px}
+.lb-f img[hidden],.lb-f video[hidden]{display:none}
 .lb-c{flex:0 0 auto;color:#CBD5E1;font-size:13px;line-height:1.4;margin:10px 0 0;text-align:center;max-width:640px}
 .lb-c:empty{display:none}
 .lb-i{position:absolute;top:0;left:64px;right:64px;height:64px;display:flex;align-items:center;justify-content:center;
@@ -988,48 +1073,84 @@ function documentsSection(snap, base) {
 const photoUrl = (base, photo, variant) =>
   `${base}/photo/${encodeURIComponent(photo.id)}/${variant}`;
 
-// One photo link. `i` is the photo's position in the whole set, hero included,
-// and is what the viewer walks; the href is the full-size image, which is what
-// the link opens when the viewer isn't running. Thumbs have no text, so the
-// alt is the link's accessible name.
-function photoLink(photos, i, base, inner) {
-  const p = photos[i];
-  const cap = p.caption ? esc(p.caption) : "";
-  return `<a href="${photoUrl(base, p, "full")}" target="_blank" rel="noopener noreferrer"
-      data-gal="${i}"${cap ? ` data-cap="${cap}"` : ""}>${inner(cap || `Photo ${i + 1} of ${photos.length}`)}</a>`;
+// The gallery in viewer order: the hero (first photo) leads, then the videos
+// — a walkthrough is usually the most telling thing in the package, so it
+// never sits behind the fold — then the remaining photos. `i` is what
+// data-gal carries and what the viewer walks, so it has to be this order
+// exactly. `label` is the link's accessible name when there's no caption:
+// thumbnails have no text of their own.
+function galleryItems(photos, videos) {
+  const items = [];
+  photos.forEach((p, k) => items.push({ kind: "photo", rec: p, hero: k === 0, label: `Photo ${k + 1} of ${photos.length}` }));
+  const rest = items.splice(1);
+  videos.forEach((v, k) => items.push({ kind: "video", rec: v, label: `Video ${k + 1} of ${videos.length}` }));
+  items.push(...rest);
+  return items.map((it, i) => ({ ...it, i }));
 }
 
-// How many thumbnails show before the disclosure: two full rows on a desktop
-// (four across) and four on a phone (two across), so the fold never lands
-// mid-row on either.
+const mmss = (secs) => {
+  const t = Math.max(0, Math.round(Number(secs) || 0));
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+};
+
+const videoUrl = (base, video) => `${base}/video/${encodeURIComponent(video.id)}`;
+
+// One gallery link. The href is what opens when the viewer isn't running: the
+// full-size image, or the video stream itself, which every browser plays on
+// its own. data-video and data-poster are what the viewer reads instead.
+function galleryLink(item, base, inner) {
+  const cap = item.rec.caption ? esc(item.rec.caption) : "";
+  const href = item.kind === "video" ? videoUrl(base, item.rec) : photoUrl(base, item.rec, "full");
+  const media = item.kind === "video" ? ` data-video="${href}" data-poster="${href}/poster/full"` : "";
+  return `<a href="${href}" target="_blank" rel="noopener noreferrer"
+      data-gal="${item.i}"${media}${cap ? ` data-cap="${cap}"` : ""}>${inner(cap || esc(item.label))}</a>`;
+}
+
+// How many tiles show before the disclosure: two full rows on a desktop (four
+// across) and four on a phone (two across), so the fold never lands mid-row.
+// Videos always show, even past eight of them.
 const INLINE_SHOTS = 8;
 
-// The rest of the photos, after the hero: a grid of the first eight, and the
-// remainder behind "Show all N photos". The viewer (photoViewer, below) walks
-// every one of them whether or not the disclosure is open.
-function photosSection(photos, base) {
-  const rest = photos.slice(1);
-  if (!rest.length) return "";
-  const thumb = (i) => photoLink(photos, i, base, (alt) =>
-    `<img src="${photoUrl(base, photos[i], "thumb")}" alt="${alt}" loading="lazy"
-          ${photos[i].width && photos[i].height ? `width="${photos[i].width}" height="${photos[i].height}"` : ""}>`);
-  const inline = rest.slice(0, INLINE_SHOTS).map((_, k) => thumb(k + 1)).join("");
-  const more = rest.slice(INLINE_SHOTS).map((_, k) => thumb(k + 1 + INLINE_SHOTS)).join("");
+// Everything after the hero: video tiles, then photo thumbnails, the first
+// eight inline and the rest behind "Show all N photos". The viewer
+// (photoViewer, below) walks every item whether or not the disclosure is open.
+function photosSection(items, base) {
+  const tiles = items.filter((it) => !it.hero);
+  if (!tiles.length) return "";
+  const photos = items.filter((it) => it.kind === "photo").length;
+  const videos = items.filter((it) => it.kind === "video").length;
+  const tile = (it) => galleryLink(it, base, (alt) => {
+    const r = it.rec;
+    const src = it.kind === "video" ? `${videoUrl(base, r)}/poster/thumb` : photoUrl(base, r, "thumb");
+    const dims = r.width && r.height ? ` width="${r.width}" height="${r.height}"` : "";
+    const badge = it.kind === "video"
+      ? `<span class="play"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5v9l7.5-4.5z"/></svg>${r.durationS ? esc(mmss(r.durationS)) : "Video"}</span>`
+      : "";
+    return `<img src="${src}" alt="${alt}" loading="lazy"${dims}>${badge}`;
+  });
+  const cut = Math.max(INLINE_SHOTS, videos);
+  const inline = tiles.slice(0, cut).map(tile).join("");
+  const more = tiles.slice(cut).map(tile).join("");
+  const count = [
+    photos ? `${photos} photo${photos === 1 ? "" : "s"}` : "",
+    videos ? `${videos} video${videos === 1 ? "" : "s"}` : "",
+  ].filter(Boolean).join(" · ");
   return `<div class="card">
-    <h2>Photos</h2>
+    <h2>Photos${videos ? " &amp; video" : ""}</h2>
     <div class="shots">${inline}</div>
     ${more ? `<details class="more">
-      <summary><span class="all">Show all ${photos.length} photos</span><span class="less">Show fewer</span></summary>
+      <summary><span class="all">Show all ${photos} photos</span><span class="less">Show fewer</span></summary>
       <div class="shots">${more}</div>
     </details>` : ""}
     <p class="muted" style="margin:10px 0 0;font-size:12px">
-      ${photos.length} photos · tap any one to see it full size.</p>
+      ${count} · tap any one to see it full size.</p>
   </div>`;
 }
 
-// The full-screen viewer GALLERY_JS drives. Static markup, hidden until a photo
-// link is tapped; the script only ever fills in src, alt, caption and counter,
-// so nothing here is built from strings at runtime.
+// The full-screen viewer GALLERY_JS drives. Static markup, hidden until a
+// gallery link is tapped; the script only ever fills in src, poster, alt,
+// caption and counter, so nothing here is built from strings at runtime. The
+// <video> stays hidden and empty until a walkthrough is shown.
 function photoViewer() {
   const icon = (d) => `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
@@ -1037,7 +1158,7 @@ function photoViewer() {
     <div class="lb-i" aria-live="polite"></div>
     <button type="button" class="lb-x" data-lb="close" aria-label="Close">${icon("M6 6l12 12M18 6L6 18")}</button>
     <button type="button" class="lb-p" data-lb="prev" aria-label="Previous photo">${icon("M15 5l-7 7 7 7")}</button>
-    <figure class="lb-f"><img alt=""><figcaption class="lb-c"></figcaption></figure>
+    <figure class="lb-f"><img alt=""><video controls playsinline preload="metadata" hidden></video><figcaption class="lb-c"></figcaption></figure>
     <button type="button" class="lb-n" data-lb="next" aria-label="Next photo">${icon("M9 5l7 7-7 7")}</button>
   </div>`;
 }
@@ -1051,7 +1172,7 @@ function photoViewer() {
 // hands in a snapshot whose sections are already masked (teaserSections),
 // photo URLs resolve through the tokenless publicPath, and the closing card
 // sells the full package instead of assuming the reader already holds it.
-export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", photos = [], teaser = false, publicPath = "", brand = null }) {
+export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", photos = [], videos = [], teaser = false, publicPath = "", brand = null }) {
   const s = snap.sections || DEFAULT_SECTIONS;
   const base = teaser ? publicPath : `/d/${encodeURIComponent(token)}`;
   const n = snap.numbers || {};
@@ -1092,14 +1213,15 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
   const contactBits = [company.phone, company.email].filter(Boolean);
   // Hero is the first photo by sort order; the operator promotes one by moving
   // it to the front rather than by flagging it.
-  const hero = s.photos !== false ? photos[0] : null;
+  const items = s.photos !== false ? galleryItems(photos, videos) : [];
+  const hero = items.find((it) => it.hero) || null;
 
   const body = `
     ${backLink ? `<p style="margin:0 0 12px"><a href="${esc(backLink)}"
       style="font-size:13px;font-weight:600;text-decoration:none">← All current deals</a></p>` : ""}
     ${hero ? `<div class="hero">
-      ${photoLink(photos, 0, base, () => `<img src="${photoUrl(base, hero, "full")}" alt="${esc(p.address || "The property")}"
-        ${hero.width && hero.height ? `width="${hero.width}" height="${hero.height}"` : ""}>`)}
+      ${galleryLink(hero, base, () => `<img src="${photoUrl(base, hero.rec, "full")}" alt="${esc(p.address || "The property")}"
+        ${hero.rec.width && hero.rec.height ? `width="${hero.rec.width}" height="${hero.rec.height}"` : ""}>`)}
       <div class="scrim">
         ${num(n.investorPrice) > 0 ? `<div class="tag">${esc(money(n.investorPrice))}</div>` : ""}
         <p class="addr">${esc(p.address || "Investment opportunity")}</p>
@@ -1120,8 +1242,8 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
     </div>`}
 
     ${s.summary ? `<div class="figs" style="margin-bottom:16px">${figs}</div>` : ""}
-    ${s.photos !== false ? photosSection(photos, base) : ""}
-    ${hero ? photoViewer() : ""}
+    ${photosSection(items, base)}
+    ${items.length ? photoViewer() : ""}
     ${feeRows}
 
     ${snap.notes && !teaser ? `<div class="card"><h2>Deal notes</h2><p class="muted" style="white-space:pre-wrap;margin:0">${esc(snap.notes)}</p></div>` : ""}
@@ -1189,6 +1311,6 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
     // The viewer only when there is something to view. Its hash is in the CSP
     // regardless (the routes pass GALLERY_JS to secureHeaders), which is
     // harmless: an allowance for a script that isn't on the page.
-    script: hero ? GALLERY_JS : "",
+    script: items.length ? GALLERY_JS : "",
   });
 }

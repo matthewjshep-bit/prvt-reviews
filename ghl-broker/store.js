@@ -13,6 +13,13 @@ import { fileURLToPath } from "node:url";
 import { dbEnabled, query, migrate } from "./db.js";
 import { OFFER_LIST_FIELDS, toListOffer } from "./shared/offer-status.js";
 
+// pg hands bigint back as a string and real as a float; the API speaks numbers.
+const videoRow = (r) => ({
+  ...r,
+  sizeBytes: r.sizeBytes == null ? null : Number(r.sizeBytes),
+  durationS: r.durationS == null ? null : Number(r.durationS),
+});
+
 const nowIso = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
 
@@ -132,6 +139,9 @@ const pgStore = {
     await query(`delete from offer_documents where offer_id = $1`, [id]).catch(() => {});
     // offer_photo_bytes / deal_document_bytes cascade from their parent rows.
     await query(`delete from offer_photos where offer_id = $1`, [id]).catch(() => {});
+    // Video BYTES are the route's job (routes/offers.js deletes the R2 objects
+    // before calling this); posters cascade from the rows.
+    await query(`delete from offer_videos where offer_id = $1`, [id]).catch(() => {});
     await query(`delete from deal_documents where offer_id = $1`, [id]).catch(() => {});
     const { rowCount } = await query(`delete from offers where id = $1`, [id]);
     return rowCount > 0;
@@ -264,6 +274,74 @@ const pgStore = {
       `delete from offer_photos where id = $1 and offer_id = $2`, [photoId, offerId]
     );
     return rowCount > 0;
+  },
+
+  /* ---- property videos ---- */
+  // Metadata only. Bytes live in R2 under storageKey (video.js) and never pass
+  // through here; posters are small and stored like photo variants. `id` is
+  // minted by the caller because the storage key is built from it before the
+  // row exists. Rows are 'uploading' until finishOfferVideo flips them.
+  async listOfferVideos(offerId) {
+    const { rows } = await query(
+      `select id, offer_id as "offerId", location_id as "locationId", status, name,
+              content_type as "contentType", size_bytes as "sizeBytes", storage_key as "storageKey",
+              upload_id as "uploadId", caption, sort, width, height, duration_s as "durationS",
+              created_at as "createdAt"
+         from offer_videos where offer_id = $1
+        order by sort, created_at, id`,
+      [offerId]
+    );
+    return rows.map(videoRow);
+  },
+  async getOfferVideo(offerId, videoId) {
+    const { rows } = await query(
+      `select id, offer_id as "offerId", location_id as "locationId", status, name,
+              content_type as "contentType", size_bytes as "sizeBytes", storage_key as "storageKey",
+              upload_id as "uploadId", caption, sort, width, height, duration_s as "durationS",
+              created_at as "createdAt"
+         from offer_videos where id = $1 and offer_id = $2`,
+      [videoId, offerId]
+    );
+    return rows[0] ? videoRow(rows[0]) : null;
+  },
+  async createOfferVideo(offerId, locationId, { id, name, contentType, sizeBytes, storageKey, uploadId }) {
+    await query(
+      `insert into offer_videos (id, offer_id, location_id, status, name, content_type, size_bytes, storage_key, upload_id, sort)
+       values ($1,$2,$3,'uploading',$4,$5,$6,$7,$8,(select coalesce(max(sort),-1)+1 from offer_videos where offer_id = $2))`,
+      [id, offerId, locationId, name || null, contentType, sizeBytes || null, storageKey, uploadId || null]
+    );
+    return pgStore.getOfferVideo(offerId, id);
+  },
+  async finishOfferVideo(offerId, videoId, { sizeBytes, width, height, durationS, posters = {} }) {
+    const { rowCount } = await query(
+      `update offer_videos set status = 'ready', size_bytes = $3, width = $4, height = $5, duration_s = $6, upload_id = null
+        where id = $1 and offer_id = $2`,
+      [videoId, offerId, sizeBytes || null, width || null, height || null, durationS || null]
+    );
+    if (!rowCount) return null;
+    for (const [variant, v] of Object.entries(posters)) {
+      await query(
+        `insert into offer_video_posters (video_id, variant, content_type, bytes) values ($1,$2,$3,$4)
+         on conflict (video_id, variant) do update set content_type = excluded.content_type, bytes = excluded.bytes`,
+        [videoId, variant, v.contentType, v.bytes]
+      );
+    }
+    return pgStore.getOfferVideo(offerId, videoId);
+  },
+  async readVideoPoster(videoId, variant) {
+    const { rows } = await query(
+      `select content_type as "contentType", bytes from offer_video_posters where video_id = $1 and variant = $2`,
+      [videoId, variant]
+    );
+    return rows[0] || null;
+  },
+  // Answers the row it removed (the caller still has to delete the bytes in R2,
+  // which the store knows nothing about), or null if it wasn't this offer's.
+  async deleteOfferVideo(offerId, videoId) {
+    const row = await pgStore.getOfferVideo(offerId, videoId);
+    if (!row) return null;
+    await query(`delete from offer_videos where id = $1 and offer_id = $2`, [videoId, offerId]);
+    return row;
   },
 
   /* ---- offer settings (one row per location) ---- */
@@ -772,6 +850,7 @@ const fileStore = (() => {
       data.dataroomInvites = data.dataroomInvites || {};
       data.dataroomEvents = data.dataroomEvents || [];
       data.offerPhotos = data.offerPhotos || {};
+      data.offerVideos = data.offerVideos || {};
       data.dealDocs = data.dealDocs || {};
       data.compCaptures = data.compCaptures || {};
       data.investors = data.investors || {};
@@ -882,6 +961,8 @@ const fileStore = (() => {
       }
       for (const p of Object.values(data.offerPhotos)) if (p.offerId === id) delete data.offerPhotos[p.id];
       fs.rmSync(path.join(DATA_DIR, "photos", id), { recursive: true, force: true });
+      for (const v of Object.values(data.offerVideos)) if (v.offerId === id) delete data.offerVideos[v.id];
+      fs.rmSync(path.join(DATA_DIR, "video-posters", id), { recursive: true, force: true });
       for (const d of Object.values(data.dealDocs)) if (d.offerId === id) delete data.dealDocs[d.id];
       fs.rmSync(path.join(DATA_DIR, "deal-docs", id), { recursive: true, force: true });
       persist();
@@ -1028,6 +1109,83 @@ const fileStore = (() => {
       }
       persist();
       return true;
+    },
+
+    /* ---- property videos ---- */
+    // Rows in store.json; bytes under DATA_DIR/videos via the r2.js local
+    // fallback (video.js); posters as files like photo variants.
+    async listOfferVideos(offerId) {
+      ensure();
+      return Object.values(data.offerVideos)
+        .filter((v) => v.offerId === offerId)
+        .sort((a, b) =>
+          a.sort - b.sort ||
+          String(a.createdAt).localeCompare(String(b.createdAt)) ||
+          a.id.localeCompare(b.id));
+    },
+    async getOfferVideo(offerId, videoId) {
+      ensure();
+      const row = data.offerVideos[videoId];
+      return row && row.offerId === offerId ? row : null;
+    },
+    async createOfferVideo(offerId, locationId, { id, name, contentType, sizeBytes, storageKey, uploadId }) {
+      ensure();
+      const maxSort = Object.values(data.offerVideos)
+        .filter((v) => v.offerId === offerId)
+        .reduce((m, v) => Math.max(m, v.sort), -1);
+      const row = {
+        id, offerId, locationId, status: "uploading", name: name || null, contentType,
+        sizeBytes: sizeBytes || null, storageKey, uploadId: uploadId || null, caption: null,
+        sort: maxSort + 1, width: null, height: null, durationS: null,
+        createdAt: new Date().toISOString(),
+      };
+      data.offerVideos[id] = row;
+      persist();
+      return row;
+    },
+    async finishOfferVideo(offerId, videoId, { sizeBytes, width, height, durationS, posters = {} }) {
+      ensure();
+      const row = data.offerVideos[videoId];
+      if (!row || row.offerId !== offerId) return null;
+      const dir = path.join(DATA_DIR, "video-posters", offerId);
+      fs.mkdirSync(dir, { recursive: true });
+      for (const [variant, v] of Object.entries(posters)) {
+        fs.writeFileSync(path.join(dir, `${videoId}.${variant}`), v.bytes);
+        fs.writeFileSync(path.join(dir, `${videoId}.${variant}.meta`), v.contentType);
+      }
+      Object.assign(row, {
+        status: "ready", sizeBytes: sizeBytes || null, width: width || null, height: height || null,
+        durationS: durationS || null, uploadId: null,
+      });
+      persist();
+      return row;
+    },
+    async readVideoPoster(videoId, variant) {
+      ensure();
+      const row = data.offerVideos[videoId];
+      if (!row) return null;
+      try {
+        const dir = path.join(DATA_DIR, "video-posters", row.offerId);
+        return {
+          bytes: fs.readFileSync(path.join(dir, `${videoId}.${variant}`)),
+          contentType: fs.readFileSync(path.join(dir, `${videoId}.${variant}.meta`), "utf8"),
+        };
+      } catch {
+        return null;
+      }
+    },
+    async deleteOfferVideo(offerId, videoId) {
+      ensure();
+      const row = data.offerVideos[videoId];
+      if (!row || row.offerId !== offerId) return null;
+      delete data.offerVideos[videoId];
+      const dir = path.join(DATA_DIR, "video-posters", offerId);
+      for (const variant of ["full", "thumb"]) {
+        fs.rmSync(path.join(dir, `${videoId}.${variant}`), { force: true });
+        fs.rmSync(path.join(dir, `${videoId}.${variant}.meta`), { force: true });
+      }
+      persist();
+      return row;
     },
 
     async createReplyDraft(doc) {
