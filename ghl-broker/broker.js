@@ -18,6 +18,8 @@ import { createDataroomRouter, createDataroomPublicRouter } from "./routes/datar
 import { createOfferPageRouter, createOfferPagePublicRouter } from "./routes/offer-page.js";
 import { store } from "./store.js";
 import { checkObjectStore } from "./r2.js";
+import { sendDueDrafts } from "./conversation-scheduler.js";
+import { sendReplyDraft } from "./reply-agent.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -123,7 +125,7 @@ function resolveLocation(req) {
   return { locationId: loc, client: makeClient(token) };
 }
 
-app.use("/api/offers", createOffersRouter({ resolveLocation, uploadDir: UPLOAD_DIR, publicBaseUrl: PUBLIC_BASE_URL }));
+app.use("/api/offers", createOffersRouter({ resolveLocation, uploadDir: UPLOAD_DIR, publicBaseUrl: PUBLIC_BASE_URL, dataroomBaseUrl: DATAROOM_BASE_URL }));
 app.use("/api/outreach", createOutreachRouter({ resolveLocation }));
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
 app.use("/api/dispo", createDispoRouter({ resolveLocation }));
@@ -171,5 +173,26 @@ setInterval(async () => {
     }
   }
 }, 15 * 60 * 1000).unref();
+
+// Conversation AI auto-sends. An approved reply is scheduled a few human
+// minutes out (reply-agent.js → conversation-scheduler.js); this sends the
+// ones that have come due. Every 30s, cheap when there is nothing scheduled
+// (one indexed read per location), and a no-op unless the broker's send gate
+// is on — without CARD_SENDS_ENABLED nothing is ever scheduled in the first
+// place, and anything left over from before the flag flipped is handed back
+// to the outbox with a flag rather than left counting down.
+const CONVERSATION_SENDS_LIVE = process.env.CARD_SENDS_ENABLED === "true";
+setInterval(async () => {
+  try {
+    const locations = sweepLocations()
+      .map((locationId) => ({ locationId, token: getTokenFor(locationId) }))
+      .filter((l) => l.token)
+      .map(({ locationId, token }) => ({ locationId, client: makeClient(token) }));
+    const r = await sendDueDrafts({ store, locations, live: CONVERSATION_SENDS_LIVE, send: sendReplyDraft, log: console.log });
+    if (r.failed || r.recovered || r.returned) console.warn(`conversation scheduler: ${JSON.stringify(r)}`);
+  } catch (e) {
+    console.error(`conversation scheduler tick failed: ${e.message}`);
+  }
+}, 30 * 1000).unref();
 
 app.listen(PORT, () => console.log(`offer broker on :${PORT}`));

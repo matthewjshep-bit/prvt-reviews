@@ -42,10 +42,14 @@
 //   POST   /api/offers/:id/deal/investors     link a disposition investor (GHL contact)
 //   POST   /api/offers/:id/deal/suggest-investors   AI-suggest investors from conversation history
 //   POST   /api/offers/automations/deal-interest    GHL workflow webhook: Conversation AI flags interest → link investor to the deal they messaged about
-//   POST   /api/offers/automations/reply            GHL workflow webhook: inbound agent text → AI-drafted reply, waiting for a human
-//   GET    /api/offers/automations/reply            open drafts + live drafting jobs
-//   POST   /api/offers/automations/reply/:id/send   send a draft (edited text allowed); dry-run unless CARD_SENDS_ENABLED
-//   POST   /api/offers/automations/reply/:id/dismiss
+//   GET/PUT /api/offers/automations/conversation/config   the Conversation AI config (persona, playbooks, routing, auto-send, rules)
+//   POST   /api/offers/automations/conversation     GHL workflow webhook: inbound text → AI-drafted reply (agent or investor); /automations/reply is an alias
+//   GET    /api/offers/automations/conversation     open + scheduled drafts, live drafting jobs
+//   GET    /api/offers/automations/conversation/history?days=   every draft in the window + per-intent stats
+//   GET    /api/offers/automations/conversation/workflows       the location's GHL workflows for the action picker
+//   POST   /api/offers/automations/conversation/test            run the pipeline in preview (nothing saved or sent)
+//   POST   /api/offers/automations/conversation/:id/send|dismiss|hold   act on a draft; send is dry-run unless CARD_SENDS_ENABLED
+//   POST   /api/offers/automations/conversation/:id/actions/:actionId/apply   run a suggested action
 //   PATCH  /api/offers/:id/deal/investors/:contactId    evaluation status
 //   DELETE /api/offers/:id/deal/investors/:contactId    unlink
 //   POST   /api/offers/deals/sync-investor-tags   backfill the on-deal GHL tag for all deal investors
@@ -79,8 +83,10 @@ import {
 } from "../auto-underwrite.js";
 import {
   startReply, listJobs as listReplyJobs, publicJob as publicReplyJob,
-  sendReplyDraft, dismissReplyDraft,
+  sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig,
 } from "../reply-agent.js";
+import { normalizeConversationAi, draftStats } from "../shared/conversation-ai.js";
+import { issueDataroomInvite } from "../dataroom.js";
 import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
 import { fetchRemoteImage, sniffImageType, sniffPdf } from "../fetch-image.js";
 import { parseDriveFolderId, listDriveFolderImages, driveImageUrl, driveDirectUrl } from "../drive-folder.js";
@@ -97,7 +103,7 @@ import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
   customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField, getContactNotes,
-  searchContactsByTag,
+  searchContactsByTag, listWorkflows,
 } from "../ghl.js";
 import {
   enrichFieldDefs, enrichTagVocab, ENRICH_TAG_GROUPS, inferContactType,
@@ -294,7 +300,7 @@ function offerNoteBody(offer) {
   return lines.join("\n");
 }
 
-export default function createOffersRouter({ resolveLocation, uploadDir, publicBaseUrl }) {
+export default function createOffersRouter({ resolveLocation, uploadDir, publicBaseUrl, dataroomBaseUrl = publicBaseUrl }) {
   const router = express.Router();
   const fail = (res, err) => {
     const code = err.http || err.status || 500;
@@ -744,7 +750,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const { locationId } = resolveLocation(req);
       const { location_id, ...body } = req.body || {};
-      const settings = effectiveSettings(body.settings || body);
+      // The Conversation AI blob is written ONLY by PUT /automations/conversation/config. A
+      // Settings form loaded before the tab saved would otherwise carry the
+      // old copy back over it — so whatever this request says, the stored
+      // value stays.
+      const { conversationAi: _fromForm, ...incoming } = body.settings || body;
+      const current = await store.getOfferSettings(locationId);
+      const settings = effectiveSettings({ ...incoming, conversationAi: current?.conversationAi || null });
       await store.saveOfferSettings(locationId, settings);
       res.json({ ok: true, settings });
     } catch (err) { fail(res, err); }
@@ -3201,19 +3213,107 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
-  /* ---------- automation: draft a reply to an inbound agent text ---------- */
-  // Target of a GHL Workflow: Inbound Message trigger → your filter → Webhook.
-  // Same trust model as the underwriter: the workflow decides WHICH texts get
-  // a draft, this endpoint drafts one in the background and answers at once.
+  /* ---------- Conversation AI ---------- */
+  // The bot that answers inbound texts from listing agents and investors,
+  // tuned on the console's Conversation AI tab. See ghl-broker/reply-agent.js
+  // for what it will and won't do on its own.
+
+  // The broker's own moves an intent rule can trigger, bound to the request.
+  // Each is best-effort from the caller's side: conversation-actions.js
+  // records an outcome per action and never throws.
+  const conversationDeps = ({ client, locationId, saved }) => ({
+    startUnderwrite: ({ contactId, message, address }) =>
+      startUnderwrite({
+        client, locationId, saved, store, contactId, message, address, askingPrice: 0,
+        dryRun: !AUTO_UNDERWRITE_ENABLED, deps: { createOffer: createOfferFromRequest },
+      }),
+    linkDealInterest: ({ contactId, addressHint }) =>
+      linkInvestorInterest({ locationId, client, contactId, addressHint }),
+    issueDataroomInvite: async ({ contactId, addressHint }) => {
+      const live = (await store.listDeals(locationId)).filter((o) => LIVE_DEAL_STAGES.has(o.deal?.stage));
+      const offer = pickDealByAddress(live, addressHint);
+      if (!offer) throw new Error(live.length ? "which deal? — no property named in the message" : "no live deals");
+      const rooms = await store.listDatarooms(locationId, { offerId: offer.id, limit: 5 });
+      const room = rooms.find((r) => r.status === "active" && r.kind !== "portfolio" && r.kind !== "offer");
+      if (!room) throw new Error(`no dataroom for ${offer.address} — build one first`);
+      const out = await issueDataroomInvite({
+        store, client, room, contactId, send: true, dryRun: false,
+        baseUrl: dataroomBaseUrl, sendsEnabled: CARD_SENDS_ENABLED, getContact, sendSms,
+      });
+      return {
+        sent: Boolean(out.send?.sent), address: offer.address,
+        reason: out.send?.error || (out.send?.dryRun ? "sends are off on the broker — link issued, not texted" : ""),
+      };
+    },
+  });
+
+  // The deal a message is about, by the street line. addressKey normalises
+  // both sides; a bare street ("54th") falls back to a contains check.
+  function pickDealByAddress(deals, hint) {
+    const h = String(hint || "").trim();
+    if (!h) return deals.length === 1 ? deals[0] : null;
+    const key = addressKey(h);
+    const exact = key && deals.find((o) => addressKey(o.address || "") === key);
+    if (exact) return exact;
+    const street = h.split(",")[0].trim().toLowerCase();
+    return (street.length >= 4 && deals.find((o) => String(o.address || "").toLowerCase().includes(street))) || null;
+  }
+
+  /* ---- config ---- */
+  router.get("/automations/conversation/config", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      res.json({ ok: true, config: conversationConfig(saved), seeded: !saved.conversationAi, sendsEnabled: CARD_SENDS_ENABLED });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The ONLY writer of settings.conversationAi. Whole-blob replace, normalised.
+  // (Under /automations/ on purpose: a one-segment path here is eaten by the
+  // GET /:id offer route above.)
+  router.put("/automations/conversation/config", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const body = req.body?.config && typeof req.body.config === "object" ? req.body.config : {};
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const config = normalizeConversationAi(body);
+      await store.saveOfferSettings(locationId, { ...saved, conversationAi: config });
+      res.json({ ok: true, config });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The location's GHL workflows, for the action picker. A missing scope is
+  // an answer, not an error — the page shows what to add.
+  router.get("/automations/conversation/workflows", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      try {
+        res.json({ ok: true, workflows: await listWorkflows(client, locationId) });
+      } catch (e) {
+        if (e?.status === 401 || e?.status === 403) {
+          return res.json({
+            ok: false, scopeMissing: true, workflows: [],
+            error: "the token lacks the workflows.readonly scope — add it to the Private Integration in GHL and this list will fill",
+          });
+        }
+        res.json({ ok: false, workflows: [], error: e?.message || "could not list workflows" });
+      }
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---- the webhook ---- */
+  // Target of ONE GHL Workflow: Customer Replied → Webhook. No tag filter is
+  // needed in GHL — the broker tells an agent from an investor by the tag
+  // rules on the page, and holds (or answers generically) when it can't.
   //
-  //   POST { location_id, secret, contactId, message, channel? }
+  //   POST { location_id, secret, contactId, message, channel?, party? }
   //   → 202 { ok, jobId }
   //
-  // Nothing is sent from here. The draft lands in the outbox (GET below) and
-  // on the contact as a note + `reply-draft` tag; a person sends it from the
-  // app. Same credential rule as the underwriter, and the same reason: this
-  // spends Anthropic tokens on nothing but a location id.
-  router.post("/automations/reply", async (req, res) => {
+  // Answers at once; the draft is written in the background and lands in the
+  // outbox (GET below) and on the contact as a note + `reply-draft` tag. Same
+  // credential rule as the underwriter, for the same reason: this spends
+  // Anthropic tokens on nothing but a location id.
+  async function conversationWebhook(req, res) {
     try {
       const b = req.body || {};
       b.location_id = b.location_id || b.locationId || b.location?.id || b.customData?.location_id;
@@ -3221,7 +3321,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!LOCATION_KEYS[locationId] && !secretOk(secretFrom(req))) {
         return res.status(403).json({
           error: !AUTO_UNDERWRITE_SECRET
-            ? "the reply agent needs a credential — set AUTO_UNDERWRITE_SECRET on the broker"
+            ? "the Conversation AI needs a credential — set AUTO_UNDERWRITE_SECRET on the broker"
             : secretFrom(req)
             ? "the secret sent doesn't match AUTO_UNDERWRITE_SECRET on the broker"
             : "no secret was sent — add it to the webhook as an x-underwrite-secret header, a ?secret= query param, or \"secret\" in a custom JSON body",
@@ -3236,66 +3336,137 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // GHL names the channel in several places depending on the trigger.
       const rawChannel = String(b.channel || b.messageType || b.type || b.customData?.channel || "").toLowerCase();
       const channel = rawChannel.includes("email") ? "email" : "sms";
+      const party = String(b.party || b.customData?.party || "").toLowerCase();
 
       const saved = await store.getOfferSettings(locationId);
-      const { skipped, job } = await startReply({ client, locationId, saved, store, contactId, message, channel });
-      // A cap hit answers 200, not 4xx — a GHL workflow that gets an error
-      // retries, and retrying is exactly what the cap exists to stop.
+      const { skipped, job } = await startReply({
+        client, locationId, saved, store, contactId, message, channel, party,
+        sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved }),
+      });
+      // A cap hit (or the bot being switched off) answers 200, not 4xx — a
+      // GHL workflow that gets an error retries, and retrying is exactly
+      // what the cap exists to stop.
       if (skipped) return res.json({ ok: true, started: false, skipped });
-      res.status(202).json({ ok: true, started: true, jobId: job.id });
+      res.status(202).json({ ok: true, started: true, jobId: job.id, party: job.party || null });
     } catch (err) { fail(res, err); }
-  });
+  }
+  router.post("/automations/reply", conversationWebhook);
+  router.post("/automations/conversation", conversationWebhook);
 
-  // The outbox: every draft waiting on a person, plus anything being drafted
-  // right now, plus whether Send would actually send.
-  router.get("/automations/reply", async (req, res) => {
+  /* ---- the outbox ---- */
+  // Every draft waiting on a person or counting down to an auto-send, plus
+  // anything being drafted right now, plus whether Send would actually send.
+  async function conversationOutbox(req, res) {
     try {
       const { locationId } = resolveLocation(req);
-      const drafts = await store.listReplyDrafts(locationId, { status: "draft", limit: 50 });
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const drafts = [
+        ...(await store.listReplyDrafts(locationId, { status: "draft", limit: 50 })),
+        ...(await store.listReplyDrafts(locationId, { status: "scheduled", limit: 50 })),
+      ].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
       res.json({
         ok: true,
+        now: new Date().toISOString(),
+        enabled: conversationConfig(saved).enabled,
         sendsEnabled: CARD_SENDS_ENABLED,
         drafts,
         jobs: listReplyJobs(locationId).map(publicReplyJob),
       });
     } catch (err) { fail(res, err); }
+  }
+  router.get("/automations/reply", conversationOutbox);
+  router.get("/automations/conversation", conversationOutbox);
+
+  // What happened: every draft in the window, lean, plus the per-intent
+  // counts that say whether an intent is ready to send on its own.
+  const LEAN_DRAFT_KEYS = [
+    "id", "contactId", "contactName", "status", "channel", "party", "partySource", "intent", "confidence",
+    "inbound", "reply", "sentText", "summary", "propertyAddress", "autoSendable", "flags", "autoSend", "actions",
+    "autoSent", "edited", "heldAt", "sendAt", "sentAt", "createdAt", "updatedAt",
+  ];
+  router.get("/automations/conversation/history", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const days = Math.min(365, Math.max(1, Number(req.query.days) || 30));
+      const since = new Date(Date.now() - days * 86400000).toISOString();
+      const rows = await store.listReplyDrafts(locationId, { since, limit: 1000 });
+      const lean = rows.map((d) => { const o = {}; for (const k of LEAN_DRAFT_KEYS) if (d[k] !== undefined) o[k] = d[k]; return o; });
+      res.json({ ok: true, days, drafts: lean, stats: draftStats(rows) });
+    } catch (err) { fail(res, err); }
   });
 
-  // Body: { text?, dryRun }. `text` is what goes out — the operator's edit
-  // wins over the model's draft. Dry-run unless dryRun:false AND the broker
-  // has CARD_SENDS_ENABLED, the same double gate an offer send has.
-  router.post("/automations/reply/:id/send", async (req, res) => {
+  /* ---- acting on a draft ---- */
+  for (const prefix of ["/automations/reply", "/automations/conversation"]) {
+    // Body: { text?, dryRun }. `text` is what goes out — the operator's edit
+    // wins over the model's draft. Dry-run unless dryRun:false AND the broker
+    // has CARD_SENDS_ENABLED, the same double gate an offer send has.
+    router.post(`${prefix}/:id/send`, async (req, res) => {
+      try {
+        const { locationId, client } = resolveLocation(req);
+        const b = req.body || {};
+        const live = b.dryRun === false && CARD_SENDS_ENABLED;
+        const out = await sendReplyDraft({ client, store, locationId, draftId: String(req.params.id), text: b.text, live });
+        res.json({ ...out, sendsEnabled: CARD_SENDS_ENABLED });
+      } catch (err) { fail(res, err); }
+    });
+    router.post(`${prefix}/:id/dismiss`, async (req, res) => {
+      try {
+        const { locationId, client } = resolveLocation(req);
+        res.json(await dismissReplyDraft({ client, store, locationId, draftId: String(req.params.id) }));
+      } catch (err) { fail(res, err); }
+    });
+    router.post(`${prefix}/:id/hold`, async (req, res) => {
+      try {
+        const { locationId } = resolveLocation(req);
+        res.json(await holdReplyDraft({ store, locationId, draftId: String(req.params.id) }));
+      } catch (err) { fail(res, err); }
+    });
+    router.post(`${prefix}/:id/actions/:actionId/apply`, async (req, res) => {
+      try {
+        const { locationId, client } = resolveLocation(req);
+        const saved = (await store.getOfferSettings(locationId)) || {};
+        res.json(await applyDraftAction({
+          client, store, locationId, draftId: String(req.params.id), actionId: String(req.params.actionId),
+          deps: conversationDeps({ client, locationId, saved }),
+        }));
+      } catch (err) { fail(res, err); }
+    });
+  }
+
+  /* ---- try it ---- */
+  // Body: { contactId?, party?, thread?: [{ dir, text }], message, channel? }.
+  // The whole pipeline in preview: nothing saved, nothing written to GHL, no
+  // action run, nothing scheduled. Not counted against the daily cap.
+  router.post("/automations/conversation/test", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
       const b = req.body || {};
-      const live = b.dryRun === false && CARD_SENDS_ENABLED;
-      const out = await sendReplyDraft({
-        client, store, locationId, draftId: String(req.params.id), text: b.text, live,
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const thread = Array.isArray(b.thread) ? b.thread.slice(0, 40) : null;
+      const out = await previewConversation({
+        client, locationId, saved, store,
+        contactId: String(b.contactId || "").slice(0, 64),
+        message: String(b.message || "").slice(0, 4000),
+        channel: String(b.channel || "").toLowerCase().includes("email") ? "email" : "sms",
+        explicitParty: "", fakeParty: ["agent", "investor"].includes(b.party) ? b.party : "",
+        fakeThread: thread, sendsEnabled: CARD_SENDS_ENABLED,
       });
-      res.json({ ...out, sendsEnabled: CARD_SENDS_ENABLED });
+      res.json({ ok: true, ...out });
     } catch (err) { fail(res, err); }
   });
 
-  router.post("/automations/reply/:id/dismiss", async (req, res) => {
-    try {
-      const { locationId, client } = resolveLocation(req);
-      res.json(await dismissReplyDraft({ client, store, locationId, draftId: String(req.params.id) }));
-    } catch (err) { fail(res, err); }
-  });
+  /* ---- an investor who showed interest ---- */
+  // Link an investor to the live deal they are talking about, as
+  // "evaluating". Shared by the deal-interest webhook and the Conversation
+  // AI's link_deal_evaluating action; the hint (a property the model read
+  // out of the message) is tried before the transcript.
+  async function linkInvestorInterest({ locationId, client, contactId, addressHint = "" }) {
+    const OPEN_STAGES = new Set(["under_contract", "buyer_found"]);
+    const open = (await store.listDeals(locationId)).filter((o) => OPEN_STAGES.has(o.deal?.stage));
+    if (!open.length) return { ok: true, linked: false, reason: "no open deals" };
 
-  router.post("/automations/deal-interest", async (req, res) => {
-    try {
-      const { locationId, client } = resolveLocation(req);
-      const b = req.body || {};
-      // GHL webhook payloads vary by trigger — accept every shape it sends.
-      const contactId = dealStr(
-        b.contactId || b.contact_id || b.contact?.id || b.customData?.contact_id, 64);
-      if (!contactId) return res.status(400).json({ error: "contact_id required" });
-
-      const OPEN_STAGES = new Set(["under_contract", "buyer_found"]);
-      const open = (await store.listDeals(locationId)).filter((o) => OPEN_STAGES.has(o.deal?.stage));
-      if (!open.length) return res.json({ ok: true, linked: false, reason: "no open deals" });
-
+    let match = pickDealByAddress(open, addressHint);
+    if (!match) {
       let text = "";
       try {
         const t = await buildTranscript(client, locationId, contactId, {
@@ -3306,7 +3477,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       } catch { /* missing scope or no messages — the single-deal fallback below still applies */ }
 
       // Most recently mentioned deal wins; a lone open deal needs no mention.
-      let match = null;
       let matchPos = -1;
       for (const o of open) {
         for (const v of addressQueryVariants(o.address || "")) {
@@ -3317,33 +3487,42 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         }
       }
       if (!match && open.length === 1) match = open[0];
-      if (!match) return res.json({ ok: true, linked: false, reason: "no deal address in recent messages" });
+    }
+    if (!match) return { ok: true, linked: false, reason: "no deal address in recent messages" };
 
-      const offer = match;
-      offer.deal.investors = offer.deal.investors || [];
-      const ts = new Date().toISOString();
-      const existing = offer.deal.investors.find((i) => i.contactId === contactId);
-      if (existing && existing.status !== "sent") {
-        return res.json({
-          ok: true, linked: true, unchanged: true,
-          offerId: offer.id, address: offer.address, status: existing.status,
-        });
-      }
-      if (existing) {
-        existing.status = "evaluating";
-        existing.updatedAt = ts;
-      } else {
-        let name = "";
-        try { name = contactName(await getContact(client, contactId)) || contactId; }
-        catch { name = contactId; }
-        offer.deal.investors.push({ contactId, name, status: "evaluating", addedAt: ts, updatedAt: ts });
-      }
-      offer.deal.updatedAt = ts;
-      await store.updateOffer(offer.id, offer);
-      await appendDealHistory(client, locationId, contactId, "investor_deal_history",
-        historyLine(ts, offer.address, "evaluating", "Conversation AI flagged interest"));
-      await syncInvestorDealTag(client, locationId, contactId);
-      res.json({ ok: true, linked: true, offerId: offer.id, address: offer.address, status: "evaluating" });
+    const offer = match;
+    offer.deal.investors = offer.deal.investors || [];
+    const ts = new Date().toISOString();
+    const existing = offer.deal.investors.find((i) => i.contactId === contactId);
+    if (existing && existing.status !== "sent") {
+      return { ok: true, linked: true, unchanged: true, offerId: offer.id, address: offer.address, status: existing.status };
+    }
+    if (existing) {
+      existing.status = "evaluating";
+      existing.updatedAt = ts;
+    } else {
+      let name = "";
+      try { name = contactName(await getContact(client, contactId)) || contactId; }
+      catch { name = contactId; }
+      offer.deal.investors.push({ contactId, name, status: "evaluating", addedAt: ts, updatedAt: ts });
+    }
+    offer.deal.updatedAt = ts;
+    await store.updateOffer(offer.id, offer);
+    await appendDealHistory(client, locationId, contactId, "investor_deal_history",
+      historyLine(ts, offer.address, "evaluating", "Conversation AI flagged interest"));
+    await syncInvestorDealTag(client, locationId, contactId);
+    return { ok: true, linked: true, offerId: offer.id, address: offer.address, status: "evaluating" };
+  }
+
+  router.post("/automations/deal-interest", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      // GHL webhook payloads vary by trigger — accept every shape it sends.
+      const contactId = dealStr(
+        b.contactId || b.contact_id || b.contact?.id || b.customData?.contact_id, 64);
+      if (!contactId) return res.status(400).json({ error: "contact_id required" });
+      res.json(await linkInvestorInterest({ locationId, client, contactId, addressHint: dealStr(b.address || b.customData?.address, 200) }));
     } catch (err) { fail(res, err); }
   });
 

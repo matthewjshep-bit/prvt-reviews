@@ -21,6 +21,7 @@
     "test:comps": "node --test comps-zillow.test.mjs",
     "test:rehab-scan": "node --test rehab-scan.test.mjs",
     "test:reply": "node --test reply-agent.test.mjs",
+    "test:conversation": "node --test conversation-*.test.mjs reply-agent.test.mjs ../shared/conversation-ai.test.mjs",
     "test:geocode": "node --test geocode.test.mjs",
     "test:address": "node --test ../shared/us-address.test.mjs",
     "test:subject": "node --test subject-property.test.mjs outreach-import.test.mjs",

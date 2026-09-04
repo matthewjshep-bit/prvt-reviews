@@ -311,13 +311,17 @@ create index if not exists dataroom_events_room_idx on dataroom_events (dataroom
 --     connections, home_sends, campaigns, journey_enrollments, journeys,
 --     data_source_tests cascade;
 
--- The reply agent's outbox. One row per drafted reply to a listing agent's
--- inbound text (see ghl-broker/reply-agent.js). `doc` carries the inbound
--- message, the draft, the model's read of the intent, and the gate result;
--- `status` is mirrored out of it so the open outbox and the daily cap are one
--- indexed query rather than a scan: 'draft' | 'sent' | 'dismissed' |
--- 'superseded'. Drafts live here rather than in memory because a draft that
--- vanishes on a redeploy is a text an agent sent that nobody answers.
+-- The Conversation AI's outbox. One row per drafted reply to an inbound text
+-- from a listing agent or an investor (see ghl-broker/reply-agent.js). `doc`
+-- carries the inbound message, the party, the draft, the model's read of the
+-- intent, the gate result, the actions it triggered and the auto-send
+-- decision; `status` is mirrored out of it so the open outbox, the scheduler's
+-- due scan and the daily cap are one indexed query rather than a scan:
+-- 'draft' | 'scheduled' | 'sending' | 'sent' | 'dismissed' | 'superseded'.
+-- A 'scheduled' row carries doc.sendAt; the 30s ticker in broker.js sends it.
+-- Drafts live here rather than in memory because a draft that vanishes on a
+-- redeploy is a text somebody sent that nobody answers — and a scheduled one
+-- still goes out on time after a restart.
 create table if not exists reply_drafts (
   id           uuid primary key,
   location_id  text not null,

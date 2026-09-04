@@ -35,6 +35,7 @@ import {
   DEFAULT_EXPIRY_DAYS, OVERRIDABLE, applyNumberOverrides, brandFrom, buildSnapshot, dealCard, dealMoves, feedHeaders, hashToken,
   newToken, normalizeLinks, normalizePublicSections, normalizeSections, photoHeaders,
   renderNotice, renderPortfolio, renderRoom, secureHeaders, syncDealNumbers, teaserSections, GALLERY_JS,
+  issueDataroomInvite, textInvite as textInviteShared,
 } from "../dataroom.js";
 import { streamVideo } from "../video.js";
 
@@ -514,39 +515,13 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
 
   /* ---------- invites ---------- */
 
-  function inviteMessage({ room, invite, token }) {
-    const first = (invite.name || "").split(" ")[0] || "there";
-    const address = room.address || room.snapshot?.property?.address || "the property";
-    const price = room.snapshot?.numbers?.investorPrice;
-    return (
-      `Hi ${first} — here's the deal package on ${address}` +
-      (price > 0 ? ` (${fmtMoney(price)})` : "") + `:\n${roomLink(token)}\n` +
-      `This link is yours only and it's tracked — please don't forward it.`
-    );
-  }
-
-  async function textInvite({ client, room, invite, token, message, dryRun }) {
-    // A custom message that forgot the link would send the investor nothing to
-    // open, so append it rather than trusting the operator to include it.
-    const custom = str(message, 800);
-    const body = !custom
-      ? inviteMessage({ room, invite, token })
-      : custom.includes(roomLink(token)) ? custom : `${custom}\n${roomLink(token)}`;
-    const live = dryRun === false && SENDS_ENABLED;
-    if (!live) {
-      return { dryRun: true, sendsEnabled: SENDS_ENABLED, preview: { to: invite.phone, message: body } };
-    }
-    const results = {};
-    try {
-      await sendSms(client, { contactId: invite.contactId, message: body });
-      results.link = { ok: true };
-    } catch (e) { results.link = { ok: false, error: e.message }; }
-    if (results.link?.ok) {
-      await store.updateDataroomInvite(invite.id, { sentAt: new Date().toISOString() });
-      await store.logDataroomEvent(room.id, invite.id, "sent", { to: invite.phone || null });
-    }
-    return { sent: Boolean(results.link?.ok), results };
-  }
+  // The message, the send and the audit trail live in dataroom.js now, shared
+  // with the Conversation AI's "suggest a dataroom invite" action — a link
+  // issued from a draft row is the same link as one issued from this page.
+  const textInvite = ({ client, room, invite, token, message, dryRun }) =>
+    textInviteShared({
+      store, client, room, invite, link: roomLink(token), message, dryRun, sendsEnabled: SENDS_ENABLED, sendSms,
+    });
 
   // Issue a personal link. The plaintext token is in THIS response and nowhere
   // else — after it, only the hash exists.
@@ -554,42 +529,22 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
     try {
       const ctx = await loadRoom(req, res);
       if (!ctx) return;
-      const { locationId, client, room } = ctx;
+      const { client, room } = ctx;
       const b = req.body || {};
       const contactId = str(b.contactId, 64);
       if (!contactId) return res.status(400).json({ error: "contactId required — investors are GHL contacts so the link can be texted" });
 
-      let name = str(b.name, 120);
-      let phone = str(b.phone, 40);
-      if (!name || !phone) {
-        try {
-          const c = await getContact(client, contactId);
-          name = name || str([c?.firstName, c?.lastName].filter(Boolean).join(" ") || c?.name, 120);
-          phone = phone || str(c?.phone, 40);
-        } catch { /* the invite still works; sending will report the gap */ }
-      }
-
-      const token = newToken();
-      const invite = await store.createDataroomInvite({
-        dataroomId: room.id,
-        locationId,
-        tokenHash: hashToken(token),
-        contactId, name: name || null, phone: phone || null,
-        expiresAt: expiryFromDays(b.expiryDays ?? room.defaultExpiryDays),
+      const out = await issueDataroomInvite({
+        store, client, room, contactId, name: str(b.name, 120), phone: str(b.phone, 40),
+        expiryDays: b.expiryDays ?? room.defaultExpiryDays, send: Boolean(b.send), message: b.message,
+        dryRun: b.dryRun !== false, baseUrl: publicBaseUrl, sendsEnabled: SENDS_ENABLED, getContact, sendSms,
       });
-
-      let send = null;
-      if (b.send) {
-        if (!phone) send = { error: "contact has no phone number" };
-        else send = await textInvite({ client, room, invite, token, message: b.message, dryRun: b.dryRun !== false });
-      }
-      const fresh = await store.getDataroomInvite(invite.id);
       res.json({
         ok: true,
-        invite: publicInvite(fresh),
+        invite: publicInvite(out.invite),
         // Shown once. Copy it now or reissue later.
-        link: roomLink(token),
-        send,
+        link: out.link,
+        send: out.send,
       });
     } catch (err) { fail(res, err); }
   });

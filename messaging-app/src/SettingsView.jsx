@@ -546,32 +546,13 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-bold">Reply agent</h2>
-        <p className="mb-3 text-xs text-slate-500">
-          A GoHighLevel workflow can webhook an inbound listing-agent text to the broker, which reads the
-          thread <em>and</em> your offer book for that agent — what you offered, on which house, at what
-          price, and what happened to it — and drafts the reply you would send. Unlike GHL&apos;s own
-          Conversation AI it can quote your actual offer, and it is not allowed to invent a number.
-          <strong> Nothing is ever sent by itself:</strong> every draft waits at the top of History for
-          you to send (edited or not) or dismiss. Counters, showings, proof-of-funds requests and
-          &ldquo;call me&rdquo; are drafted as holding replies and flagged. Sending goes out through GHL as
-          a normal text from your number, in the same thread. Uses the Anthropic key above
-          (~$0.02–0.05 per draft).
-        </p>
-        <Txt label="Daily cap (drafts per day)"
-          value={String(form.replyAgentDailyCap ?? "")}
-          onChange={(v) => set("replyAgentDailyCap")(v.replace(/[^\d]/g, ""))}
-          placeholder="60" />
-        <label className="mt-3 block">
-          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Standing instructions</span>
-          <textarea className={`${INPUT_CLS} min-h-[6rem]`}
-            value={form.replyAgentInstructions || ""}
-            onChange={(e) => set("replyAgentInstructions")(e.target.value)}
-            placeholder={"Sign off as Matt. We buy as-is, cash, close in 14–21 days, no financing or inspection contingency. Never discuss our assignment fee or who the end buyer is. If they ask for proof of funds, say we'll send it with the contract."} />
-        </label>
-        <p className="mt-1 text-xs text-slate-400">
-          Your voice and your rules, in plain English. The model treats these as facts it may use and
-          lines it may not cross. Leave blank to start and add a line each time a draft gets something wrong.
+        <h2 className="mb-3 text-sm font-bold">Conversation AI</h2>
+        <p className="text-xs text-slate-500">
+          The bot that answers inbound agent and investor texts has its own tab now — <strong>Conversation AI</strong>,
+          in the header. Its voice, the rules for agents and for investors, who counts as which, what it may send on
+          its own and what it triggers in GHL all live there, along with a try-it panel and the outbox. The daily cap
+          and standing instructions that used to sit here were carried over the first time the tab opened. It still
+          uses the Anthropic key above.
         </p>
       </section>
 

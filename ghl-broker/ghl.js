@@ -570,6 +570,37 @@ export async function getLastMessageDate(client, locationId, contactId) {
   return { at: at.toISOString(), direction: c.lastMessageDirection || null, type: c.lastMessageType || null };
 }
 
+/* ---------- workflows ---------- */
+
+// The location's workflows, for the Conversation AI's "add to workflow" action
+// picker. Needs the workflows.readonly scope — a 401/403 here means the
+// Private Integration doesn't have it yet, and the caller says so rather than
+// showing an empty list. Returns [{ id, name, status }].
+export async function listWorkflows(client, locationId) {
+  const data = await client.call(`/workflows/?locationId=${encodeURIComponent(locationId)}`);
+  const rows = Array.isArray(data?.workflows) ? data.workflows : Array.isArray(data) ? data : [];
+  return rows
+    .map((w) => ({ id: String(w.id || ""), name: String(w.name || ""), status: String(w.status || "") }))
+    .filter((w) => w.id);
+}
+
+// Drop a contact into a workflow — the same thing a "Contact tag added"
+// trigger does, without the tag. contacts.write covers it. GHL wants an ISO
+// start time; "now" is the only one this codebase ever means.
+export async function addContactToWorkflow(client, contactId, workflowId, { eventStartTime } = {}) {
+  return client.call(
+    `/contacts/${encodeURIComponent(contactId)}/workflow/${encodeURIComponent(workflowId)}`,
+    { method: "POST", body: { eventStartTime: eventStartTime || new Date().toISOString() } }
+  );
+}
+
+export async function removeContactFromWorkflow(client, contactId, workflowId) {
+  return client.call(
+    `/contacts/${encodeURIComponent(contactId)}/workflow/${encodeURIComponent(workflowId)}`,
+    { method: "DELETE" }
+  );
+}
+
 /* ---------- messaging ---------- */
 
 export async function sendSms(client, { contactId, message, attachments }) {

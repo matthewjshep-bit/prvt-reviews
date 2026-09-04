@@ -191,6 +191,13 @@ export function toListOffer(offer) {
   for (const k of OFFER_LIST_FIELDS) if (offer[k] !== undefined) row[k] = offer[k];
   const at = offerExpiresAt(offer);
   if (at) row.expiresAt = at.toISOString();
+  // askingPrice  the list price lives at calc.inputs.askingPrice, inside the
+  //              calc blob this trim drops. The reply agent quotes it to an
+  //              agent who just named it, and its money guard flags any number
+  //              it can't see — so without this every "your $525k asking"
+  //              read as an invented figure.
+  const asking = Number(offer?.askingPrice ?? offer?.calc?.inputs?.askingPrice ?? offer?.inputs?.askingPrice) || 0;
+  if (asking > 0) row.askingPrice = asking;
   row.listOnly = true;
   return row;
 }

@@ -368,3 +368,277 @@ test("dismiss closes the draft and clears the tag", async () => {
   const again = await dismissReplyDraft({ client, store, locationId: "LOC", draftId: "d1" });
   assert.equal(again.draft.status, "dismissed");
 });
+
+/* ---------- the Conversation AI: parties, auto-send, actions ---------- */
+
+import {
+  holdReplyDraft, applyDraftAction, previewConversation, decideAutoSend, conversationConfig,
+} from "./reply-agent.js";
+
+const NOW = Date.parse("2026-09-04T17:30:00Z");   // 10:30 Pacific, inside the default window
+const DEAL = {
+  id: "o1", address: "2010 NE 54th St, Seattle, WA 98105", cashAmount: 420000,
+  calc: { inputs: { arv: 600000, repairs: 40000 } },
+  deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000, investors: [] },
+};
+function ghlStubFor(tags) {
+  const notes = [];
+  const tagCalls = [];
+  const calls = [];
+  const client = {
+    call: async (path, opts = {}) => {
+      calls.push([opts.method || "GET", path]);
+      if (/^\/contacts\/c1$/.test(path) && !opts.method) return { contact: { id: "c1", firstName: "Sam", lastName: "Lee", tags } };
+      if (path.endsWith("/notes")) { notes.push(opts.body.body); return {}; }
+      if (path.endsWith("/tags")) { tagCalls.push([opts.method || "POST", opts.body.tags]); return {}; }
+      if (path.startsWith("/conversations/search")) return { conversations: [] };
+      if (path === "/conversations/messages") return { messageId: "m9" };
+      if (path.includes("/workflow/")) return { succeeded: true };
+      throw new Error(`unexpected ${path}`);
+    },
+  };
+  return { client, notes, tags: tagCalls, calls };
+}
+const INVESTOR_DRAFT = {
+  intent: "interested", confidence: "high", needsHuman: false, humanReason: "",
+  reply: "It's at $445,000 — happy to send the package over.", summary: "Investor wants details on 2010 NE 54th.",
+  propertyAddress: "2010 NE 54th St", counterAmount: 0,
+};
+
+test("an investor-tagged contact gets the deal book, and the fee never reaches the reply", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor-active"]);
+  const store = fakeStore();
+  store.listDeals = async () => [DEAL];
+  let seen;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "what's the price on 54th?",
+    deps: { draft: async (args) => { seen = args; return INVESTOR_DRAFT; } },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(job.party, "investor");
+  assert.equal(job.partySource, "tags");
+  assert.equal(seen.party, "investor");
+  assert.match(seen.context.text, /buyer price \$445,000/);
+  assert.equal(seen.context.text.includes("$25,000"), false);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.party, "investor");
+  assert.equal(d.autoSendable, true, d.flags.join(" · "));
+  assert.equal(d.contextSummary.matchingDeals, 1);
+});
+
+test("an investor reply that names our fee or contract price is flagged even if they said it first", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor"]);
+  const store = fakeStore();
+  store.listDeals = async () => [DEAL];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "is your fee 25k?",
+    deps: { draft: async () => ({ ...INVESTOR_DRAFT, reply: "Yes, our fee is $25,000 on top of the $420,000 contract." }) },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.autoSendable, false);
+  assert.match(d.flags.join(" · "), /names \$25,000, \$420,000, which is our contract price or assignment fee/);
+});
+
+const AUTO_SAVED = {
+  ...SAVED,
+  conversationAi: { parties: { agent: { autoSend: { enabled: true, intents: ["question", "status_check"] } } } },
+};
+
+test("an allowlisted intent on an auto-send party is scheduled a few minutes out, and the note says so", async () => {
+  _resetJobs();
+  const { client, notes } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => OFFERS;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: AUTO_SAVED, store, contactId: "c1", message: "still interested?", sendsEnabled: true,
+    deps: { draft: async () => DRAFT, now: () => NOW, random: () => 0 },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "scheduled");
+  assert.equal(d.sendAt, "2026-09-04T17:32:00.000Z", "now + the minimum delay");
+  assert.equal(d.autoSend.decided, true);
+  assert.equal(job.scheduledFor, d.sendAt);
+  assert.match(notes[0], /will send it itself at/);
+});
+
+test("with sends off on the broker nothing is scheduled, and the draft says why", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: AUTO_SAVED, store, contactId: "c1", message: "still interested?", sendsEnabled: false,
+    deps: { draft: async () => ({ ...DRAFT, reply: "Yes, still interested." }) },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft");
+  assert.equal(d.autoSend.decided, false);
+  assert.match(d.autoSend.reason, /CARD_SENDS_ENABLED/);
+});
+
+test("decideAutoSend names the first switch that is off", () => {
+  const ok = { ok: true, flags: [] };
+  const cfg = conversationConfig(AUTO_SAVED);
+  assert.deepEqual(decideAutoSend({ gate: ok, party: "agent", intent: "question", config: cfg, sendsEnabled: true }), { send: true, reason: "" });
+  assert.match(decideAutoSend({ gate: ok, party: "agent", intent: "rejection", config: cfg, sendsEnabled: true }).reason, /not on the agent auto-send list/);
+  assert.match(decideAutoSend({ gate: ok, party: "investor", intent: "question", config: cfg, sendsEnabled: true }).reason, /auto-send is off for investors/);
+  assert.match(decideAutoSend({ gate: ok, party: "agent", intent: "question", channel: "email", config: cfg, sendsEnabled: true }).reason, /email replies don't auto-send/);
+  assert.match(decideAutoSend({ gate: { ok: false, flags: ["the model was only low confidence"] }, party: "agent", intent: "question", config: cfg, sendsEnabled: true }).reason, /needs a person: the model was only low/);
+  assert.match(decideAutoSend({ gate: ok, party: "unknown", intent: "question", config: cfg, sendsEnabled: true }).reason, /unknown contact never/);
+});
+
+test("a new text supersedes a scheduled reply too — the conversation moved on", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore([{ ...openDraft(), id: "sched", status: "scheduled", sendAt: "2026-09-04T17:40:00Z" }]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "actually never mind",
+    deps: { draft: async () => DRAFT },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const old = await store.getReplyDraft("sched");
+  assert.equal(old.status, "superseded");
+  assert.equal(old.sendAt, null);
+});
+
+test("hold turns a scheduled reply back into a draft that waits for a person", async () => {
+  const store = fakeStore([{ ...openDraft(), status: "scheduled", sendAt: "2026-09-04T17:40:00Z", autoSend: { decided: true, reason: "" } }]);
+  const r = await holdReplyDraft({ store, locationId: "LOC", draftId: "d1" });
+  assert.equal(r.draft.status, "draft");
+  assert.equal(r.draft.sendAt, null);
+  assert.ok(r.draft.heldAt);
+  assert.match(r.draft.flags.join(" · "), /held by you/);
+  assert.equal(r.draft.autoSend.decided, false);
+  const again = await holdReplyDraft({ store, locationId: "LOC", draftId: "d1" });
+  assert.equal(again.draft.status, "draft", "idempotent");
+});
+
+test("the scheduler's send goes out as written, marks it auto-sent, and leaves a note", async () => {
+  const store = fakeStore([{ ...openDraft(), status: "sending", sendingAt: new Date().toISOString(), party: "agent", intent: "question" }]);
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true });
+  assert.equal(r.draft.status, "sent");
+  assert.equal(r.draft.autoSent, true);
+  assert.equal(r.draft.edited, false);
+  const sms = calls.find(([p]) => p === "/conversations/messages");
+  assert.equal(sms[1].body.message, "Yes, still interested.");
+  const noteCall = calls.find(([p]) => p.endsWith("/notes"));
+  assert.match(noteCall[1].body.body, /sent this reply itself/);
+});
+
+test("a contact with no agent or investor tag holds with a note and no draft", async () => {
+  _resetJobs();
+  const { client, notes, tags } = ghlStubFor(["lead"]);
+  const store = fakeStore();
+  let called = false;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "hey",
+    deps: { draft: async () => { called = true; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(job.status, "held");
+  assert.equal(job.party, "unknown");
+  assert.equal(called, false, "no Claude call for a contact we can't place");
+  assert.equal(job.draftId, null);
+  assert.equal(tags.length, 0);
+  assert.match(notes[0], /none of the tags/);
+});
+
+test("with unknown set to generic, an untagged contact still gets a careful draft that never auto-sends", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["lead"]);
+  const store = fakeStore();
+  const saved = { ...AUTO_SAVED, conversationAi: { ...AUTO_SAVED.conversationAi, routing: { unknown: "generic", genericInstructions: "Be brief." } } };
+  let seen;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "hey", sendsEnabled: true,
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, reply: "Hi — what can I help with?" }; } },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(seen.party, "unknown");
+  assert.equal(seen.instructions, "Be brief.");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.party, "unknown");
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /unknown contact never auto-sends/);
+});
+
+test("an auto rule fires on a confident read; an ask rule waits on the row; a person can apply it", async () => {
+  _resetJobs();
+  const { client, tags } = ghlStubFor(["investor"]);
+  const store = fakeStore();
+  store.listDeals = async () => [DEAL];
+  const saved = {
+    ...SAVED,
+    conversationAi: { parties: { investor: { intentRules: {
+      interested: { mode: "auto", actions: [{ type: "add_tags", tags: ["hot-investor"] }, { type: "add_to_workflow", workflowId: "wf1", workflowName: "Investor follow-up" }] },
+      passing: { mode: "ask", actions: [{ type: "remove_tags", tags: ["hot-investor"] }] },
+    } } } },
+  };
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "send me 54th",
+    deps: { draft: async () => INVESTOR_DRAFT },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(d.actions.map((a) => [a.type, a.mode, a.status]), [["add_tags", "auto", "done"], ["add_to_workflow", "auto", "done"]]);
+  assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("hot-investor")));
+
+  // now a pass, medium confidence: nothing fires, one suggestion waits
+  _resetJobs();
+  const { job: j2 } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "gonna pass",
+    deps: { draft: async () => ({ ...INVESTOR_DRAFT, intent: "passing", confidence: "medium", reply: "Understood — thanks for looking." }) },
+  });
+  await settle();
+  const d2 = await store.getReplyDraft(j2.draftId);
+  assert.deepEqual(d2.actions.map((a) => [a.type, a.mode, a.status]), [["remove_tags", "ask", "pending"]]);
+  const before = tags.length;
+  const r = await applyDraftAction({ client, store, locationId: "LOC", draftId: d2.id, actionId: d2.actions[0].id });
+  assert.equal(r.action.status, "applied");
+  assert.equal(tags.length, before + 1);
+  assert.deepEqual(tags[tags.length - 1], ["DELETE", ["hot-investor"]]);
+  await assert.rejects(() => applyDraftAction({ client, store, locationId: "LOC", draftId: d2.id, actionId: d2.actions[0].id }), /already applied/);
+});
+
+test("a preview runs the whole pipeline and writes nothing anywhere", async () => {
+  const { client, calls } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => OFFERS;
+  let created = 0;
+  store.createReplyDraft = async () => { created++; throw new Error("must not persist"); };
+  const r = await previewConversation({
+    client, locationId: "LOC", saved: AUTO_SAVED, store, contactId: "c1", message: "still interested in 12 Elm?", sendsEnabled: true,
+    deps: { draft: async () => DRAFT, random: () => 0 }, now: NOW,
+  });
+  assert.equal(r.party, "agent");
+  assert.equal(r.held, false);
+  assert.equal(r.draft.reply, DRAFT.reply);
+  assert.equal(r.gate.ok, true);
+  assert.equal(r.autoSend.would, true);
+  assert.equal(r.autoSend.sendAt, "2026-09-04T17:32:00.000Z");
+  assert.match(r.context.text, /12 Elm St/);
+  assert.equal(created, 0);
+  assert.equal(calls.some(([m]) => m !== "GET"), false, "no POST/PUT/DELETE reached GHL");
+});
+
+test("a preview can be run on a typed thread with no contact at all", async () => {
+  const r = await previewConversation({
+    client: { call: async () => { throw new Error("should not be called"); } }, locationId: "LOC", saved: SAVED, store: fakeStore(),
+    message: "what's your fee?", fakeParty: "investor", fakeThread: [{ dir: "US", text: "Have a deal on 54th." }, { dir: "THEM", text: "what's the price" }],
+    deps: { draft: async (args) => ({ ...INVESTOR_DRAFT, reply: `The price is the price — ${args.transcript.includes("THEM sms: what's the price") ? "ok" : "no thread"}.` }) },
+  });
+  assert.equal(r.party, "investor");
+  assert.equal(r.partySource, "try-it");
+  assert.match(r.draft.reply, /ok\.$/);
+});

@@ -215,16 +215,34 @@ export const getUnderwrites = () =>
 export const cancelUnderwrite = (jobId) =>
   post(`/api/offers/automations/underwrite/${encodeURIComponent(jobId)}/cancel`, {});
 
-/* ---------- reply agent (inbound text -> drafted reply) ---------- */
+/* ---------- Conversation AI (inbound text -> drafted or auto-sent reply) ---------- */
 // Drafts are started by a GHL workflow webhook, not from here. The outbox
-// lists every draft waiting on a person; Send goes out through GHL as a normal
-// text from our number (dry-run unless the broker has CARD_SENDS_ENABLED).
+// lists every draft waiting on a person or counting down to an auto-send;
+// Send goes out through GHL as a normal text from our number (dry-run unless
+// the broker has CARD_SENDS_ENABLED). The config is its own blob with its own
+// route — Settings never writes it.
+export const getConversationAi = () =>
+  fetch(`${API_BASE}/api/offers/automations/conversation/config?${locq()}`).then(j);
+export const saveConversationAi = (config) =>
+  post(`/api/offers/automations/conversation/config`, { config }, "PUT").then((r) => r.config);
+export const listWorkflows = () =>
+  fetch(`${API_BASE}/api/offers/automations/conversation/workflows?${locq()}`).then(j);
 export const getReplyDrafts = () =>
-  fetch(`${API_BASE}/api/offers/automations/reply?${locq()}`).then(j);
+  fetch(`${API_BASE}/api/offers/automations/conversation?${locq()}`).then(j);
+export const getConversationHistory = (days = 30) =>
+  fetch(`${API_BASE}/api/offers/automations/conversation/history?${locq()}&days=${encodeURIComponent(days)}`).then(j);
 export const sendReplyDraft = (id, text) =>
-  post(`/api/offers/automations/reply/${encodeURIComponent(id)}/send`, { text, dryRun: false });
+  post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/send`, { text, dryRun: false });
 export const dismissReplyDraft = (id) =>
-  post(`/api/offers/automations/reply/${encodeURIComponent(id)}/dismiss`, {});
+  post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/dismiss`, {});
+export const holdReplyDraft = (id) =>
+  post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/hold`, {});
+export const applyDraftAction = (id, actionId) =>
+  post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/actions/${encodeURIComponent(actionId)}/apply`, {});
+// Run the whole pipeline in preview on a real contact or a typed thread.
+// Nothing is saved, sent, tagged or scheduled.
+export const testConversation = ({ contactId, party, thread, message, channel }) =>
+  post(`/api/offers/automations/conversation/test`, { contactId, party, thread, message, channel });
 
 /* ---------- Zillow comp capture (bookmarklet inbox) ---------- */
 // Comps grabbed off Zillow land in a server-side inbox — the app runs in a GHL

@@ -375,7 +375,8 @@ const pgStore = {
   async listReplyDrafts(locationId, { status = null, contactId = null, since = null, limit = 100 } = {}) {
     const params = [locationId];
     let where = "";
-    if (status) { params.push(status); where += ` and status = $${params.length}`; }
+    if (Array.isArray(status) && status.length) { params.push(status); where += ` and status = any($${params.length}::text[])`; }
+    else if (status && !Array.isArray(status)) { params.push(status); where += ` and status = $${params.length}`; }
     if (contactId) { params.push(contactId); where += ` and contact_id = $${params.length}`; }
     if (since) { params.push(since); where += ` and created_at >= $${params.length}`; }
     params.push(limit);
@@ -769,6 +770,15 @@ const pgStore = {
   },
   async listDataroomInvites(dataroomId) {
     const { rows } = await query(`${INVITE_SELECT} where dataroom_id = $1 order by created_at`, [dataroomId]);
+    return rows;
+  },
+  // Every link ever issued to one contact, newest first — the Conversation
+  // AI reads it to tell an investor "you opened it twice" from "not yet".
+  async listDataroomInvitesByContact(locationId, contactId, { limit = 50 } = {}) {
+    const { rows } = await query(
+      `${INVITE_SELECT} where location_id = $1 and contact_id = $2 order by created_at desc limit $3`,
+      [locationId, contactId, limit]
+    );
     return rows;
   },
   // Partial update by column name (camelCase keys map to the snake_case
@@ -1201,7 +1211,7 @@ const fileStore = (() => {
       ensure();
       return Object.values(data.replyDrafts)
         .filter((d) => d.locationId === locationId)
-        .filter((d) => !status || d.status === status)
+        .filter((d) => !status || (Array.isArray(status) ? status.includes(d.status) : d.status === status))
         .filter((d) => !contactId || d.contactId === contactId)
         .filter((d) => !since || (d.createdAt || "") >= since)
         .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
@@ -1592,6 +1602,13 @@ const fileStore = (() => {
       return Object.values(data.dataroomInvites)
         .filter((i) => i.dataroomId === dataroomId)
         .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+    },
+    async listDataroomInvitesByContact(locationId, contactId, { limit = 50 } = {}) {
+      ensure();
+      return Object.values(data.dataroomInvites)
+        .filter((i) => i.locationId === locationId && i.contactId === contactId)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .slice(0, limit);
     },
     async updateDataroomInvite(id, patch) {
       ensure();

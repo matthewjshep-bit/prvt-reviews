@@ -125,12 +125,20 @@ export const DEFAULT_OFFER_SETTINGS = {
   // the spend ceiling, because each run costs Apify credits and two Claude
   // vision calls. See ghl-broker/auto-underwrite.js.
   autoUnderwriteDailyCap: 25,
-  // Reply agent (an inbound agent text -> a drafted reply waiting in the app).
-  // Nothing is ever sent by itself in this version; the cap bounds Claude
-  // spend, and the instructions are the operator's standing voice and rules —
-  // who signs, how we close, what never to discuss. See ghl-broker/reply-agent.js.
+  // Reply agent, first version (2026-09-03). DEPRECATED as settings: both now
+  // only SEED the Conversation AI config below the first time a location
+  // opens that tab, and are ignored once `conversationAi` exists. Kept so an
+  // account that never opened the tab behaves exactly as it did.
   replyAgentDailyCap: 60,
   replyAgentInstructions: "",
+  // Conversation AI — persona, per-party playbooks, routing, auto-send and
+  // intent → GHL action rules. null until the tab saves it; the broker builds
+  // the effective config with normalizeConversationAi (shared/conversation-ai.js)
+  // and seeds it from the two deprecated keys above. Written ONLY by
+  // PUT /api/offers/automations/conversation/config — the Settings page re-attaches the stored
+  // value rather than carrying its own copy, so a stale Settings form can't
+  // clobber what the tab saved.
+  conversationAi: null,
   // Where closed sales come from. "zillow" scrapes the sold map through Apify
   // (the book the operator already reads by eye, and it carries the $/sqft
   // spread the price proxy below needs); "realestateapi" uses county + MLS
@@ -299,6 +307,10 @@ export function effectiveSettings(overrides = {}) {
   // replace the defaults wholesale and blank out keys it never mentioned.
   s.company = { ...DEFAULT_OFFER_SETTINGS.company, ...((overrides || {}).company || {}) };
   s.psa = { ...DEFAULT_OFFER_SETTINGS.psa, ...((overrides || {}).psa || {}) };
+  // The Conversation AI blob has its own normalizer (every nested key, enum
+  // and number is validated there); a saved partial is filled, not trusted.
+  const cai = (overrides || {}).conversationAi;
+  s.conversationAi = cai && typeof cai === "object" ? normalizeConversationAi(cai) : null;
   return s;
 }
 

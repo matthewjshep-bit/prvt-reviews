@@ -32,6 +32,85 @@ export const newToken = () => crypto.randomBytes(32).toString("base64url");
 export const hashToken = (token) => crypto.createHash("sha256").update(String(token)).digest("hex");
 
 /* ============================================================= *
+ * Invites: issuing and texting a personal link
+ * ============================================================= */
+
+// Shared by the dataroom router and the Conversation AI's "suggest a dataroom
+// invite" action, so a link issued from a draft row is the same link, with
+// the same text and the same audit trail, as one issued from the room page.
+
+export const expiryFromDays = (days) => {
+  const d = Math.min(365, Math.max(1, parseInt(days, 10) || DEFAULT_EXPIRY_DAYS));
+  return new Date(Date.now() + d * 24 * 60 * 60 * 1000).toISOString();
+};
+
+export function inviteMessage({ room, invite, link }) {
+  const first = (invite.name || "").split(" ")[0] || "there";
+  const address = room.address || room.snapshot?.property?.address || "the property";
+  const price = room.snapshot?.numbers?.investorPrice;
+  return (
+    `Hi ${first} — here's the deal package on ${address}` +
+    (price > 0 ? ` (${fmtMoney(price)})` : "") + `:\n${link}\n` +
+    `This link is yours only and it's tracked — please don't forward it.`
+  );
+}
+
+// Text an issued link. A custom message that forgot the link would send the
+// investor nothing to open, so it is appended rather than trusted. Live only
+// when the caller asked (dryRun === false) AND the broker's send gate is on.
+export async function textInvite({ store, client, room, invite, link, message = "", dryRun = true, sendsEnabled = false, sendSms }) {
+  const custom = String(message || "").replace(/\s+/g, " ").trim().slice(0, 800);
+  const body = !custom ? inviteMessage({ room, invite, link }) : custom.includes(link) ? custom : `${custom}\n${link}`;
+  const live = dryRun === false && sendsEnabled;
+  if (!live) {
+    return { dryRun: true, sendsEnabled, preview: { to: invite.phone, message: body } };
+  }
+  const results = {};
+  try {
+    await sendSms(client, { contactId: invite.contactId, message: body });
+    results.link = { ok: true };
+  } catch (e) { results.link = { ok: false, error: e.message }; }
+  if (results.link?.ok) {
+    await store.updateDataroomInvite(invite.id, { sentAt: new Date().toISOString() });
+    await store.logDataroomEvent(room.id, invite.id, "sent", { to: invite.phone || null });
+  }
+  return { sent: Boolean(results.link?.ok), results };
+}
+
+// Issue a personal link, optionally texting it. The plaintext token is in the
+// return value and nowhere else — after it, only the hash exists.
+export async function issueDataroomInvite({
+  store, client, room, contactId, name = "", phone = "", expiryDays, send = false, message = "", dryRun = true,
+  baseUrl, sendsEnabled = false, getContact, sendSms,
+}) {
+  let who = String(name || "").trim().slice(0, 120);
+  let tel = String(phone || "").trim().slice(0, 40);
+  if ((!who || !tel) && typeof getContact === "function") {
+    try {
+      const c = await getContact(client, contactId);
+      who = who || String([c?.firstName, c?.lastName].filter(Boolean).join(" ") || c?.name || "").slice(0, 120);
+      tel = tel || String(c?.phone || "").slice(0, 40);
+    } catch { /* the invite still works; sending will report the gap */ }
+  }
+  const token = newToken();
+  const link = `${baseUrl}/d/${token}`;
+  const invite = await store.createDataroomInvite({
+    dataroomId: room.id,
+    locationId: room.locationId,
+    tokenHash: hashToken(token),
+    contactId, name: who || null, phone: tel || null,
+    expiresAt: expiryFromDays(expiryDays ?? room.defaultExpiryDays),
+  });
+  let sendResult = null;
+  if (send) {
+    if (!tel) sendResult = { error: "contact has no phone number" };
+    else sendResult = await textInvite({ store, client, room, invite, link, message, dryRun, sendsEnabled, sendSms });
+  }
+  const fresh = await store.getDataroomInvite(invite.id);
+  return { invite: fresh, token, link, send: sendResult };
+}
+
+/* ============================================================= *
  * Snapshot: offer → investor-facing package
  * ============================================================= */
 

@@ -106,9 +106,11 @@ cutover, the standalone Agent Outreach site) after it.
 Token scopes: `contacts.readonly`, `contacts.write`,
 `locations/customFields.readonly`, `locations/customFields.write`,
 `conversations.write`, `conversations/message.write`, plus
-`conversations.readonly` — required only for the Dashboard's calls/texts
-panel (`/dashboard`); the dashboard shows a warning banner and keeps working
-without it.
+`conversations.readonly` — required for the Dashboard's calls/texts panel
+(`/dashboard`) and for the Conversation AI to read a thread before replying
+— and `workflows.readonly`, which only fills the "add to a GHL workflow"
+picker on the Conversation AI tab (the action itself needs just
+`contacts.write`; without the scope you can paste a workflow id).
 
 Sanity: `GET /` → `offer broker ok`, then
 `POST /api/offers/calculate` with `{"location_id":"...","inputs":{"askingPrice":200000}}`.
@@ -527,78 +529,141 @@ call carrying ~36 images, which is what takes a run to $1–3 and 3–5 minutes.
 That is the dial to turn if the price proxy is producing ARVs you don't trust in
 a particular market.
 
-## Reply agent (inbound text → drafted reply)
+## Conversation AI (inbound text → a reply, drafted or sent)
 
-An agent texts back — "would you do 410?", "seller went another way", "can you
-send proof of funds?", "still interested?" — and a drafted reply is waiting at
-the top of History a few seconds later, with the reason it needs you beside
-it. You send it, edit it first, or dismiss it. **Nothing is ever sent by
-itself in this version.**
+An agent texts "still interested in 12 Elm?"; an investor texts "what's the
+price on 54th?". A GHL workflow hands each text to the broker, which works out
+**who is texting** from their tags, reads **the right record book** — the
+offer book for a listing agent, the deal book and buy box for an investor —
+and drafts what we would say in the voice set on the console's
+**Conversation AI** tab. A draft waits in the outbox for a person, or, for the
+intents that tab has cleared, counts down a few human minutes and sends
+itself. It can also **trigger things in GHL** on what it hears.
 
-Why not GHL's Conversation AI: it is a generic bot working from a knowledge
-base. It has never seen the offer we sent this agent, at what price, on which
-house, or what happened to it — and every reply to a listing agent is really a
-reply about a specific offer. The broker knows them all, so the draft is built
-from the thread **and** the offer book, and the model is forbidden from using
-a number that isn't in one of the two.
+Why not GHL's own Conversation AI: it is a generic knowledge-base bot that has
+never seen the offer we sent this agent or the deal we blasted this investor,
+so it can't answer the only question either of them is asking. This one can,
+and it is not allowed to invent a number. Code: `ghl-broker/reply-agent.js`
+(the pipeline), `conversation-party.js` (who), `conversation-context.js`
+(what we know), `conversation-prompt.js` (what the model is told),
+`conversation-actions.js` (what it triggers), `conversation-scheduler.js`
+(when it sends), `shared/conversation-ai.js` (the config).
 
-**Prerequisites.** Settings needs the Anthropic key. Sending uses
-`CARD_SENDS_ENABLED=true` on the broker, the same gate an offer text has;
-without it, Send previews and changes nothing. The webhook uses the same
-`AUTO_UNDERWRITE_SECRET` as the underwriter (one credential for both
-automations). Turn GHL's own Conversation AI **off** for contacts the workflow
-routes here, or the two will answer the same text.
+**Prerequisites.** Settings needs the Anthropic key. Two Render env vars:
+`AUTO_UNDERWRITE_SECRET` (the same webhook credential the underwriter uses)
+and `CARD_SENDS_ENABLED=true` — without it nothing goes out, by you or by
+itself, and the tab says so. Scopes: `conversations.readonly` to read the
+thread, `workflows.readonly` for the workflow picker (see the scopes list
+above).
 
-**Wiring.** A GHL Workflow: trigger **Inbound Message**, your filter (a tag
-such as `agent`, or the same Tier-1 filter the underwriter uses), then a
-**Webhook** action, `POST`, to
-`https://offers.shepflips.com/api/offers/automations/reply`, body:
+**Wiring — one workflow.** Trigger **Customer Replied** (GHL's inbound-message
+trigger; filter Reply Channel to SMS for now). Add **no tag filter**: the
+broker routes by the tag rules on the tab and holds, or answers generically,
+when a contact carries neither kind. Action: **Webhook**, `POST` to
+`https://offers.shepflips.com/api/offers/automations/conversation`, header
+`x-underwrite-secret: <AUTO_UNDERWRITE_SECRET>`, custom data:
 
-```json
-{ "location_id": "{{location.id}}", "secret": "<AUTO_UNDERWRITE_SECRET>",
-  "contactId": "{{contact.id}}", "message": "{{message.body}}",
-  "channel": "{{message.type}}" }
+```
+location_id   {{location.id}}
+contact_id    {{contact.id}}
+message       {{message.body}}
+channel       sms
 ```
 
-`channel` is optional; anything containing "email" drafts an email, everything
-else a text. It answers `202` at once and drafts in the background (a few
-seconds — one Claude call). One open draft per agent: a second text before the
-first was answered supersedes it, because the reply is to the conversation, not
-to a message.
+(`/api/offers/automations/reply` still works — it is the same handler.) Add
+`party: agent` or `party: investor` only if the workflow already knows; it
+overrides the tag rules. Then **switch GHL's Conversation AI off** for these
+contacts (location setting, or a "Conversation AI: disable" action at the top
+of the workflow) — otherwise both bots answer the same text. It answers `202`
+in milliseconds; the draft is written in the background.
 
-**What the model is given.** The agent's name and tags, your standing
-instructions from Settings (who signs, how you close, what never to discuss),
-the last ~60 messages of the thread, and the agent's offers newest first —
-address, our amount, asking, status, when it was sent and how. If an
-auto-underwrite is running for that agent right now it is told so, and may say
-"numbers coming shortly" without a number.
+**Who is who.** The tab's routing card holds two comma lists of tag patterns
+(`*` is the only wildcard): listing agents (`agent`, `agent-*`) and investors
+(`investor`, `investor-*`, `on-deal`). A contact matching both goes to the
+party the card says wins; one matching neither either **holds** (a note on
+the contact, no draft — the default) or gets a **generic** careful draft that
+never auto-sends. This deliberately does not use `inferContactType` from the
+enrichment code, whose substring rules call an agent who was tagged into a
+dispo blast ambiguous.
 
-**What it may not do.** Accept a counter, move an offer, confirm a showing or
-inspection time, promise proof of funds, agree to terms, or tell the agent it
-is a bot. Those come back as a holding reply ("let me run that by my partner
-and get back to you this afternoon") and flagged. And the one rule that is not
-a judgment call: `evaluateReplyGates` in `ghl-broker/reply-agent.js` rejects
-any draft that names a dollar figure not in the offer book or the agent's own
-message. A made-up number to a listing agent is the worst thing this could do.
+**What the model is given.** The persona (name, role, voice, length, sign-off),
+the house rules, the party's playbook (standing instructions, "it may / it may
+not"), the examples of our voice, the intent definitions, and then per party:
 
-**Watching it.** The **Replies to send** strip at the top of History: each row
-shows what the agent said, the model's one-line read of it, the draft in an
-editable box, and either "would have been safe to send on its own" or the
-reasons it needs you. The contact also gets a note with the draft and a
-`reply-draft` tag, cleared when you send or dismiss. Sent drafts record what
-actually went out (`sentText`) beside what the model wrote, so an edit rate is
-a query away.
+- *Agent* — the offer book, newest first: our cash offer, the asking price,
+  status, when and how it was sent; the Subject Property field; anything the
+  enrichment sweep learned (areas served, personal details, last conversation
+  summary); and any auto-underwrite running for them right now ("numbers
+  coming shortly", never a number).
+- *Investor* — their buy box (from the Dispositions book, or their GHL fields
+  if they were never synced); the live deals they are already on, with their
+  status and whether they opened the dataroom link we sent; and up to five
+  other live deals that fit their buy box, each with **only the buyer price**
+  (contract price + our fee), ARV and estimated repairs. The contract price
+  and the fee are handed to the money guard as **forbidden**: a draft that
+  names either is flagged even if the investor said the number first.
 
-**Graduating it.** The gate result is stored on every draft as `autoSendable`
-plus `flags`. After a few weeks, count how often `autoSendable` was true AND
-you sent the draft unedited; if that number is high for questions, passes and
-check-ins, that is the evidence for letting those intents go out on their own.
-`AUTO_SENDABLE_INTENTS` is the short list that would have to earn each
-addition; counters, calls, showings and proof of funds are deliberately never
-on it.
+**What it will not do on its own.** `evaluateReplyGates` holds a draft that
+names a number not in the record book or the inbound text, that leaks a
+forbidden number, that the model marked `needsHuman`, that is under high
+confidence, that is empty, or that is too long for a text — and every intent
+in `NEVER_AUTO` (agent: counter, acceptance, wants a call, scheduling, proof
+of funds, new property, other; investor: price pushback, wants to buy, wants
+to walk it, wants a call, other) is a person's call whatever the tab says.
+`decideAutoSend` then adds the tab's switches: the bot is on, the broker can
+send, the party's auto-send is on, the intent is on its allowlist, the channel
+is allowed. The first switch that is off is recorded on the draft and shown
+on the row ("Would have been safe to send on its own. Didn't, because
+auto-send is off for agents").
 
-**Cost.** One Claude text call per inbound message, roughly $0.02–0.05. Daily
-cap in Settings (default 60), counted from the database.
+**Auto-send.** Off by default for both parties. When a reply clears
+everything it is **scheduled**, not sent: `sendAt` = now + a random delay in
+the configured band (default 2–4 minutes), pushed to the next opening if that
+lands outside the sending window (default 08:00–20:00 America/Los_Angeles).
+The row shows "Sending itself in 2m 10s" with a **Hold** button; the contact
+note says the same. A 30-second ticker in `broker.js` sends what has come due,
+as written, and notes the contact "Conversation AI sent this reply itself". A
+failed send goes back to the outbox with the reason and is never retried
+silently; a send interrupted by a restart is handed back after five minutes.
+State is in `reply_drafts` (status `scheduled` / `sending`), so a redeploy
+loses nothing.
+
+**Actions.** Per party, per intent, the tab can wire: add tags, remove tags,
+set a custom field (`{{intent}}`, `{{propertyAddress}}`, `{{summary}}`,
+`{{date}}` and friends interpolate), add the contact to a GHL workflow, and
+the broker's own moves — link an investor to the deal they mean as
+"evaluating" (the deal-interest logic, now shared), start an auto-underwrite
+for an agent's new property, text an investor a dataroom link. A rule runs
+**automatically** the moment the intent is read with high confidence, or
+**ask me first**, which shows it on the draft row as a violet chip for one
+click. A dataroom link is always ask-first. Every outcome is recorded on the
+draft and in the contact note.
+
+**Try it.** The tab's try-it panel runs the whole pipeline on a real contact
+(their real thread and records) or a typed thread, and shows who the broker
+thinks they are, what the model saw, the intent, the draft, why it would or
+wouldn't send itself, and the actions that would fire. Nothing is saved,
+sent, tagged or scheduled, and it doesn't count against the daily cap. This is
+where the page gets tuned: when a draft is wrong, add a line to the playbook
+and run it again.
+
+**Graduating an intent.** The history table on the tab shows, per party and
+intent, how many drafts the gates would have let go (*auto-sendable*) and how
+many a person then sent **as written**. When those agree for a couple of weeks,
+tick the intent on the party's allowlist and turn the party's auto-send on.
+Counters, calls, showings, proof of funds and buying decisions stay yours for
+good.
+
+**Where the config lives.** `settings.conversationAi`, written only by
+`PUT /api/offers/automations/conversation/config` — the Settings page re-attaches the stored
+value rather than carrying its own copy, so a stale Settings form can't
+clobber what the tab saved. A location that never opened the tab is seeded
+from the old `replyAgentDailyCap` / `replyAgentInstructions` and behaves as it
+did.
+
+**Cost.** One Claude call per inbound text (~$0.02–0.05), read once at the
+daily cap on the tab (default 60), counted from the store so a restart can't
+reset it. No Apify. Two drafts in flight per location at a time.
 
 ## Agent Outreach
 
@@ -769,6 +834,10 @@ Notes for whoever maintains this:
 - **Dispositions blasts are dry-run by default** — same double gate via
   `DISPO_BLASTS_ENABLED`. Syncing the investor book only reads from GHL, so it
   is deliberately not gated; the buy-box editor writes only changed fields.
+- **The Conversation AI sends only what its tab allows** — per-party
+  auto-send switches and intent allowlists, `NEVER_AUTO` above them, and the
+  broker's `CARD_SENDS_ENABLED` gate above that. Every auto-send is scheduled
+  minutes out with a Hold button. See "Conversation AI" above.
 - **Auto-underwrites are dry-run by default** — same double gate via
   `AUTO_UNDERWRITE_ENABLED`. A dry run still does all the work (and spends the
   Apify/Anthropic money); it just saves a draft instead of publishing an offer.

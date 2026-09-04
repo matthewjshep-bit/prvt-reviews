@@ -6,6 +6,8 @@
 //               generate the document, attach it to the contact record.
 //               Reached from the header button, not a tab.
 //   Deals     — offers under signed contract, tracked through disposition.
+//   Conversation AI — the bot that answers inbound agent and investor texts:
+//               its voice, playbooks, routing, auto-send switches and outbox.
 //   Settings  — calculation defaults + company info printed on the document.
 // Plus three sibling apps on their own paths: /agents, /dashboard, /dispo.
 
@@ -19,6 +21,7 @@ import AgentOutreach from "./AgentOutreach.jsx";
 import Dispositions from "./Dispositions.jsx";
 import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
+import ConversationAi from "./ConversationAi.jsx";
 import { getLocationId, getLocationKey, getOffer, getSettings } from "./api.js";
 
 // The offer editor lives in the main app — from the standalone Deals page,
@@ -67,6 +70,7 @@ const NAV =
     : [
         { view: "history", label: "Offers" },
         { view: "deals", label: "Deals" },
+        { view: "conversation", label: "Conversation AI" },
         { view: "settings", label: "Settings" },
       ];
 
@@ -273,6 +277,7 @@ export default function OfferApp() {
               ? (o) => window.open(offerEditorUrl(o.id), "_blank")
               : (o) => { setEditing(o); setView("new"); }} />
         )}
+        {view === "conversation" && <ConversationAi />}
         {view === "outreach" && <AgentOutreach settings={settings} />}
         {view === "dispo" && <Dispositions />}
         {view === "dashboard" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
