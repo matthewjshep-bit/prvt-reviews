@@ -60,18 +60,22 @@ DATABASE_URL=postgres://...       # Render Postgres; schema auto-applies on boot
 #
 # Supabase Storage (the project this account already has):
 #   1. Storage → New bucket → name it deal-videos, leave it private.
-#   2. Project Settings → Storage → "Upload file size limit": raise it to at
-#      least 500 MB. (The free plan caps files at 50 MB; Pro allows this.)
-#   3. Project Settings → Storage → S3 Connection: turn it on, copy the Endpoint
+#   2. Project Settings → Storage → S3 Connection: turn it on, copy the Endpoint
 #      and Region shown there, then "New access key" → copy the id and secret.
-#   4. Set these on the Render service and let it redeploy:
+#   3. Set these on the Render service and let it redeploy:
 S3_ENDPOINT=https://<project-ref>.supabase.co/storage/v1/s3
 S3_REGION=<the region shown next to the endpoint, e.g. us-west-1>
 S3_ACCESS_KEY_ID=...
 S3_SECRET_ACCESS_KEY=...
 S3_BUCKET=deal-videos
-#   5. Deploy check: the boot log prints "object store ok: deal-videos @ https://…".
+#   4. Deploy check: the boot log prints "object store ok: deal-videos @ https://…".
 #      "configured but not answering" means a typo above — the message says which.
+#
+# The free plan's 50 MB per-file limit does not matter: the broker stores each
+# video as 8 MB objects and stitches them on playback. What the free plan does
+# cap is the TOTAL — about 1 GB stored and 5 GB served per month — so roughly
+# five walkthroughs, watched a couple of dozen times. Watch Storage → Usage;
+# Pro lifts both by two orders of magnitude.
 #
 # Cloudflare R2 works the same way through R2_ACCOUNT_ID + R2_ACCESS_KEY_ID +
 # R2_SECRET_ACCESS_KEY + R2_BUCKET (the endpoint is derived). R2_PUBLIC_BASE is

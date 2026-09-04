@@ -532,9 +532,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
    * A phone walkthrough is a few hundred MB, so it never travels as one JSON
    * body. The browser asks to begin, PUTs uniform 8MB parts (a request each, so
    * a dropped connection retries one part rather than the file), then completes
-   * with the poster frame and dimensions it read locally. Each part goes
-   * straight to R2 (video.js); the broker keeps only the row. The investor read
-   * path is in routes/dataroom.js behind a link token, like photos.
+   * with the poster frame and dimensions it read locally. Each part is stored
+   * as an object of its own (video.js) — never glued into one file, so a bucket
+   * with a small per-file limit still holds a long walkthrough — and the broker
+   * keeps only the row. The investor read path is in routes/dataroom.js behind
+   * a link token, like photos.
    * ------------------------------------------------------------------------ */
 
   router.get("/:id/videos", async (req, res) => {
@@ -659,7 +661,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!video || video.status !== "ready") return res.status(404).type("text/plain").send("not found");
       res.set("Cache-Control", "private, max-age=86400");
       res.set("X-Content-Type-Options", "nosniff");
-      const served = await streamVideo(req, res, { key: video.storageKey, contentType: video.contentType, etag: `"${video.id}"` });
+      const served = await streamVideo(req, res, { key: video.storageKey, contentType: video.contentType, etag: `"${video.id}"`, size: video.sizeBytes });
       if (!served) res.status(404).type("text/plain").send("not found");
     } catch (err) { if (!res.headersSent) fail(res, err); else res.destroy(); }
   });

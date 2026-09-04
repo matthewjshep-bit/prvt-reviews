@@ -716,7 +716,7 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
     res.set("Referrer-Policy", "no-referrer");
     res.set("X-Content-Type-Options", "nosniff");
     res.set("Cache-Control", "private, max-age=86400");
-    const served = await streamVideo(req, res, { key: video.storageKey, contentType: video.contentType, etag: `"${video.id}"` });
+    const served = await streamVideo(req, res, { key: video.storageKey, contentType: video.contentType, etag: `"${video.id}"`, size: video.sizeBytes });
     if (!served) gone(res);
   }
   async function sendRoomPoster(req, res, room, videoId, variant) {

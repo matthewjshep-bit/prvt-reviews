@@ -82,9 +82,10 @@ Storage: Postgres when `DATABASE_URL` is set (schema auto-applies on boot),
 otherwise a local JSON file (dev only). Generated documents go to R2 when the
 `R2_*` vars are set, otherwise to local `uploads/` (dev only). Property videos
 go to an S3-protocol object store — Supabase Storage here, via the `S3_*`
-vars — in uniform parts as the browser sends them (`video.js`) and stream
-back through the token-gated dataroom routes with Range support. Without a
-bucket they land under `data/` in dev and are refused in production.
+vars — as uniform 8 MB objects, one per part the browser sends (`video.js`),
+and stream back stitched, through the token-gated dataroom routes with Range
+support. Without a bucket they land under `data/` in dev and are refused in
+production.
 
 Key files: `broker.js` (entry + CORS + location guard), `routes/offers.js`
 (the whole product API), `shared/offer-calc.js` (vendored calc engine —
