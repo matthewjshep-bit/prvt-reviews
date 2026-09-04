@@ -54,14 +54,29 @@ CARD_SERVICE_URL=https://prvt-reviews.onrender.com
 PUBLIC_BASE_URL=https://offers.shepflips.com    # agent-facing links
 DATAROOM_BASE_URL=https://deals.shepflips.com   # investor-facing links
 DATABASE_URL=postgres://...       # Render Postgres; schema auto-applies on boot
-# R2_* — Cloudflare R2. Property videos REQUIRE the first four (account id,
-# access key, secret, bucket): a walkthrough is hundreds of MB and streams from
-# the bucket through the broker. R2_PUBLIC_BASE is separate and optional: set it
-# and generated documents move from Postgres to R2 under that hostname; leave it
-# unset and they stay where they are. Setup: Cloudflare dashboard → R2 → create
-# a bucket (any name; keep it private) → Manage R2 API Tokens → token with
-# Object Read & Write on that bucket → copy the account id, key and secret.
-# R2_ACCOUNT_ID=...  R2_ACCESS_KEY_ID=...  R2_SECRET_ACCESS_KEY=...  R2_BUCKET=...
+# Object store (S3 protocol) — REQUIRED for property videos; nothing else needs
+# it. A walkthrough is hundreds of MB and streams from the bucket through the
+# broker's token-gated routes, so the bucket stays PRIVATE.
+#
+# Supabase Storage (the project this account already has):
+#   1. Storage → New bucket → name it deal-videos, leave it private.
+#   2. Project Settings → Storage → "Upload file size limit": raise it to at
+#      least 500 MB. (The free plan caps files at 50 MB; Pro allows this.)
+#   3. Project Settings → Storage → S3 Connection: turn it on, copy the Endpoint
+#      and Region shown there, then "New access key" → copy the id and secret.
+#   4. Set these on the Render service and let it redeploy:
+S3_ENDPOINT=https://<project-ref>.supabase.co/storage/v1/s3
+S3_REGION=<the region shown next to the endpoint, e.g. us-west-1>
+S3_ACCESS_KEY_ID=...
+S3_SECRET_ACCESS_KEY=...
+S3_BUCKET=deal-videos
+#   5. Deploy check: the boot log prints "object store ok: deal-videos @ https://…".
+#      "configured but not answering" means a typo above — the message says which.
+#
+# Cloudflare R2 works the same way through R2_ACCOUNT_ID + R2_ACCESS_KEY_ID +
+# R2_SECRET_ACCESS_KEY + R2_BUCKET (the endpoint is derived). R2_PUBLIC_BASE is
+# separate and optional: set it and generated documents move from Postgres to
+# the bucket under that hostname; leave it unset and they stay where they are.
 # R2_PUBLIC_BASE is the hostname on every offer PDF an agent opens — connect a
 # custom domain (docs.shepflips.com) to the bucket and keep the old one attached
 # so already-issued document URLs keep resolving.

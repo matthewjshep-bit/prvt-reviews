@@ -1,50 +1,95 @@
-// r2.js — broker-side Cloudflare R2 uploads for user assets (image layers).
-// Falls back to local disk (served at /uploads) when R2 isn't configured, so
-// uploads work in dev. NOTE: local URLs are private-host and will be refused by
-// cardgen's SSRF guard at render time — production must use R2 (public host).
+// r2.js — the broker's object store, spoken over the S3 protocol.
+//
+// Two kinds of thing live here. Public assets (uploadAsset: generated PDFs and
+// image layers) get a public URL and need a public hostname to print on it.
+// Raw objects (property videos, below) never get a URL at all: investors reach
+// them only through the broker's token-gated routes, so a private bucket is
+// exactly right. Both fall back to local disk when nothing is configured — dev
+// and tests — and production refuses video rather than trust Render's disk.
+//
+// The backend is whatever answers S3 at S3_ENDPOINT. Supabase Storage is the
+// one this operator uses (Project Settings → Storage → S3 Connection); the
+// original Cloudflare R2 wiring still works through the R2_* names, with the
+// endpoint derived from the account id. Path-style addressing suits both.
 
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
-const R2_BUCKET = process.env.R2_BUCKET || "";
-const R2_PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/$/, "");
+const env = (k) => (process.env[k] || "").trim();
+const R2_ACCOUNT_ID = env("R2_ACCOUNT_ID");
+const ENDPOINT = (env("S3_ENDPOINT") || (R2_ACCOUNT_ID ? `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : "")).replace(/\/$/, "");
+// Supabase signs against the project's region; R2 accepts "auto".
+const REGION = env("S3_REGION") || (R2_ACCOUNT_ID ? "auto" : "us-east-1");
+const ACCESS_KEY_ID = env("S3_ACCESS_KEY_ID") || env("R2_ACCESS_KEY_ID");
+const SECRET_ACCESS_KEY = env("S3_SECRET_ACCESS_KEY") || env("R2_SECRET_ACCESS_KEY");
+const BUCKET = env("S3_BUCKET") || env("R2_BUCKET");
+const R2_PUBLIC_BASE = env("R2_PUBLIC_BASE").replace(/\/$/, "");
 
 // Two switches, because they answer different questions. The raw object store
-// (videos, below) needs only credentials and a bucket. Public assets also need
+// needs an endpoint, credentials and a bucket. Public assets also need
 // R2_PUBLIC_BASE — the hostname printed on every document URL — and setting it
 // is what moves generated documents out of Postgres. So an operator can turn on
-// video with four variables without changing where their PDFs live.
-const R2_CREDENTIAL_VARS = { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET };
-export const r2Missing = Object.entries(R2_CREDENTIAL_VARS).filter(([, v]) => !v).map(([k]) => k);
-export const r2StoreEnabled = r2Missing.length === 0;
-export const r2Enabled = r2StoreEnabled && Boolean(R2_PUBLIC_BASE);
+// video without changing where their PDFs live.
+export const storeMissing = Object.entries({
+  S3_ENDPOINT: ENDPOINT, S3_ACCESS_KEY_ID: ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY: SECRET_ACCESS_KEY, S3_BUCKET: BUCKET,
+}).filter(([, v]) => !v).map(([k]) => k);
+export const storeEnabled = storeMissing.length === 0;
+export const r2Enabled = storeEnabled && Boolean(R2_PUBLIC_BASE);
+export const storeEndpoint = ENDPOINT;
+export const storeBucket = BUCKET;
 
 let s3 = null;
 async function client() {
   if (s3) return s3;
   const { S3Client } = await import("@aws-sdk/client-s3");
   s3 = new S3Client({
-    region: "auto",
-    endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    credentials: { accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY },
+    region: REGION,
+    endpoint: ENDPOINT,
+    // bucket in the path, not the hostname: Supabase requires it, R2 accepts it.
+    forcePathStyle: true,
+    credentials: { accessKeyId: ACCESS_KEY_ID, secretAccessKey: SECRET_ACCESS_KEY },
   });
   return s3;
 }
 
-// Upload bytes and return a public URL. localDir/localBaseUrl are the dev
-// fallback location + the URL prefix that maps to it. contentDisposition, when
-// set, is stored on the object and served back by R2 (names the Save dialog).
+// Boot-time proof that the bucket answers to these keys. Five hand-typed
+// environment variables are the likeliest way video breaks, and this is how it
+// says so in the deploy log rather than at the operator's first upload.
+// ListObjects with one key is the probe every S3 implementation answers.
+export async function checkObjectStore() {
+  if (!storeEnabled) return { ok: false, configured: false, reason: `not configured (missing ${storeMissing.join(", ")})` };
+  try {
+    const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
+    await (await client()).send(new ListObjectsV2Command({ Bucket: BUCKET, MaxKeys: 1 }));
+    return { ok: true, configured: true, endpoint: ENDPOINT, bucket: BUCKET };
+  } catch (err) {
+    return { ok: false, configured: true, reason: `${err?.name || "error"}: ${err?.message || err}` };
+  }
+}
+
+// Storage backends say "too big" in their own words; the operator needs to hear
+// which knob to turn. Supabase enforces a project-wide upload limit (50MB on
+// the free plan) that has to be raised for a walkthrough to land at all.
+function sizeLimitError(err) {
+  const text = `${err?.name || ""} ${err?.message || ""}`;
+  if (!/EntityTooLarge|PayloadTooLarge|Payload too large|maximum allowed size|exceeded the maximum|too large/i.test(text)) return null;
+  return Object.assign(new Error(
+    "the storage bucket's file size limit is below this video — raise it (Supabase: Project Settings → Storage → upload file size limit) and try again"
+  ), { http: 413 });
+}
+
+// Upload bytes and return a public URL under R2_PUBLIC_BASE. localDir/localBaseUrl
+// are the dev fallback location + the URL prefix that maps to it.
+// contentDisposition, when set, is stored on the object and served back with it
+// (names the Save dialog).
 export async function uploadAsset(key, buffer, contentType, { localDir, localBaseUrl, contentDisposition }) {
   if (r2Enabled) {
     const { PutObjectCommand } = await import("@aws-sdk/client-s3");
     await (await client()).send(
       new PutObjectCommand({
-        Bucket: R2_BUCKET,
+        Bucket: BUCKET,
         Key: key,
         Body: buffer,
         ContentType: contentType,
@@ -80,10 +125,10 @@ const localPath = (localDir, key) =>
 const partsDir = (localDir, uploadId) => path.join(localDir, ".multipart", String(uploadId).replace(/[^A-Za-z0-9-]/g, ""));
 
 export async function createMultipart(key, contentType, { localDir }) {
-  if (r2StoreEnabled) {
+  if (storeEnabled) {
     const { CreateMultipartUploadCommand } = await import("@aws-sdk/client-s3");
     const r = await (await client()).send(new CreateMultipartUploadCommand({
-      Bucket: R2_BUCKET, Key: key, ContentType: contentType, CacheControl: "private, max-age=86400",
+      Bucket: BUCKET, Key: key, ContentType: contentType, CacheControl: "private, max-age=86400",
     }));
     return { uploadId: r.UploadId };
   }
@@ -93,12 +138,14 @@ export async function createMultipart(key, contentType, { localDir }) {
 }
 
 export async function uploadPart(key, uploadId, partNumber, body, { localDir }) {
-  if (r2StoreEnabled) {
+  if (storeEnabled) {
     const { UploadPartCommand } = await import("@aws-sdk/client-s3");
-    const r = await (await client()).send(new UploadPartCommand({
-      Bucket: R2_BUCKET, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: body,
-    }));
-    return { etag: r.ETag };
+    try {
+      const r = await (await client()).send(new UploadPartCommand({
+        Bucket: BUCKET, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: body,
+      }));
+      return { etag: r.ETag };
+    } catch (err) { throw sizeLimitError(err) || err; }
   }
   const dir = partsDir(localDir, uploadId);
   await fs.access(dir); // an unknown upload id fails here, as R2 would
@@ -110,14 +157,16 @@ export async function uploadPart(key, uploadId, partNumber, body, { localDir }) 
 // the finished object, which is the one number the upload's own bookkeeping
 // can't be trusted for.
 export async function completeMultipart(key, uploadId, parts, { localDir }) {
-  if (r2StoreEnabled) {
+  if (storeEnabled) {
     const { CompleteMultipartUploadCommand, HeadObjectCommand } = await import("@aws-sdk/client-s3");
     const s3 = await client();
-    await s3.send(new CompleteMultipartUploadCommand({
-      Bucket: R2_BUCKET, Key: key, UploadId: uploadId,
-      MultipartUpload: { Parts: parts.map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })) },
-    }));
-    const head = await s3.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    try {
+      await s3.send(new CompleteMultipartUploadCommand({
+        Bucket: BUCKET, Key: key, UploadId: uploadId,
+        MultipartUpload: { Parts: parts.map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })) },
+      }));
+    } catch (err) { throw sizeLimitError(err) || err; }
+    const head = await s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
     return { size: Number(head.ContentLength) || 0 };
   }
   const dir = partsDir(localDir, uploadId);
@@ -130,18 +179,18 @@ export async function completeMultipart(key, uploadId, parts, { localDir }) {
 }
 
 export async function abortMultipart(key, uploadId, { localDir }) {
-  if (r2StoreEnabled) {
+  if (storeEnabled) {
     const { AbortMultipartUploadCommand } = await import("@aws-sdk/client-s3");
-    await (await client()).send(new AbortMultipartUploadCommand({ Bucket: R2_BUCKET, Key: key, UploadId: uploadId }));
+    await (await client()).send(new AbortMultipartUploadCommand({ Bucket: BUCKET, Key: key, UploadId: uploadId }));
     return;
   }
   await fs.rm(partsDir(localDir, uploadId), { recursive: true, force: true });
 }
 
 export async function deleteObject(key, { localDir }) {
-  if (r2StoreEnabled) {
+  if (storeEnabled) {
     const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
-    await (await client()).send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    await (await client()).send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
     return;
   }
   await fs.rm(localPath(localDir, key), { force: true });
@@ -173,11 +222,11 @@ function parseRange(header, size) {
 // slice, 416 for an unsatisfiable range, 404 for no such key. `body` is a
 // Readable to pipe straight into the response — bytes never sit in memory.
 export async function readObject(key, { range, localDir }) {
-  if (r2StoreEnabled) {
+  if (storeEnabled) {
     const { GetObjectCommand } = await import("@aws-sdk/client-s3");
     try {
       const r = await (await client()).send(new GetObjectCommand({
-        Bucket: R2_BUCKET, Key: key, ...(range ? { Range: range } : {}),
+        Bucket: BUCKET, Key: key, ...(range ? { Range: range } : {}),
       }));
       return {
         status: r.$metadata?.httpStatusCode === 206 ? 206 : 200,

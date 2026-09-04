@@ -1,22 +1,22 @@
 // video.js — property videos: where their bytes live and how they stream.
 //
 // A phone walkthrough is a few hundred MB, which rules out everything the
-// photos do (base64 in a JSON body, bytea in Postgres). Bytes go to R2 in
-// parts as the browser sends them (r2.js), the row in the store carries the
+// photos do (base64 in a JSON body, bytea in Postgres). Bytes go to the object
+// store in parts as the browser sends them (r2.js), the row in the store carries the
 // key, and playback streams back through the token-gated dataroom routes with
 // Range support — Safari refuses to play a <video> at all from a server that
 // ignores Range, and a scrub bar is a stream of small ranged requests.
 //
-// Without R2 the same calls write files under DATA_DIR, which is right for
-// dev and tests and wrong for production: Render's disk is wiped on deploy, so
-// Postgres-without-R2 refuses uploads (videoStorageReady) rather than lose
-// them silently a day later.
+// Without an object store the same calls write files under DATA_DIR, which is
+// right for dev and tests and wrong for production: Render's disk is wiped on
+// deploy, so Postgres-without-a-bucket refuses uploads (videoStorageReady)
+// rather than lose them silently a day later.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dbEnabled } from "./db.js";
 import {
-  abortMultipart, completeMultipart, createMultipart, deleteObject, r2Missing, r2StoreEnabled, readObject, uploadPart,
+  abortMultipart, completeMultipart, createMultipart, deleteObject, readObject, storeEnabled, storeMissing, uploadPart,
 } from "./r2.js";
 
 // Container → file extension. Browsers decide what they can PLAY by codec, not
@@ -30,13 +30,14 @@ export const MAX_VIDEOS_PER_OFFER = 10;
 export const PART_BYTES = 8 * 1024 * 1024;
 export const MAX_PARTS = Math.ceil(MAX_VIDEO_BYTES / PART_BYTES);
 
-// Credentials and a bucket are all video needs — not R2_PUBLIC_BASE, which is
-// about document URLs and would move the PDFs too. The hint names exactly the
-// variables still missing, so the fix is one trip to the Render dashboard.
-export const videoStorageReady = r2StoreEnabled || !dbEnabled;
+// An endpoint, credentials and a bucket are all video needs — not
+// R2_PUBLIC_BASE, which is about document URLs and would move the PDFs too.
+// The hint names exactly the variables still missing, so the fix is one trip
+// to the Render dashboard.
+export const videoStorageReady = storeEnabled || !dbEnabled;
 export const VIDEO_STORAGE_HINT =
-  `Video storage isn't set up on this server — set ${r2Missing.length ? r2Missing.join(", ") : "the R2_* variables"} ` +
-  "on the Render service (a Cloudflare R2 bucket; see RUNBOOK.md) to enable video uploads.";
+  `Video storage isn't set up on this server — set ${storeMissing.length ? storeMissing.join(", ") : "the S3_* variables"} ` +
+  "on the Render service (Supabase Storage → S3 connection; see RUNBOOK.md) to enable video uploads.";
 
 // The local fallback's root. Same default as store.js so a dev checkout keeps
 // everything under one data/ folder; keys carry their own videos/ prefix.

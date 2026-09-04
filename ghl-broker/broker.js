@@ -17,6 +17,7 @@ import createDispoRouter from "./routes/dispo.js";
 import { createDataroomRouter, createDataroomPublicRouter } from "./routes/dataroom.js";
 import { createOfferPageRouter, createOfferPagePublicRouter } from "./routes/offer-page.js";
 import { store } from "./store.js";
+import { checkObjectStore } from "./r2.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -140,6 +141,14 @@ app.use("/d", createDataroomPublicRouter({ publicBaseUrl: DATAROOM_BASE_URL }));
 app.use("/o", createOfferPagePublicRouter());
 
 store.init().catch((e) => console.error("store init failed:", e.message));
+// Say at boot whether property videos have somewhere to go. "not configured"
+// is a quiet state (uploads are refused with a message); a configured bucket
+// that doesn't answer is the thing to read this log for.
+checkObjectStore().then((r) => {
+  if (r.ok) console.log(`object store ok: ${r.bucket} @ ${r.endpoint}`);
+  else if (!r.configured) console.log(`object store ${r.reason} — video uploads disabled`);
+  else console.error(`object store configured but not answering — ${r.reason}`);
+}).catch((e) => console.error("object store check failed:", e.message));
 
 // Nightly AI enrichment sweep (Settings → "Nightly conversation sweep").
 // Fires during the 10:00 UTC hour ≈ 2–3am Pacific; maybeStartNightlySweep
