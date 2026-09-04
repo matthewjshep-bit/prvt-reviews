@@ -15,6 +15,7 @@ import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
 export const LIVE = new Set(["queued", "running"]);
 
 const INTENT_CLS = {
+  realm_check: "bg-violet-100 text-violet-800", realm_yes: "bg-emerald-100 text-emerald-800",
   counter: "bg-violet-100 text-violet-800", acceptance: "bg-emerald-100 text-emerald-800",
   rejection: "bg-rose-100 text-rose-700", passing: "bg-rose-100 text-rose-700",
   wants_call: "bg-amber-100 text-amber-800", scheduling: "bg-amber-100 text-amber-800",
@@ -142,9 +143,15 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
         <span className="ml-auto text-xs text-slate-500">{ago(d.createdAt)}</span>
       </div>
 
-      <div className="mt-1 text-xs text-slate-600">
-        <span className="text-slate-400">They said:</span> “{d.inbound}”
-      </div>
+      {d.outbound?.kind === "realm_check" ? (
+        <div className="mt-1 text-xs text-slate-600">
+          <span className="text-slate-400">Numbers came back:</span> our offer on {d.outbound.address} is {d.outbound.amount ? `$${Number(d.outbound.amount).toLocaleString()}` : "set"} — this floats it before the formal offer goes.
+        </div>
+      ) : (
+        <div className="mt-1 text-xs text-slate-600">
+          <span className="text-slate-400">They said:</span> “{d.inbound}”
+        </div>
+      )}
       {d.summary && <div className="mt-0.5 text-xs text-slate-500">{d.summary}</div>}
 
       {scheduled ? (

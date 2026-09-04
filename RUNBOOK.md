@@ -661,6 +661,25 @@ deal. The investor book now also recognises a dispo blast tag as "sent to
 them" and lists finished deals they saw as NO LONGER AVAILABLE, so "is 54th
 still open?" gets an honest answer.
 
+**The realm check.** The flow Matt described: an agent confirms a listing →
+Tier 1, Subject Property written, the auto-underwrite runs (your Tier 1
+workflow, or the `start_underwrite` action). While it runs, the agent
+playbook's QUALIFY paragraph has the bot learn condition, the seller's
+number, timeline and occupancy, one question at a time. When the underwrite
+creates an offer, the underwriter's `onOfferCreated` hook calls
+`startProactive` and the bot drafts a text it STARTS — "we'd likely land
+around 410k as-is, quick close; is that in the realm for the seller before I
+send it over?" — with the number from the offer book (so the money guard
+allows it) and the letter's terms. It waits in the outbox like any reply,
+labelled "floated our number"; tick `realm_check` on the agent's auto-send
+list to let it go by itself. The agent's answer is read as `realm_yes` (tag
+`realm-yes`, the offer noted "in the realm" and a ledger line, so History
+and the next context both know) or as a `counter` / `rejection` like any
+other. The agent book now also carries each offer's terms (close days,
+earnest money, as-is) and its counter history; the ARV and repair estimate
+ride along too but reach the prompt only when the playbook's **Show the
+math** switch is on (off on the starter — it's leverage).
+
 **What the model is given.** The persona (name, role, voice, length, sign-off),
 the house rules, the party's playbook (standing instructions, "it may / it may
 not"), the examples of our voice, the intent definitions, and then per party:

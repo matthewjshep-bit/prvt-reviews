@@ -155,3 +155,22 @@ test("bulk needs a selection", async () => {
 });
 
 test.after(() => server.close());
+
+import { toListOffer as toRow } from "./shared/offer-status.js";
+
+test("a lean row carries the numbers and terms the Conversation AI needs, not the calc blob", () => {
+  const row = toRow({
+    id: "o1", locationId: "L", address: "12 Elm", cashAmount: 410000, status: "sent", createdAt: "2026-09-01T00:00:00Z",
+    calc: { inputs: { arv: 620000, repairs: 55000, askingPrice: 525000 }, settings: { earnestMoney: 2500, termFinancing: "cash", termCondition: "as-is", termPossession: "at closing", psa: { closingDays: 14 } } },
+    statusHistory: [{ status: "countered", ts: "2026-09-02T00:00:00Z", note: "425k" }],
+    realm: { answer: "yes", ts: "2026-09-03T00:00:00Z" },
+  });
+  assert.equal(row.askingPrice, 525000);
+  assert.equal(row.arv, 620000);
+  assert.equal(row.repairs, 55000);
+  assert.deepEqual(row.terms, { closingDays: 14, earnestMoney: 2500, financing: "cash", condition: "as-is", possession: "at closing" });
+  assert.equal(row.statusHistory.length, 1);
+  assert.equal(row.realm.answer, "yes");
+  assert.equal(row.calc, undefined);
+  assert.deepEqual(toRow(row), row, "idempotent");
+});

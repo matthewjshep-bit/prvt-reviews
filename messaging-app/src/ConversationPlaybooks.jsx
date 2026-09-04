@@ -6,7 +6,7 @@ import React, { useEffect, useState } from "react";
 import { Lock, Plus, Trash2 } from "lucide-react";
 import {
   INTENTS, INTENT_LABEL, INTENT_GLOSS, NEVER_AUTO, PARTY_LABEL, ACTION_LABEL, ACTION_TYPES,
-  INTERNAL_ACTIONS, INTERNAL_ACTIONS_FOR, ASK_ONLY_ACTIONS, TOKENS,
+  INTERNAL_ACTIONS, INTERNAL_ACTIONS_FOR, ASK_ONLY_ACTIONS, TOKENS, OUTBOUND_INTENTS,
 } from "@shared/conversation-ai.js";
 import { BTN } from "./ui.jsx";
 
@@ -364,13 +364,29 @@ export function PartyPlaybooks({ config, patch, workflows }) {
           </Field>
         </div>
 
+        {party === "agent" && (
+          <div className="grid gap-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-2">
+            <div>
+              <Toggle checked={pb.realmCheck?.enabled} onChange={(v) => setPb({ realmCheck: { enabled: v } })}>
+                <span className="font-semibold">Realm check when numbers land</span>
+              </Toggle>
+              <p className={HINT}>When an auto-underwrite creates an offer for an agent, draft a text that floats the number as a soft one and asks if it's in the realm before the formal offer goes. It waits in the outbox like any reply; tick "floated our number" on the auto-send list to let it go by itself.</p>
+            </div>
+            <div>
+              <Toggle checked={pb.showMath} onChange={(v) => setPb({ showMath: v })}>
+                <span className="font-semibold">Show the math</span>
+              </Toggle>
+              <p className={HINT}>Let it explain a number with our ARV and repair estimate when an agent pushes back. Off keeps that leverage until you decide.</p>
+            </div>
+          </div>
+        )}
         <div className="rounded-lg border border-slate-200 p-3">
           <Toggle checked={pb.autoSend.enabled} onChange={(v) => setPb({ autoSend: { ...pb.autoSend, enabled: v } })}>
             <span className="font-semibold">Let it send on its own to {PARTY_LABEL[party].toLowerCase()}s</span>
           </Toggle>
           <p className={HINT}>Only for the intents ticked below, only when every gate passes, and only after the delay above. Everything else still waits for you.</p>
           <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
-            {INTENTS[party].map((intent) => {
+            {[...INTENTS[party], ...(OUTBOUND_INTENTS[party] || [])].map((intent) => {
               const locked = NEVER_AUTO[party].includes(intent);
               const on = pb.autoSend.intents.includes(intent);
               return (
@@ -381,8 +397,8 @@ export function PartyPlaybooks({ config, patch, workflows }) {
                     : <input type="checkbox" className="mt-1" checked={on} disabled={!pb.autoSend.enabled}
                         onChange={(e) => setPb({ autoSend: { ...pb.autoSend, intents: e.target.checked ? [...pb.autoSend.intents, intent] : pb.autoSend.intents.filter((x) => x !== intent) } })} />}
                   <span>
-                    <span className="font-medium">{INTENT_LABEL[party][intent]}</span>
-                    <span className="block text-xs text-slate-400">{INTENT_GLOSS[party][intent]}</span>
+                    <span className="font-medium">{INTENT_LABEL[party][intent] || intent}</span>
+                    <span className="block text-xs text-slate-400">{INTENT_GLOSS[party][intent] || (intent === "realm_check" ? "the text it starts when an underwrite lands: floats our number, asks if it's in the realm" : "")}</span>
                   </span>
                 </label>
               );

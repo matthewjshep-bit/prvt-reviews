@@ -1023,3 +1023,99 @@ test("counter and pass update the offer, passing updates the investor, through t
   assert.deepEqual(d2.actions.map((a) => [a.type, a.status]), [["mark_investor_passed", "done"]]);
   assert.equal(inv[0].status, "passed");
 });
+
+/* ---------- the realm check: numbers land, the bot floats them ---------- */
+
+import { startProactive } from "./reply-agent.js";
+
+const LANDED = {
+  id: "o9", address: "12 Elm St, Renton, WA 98056", contactId: "c1", cashAmount: 410000, askingPrice: 525000,
+  status: "new", createdAt: iso(1000), terms: { closingDays: 14, earnestMoney: 2500, condition: "as-is" },
+};
+
+test("when an underwrite lands, the bot drafts a realm check that floats the number from the book", async () => {
+  _resetJobs();
+  const { client, notes, tags } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => [LANDED];
+  let seen;
+  const { job } = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: LANDED, sendsEnabled: true,
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "realm_check", reply: "Ran 12 Elm. We'd likely land around 410k cash, as-is, 14-day close. Is that in the realm for your seller before I send it over?", summary: "Floats 410k on 12 Elm." }; } },
+  });
+  assert.ok(job, "started");
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(job.outbound, "realm_check");
+  assert.equal(seen.outbound.kind, "realm_check");
+  assert.equal(seen.outbound.amountText, "$410,000");
+  assert.match(seen.outbound.terms, /14-day close, as-is/);
+  assert.match(seen.context.text, /our cash offer \$410,000 \(asking \$525,000\) terms: 14-day close, \$2,500 earnest money, as-is/);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "realm_check");
+  assert.equal(d.status, "draft");
+  assert.equal(d.outbound.address, "12 Elm St, Renton, WA 98056");
+  assert.equal(d.autoSendable, true, d.flags.join(" · "));
+  assert.match(d.autoSend.reason, /auto-send is off for listing agents/, "waits for a person until the switch and the allowlist say otherwise");
+  assert.deepEqual(tags, [["POST", ["reply-draft"]]]);
+  assert.match(notes[0], /AI drafted a realm check on 12 Elm St.*\(\$410,000\)/);
+});
+
+test("the realm check respects the playbook switch, the hands-off tag, and the allowlist", async () => {
+  _resetJobs();
+  const off = { ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi, parties: { ...STARTER_SAVED.conversationAi.parties, agent: { ...STARTER_SAVED.conversationAi.parties.agent, realmCheck: { enabled: false } } } } };
+  const r = await startProactive({ client: deadClient, locationId: "LOC", saved: off, store: fakeStore(), contactId: "c1", offer: LANDED });
+  assert.match(r.skipped, /realm check is off/);
+  const noNumber = await startProactive({ client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1", offer: { ...LANDED, cashAmount: null } });
+  assert.match(noNumber.skipped, /no number to float/);
+
+  const { client } = ghlStubFor(["agent", "stop bot"]);
+  const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1", offer: LANDED, deps: { draft: async () => DRAFT } });
+  await settle();
+  assert.equal(job.status, "held");
+
+  _resetJobs();
+  const on = { ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi, parties: { ...STARTER_SAVED.conversationAi.parties, agent: { ...STARTER_SAVED.conversationAi.parties.agent, autoSend: { enabled: true, intents: ["realm_check"] } } } } };
+  const { client: c2 } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => [LANDED];
+  const { job: j2 } = await startProactive({
+    client: c2, locationId: "LOC", saved: on, store, contactId: "c1", offer: LANDED, sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "realm_check", reply: "We'd land around 410k as-is. In the realm for the seller?" }), now: () => NOW, random: () => 0 },
+  });
+  await settle();
+  const d = await store.getReplyDraft(j2.draftId);
+  assert.equal(d.status, "scheduled", d.autoSend?.reason);
+});
+
+test("'in the realm' notes the offer and tags the agent; the math stays hidden unless the switch is on", async () => {
+  _resetJobs();
+  const { client, tags } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => [{ ...LANDED, arv: 620000, repairs: 55000 }];
+  const realm = [];
+  let seen;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "yeah that works, send it over",
+    deps: {
+      draft: async (args) => { seen = args; return { ...DRAFT, intent: "realm_yes", reply: "Great, sending it over today.", propertyAddress: "12 Elm St" }; },
+      setOfferRealm: async (args) => { realm.push(args); return { ok: true, address: "12 Elm St, Renton, WA 98056", answer: "yes" }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(seen.context.text.includes("our math"), false, "ARV and repairs stay out of the prompt");
+  assert.equal(seen.context.amounts.includes(620000), false);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(d.actions.map((a) => [a.type, a.status]), [["add_tags", "done"], ["mark_offer_realm_yes", "done"]]);
+  assert.equal(realm[0].answer, "yes");
+  assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("realm-yes")));
+
+  const shown = { ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi, parties: { ...STARTER_SAVED.conversationAi.parties, agent: { ...STARTER_SAVED.conversationAi.parties.agent, showMath: true } } } };
+  _resetJobs();
+  let seen2;
+  await startReply({ client, locationId: "LOC", saved: shown, store, contactId: "c1", message: "why so low?", deps: { draft: async (args) => { seen2 = args; return DRAFT; } } });
+  await settle();
+  assert.match(seen2.context.text, /\[our math: ARV \$620,000, repairs \$55,000\]/);
+  assert.ok(seen2.context.amounts.includes(620000) && seen2.context.amounts.includes(55000));
+});

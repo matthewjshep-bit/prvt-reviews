@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  normalizeConversationAi, CONVERSATION_AI_DEFAULTS, INTENTS, NEVER_AUTO, autoEligible,
+  normalizeConversationAi, CONVERSATION_AI_DEFAULTS, INTENTS, NEVER_AUTO, autoEligible, OUTBOUND_INTENTS,
   draftStats, substituteTokens, actionAllowedFor, isValidTimeZone,
 } from "./conversation-ai.js";
 
@@ -62,7 +62,7 @@ test("an allowlist can never contain a never-auto intent, and unknown intents ar
   assert.deepEqual(c.parties.investor.autoSend.intents, ["interested"]);
   for (const p of ["agent", "investor"]) {
     for (const i of NEVER_AUTO[p]) assert.equal(autoEligible(p).includes(i), false, `${p}:${i}`);
-    assert.ok(autoEligible(p).every((i) => INTENTS[p].includes(i)));
+    assert.ok(autoEligible(p).every((i) => INTENTS[p].includes(i) || (OUTBOUND_INTENTS[p] || []).includes(i)));
   }
 });
 
@@ -263,4 +263,17 @@ test("fallback rules, bot-off tags, debounce, human-active, profile and notes al
   assert.equal(st.parties.investor.intentRules.passing.actions[0].type, "mark_investor_passed");
   assert.equal(st.parties.investor.intentRules.wants_to_buy.actions.some((a) => a.type === "mark_investor_committed"), true);
   assert.equal(st.autoSend.debounceSec, 45);
+});
+
+test("the realm check and the math switch normalize, and realm_check is an outbound intent on the agent allowlist", () => {
+  const c = normalizeConversationAi({ parties: { agent: { showMath: "true", realmCheck: { enabled: "true" }, autoSend: { enabled: true, intents: ["realm_check", "realm_yes", "counter"] } } } });
+  assert.equal(c.parties.agent.showMath, true);
+  assert.equal(c.parties.agent.realmCheck.enabled, true);
+  assert.deepEqual(c.parties.agent.autoSend.intents, ["realm_check", "realm_yes"]);
+  assert.equal(INTENTS.agent.includes("realm_check"), false, "the classifier never reads an inbound text as one");
+  const st = starterConfig({ signer: "Matt" });
+  assert.equal(st.parties.agent.realmCheck.enabled, true);
+  assert.equal(st.parties.agent.showMath, false);
+  assert.deepEqual(st.parties.agent.intentRules.realm_yes.actions.map((a) => a.type), ["add_tags", "mark_offer_realm_yes"]);
+  assert.match(st.parties.agent.instructions, /REALM CHECK/);
 });

@@ -83,7 +83,7 @@ const statusWord = (s) => ({
 // The offer book, newest first, capped, and every number here is a number the
 // reply is ALLOWED to say. Unchanged from the first version except that the
 // asking price now actually arrives (see toListOffer in shared/offer-status.js).
-export function summarizeOffers(offers = [], { now = Date.now() } = {}) {
+export function summarizeOffers(offers = [], { now = Date.now(), showMath = false } = {}) {
   const rows = [...offers]
     .filter((o) => o && o.address)
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
@@ -98,13 +98,32 @@ export function summarizeOffers(offers = [], { now = Date.now() } = {}) {
     if (asking) amounts.add(asking);
     const lastSend = (o.sends || []).filter((s) => s && s.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0];
     const age = daysAgo(lastSend?.ts || o.createdAt, now);
+    // The letter's terms are things the bot may confirm; the math behind the
+    // number is leverage, shown only when the playbook says so.
+    const t = o.terms || {};
+    const terms = [
+      t.closingDays ? `${t.closingDays}-day close` : "",
+      t.earnestMoney ? `${fmtMoney(t.earnestMoney)} earnest money` : "",
+      t.condition ? "as-is" : "",
+    ].filter(Boolean).join(", ");
+    if (t.earnestMoney) amounts.add(Math.round(t.earnestMoney));
+    const arv = Number(o.arv ?? o.calc?.inputs?.arv) || 0;
+    const repairs = Number(o.repairs ?? o.calc?.inputs?.repairs) || 0;
+    if (showMath) { if (arv) amounts.add(arv); if (repairs) amounts.add(repairs); }
+    const counters = (o.statusHistory || []).filter((h) => h?.status === "countered").slice(-2)
+      .map((h) => `countered${h.note ? ` (${String(h.note).slice(0, 60)})` : ""} ${dateWord(h.ts)}`);
+    const realm = o.realm?.answer === "yes" ? "agent said the number is in the realm" : "";
     const parts = [
       `${o.address}:`,
       amount ? `our cash offer ${fmtMoney(amount)}` : status === "draft" ? "still being underwritten (no number yet)" : "no amount recorded",
       asking ? `(asking ${fmtMoney(asking)})` : "",
+      terms ? `terms: ${terms}` : "",
+      showMath && (arv || repairs) ? `[our math: ARV ${arv ? fmtMoney(arv) : "n/a"}, repairs ${repairs ? fmtMoney(repairs) : "n/a"}]` : "",
       `— status: ${statusWord(status)}`,
       lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" ? "" : "not sent yet",
       o.validLabel ? `valid ${o.validLabel}` : "",
+      counters.length ? `history: ${counters.join("; ")}` : "",
+      realm,
       o.statusNote ? `note: ${String(o.statusNote).slice(0, 120)}` : "",
     ].filter(Boolean);
     lines.push(`- ${parts.join(" ")}`);
@@ -118,8 +137,8 @@ export function summarizeOffers(offers = [], { now = Date.now() } = {}) {
 const historyTail = (v, n = HISTORY_LINES_IN_CONTEXT) =>
   String(v || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-n);
 
-export function buildAgentContext({ offers, custom = {}, now = Date.now() }) {
-  const book = summarizeOffers(offers, { now });
+export function buildAgentContext({ offers, custom = {}, now = Date.now(), showMath = false }) {
+  const book = summarizeOffers(offers, { now, showMath });
   const amounts = new Set(book.amounts);
   const fields = fieldLines(custom, AGENT_FIELD_KEYS);
 
@@ -149,9 +168,9 @@ export function buildAgentContext({ offers, custom = {}, now = Date.now() }) {
   };
 }
 
-export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now() }) {
+export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
-  return buildAgentContext({ offers: rows, custom, now });
+  return buildAgentContext({ offers: rows, custom, now, showMath });
 }
 
 /* ---------- the investor's book ---------- */
@@ -227,7 +246,7 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
     const link = (offer.deal.investors || []).find((i) => i.contactId === contactId) || null;
     const blasted = blastTagged(tags, offer.address, blastPrefix);
     if (GONE_DEAL_STAGES.has(offer.deal.stage)) {
-      if (link || blasted) gone.push({ address: offer.address || "a property", stage: offer.deal.stage, at: offer.deal.updatedAt || "" });
+      if (link || blasted) gone.push({ address: offer.address || "a property", stage: offer.deal.stage, at: offer.deal.updatedAt || "", theirs: link?.status || null });
       continue;
     }
     if (!INVESTOR_DEAL_STAGES.has(offer.deal.stage)) continue;
@@ -258,7 +277,8 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
 
   const fields = fieldLines(custom, INVESTOR_FIELD_KEYS);
   const history = historyTail(investor.dealHistory || custom.investor_deal_history);
-  const goneLines = gone.slice(0, 3).map((g) => `- ${g.address}: ${GONE_WORD[g.stage] || g.stage}`);
+  const standing = { committed: "they were the buyer", passed: "they passed on it", evaluating: "they were looking at it", sent: "it was sent to them" };
+  const goneLines = gone.slice(0, 3).map((g) => `- ${g.address}: ${GONE_WORD[g.stage] || g.stage}${g.theirs && standing[g.theirs] ? ` — ${standing[g.theirs]}` : ""}`);
   const text = [
     `INVESTOR PROFILE (their buy box, as we understand it):\n${profile}`,
     linked.length ? `DEALS THEY ARE ALREADY ON (sent to them, or they asked):\n${linked.map(dealLine).join("\n")}` : "DEALS THEY ARE ALREADY ON: none.",

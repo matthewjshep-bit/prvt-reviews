@@ -44,7 +44,7 @@ import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { fmtMoney } from "./shared/offer-calc.js";
 import {
   normalizeConversationAi, INTENTS, NEVER_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
-  SILENT_INTENTS, detectOptOut, optOutActions,
+  SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutActions,
 } from "./shared/conversation-ai.js";
 import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
@@ -153,7 +153,7 @@ export async function countToday({ store, locationId, now = Date.now() }) {
 export async function draftReply({
   message, transcript = "", offers = { text: "", amounts: [], count: 0 }, contact = {},
   underwriting = [], instructions = "", signer = "", aiApiKey,
-  party = "agent", config = null, context = null, channel = "sms",
+  party = "agent", config = null, context = null, channel = "sms", outbound = null,
 }) {
   const client = new Anthropic({ apiKey: aiApiKey, timeout: 120_000 });
   const cfg = config || normalizeConversationAi(null);
@@ -163,8 +163,8 @@ export async function draftReply({
       : "",
   };
   const system = buildSystemPrompt({ config: cfg, party, channel });
-  const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message });
-  const intents = INTENTS[party] || INTENTS.agent;
+  const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound });
+  const intents = outbound ? [outbound.kind] : (INTENTS[party] || INTENTS.agent);
 
   let response;
   try {
@@ -177,7 +177,7 @@ export async function draftReply({
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       system,
-      output_config: { format: { type: "json_schema", schema: schemaFor(party) } },
+      output_config: { format: { type: "json_schema", schema: schemaFor(party, { outbound }) } },
       messages: [{ role: "user", content: [{ type: "text", text: user }] }],
     });
   } catch (e) {
@@ -299,7 +299,8 @@ export function evaluateReplyGates({
   const never = NEVER_AUTO[party] || NEVER_AUTO.agent;
   const maxSms = Number(style?.maxSmsChars) > 0 ? Number(style.maxSmsChars) : RA_MAX_SMS_CHARS;
 
-  if (never.includes(draft.intent) || !(INTENTS[party] || INTENTS.agent).includes(draft.intent)) {
+  const known = [...(INTENTS[party] || INTENTS.agent), ...(OUTBOUND_INTENTS[party] || [])];
+  if (never.includes(draft.intent) || !known.includes(draft.intent)) {
     flags.push(`a ${String(draft.intent).replace(/_/g, " ")} is a person's call`);
   }
   if (draft.needsHuman) {
@@ -588,7 +589,7 @@ export async function assembleConversation({
   if (light) {
     /* an opt-out needs the party and nothing else */
   } else if (party === "agent") {
-    context = await loadAgentContext({ store, locationId, contactId, custom, now });
+    context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath) });
     underwriting = listUnderwriteJobs(locationId)
       .filter((j) => j.contactId === contactId && (j.status === "running" || j.status === "queued"))
       .map((j) => j.address || "a property")
@@ -722,6 +723,121 @@ export async function startReply({
 
 const DEDUPE_MS = 2 * 60 * 1000;
 const waiting = new Map();   // `${locationId}:${contactId}` -> { job, timer }
+
+/**
+ * startProactive({ client, locationId, saved, store, contactId, kind, offer, sendsEnabled, deps })
+ *
+ * A message the bot STARTS. Today one kind: the realm check — an
+ * auto-underwrite just landed an offer for this agent, and before the formal
+ * offer goes over the bot floats the number as a soft one and asks whether
+ * it's in the realm. Same lane, same gates, same outbox as a reply; the
+ * number is in the offer book, so the money guard allows it. Sends itself
+ * only when realm_check is on the agent's auto-send list. Returns the job,
+ * or { skipped } when the playbook has it off.
+ */
+export async function startProactive({ client, locationId, saved, store, contactId, kind = "realm_check", offer, sendsEnabled = false, deps = {} }) {
+  const aiApiKey = String(saved?.aiApiKey || "").trim();
+  if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
+  const config = conversationConfig(saved);
+  if (!config.enabled) return { skipped: "Conversation AI is switched off", job: null };
+  if (kind !== "realm_check") return { skipped: `unknown outbound kind ${kind}`, job: null };
+  if (!config.parties.agent.realmCheck?.enabled) return { skipped: "realm check is off for agents", job: null };
+  if (!offer?.cashAmount) return { skipped: "the offer has no number to float", job: null };
+  if (!contactId) return { skipped: "the offer has no contact", job: null };
+
+  const job = {
+    id: newJobId(), locationId, contactId, contactName: "", status: "queued", phase: "queued",
+    channel: "sms", message: "", attachments: 0, party: "agent", partySource: "offer", outbound: kind,
+    offerId: offer.id || null, draftId: null, intent: kind, summary: "", heldReason: null, scheduledFor: null,
+    warnings: [], error: null, startedAt: new Date().toISOString(), finishedAt: null,
+  };
+  jobs.set(job.id, job);
+  runOnLane(locationId, () =>
+    runProactive(job, { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, config, deps: { ...deps, draft: deps.draft || draftReply } })
+      .catch(async (e) => {
+        job.status = "error";
+        job.error = String(e?.message || e).slice(0, 300);
+        job.finishedAt = new Date().toISOString();
+        await note(client, contactId, `AI realm check could not be drafted — ${job.error}. The offer is in History; float the number by hand if you like.`, job.warnings);
+      })
+  );
+  return { skipped: null, job };
+}
+
+async function runProactive(job, ctx) {
+  const { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, config, deps } = ctx;
+  const now = typeof deps.now === "function" ? deps.now() : Date.now();
+  const warnings = job.warnings;
+  job.status = "running";
+  job.phase = "reading";
+  const a = await assembleConversation({
+    client, locationId, saved, store, contactId: job.contactId, message: "", channel: "sms",
+    explicitParty: "agent", now, warnings, aiApiKey,
+  });
+  job.contactName = a.contactName;
+  if (a.botOff?.length) {
+    job.status = "held"; job.phase = ""; job.heldReason = `bot is off for this contact (tag: ${a.botOff[0]})`; job.finishedAt = new Date().toISOString();
+    return;
+  }
+  const { context } = a;
+  const closeDays = offer.terms?.closingDays || saved?.psa?.closingDays || 0;
+  const terms = [closeDays ? `${closeDays}-day close` : "", "as-is"].filter(Boolean).join(", ");
+  const asking = Number(offer.askingPrice || offer.calc?.inputs?.askingPrice) || 0;
+  const outbound = {
+    kind: "realm_check", address: offer.address || "the property", amount: offer.cashAmount,
+    amountText: fmtMoney(offer.cashAmount), askingText: asking ? fmtMoney(asking) : "", terms,
+  };
+
+  job.phase = "drafting";
+  const draft = await deps.draft({
+    message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
+    contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer,
+    aiApiKey, party: "agent", config, context, channel: "sms", outbound,
+  });
+  draft.intent = "realm_check";
+  job.summary = draft.summary;
+  // The number it floats is the offer's; the guard sees it either way.
+  const allowed = [...new Set([...(context.amounts || []), Math.round(offer.cashAmount)])];
+  const gate = evaluateReplyGates({ draft, party: "agent", allowedAmounts: allowed, forbiddenAmounts: context.forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style });
+  const auto = decideAutoSend({ gate, party: "agent", intent: "realm_check", channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
+
+  job.phase = "saving";
+  const open = [];
+  for (const status of ["draft", "scheduled"]) {
+    const rows = await store.listReplyDrafts(locationId, { contactId: job.contactId, status, limit: 5 }).catch(() => []);
+    open.push(...rows);
+  }
+  for (const old of open) {
+    await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
+  }
+  const ts = new Date().toISOString();
+  let record = await store.createReplyDraft({
+    locationId, contactId: job.contactId, contactName: job.contactName, status: "draft", channel: "sms", jobId: job.id,
+    inbound: "", outbound: { kind: "realm_check", offerId: offer.id || null, address: offer.address || "", amount: offer.cashAmount },
+    reply: draft.reply, intent: "realm_check", confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
+    summary: draft.summary || `Floats our ${fmtMoney(offer.cashAmount)} on ${offer.address} and asks if it's in the realm.`,
+    propertyAddress: offer.address || draft.propertyAddress || "", counterAmount: null,
+    autoSendable: gate.ok, flags: gate.flags, party: "agent", partySource: "offer", matchedTags: a.matchedTags,
+    contextSummary: context.summary || {}, offersInContext: context.offers?.count ?? 0,
+    autoSend: { decided: auto.send, reason: auto.reason }, humanActive: a.humanActive || null, actions: [],
+    supersededIds: open.map((o) => o.id), warnings: warnings.slice(0, 6), noteOnAutoSend: config.notes?.onAutoSend !== false,
+    promptVersion: 3, updatedAt: ts,
+  });
+  job.draftId = record.id;
+  try { await addContactTags(client, job.contactId, [RA_TAGS.draft]); } catch (e) { warnings.push(`tag: ${e.message}`); }
+  if (auto.send && draft.reply) {
+    job.phase = "scheduling";
+    const random = typeof deps.random === "function" ? deps.random : Math.random;
+    const sendAt = nextSendTime({ now, delayMs: pickDelayMs(config, random), quietHours: config.autoSend.quietHours });
+    record = { ...record, status: "scheduled", sendAt, scheduledAt: new Date(now).toISOString(), updatedAt: new Date().toISOString() };
+    await store.updateReplyDraft(record.id, record);
+    job.scheduledFor = sendAt;
+  }
+  if (config.notes?.onDraft !== false) await note(client, job.contactId, draftNote(record), warnings);
+  job.status = "done";
+  job.phase = "";
+  job.finishedAt = new Date().toISOString();
+}
 
 function runOnLane(locationId, fn) {
   const lane = lanes.get(locationId) || { running: 0, waiting: [] };
@@ -1014,12 +1130,13 @@ function draftNote(d) {
   const failed = (d.actions || []).filter((a) => a.status === "failed").map((a) => `  • ${a.type}: ${a.error}`);
   const asks = (d.actions || []).filter((a) => a.status === "pending").map((a) => `  • ${a.type.replace(/_/g, " ")}`);
   const learned = (d.profileUpdates?.learned || []).map((l) => `  • ${l}`);
+  const what = d.outbound?.kind === "realm_check" ? `a realm check on ${d.outbound.address || d.propertyAddress} (${fmtMoney(d.outbound.amount)})` : `a reply${d.propertyAddress ? ` about ${d.propertyAddress}` : ""}`;
   return [
     d.status === "scheduled"
-      ? `AI drafted a reply${d.propertyAddress ? ` about ${d.propertyAddress}` : ""} and will send it itself at ${new Date(d.sendAt).toLocaleString("en-US", { timeZone: "America/Los_Angeles", hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })} unless you hold it in the app.`
-      : `AI drafted a reply${d.propertyAddress ? ` about ${d.propertyAddress}` : ""} — open the app to send it.`,
+      ? `AI drafted ${what} and will send it itself at ${new Date(d.sendAt).toLocaleString("en-US", { timeZone: "America/Los_Angeles", hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })} unless you hold it in the app.`
+      : `AI drafted ${what} — open the app to send it.`,
     ``,
-    `${whoWord(d)}: ${d.summary || d.intent}`,
+    d.outbound ? `Why: ${d.summary || "numbers came back"}` : `${whoWord(d)}: ${d.summary || d.intent}`,
     d.flags.length ? `Needs you because: ${d.flags.join("; ")}` : `Would have been safe to send on its own.`,
     ...(acted.length ? [``, `Done automatically:`, ...acted] : []),
     ...(failed.length ? [``, `Could not do:`, ...failed] : []),

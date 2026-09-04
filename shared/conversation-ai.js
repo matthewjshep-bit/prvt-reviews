@@ -19,7 +19,7 @@ export const CONFIDENCES = ["high", "medium", "low"];
 // comes back as "other" and holds.
 export const INTENTS = {
   agent: [
-    "deal_available", "new_property", "investor_open", "question", "counter", "acceptance", "rejection",
+    "deal_available", "new_property", "investor_open", "realm_yes", "question", "counter", "acceptance", "rejection",
     "wants_call", "scheduling", "proof_of_funds", "status_check", "small_talk", "media", "opt_out", "other",
   ],
   investor: [
@@ -33,9 +33,15 @@ export const INTENTS = {
 // line from config.media. Both still show in the history.
 export const SILENT_INTENTS = new Set(["opt_out"]);
 
+// Messages the bot STARTS rather than answers. Not in the classifier's
+// vocabulary — the model never reads an inbound text as one of these — but
+// they need labels, gates and an allowlist slot like any other.
+export const OUTBOUND_INTENTS = { agent: ["realm_check"], investor: [] };
+
 export const INTENT_LABEL = {
   agent: {
     deal_available: "has a deal (tier 1)", new_property: "new property (tier 1)", investor_open: "open to investors (tier 2)",
+    realm_yes: "number is in the realm", realm_check: "floated our number",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
     wants_call: "wants a call", scheduling: "scheduling", proof_of_funds: "proof of funds",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
@@ -55,6 +61,7 @@ export const INTENT_GLOSS = {
   agent: {
     deal_available: "the listing we asked about (or one they've got) is available and needs work — condition, price expectations, seller timeline",
     investor_open: "no deal right now, but open to working with investors or happy for us to stay in touch",
+    realm_yes: "says the number we floated works, is in the realm, or to go ahead and send the formal offer",
     media: "the message is only a photo or attachment",
     opt_out: "asks us to stop texting, says wrong number, or is plainly angry — reply with nothing at all",
     question: "asks something answerable from the thread or the offer book",
@@ -95,14 +102,14 @@ export const NEVER_AUTO = {
   investor: ["price_pushback", "wants_to_buy", "wants_walkthrough", "wants_call", "opt_out", "other"],
 };
 export const autoEligible = (party) =>
-  (INTENTS[party] || []).filter((i) => !(NEVER_AUTO[party] || []).includes(i));
+  [...(INTENTS[party] || []), ...(OUTBOUND_INTENTS[party] || [])].filter((i) => !(NEVER_AUTO[party] || []).includes(i));
 
 /* ---------- actions: what an intent may trigger in GHL, or here ---------- */
 
 export const ACTION_TYPES = [
   "add_tags", "remove_tags", "set_field", "add_to_workflow", "remove_from_workflow",
   "link_deal_evaluating", "start_underwrite", "suggest_dataroom_invite",
-  "mark_offer_countered", "mark_offer_passed", "mark_investor_passed", "mark_investor_committed",
+  "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
 ];
 export const ACTION_LABEL = {
   add_tags: "Add tags", remove_tags: "Remove tags", set_field: "Set a custom field",
@@ -110,6 +117,7 @@ export const ACTION_LABEL = {
   link_deal_evaluating: "Link them to the deal as evaluating",
   start_underwrite: "Start an auto-underwrite", suggest_dataroom_invite: "Suggest a dataroom invite",
   mark_offer_countered: "Mark their offer countered", mark_offer_passed: "Mark their offer passed",
+  mark_offer_realm_yes: "Note on the offer that the number is in the realm",
   mark_investor_passed: "Mark them passed on the deal", mark_investor_committed: "Mark them the committed buyer",
 };
 // Actions that run on the broker rather than in GHL, and which party each
@@ -117,10 +125,10 @@ export const ACTION_LABEL = {
 // to a dataroom; an offer belongs to an agent, a deal status to an investor.
 export const INTERNAL_ACTIONS = new Set([
   "link_deal_evaluating", "start_underwrite", "suggest_dataroom_invite",
-  "mark_offer_countered", "mark_offer_passed", "mark_investor_passed", "mark_investor_committed",
+  "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
 ]);
 export const INTERNAL_ACTIONS_FOR = {
-  agent: ["start_underwrite", "mark_offer_countered", "mark_offer_passed"],
+  agent: ["start_underwrite", "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes"],
   investor: ["link_deal_evaluating", "suggest_dataroom_invite", "mark_investor_passed", "mark_investor_committed"],
 };
 // Never automatic: a dataroom link is a document going out, and a committed
@@ -147,6 +155,14 @@ const PLAYBOOK = () => ({
   // Runs when no intent rule fired — the "any reply with no fit" bucket.
   // `unlessTags`: skip when the contact already carries one (never demote).
   fallback: { mode: "ask", actions: [], unlessTags: [] },
+  // May the bot explain our number with the ARV and repair estimate? Off
+  // keeps that leverage until a person decides otherwise.
+  showMath: false,
+  // When an auto-underwrite lands an offer for this party, draft a text that
+  // floats the number as a soft one and asks whether it's in the realm
+  // before the formal offer goes. Sends itself only if realm_check is on the
+  // party's auto-send list.
+  realmCheck: { enabled: false },
 });
 
 // Words that mean "stop". Matched deterministically, before any model call,
@@ -301,6 +317,8 @@ function normalizePlaybook(p, party, seed = {}) {
       actions: (Array.isArray(fb.actions) ? fb.actions : []).map((a) => normalizeAction(a, party)).filter(Boolean).slice(0, 8),
       unlessTags: list(fb.unlessTags, { max: 20, each: 80, lower: true }),
     },
+    showMath: bool(src.showMath, false),
+    realmCheck: { enabled: bool(src.realmCheck?.enabled, false) },
   };
 }
 
@@ -627,6 +645,13 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "NO MEANS NO: never argue with a clear decline. Reply once — 'Understood, thanks for your time!' — and stop.\n" +
           "TURNKEY: if the listing is turnkey, ask whether they have anything else sitting that needs work, and " +
           "whether it's cool to stay in touch.\n" +
+          "QUALIFY: once there's an address, learn — one question at a time, across the conversation, never as a " +
+          "form — the condition and what work it needs, what the seller needs to get, their timeline, and whether " +
+          "it's vacant or occupied. These are what our underwriting reads.\n" +
+          "REALM CHECK: when our number comes back you may float it as a soft number ('we'd likely land around " +
+          "410k as-is, quick close') and ask whether that's in the realm for the seller before the formal offer " +
+          "goes over. If they say it works, say you'll send it over today. If they push back with a number, " +
+          "acknowledge it and say you'll run it by your partner — never move on your own.\n" +
           `IF ASKED IF YOU'RE A BOT: give the standard line, then ask if they have any stale or pocket listings right now.`,
         mayCommit:
           "Confirm we buy as-is for cash with a 10 to 14 day target close. Say we'll run an address by underwriting " +
@@ -641,7 +666,10 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           investor_open: tierRule("tier-2", ["tier-3"], "tier2", ["tier3"]),
           rejection: tierRule("tier-3", [], "tier3", [], [{ type: "mark_offer_passed" }]),
           counter: { mode: "auto", actions: [{ type: "mark_offer_countered" }] },
+          realm_yes: { mode: "auto", actions: [{ type: "add_tags", tags: ["realm-yes"] }, { type: "mark_offer_realm_yes" }] },
         },
+        showMath: false,
+        realmCheck: { enabled: true },
         // Any agent reply with no fit is Tier 3 — the old bot's catch-all —
         // unless they already have a tier.
         fallback: {

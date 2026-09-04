@@ -1041,6 +1041,14 @@ async function runUnderwrite(job, ctx) {
 
   await setTag(client, job.contactId, UW_TAGS.done, warnings);
   await note(client, job.contactId, doneNote(job, arv, repairs), warnings);
+
+  // Numbers are back: the Conversation AI may float them to the agent as a
+  // soft number before the formal offer goes. Wired by the route; a failure
+  // here is a warning on the run, never a failed underwrite.
+  if (typeof deps?.onOfferCreated === "function") {
+    try { await deps.onOfferCreated({ offer, job }); }
+    catch (e) { warnings.push(`realm check: ${String(e?.message || e).slice(0, 120)}`); }
+  }
 }
 
 /* ---------- holding for review ---------- */

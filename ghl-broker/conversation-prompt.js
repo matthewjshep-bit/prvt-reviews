@@ -110,6 +110,11 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     "yesterday, and never anything that would read as surveillance or as a script."
   );
   parts.push(COMMITMENTS[party] || COMMITMENTS.unknown);
+  if (party === "agent") {
+    parts.push(playbook.showMath
+      ? "MATH: when an agent pushes on a number you may explain it with the ARV and repair estimate shown beside the offer in the context, once, plainly."
+      : "MATH: never explain how an offer number was built. If pushed, say it reflects the work the house needs and the resale we see, and that your partner reviews the numbers.");
+  }
   if (playbook.mayCommit) parts.push(`YOU MAY, on your own: ${playbook.mayCommit}`);
   if (playbook.mayNotCommit) parts.push(`YOU MAY NOT, ever: ${playbook.mayNotCommit}`);
   if (config?.rules?.length) parts.push(`HOUSE RULES — never break these:\n${config.rules.map((r) => `- ${r}`).join("\n")}`);
@@ -154,10 +159,19 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
  */
 export function buildUserContext({
   party = "agent", contact = {}, signer = "", instructions = "", context = { text: "" },
-  underwriting = [], transcript = "", message = "",
+  underwriting = [], transcript = "", message = "", outbound = null,
 } = {}) {
   const label = party === "investor" ? "INVESTOR" : party === "agent" ? "AGENT" : "CONTACT";
   const them = party === "investor" ? "the investor" : party === "agent" ? "the agent" : "them";
+  // A message WE start. The realm check: numbers came back on a property
+  // and the bot floats them as a soft number before the formal offer goes.
+  const opening = outbound?.kind === "realm_check"
+    ? `YOU ARE STARTING THIS MESSAGE — nothing new came in. Our underwriting just came back on ${outbound.address}: ` +
+      `cash offer ${outbound.amountText}${outbound.terms ? `, ${outbound.terms}` : ""}` +
+      `${outbound.askingText ? ` (they are asking ${outbound.askingText})` : ""}. Float it as a soft number ` +
+      `("we'd likely land around …") and ask, in one natural question, whether that's in the realm for the seller ` +
+      `before you send the formal offer over. Reference the thread so it reads as a continuation. Set intent to realm_check.`
+    : "";
   return [
     `${label}: ${contact.name || "unknown name"}${contact.tags?.length ? ` (tags: ${contact.tags.slice(0, 8).join(", ")})` : ""}`,
     signer ? `YOU ARE: ${signer}` : "",
@@ -169,8 +183,8 @@ export function buildUserContext({
     transcript
       ? `THE THREAD SO FAR (US = our team, THEM = ${them}):\n${String(transcript).slice(0, 14000)}`
       : "THE THREAD SO FAR: (no earlier messages available)",
-    `NEWEST INBOUND MESSAGE FROM ${label === "CONTACT" ? "THEM" : `THE ${label}`} (this is what you are replying to):\n"${String(message || "").slice(0, 2000)}"`,
-    "Write the reply.",
+    opening || `NEWEST INBOUND MESSAGE FROM ${label === "CONTACT" ? "THEM" : `THE ${label}`} (this is what you are replying to):\n"${String(message || "").slice(0, 2000)}"`,
+    opening ? "Write the message." : "Write the reply.",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -197,14 +211,15 @@ export function profileSchemaFor(party = "agent") {
   return { type: "object", additionalProperties: false, required: Object.keys(props), properties: props };
 }
 
-export function schemaFor(party = "agent", { profile = true } = {}) {
+export function schemaFor(party = "agent", { profile = true, outbound = null } = {}) {
+  const intents = outbound ? [outbound.kind] : (INTENTS[party] || INTENTS.agent);
   return {
     type: "object",
     additionalProperties: false,
     required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount", ...(profile ? ["profile"] : [])],
     properties: {
       ...(profile ? { profile: profileSchemaFor(party) } : {}),
-      intent: { type: "string", enum: INTENTS[party] || INTENTS.agent },
+      intent: { type: "string", enum: intents },
       confidence: { type: "string", enum: CONFIDENCES, description: "How sure you are of the intent AND that the reply is right" },
       reply: { type: "string", description: "The reply text, or empty when nothing should be sent" },
       needsHuman: { type: "boolean", description: "True when the message asks for anything that commits us" },

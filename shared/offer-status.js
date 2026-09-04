@@ -171,6 +171,9 @@ export const OFFER_LIST_FIELDS = [
   // It rides on the lean row so the auto-underwrite daily cap and the 24h
   // dedupe can be answered without reading every offer document in full.
   "autoUnderwrite",
+  // The outcome ledger ({status, ts, note} rows) — a counter with its number
+  // is the one thing the Conversation AI needs from it, and it's small.
+  "statusHistory", "realm",
   "createdAt", "updatedAt", "dateLabel", "validLabel",
   "pdfUrl", "imageUrl", "scopePdfUrl", "compsPdfUrl",
   "psaPdfUrl", "contractPdfUrl", "assignmentPdfUrl", "netSheetPdfUrl",
@@ -198,6 +201,25 @@ export function toListOffer(offer) {
   //              read as an invented figure.
   const asking = Number(offer?.askingPrice ?? offer?.calc?.inputs?.askingPrice ?? offer?.inputs?.askingPrice) || 0;
   if (asking > 0) row.askingPrice = asking;
+  // arv / repairs / terms  what the Conversation AI needs to explain an offer
+  //              (behind its own switch) and to confirm the terms on the
+  //              letter — a few numbers instead of the whole calc blob.
+  const arv = Number(offer?.arv ?? offer?.calc?.inputs?.arv) || 0;
+  if (arv > 0) row.arv = arv;
+  const repairs = Number(offer?.repairs ?? offer?.calc?.inputs?.repairs) || 0;
+  if (repairs > 0) row.repairs = repairs;
+  const st = offer?.calc?.settings || null;
+  if (offer?.terms) row.terms = offer.terms;
+  else if (st) {
+    // Only the terms the letter actually names — a row must stay a row.
+    const terms = {};
+    if (Number(st.psa?.closingDays) > 0) terms.closingDays = Number(st.psa.closingDays);
+    if (Number(st.earnestMoney) > 0) terms.earnestMoney = Number(st.earnestMoney);
+    for (const [k, v] of [["financing", st.termFinancing], ["condition", st.termCondition], ["possession", st.termPossession]]) {
+      if (String(v || "").trim()) terms[k] = String(v).trim();
+    }
+    if (Object.keys(terms).length) row.terms = terms;
+  }
   row.listOnly = true;
   return row;
 }

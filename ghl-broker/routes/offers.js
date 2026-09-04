@@ -82,7 +82,7 @@ import {
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT,
 } from "../auto-underwrite.js";
 import {
-  startReply, listJobs as listReplyJobs, publicJob as publicReplyJob,
+  startReply, startProactive, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig,
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats } from "../shared/conversation-ai.js";
@@ -3179,7 +3179,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       const { skipped, job } = await startUnderwrite({
         client, locationId, saved, store, contactId, message, address, askingPrice, dryRun,
-        deps: { createOffer: createOfferFromRequest },
+        deps: underwriteDeps({ client, locationId, saved }),
       });
       // A cap hit answers 200, not 4xx: a GHL workflow that gets an error
       // retries, and retrying is exactly what the cap exists to stop.
@@ -3221,12 +3221,43 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // The broker's own moves an intent rule can trigger, bound to the request.
   // Each is best-effort from the caller's side: conversation-actions.js
   // records an outcome per action and never throws.
+  // When an auto-underwrite lands an offer, the Conversation AI floats the
+  // number to the agent (a draft in the outbox unless realm_check is
+  // allowlisted). Same hook for both doors into the underwriter.
+  const underwriteDeps = ({ client, locationId, saved }) => ({
+    createOffer: createOfferFromRequest,
+    onOfferCreated: async ({ offer }) => {
+      const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      const r = await startProactive({
+        client, locationId, saved: fresh, store, contactId: offer.contactId, kind: "realm_check",
+        offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
+      });
+      if (r.skipped) console.log(`realm check skipped for ${offer.id}: ${r.skipped}`);
+    },
+  });
+
   const conversationDeps = ({ client, locationId, saved }) => ({
     startUnderwrite: ({ contactId, message, address }) =>
       startUnderwrite({
         client, locationId, saved, store, contactId, message, address, askingPrice: 0,
-        dryRun: !AUTO_UNDERWRITE_ENABLED, deps: { createOffer: createOfferFromRequest },
+        dryRun: !AUTO_UNDERWRITE_ENABLED, deps: underwriteDeps({ client, locationId, saved }),
       }),
+    // "In the realm": remembered on the offer, so the book says so next time
+    // and History can show which offers are cleared to send.
+    setOfferRealm: async ({ contactId, addressHint, answer, note = "" }) => {
+      const open = (await store.listOffers(locationId, { contactId, limit: 50 })).filter((o) => o.status !== "draft" && !o.deal);
+      if (!open.length) return { ok: false, reason: "no open offer to note" };
+      const offer = pickDealByAddress(open, addressHint) || open[0];
+      const full = await store.getOffer(offer.id);
+      if (!full) return { ok: false, reason: "offer vanished" };
+      const ts = new Date().toISOString();
+      full.realm = { answer: answer === "yes" ? "yes" : "no", ts, note: dealStr(note, 200) };
+      full.statusNote = full.statusNote || (answer === "yes" ? "agent says the number is in the realm" : "");
+      await store.updateOffer(full.id, full);
+      await appendDealHistory(client, locationId, contactId, "agent_deal_history",
+        historyLine(ts, full.address, answer === "yes" ? "number in the realm" : "number not in the realm", dealStr(note, 120)));
+      return { ok: true, address: full.address, answer: full.realm.answer };
+    },
     linkDealInterest: ({ contactId, addressHint }) =>
       linkInvestorInterest({ locationId, client, contactId, addressHint }),
     // The agent's offer outcome, from what they just said: a counter or a

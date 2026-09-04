@@ -90,6 +90,12 @@ const EXECUTORS = {
     if (!r?.ok) return r?.reason || "no open offer to mark";
     return r.unchanged ? `offer on ${r.address} was already passed` : `offer on ${r.address} marked passed`;
   },
+  async mark_offer_realm_yes({ deps, contactId, draft }) {
+    if (typeof deps?.setOfferRealm !== "function") throw new Error("offer realm is not wired on this broker");
+    const r = await deps.setOfferRealm({ contactId, addressHint: draft?.propertyAddress || "", answer: "yes", note: String(draft?.summary || "").slice(0, 200) });
+    if (!r?.ok) return r?.reason || "no open offer to note";
+    return `${r.address}: in the realm — send the formal offer`;
+  },
   async mark_investor_passed({ deps, contactId, draft }) {
     if (typeof deps?.setInvestorStatus !== "function") throw new Error("investor status is not wired on this broker");
     const r = await deps.setInvestorStatus({ contactId, addressHint: draft?.propertyAddress || "", status: "passed" });
