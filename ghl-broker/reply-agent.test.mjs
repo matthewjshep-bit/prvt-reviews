@@ -10,7 +10,7 @@ import {
 
 const DRAFT = {
   intent: "question", confidence: "high", needsHuman: false, humanReason: "",
-  reply: "Yes, still interested — our $410,000 cash offer on 12 Elm stands through Friday.",
+  reply: "Yes, still interested, our 410k cash offer on 12 Elm stands through Friday.",
   summary: "Agent asked if we're still interested; draft confirms the standing offer.",
   propertyAddress: "12 Elm St", counterAmount: 0,
 };
@@ -401,7 +401,7 @@ function ghlStubFor(tags) {
 }
 const INVESTOR_DRAFT = {
   intent: "interested", confidence: "high", needsHuman: false, humanReason: "",
-  reply: "It's at $445,000 — happy to send the package over.", summary: "Investor wants details on 2010 NE 54th.",
+  reply: "It's at 445k, happy to send the package over.", summary: "Investor wants details on 2010 NE 54th.",
   propertyAddress: "2010 NE 54th St", counterAmount: 0,
 };
 
@@ -665,4 +665,170 @@ test("a test on a real contact carries their real thread, then the typed turns",
   const typed = seen.transcript.indexOf("THEM sms: typed turn one");
   assert.ok(real >= 0 && typed > real, "real first, typed after");
   assert.match(seen.transcript, /US sms: our typed answer/);
+});
+
+/* ---------- the GHL bots, consolidated: opt-out, photos, classify, carrier style ---------- */
+
+import { scrubReply, classifyParty } from "./reply-agent.js";
+import { starterConfig, detectOptOut } from "./shared/conversation-ai.js";
+
+const STARTER_SAVED = { ...SAVED, conversationAi: starterConfig({ signer: "Matt Shepherd" }) };
+
+test("STOP gets silence and the tags, no model call, and cancels anything counting down", async () => {
+  _resetJobs();
+  const { client, notes, tags } = ghlStubFor(["agent"]);
+  const store = fakeStore([{ ...openDraft(), id: "sched", status: "scheduled", sendAt: "2026-09-04T17:40:00Z" }]);
+  let called = false;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "STOP texting me",
+    deps: { draft: async () => { called = true; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(called, false, "no Claude call for an opt-out");
+  assert.equal(job.intent, "opt_out");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "handled");
+  assert.equal(d.reply, "");
+  assert.deepEqual(d.actions.map((a) => [a.type, a.status]), [["add_tags", "done"]]);
+  assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("stop bot") && t.includes("dnc")));
+  assert.equal((await store.getReplyDraft("sched")).status, "superseded");
+  assert.match(notes[0], /opt-out/);
+  assert.match(notes[0], /No reply was sent/);
+  assert.equal(notes.length, 1);
+});
+
+test("the model reading an opt-out the keywords missed ends the same way", async () => {
+  _resetJobs();
+  const { client, tags } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "lose my number pal",
+    deps: { draft: async () => ({ ...DRAFT, intent: "opt_out", reply: "Understood.", summary: "Angry; wants no more texts." }) },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "handled");
+  assert.equal(d.reply, "", "the model's goodbye is dropped — an opt-out gets silence");
+  assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("dnc")));
+});
+
+test("the opt-out keywords are strict about where a word sits", () => {
+  const o = starterConfig().optOut;
+  assert.equal(detectOptOut("STOP", o), true);
+  assert.equal(detectOptOut("please stop by the office tomorrow", o), false);
+  assert.equal(detectOptOut("cancelled the listing", o), false);
+  assert.equal(detectOptOut("this is the wrong number", o), true);
+  assert.equal(detectOptOut("don't text me again", o), true);
+  assert.equal(detectOptOut("", o), false);
+  assert.equal(detectOptOut("STOP", { ...o, enabled: false }), false);
+});
+
+test("a bare photo gets the canned line and no model call", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  let called = false;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "", attachments: 2,
+    deps: { draft: async () => { called = true; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(called, false);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "media");
+  assert.equal(d.reply, "Thanks for the images, taking a look!");
+  assert.equal(d.autoSendable, true, d.flags.join(" · "));
+  assert.equal(d.attachments, 2);
+});
+
+test("an empty message with no attachment is still refused", async () => {
+  _resetJobs();
+  await assert.rejects(
+    () => startReply({ client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1", message: "", attachments: 0 }),
+    /message required/
+  );
+});
+
+test("an untagged contact is placed by the words, and stamped so the tags decide next time", async () => {
+  _resetJobs();
+  const { client, tags } = ghlStubFor(["lead"]);
+  const store = fakeStore();
+  store.listDeals = async () => [DEAL];
+  let seen;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "is 54th still available? cash buyer here",
+    deps: {
+      classify: async (args) => { seen = args; return { party: "investor", confidence: "high", reason: "cash buyer asking about a marketed property" }; },
+      draft: async () => INVESTOR_DRAFT,
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(job.party, "investor");
+  assert.equal(job.partySource, "classified");
+  assert.match(seen.message, /54th/);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.classified.party, "investor");
+  assert.equal(d.actions[0].type, "add_tags");
+  assert.deepEqual(d.actions[0].tags, ["investor"], "the party's first plain tag");
+  assert.equal(d.actions[0].status, "done");
+  assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("investor")));
+  assert.match(d.contextSummary && JSON.stringify(d.contextSummary), /matchingDeals/, "the investor book was loaded after the classification");
+});
+
+test("a low-confidence classification stays unknown and gets the generic clarifying reply", async () => {
+  _resetJobs();
+  const { client, tags } = ghlStubFor(["lead"]);
+  const store = fakeStore();
+  let seen;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "hey", sendsEnabled: true,
+    deps: {
+      classify: async () => ({ party: "agent", confidence: "low", reason: "could be anyone" }),
+      draft: async (args) => { seen = args; return { ...DRAFT, reply: "Hey, is this about a listing you have, or are you looking to pick one up?" }; },
+    },
+  });
+  await settle();
+  assert.equal(job.party, "unknown");
+  assert.match(seen.instructions, /ONE natural question/);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /unknown contact never/);
+  assert.equal(tags.filter(([m, t]) => m === "POST" && !t.includes("reply-draft")).length, 0, "no party tag stamped");
+});
+
+test("carrier-unsafe drafts hold: a dollar sign, a link, or too many characters", () => {
+  const style = starterConfig().style;
+  const g = (reply) => evaluateReplyGates({ draft: { ...DRAFT, reply }, allowedAmounts: [410000], style });
+  assert.match(g("Our $410,000 offer stands.").flags.join(" · "), /dollar sign in a text/);
+  assert.match(g("See https://example.com/deal for details.").flags.join(" · "), /link in a text/);
+  assert.match(g("x".repeat(301)).flags.join(" · "), /301 characters is too long/);
+  assert.equal(g("Our 410k offer stands.").ok, true);
+  assert.equal(evaluateReplyGates({ draft: { ...DRAFT, reply: "Our $410,000 offer stands." }, allowedAmounts: [410000], style, channel: "email" }).ok, true, "email is not a text");
+});
+
+test("em dashes are scrubbed from a draft, and the tag rules from the starter fire on a tier read", async () => {
+  assert.equal(scrubReply("Got it — appreciate it — talk soon.", { noEmDashes: true }), "Got it, appreciate it, talk soon.");
+  assert.equal(scrubReply("— leading and trailing —", { noEmDashes: true }), "leading and trailing");
+  assert.equal(scrubReply("keep — this", { noEmDashes: false }), "keep — this");
+
+  _resetJobs();
+  const { client, tags } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "yeah 12 Elm needs a full reno, seller wants out by October",
+    deps: { draft: async () => ({ ...DRAFT, intent: "deal_available", reply: "Got it. Let me run this address by my underwriting team today and see if we can get back to you with an offer.", propertyAddress: "12 Elm St" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(d.actions.map((a) => [a.type, a.tags, a.status]), [["add_tags", ["tier-1"], "done"], ["remove_tags", ["tier-2", "tier-3"], "done"]]);
+  assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("tier-1")));
+  assert.ok(tags.some(([m, t]) => m === "DELETE" && t.includes("tier-2")));
+});
+
+test("the classifier is wired through the same API shape as the drafter", () => {
+  assert.equal(typeof classifyParty, "function");
 });

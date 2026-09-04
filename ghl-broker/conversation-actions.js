@@ -50,7 +50,11 @@ const EXECUTORS = {
     return `removed ${action.tags.join(", ")}`;
   },
   async set_field({ client, locationId, contactId, action, draft }) {
-    const value = substituteTokens(action.value, draft);
+    const value = substituteTokens(action.value, draft).trim();
+    // A template whose tokens all came up empty ({{propertyAddress}} on a
+    // message that named no property) must not blank a field that had a
+    // value — the Subject Property field aims the underwriter.
+    if (!value && /\{\{/.test(action.value || "")) return `${action.key}: nothing to write`;
     const id = await findOrCreateCustomFieldByKey(client, locationId, action.key, action.key, "TEXT");
     if (!id) throw new Error(`could not find or create the field ${action.key}`);
     await updateContact(client, contactId, { customFields: [{ id, value }] });

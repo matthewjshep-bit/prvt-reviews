@@ -42,6 +42,7 @@ import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { fmtMoney } from "./shared/offer-calc.js";
 import {
   normalizeConversationAi, INTENTS, NEVER_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
+  SILENT_INTENTS, detectOptOut, optOutActions,
 } from "./shared/conversation-ai.js";
 import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
@@ -51,7 +52,9 @@ import { resolveParty } from "./conversation-party.js";
 import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT,
 } from "./conversation-context.js";
-import { buildSystemPrompt, buildUserContext, schemaFor } from "./conversation-prompt.js";
+import {
+  buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext,
+} from "./conversation-prompt.js";
 import { planActions, runActions } from "./conversation-actions.js";
 import { pickDelayMs, nextSendTime } from "./conversation-scheduler.js";
 
@@ -187,12 +190,53 @@ export async function draftReply({
   return {
     intent: intents.includes(p.intent) ? p.intent : "other",
     confidence: CONFIDENCES.includes(p.confidence) ? p.confidence : "low",
-    reply: String(p.reply || "").trim(),
+    reply: scrubReply(String(p.reply || "").trim(), cfg.style),
     needsHuman: Boolean(p.needsHuman),
     humanReason: String(p.humanReason || "").trim().slice(0, 300),
     summary: String(p.summary || "").trim().slice(0, 300),
     propertyAddress: String(p.propertyAddress || "").trim().slice(0, 200),
     counterAmount: Math.max(0, Number(p.counterAmount) || 0),
+  };
+}
+
+// The em dash is the tell of a bot. The model is told not to; this is the
+// net under it. A comma reads right in a text almost everywhere a dash did.
+export function scrubReply(reply, style = {}) {
+  if (!style?.noEmDashes) return reply;
+  return String(reply || "")
+    .replace(/\s*[\u2014\u2013]\s*/g, ", ")
+    .replace(/^,\s*/, "").replace(/,\s*$/, "").replace(/,\s*,/g, ",")
+    .trim();
+}
+
+/**
+ * classifyParty({ contact, transcript, message, aiApiKey }) → { party, confidence, reason }
+ *
+ * The GHL "master bot", reduced to one cheap structured call. Only runs for
+ * a contact whose tags say nothing and only when the page asks for it.
+ */
+export async function classifyParty({ contact = {}, transcript = "", message = "", aiApiKey }) {
+  const client = new Anthropic({ apiKey: aiApiKey, timeout: 60_000 });
+  let response;
+  try {
+    response = await client.beta.messages.create({
+      model: "claude-sonnet-5",
+      max_tokens: 400,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      system: CLASSIFY_SYSTEM,
+      output_config: { format: { type: "json_schema", schema: CLASSIFY_SCHEMA } },
+      messages: [{ role: "user", content: [{ type: "text", text: buildClassifyContext({ contact, transcript, message }) }] }],
+    });
+  } catch (e) {
+    throw anthropicErrorToHttp(e);
+  }
+  const raw = response.content.find((b) => b.type === "text")?.text || "{}";
+  const p = JSON.parse(raw);
+  return {
+    party: p.party === "agent" || p.party === "investor" ? p.party : "unknown",
+    confidence: CONFIDENCES.includes(p.confidence) ? p.confidence : "low",
+    reason: String(p.reason || "").slice(0, 200),
   };
 }
 
@@ -224,11 +268,12 @@ export function moneyIn(text) {
  * "could this have gone out by itself?" is a count, not a guess.
  */
 export function evaluateReplyGates({
-  draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], inboundMessage = "", channel = "sms",
+  draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], inboundMessage = "", channel = "sms", style = null,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
   const never = NEVER_AUTO[party] || NEVER_AUTO.agent;
+  const maxSms = Number(style?.maxSmsChars) > 0 ? Number(style.maxSmsChars) : RA_MAX_SMS_CHARS;
 
   if (never.includes(draft.intent) || !(INTENTS[party] || INTENTS.agent).includes(draft.intent)) {
     flags.push(`a ${String(draft.intent).replace(/_/g, " ")} is a person's call`);
@@ -242,8 +287,15 @@ export function evaluateReplyGates({
   if (draft.intent !== "small_talk" && !draft.reply) {
     flags.push("the draft came back empty");
   }
-  if (channel === "sms" && draft.reply.length > RA_MAX_SMS_CHARS) {
+  if (channel === "sms" && draft.reply.length > maxSms) {
     flags.push(`${draft.reply.length} characters is too long for a text`);
+  }
+  // Carrier filters key on these two; the page decides whether they hold.
+  if (channel === "sms" && style?.noDollarSigns && /\$/.test(draft.reply)) {
+    flags.push("a dollar sign in a text trips carrier spam filters");
+  }
+  if (channel === "sms" && style?.noLinks && /https?:\/\/|www\./i.test(draft.reply)) {
+    flags.push("a link in a text trips carrier spam filters");
   }
   // The two rules that are not judgment calls. A number the other side must
   // never hear — our contract price, our fee — is flagged even if they said
@@ -318,6 +370,7 @@ const renderFakeThread = (thread = [], channel = "sms") =>
 export async function assembleConversation({
   client, locationId, saved, store, contactId = "", message = "", channel = "sms",
   explicitParty = "", fakeThread = null, fakeParty = "", now = Date.now(), warnings = [],
+  aiApiKey = "", classify = classifyParty, light = false,
 }) {
   const config = conversationConfig(saved);
 
@@ -332,7 +385,9 @@ export async function assembleConversation({
   const resolved = fakeParty
     ? { party: fakeParty, source: "try-it", matched: { agent: [], investor: [] } }
     : resolveParty({ explicit: explicitParty, tags, routing: config.routing });
-  const party = resolved.party;
+  let party = resolved.party;
+  let partySource = resolved.source;
+  let classified = null;
 
   // The real thread when there is a contact, and after it whatever the test
   // window typed — so a test on a real contact is "their conversation so far,
@@ -351,11 +406,30 @@ export async function assembleConversation({
   const typed = fakeThread ? renderFakeThread(fakeThread, channel) : "";
   const transcript = [real, typed].filter(Boolean).join("\n");
 
-  const custom = contact ? await loadContactContext({ client, locationId, contact }) : {};
+  // The old "master bot": a contact whose tags say nothing is placed by the
+  // words. On a confident read the party's first plain tag is stamped on
+  // the contact (as an auto action, recorded on the draft) so the next text
+  // is routed by tags like everyone else's.
+  if (party === "unknown" && config.routing.unknown === "classify" && aiApiKey && !light && String(message || "").trim()) {
+    try {
+      const c = await classify({ contact: { name, tags }, transcript, message, aiApiKey });
+      classified = c;
+      if (c.party !== "unknown" && c.confidence !== "low") {
+        party = c.party;
+        partySource = "classified";
+      }
+    } catch (e) {
+      warnings.push(`classify: ${e.message?.slice(0, 120) || "failed"}`);
+    }
+  }
+
+  const custom = contact && !light ? await loadContactContext({ client, locationId, contact }) : {};
 
   let context = { text: "", amounts: [], forbiddenAmounts: [], summary: {} };
   let underwriting = [];
-  if (party === "agent") {
+  if (light) {
+    /* an opt-out needs the party and nothing else */
+  } else if (party === "agent") {
     context = await loadAgentContext({ store, locationId, contactId, custom, now });
     underwriting = listUnderwriteJobs(locationId)
       .filter((j) => j.contactId === contactId && (j.status === "running" || j.status === "queued"))
@@ -369,8 +443,13 @@ export async function assembleConversation({
   const instructions = playbook ? playbook.instructions : config.routing.genericInstructions;
   const signer = config.persona.name || saved?.company?.signer || saved?.company?.name || "";
 
+  // The tag that would route them next time, when the words placed them.
+  const stampTag = partySource === "classified" && config.routing.tagOnClassify
+    ? (config.routing[party === "investor" ? "investorTags" : "agentTags"] || []).find((t) => !t.includes("*")) || null
+    : null;
+
   return {
-    config, party, partySource: resolved.source, matchedTags: resolved.matched,
+    config, party, partySource, matchedTags: resolved.matched, classified, stampTag,
     playbook, contact, contactName: name, tags, custom, transcript, context, underwriting, instructions, signer,
   };
 }
@@ -387,10 +466,12 @@ export async function assembleConversation({
  */
 export async function startReply({
   client, locationId, saved, store, contactId, message, channel = "sms", party = "", sendsEnabled = false, deps = {},
+  attachments = 0,
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
-  if (!String(message || "").trim()) throw Object.assign(new Error("message required"), { http: 400 });
+  const nAttachments = Math.max(0, Number(attachments) || 0);
+  if (!String(message || "").trim() && !nAttachments) throw Object.assign(new Error("message required"), { http: 400 });
 
   const config = conversationConfig(saved);
   if (!config.enabled) return { skipped: "Conversation AI is switched off on the Conversation AI page", job: null };
@@ -410,6 +491,7 @@ export async function startReply({
     phase: "queued",
     channel: channel === "email" ? "email" : "sms",
     message: String(message || "").slice(0, 1000),
+    attachments: nAttachments,
     party: party === "agent" || party === "investor" ? party : "",
     partySource: null,
     draftId: null,
@@ -467,11 +549,26 @@ async function runReply(job, ctx) {
   const warnings = job.warnings;
   job.status = "running";
 
+  /* --- 0. an opt-out gets silence, before anything is spent --- */
+  const cfg = conversationConfig(saved);
+  if (detectOptOut(job.message, cfg.optOut)) {
+    job.phase = "reading";
+    const a = await assembleConversation({
+      client, locationId, saved, store, contactId: job.contactId, message: job.message, channel: job.channel,
+      explicitParty: job.party, now, warnings, light: true,
+    });
+    job.party = a.party;
+    job.partySource = a.partySource;
+    job.contactName = a.contactName;
+    await handleOptOut(job, { ...ctx, config: cfg, party: a.party, partySource: a.partySource, matchedTags: a.matchedTags, confidence: "high", reason: "an opt-out keyword" });
+    return;
+  }
+
   /* --- 1. who and what --- */
   job.phase = "reading";
   const a = await assembleConversation({
     client, locationId, saved, store, contactId: job.contactId, message: job.message, channel: job.channel,
-    explicitParty: job.party, now, warnings,
+    explicitParty: job.party, now, warnings, aiApiKey, classify: deps.classify || classifyParty,
   });
   const { config, party, playbook, context } = a;
   job.party = party;
@@ -492,26 +589,43 @@ async function runReply(job, ctx) {
 
   /* --- 2. the draft --- */
   job.phase = "drafting";
-  const draft = await deps.draft({
-    message: job.message,
-    transcript: a.transcript,
-    offers: context.offers || { text: "", amounts: [], count: 0 },
-    contact: { name: a.contactName, tags: a.tags },
-    underwriting: a.underwriting,
-    instructions: a.instructions,
-    signer: a.signer,
-    aiApiKey,
-    party, config, context, channel: job.channel,
-  });
+  let draft;
+  if (job.attachments > 0 && !String(job.message || "").trim()) {
+    // A bare photo gets the canned line and no model call — the rule is
+    // "never analyse the image", and the surest way not to is not to look.
+    draft = mediaDraft(config);
+  } else {
+    draft = await deps.draft({
+      message: job.message,
+      transcript: a.transcript,
+      offers: context.offers || { text: "", amounts: [], count: 0 },
+      contact: { name: a.contactName, tags: a.tags },
+      underwriting: a.underwriting,
+      instructions: a.instructions,
+      signer: a.signer,
+      aiApiKey,
+      party, config, context, channel: job.channel,
+    });
+  }
   job.intent = draft.intent;
   job.summary = draft.summary;
 
+  // The model read an opt-out the keywords didn't catch ("lose my number",
+  // plain anger). Same outcome as the keyword: silence and the tag.
+  if (SILENT_INTENTS.has(draft.intent)) {
+    await handleOptOut(job, { ...ctx, config, party, partySource: a.partySource, matchedTags: a.matchedTags, confidence: draft.confidence, reason: draft.summary || "the model read an opt-out" });
+    return;
+  }
+
   const gate = evaluateReplyGates({
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts,
-    inboundMessage: job.message, channel: job.channel,
+    inboundMessage: job.message, channel: job.channel, style: config.style,
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook }) : { auto: [], suggested: [] };
+  if (a.stampTag) {
+    plan.auto.unshift({ id: `a-route-${job.id}`, type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", party, why: "routed by the message" });
+  }
 
   /* --- 3. nothing to say --- */
   if (draft.intent === "small_talk" && !draft.reply && !plan.auto.length && !plan.suggested.length) {
@@ -557,6 +671,8 @@ async function runReply(job, ctx) {
     party,
     partySource: a.partySource,
     matchedTags: a.matchedTags,
+    classified: a.classified || null,
+    attachments: job.attachments || 0,
     contextSummary: context.summary || {},
     offersInContext: context.offers?.count ?? 0,
     autoSend: { decided: auto.send, reason: auto.reason },
@@ -600,6 +716,62 @@ async function runReply(job, ctx) {
   job.finishedAt = new Date().toISOString();
 }
 
+const mediaDraft = (config) => ({
+  intent: "media", confidence: "high", reply: config.media?.reply || "Thanks for the images, taking a look!",
+  needsHuman: false, humanReason: "", summary: "Sent a photo with no text; the canned acknowledgement goes back.",
+  propertyAddress: "", counterAmount: 0,
+});
+
+// Silence, the tag, and a record. Any open or scheduled draft to this
+// contact is superseded — a reply that was counting down must not go out to
+// someone who just said stop.
+async function handleOptOut(job, ctx) {
+  const { client, locationId, store, config, party, partySource, matchedTags, confidence, reason, deps = {} } = ctx;
+  const warnings = job.warnings;
+  job.phase = "acting";
+  job.intent = "opt_out";
+  job.summary = reason;
+  const open = [];
+  for (const status of ["draft", "scheduled"]) {
+    const rows = await store.listReplyDrafts(locationId, { contactId: job.contactId, status, limit: 5 }).catch(() => []);
+    open.push(...rows);
+  }
+  for (const old of open) {
+    await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
+  }
+  const planned = optOutActions(config.optOut).map((a, i) => ({
+    ...a, id: `a-optout-${job.id}-${i}`, mode: confidence === "high" ? "auto" : "ask", status: "pending", party,
+  }));
+  const ts = new Date().toISOString();
+  let record = await store.createReplyDraft({
+    locationId, contactId: job.contactId, contactName: job.contactName, status: "handled", channel: job.channel,
+    jobId: job.id, inbound: job.message, reply: "", intent: "opt_out", confidence, needsHuman: false, humanReason: "",
+    summary: reason, propertyAddress: "", counterAmount: null, autoSendable: false,
+    flags: ["an opt-out gets no reply"], party, partySource, matchedTags, autoSend: { decided: false, reason: "an opt-out gets no reply" },
+    actions: planned, supersededIds: open.map((o) => o.id), warnings: warnings.slice(0, 6), promptVersion: 2, updatedAt: ts,
+  });
+  job.draftId = record.id;
+  const toRun = planned.filter((x) => x.mode === "auto");
+  if (toRun.length) {
+    const done = await runActions({ client, locationId, contactId: job.contactId, actions: toRun, draft: { ...record, now: Date.now() }, deps });
+    const byId = new Map(done.map((x) => [x.id, x]));
+    record = { ...record, actions: record.actions.map((x) => byId.get(x.id) || x), updatedAt: new Date().toISOString() };
+    await store.updateReplyDraft(record.id, record).catch(() => {});
+  }
+  if (open.length) await removeContactTags(client, job.contactId, [RA_TAGS.draft]).catch(() => {});
+  const did = record.actions.filter((x) => x.status === "done").map((x) => x.detail || x.type);
+  const asks = record.actions.filter((x) => x.status === "pending").map((x) => x.type.replace(/_/g, " "));
+  await note(client, job.contactId,
+    `Conversation AI: opt-out (${reason}). No reply was sent and none will be drafted.` +
+    (did.length ? `\nDone: ${did.join("; ")}.` : "") +
+    (asks.length ? `\nSuggested in the app: ${asks.join("; ")}.` : "") +
+    (open.length ? `\n${open.length} pending draft${open.length === 1 ? "" : "s"} to them cancelled.` : ""),
+    warnings);
+  job.status = "done";
+  job.phase = "";
+  job.finishedAt = new Date().toISOString();
+}
+
 const whoWord = (d) => (d.party === "investor" ? "The investor" : d.party === "agent" ? "The agent" : "They");
 
 function draftNote(d) {
@@ -630,37 +802,53 @@ function draftNote(d) {
  * when tuning the page.
  */
 export async function previewConversation({
-  client, locationId, saved, store, contactId = "", message, channel = "sms",
+  client, locationId, saved, store, contactId = "", message, channel = "sms", attachments = 0,
   explicitParty = "", fakeThread = null, fakeParty = "", sendsEnabled = false, deps = {}, now = Date.now(),
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
-  if (!String(message || "").trim()) throw Object.assign(new Error("message required"), { http: 400 });
+  const nAttachments = Math.max(0, Number(attachments) || 0);
+  if (!String(message || "").trim() && !nAttachments) throw Object.assign(new Error("message required"), { http: 400 });
   const warnings = [];
+  const cfg = conversationConfig(saved);
+  const isOptOut = detectOptOut(message, cfg.optOut);
   const a = await assembleConversation({
     client, locationId, saved, store, contactId, message, channel, explicitParty, fakeThread, fakeParty, now, warnings,
+    aiApiKey, classify: deps.classify || classifyParty, light: isOptOut,
   });
   const { config, party, playbook, context } = a;
   const base = {
-    party, partySource: a.partySource, matchedTags: a.matchedTags, contactName: a.contactName,
+    party, partySource: a.partySource, matchedTags: a.matchedTags, classified: a.classified, contactName: a.contactName,
     context: { text: context.text, amounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, summary: context.summary || {} },
     transcript: String(a.transcript || "").slice(-4000),
     instructions: a.instructions, signer: a.signer, warnings,
   };
+  const optOutView = (confidence, reason) => ({
+    ...base, held: false, optOut: true,
+    draft: { intent: "opt_out", confidence, reply: "", needsHuman: false, humanReason: "", summary: reason, propertyAddress: "", counterAmount: 0 },
+    gate: { ok: true, flags: [] },
+    autoSend: { would: false, reason: "an opt-out gets no reply", sendAt: null },
+    actions: { auto: confidence === "high" ? optOutActions(config.optOut) : [], suggested: confidence === "high" ? [] : optOutActions(config.optOut) },
+  });
+  if (isOptOut) return optOutView("high", "an opt-out keyword — silence, then the opt-out actions");
   if (party === "unknown" && config.routing.unknown === "hold") {
     return { ...base, held: true, reason: "no agent or investor tag on the contact — the run would hold with no draft" };
   }
   const drafter = deps.draft || draftReply;
-  const draft = await drafter({
-    message, transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
-    contact: { name: a.contactName, tags: a.tags }, underwriting: a.underwriting,
-    instructions: a.instructions, signer: a.signer, aiApiKey, party, config, context, channel,
-  });
+  const draft = nAttachments > 0 && !String(message || "").trim()
+    ? mediaDraft(config)
+    : await drafter({
+      message, transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
+      contact: { name: a.contactName, tags: a.tags }, underwriting: a.underwriting,
+      instructions: a.instructions, signer: a.signer, aiApiKey, party, config, context, channel,
+    });
+  if (SILENT_INTENTS.has(draft.intent)) return optOutView(draft.confidence, draft.summary || "the model read an opt-out");
   const gate = evaluateReplyGates({
-    draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, inboundMessage: message, channel,
+    draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, inboundMessage: message, channel, style: config.style,
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook }) : { auto: [], suggested: [] };
+  if (a.stampTag) plan.auto.unshift({ type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", why: "routed by the message" });
   const sendAt = auto.send
     ? nextSendTime({ now, delayMs: pickDelayMs(config, deps.random || Math.random), quietHours: config.autoSend.quietHours })
     : null;

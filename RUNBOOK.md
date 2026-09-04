@@ -579,12 +579,46 @@ in milliseconds; the draft is written in the background.
 
 **Who is who.** The tab's routing card holds two comma lists of tag patterns
 (`*` is the only wildcard): listing agents (`agent`, `agent-*`) and investors
-(`investor`, `investor-*`, `on-deal`). A contact matching both goes to the
-party the card says wins; one matching neither either **holds** (a note on
-the contact, no draft — the default) or gets a **generic** careful draft that
-never auto-sends. This deliberately does not use `inferContactType` from the
-enrichment code, whose substring rules call an agent who was tagged into a
-dispo blast ambiguous.
+(`investor`, `investor-*`, `dispo-*`, `disposition-*`, `on-deal`). A contact
+matching both goes to the party the card says wins. One matching neither is
+handled per the card: **classify** (the old GHL "master bot", reduced to one
+cheap structured call — is this an agent with a property we could buy, or a
+buyer who wants a deal from us?) answers from that playbook and, on a
+confident read, stamps the party's first plain tag so the tags decide next
+time; when the words don't settle it, it drafts the generic clarifying reply
+("is this about a listing you have, or are you looking to pick one up?"),
+which never auto-sends. **Hold** leaves a note and writes no draft;
+**generic** skips the read. This deliberately does not use `inferContactType`
+from the enrichment code, whose substring rules call an agent who was tagged
+into a dispo blast ambiguous.
+
+**Before any of that: opt-outs and photos.** A text that starts with one of
+the opt-out words (`stop`, `unsubscribe`, `remove`, `cancel`, `quit`, `end`)
+or contains one of the phrases (`wrong number`, `do not text`, …) gets
+**silence** — no goodbye, no confirmation — plus the opt-out tags (`stop bot`,
+`dnc` on the starter) and any reply counting down to that contact is
+cancelled. No model call is made. The model can also read an opt-out the
+words missed ("lose my number", plain anger); it ends the same way. Point a
+GHL workflow at the tag to set DND. A message that is only a photo gets the
+canned line ("Thanks for the images, taking a look!") and the image is never
+looked at — pass the attachments to the webhook as `attachments` (a list, a
+URL, or a count) so an empty body isn't refused.
+
+**The starter playbook.** "Load starter playbook" on the tab fills the
+persona, rules, examples, routing, texting rules, opt-outs and both playbooks
+with the Shep Flips setup consolidated from the three GHL bots it replaces
+(2026-09-04): the master router is the classify step; the acquisitions bot is
+the agent playbook (Tier 1 = has a deal or a new property → `tier-1`, Tier 2
+= open to investors → `tier-2`, Tier 3 = passed → `tier-3`, mirroring the
+Acquisitions pipeline stages); the dispositions bot, which had been a copy of
+the acquisitions prompt, is written properly for the first time (interested →
+`investor-active` + link to the deal + a suggested dataroom link; wants to
+buy / walk it → ask-first `investor-hot` + link). Every auto-send stays off
+until a person ticks it. **Triggers to keep in GHL:** your existing "Tier 1
+opportunity" workflow should trigger on the `tier-1` tag (it can also start
+the auto-underwrite — see Door 1 above); the Tier 2/3 nurture workflows on
+`tier-2` / `tier-3`; a DND workflow on `stop bot` or `dnc`. Nothing in GHL
+needs to classify, tag tiers or reply any more — switch those bots off.
 
 **What the model is given.** The persona (name, role, voice, length, sign-off),
 the house rules, the party's playbook (standing instructions, "it may / it may
@@ -606,7 +640,10 @@ not"), the examples of our voice, the intent definitions, and then per party:
 **What it will not do on its own.** `evaluateReplyGates` holds a draft that
 names a number not in the record book or the inbound text, that leaks a
 forbidden number, that the model marked `needsHuman`, that is under high
-confidence, that is empty, or that is too long for a text — and every intent
+confidence, that is empty, that is too long for a text, or — under the
+texting rules on the tab — that carries a `$` or a link (carrier spam
+filters key on both; money is written 525k). Em dashes are scrubbed from
+every draft. And every intent
 in `NEVER_AUTO` (agent: counter, acceptance, wants a call, scheduling, proof
 of funds, new property, other; investor: price pushback, wants to buy, wants
 to walk it, wants a call, other) is a person's call whatever the tab says.

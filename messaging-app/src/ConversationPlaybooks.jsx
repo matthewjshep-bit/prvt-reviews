@@ -97,6 +97,11 @@ export function PersonaCard({ config, patch }) {
             placeholder="Short, plain, warm. Sounds like a busy investor who respects the agent's time. Never salesy. Says 'we' about the company and 'I' about myself." />
         </Field>
       </div>
+      <div className="mt-3">
+        <Field label="If they ask whether it's a bot" hint="Left blank, it never admits to being one. Filled in, it answers with exactly this line and carries on — the compliant choice.">
+          <Text value={p.ifAskedIfBot} onChange={set("ifAskedIfBot")} placeholder="I'm an assistant on Matt's team keeping up with texts! Happy to help either way." />
+        </Field>
+      </div>
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         <Field label="Length">
           <Select value={p.length} onChange={set("length")} options={[["short", "Short (1–3 sentences)"], ["medium", "Medium (2–5)"], ["long", "As long as it needs"]]} />
@@ -182,14 +187,22 @@ export function RoutingCard({ config, patch, version }) {
         <Field label="If a contact carries both" hint="A buyer who is also an agent gets the playbook you pick here.">
           <Select value={r.priority} onChange={set("priority")} options={[["agent", "Treat as a listing agent"], ["investor", "Treat as an investor"]]} />
         </Field>
-        <Field label="If a contact carries neither" hint="Hold leaves a note on the contact and writes no draft. Generic drafts a careful, number-free reply that never auto-sends.">
-          <Select value={r.unknown} onChange={set("unknown")} options={[["hold", "Hold — a person answers"], ["generic", "Draft a generic reply"]]} />
+        <Field label="If a contact carries neither" hint="Hold leaves a note and writes no draft. Classify reads the message the way your old master bot did, then answers from that playbook; when the words don't settle it, it drafts the generic reply below. Generic skips the read.">
+          <Select value={r.unknown} onChange={set("unknown")} options={[["classify", "Work it out from the message"], ["hold", "Hold — a person answers"], ["generic", "Draft a generic reply"]]} />
         </Field>
       </div>
-      {r.unknown === "generic" && (
+      {r.unknown === "classify" && (
         <div className="mt-3">
-          <Field label="Instructions for an unknown contact">
-            <Area value={r.genericInstructions} onChange={set("genericInstructions")} rows={2} placeholder="Ask what they're looking for and whether they're an agent or a buyer. Commit to nothing." />
+          <Toggle checked={r.tagOnClassify} onChange={set("tagOnClassify")}>
+            When the message settles it, tag the contact ({(r.agentTags || []).find((t) => !t.includes("*")) || "agent"} / {(r.investorTags || []).find((t) => !t.includes("*")) || "investor"}) so the tags decide next time
+          </Toggle>
+        </div>
+      )}
+      {(r.unknown === "generic" || r.unknown === "classify") && (
+        <div className="mt-3">
+          <Field label={r.unknown === "classify" ? "When the message doesn't settle it, reply with" : "Instructions for an unknown contact"}
+            hint="One natural question a rep would ask. Never a number, never a department. This reply never auto-sends.">
+            <Area value={r.genericInstructions} onChange={set("genericInstructions")} rows={2} placeholder="Ask one natural question that tells you which side they're on. Commit to nothing." />
           </Field>
         </div>
       )}
@@ -220,6 +233,66 @@ export function AutoSendCard({ config, patch }) {
           <Toggle checked={a.channels.includes("email")} onChange={toggleChannel("email")}>Emails may auto-send</Toggle>
         </div>
       </div>
+    </Section>
+  );
+}
+
+/* ---------- texting rules, opt-outs, photos ---------- */
+
+export function StyleCard({ config, patch }) {
+  const st = config.style;
+  const set = (k) => (v) => patch({ style: { ...st, [k]: v } });
+  return (
+    <Section title="Texting rules"
+      intro="Carrier spam filters key on dollar signs and links; an em dash is what a bot sounds like. The first two hold a draft that breaks them, the third is scrubbed from the draft. Emails are exempt.">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Toggle checked={st.noDollarSigns} onChange={set("noDollarSigns")}>No dollar signs in texts — write 525k, not $525,000</Toggle>
+        <Toggle checked={st.noLinks} onChange={set("noLinks")}>No links in texts</Toggle>
+        <Toggle checked={st.noEmDashes} onChange={set("noEmDashes")}>No em dashes</Toggle>
+        <Field label="Longest text it may send (characters)" hint="A draft over this holds. The voice above sets the target; this is the ceiling.">
+          <Text type="number" value={st.maxSmsChars} onChange={(v) => set("maxSmsChars")(Number(v))} />
+        </Field>
+      </div>
+    </Section>
+  );
+}
+
+export function OptOutCard({ config, patch, version, workflows }) {
+  const o = config.optOut;
+  const set = (k) => (v) => patch({ optOut: { ...o, [k]: v } });
+  return (
+    <Section title="Opt-outs"
+      intro="A text that starts with one of these words, or contains one of these phrases, gets silence — no goodbye, no confirmation — plus the tags below. Any reply counting down to that contact is cancelled. The model can also read an opt-out the words didn't catch ('lose my number', plain anger); it ends the same way.">
+      <Toggle checked={o.enabled} onChange={set("enabled")}>Handle opt-outs before anything else</Toggle>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Field label="Words and phrases" hint="Comma-separated. A single word must start the message; a phrase may appear anywhere.">
+          <TagList value={o.keywords} onChange={set("keywords")} version={version} placeholder="stop, unsubscribe, wrong number" />
+        </Field>
+        <Field label="Tags to add" hint="Point a GHL workflow at one of these to set DND.">
+          <TagList value={o.tags} onChange={set("tags")} version={version} placeholder="stop bot, dnc" />
+        </Field>
+        <Field label="Tags to remove">
+          <TagList value={o.removeTags} onChange={set("removeTags")} version={version} placeholder="tier-1, tier-2" />
+        </Field>
+        <Field label="Workflow to add them to" hint="Optional.">
+          {workflows?.list?.length ? (
+            <Select value={o.workflowId} onChange={set("workflowId")} options={[["", "None"], ...workflows.list.map((w) => [w.id, w.name])]} />
+          ) : (
+            <Text value={o.workflowId} onChange={set("workflowId")} placeholder="workflow id (optional)" />
+          )}
+        </Field>
+      </div>
+    </Section>
+  );
+}
+
+export function MediaCard({ config, patch }) {
+  return (
+    <Section title="Photos and attachments"
+      intro="A message that is only a photo gets this line back and nothing else. The image is never looked at, which is the surest way never to describe it.">
+      <Field label="Reply to a bare photo">
+        <Text value={config.media.reply} onChange={(v) => patch({ media: { ...config.media, reply: v } })} placeholder="Thanks for the images, taking a look!" />
+      </Field>
     </Section>
   );
 }

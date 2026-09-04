@@ -3247,6 +3247,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     },
   });
 
+  // How many attachments a webhook body describes, whatever shape it took.
+  function countAttachments(v) {
+    if (v == null || v === "" || v === false) return 0;
+    if (Array.isArray(v)) return v.filter(Boolean).length;
+    if (typeof v === "number") return Math.max(0, Math.round(v));
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (!t || t === "[]" || t === "0" || t === "false") return 0;
+      return t.split(/[\s,]+/).filter(Boolean).length;
+    }
+    return 1;
+  }
+
   // The deal a message is about, by the street line. addressKey normalises
   // both sides; a bare street ("54th") falls back to a contains check.
   function pickDealByAddress(deals, hint) {
@@ -3332,7 +3345,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       ).slice(0, 64);
       if (!contactId) return res.status(400).json({ error: "contact_id required" });
       const message = String(b.message || b.body || b.customData?.message || "").slice(0, 4000);
-      if (!message.trim()) return res.status(400).json({ error: "message required — pass {{message.body}}" });
+      // A photo with no words arrives as an empty body plus attachments —
+      // GHL exposes them as a list, a URL string, or a count depending on
+      // the trigger. Any of those is enough to know there was one.
+      const attachments = countAttachments(b.attachments ?? b.attachment ?? b.customData?.attachments ?? b.message?.attachments);
+      if (!message.trim() && !attachments) return res.status(400).json({ error: "message required — pass {{message.body}}" });
       // GHL names the channel in several places depending on the trigger.
       const rawChannel = String(b.channel || b.messageType || b.type || b.customData?.channel || "").toLowerCase();
       const channel = rawChannel.includes("email") ? "email" : "sms";
@@ -3340,7 +3357,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       const saved = await store.getOfferSettings(locationId);
       const { skipped, job } = await startReply({
-        client, locationId, saved, store, contactId, message, channel, party,
+        client, locationId, saved, store, contactId, message, channel, party, attachments,
         sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved }),
       });
       // A cap hit (or the bot being switched off) answers 200, not 4xx — a
@@ -3447,6 +3464,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         client, locationId, saved, store,
         contactId: String(b.contactId || "").slice(0, 64),
         message: String(b.message || "").slice(0, 4000),
+        attachments: countAttachments(b.attachments),
         channel: String(b.channel || "").toLowerCase().includes("email") ? "email" : "sms",
         explicitParty: "", fakeParty: ["agent", "investor"].includes(b.party) ? b.party : "",
         fakeThread: thread, sendsEnabled: CARD_SENDS_ENABLED,

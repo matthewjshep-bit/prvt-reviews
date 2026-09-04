@@ -93,3 +93,15 @@ test("internal actions go through the injected deps, and a failure records rathe
   assert.equal(out[4].status, "failed");
   assert.match(out[4].error, /unknown action/);
 });
+
+test("a field template whose tokens came up empty writes nothing rather than blanking the field", async () => {
+  const calls = [];
+  const client = { call: async (path, opts = {}) => { calls.push([opts.method || "GET", path]); return { customFields: [] }; } };
+  const out = await runActions({
+    client, locationId: "LOC", contactId: "c1", draft: { propertyAddress: "" },
+    actions: [{ id: "a1", type: "set_field", key: "subject_property", value: "{{propertyAddress}}" }],
+  });
+  assert.equal(out[0].status, "done");
+  assert.match(out[0].detail, /nothing to write/);
+  assert.equal(calls.some(([m]) => m === "PUT"), false);
+});

@@ -66,7 +66,7 @@ test("an allowlist can never contain a never-auto intent, and unknown intents ar
   }
 });
 
-test("intent rules keep only real actions, and a dataroom invite forces ask", () => {
+test("intent rules keep only real actions; a dataroom invite rides along without dragging the rule to ask", () => {
   const c = normalizeConversationAi({
     parties: {
       investor: {
@@ -87,7 +87,7 @@ test("intent rules keep only real actions, and a dataroom invite forces ask", ()
     },
   });
   const r = c.parties.investor.intentRules.interested;
-  assert.equal(r.mode, "ask", "a document going out is never automatic");
+  assert.equal(r.mode, "auto", "the tags still fire; planActions keeps the invite itself a suggestion");
   assert.deepEqual(r.actions, [
     { type: "add_tags", tags: ["hot-investor"] },
     { type: "suggest_dataroom_invite" },
@@ -149,4 +149,63 @@ test("draftStats counts the graduation evidence per party and intent", () => {
   assert.equal(s.byParty.investor.byIntent.interested.pending, 1);
   assert.equal(s.byParty.agent.byIntent.status_check.superseded, 1);
   assert.equal(s.totals.total, 6);
+});
+
+/* ---------- the consolidated GHL bots ---------- */
+
+import { starterConfig, detectOptOut, optOutActions, DEFAULT_OPT_OUT_KEYWORDS } from "./conversation-ai.js";
+
+test("style, opt-out and media sections coerce and default", () => {
+  const c = normalizeConversationAi({
+    style: { noDollarSigns: "false", maxSmsChars: "5000" },
+    optOut: { keywords: "STOP, Wrong Number", tags: ["Stop Bot"], workflowId: " wf9 " },
+    media: { reply: "" },
+    routing: { unknown: "classify", tagOnClassify: "false" },
+    persona: { ifAskedIfBot: "  I'm an assistant.  " },
+  });
+  assert.equal(c.style.noDollarSigns, false);
+  assert.equal(c.style.noLinks, true);
+  assert.equal(c.style.maxSmsChars, 1600, "clamped");
+  assert.deepEqual(c.optOut.keywords, ["stop", "wrong number"]);
+  assert.deepEqual(c.optOut.tags, ["stop bot"]);
+  assert.equal(c.optOut.workflowId, "wf9");
+  assert.equal(c.media.reply, "Thanks for the images, taking a look!", "an empty reply falls back");
+  assert.equal(c.routing.unknown, "classify");
+  assert.equal(c.routing.tagOnClassify, false);
+  assert.equal(c.persona.ifAskedIfBot, "I'm an assistant.");
+  const d = normalizeConversationAi({});
+  assert.deepEqual(d.optOut.keywords, DEFAULT_OPT_OUT_KEYWORDS);
+  assert.deepEqual(optOutActions(d.optOut), [{ type: "add_tags", tags: ["dnc"] }]);
+  assert.deepEqual(optOutActions({ tags: ["a"], removeTags: ["b"], workflowId: "w" }).map((a) => a.type), ["add_tags", "remove_tags", "add_to_workflow"]);
+});
+
+test("a dataroom invite inside an auto rule no longer drags the tags down to ask", () => {
+  const c = normalizeConversationAi({ parties: { investor: { intentRules: {
+    interested: { mode: "auto", actions: [{ type: "add_tags", tags: ["hot"] }, { type: "suggest_dataroom_invite" }] },
+  } } } });
+  assert.equal(c.parties.investor.intentRules.interested.mode, "auto");
+});
+
+test("the starter playbook is a valid config with the real tags, and every auto-send is off", () => {
+  const c = starterConfig({ signer: "Matt Shepherd" });
+  assert.deepEqual(normalizeConversationAi(c), c, "idempotent");
+  assert.equal(c.persona.name, "Matt");
+  assert.match(c.persona.ifAskedIfBot, /assistant on Matt's team/);
+  assert.equal(c.routing.unknown, "classify");
+  assert.ok(c.routing.investorTags.includes("dispo-*"));
+  assert.equal(c.parties.agent.autoSend.enabled, false);
+  assert.equal(c.parties.investor.autoSend.enabled, false);
+  const a = c.parties.agent.intentRules;
+  assert.deepEqual(a.deal_available.actions[0], { type: "add_tags", tags: ["tier-1"] });
+  assert.deepEqual(a.investor_open.actions[0], { type: "add_tags", tags: ["tier-2"] });
+  assert.deepEqual(a.rejection.actions[0], { type: "add_tags", tags: ["tier-3"] });
+  assert.equal(a.counter, undefined, "a counter stays a person's call with no side effects");
+  const i = c.parties.investor.intentRules;
+  assert.equal(i.interested.mode, "auto");
+  assert.ok(i.interested.actions.some((x) => x.type === "suggest_dataroom_invite"));
+  assert.equal(i.wants_to_buy.mode, "ask");
+  assert.deepEqual(c.optOut.tags, ["stop bot", "dnc"]);
+  assert.equal(c.style.noDollarSigns, true);
+  assert.ok(c.rules.some((r) => /off-market/.test(r)));
+  assert.equal(detectOptOut("Unsubscribe", c.optOut), true);
 });

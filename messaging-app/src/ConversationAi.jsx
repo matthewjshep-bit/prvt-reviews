@@ -8,17 +8,18 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
-import { INTENT_LABEL, PARTY_LABEL, normalizeConversationAi } from "@shared/conversation-ai.js";
+import { INTENT_LABEL, PARTY_LABEL, normalizeConversationAi, starterConfig } from "@shared/conversation-ai.js";
 import { getConversationAi, getConversationHistory, listWorkflows, saveConversationAi } from "./api.js";
-import { BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, SkeletonRows, TableCard } from "./ui.jsx";
+import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, SkeletonRows, TableCard } from "./ui.jsx";
 import ReplyStrip from "./ReplyStrip.jsx";
 import ConversationTryIt from "./ConversationTryIt.jsx";
 import {
-  AutoSendCard, ExamplesEditor, INPUT_CLS, PartyPlaybooks, PersonaCard, RoutingCard, RulesEditor, Section,
+  AutoSendCard, ExamplesEditor, INPUT_CLS, MediaCard, OptOutCard, PartyPlaybooks, PersonaCard, RoutingCard, RulesEditor,
+  Section, StyleCard,
 } from "./ConversationPlaybooks.jsx";
 import { IntentPill, PartyPill, ago } from "./ConversationOutbox.jsx";
 
-export default function ConversationAi() {
+export default function ConversationAi({ settings }) {
   const [config, setConfig] = useState(null);
   const [form, setForm] = useState(null);
   const [version, setVersion] = useState(0);
@@ -88,6 +89,15 @@ export default function ConversationAi() {
         )}
         {seeded && <span className="text-xs text-slate-500">Carried over from the old Reply agent settings — save once to keep it.</span>}
         <div className="ml-auto flex items-center gap-2">
+          <button type="button" className={BTN}
+            title="Replace the persona, rules, examples, routing, texting rules, opt-outs and both playbooks with the Shep Flips starter (your three GHL bots, consolidated). The on/off switch, the cap and the auto-send timing stay as they are; every auto-send stays off until you tick it."
+            onClick={() => {
+              if (!window.confirm("Load the Shep Flips starter playbook? It replaces the persona, rules, examples, routing, texting rules, opt-outs and both playbooks. Nothing is saved until you press Save.")) return;
+              const st = starterConfig({ signer: settings?.company?.signer || settings?.company?.name || "", company: settings?.company?.name || "Shep Flips" });
+              patch({ ...st, enabled: form.enabled, dailyCap: form.dailyCap, autoSend: form.autoSend });
+            }}>
+            Load starter playbook
+          </button>
           {saved && !dirty && <span className="inline-flex items-center gap-1 text-xs text-emerald-700"><Check size={13} /> Saved</span>}
           {dirty && <span className="text-xs text-amber-700">Unsaved changes</span>}
           <button type="button" className={BTN_PRIMARY} disabled={saving || (!dirty && !seeded)} onClick={save}>
@@ -107,6 +117,9 @@ export default function ConversationAi() {
       <RoutingCard config={form} patch={patch} version={version} />
       <PartyPlaybooks config={form} patch={patch} workflows={workflows} />
       <AutoSendCard config={form} patch={patch} />
+      <StyleCard config={form} patch={patch} />
+      <OptOutCard config={form} patch={patch} version={version} workflows={workflows} />
+      <MediaCard config={form} patch={patch} />
       <RulesEditor config={form} patch={patch} />
       <ExamplesEditor config={form} patch={patch} />
 
@@ -121,6 +134,7 @@ const outcomeOf = (d) => {
   if (d.status === "sent") return d.autoSent ? ["sent itself", "text-emerald-700"] : d.edited ? ["sent, edited", "text-slate-700"] : ["sent as written", "text-emerald-700"];
   if (d.status === "dismissed") return ["dismissed", "text-slate-500"];
   if (d.status === "superseded") return ["superseded", "text-slate-400"];
+  if (d.status === "handled") return [d.intent === "opt_out" ? "opted out, no reply" : "handled", "text-slate-500"];
   if (d.status === "scheduled") return ["sending soon", "text-amber-700"];
   if (d.status === "sending") return ["sending", "text-amber-700"];
   return [d.heldAt ? "held, waiting" : "waiting", "text-amber-700"];

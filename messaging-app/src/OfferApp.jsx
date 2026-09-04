@@ -277,7 +277,7 @@ export default function OfferApp() {
               ? (o) => window.open(offerEditorUrl(o.id), "_blank")
               : (o) => { setEditing(o); setView("new"); }} />
         )}
-        {view === "conversation" && <ConversationAi />}
+        {view === "conversation" && <ConversationAi settings={settings} />}
         {view === "outreach" && <AgentOutreach settings={settings} />}
         {view === "dispo" && <Dispositions />}
         {view === "dashboard" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}

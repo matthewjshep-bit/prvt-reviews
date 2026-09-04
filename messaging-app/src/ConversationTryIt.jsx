@@ -141,6 +141,7 @@ export default function ConversationTryIt({ sendsEnabled = true, compact = false
             <span className="inline-flex items-center gap-1">
               → <PartyPill party={knownParty} />
               {lastBot.meta?.partySource === "tags" && <span className="text-slate-400">by their tags</span>}
+              {lastBot.meta?.partySource === "classified" && <span className="text-slate-400" title={lastBot.meta?.classified?.reason}>by the message</span>}
             </span>
           )}
           {contact && <span className="ml-auto text-slate-400">Their real thread and records are behind every reply.</span>}
@@ -221,6 +222,8 @@ function BotTurn({ turn: t, open, onToggle, sendsEnabled }) {
         <div className="rounded-2xl rounded-bl-md bg-slate-100 px-3.5 py-2 text-sm text-slate-900 whitespace-pre-wrap">
           {m.held
             ? <span className="italic text-amber-800">{m.reason}</span>
+            : m.optOut
+            ? <span className="italic text-slate-500">(silence — an opt-out gets no reply)</span>
             : t.text || <span className="italic text-slate-400">(no reply — the model thought none was needed)</span>}
         </div>
         {d && (
