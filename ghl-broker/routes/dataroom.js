@@ -34,7 +34,7 @@ import { getContact, sendSms } from "../ghl.js";
 import {
   DEFAULT_EXPIRY_DAYS, brandFrom, buildSnapshot, dealCard, feedHeaders, hashToken,
   newToken, normalizeLinks, normalizePublicSections, normalizeSections, photoHeaders,
-  renderNotice, renderPortfolio, renderRoom, secureHeaders, syncDealNumbers, teaserSections,
+  renderNotice, renderPortfolio, renderRoom, secureHeaders, syncDealNumbers, teaserSections, GALLERY_JS,
 } from "../dataroom.js";
 
 // A location's portfolio is itself a dataroom row — offerId null, kind
@@ -851,7 +851,7 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
     try {
       const room = await resolveTeaser(req, res);
       if (!room) return;
-      secureHeaders(res);
+      secureHeaders(res, { scripts: [GALLERY_JS] });
       // The marketing site embedding the feed is what should rank, not the
       // broker's bare teaser page.
       res.set("X-Robots-Tag", "noindex");
@@ -908,7 +908,10 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
       const ctx = await resolveInvite(req, res);
       if (!ctx) return;
       const { token, invite, room } = ctx;
-      secureHeaders(res);
+      // The photo viewer is the one script an investor page runs; allowing it
+      // by hash here is what lets renderRoom's <script> execute. The portfolio
+      // page shares this route and embeds no script, so the allowance is moot there.
+      secureHeaders(res, { scripts: [GALLERY_JS] });
 
       const viewCount = (invite.viewCount || 0) + 1;
       await store.updateDataroomInvite(invite.id, {

@@ -313,9 +313,127 @@ export function esc(s) {
 
 const money = (n) => (num(n) > 0 ? fmtMoney(Math.round(num(n))) : "—");
 
+// The one script an investor page runs: the photo viewer. Every photo link on
+// the page (the hero and each thumbnail) carries data-gal="<index>" and points
+// at the full-size image, so with scripting off the links simply open in a new
+// tab. With it on, a tap opens the overlay in the markup photoViewer() emits:
+// prev/next, swipe, arrow keys, Escape, a counter, and the phone's back gesture
+// closes it instead of leaving the room.
+//
+// It is allowed by CONTENT HASH, not by 'unsafe-inline' or a nonce: the CSP
+// names the SHA-256 of this exact string, so nothing else inline can ever run,
+// there is no per-request state to plumb through the renderer, and a typo here
+// fails closed (the browser drops the script and the links still work).
+// Keep it free of backticks and of the sequence "</script".
+export const GALLERY_JS = `(function () {
+  var d = document, h = d.documentElement, lb = d.getElementById("lb");
+  if (!lb || !d.querySelector("a[data-gal]")) return;
+  var links = [].slice.call(d.querySelectorAll("a[data-gal]"))
+    .sort(function (a, b) { return a.dataset.gal - b.dataset.gal; });
+  var img = lb.querySelector("img"), cap = lb.querySelector(".lb-c"), idx = lb.querySelector(".lb-i");
+  var btns = [].slice.call(lb.querySelectorAll("button"));
+  var cur = -1, opener = null, pushed = false;
+  h.classList.add("gal");
+
+  function preload(i) {
+    if (i >= 0 && i < links.length) { var p = new Image(); p.src = links[i].href; }
+  }
+  function show(i) {
+    cur = (i + links.length) % links.length;
+    var a = links[cur], text = a.dataset.cap || "";
+    lb.classList.add("loading");
+    img.src = a.href;
+    img.alt = text;
+    cap.textContent = text;
+    idx.textContent = (cur + 1) + " / " + links.length;
+    preload(cur + 1); preload(cur - 1);
+  }
+  function open(i, from) {
+    opener = from || null;
+    lb.hidden = false;
+    h.classList.add("lb-open");
+    show(i);
+    try { history.pushState({ lb: 1 }, ""); pushed = true; } catch (e) { pushed = false; }
+    lb.querySelector(".lb-x").focus();
+  }
+  function close(fromHistory) {
+    if (lb.hidden) return;
+    lb.hidden = true;
+    h.classList.remove("lb-open");
+    img.removeAttribute("src");
+    if (opener && opener.focus) opener.focus();
+    opener = null;
+    var back = pushed && !fromHistory;
+    pushed = false;
+    if (back) history.back();
+  }
+
+  img.addEventListener("load", function () { lb.classList.remove("loading"); });
+  img.addEventListener("error", function () { lb.classList.remove("loading"); });
+
+  d.addEventListener("click", function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    var a = t.closest("a[data-gal]");
+    if (a) {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button) return;
+      e.preventDefault();
+      open(links.indexOf(a), a);
+      return;
+    }
+    var b = t.closest("[data-lb]");
+    if (b) {
+      var k = b.dataset.lb;
+      if (k === "close") close(); else if (k === "prev") show(cur - 1); else if (k === "next") show(cur + 1);
+      return;
+    }
+    if (t === lb || (t.classList && t.classList.contains("lb-f"))) close();
+  });
+
+  d.addEventListener("keydown", function (e) {
+    if (lb.hidden) return;
+    if (e.key === "Escape") { e.preventDefault(); close(); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); show(cur - 1); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); show(cur + 1); }
+    else if (e.key === "Tab") {
+      var i = btns.indexOf(d.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); btns[btns.length - 1].focus(); }
+      else if (!e.shiftKey && (i < 0 || i === btns.length - 1)) { e.preventDefault(); btns[0].focus(); }
+    }
+  });
+
+  var tx = null, ty = null;
+  lb.addEventListener("touchstart", function (e) {
+    var t = e.changedTouches[0]; tx = t.clientX; ty = t.clientY;
+  }, { passive: true });
+  lb.addEventListener("touchend", function (e) {
+    if (tx === null) return;
+    var t = e.changedTouches[0], dx = t.clientX - tx, dy = t.clientY - ty;
+    tx = ty = null;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5) show(dx < 0 ? cur + 1 : cur - 1);
+  }, { passive: true });
+
+  window.addEventListener("popstate", function () { if (!lb.hidden) close(true); });
+})();`;
+
+// 'sha256-…' source expressions for the CSP, memoized: the scripts are module
+// constants, so hashing them per response would only spend CPU to get the same
+// answer.
+const cspHashes = new Map();
+const cspHash = (src) => {
+  if (!cspHashes.has(src)) {
+    cspHashes.set(src, `'sha256-${crypto.createHash("sha256").update(src, "utf8").digest("base64")}'`);
+  }
+  return cspHashes.get(src);
+};
+
 // Headers every dataroom response carries: no indexing, no referrer leak of
 // the token, no caching of confidential content, no framing.
-export function secureHeaders(res) {
+//
+// `scripts` is the list of inline script SOURCES the page will embed (see
+// GALLERY_JS). Each is allowed by its hash and nothing else is, so a page that
+// passes none stays entirely script-free — the notices and the offer page do.
+export function secureHeaders(res, { scripts = [] } = {}) {
   res.set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
   res.set("Referrer-Policy", "no-referrer");
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
@@ -325,7 +443,8 @@ export function secureHeaders(res) {
   res.set(
     "Content-Security-Policy",
     "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; " +
-    "form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    "form-action 'self'; frame-ancestors 'none'; base-uri 'none'" +
+    (scripts.length ? `; script-src ${scripts.map(cspHash).join(" ")}` : "")
   );
 }
 
@@ -428,26 +547,66 @@ tr:last-child td{border-bottom:0}
 /* ---- photography ----
    A hero photo carries an arbitrary image behind white type, so it needs a
    scrim to stay legible. That is the one gradient in the system and it is a
-   legibility device, not decoration (see DESIGN.md). Everything here is pure
-   CSS: the investor pages have no script-src, so no carousel or JS lightbox is
-   possible — the gallery is a scroll-snap strip and photos open full-size in a
-   new tab. */
+   legibility device, not decoration (see DESIGN.md).
+
+   The gallery is a wrapping 3:2 grid — never a horizontal strip, whose only
+   "there's more" signal is a scrollbar that macOS and every phone hide, so it
+   read as four photos and done. Past the first eight the thumbnails sit behind
+   a details/summary disclosure, which needs no script to open. Tapping any photo
+   opens the viewer (.lb) when GALLERY_JS runs, and the full-size image in a new
+   tab when it doesn't. */
 .hero{position:relative;border-radius:12px;overflow:hidden;margin:0 0 16px;background:#0F172A;
   border:1px solid #E2E8F0}
 .hero img{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover}
-.hero .scrim{position:absolute;inset:auto 0 0 0;padding:56px 20px 18px;color:#fff;
+.hero a{display:block;line-height:0}
+/* The scrim sits over the bottom of the photo; letting taps fall through it
+   makes the whole hero, not just its top half, open the viewer. */
+.hero .scrim{pointer-events:none;position:absolute;inset:auto 0 0 0;padding:56px 20px 18px;color:#fff;
   background:linear-gradient(to top,rgba(15,23,42,.92) 0%,rgba(15,23,42,.72) 42%,rgba(15,23,42,0) 100%)}
 .hero .addr{font-size:21px;font-weight:800;letter-spacing:-.02em;line-height:1.2;margin:0;
   text-shadow:0 1px 12px rgba(15,23,42,.5)}
 .hero .sub{font-size:13px;color:#CBD5E1;margin:5px 0 0}
 .hero .tag{display:inline-block;background:#fff;color:#0F172A;font-size:13px;font-weight:800;
   padding:5px 11px;border-radius:8px;margin:0 0 10px;font-variant-numeric:tabular-nums}
-.shots{display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;
-  scroll-snap-type:x mandatory;padding:2px 0 6px;margin:0 -2px}
-.shots a{flex:0 0 auto;scroll-snap-align:start;border-radius:8px;overflow:hidden;
-  border:1px solid #E2E8F0;background:#F1F5F9;line-height:0}
-.shots img{display:block;width:164px;height:116px;object-fit:cover}
-@media(max-width:520px){.shots img{width:140px;height:100px}}
+.shots{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.shots a{display:block;border-radius:8px;overflow:hidden;border:1px solid #E2E8F0;background:#F1F5F9;line-height:0}
+.shots img{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover}
+@media(max-width:520px){.shots{grid-template-columns:repeat(2,minmax(0,1fr))}}
+html.gal a[data-gal]{cursor:zoom-in}
+.more{margin:8px 0 0}
+.more summary{list-style:none;display:block;text-align:center;cursor:pointer;font-size:13px;font-weight:600;
+  color:#0F172A;background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:9px 16px;margin:0 0 8px}
+.more summary::-webkit-details-marker{display:none}
+.more summary .less{display:none}
+.more[open] summary .all{display:none}
+.more[open] summary .less{display:inline}
+/* The viewer. An overlay, so it is the one place besides the hero scrim that
+   ink appears at alpha; no gradients, no shadows, and buttons are flat rings. */
+.lb{position:fixed;inset:0;z-index:50;background:rgba(15,23,42,.97);
+  display:flex;align-items:center;justify-content:center}
+.lb[hidden]{display:none}
+html.lb-open{overflow:hidden}
+.lb-f{margin:0;width:100%;height:100vh;height:100dvh;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:64px 72px}
+.lb-f img{display:block;max-width:100%;max-height:100%;min-height:0;width:auto;height:auto;
+  object-fit:contain;border-radius:4px;transition:opacity .2s}
+.lb-f img:not([src]){visibility:hidden}
+.lb.loading .lb-f img{opacity:.35}
+.lb-c{flex:0 0 auto;color:#CBD5E1;font-size:13px;line-height:1.4;margin:10px 0 0;text-align:center;max-width:640px}
+.lb-c:empty{display:none}
+.lb-i{position:absolute;top:0;left:64px;right:64px;height:64px;display:flex;align-items:center;justify-content:center;
+  color:#CBD5E1;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;pointer-events:none}
+.lb button{position:absolute;width:44px;height:44px;padding:0;border-radius:9999px;cursor:pointer;
+  border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.1);color:#fff;
+  display:flex;align-items:center;justify-content:center;transition:background .15s}
+.lb button:hover{background:rgba(255,255,255,.22)}
+.lb button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.lb-x{top:10px;right:10px}
+.lb-p{left:14px;top:50%;transform:translateY(-50%)}
+.lb-n{right:14px;top:50%;transform:translateY(-50%)}
+@media(max-width:520px){.lb-f{padding:60px 10px 72px}
+  .lb-p,.lb-n{top:auto;bottom:14px;transform:none}}
+@media(prefers-reduced-motion:reduce){.lb,.lb *{transition:none}}
 .noshot{padding:16px;text-align:center;background:#F1F5F9;color:#94A3B8;
   font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
 
@@ -557,7 +716,10 @@ export function brandHeader(brand) {
   </div></header>`;
 }
 
-export function page({ title, css = "", body, watermark = "", brand = null }) {
+// `script` is inline source embedded verbatim before </body>. It runs only if
+// the response's CSP names its hash — see secureHeaders — so a caller passing
+// one must also have passed the same string to secureHeaders({ scripts }).
+export function page({ title, css = "", body, watermark = "", brand = null, script = "" }) {
   const tiles = watermark
     ? `<div class="wm" aria-hidden="true">${Array.from({ length: 24 }, () => `<span>${esc(watermark)}</span>`).join("")}</div>`
     : "";
@@ -569,7 +731,7 @@ export function page({ title, css = "", body, watermark = "", brand = null }) {
 <meta name="referrer" content="no-referrer">
 <title>${esc(title)}</title>
 <style>${BASE_CSS}${css}</style>
-</head><body>${brandHeader(brand)}${tiles}<div class="wrap">${body}</div></body></html>`;
+</head><body>${brandHeader(brand)}${tiles}<div class="wrap">${body}</div>${script ? `<script>${script}</script>` : ""}</body></html>`;
 }
 
 // Standalone notice — bad link, expired, revoked, locked out. Deliberately
@@ -826,21 +988,57 @@ function documentsSection(snap, base) {
 const photoUrl = (base, photo, variant) =>
   `${base}/photo/${encodeURIComponent(photo.id)}/${variant}`;
 
-// The rest of the photos, after the hero. A scroll-snap strip rather than a
-// grid so it stays one gesture on a phone; each opens full-size in a new tab,
-// which beats a :target lightbox on a page we can't debug in the wild.
+// One photo link. `i` is the photo's position in the whole set, hero included,
+// and is what the viewer walks; the href is the full-size image, which is what
+// the link opens when the viewer isn't running. Thumbs have no text, so the
+// alt is the link's accessible name.
+function photoLink(photos, i, base, inner) {
+  const p = photos[i];
+  const cap = p.caption ? esc(p.caption) : "";
+  return `<a href="${photoUrl(base, p, "full")}" target="_blank" rel="noopener noreferrer"
+      data-gal="${i}"${cap ? ` data-cap="${cap}"` : ""}>${inner(cap || `Photo ${i + 1} of ${photos.length}`)}</a>`;
+}
+
+// How many thumbnails show before the disclosure: two full rows on a desktop
+// (four across) and four on a phone (two across), so the fold never lands
+// mid-row on either.
+const INLINE_SHOTS = 8;
+
+// The rest of the photos, after the hero: a grid of the first eight, and the
+// remainder behind "Show all N photos". The viewer (photoViewer, below) walks
+// every one of them whether or not the disclosure is open.
 function photosSection(photos, base) {
   const rest = photos.slice(1);
   if (!rest.length) return "";
+  const thumb = (i) => photoLink(photos, i, base, (alt) =>
+    `<img src="${photoUrl(base, photos[i], "thumb")}" alt="${alt}" loading="lazy"
+          ${photos[i].width && photos[i].height ? `width="${photos[i].width}" height="${photos[i].height}"` : ""}>`);
+  const inline = rest.slice(0, INLINE_SHOTS).map((_, k) => thumb(k + 1)).join("");
+  const more = rest.slice(INLINE_SHOTS).map((_, k) => thumb(k + 1 + INLINE_SHOTS)).join("");
   return `<div class="card">
     <h2>Photos</h2>
-    <div class="shots">
-      ${rest.map((p) => `<a href="${photoUrl(base, p, "full")}" target="_blank" rel="noopener noreferrer">
-        <img src="${photoUrl(base, p, "thumb")}" alt="" loading="lazy"
-          ${p.width && p.height ? `width="${p.width}" height="${p.height}"` : ""}></a>`).join("")}
-    </div>
-    <p class="muted" style="margin:8px 0 0;font-size:12px">
-      ${rest.length + 1} photo${rest.length ? "s" : ""} · tap any one to see it full size.</p>
+    <div class="shots">${inline}</div>
+    ${more ? `<details class="more">
+      <summary><span class="all">Show all ${photos.length} photos</span><span class="less">Show fewer</span></summary>
+      <div class="shots">${more}</div>
+    </details>` : ""}
+    <p class="muted" style="margin:10px 0 0;font-size:12px">
+      ${photos.length} photos · tap any one to see it full size.</p>
+  </div>`;
+}
+
+// The full-screen viewer GALLERY_JS drives. Static markup, hidden until a photo
+// link is tapped; the script only ever fills in src, alt, caption and counter,
+// so nothing here is built from strings at runtime.
+function photoViewer() {
+  const icon = (d) => `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+  return `<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Photo viewer">
+    <div class="lb-i" aria-live="polite"></div>
+    <button type="button" class="lb-x" data-lb="close" aria-label="Close">${icon("M6 6l12 12M18 6L6 18")}</button>
+    <button type="button" class="lb-p" data-lb="prev" aria-label="Previous photo">${icon("M15 5l-7 7 7 7")}</button>
+    <figure class="lb-f"><img alt=""><figcaption class="lb-c"></figcaption></figure>
+    <button type="button" class="lb-n" data-lb="next" aria-label="Next photo">${icon("M9 5l7 7-7 7")}</button>
   </div>`;
 }
 
@@ -900,8 +1098,8 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
     ${backLink ? `<p style="margin:0 0 12px"><a href="${esc(backLink)}"
       style="font-size:13px;font-weight:600;text-decoration:none">← All current deals</a></p>` : ""}
     ${hero ? `<div class="hero">
-      <img src="${photoUrl(base, hero, "full")}" alt="${esc(p.address || "The property")}"
-        ${hero.width && hero.height ? `width="${hero.width}" height="${hero.height}"` : ""}>
+      ${photoLink(photos, 0, base, () => `<img src="${photoUrl(base, hero, "full")}" alt="${esc(p.address || "The property")}"
+        ${hero.width && hero.height ? `width="${hero.width}" height="${hero.height}"` : ""}>`)}
       <div class="scrim">
         ${num(n.investorPrice) > 0 ? `<div class="tag">${esc(money(n.investorPrice))}</div>` : ""}
         <p class="addr">${esc(p.address || "Investment opportunity")}</p>
@@ -923,6 +1121,7 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
 
     ${s.summary ? `<div class="figs" style="margin-bottom:16px">${figs}</div>` : ""}
     ${s.photos !== false ? photosSection(photos, base) : ""}
+    ${hero ? photoViewer() : ""}
     ${feeRows}
 
     ${snap.notes && !teaser ? `<div class="card"><h2>Deal notes</h2><p class="muted" style="white-space:pre-wrap;margin:0">${esc(snap.notes)}</p></div>` : ""}
@@ -987,5 +1186,9 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
     // is meant to circulate, so it carries the company's mark instead. The
     // public teaser is deliberately unmarked — nothing on it is confidential.
     watermark: teaser ? "" : recipient ? `${recipient} · CONFIDENTIAL` : (company.name || "CONFIDENTIAL"),
+    // The viewer only when there is something to view. Its hash is in the CSP
+    // regardless (the routes pass GALLERY_JS to secureHeaders), which is
+    // harmless: an allowance for a script that isn't on the page.
+    script: hero ? GALLERY_JS : "",
   });
 }

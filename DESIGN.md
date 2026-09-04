@@ -144,13 +144,23 @@ rather than by convention:
   Roboto on Android. Weight and size contrast, not typeface, are what make these
   pages feel designed. Embedding a subset as a `data:` URI is possible but has
   been judged not worth the first-paint cost on cell service.
-- **It runs no JavaScript at all** — there is no `script-src`. Every interaction
-  must be pure CSS. Hence the photo gallery is a `scroll-snap` strip with photos
-  opening full-size in a new tab, rather than a carousel or lightbox.
+- **It runs one script, and only by hash.** `script-src` names the SHA-256 of
+  the photo viewer's exact source (`GALLERY_JS` in `dataroom.js`) and nothing
+  else — no `'unsafe-inline'`, no nonces to plumb through the renderer — and
+  `default-src 'none'` still leaves that script nowhere to send anything. Every
+  other interaction is pure CSS, and the viewer is an enhancement: with scripting
+  off, every photo link opens the full-size image in a new tab.
 
 **Photography.** The investor document is the only surface with photographs. A
 deal page leads with a 3:2 hero (the operator's first photo) carrying the address
-and price over a scrim; remaining photos sit in a horizontal strip. Portfolio
+and price over a scrim. The remaining photos tile in a 3:2 grid — four across,
+two on a phone — with the first eight shown and the rest behind a "Show all N
+photos" disclosure; never a horizontal strip, whose only sign of more is a
+scrollbar that phones and macOS hide. Tapping any photo, the hero included, opens
+a full-screen viewer: ink at 97% behind the image, flat ring buttons for
+prev/next/close, swipe and arrow keys, a "12 / 67" counter, the caption when
+there is one, and the phone's back gesture closes it instead of leaving the
+room. Portfolio
 cards lead with the same photo as a 3:2 thumbnail with the price badged over its
 lower-left. Deals without photos get a flat `#F1F5F9` placeholder reading "Photos
 coming soon" — never a broken image, and never a stretched one: every photo is

@@ -6,6 +6,7 @@
 // revoke / reissue / expiry kill access immediately.
 // Runs against the JSON file backend in a throwaway temp directory.
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +27,7 @@ process.env.DATAROOM_FEED_TTL_MS = "0";
 const { default: express } = await import("express");
 const { store } = await import("./store.js");
 const { createDataroomRouter, createDataroomPublicRouter } = await import("./routes/dataroom.js");
+const { GALLERY_JS } = await import("./dataroom.js");
 
 const LOC = "loc-test-1";
 const resolveLocation = (req) => {
@@ -234,6 +236,41 @@ let pgh = await (await fetch(dealShare, { redirect: "manual" })).text();
 ok("hero photo renders", pgh.includes(`/photo/${photoA1}/full`));
 ok("the rest go in the strip", pgh.includes(`/photo/${photoA2}/thumb`));
 ok("hero carries explicit dimensions", /width="1600" height="1067"/.test(pgh));
+
+console.log("\n== photos: the viewer and its CSP ==");
+// The photo viewer is the only script an investor page runs, and the CSP allows
+// it by the hash of its exact source. The two halves have to agree byte for
+// byte, or the browser drops the script and the page quietly loses the viewer.
+const dealRes = await fetch(dealShare, { redirect: "manual" });
+const dealCsp = dealRes.headers.get("content-security-policy") || "";
+const shipped = (pgh.match(/<script>([\s\S]*?)<\/script>/) || [])[1] || "";
+const shippedHash = `'sha256-${crypto.createHash("sha256").update(shipped, "utf8").digest("base64")}'`;
+const scriptSrc = ((dealCsp.match(/script-src ([^;]*)/) || [])[1] || "").trim();
+ok("the viewer ships with the page", shipped.length > 0 && pgh.includes('id="lb"'));
+ok("script-src allows that script's hash and nothing else", scriptSrc === shippedHash, scriptSrc);
+ok("the hero opens the viewer at the first photo", /<div class="hero">\s*<a [^>]*data-gal="0"/.test(pgh));
+ok("thumbnails are numbered for the viewer", pgh.includes('data-gal="1"'));
+const teaserRes = await fetch(`${B}/d/deal/${room.id}`, { redirect: "manual" });
+ok("the teaser allows the same script", (teaserRes.headers.get("content-security-policy") || "").includes(shippedHash),
+  teaserRes.status);
+const bad = await fetch(`${B}/d/definitely-not-a-token`, { redirect: "manual" });
+const badCsp = bad.headers.get("content-security-policy") || "";
+ok("pages without a viewer allow no script at all", badCsp.includes("default-src 'none'") && !badCsp.includes("script-src"), badCsp);
+
+// Past the first eight, thumbnails sit behind a disclosure so a 60-photo listing
+// doesn't become a 60-row page; the viewer still walks every one of them. Seeded
+// and removed here so the reorder/delete checks below see the two they expect.
+const extra = [];
+for (let i = 0; i < 9; i++) extra.push((await seedPhoto(offer.id)).id);
+pgh = await (await fetch(dealShare, { redirect: "manual" })).text();
+const galCount = (pgh.match(/data-gal="/g) || []).length;
+ok("every photo is reachable from the viewer", galCount === 11, galCount);
+ok("the tail folds behind a show-all control", pgh.includes("Show all 11 photos"));
+const fold = pgh.indexOf('<details class="more">');
+ok("eight thumbnails stay in front of the fold", fold > 0 && pgh.indexOf('data-gal="8"') < fold && fold < pgh.indexOf('data-gal="9"'));
+for (const id of extra) await store.deleteOfferPhoto(offer.id, id);
+pgh = await (await fetch(dealShare, { redirect: "manual" })).text();
+ok("with two photos there is nothing to fold", !pgh.includes('<details class="more">') && pgh.includes("2 photos"));
 ph = await (await fetch(portfolioLink, { redirect: "manual" })).text();
 ok("portfolio card shows a thumbnail", ph.includes(`/photo/${photoA1}/thumb`));
 ok("portfolio thumb is served under the deal's own token",
@@ -616,7 +653,10 @@ html = await v.text();
 ok("links render for the investor", html.includes("3D walkthrough") && html.includes("my.matterport.com"));
 ok("links sit in the documents card", html.includes("Documents &amp; links"));
 ok("no javascript: href reaches the page", !/href="javascript:/i.test(html));
-ok("no inline script reaches the page", !/<script/i.test(html));
+const inline = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
+ok("the only script on the page is the hashed viewer", inline.length === 1 && inline[0] === GALLERY_JS, inline.length);
+ok("no other script tag, closed or not, reaches the page",
+  !/<script/i.test(html.replace(`<script>${GALLERY_JS}</script>`, "")));
 
 // The whole point of storing links on the room rather than the offer.
 r = await jget(`${B}/api/datarooms/${room.id}`, {
