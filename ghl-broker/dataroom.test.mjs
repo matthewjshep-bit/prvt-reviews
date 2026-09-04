@@ -767,6 +767,12 @@ r = await jget(`${B}/api/datarooms/${room.id}/revoke`, {
 v = await fetch(link3, { redirect: "manual" });
 ok("restore brings them back", v.status === 200 && (await v.text()).includes("Sumner"), v.status);
 
+console.log("\n== viewer: a link that picked up punctuation still opens ==");
+for (const tail of [".", ",", ")", "%20", ".%20"]) {
+  v = await fetch(`${link3}${tail}`, { redirect: "manual" });
+  ok(`a trailing "${decodeURIComponent(tail)}" is forgiven`, v.status === 200 && (await v.text()).includes("Sumner"), v.status);
+}
+
 console.log("\n== operator: garbage tokens ==");
 for (const bad of ["short", "../../etc/passwd", "A".repeat(200), "%00"]) {
   v = await fetch(`${B}/d/${encodeURIComponent(bad)}`, { redirect: "manual" });

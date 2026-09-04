@@ -739,7 +739,12 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
   // Every failure returns the same notice — a prober learns nothing about
   // whether a token existed.
   async function resolveInvite(req, res) {
-    const token = String(req.params.token || "");
+    // Messaging apps sometimes fold the character after a link into the tap
+    // target — a period, a comma, a closing bracket, a trailing space from a
+    // copy-paste. Tokens are base64url and never end in any of those, so
+    // shedding them can't make a wrong token right; it only stops a right one
+    // from dying on a punctuation mark.
+    const token = String(req.params.token || "").replace(/[\s.,;:!?)\]]+$/, "");
     if (!/^[A-Za-z0-9_-]{20,128}$/.test(token)) { gone(res); return null; }
     const invite = await store.getDataroomInviteByTokenHash(hashToken(token));
     if (!invite) {
