@@ -184,6 +184,9 @@ export function RoutingCard({ config, patch, version }) {
         <Field label="Investor tags">
           <TagList value={r.investorTags} onChange={set("investorTags")} placeholder="investor, investor-*, on-deal" version={version} />
         </Field>
+        <Field label="Hands-off tags" hint="A contact carrying one is yours: no draft, no send, nothing. Tag them in GHL when you take a thread over.">
+          <TagList value={r.botOffTags} onChange={set("botOffTags")} placeholder="stop bot, bot-off" version={version} />
+        </Field>
         <Field label="If a contact carries both" hint="A buyer who is also an agent gets the playbook you pick here.">
           <Select value={r.priority} onChange={set("priority")} options={[["agent", "Treat as a listing agent"], ["investor", "Treat as an investor"]]} />
         </Field>
@@ -228,6 +231,12 @@ export function AutoSendCard({ config, patch }) {
         <Field label="Time zone" hint="An IANA name. Outside the window a reply waits for the next opening.">
           <Text value={a.quietHours.timeZone} onChange={setQh("timeZone")} placeholder="America/Los_Angeles" />
         </Field>
+        <Field label="Wait for follow-up texts (seconds)" hint="Three texts in a row get one reply to all three. 0 drafts at once.">
+          <Text type="number" value={a.debounceSec} onChange={(v) => set("debounceSec")(Number(v))} />
+        </Field>
+        <Field label="Stand down after you reply (minutes)" hint="If a person replied to them this recently, the bot drafts but never sends itself.">
+          <Text type="number" value={a.humanActiveMin} onChange={(v) => set("humanActiveMin")(Number(v))} />
+        </Field>
         <div className="flex flex-col justify-end gap-1 pb-1">
           <Toggle checked={a.channels.includes("sms")} onChange={toggleChannel("sms")}>Texts may auto-send</Toggle>
           <Toggle checked={a.channels.includes("email")} onChange={toggleChannel("email")}>Emails may auto-send</Toggle>
@@ -252,6 +261,27 @@ export function StyleCard({ config, patch }) {
         <Field label="Longest text it may send (characters)" hint="A draft over this holds. The voice above sets the target; this is the ceiling.">
           <Text type="number" value={st.maxSmsChars} onChange={(v) => set("maxSmsChars")(Number(v))} />
         </Field>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 border-t border-slate-100 pt-3">
+        <Toggle checked={config.notes.onDraft} onChange={(v) => patch({ notes: { ...config.notes, onDraft: v } })}>Leave a GHL note on every draft</Toggle>
+        <Toggle checked={config.notes.onAutoSend} onChange={(v) => patch({ notes: { ...config.notes, onAutoSend: v } })}>Leave a GHL note when it sends itself</Toggle>
+      </div>
+    </Section>
+  );
+}
+
+export function ProfileCard({ config, patch }) {
+  const pr = config.profile;
+  const set = (k) => (v) => patch({ profile: { ...pr, [k]: v } });
+  return (
+    <Section title="Memory"
+      intro="It reads the texts and the recent call transcripts, files what is new about the person into their CRM fields (personal details, areas, the properties they've sent, an investor's buy box) through the same merge rules the nightly sweep uses, and leans on it in the reply — once, lightly, the way a colleague who remembers would.">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="flex items-end pb-2"><Toggle checked={pr.enabled} onChange={set("enabled")}>Build their profile as we talk</Toggle></div>
+        <Field label="Call transcripts to read" hint="The most recent recorded calls, when GHL has transcribed them.">
+          <Text type="number" value={pr.callTranscripts} onChange={(v) => set("callTranscripts")(Number(v))} />
+        </Field>
+        <div className="flex items-end pb-2"><Toggle checked={pr.writeSummary} onChange={set("writeSummary")}>Keep "last conversation" current</Toggle></div>
       </div>
     </Section>
   );
@@ -362,8 +392,44 @@ export function PartyPlaybooks({ config, patch, workflows }) {
         </div>
 
         <IntentRulesTable party={party} pb={pb} setPb={setPb} workflows={workflows} />
+        <FallbackEditor party={party} pb={pb} setPb={setPb} workflows={workflows} />
       </div>
     </Section>
+  );
+}
+
+// The catch-all: what happens when no rule above matched. The old GHL bot
+// put every agent reply with no fit into Tier 3 this way.
+function FallbackEditor({ party, pb, setPb, workflows }) {
+  const fb = pb.fallback || { mode: "ask", actions: [], unlessTags: [] };
+  const set = (next) => setPb({ fallback: { ...fb, ...next } });
+  const allowedTypes = ACTION_TYPES.filter((t) => !INTERNAL_ACTIONS.has(t) || (INTERNAL_ACTIONS_FOR[party] || []).includes(t));
+  return (
+    <div className="rounded-lg border border-dashed border-slate-300 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium">When no rule above matched</span>
+        <select className="rounded-lg border border-slate-300 px-2 py-1 text-xs" value={fb.mode} onChange={(e) => set({ mode: e.target.value })}>
+          <option value="auto">automatically</option>
+          <option value="ask">ask me first</option>
+        </select>
+        <span className="text-xs text-slate-400">unless they already carry</span>
+        <input className="w-56 rounded-lg border border-slate-300 px-2 py-1 text-xs" placeholder="tier-1, tier-2, tier-3"
+          defaultValue={(fb.unlessTags || []).join(", ")}
+          onChange={(e) => set({ unlessTags: e.target.value.split(",").map((t) => t.trim()).filter(Boolean) })} />
+      </div>
+      <div className="mt-2 space-y-2">
+        {(fb.actions || []).map((a, i) => (
+          <ActionEditor key={i} action={a} party={party} allowedTypes={allowedTypes} workflows={workflows}
+            onChange={(next) => set({ actions: fb.actions.map((x, j) => (j === i ? next : x)) })}
+            onRemove={() => set({ actions: fb.actions.filter((_, j) => j !== i) })} />
+        ))}
+        {(fb.actions || []).length < 8 && (
+          <button type="button" className={BTN} onClick={() => set({ actions: [...(fb.actions || []), { type: "add_tags", tags: [] }] })}>
+            <Plus size={13} /> Add a catch-all action
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -434,7 +500,7 @@ function IntentRulesTable({ party, pb, setPb, workflows }) {
 }
 
 function ActionEditor({ action: a, allowedTypes, workflows, onChange, onRemove }) {
-  const setType = (type) => onChange({ type, ...(type === "add_tags" || type === "remove_tags" ? { tags: [] } : {}), ...(type === "set_field" ? { key: "", value: "" } : {}), ...(type === "add_to_workflow" ? { workflowId: "", workflowName: "" } : {}) });
+  const setType = (type) => onChange({ type, ...(type === "add_tags" || type === "remove_tags" ? { tags: [] } : {}), ...(type === "set_field" ? { key: "", value: "" } : {}), ...(type === "add_to_workflow" || type === "remove_from_workflow" ? { workflowId: "", workflowName: "" } : {}) });
   return (
     <div className="flex flex-wrap items-center gap-2">
       <select className="rounded-lg border border-slate-300 px-2 py-1 text-xs" value={a.type} onChange={(e) => setType(e.target.value)}>
@@ -453,7 +519,7 @@ function ActionEditor({ action: a, allowedTypes, workflows, onChange, onRemove }
             value={a.value || ""} onChange={(e) => onChange({ ...a, value: e.target.value })} />
         </>
       )}
-      {a.type === "add_to_workflow" && (
+      {(a.type === "add_to_workflow" || a.type === "remove_from_workflow") && (
         workflows?.list?.length ? (
           <select className="min-w-[14rem] flex-1 rounded-lg border border-slate-300 px-2 py-1 text-xs" value={a.workflowId || ""}
             onChange={(e) => { const w = workflows.list.find((x) => x.id === e.target.value); onChange({ ...a, workflowId: e.target.value, workflowName: w?.name || "" }); }}>

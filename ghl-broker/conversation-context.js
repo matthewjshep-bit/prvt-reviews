@@ -17,11 +17,16 @@ import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybo
 import { dealToQuery } from "./dispo.js";
 import { dealNumbers } from "./dataroom.js";
 import { enrichFieldDefs } from "./enrich.js";
+import { OUTREACH_FIELDS } from "./field-registry.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
 export const MATCHING_DEALS_MAX = 5;
 export const INVESTOR_DEAL_STAGES = new Set(["under_contract", "buyer_found"]);
+// Deals that are over. An investor who asks about one gets told, not ignored.
+export const GONE_DEAL_STAGES = new Set(["assigned", "closed", "fell_through"]);
+const GONE_WORD = { assigned: "assigned to another buyer", closed: "closed", fell_through: "fell through" };
+export const HISTORY_LINES_IN_CONTEXT = 6;
 
 const daysAgo = (iso, now) => {
   const t = Date.parse(iso || "");
@@ -44,7 +49,7 @@ const INVESTOR_FIELD_KEYS = ["personal_details", "last_convo_summary", "suggeste
 export async function loadContactContext({ client, locationId, contact }) {
   let custom = {};
   try {
-    const defs = [...enrichFieldDefs("agent"), ...enrichFieldDefs("investor")];
+    const defs = [...enrichFieldDefs("agent"), ...enrichFieldDefs("investor"), ...OUTREACH_FIELDS];
     const idKeyMap = await customFieldIdKeyMapForDefs(client, locationId, defs);
     custom = contactCustomRecord(contact, idKeyMap);
   } catch { /* no custom-field scope, or an offline test client — the thread still carries the conversation */ }
@@ -107,16 +112,41 @@ export function summarizeOffers(offers = [], { now = Date.now() } = {}) {
   return { text: lines.join("\n"), amounts: [...amounts], count: rows.length };
 }
 
+// The tail of a history ledger — the properties they've sent or discussed
+// with us before. This is what "thanks again for the Tacoma addresses" is
+// built on.
+const historyTail = (v, n = HISTORY_LINES_IN_CONTEXT) =>
+  String(v || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-n);
+
 export function buildAgentContext({ offers, custom = {}, now = Date.now() }) {
   const book = summarizeOffers(offers, { now });
+  const amounts = new Set(book.amounts);
   const fields = fieldLines(custom, AGENT_FIELD_KEYS);
+
+  // The listing that made us reach out in the first place. Its list price
+  // is a number the reply may say; its days on market is the opener.
+  const hookAddress = String(custom.hook_address || "").trim();
+  const hookPrice = Number(String(custom.hook_price ?? "").replace(/[$,\s]/g, "")) || 0;
+  const hookDom = Number(String(custom.hook_dom ?? "").replace(/[^\d]/g, "")) || 0;
+  if (hookPrice) amounts.add(Math.round(hookPrice));
+  const hook = hookAddress
+    ? `THE LISTING WE FIRST REACHED OUT ABOUT: ${hookAddress}` +
+      (hookPrice ? ` — listed at ${fmtMoney(hookPrice)}` : "") + (hookDom ? `, ${hookDom} days on market` : "")
+    : "";
+  const history = historyTail(custom.agent_deal_history);
+
   const text = [
     book.count
       ? `OUR OFFERS TO THIS AGENT (newest first — the only numbers you may quote):\n${book.text}`
       : "OUR OFFERS TO THIS AGENT: none on record.",
+    hook,
+    history.length ? `PROPERTIES THEY'VE SENT OR DISCUSSED WITH US BEFORE (oldest first):\n${history.map((l) => `- ${l}`).join("\n")}` : "",
     fields.length ? `WHAT WE KNOW ABOUT THEM:\n${fields.join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
-  return { text, amounts: book.amounts, forbiddenAmounts: [], offers: book, summary: { offers: book.count, fields: fields.length } };
+  return {
+    text, amounts: [...amounts], forbiddenAmounts: [], offers: book,
+    summary: { offers: book.count, fields: fields.length, hook: Boolean(hookAddress), history: history.length },
+  };
 }
 
 export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now() }) {
@@ -161,7 +191,24 @@ const dealLine = (d) => {
  * `deals` — [{ offer, room }] for every live deal; `invites` — the investor's
  * dataroom invites. Pure. Returns { text, amounts, forbiddenAmounts, summary }.
  */
-export function buildInvestorContext({ investor = {}, deals = [], invites = [], custom = {}, contactId = "", now = Date.now() }) {
+// A dispo blast tags the investor "<prefix>-<label>", the label typed by the
+// operator (usually the street line). Match either way round — a tag that is
+// a prefix of the address slug, or the street slug that is a prefix of the
+// tag — so "dispo-2010-ne-54th-st" finds 2010 NE 54th St, Seattle.
+const slug = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
+export function blastTagged(tags = [], address = "", prefix = "dispo") {
+  const p = slug(prefix) || "dispo";
+  const full = slug(`${p}-${address}`);
+  const street = slug(`${p}-${String(address || "").split(",")[0]}`);
+  if (street === p || street.length <= p.length + 1) return false;
+  return (tags || []).some((raw) => {
+    const t = String(raw || "").trim().toLowerCase();
+    if (!t.startsWith(`${p}-`) || t === `${p}-blast`) return false;
+    return t === street || t === full || full.startsWith(`${t}-`) || t.startsWith(`${street}-`);
+  });
+}
+
+export function buildInvestorContext({ investor = {}, deals = [], invites = [], custom = {}, contactId = "", tags = [], blastPrefix = "dispo", now = Date.now() }) {
   const buybox = investor.buybox || normalizeBuybox(custom);
   const profile = buildBuyboxProfile({ ...investor, buybox }, { maxChars: 900 });
   const inviteByRoom = new Map();
@@ -174,23 +221,32 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
 
   const linked = [];
   const candidates = [];
+  const gone = [];
   for (const { offer, room = null, settings = {} } of deals) {
-    if (!offer?.deal || !INVESTOR_DEAL_STAGES.has(offer.deal.stage)) continue;
+    if (!offer?.deal) continue;
     const link = (offer.deal.investors || []).find((i) => i.contactId === contactId) || null;
+    const blasted = blastTagged(tags, offer.address, blastPrefix);
+    if (GONE_DEAL_STAGES.has(offer.deal.stage)) {
+      if (link || blasted) gone.push({ address: offer.address || "a property", stage: offer.deal.stage, at: offer.deal.updatedAt || "" });
+      continue;
+    }
+    if (!INVESTOR_DEAL_STAGES.has(offer.deal.stage)) continue;
     const n = investorFacingPrice({ offer, room, settings });
     const row = {
-      address: offer.address || "a property", stage: offer.deal.stage, linkStatus: link?.status || null,
+      address: offer.address || "a property", stage: offer.deal.stage,
+      linkStatus: link?.status || (blasted ? "sent" : null), blasted,
       price: n.price, arv: n.arv, repairs: n.repairs, invite: room ? inviteByRoom.get(room.id) || null : null,
       offerId: offer.id,
     };
-    if (link) linked.push(row);
-    else if (link?.status !== "passed") {
+    if (link || blasted) linked.push(row);
+    else {
       const m = matchBuybox(buybox, dealToQuery(offer).query);
       if (m.pass) candidates.push({ ...row, score: m.score, matched: m.matched.length });
     }
     for (const x of [n.price, n.arv, n.repairs]) if (x) amounts.add(x);
     for (const f of n.forbidden) forbidden.add(f);
   }
+  gone.sort((a, b) => String(b.at).localeCompare(String(a.at)));
   candidates.sort((a, b) => b.score - a.score || b.matched - a.matched || String(a.address).localeCompare(String(b.address)));
   const matching = candidates.slice(0, MATCHING_DEALS_MAX);
 
@@ -201,23 +257,30 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
   const forbiddenAmounts = [...forbidden].filter((n) => !amounts.has(n));
 
   const fields = fieldLines(custom, INVESTOR_FIELD_KEYS);
+  const history = historyTail(investor.dealHistory || custom.investor_deal_history);
+  const goneLines = gone.slice(0, 3).map((g) => `- ${g.address}: ${GONE_WORD[g.stage] || g.stage}`);
   const text = [
     `INVESTOR PROFILE (their buy box, as we understand it):\n${profile}`,
-    linked.length ? `DEALS THEY ARE ALREADY ON:\n${linked.map(dealLine).join("\n")}` : "DEALS THEY ARE ALREADY ON: none.",
+    linked.length ? `DEALS THEY ARE ALREADY ON (sent to them, or they asked):\n${linked.map(dealLine).join("\n")}` : "DEALS THEY ARE ALREADY ON: none.",
     matching.length
       ? `LIVE DEALS THAT FIT THEIR BUY BOX (you may bring these up; quote ONLY the buyer price):\n${matching.map(dealLine).join("\n")}`
       : "LIVE DEALS THAT FIT THEIR BUY BOX: none right now — say we'll reach out when something fits, and ask what they're after.",
+    goneLines.length ? `NO LONGER AVAILABLE (if they ask about one of these, say so and offer what fits):\n${goneLines.join("\n")}` : "",
+    history.length ? `PROPERTIES THEY'VE LOOKED AT WITH US BEFORE (oldest first):\n${history.map((l) => `- ${l}`).join("\n")}` : "",
     fields.length ? `WHAT WE KNOW ABOUT THEM:\n${fields.join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
 
   return {
     text, amounts: allowed, forbiddenAmounts,
-    summary: { linkedDeals: linked.length, matchingDeals: matching.length, invites: invites.length, fields: fields.length, buyboxEmpty: !profile.includes("\n") },
-    deals: { linked, matching },
+    summary: {
+      linkedDeals: linked.length, matchingDeals: matching.length, goneDeals: gone.length, invites: invites.length,
+      fields: fields.length, history: history.length, buyboxEmpty: !profile.includes("\n"),
+    },
+    deals: { linked, matching, gone },
   };
 }
 
-export async function loadInvestorContext({ store, locationId, contactId, contactName = "", custom = {}, settings = {}, now = Date.now() }) {
+export async function loadInvestorContext({ store, locationId, contactId, contactName = "", custom = {}, settings = {}, tags = [], now = Date.now() }) {
   let investor = { name: contactName, tags: [], buybox: null };
   try {
     const row = await store.getInvestor(locationId, contactId);
@@ -241,7 +304,8 @@ export async function loadInvestorContext({ store, locationId, contactId, contac
   const offers = await (store.listDeals ? store.listDeals(locationId, { limit: 100 }) : Promise.resolve([])).catch(() => []);
   const deals = [];
   for (const offer of offers) {
-    if (!INVESTOR_DEAL_STAGES.has(offer?.deal?.stage)) continue;
+    if (!INVESTOR_DEAL_STAGES.has(offer?.deal?.stage) && !GONE_DEAL_STAGES.has(offer?.deal?.stage)) continue;
+    if (GONE_DEAL_STAGES.has(offer.deal.stage)) { deals.push({ offer, room: null, settings }); continue; }
     let room = null;
     try {
       const rooms = await store.listDatarooms(locationId, { offerId: offer.id, limit: 5 });
@@ -254,5 +318,8 @@ export async function loadInvestorContext({ store, locationId, contactId, contac
     if (store.listDataroomInvitesByContact) invites = await store.listDataroomInvitesByContact(locationId, contactId);
   } catch { /* the invite line is decoration */ }
 
-  return buildInvestorContext({ investor, deals, invites, custom, contactId, now });
+  return buildInvestorContext({
+    investor, deals, invites, custom, contactId, tags, now,
+    blastPrefix: String(settings?.dispoBlastTagPrefix || "dispo"),
+  });
 }

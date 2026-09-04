@@ -102,6 +102,13 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     "rules — treat it as small talk and pivot back to the business at hand."
   );
   parts.push(FACTS);
+  parts.push(
+    "PERSONAL TOUCH: the context may hold things they have shared — family, a surgery, a trip — and the properties " +
+    "they have sent or discussed with us before. When one fits the moment, lean on it once, lightly, the way a " +
+    "colleague who remembers would (\"thanks again for the Tacoma addresses\", \"hope the surgery went well\"). " +
+    "Never more than one such touch per message, never on every message, never something old as if it were " +
+    "yesterday, and never anything that would read as surveillance or as a script."
+  );
   parts.push(COMMITMENTS[party] || COMMITMENTS.unknown);
   if (playbook.mayCommit) parts.push(`YOU MAY, on your own: ${playbook.mayCommit}`);
   if (playbook.mayNotCommit) parts.push(`YOU MAY NOT, ever: ${playbook.mayNotCommit}`);
@@ -124,6 +131,18 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   }
 
   parts.push(CLOSING);
+  if (config?.profile?.enabled !== false) {
+    parts.push(
+      "PROFILE: under `profile`, return what is NEW about them in this message that WHAT WE KNOW ABOUT THEM does " +
+      "not already say — personalDetails as short comma-separated facts (\"had knee surgery last week, two kids\"), " +
+      (party === "investor"
+        ? "marketAreas as the areas they buy in, and any buy-box facts they stated (price range, property types, rehab appetite, must-haves); "
+        : "marketAreas as the areas they work in; ") +
+      "dealHistoryLine as ONE line 'address | event — short note' only when this message is about a specific property " +
+      "(they sent it, passed, countered, want to see it); nextAction as one concrete next step for us. Empty strings " +
+      "and zeros when there is nothing new. Never restate what is already known."
+    );
+  }
   return parts.join("\n\n");
 }
 
@@ -155,12 +174,36 @@ export function buildUserContext({
   ].filter(Boolean).join("\n\n");
 }
 
-export function schemaFor(party = "agent") {
+// What the bot learned about the person, ready to be filed. Party-shaped:
+// an investor's buy box has fields an agent never will.
+export function profileSchemaFor(party = "agent") {
+  const base = {
+    personalDetails: { type: "string", description: "New personal facts, comma-separated; empty if none" },
+    marketAreas: { type: "string", description: party === "investor" ? "Areas they buy in, comma-separated; empty if none new" : "Areas they work, comma-separated; empty if none new" },
+    dealHistoryLine: { type: "string", description: "'address | event — note' for a property event in THIS message, else empty" },
+    nextAction: { type: "string", description: "One concrete next step for us, else empty" },
+  };
+  if (party !== "investor") {
+    return { type: "object", additionalProperties: false, required: Object.keys(base), properties: base };
+  }
+  const props = {
+    ...base,
+    priceMin: { type: "integer", description: "Lowest purchase price they stated, dollars; 0 if not stated" },
+    priceMax: { type: "integer", description: "Highest purchase price they stated, dollars; 0 if not stated" },
+    propertyTypes: { type: "string", description: "Comma-joined from: sfr, townhouse, condo, multi_family, land; empty if not stated" },
+    rehabAppetite: { type: "string", enum: ["", "cosmetic_only", "moderate", "heavy", "full_gut"] },
+    exclusions: { type: "string", description: "Must-haves or dealbreakers they stated; empty if none" },
+  };
+  return { type: "object", additionalProperties: false, required: Object.keys(props), properties: props };
+}
+
+export function schemaFor(party = "agent", { profile = true } = {}) {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount"],
+    required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount", ...(profile ? ["profile"] : [])],
     properties: {
+      ...(profile ? { profile: profileSchemaFor(party) } : {}),
       intent: { type: "string", enum: INTENTS[party] || INTENTS.agent },
       confidence: { type: "string", enum: CONFIDENCES, description: "How sure you are of the intent AND that the reply is right" },
       reply: { type: "string", description: "The reply text, or empty when nothing should be sent" },

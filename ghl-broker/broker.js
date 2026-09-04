@@ -19,7 +19,7 @@ import { createOfferPageRouter, createOfferPagePublicRouter } from "./routes/off
 import { store } from "./store.js";
 import { checkObjectStore } from "./r2.js";
 import { sendDueDrafts } from "./conversation-scheduler.js";
-import { sendReplyDraft } from "./reply-agent.js";
+import { sendReplyDraft, conversationConfig } from "./reply-agent.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -182,6 +182,7 @@ setInterval(async () => {
 // place, and anything left over from before the flag flipped is handed back
 // to the outbox with a flag rather than left counting down.
 const CONVERSATION_SENDS_LIVE = process.env.CARD_SENDS_ENABLED === "true";
+let lastPrune = 0;
 setInterval(async () => {
   try {
     const locations = sweepLocations()
@@ -190,6 +191,19 @@ setInterval(async () => {
       .map(({ locationId, token }) => ({ locationId, client: makeClient(token) }));
     const r = await sendDueDrafts({ store, locations, live: CONVERSATION_SENDS_LIVE, send: sendReplyDraft, log: console.log });
     if (r.failed || r.recovered || r.returned) console.warn(`conversation scheduler: ${JSON.stringify(r)}`);
+    // Once a day: settled drafts past the tab's retention go.
+    if (Date.now() - lastPrune > 24 * 3600 * 1000) {
+      lastPrune = Date.now();
+      for (const { locationId } of locations) {
+        try {
+          const days = conversationConfig((await store.getOfferSettings(locationId)) || {}).retentionDays;
+          if (days > 0 && store.pruneReplyDrafts) {
+            const n = await store.pruneReplyDrafts(locationId, new Date(Date.now() - days * 86400000).toISOString());
+            if (n) console.log(`conversation retention: pruned ${n} draft(s) for ${locationId}`);
+          }
+        } catch (e) { console.error(`conversation retention failed for ${locationId}: ${e.message}`); }
+      }
+    }
   } catch (e) {
     console.error(`conversation scheduler tick failed: ${e.message}`);
   }

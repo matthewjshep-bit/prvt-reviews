@@ -199,7 +199,7 @@ test("the starter playbook is a valid config with the real tags, and every auto-
   assert.deepEqual(a.deal_available.actions[0], { type: "add_tags", tags: ["tier-1"] });
   assert.deepEqual(a.investor_open.actions[0], { type: "add_tags", tags: ["tier-2"] });
   assert.deepEqual(a.rejection.actions[0], { type: "add_tags", tags: ["tier-3"] });
-  assert.equal(a.counter, undefined, "a counter stays a person's call with no side effects");
+  assert.deepEqual(a.counter.actions.map((x) => x.type), ["mark_offer_countered"], "a counter is a person's call to answer, but the offer is marked");
   const i = c.parties.investor.intentRules;
   assert.equal(i.interested.mode, "auto");
   assert.ok(i.interested.actions.some((x) => x.type === "suggest_dataroom_invite"));
@@ -232,5 +232,35 @@ test("the starter wires the five GHL workflows by name when it can see them, and
   assert.deepEqual(wfIn("investor", "buybox_update"), ["d2"]);
   assert.equal(c.parties.agent.intentRules.deal_available.actions[0].type, "add_tags", "the tags still come first");
   const bare = starterConfig({ signer: "Matt" });
-  assert.deepEqual(bare.parties.agent.intentRules.deal_available.actions.map((a) => a.type), ["add_tags", "remove_tags"]);
+  assert.deepEqual(bare.parties.agent.intentRules.deal_available.actions.map((a) => a.type), ["add_tags", "remove_tags", "set_field"], "no workflows visible, no workflow actions");
+});
+
+test("fallback rules, bot-off tags, debounce, human-active, profile and notes all normalize", () => {
+  const c = normalizeConversationAi({
+    routing: { botOffTags: "Stop Bot, bot-off" },
+    autoSend: { debounceSec: "45", humanActiveMin: "-5" },
+    profile: { enabled: "false", callTranscripts: 99 },
+    notes: { onDraft: false },
+    dailyCapPerContact: "3",
+    retentionDays: "0",
+    parties: { agent: { fallback: { mode: "auto", actions: [{ type: "add_tags", tags: ["tier-3"] }, { type: "mark_investor_passed" }], unlessTags: ["Tier-1"] } } },
+  });
+  assert.deepEqual(c.routing.botOffTags, ["stop bot", "bot-off"]);
+  assert.equal(c.autoSend.debounceSec, 45);
+  assert.equal(c.autoSend.humanActiveMin, 0);
+  assert.equal(c.profile.enabled, false);
+  assert.equal(c.profile.callTranscripts, 10);
+  assert.equal(c.notes.onDraft, false);
+  assert.equal(c.notes.onAutoSend, true);
+  assert.equal(c.dailyCapPerContact, 3);
+  assert.equal(c.retentionDays, 0);
+  assert.deepEqual(c.parties.agent.fallback, { mode: "auto", actions: [{ type: "add_tags", tags: ["tier-3"] }], unlessTags: ["tier-1"] });
+  assert.deepEqual(c.parties.investor.fallback, { mode: "ask", actions: [], unlessTags: [] });
+  const st = starterConfig({ signer: "Matt", workflows: [{ id: "w2", name: "TIER 2" }, { id: "w3", name: "TIER 3" }] });
+  assert.deepEqual(st.parties.agent.intentRules.deal_available.actions.map((a) => a.type), ["add_tags", "remove_tags", "remove_from_workflow", "remove_from_workflow", "set_field"]);
+  assert.equal(st.parties.agent.intentRules.deal_available.actions.at(-1).value, "{{propertyAddress}}");
+  assert.equal(st.parties.agent.intentRules.counter.actions[0].type, "mark_offer_countered");
+  assert.equal(st.parties.investor.intentRules.passing.actions[0].type, "mark_investor_passed");
+  assert.equal(st.parties.investor.intentRules.wants_to_buy.actions.some((a) => a.type === "mark_investor_committed"), true);
+  assert.equal(st.autoSend.debounceSec, 45);
 });

@@ -105,3 +105,29 @@ test("a field template whose tokens came up empty writes nothing rather than bla
   assert.match(out[0].detail, /nothing to write/);
   assert.equal(calls.some(([m]) => m === "PUT"), false);
 });
+
+test("leaving a workflow they weren't in is not a failure, and the status actions go through the deps", async () => {
+  const client = { call: async (path, opts = {}) => {
+    if (opts.method === "DELETE" && path.includes("/workflow/")) { const e = new Error("not enrolled"); e.status = 404; throw e; }
+    return {};
+  } };
+  const out = await runActions({
+    client, locationId: "LOC", contactId: "c1", draft: { propertyAddress: "12 Elm St", counterAmount: 425000, summary: "s" },
+    actions: [
+      { id: "a1", type: "remove_from_workflow", workflowId: "w3", workflowName: "TIER 3" },
+      { id: "a2", type: "mark_offer_countered" },
+      { id: "a3", type: "mark_offer_passed" },
+      { id: "a4", type: "mark_investor_committed" },
+    ],
+    deps: {
+      setOfferStatus: async ({ status }) => (status === "passed" ? { ok: false, reason: "no open offer to mark" } : { ok: true, address: "12 Elm St", status }),
+      setInvestorStatus: async () => ({ ok: false, reason: "which deal? — no property named" }),
+    },
+  });
+  assert.deepEqual(out.map((a) => [a.status, a.detail || a.error]), [
+    ["done", "not in TIER 3"],
+    ["done", "offer on 12 Elm St marked countered"],
+    ["done", "no open offer to mark"],
+    ["failed", "which deal? — no property named"],
+  ]);
+});

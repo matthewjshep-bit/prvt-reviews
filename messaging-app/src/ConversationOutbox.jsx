@@ -26,8 +26,8 @@ const INTENT_CLS = {
 const PARTY_CLS = { agent: "bg-slate-200 text-slate-700", investor: "bg-sky-100 text-sky-800", unknown: "bg-amber-100 text-amber-800" };
 
 const PHASE = {
-  queued: "Queued", reading: "Reading the thread", drafting: "Drafting", saving: "Saving",
-  acting: "Running actions", scheduling: "Scheduling",
+  queued: "Queued", waiting: "Waiting for follow-up texts", reading: "Reading the thread", drafting: "Drafting",
+  saving: "Saving", filing: "Filing what it learned", acting: "Running actions", scheduling: "Scheduling",
 };
 
 export const intentLabel = (party, intent) =>
@@ -165,6 +165,14 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
         </div>
       )}
 
+      {d.profileUpdates?.learned?.length > 0 && (
+        <div className="mt-1 text-[11px] text-slate-500">
+          <span className="text-slate-400">Filed to their profile:</span> {d.profileUpdates.learned.join(" · ")}
+        </div>
+      )}
+      {d.humanActive && !scheduled && (
+        <div className="mt-0.5 text-[11px] text-slate-500">You replied to them {d.humanActive.minutesAgo}m ago, so this waits for you.</div>
+      )}
       {(settled.length > 0 || pending.length > 0) && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           {settled.map((a) => (

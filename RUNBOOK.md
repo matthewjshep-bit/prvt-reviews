@@ -626,6 +626,41 @@ the action editor takes a pasted workflow id). Enrolling a contact needs only
 Nothing in GHL needs to classify, tag tiers or reply any more — switch those
 bots off.
 
+**Memory.** With the Memory card on (the starter turns it on), every reply's
+model call also returns what is NEW about the person — personal details, the
+areas they work or buy, a property event ("7 Pine Ct | sent us the listing"),
+an investor's price band, types and rehab appetite — and `applyProfileUpdates`
+files it into the same CRM fields the nightly enrichment sweep keeps, through
+the same merge rules (facts union, history ledgers dedupe and keep the
+newest), so the two never fight. The transcript it reads includes the most
+recent call transcripts (default 2) when GHL has them. The prompt's PERSONAL
+TOUCH rule then lets the reply lean on that once, lightly — "thanks again for
+the Tacoma addresses", "hope the surgery went well" — never every message,
+never as surveillance. Each draft row and its note say what was filed.
+
+**Hands off.** A contact carrying a hands-off tag (`stop bot`, `bot-off` on
+the starter — the same tag the opt-out writes) gets no draft, no send, no
+note. And when a person replied to them inside the stand-down window (30
+min), the bot drafts but never sends itself: the row says "you replied to them
+N minutes ago". Three texts in a row are one reply: the draft waits the
+debounce (45s on the starter) and a newer text replaces the waiting job; the
+same words twice inside two minutes are one message. Each contact also has
+its own daily cap (12).
+
+**Catch-all and status.** Each playbook has a fallback that runs when no
+intent rule matched, unless the contact already carries one of its tags: on
+the starter, any agent reply with no fit is Tier 3 (tag + TIER 3 workflow),
+never demoting a Tier 1 or 2. Tier moves also LEAVE the lower tiers'
+workflows (`remove_from_workflow`) so a nurture drip can't keep texting an
+agent we're now working, and a Tier 1 read writes the named address to
+Subject Property (empty tokens write nothing) so the underwriter reads it. A
+counter marks the agent's open offer countered and a pass marks it passed
+(the same write as History's status menu); an investor passing is marked
+passed on the deal; the committed buyer is ask-first because it advances the
+deal. The investor book now also recognises a dispo blast tag as "sent to
+them" and lists finished deals they saw as NO LONGER AVAILABLE, so "is 54th
+still open?" gets an honest answer.
+
 **What the model is given.** The persona (name, role, voice, length, sign-off),
 the house rules, the party's playbook (standing instructions, "it may / it may
 not"), the examples of our voice, the intent definitions, and then per party:
@@ -709,9 +744,11 @@ clobber what the tab saved. A location that never opened the tab is seeded
 from the old `replyAgentDailyCap` / `replyAgentInstructions` and behaves as it
 did.
 
-**Cost.** One Claude call per inbound text (~$0.02–0.05), read once at the
-daily cap on the tab (default 60), counted from the store so a restart can't
-reset it. No Apify. Two drafts in flight per location at a time.
+**Cost.** One Claude call per inbound text (~$0.02–0.05, a little more with
+call transcripts and the profile extraction), read once at the daily cap on
+the tab (default 60, plus 12 per contact), counted from the store so a
+restart can't reset it. No Apify. Two drafts in flight per location at a
+time. Settled drafts older than the retention (180 days) are pruned daily.
 
 ## Agent Outreach
 

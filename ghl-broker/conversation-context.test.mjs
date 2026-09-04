@@ -45,7 +45,7 @@ test("a deal they're already on is listed with their status and the dataroom tra
   const offer = deal({ deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000, investors: [{ contactId: "c1", status: "evaluating" }] } });
   const invites = [{ dataroomId: "r1", contactId: "c1", sentAt: "2026-08-20T00:00:00Z", viewCount: 3, lastViewedAt: "2026-08-22T00:00:00Z" }];
   const ctx = buildInvestorContext({ investor: INVESTOR, deals: [{ offer, room }], invites, contactId: "c1", now: NOW });
-  assert.match(ctx.text, /DEALS THEY ARE ALREADY ON:\n- 2010 NE 54th St.*they are evaluating.*dataroom link sent Aug 20, opened 3× \(last Aug 22\)/);
+  assert.match(ctx.text, /DEALS THEY ARE ALREADY ON \(sent to them, or they asked\):\n- 2010 NE 54th St.*they are evaluating.*dataroom link sent Aug 20, opened 3× \(last Aug 22\)/);
   assert.match(ctx.text, /LIVE DEALS THAT FIT THEIR BUY BOX: none right now/);
   assert.equal(ctx.summary.linkedDeals, 1);
   assert.equal(ctx.summary.matchingDeals, 0);
@@ -95,4 +95,38 @@ test("the agent's book carries the asking price from the lean row, and the field
   assert.deepEqual(ctx.forbiddenAmounts, []);
   assert.equal(summarizeOffers([]).count, 0);
   assert.deepEqual(fieldLines({ personal_details: " " }, ["personal_details"]), []);
+});
+
+import { blastTagged } from "./conversation-context.js";
+
+test("the agent's book carries the outreach hook and the properties they've sent before", () => {
+  const ctx = buildAgentContext({
+    offers: [], now: NOW,
+    custom: { hook_address: "17118 Riverview Way E, Enumclaw, WA", hook_price: "700000", hook_dom: "63",
+      agent_deal_history: "2026-07-01 | 1 Old St | passed\n2026-08-10 | 5 Tacoma Ave, Tacoma | sent us the listing — vacant\n2026-08-12 | 9 Tacoma Ave, Tacoma | sent us the listing" },
+  });
+  assert.match(ctx.text, /THE LISTING WE FIRST REACHED OUT ABOUT: 17118 Riverview Way E.*listed at \$700,000, 63 days on market/);
+  assert.match(ctx.text, /PROPERTIES THEY'VE SENT OR DISCUSSED WITH US BEFORE/);
+  assert.match(ctx.text, /5 Tacoma Ave/);
+  assert.ok(ctx.amounts.includes(700000), "the list price may be quoted");
+  assert.equal(ctx.summary.history, 3);
+});
+
+test("a dispo blast tag is recognised as 'sent to them', and a finished deal is listed as gone", () => {
+  assert.equal(blastTagged(["dispo-2010-ne-54th-st"], "2010 NE 54th St, Seattle, WA 98105"), true);
+  assert.equal(blastTagged(["dispo-2010-ne-54th-st-seattle-wa-98105"], "2010 NE 54th St, Seattle, WA 98105"), true);
+  assert.equal(blastTagged(["dispo-blast", "dispo-pierce"], "2010 NE 54th St, Seattle, WA 98105"), false);
+  assert.equal(blastTagged(["disposition-2010-ne-54th-st"], "2010 NE 54th St", "disposition"), true);
+  const ctx = buildInvestorContext({
+    investor: INVESTOR, contactId: "c1", now: NOW, tags: ["investor", "dispo-2010-ne-54th-st", "dispo-1-gone-st"],
+    deals: [
+      { offer: deal() },
+      { offer: deal({ id: "g", address: "1 Gone St, Seattle, WA 98105", deal: { stage: "assigned", contractPrice: 1, assignmentFee: 1, investors: [], updatedAt: "2026-09-01T00:00:00Z" } }) },
+      { offer: deal({ id: "u", address: "2 Unseen St, Seattle, WA 98105", deal: { stage: "closed", contractPrice: 1, assignmentFee: 1, investors: [] } }) },
+    ],
+  });
+  assert.match(ctx.text, /DEALS THEY ARE ALREADY ON \(sent to them, or they asked\):\n- 2010 NE 54th St.*they are sent it, no answer yet/);
+  assert.match(ctx.text, /NO LONGER AVAILABLE.*\n- 1 Gone St.*assigned to another buyer/);
+  assert.equal(ctx.text.includes("Unseen St"), false, "a finished deal they never saw isn't mentioned");
+  assert.equal(ctx.summary.goneDeals, 1);
 });

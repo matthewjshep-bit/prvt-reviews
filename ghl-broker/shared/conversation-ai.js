@@ -103,25 +103,32 @@ export const autoEligible = (party) =>
 /* ---------- actions: what an intent may trigger in GHL, or here ---------- */
 
 export const ACTION_TYPES = [
-  "add_tags", "remove_tags", "set_field", "add_to_workflow",
+  "add_tags", "remove_tags", "set_field", "add_to_workflow", "remove_from_workflow",
   "link_deal_evaluating", "start_underwrite", "suggest_dataroom_invite",
+  "mark_offer_countered", "mark_offer_passed", "mark_investor_passed", "mark_investor_committed",
 ];
 export const ACTION_LABEL = {
   add_tags: "Add tags", remove_tags: "Remove tags", set_field: "Set a custom field",
-  add_to_workflow: "Add to a GHL workflow", link_deal_evaluating: "Link them to the deal as evaluating",
+  add_to_workflow: "Add to a GHL workflow", remove_from_workflow: "Remove from a GHL workflow",
+  link_deal_evaluating: "Link them to the deal as evaluating",
   start_underwrite: "Start an auto-underwrite", suggest_dataroom_invite: "Suggest a dataroom invite",
+  mark_offer_countered: "Mark their offer countered", mark_offer_passed: "Mark their offer passed",
+  mark_investor_passed: "Mark them passed on the deal", mark_investor_committed: "Mark them the committed buyer",
 };
 // Actions that run on the broker rather than in GHL, and which party each
 // makes sense for. An investor can't be underwritten; an agent isn't invited
-// to a dataroom.
-export const INTERNAL_ACTIONS = new Set(["link_deal_evaluating", "start_underwrite", "suggest_dataroom_invite"]);
+// to a dataroom; an offer belongs to an agent, a deal status to an investor.
+export const INTERNAL_ACTIONS = new Set([
+  "link_deal_evaluating", "start_underwrite", "suggest_dataroom_invite",
+  "mark_offer_countered", "mark_offer_passed", "mark_investor_passed", "mark_investor_committed",
+]);
 export const INTERNAL_ACTIONS_FOR = {
-  agent: ["start_underwrite"],
-  investor: ["link_deal_evaluating", "suggest_dataroom_invite"],
+  agent: ["start_underwrite", "mark_offer_countered", "mark_offer_passed"],
+  investor: ["link_deal_evaluating", "suggest_dataroom_invite", "mark_investor_passed", "mark_investor_committed"],
 };
-// Never automatic: a dataroom link is a document going out, so it is always
-// suggested and applied by a person.
-export const ASK_ONLY_ACTIONS = new Set(["suggest_dataroom_invite"]);
+// Never automatic: a dataroom link is a document going out, and a committed
+// buyer advances the deal — both are applied by a person.
+export const ASK_ONLY_ACTIONS = new Set(["suggest_dataroom_invite", "mark_investor_committed"]);
 export const actionAllowedFor = (party, type) =>
   ACTION_TYPES.includes(type) &&
   (!INTERNAL_ACTIONS.has(type) || (INTERNAL_ACTIONS_FOR[party] || []).includes(type));
@@ -140,6 +147,9 @@ const PLAYBOOK = () => ({
   mayNotCommit: "",
   autoSend: { enabled: false, intents: [] },
   intentRules: {},
+  // Runs when no intent rule fired — the "any reply with no fit" bucket.
+  // `unlessTags`: skip when the contact already carries one (never demote).
+  fallback: { mode: "ask", actions: [], unlessTags: [] },
 });
 
 // Words that mean "stop". Matched deterministically, before any model call,
@@ -161,11 +171,21 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   routing: {
     agentTags: ["agent", "agent-*"],
     investorTags: ["investor", "investor-*", "on-deal"],
+    // A contact carrying one of these is yours: no draft, no send, nothing.
+    // The same tag the opt-out writes belongs here, so it protects twice.
+    botOffTags: ["stop bot", "bot-off"],
     priority: "agent",
     unknown: "hold",                   // "hold" | "generic" | "classify"
     tagOnClassify: true,               // classify: stamp the party's first plain tag so next time the tags decide
     genericInstructions: "",
   },
+  // Profile memory: read call transcripts along with the texts, pull what is
+  // new about the person out of each message into their CRM fields, and let
+  // the reply lean on it. writeSummary keeps last_convo_summary current.
+  profile: { enabled: true, callTranscripts: 2, writeSummary: true },
+  notes: { onDraft: true, onAutoSend: true },
+  dailyCapPerContact: 12,
+  retentionDays: 180,
   // Carrier-safe texting. A "$" or a link in an SMS is what spam filters key
   // on; an em dash is what a bot sounds like. The first two are gates (a
   // draft that breaks them holds), the third is scrubbed from the draft.
@@ -178,6 +198,12 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
     delayMaxSec: 240,
     quietHours: { start: "08:00", end: "20:00", timeZone: "America/Los_Angeles" },
     channels: ["sms"],
+    // Wait this long after a text before drafting, so three texts in a row
+    // get one reply to all three. 0 = draft at once.
+    debounceSec: 0,
+    // Don't auto-send when a person replied to them this recently — they
+    // have the thread.
+    humanActiveMin: 30,
   },
 });
 
@@ -236,7 +262,8 @@ function normalizeAction(a, party) {
       if (!FIELD_KEY_RE.test(key)) return null;
       return { type, key, value: str(a.value, 300) };
     }
-    case "add_to_workflow": {
+    case "add_to_workflow":
+    case "remove_from_workflow": {
       const workflowId = str(a.workflowId, 80);
       if (!workflowId) return null;
       return { type, workflowId, workflowName: str(a.workflowName, 120) };
@@ -262,6 +289,7 @@ function normalizePlaybook(p, party, seed = {}) {
     intentRules[intent] = { mode: oneOf(r.mode, RULE_MODES, "ask"), actions };
   }
   const auto = src.autoSend && typeof src.autoSend === "object" ? src.autoSend : {};
+  const fb = src.fallback && typeof src.fallback === "object" ? src.fallback : {};
   return {
     instructions: str(src.instructions ?? seed.instructions, 4000),
     mayCommit: str(src.mayCommit, 1500),
@@ -271,6 +299,11 @@ function normalizePlaybook(p, party, seed = {}) {
       intents: list(auto.intents, { max: 20, each: 40 }).filter((i) => eligible.includes(i)),
     },
     intentRules,
+    fallback: {
+      mode: oneOf(fb.mode, RULE_MODES, "ask"),
+      actions: (Array.isArray(fb.actions) ? fb.actions : []).map((a) => normalizeAction(a, party)).filter(Boolean).slice(0, 8),
+      unlessTags: list(fb.unlessTags, { max: 20, each: 80, lower: true }),
+    },
   };
 }
 
@@ -300,6 +333,8 @@ export function normalizeConversationAi(doc, seed = {}) {
   const style = d.style && typeof d.style === "object" ? d.style : {};
   const optOut = d.optOut && typeof d.optOut === "object" ? d.optOut : {};
   const media = d.media && typeof d.media === "object" ? d.media : {};
+  const profile = d.profile && typeof d.profile === "object" ? d.profile : {};
+  const notes = d.notes && typeof d.notes === "object" ? d.notes : {};
   const auto = d.autoSend && typeof d.autoSend === "object" ? d.autoSend : {};
   const qh = auto.quietHours && typeof auto.quietHours === "object" ? auto.quietHours : {};
   const parties = d.parties && typeof d.parties === "object" ? d.parties : {};
@@ -323,11 +358,20 @@ export function normalizeConversationAi(doc, seed = {}) {
 
   const agentTags = "agentTags" in routing ? list(routing.agentTags, { max: 30, each: 80, lower: true }) : [...D.routing.agentTags];
   const investorTags = "investorTags" in routing ? list(routing.investorTags, { max: 30, each: 80, lower: true }) : [...D.routing.investorTags];
+  const botOffTags = "botOffTags" in routing ? list(routing.botOffTags, { max: 20, each: 80, lower: true }) : [...D.routing.botOffTags];
 
   return {
     version: 1,
     enabled: bool(d.enabled, D.enabled),
     dailyCap: int(d.dailyCap ?? seedFor.dailyCap, D.dailyCap, 1, 1000),
+    dailyCapPerContact: int(d.dailyCapPerContact, D.dailyCapPerContact, 1, 200),
+    retentionDays: int(d.retentionDays, D.retentionDays, 0, 3650),
+    profile: {
+      enabled: bool(profile.enabled, D.profile.enabled),
+      callTranscripts: int(profile.callTranscripts, D.profile.callTranscripts, 0, 10),
+      writeSummary: bool(profile.writeSummary, D.profile.writeSummary),
+    },
+    notes: { onDraft: bool(notes.onDraft, D.notes.onDraft), onAutoSend: bool(notes.onAutoSend, D.notes.onAutoSend) },
     persona: {
       name: str(persona.name ?? seedFor.signer, 80),
       role: str(persona.role, 120),
@@ -342,6 +386,7 @@ export function normalizeConversationAi(doc, seed = {}) {
     routing: {
       agentTags,
       investorTags,
+      botOffTags,
       priority: oneOf(routing.priority, PARTIES, D.routing.priority),
       unknown: oneOf(routing.unknown, ["hold", "generic", "classify"], D.routing.unknown),
       tagOnClassify: bool(routing.tagOnClassify, D.routing.tagOnClassify),
@@ -376,6 +421,8 @@ export function normalizeConversationAi(doc, seed = {}) {
       channels: Array.isArray(auto.channels)
         ? list(auto.channels, { max: 10, each: 10, lower: true }).filter((c) => CHANNELS.includes(c))
         : [...D.autoSend.channels],
+      debounceSec: int(auto.debounceSec, D.autoSend.debounceSec, 0, 600),
+      humanActiveMin: int(auto.humanActiveMin, D.autoSend.humanActiveMin, 0, 1440),
     },
   };
 }
@@ -504,9 +551,17 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
   const first = String(signer || "").trim().split(/\s+/)[0] || "Matt";
   const wf = matchStarterWorkflows(workflows);
   const enroll = (key) => (wf[key] ? [{ type: "add_to_workflow", workflowId: wf[key].id, workflowName: wf[key].name }] : []);
-  const tierRule = (tier, remove, key) => ({ mode: "auto", actions: [
-    { type: "add_tags", tags: [tier] }, ...(remove.length ? [{ type: "remove_tags", tags: remove }] : []), ...enroll(key),
+  const leave = (...keys) => keys.filter((k) => wf[k]).map((k) => ({ type: "remove_from_workflow", workflowId: wf[k].id, workflowName: wf[k].name }));
+  // A tier is exclusive: moving up adds the tier's tag and workflow, and
+  // leaves the lower tiers' workflows so a nurture drip can't keep texting
+  // someone we're now actively working.
+  const tierRule = (tier, remove, key, leaveKeys = [], extra = []) => ({ mode: "auto", actions: [
+    { type: "add_tags", tags: [tier] }, ...(remove.length ? [{ type: "remove_tags", tags: remove }] : []),
+    ...enroll(key), ...leave(...leaveKeys), ...extra,
   ] });
+  // The address the agent just named becomes the Subject Property the
+  // underwriter reads. Empty tokens write nothing (see conversation-actions).
+  const subject = [{ type: "set_field", key: "subject_property", value: "{{propertyAddress}}" }];
   return normalizeConversationAi({
     persona: {
       name: first,
@@ -541,6 +596,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
     routing: {
       agentTags: ["agent", "agent-*"],
       investorTags: ["investor", "investor-*", "dispo-*", "disposition-*", "on-deal"],
+      botOffTags: ["stop bot", "bot-off"],
       priority: "agent",
       unknown: "classify",
       tagOnClassify: true,
@@ -583,10 +639,18 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "Mention off-market deals. Promise proof of funds. Send a link.",
         autoSend: { enabled: false, intents: [] },
         intentRules: {
-          deal_available: tierRule("tier-1", ["tier-2", "tier-3"], "tier1"),
-          new_property: tierRule("tier-1", ["tier-2", "tier-3"], "tier1"),
-          investor_open: tierRule("tier-2", ["tier-3"], "tier2"),
-          rejection: tierRule("tier-3", [], "tier3"),
+          deal_available: tierRule("tier-1", ["tier-2", "tier-3"], "tier1", ["tier2", "tier3"], subject),
+          new_property: tierRule("tier-1", ["tier-2", "tier-3"], "tier1", ["tier2", "tier3"], subject),
+          investor_open: tierRule("tier-2", ["tier-3"], "tier2", ["tier3"]),
+          rejection: tierRule("tier-3", [], "tier3", [], [{ type: "mark_offer_passed" }]),
+          counter: { mode: "auto", actions: [{ type: "mark_offer_countered" }] },
+        },
+        // Any agent reply with no fit is Tier 3 — the old bot's catch-all —
+        // unless they already have a tier.
+        fallback: {
+          mode: "auto",
+          actions: [{ type: "add_tags", tags: ["tier-3"] }, ...enroll("tier3")],
+          unlessTags: ["tier-1", "tier-2", "tier-3"],
         },
       },
       investor: {
@@ -622,10 +686,14 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           ] },
           looking_for_deals: { mode: "auto", actions: [{ type: "add_tags", tags: ["investor-active"] }, { type: "remove_tags", tags: ["investor-stale"] }, ...enroll("dispoTier2")] },
           buybox_update: { mode: "auto", actions: [{ type: "add_tags", tags: ["investor-active"] }, ...enroll("dispoTier2")] },
-          wants_to_buy: { mode: "ask", actions: [{ type: "add_tags", tags: ["investor-hot"] }, ...enroll("dispoTier1"), { type: "link_deal_evaluating" }] },
+          wants_to_buy: { mode: "ask", actions: [{ type: "add_tags", tags: ["investor-hot"] }, ...enroll("dispoTier1"), { type: "link_deal_evaluating" }, { type: "mark_investor_committed" }] },
           wants_walkthrough: { mode: "ask", actions: [{ type: "add_tags", tags: ["investor-hot"] }, ...enroll("dispoTier1"), { type: "link_deal_evaluating" }] },
+          passing: { mode: "auto", actions: [{ type: "mark_investor_passed" }] },
         },
       },
     },
+    autoSend: { debounceSec: 45, humanActiveMin: 30 },
+    profile: { enabled: true, callTranscripts: 2, writeSummary: true },
+    notes: { onDraft: true, onAutoSend: true },
   });
 }

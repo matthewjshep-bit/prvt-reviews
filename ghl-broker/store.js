@@ -398,6 +398,16 @@ const pgStore = {
     );
     return rowCount > 0;
   },
+  // Retention: settled rows older than the cutoff go. Open, scheduled and
+  // in-flight rows never do — a draft nobody answered is still a draft.
+  async pruneReplyDrafts(locationId, beforeIso) {
+    const { rowCount } = await query(
+      `delete from reply_drafts where location_id = $1 and created_at < $2
+         and status in ('sent', 'dismissed', 'superseded', 'handled')`,
+      [locationId, beforeIso]
+    );
+    return rowCount;
+  },
 
   /* ---- agent outreach batches ---- */
   async createOutreachBatch(locationId, { name, autoNamed = true } = {}) {
@@ -1227,6 +1237,18 @@ const fileStore = (() => {
       data.replyDrafts[id] = doc;
       persist();
       return true;
+    },
+    async pruneReplyDrafts(locationId, beforeIso) {
+      ensure();
+      let n = 0;
+      for (const [id, d] of Object.entries(data.replyDrafts)) {
+        if (d.locationId === locationId && (d.createdAt || "") < beforeIso && ["sent", "dismissed", "superseded", "handled"].includes(d.status)) {
+          delete data.replyDrafts[id];
+          n++;
+        }
+      }
+      if (n) persist();
+      return n;
     },
 
     async getOfferSettings(locationId) {

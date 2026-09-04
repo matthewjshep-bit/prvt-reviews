@@ -3229,6 +3229,62 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }),
     linkDealInterest: ({ contactId, addressHint }) =>
       linkInvestorInterest({ locationId, client, contactId, addressHint }),
+    // The agent's offer outcome, from what they just said: a counter or a
+    // pass. Same write the History table's status menu makes — ledger line,
+    // tag reconcile and all — on their newest open offer, or the one whose
+    // address the message named.
+    setOfferStatus: async ({ contactId, addressHint, status, note = "" }) => {
+      if (!["countered", "passed", "no_response"].includes(status)) return { ok: false, reason: `not a status this can set: ${status}` };
+      const open = (await store.listOffers(locationId, { contactId, limit: 50 })).filter((o) => o.status !== "draft" && !o.deal);
+      if (!open.length) return { ok: false, reason: "no open offer to mark" };
+      const offer = pickDealByAddress(open, addressHint) || open[0];
+      if (effectiveStatus(offer) === status) return { ok: true, unchanged: true, address: offer.address, status };
+      const ts = new Date().toISOString();
+      recordStatus(offer, status, dealStr(note, 200), ts);
+      await store.updateOffer(offer.id, offer);
+      await appendDealHistory(client, locationId, contactId, "agent_deal_history",
+        historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), dealStr(note, 200)));
+      await syncAgentOfferTag(client, locationId, contactId);
+      return { ok: true, address: offer.address, status };
+    },
+    // The investor's standing on a deal: passed, or the committed buyer
+    // (which advances an under-contract deal to buyer_found, as the Deals
+    // page does). Links them first if they weren't.
+    setInvestorStatus: async ({ contactId, addressHint, status }) => {
+      if (!INVESTOR_STATUSES.includes(status)) return { ok: false, reason: `not an investor status: ${status}` };
+      const live = (await store.listDeals(locationId)).filter((o) => LIVE_DEAL_STAGES.has(o.deal?.stage));
+      let offer = pickDealByAddress(live, addressHint);
+      if (!offer) {
+        const mine = live.filter((o) => (o.deal.investors || []).some((i) => i.contactId === contactId));
+        offer = mine.length === 1 ? mine[0] : null;
+      }
+      if (!offer) return { ok: false, reason: live.length ? "which deal? — no property named" : "no live deals" };
+      offer.deal.investors = offer.deal.investors || [];
+      const ts = new Date().toISOString();
+      let inv = offer.deal.investors.find((i) => i.contactId === contactId);
+      if (!inv) {
+        let name = "";
+        try { name = contactName(await getContact(client, contactId)) || contactId; } catch { name = contactId; }
+        inv = { contactId, name, status, addedAt: ts, updatedAt: ts };
+        offer.deal.investors.push(inv);
+      } else {
+        inv.status = status;
+        inv.updatedAt = ts;
+      }
+      if (status === "committed" && offer.deal.stage === "under_contract") {
+        offer.deal.stage = "buyer_found";
+        (offer.deal.stageHistory = offer.deal.stageHistory || []).push({ stage: "buyer_found", ts });
+        await createContactNote(client, contactId, {
+          body: `COMMITTED BUYER — ${offer.address || "property"} (${dateLabel()})` +
+            (offer.deal.assignmentFee ? `\nAssignment fee: ${fmtMoney(offer.deal.assignmentFee)}` : ""),
+        }).catch(() => {});
+      }
+      offer.deal.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      await appendDealHistory(client, locationId, contactId, "investor_deal_history", historyLine(ts, offer.address, status));
+      await syncInvestorDealTag(client, locationId, contactId);
+      return { ok: true, address: offer.address, status };
+    },
     issueDataroomInvite: async ({ contactId, addressHint }) => {
       const live = (await store.listDeals(locationId)).filter((o) => LIVE_DEAL_STAGES.has(o.deal?.stage));
       const offer = pickDealByAddress(live, addressHint);

@@ -14,8 +14,8 @@ import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, SkeletonRows, TableCar
 import ReplyStrip from "./ReplyStrip.jsx";
 import ConversationTryIt from "./ConversationTryIt.jsx";
 import {
-  AutoSendCard, ExamplesEditor, INPUT_CLS, MediaCard, OptOutCard, PartyPlaybooks, PersonaCard, RoutingCard, RulesEditor,
-  Section, StyleCard,
+  AutoSendCard, ExamplesEditor, INPUT_CLS, MediaCard, OptOutCard, PartyPlaybooks, PersonaCard, ProfileCard, RoutingCard,
+  RulesEditor, Section, StyleCard,
 } from "./ConversationPlaybooks.jsx";
 import { IntentPill, PartyPill, ago } from "./ConversationOutbox.jsx";
 
@@ -80,7 +80,10 @@ export default function ConversationAi({ settings }) {
           Daily cap
           <input type="number" min="1" className="w-20 rounded-lg border border-slate-300 px-2 py-1 text-sm" value={form.dailyCap}
             onChange={(e) => patch({ dailyCap: Number(e.target.value) })} />
-          drafts
+          drafts, and
+          <input type="number" min="1" className="w-16 rounded-lg border border-slate-300 px-2 py-1 text-sm" value={form.dailyCapPerContact}
+            onChange={(e) => patch({ dailyCapPerContact: Number(e.target.value) })} />
+          per contact
         </label>
         {!sendsEnabled && (
           <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800" title="Set CARD_SENDS_ENABLED=true on the broker">
@@ -103,7 +106,8 @@ export default function ConversationAi({ settings }) {
                 company: settings?.company?.name || "Shep Flips",
                 workflows: workflows.list,   // TIER 1/2/3 and Tier 1/2 Disposition are wired by name when the list is visible
               });
-              patch({ ...st, enabled: form.enabled, dailyCap: form.dailyCap, autoSend: form.autoSend });
+              patch({ ...st, enabled: form.enabled, dailyCap: form.dailyCap, dailyCapPerContact: form.dailyCapPerContact,
+                autoSend: { ...st.autoSend, delayMinSec: form.autoSend.delayMinSec, delayMaxSec: form.autoSend.delayMaxSec, quietHours: form.autoSend.quietHours, channels: form.autoSend.channels } });
             }}>
             Load starter playbook
           </button>
@@ -126,6 +130,7 @@ export default function ConversationAi({ settings }) {
       <RoutingCard config={form} patch={patch} version={version} />
       <PartyPlaybooks config={form} patch={patch} workflows={workflows} />
       <AutoSendCard config={form} patch={patch} />
+      <ProfileCard config={form} patch={patch} />
       <StyleCard config={form} patch={patch} />
       <OptOutCard config={form} patch={patch} version={version} workflows={workflows} />
       <MediaCard config={form} patch={patch} />

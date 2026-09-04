@@ -12,8 +12,9 @@
 
 import { ASK_ONLY_ACTIONS, substituteTokens } from "./shared/conversation-ai.js";
 import {
-  addContactTags, removeContactTags, addContactToWorkflow, findOrCreateCustomFieldByKey, updateContact,
+  addContactTags, removeContactTags, addContactToWorkflow, removeContactFromWorkflow, findOrCreateCustomFieldByKey, updateContact,
 } from "./ghl.js";
+import { fmtMoney } from "./shared/offer-calc.js";
 
 let seq = 0;
 const newActionId = () => `a-${Date.now().toString(36)}-${(seq++).toString(36)}`;
@@ -63,6 +64,43 @@ const EXECUTORS = {
   async add_to_workflow({ client, contactId, action }) {
     await addContactToWorkflow(client, contactId, action.workflowId);
     return `added to ${action.workflowName || action.workflowId}`;
+  },
+  // Leaving a workflow they were never in is a 4xx from GHL and not a
+  // failure of ours — a tier move must not read as broken because the drip
+  // had already finished.
+  async remove_from_workflow({ client, contactId, action }) {
+    try {
+      await removeContactFromWorkflow(client, contactId, action.workflowId);
+      return `removed from ${action.workflowName || action.workflowId}`;
+    } catch (e) {
+      if (e?.status && e.status >= 400 && e.status < 500) return `not in ${action.workflowName || action.workflowId}`;
+      throw e;
+    }
+  },
+  async mark_offer_countered({ deps, contactId, draft }) {
+    if (typeof deps?.setOfferStatus !== "function") throw new Error("offer status is not wired on this broker");
+    const note = draft?.counterAmount ? `countered at ${fmtMoney(draft.counterAmount)}` : String(draft?.summary || "").slice(0, 200);
+    const r = await deps.setOfferStatus({ contactId, addressHint: draft?.propertyAddress || "", status: "countered", note });
+    if (!r?.ok) return r?.reason || "no open offer to mark";
+    return r.unchanged ? `offer on ${r.address} was already countered` : `offer on ${r.address} marked countered`;
+  },
+  async mark_offer_passed({ deps, contactId, draft }) {
+    if (typeof deps?.setOfferStatus !== "function") throw new Error("offer status is not wired on this broker");
+    const r = await deps.setOfferStatus({ contactId, addressHint: draft?.propertyAddress || "", status: "passed", note: String(draft?.summary || "").slice(0, 200) });
+    if (!r?.ok) return r?.reason || "no open offer to mark";
+    return r.unchanged ? `offer on ${r.address} was already passed` : `offer on ${r.address} marked passed`;
+  },
+  async mark_investor_passed({ deps, contactId, draft }) {
+    if (typeof deps?.setInvestorStatus !== "function") throw new Error("investor status is not wired on this broker");
+    const r = await deps.setInvestorStatus({ contactId, addressHint: draft?.propertyAddress || "", status: "passed" });
+    if (!r?.ok) return r?.reason || "no deal to mark";
+    return `passed on ${r.address}`;
+  },
+  async mark_investor_committed({ deps, contactId, draft }) {
+    if (typeof deps?.setInvestorStatus !== "function") throw new Error("investor status is not wired on this broker");
+    const r = await deps.setInvestorStatus({ contactId, addressHint: draft?.propertyAddress || "", status: "committed" });
+    if (!r?.ok) throw new Error(r?.reason || "no deal to mark");
+    return `committed buyer on ${r.address}`;
   },
   async link_deal_evaluating({ deps, contactId, draft }) {
     if (typeof deps?.linkDealInterest !== "function") throw new Error("deal linking is not wired on this broker");

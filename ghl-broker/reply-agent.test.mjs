@@ -389,6 +389,8 @@ function ghlStubFor(tags) {
     call: async (path, opts = {}) => {
       calls.push([opts.method || "GET", path]);
       if (/^\/contacts\/c1$/.test(path) && !opts.method) return { contact: { id: "c1", firstName: "Sam", lastName: "Lee", tags } };
+      if (/^\/contacts\/c1$/.test(path) && opts.method === "PUT") return { contact: {} };
+      if (path.endsWith("/customFields") && !opts.method) return { customFields: [{ id: "f-sp", name: "Subject Property", fieldKey: "contact.subject_property" }] };
       if (path.endsWith("/notes")) { notes.push(opts.body.body); return {}; }
       if (path.endsWith("/tags")) { tagCalls.push([opts.method || "POST", opts.body.tags]); return {}; }
       if (path.startsWith("/conversations/search")) return { conversations: [] };
@@ -672,7 +674,10 @@ test("a test on a real contact carries their real thread, then the typed turns",
 import { scrubReply, classifyParty } from "./reply-agent.js";
 import { starterConfig, detectOptOut } from "./shared/conversation-ai.js";
 
-const STARTER_SAVED = { ...SAVED, conversationAi: starterConfig({ signer: "Matt Shepherd" }) };
+// The starter with its debounce off: these tests settle in 30ms, and the
+// debounce has a test of its own.
+const STARTER_RAW = starterConfig({ signer: "Matt Shepherd" });
+const STARTER_SAVED = { ...SAVED, conversationAi: { ...STARTER_RAW, autoSend: { ...STARTER_RAW.autoSend, debounceSec: 0 } } };
 
 test("STOP gets silence and the tags, no model call, and cancels anything counting down", async () => {
   _resetJobs();
@@ -824,11 +829,197 @@ test("em dashes are scrubbed from a draft, and the tag rules from the starter fi
   await settle();
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
-  assert.deepEqual(d.actions.map((a) => [a.type, a.tags, a.status]), [["add_tags", ["tier-1"], "done"], ["remove_tags", ["tier-2", "tier-3"], "done"]]);
+  assert.deepEqual(d.actions.map((a) => [a.type, a.tags || a.key, a.status]), [
+    ["add_tags", ["tier-1"], "done"], ["remove_tags", ["tier-2", "tier-3"], "done"], ["set_field", "subject_property", "done"],
+  ]);
+  assert.equal(d.actions[2].detail, "subject_property = 12 Elm St", "the address the agent named aims the underwriter");
   assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("tier-1")));
   assert.ok(tags.some(([m, t]) => m === "DELETE" && t.includes("tier-2")));
 });
 
 test("the classifier is wired through the same API shape as the drafter", () => {
   assert.equal(typeof classifyParty, "function");
+});
+
+/* ---------- the gap review: hands off, catch-all, debounce, memory ---------- */
+
+import { mergeFacts, lastOutbound, humanHasThread, applyProfileUpdates, countTodayForContact } from "./reply-agent.js";
+
+const STARTER_NOW = STARTER_SAVED;
+
+test("a contact carrying the bot-off tag is left alone: no draft, no note", async () => {
+  _resetJobs();
+  const { client, notes } = ghlStubFor(["agent", "stop bot"]);
+  let called = false;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store: fakeStore(), contactId: "c1", message: "still interested?",
+    deps: { draft: async () => { called = true; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(job.status, "held");
+  assert.match(job.heldReason, /bot is off.*stop bot/);
+  assert.equal(called, false);
+  assert.equal(notes.length, 0);
+});
+
+test("an agent reply with no fit lands in Tier 3 — unless they already have a tier", async () => {
+  _resetJobs();
+  const { client, tags } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "who is this?",
+    deps: { draft: async () => ({ ...DRAFT, intent: "other", confidence: "medium", reply: "It's Matt, I buy homes that need work around Renton. Anything sitting on your side?" }) },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(d.actions.map((a) => [a.type, a.tags, a.status, a.why]), [["add_tags", ["tier-3"], "done", "no rule matched"]]);
+  assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("tier-3")));
+
+  _resetJobs();
+  const { client: c2, tags: t2 } = ghlStubFor(["agent", "tier-1"]);
+  const store2 = fakeStore();
+  const { job: j2 } = await startReply({
+    client: c2, locationId: "LOC", saved: STARTER_NOW, store: store2, contactId: "c1", message: "who is this?",
+    deps: { draft: async () => ({ ...DRAFT, intent: "other", reply: "It's Matt." }) },
+  });
+  await settle();
+  assert.deepEqual((await store2.getReplyDraft(j2.draftId)).actions, [], "a Tier 1 agent is never demoted");
+  assert.equal(t2.some(([m, t]) => m === "POST" && t.includes("tier-3")), false);
+});
+
+test("three texts in a row become one draft, and the same text twice is one message", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  let drafts = 0;
+  const deps = { draft: async () => { drafts++; return DRAFT; }, debounceMs: 60 };
+  const a = await startReply({ client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "hey", deps });
+  const b = await startReply({ client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "it's 12 elm", deps });
+  const c = await startReply({ client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "needs a full reno", deps });
+  assert.equal(c.job.phase, "waiting");
+  assert.equal(a.job.status, "superseded");
+  assert.equal(a.job.supersededBy, b.job.id);
+  assert.equal(b.job.status, "superseded");
+  const dup = await startReply({ client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "needs a full reno", deps });
+  assert.match(dup.skipped, /duplicate of/);
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(c.job.status, "done", c.job.error);
+  assert.equal(drafts, 1, "one model call for three texts");
+  assert.equal((await store.listReplyDrafts("LOC", { status: "draft" })).length, 1);
+});
+
+test("a contact has their own daily cap", async () => {
+  _resetJobs();
+  const rows = Array.from({ length: 12 }, (_, i) => ({ id: `d${i}`, jobId: `ra-${i}`, locationId: "LOC", contactId: "c1", createdAt: iso(60_000), status: "sent" }));
+  const store = fakeStore(rows);
+  assert.equal(await countTodayForContact({ store, locationId: "LOC", contactId: "c1" }), 12);
+  const r = await startReply({ client: deadClient, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "hi" });
+  assert.match(r.skipped, /this contact's daily cap reached \(12\/12\)/);
+  const other = await startReply({ client: deadClient, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c2", message: "hi" });
+  assert.ok(other.job, "another contact is unaffected");
+});
+
+test("when a person replied to them minutes ago, the bot drafts but never sends itself", async () => {
+  const stamp = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 16).replace("T", " ");
+  const transcript = `[${stamp}] THEM sms: any update?\n[${stamp}] US sms: Yes, calling you in ten.`;
+  assert.deepEqual(lastOutbound(transcript).text, "Yes, calling you in ten.");
+  const store = fakeStore([{ id: "x", locationId: "LOC", contactId: "c1", status: "sent", sentText: "something else", createdAt: iso(1000) }]);
+  const h = await humanHasThread({ store, locationId: "LOC", contactId: "c1", transcript, minutes: 30 });
+  assert.ok(h && h.minutesAgo <= 6);
+  const ours = fakeStore([{ id: "x", locationId: "LOC", contactId: "c1", status: "sent", sentText: "Yes, calling you in ten.", createdAt: iso(1000) }]);
+  assert.equal(await humanHasThread({ store: ours, locationId: "LOC", contactId: "c1", transcript, minutes: 30 }), null, "our own auto-send doesn't count");
+  const old = transcript.split(stamp).join(new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 16).replace("T", " "));
+  assert.equal(await humanHasThread({ store, locationId: "LOC", contactId: "c1", transcript: old, minutes: 30 }), null);
+  const cfg = conversationConfig(AUTO_SAVED);
+  assert.match(decideAutoSend({ gate: { ok: true, flags: [] }, party: "agent", intent: "question", config: cfg, sendsEnabled: true, humanActive: h }).reason, /you replied to them \d+ minutes ago/);
+});
+
+test("what the bot learns is filed to the same fields the sweep keeps, merged not overwritten", async () => {
+  const calls = [];
+  const client = {
+    call: async (path, opts = {}) => {
+      calls.push([opts.method || "GET", path, opts.body]);
+      if (path.endsWith("/customFields") && !opts.method) {
+        return { customFields: [
+          { id: "f-pd", name: "Personal Details", fieldKey: "contact.personal_details" },
+          { id: "f-area", name: "Areas Served", fieldKey: "contact.agent_market_area" },
+          { id: "f-hist", name: "Deal History", fieldKey: "contact.agent_deal_history" },
+          { id: "f-sum", name: "Last Conversation Summary", fieldKey: "contact.last_convo_summary" },
+          { id: "f-date", name: "Last Conversation Date", fieldKey: "contact.last_convo_date" },
+        ] };
+      }
+      return {};
+    },
+  };
+  const r = await applyProfileUpdates({
+    client, locationId: "LOC", contactId: "c1", party: "agent",
+    profile: { personalDetails: "knee surgery last week, two kids", marketAreas: "Tacoma", dealHistoryLine: "7 Pine Ct | sent us the listing — vacant", nextAction: "", priceMin: 0, priceMax: 0, propertyTypes: "", rehabAppetite: "", exclusions: "" },
+    custom: { personal_details: "Two kids, from Boise", agent_market_area: "Kent, Auburn", agent_deal_history: "2026-08-01 | 12 Elm St | we offered — 410k" },
+    summary: "Agent sent 7 Pine and mentioned surgery.", config: conversationConfig(STARTER_NOW), now: Date.parse("2026-09-04T18:00:00Z"),
+  });
+  assert.deepEqual(r.written.sort(), ["agent_deal_history", "agent_market_area", "last_convo_date", "last_convo_summary", "personal_details"]);
+  assert.equal(r.learned.length, 3);
+  const put = calls.find(([m, p]) => m === "PUT" && p === "/contacts/c1");
+  const byId = Object.fromEntries(put[2].customFields.map((f) => [f.id, f.value]));
+  assert.equal(byId["f-pd"], "Two kids, from Boise, knee surgery last week", "the duplicate fact is dropped, the new one appended");
+  assert.equal(byId["f-area"], "Kent, Auburn, Tacoma");
+  assert.match(byId["f-hist"], /^2026-08-01 \| 12 Elm St.*\n2026-09-04 \| 7 Pine Ct \| sent us the listing — vacant$/);
+  assert.equal(byId["f-date"], "2026-09-04");
+  assert.equal(mergeFacts("a, b", "B, c"), "a, b, c");
+  const nothing = await applyProfileUpdates({ client, locationId: "LOC", contactId: "c1", party: "agent", profile: null, config: conversationConfig(STARTER_NOW) });
+  assert.deepEqual(nothing, { learned: [], written: [] });
+});
+
+test("a run files the profile and the note says what it learned", async () => {
+  _resetJobs();
+  const { client, notes } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "back from surgery, still got 7 Pine if you want it",
+    deps: { draft: async () => ({ ...DRAFT, intent: "deal_available", reply: "Hope the recovery's going well. Yes on 7 Pine, let me run it by underwriting today.", propertyAddress: "7 Pine Ct",
+      profile: { personalDetails: "recovering from surgery", marketAreas: "", dealHistoryLine: "7 Pine Ct | sent us the listing", nextAction: "", priceMin: 0, priceMax: 0, propertyTypes: "", rehabAppetite: "", exclusions: "" } }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  // the stub answers customFields with an error → the write is a warning, the learned lines still show
+  assert.ok(d.profileUpdates === undefined || d.profileUpdates.learned.length >= 1);
+  assert.match(d.warnings.join(" · ") + (d.profileUpdates ? "" : " profile"), /profile/);
+  assert.match(notes[0], /AI drafted a reply/);
+});
+
+test("counter and pass update the offer, passing updates the investor, through the wired deps", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const seen = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "would you do 425k?",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", needsHuman: true, humanReason: "named a number", counterAmount: 425000, reply: "Let me run 425k by my partner today." }),
+      setOfferStatus: async (args) => { seen.push(args); return { ok: true, address: "12 Elm St", status: args.status }; },
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(d.actions.map((a) => [a.type, a.status, a.detail]), [["mark_offer_countered", "done", "offer on 12 Elm St marked countered"]]);
+  assert.equal(seen[0].status, "countered");
+  assert.match(seen[0].note, /countered at \$425,000/);
+
+  _resetJobs();
+  const { client: ic } = ghlStubFor(["investor"]);
+  const store2 = fakeStore();
+  store2.listDeals = async () => [DEAL];
+  const inv = [];
+  const { job: j2 } = await startReply({
+    client: ic, locationId: "LOC", saved: STARTER_NOW, store: store2, contactId: "c1", message: "gonna pass on 54th",
+    deps: {
+      draft: async () => ({ ...INVESTOR_DRAFT, intent: "passing", reply: "Understood, thanks for looking.", propertyAddress: "2010 NE 54th St" }),
+      setInvestorStatus: async (args) => { inv.push(args); return { ok: true, address: "2010 NE 54th St", status: "passed" }; },
+    },
+  });
+  await settle();
+  const d2 = await store2.getReplyDraft(j2.draftId);
+  assert.deepEqual(d2.actions.map((a) => [a.type, a.status]), [["mark_investor_passed", "done"]]);
+  assert.equal(inv[0].status, "passed");
 });

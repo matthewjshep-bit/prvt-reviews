@@ -37,7 +37,9 @@
 // nobody answers. The spend cap reads from the store for the same reason.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { buildTranscript } from "./enrich.js";
+import { buildTranscript, enrichFieldDefs, mergeHistory } from "./enrich.js";
+import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
+import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { fmtMoney } from "./shared/offer-calc.js";
 import {
@@ -113,6 +115,8 @@ export function publicJob(job) {
 export function _resetJobs() {
   jobs.clear();
   lanes.clear();
+  for (const w of waiting.values()) clearTimeout(w.timer);
+  waiting.clear();
 }
 
 /* ---------- spend guard ---------- */
@@ -196,7 +200,27 @@ export async function draftReply({
     summary: String(p.summary || "").trim().slice(0, 300),
     propertyAddress: String(p.propertyAddress || "").trim().slice(0, 200),
     counterAmount: Math.max(0, Number(p.counterAmount) || 0),
+    profile: normalizeProfile(p.profile),
   };
+}
+
+// What the model learned, trimmed to what the fields can hold.
+export function normalizeProfile(p) {
+  if (!p || typeof p !== "object") return null;
+  const str = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
+  const out = {
+    personalDetails: str(p.personalDetails, 400),
+    marketAreas: str(p.marketAreas, 300),
+    dealHistoryLine: str(p.dealHistoryLine, 300),
+    nextAction: str(p.nextAction, 300),
+    priceMin: Math.max(0, Math.round(Number(p.priceMin) || 0)),
+    priceMax: Math.max(0, Math.round(Number(p.priceMax) || 0)),
+    propertyTypes: str(p.propertyTypes, 120).toLowerCase(),
+    rehabAppetite: ["cosmetic_only", "moderate", "heavy", "full_gut"].includes(p.rehabAppetite) ? p.rehabAppetite : "",
+    exclusions: str(p.exclusions, 300),
+  };
+  const any = Object.values(out).some((v) => (typeof v === "number" ? v > 0 : Boolean(v)));
+  return any ? out : null;
 }
 
 // The em dash is the tell of a bot. The model is told not to; this is the
@@ -323,9 +347,10 @@ export function evaluateReplyGates({
  * draft and shown on the row, so "why didn't it send itself?" is answered
  * before it is asked.
  */
-export function decideAutoSend({ gate, party = "agent", intent = "other", channel = "sms", config, sendsEnabled = false }) {
+export function decideAutoSend({ gate, party = "agent", intent = "other", channel = "sms", config, sendsEnabled = false, humanActive = null }) {
   if (!gate?.ok) return { send: false, reason: gate?.flags?.[0] ? `needs a person: ${gate.flags[0]}` : "the gates did not pass" };
   if (!config?.enabled) return { send: false, reason: "Conversation AI is switched off" };
+  if (humanActive) return { send: false, reason: `you replied to them ${humanActive.minutesAgo} minute${humanActive.minutesAgo === 1 ? "" : "s"} ago — you have the thread` };
   if (!sendsEnabled) return { send: false, reason: "sends are off on the broker (CARD_SENDS_ENABLED)" };
   const playbook = config.parties?.[party];
   if (!playbook) return { send: false, reason: "an unknown contact never auto-sends" };
@@ -347,6 +372,134 @@ async function note(client, contactId, body, warnings) {
   } catch (e) {
     warnings.push(`note: ${e.message}`);
   }
+}
+
+/* ---------- profile memory ---------- */
+
+// Comma-separated facts, merged: what they told us before plus what is new,
+// deduped case-insensitively, oldest first, capped.
+export function mergeFacts(existing, additions, max = 1500) {
+  const split = (v) => String(v || "").split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
+  const out = [];
+  const seen = new Set();
+  for (const f of [...split(existing), ...split(additions)]) {
+    const k = f.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(f);
+  }
+  let text = out.join(", ");
+  while (out.length > 1 && text.length > max) { out.shift(); text = out.join(", "); }
+  return text.slice(0, max);
+}
+
+/**
+ * applyProfileUpdates({ client, locationId, contactId, party, profile, custom, summary, config, now })
+ *
+ * Files what the reply's model call learned into the contact's CRM fields —
+ * the same fields the nightly enrichment sweep keeps, through the same
+ * merge rules (history ledgers dedupe and keep the newest; facts union), so
+ * the two never fight. Returns { learned: [line], written: [key] }. Never
+ * throws; a field write that fails is a warning on the draft.
+ */
+export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", config, now = Date.now(), warnings = [] }) {
+  if (!profile || !contactId || party === "unknown") return { learned: [], written: [] };
+  const type = party === "investor" ? "investor" : "agent";
+  const defs = new Map(enrichFieldDefs(type).map((f) => [f.key, f]));
+  const today = new Date(now).toISOString().slice(0, 10);
+  const writes = {};
+  const learned = [];
+  const cur = (k) => String(custom?.[k] ?? "").trim();
+
+  if (profile.personalDetails) {
+    const merged = mergeFacts(cur("personal_details"), profile.personalDetails);
+    if (merged !== cur("personal_details")) { writes.personal_details = merged; learned.push(`personal: ${profile.personalDetails}`); }
+  }
+  const areasKey = type === "investor" ? "buybox_areas" : "agent_market_area";
+  if (profile.marketAreas) {
+    const merged = mergeFacts(cur(areasKey), profile.marketAreas, 600);
+    if (merged !== cur(areasKey)) { writes[areasKey] = merged; learned.push(`areas: ${profile.marketAreas}`); }
+  }
+  if (profile.dealHistoryLine && profile.dealHistoryLine.includes("|")) {
+    const key = type === "investor" ? "investor_deal_history" : "agent_deal_history";
+    const line = /^\d{4}-\d{2}-\d{2}/.test(profile.dealHistoryLine) ? profile.dealHistoryLine : `${today} | ${profile.dealHistoryLine}`;
+    const merged = mergeHistory(cur(key), [line]);
+    if (merged !== cur(key)) { writes[key] = merged; learned.push(`history: ${profile.dealHistoryLine}`); }
+  }
+  if (profile.nextAction && profile.nextAction !== cur("suggested_next_action")) {
+    writes.suggested_next_action = profile.nextAction;
+  }
+  if (type === "investor") {
+    const num = (k) => Number(String(cur(k)).replace(/[$,\s]/g, "")) || 0;
+    if (profile.priceMin && profile.priceMin !== num("buybox_price_min")) { writes.buybox_price_min = profile.priceMin; learned.push(`buys from ${fmtMoney(profile.priceMin)}`); }
+    if (profile.priceMax && profile.priceMax !== num("buybox_price_max")) { writes.buybox_price_max = profile.priceMax; learned.push(`buys up to ${fmtMoney(profile.priceMax)}`); }
+    if (profile.propertyTypes) {
+      const allowed = defs.get("buybox_property_types")?.values || [];
+      const types = profile.propertyTypes.split(",").map((t) => t.trim().replace(/[\s-]+/g, "_")).filter((t) => allowed.includes(t));
+      const merged = mergeFacts(cur("buybox_property_types"), types.join(", "), 200);
+      if (types.length && merged !== cur("buybox_property_types")) { writes.buybox_property_types = merged; learned.push(`types: ${types.join(", ")}`); }
+    }
+    if (profile.rehabAppetite && profile.rehabAppetite !== cur("rehab_appetite")) { writes.rehab_appetite = profile.rehabAppetite; learned.push(`rehab: ${profile.rehabAppetite.replace(/_/g, " ")}`); }
+    if (profile.exclusions) {
+      const merged = mergeFacts(cur("buybox_exclusions"), profile.exclusions, 500);
+      if (merged !== cur("buybox_exclusions")) { writes.buybox_exclusions = merged; learned.push(`must-haves: ${profile.exclusions}`); }
+    }
+  }
+  if (config?.profile?.writeSummary && summary && Object.keys(writes).length) {
+    writes.last_convo_summary = summary.slice(0, 500);
+    writes.last_convo_date = today;
+  }
+  if (!Object.keys(writes).length) return { learned: [], written: [] };
+
+  try {
+    const fieldWrites = [];
+    for (const [k, v] of Object.entries(writes)) {
+      const def = defs.get(k);
+      const id = await findOrCreateCustomFieldByKey(client, locationId, k, def?.name || k, def?.dataType || "TEXT");
+      if (id) fieldWrites.push({ id, value: v });
+    }
+    if (fieldWrites.length) await updateContact(client, contactId, { customFields: fieldWrites });
+  } catch (e) {
+    warnings.push(`profile: ${String(e?.message || e).slice(0, 120)}`);
+    return { learned, written: [], failed: true };
+  }
+  return { learned, written: Object.keys(writes) };
+}
+
+/* ---------- who has the thread ---------- */
+
+// The newest thing WE sent, off the transcript: "[YYYY-MM-DD HH:MM] US sms: text".
+export function lastOutbound(transcript = "") {
+  let found = null;
+  for (const line of String(transcript || "").split("\n")) {
+    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US \w+: (.*)$/.exec(line);
+    if (m) found = { ts: Date.parse(`${m[1]}T${m[2]}:00Z`), text: m[3].trim() };
+  }
+  return found;
+}
+
+// A person replied to them recently and it wasn't one of ours going out:
+// they have the thread, so the bot drafts but never sends on its own.
+export async function humanHasThread({ store, locationId, contactId, transcript, minutes = 30, now = Date.now() }) {
+  if (!minutes || !contactId) return null;
+  const last = lastOutbound(transcript);
+  if (!last || !Number.isFinite(last.ts) || now - last.ts > minutes * 60000) return null;
+  const ours = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 10 }).catch(() => []);
+  const norm = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (ours.some((d) => norm(d.sentText || d.reply) === norm(last.text))) return null;
+  return { at: new Date(last.ts).toISOString(), minutesAgo: Math.max(0, Math.round((now - last.ts) / 60000)) };
+}
+
+// This contact's drafts today, from the store plus what is in flight.
+export async function countTodayForContact({ store, locationId, contactId, now = Date.now() }) {
+  const since = dayStartIso(now);
+  const ids = new Set();
+  for (const j of jobs.values()) {
+    if (j.locationId === locationId && j.contactId === contactId && String(j.startedAt) >= since && j.status !== "superseded") ids.add(j.id);
+  }
+  const rows = await store.listReplyDrafts(locationId, { contactId, since, limit: 200 }).catch(() => []);
+  for (const d of rows) if (d?.jobId) ids.add(d.jobId);
+  return ids.size;
 }
 
 /* ---------- assembling what the model sees ---------- */
@@ -395,14 +548,19 @@ export async function assembleConversation({
   let real = "";
   if (contactId) {
     try {
+      // Call transcripts ride along when the tab asks: what was said on the
+      // phone — a surgery, a market, an address — is the memory the reply
+      // leans on.
       const t = await buildTranscript(client, locationId, contactId, {
-        maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 60, maxChars: 14000, maxCallTranscripts: 0,
+        maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 60, maxChars: 16000,
+        maxCallTranscripts: light ? 0 : (config.profile?.enabled ? config.profile.callTranscripts : 0),
       });
       real = t.text || "";
     } catch (e) {
       warnings.push(`thread: ${e.message?.slice(0, 120) || "could not be read"}`);
     }
   }
+  const botOff = matchTagPatterns(tags, config.routing.botOffTags || []);
   const typed = fakeThread ? renderFakeThread(fakeThread, channel) : "";
   const transcript = [real, typed].filter(Boolean).join("\n");
 
@@ -436,8 +594,11 @@ export async function assembleConversation({
       .map((j) => j.address || "a property")
       .slice(0, 3);
   } else if (party === "investor") {
-    context = await loadInvestorContext({ store, locationId, contactId, contactName: name, custom, settings: saved || {}, now });
+    context = await loadInvestorContext({ store, locationId, contactId, contactName: name, custom, settings: saved || {}, tags, now });
   }
+  const humanActive = light ? null : await humanHasThread({
+    store, locationId, contactId, transcript: real, minutes: config.autoSend?.humanActiveMin, now,
+  });
 
   const playbook = config.parties?.[party] || null;
   const instructions = playbook ? playbook.instructions : config.routing.genericInstructions;
@@ -449,7 +610,7 @@ export async function assembleConversation({
     : null;
 
   return {
-    config, party, partySource, matchedTags: resolved.matched, classified, stampTag,
+    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, humanActive,
     playbook, contact, contactName: name, tags, custom, transcript, context, underwriting, instructions, signer,
   };
 }
@@ -481,6 +642,21 @@ export async function startReply({
   if (usedToday >= cap) {
     return { skipped: `daily cap reached (${usedToday}/${cap})`, job: null };
   }
+  const perContact = config.dailyCapPerContact || 0;
+  if (perContact) {
+    const theirs = await countTodayForContact({ store, locationId, contactId });
+    if (theirs >= perContact) return { skipped: `this contact's daily cap reached (${theirs}/${perContact})`, job: null };
+  }
+  // GHL retries a webhook it thinks failed, and a workflow can fire twice on
+  // one text. The same words from the same contact inside two minutes are
+  // one message.
+  const text = String(message || "").trim();
+  for (const j of jobs.values()) {
+    if (j.locationId === locationId && j.contactId === contactId && j.message === text.slice(0, 1000) &&
+        j.status !== "superseded" && Date.now() - Date.parse(j.startedAt) < DEDUPE_MS) {
+      return { skipped: `duplicate of ${j.id}`, job: null };
+    }
+  }
 
   const job = {
     id: newJobId(),
@@ -506,7 +682,7 @@ export async function startReply({
   };
   jobs.set(job.id, job);
 
-  runOnLane(locationId, () =>
+  const launch = () => runOnLane(locationId, () =>
     runReply(job, { client, locationId, saved, store, aiApiKey, sendsEnabled, deps: { ...deps, draft: deps.draft || draftReply } })
       .catch(async (e) => {
         job.status = "error";
@@ -519,8 +695,33 @@ export async function startReply({
           job.warnings);
       })
   );
+
+  // Three texts in a row get one reply to all three: the draft waits a
+  // beat, and a newer text from the same contact replaces the waiting job.
+  // The earlier texts are in the thread the newer job reads.
+  const debounceMs = deps.debounceMs != null ? Number(deps.debounceMs) : (config.autoSend?.debounceSec || 0) * 1000;
+  const key = `${locationId}:${contactId}`;
+  if (debounceMs > 0) {
+    const prev = waiting.get(key);
+    if (prev) {
+      clearTimeout(prev.timer);
+      prev.job.status = "superseded";
+      prev.job.phase = "";
+      prev.job.finishedAt = new Date().toISOString();
+      prev.job.supersededBy = job.id;
+    }
+    job.phase = "waiting";
+    const timer = setTimeout(() => { waiting.delete(key); launch(); }, debounceMs);
+    if (typeof timer.unref === "function") timer.unref();
+    waiting.set(key, { job, timer });
+  } else {
+    launch();
+  }
   return { skipped: null, job };
 }
+
+const DEDUPE_MS = 2 * 60 * 1000;
+const waiting = new Map();   // `${locationId}:${contactId}` -> { job, timer }
 
 function runOnLane(locationId, fn) {
   const lane = lanes.get(locationId) || { running: 0, waiting: [] };
@@ -575,6 +776,16 @@ async function runReply(job, ctx) {
   job.partySource = a.partySource;
   job.contactName = a.contactName;
 
+  if (a.botOff?.length) {
+    // The operator turned the bot off for this contact. No draft, no note —
+    // they know.
+    job.status = "held";
+    job.phase = "";
+    job.heldReason = `bot is off for this contact (tag: ${a.botOff[0]})`;
+    job.finishedAt = new Date().toISOString();
+    return;
+  }
+
   if (party === "unknown" && config.routing.unknown === "hold") {
     job.status = "held";
     job.phase = "";
@@ -621,10 +832,19 @@ async function runReply(job, ctx) {
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts,
     inboundMessage: job.message, channel: job.channel, style: config.style,
   });
-  const auto = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled });
+  const auto = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook }) : { auto: [], suggested: [] };
   if (a.stampTag) {
     plan.auto.unshift({ id: `a-route-${job.id}`, type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", party, why: "routed by the message" });
+  }
+  // No rule matched: the party's catch-all, unless they already carry one
+  // of the tags it exists to hand out. Fires whatever the confidence — "no
+  // fit" is a bucket, not a judgment.
+  if (!plan.auto.length && !plan.suggested.length && playbook?.fallback?.actions?.length &&
+      !(draft.intent === "small_talk" && !draft.reply) &&
+      !matchTagPatterns(a.tags, playbook.fallback.unlessTags || []).length) {
+    const fb = playbook.fallback.actions.map((x, i) => ({ ...x, id: `a-fb-${job.id}-${i}`, mode: playbook.fallback.mode, status: "pending", party, why: "no rule matched" }));
+    if (playbook.fallback.mode === "auto") plan.auto.push(...fb); else plan.suggested.push(...fb);
   }
 
   /* --- 3. nothing to say --- */
@@ -676,13 +896,28 @@ async function runReply(job, ctx) {
     contextSummary: context.summary || {},
     offersInContext: context.offers?.count ?? 0,
     autoSend: { decided: auto.send, reason: auto.reason },
+    humanActive: a.humanActive || null,
     actions: [...plan.auto, ...plan.suggested],
     supersededIds: open.map((o) => o.id),
     warnings: warnings.slice(0, 6),
-    promptVersion: 2,
+    noteOnAutoSend: config.notes?.onAutoSend !== false,
+    promptVersion: 3,
     updatedAt: ts,
   });
   job.draftId = record.id;
+
+  /* --- 4b. what we learned about them --- */
+  if (config.profile?.enabled && draft.profile) {
+    job.phase = "filing";
+    const filed = await applyProfileUpdates({
+      client, locationId, contactId: job.contactId, party, profile: draft.profile, custom: a.custom,
+      summary: draft.summary, config, now, warnings,
+    });
+    if (filed.learned.length || filed.written.length) {
+      record = { ...record, profileUpdates: { learned: filed.learned, written: filed.written }, warnings: warnings.slice(0, 6), updatedAt: new Date().toISOString() };
+      await store.updateReplyDraft(record.id, record).catch(() => {});
+    }
+  }
 
   /* --- 5. the automatic actions --- */
   if (plan.auto.length) {
@@ -709,7 +944,7 @@ async function runReply(job, ctx) {
     await store.updateReplyDraft(record.id, record);
     job.scheduledFor = sendAt;
   }
-  await note(client, job.contactId, draftNote(record), warnings);
+  if (config.notes?.onDraft !== false) await note(client, job.contactId, draftNote(record), warnings);
 
   job.status = "done";
   job.phase = "";
@@ -778,6 +1013,7 @@ function draftNote(d) {
   const acted = (d.actions || []).filter((a) => a.status === "done").map((a) => `  • ${a.detail || a.type}`);
   const failed = (d.actions || []).filter((a) => a.status === "failed").map((a) => `  • ${a.type}: ${a.error}`);
   const asks = (d.actions || []).filter((a) => a.status === "pending").map((a) => `  • ${a.type.replace(/_/g, " ")}`);
+  const learned = (d.profileUpdates?.learned || []).map((l) => `  • ${l}`);
   return [
     d.status === "scheduled"
       ? `AI drafted a reply${d.propertyAddress ? ` about ${d.propertyAddress}` : ""} and will send it itself at ${new Date(d.sendAt).toLocaleString("en-US", { timeZone: "America/Los_Angeles", hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })} unless you hold it in the app.`
@@ -788,6 +1024,7 @@ function draftNote(d) {
     ...(acted.length ? [``, `Done automatically:`, ...acted] : []),
     ...(failed.length ? [``, `Could not do:`, ...failed] : []),
     ...(asks.length ? [``, `Suggested (apply in the app):`, ...asks] : []),
+    ...(learned.length ? [``, `Filed to their profile:`, ...learned] : []),
     ``,
     `Draft:`,
     d.reply || "(nothing — the model thought no reply was needed)",
@@ -831,6 +1068,9 @@ export async function previewConversation({
     actions: { auto: confidence === "high" ? optOutActions(config.optOut) : [], suggested: confidence === "high" ? [] : optOutActions(config.optOut) },
   });
   if (isOptOut) return optOutView("high", "an opt-out keyword — silence, then the opt-out actions");
+  if (a.botOff?.length) {
+    return { ...base, held: true, reason: `the bot is off for this contact (tag: ${a.botOff[0]}) — nothing would be drafted` };
+  }
   if (party === "unknown" && config.routing.unknown === "hold") {
     return { ...base, held: true, reason: "no agent or investor tag on the contact — the run would hold with no draft" };
   }
@@ -846,16 +1086,22 @@ export async function previewConversation({
   const gate = evaluateReplyGates({
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, inboundMessage: message, channel, style: config.style,
   });
-  const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled });
+  const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook }) : { auto: [], suggested: [] };
   if (a.stampTag) plan.auto.unshift({ type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", why: "routed by the message" });
+  if (!plan.auto.length && !plan.suggested.length && playbook?.fallback?.actions?.length &&
+      !(draft.intent === "small_talk" && !draft.reply) && !matchTagPatterns(a.tags, playbook.fallback.unlessTags || []).length) {
+    const fb = playbook.fallback.actions.map((x) => ({ ...x, mode: playbook.fallback.mode, status: "pending", why: "no rule matched" }));
+    if (playbook.fallback.mode === "auto") plan.auto.push(...fb); else plan.suggested.push(...fb);
+  }
   const sendAt = auto.send
     ? nextSendTime({ now, delayMs: pickDelayMs(config, deps.random || Math.random), quietHours: config.autoSend.quietHours })
     : null;
   return {
-    ...base, held: false, draft, gate,
+    ...base, held: false, draft, gate, humanActive: a.humanActive || null,
     autoSend: { would: auto.send, reason: auto.reason, sendAt },
     actions: { auto: plan.auto, suggested: plan.suggested },
+    profile: draft.profile || null,
   };
 }
 
@@ -901,7 +1147,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   };
   await store.updateReplyDraft(d.id, updated);
   await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
-  if (auto) {
+  if (auto && d.noteOnAutoSend !== false) {
     await createContactNote(client, d.contactId, {
       body: `Conversation AI sent this reply itself (${d.party || "agent"} · ${String(d.intent || "").replace(/_/g, " ")}):\n\n${body}`,
     }).catch(() => {});

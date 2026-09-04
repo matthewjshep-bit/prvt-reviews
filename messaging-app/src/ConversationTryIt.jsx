@@ -250,6 +250,16 @@ function BotTurn({ turn: t, open, onToggle, sendsEnabled }) {
         {open && (
           <div className="mt-1 space-y-1 rounded-lg border border-slate-200 bg-white p-2 text-[11px] text-slate-600">
             {d?.summary && <div><span className="text-slate-400">Summary:</span> {d.summary}</div>}
+            {m.profile && (
+              <div><span className="text-slate-400">Would file:</span> {[
+                m.profile.personalDetails && `personal: ${m.profile.personalDetails}`,
+                m.profile.marketAreas && `areas: ${m.profile.marketAreas}`,
+                m.profile.dealHistoryLine && `history: ${m.profile.dealHistoryLine}`,
+                m.profile.nextAction && `next: ${m.profile.nextAction}`,
+                m.profile.priceMax && `buys up to ${m.profile.priceMax.toLocaleString()}`,
+              ].filter(Boolean).join(" · ") || "nothing new"}</div>
+            )}
+            {m.humanActive && <div><span className="text-slate-400">Note:</span> a person replied to them {m.humanActive.minutesAgo}m ago, so it would wait.</div>}
             {m.gate?.flags?.length > 0 && <div><span className="text-slate-400">Flags:</span> {m.gate.flags.join(" · ")}</div>}
             {m.autoSend && (
               <div><span className="text-slate-400">Auto-send:</span> {m.autoSend.would ? `yes, at ${new Date(m.autoSend.sendAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : `no — ${m.autoSend.reason}`}{!sendsEnabled ? " (sends are off on the broker)" : ""}</div>
