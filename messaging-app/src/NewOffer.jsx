@@ -498,23 +498,44 @@ const legacyTermsToRows = (t, s) =>
 // this form never sets it, so it isn't this form's business to unpin.
 const hasFigurePin = (r) => Number(r?.pins?.arv) > 0 || Number(r?.pins?.repairs) > 0;
 
-// A deal page can pin its own ARV or rehab (DataroomModal's "Headline
-// numbers"), and a pin deliberately outranks the offer — which, from this
-// form, looks exactly like an edit that didn't take. So say it beside the
-// field being typed in, and give the one click that hands the figure back to
-// the offer. Rooms re-sync from the offer the moment the pin is gone.
-function PinNotice({ rooms, field, busy, onFollow }) {
+const moneyNum = (v) => Number(String(v ?? "").replace(/[^\d]/g, "")) || 0;
+
+// Why the number typed here isn't the number investors are looking at. There
+// are exactly two answers, and both used to be invisible from this screen:
+//
+//   1. It was never saved. Autosave writes the workspace — comps, scope, the
+//      typed figures — so a reload brings the new ARV back and it reads as
+//      committed. But the offer of record, its documents and every deal page
+//      built from it still hold the old one until Save changes. That gap is
+//      the whole bug this notice exists to close.
+//   2. The deal page pinned its own figure (DataroomModal's "Headline
+//      numbers"), which deliberately outranks the offer.
+//
+// Said beside the field being typed in, with the one button that fixes it.
+function FigureNotice({ field, typed, saved, rooms, saving, onSave, unpinning, onFollow }) {
   const pinned = rooms.filter((r) => Number(r.pins?.[field]) > 0);
-  if (!pinned.length) return null;
-  const amounts = [...new Set(pinned.map((r) => fmtMoney(Number(r.pins[field]))))];
+  const unsaved = saved > 0 && typed !== saved;
+  if (!unsaved && !pinned.length) return null;
+  const BTN = "font-semibold text-blue-700 underline hover:text-blue-900 disabled:opacity-50";
   return (
     <p className="mt-1 text-xs text-amber-700">
-      Deal page shows {amounts.join(" / ")}
-      {pinned.length > 1 ? ` (${pinned.length} rooms)` : ""} — set there, so this number won't reach investors.{" "}
-      <button type="button" disabled={busy} onClick={onFollow}
-        className="font-semibold text-blue-700 underline hover:text-blue-900 disabled:opacity-50">
-        {busy ? "Clearing…" : "Follow this offer"}
-      </button>
+      {unsaved && (
+        <>
+          Not saved — the offer, its documents and the deal page still say {fmtMoney(saved)}.{" "}
+          <button type="button" disabled={saving} onClick={onSave} className={BTN}>
+            {saving ? "Saving…" : "Save changes"}
+          </button>{" "}
+        </>
+      )}
+      {pinned.length > 0 && (
+        <>
+          Deal page shows {[...new Set(pinned.map((r) => fmtMoney(Number(r.pins[field]))))].join(" / ")}
+          {pinned.length > 1 ? ` (${pinned.length} rooms)` : ""} — set there, so this number won't reach investors.{" "}
+          <button type="button" disabled={unpinning} onClick={onFollow} className={BTN}>
+            {unpinning ? "Clearing…" : "Follow this offer"}
+          </button>
+        </>
+      )}
     </p>
   );
 }
@@ -679,6 +700,14 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       .catch(() => { /* the strip is a convenience — never block the form */ });
     return () => { live = false; };
   }, [contact?.id]);
+
+  // The figures as the OFFER OF RECORD holds them — not what's typed above.
+  // They differ the moment a figure is edited and stay different until Save
+  // changes, which is precisely the window in which the deal page looks broken.
+  // Kept in state rather than read off `liveOffer` because the agent strip's
+  // rows are trimmed for the table and drop `calc` entirely.
+  const [savedInputs, setSavedInputs] = useState(fromOffer?.calc?.inputs || {});
+  useEffect(() => { setSavedInputs(fromOffer?.calc?.inputs || {}); }, [fromOffer?.id]);
 
   // Deal pages built from this offer that are showing a pinned ARV or rehab
   // instead of the offer's own. Read here so the two fields below can admit it
@@ -930,6 +959,8 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     setError(""); setSaving(true);
     try {
       const r = await updateOffer(id, { inputs, settings: effSettings, scope, snapshot: formSnapshot() });
+      // The offer of record just moved; the "not saved" notices read from here.
+      setSavedInputs(r.offer?.calc?.inputs || {});
       setSaveWarnings(r.warnings || []);
       setSavedAt(new Date());
       setPreview(null);
@@ -1308,13 +1339,17 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
             <Field label="After-repair value / ARV ($)">
               <input className={INPUT_CLS} inputMode="numeric" value={inputs.arv} onChange={setMoney("arv")} placeholder="from comps below" />
             </Field>
-            <PinNotice rooms={pinnedRooms} field="arv" busy={unpinning === "arv"} onFollow={() => followOffer("arv")} />
+            <FigureNotice field="arv" typed={moneyNum(inputs.arv)} saved={moneyNum(savedInputs.arv)}
+              rooms={pinnedRooms} saving={saving} onSave={doSave}
+              unpinning={unpinning === "arv"} onFollow={() => followOffer("arv")} />
           </div>
           <div>
             <Field label="Estimated repairs ($)">
               <input className={INPUT_CLS} inputMode="numeric" value={inputs.repairs} onChange={setMoney("repairs")} placeholder="from scope below" />
             </Field>
-            <PinNotice rooms={pinnedRooms} field="repairs" busy={unpinning === "repairs"} onFollow={() => followOffer("repairs")} />
+            <FigureNotice field="repairs" typed={moneyNum(inputs.repairs)} saved={moneyNum(savedInputs.repairs)}
+              rooms={pinnedRooms} saving={saving} onSave={doSave}
+              unpinning={unpinning === "repairs"} onFollow={() => followOffer("repairs")} />
           </div>
           <Field label="Asking price ($, optional)">
             <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={setMoney("askingPrice")} placeholder="for %-of-asking context" />

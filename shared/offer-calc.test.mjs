@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { calculateOffers, DEFAULT_OFFER_SETTINGS, estimateHolding, netComparison, repairsAdjustment } from "./offer-calc.js";
+import { calculateOffers, DEFAULT_OFFER_SETTINGS, effectiveSettings, estimateHolding, netComparison, repairsAdjustment } from "./offer-calc.js";
 
 const S = DEFAULT_OFFER_SETTINGS;
 
@@ -291,4 +291,21 @@ test("netComparison: the list price a traditional sale needs to match our net", 
 test("netComparison: refuses impossible inputs", () => {
   assert.equal(netComparison(0), null);
   assert.equal(netComparison(300000, { sellerAgentPct: 60, buyerAgentPct: 50 }), null);
+});
+
+/* ---------------- saved settings ---------------- */
+
+// effectiveSettings normalizes a saved Conversation AI blob through a sibling
+// module. It once called that normalizer without importing it, so every
+// location that had configured Conversation AI threw here — the console fell
+// back to default settings ("normalizeConversationAi is not defined") and every
+// server-side caller lost the saved wholesale fee with it.
+test("effectiveSettings: a saved conversationAi blob normalizes instead of throwing", () => {
+  const s = effectiveSettings({ wholesaleFee: 12000, conversationAi: { enabled: true } });
+  assert.equal(s.wholesaleFee, 12000);
+  assert.equal(s.conversationAi.enabled, true);
+});
+
+test("effectiveSettings: no conversationAi saved leaves it null", () => {
+  assert.equal(effectiveSettings({ wholesaleFee: 9000 }).conversationAi, null);
 });

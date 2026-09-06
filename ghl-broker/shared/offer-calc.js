@@ -3,7 +3,8 @@
 
 // offer-calc.js — the cash-offer calculation engine, shared by the broker
 // (document generation + persistence) and the frontend (live preview as the
-// user types). Pure functions, no I/O, no deps.
+// user types). Pure functions, no I/O; the one import is a sibling in this
+// same folder, which every consumer already resolves.
 //
 // Four underwriting models (see UNDERWRITE_MODES), picked per offer:
 //
@@ -40,6 +41,8 @@
 // lowballoffer.ai model below; "mao" is the classic flipper 70% rule:
 // maoPctOfArv% of ARV minus repairs, minus the fee, no jitter. "blended" is
 // the mean of those three.
+import { normalizeConversationAi } from "./conversation-ai.js";
+
 export const UNDERWRITE_MODES = [
   { key: "backstack", label: "Back-stack from ARV", hint: "ARV − selling costs − flip profit − repairs − holding − your fee" },
   { key: "lowball", label: "90% ARV − 2× rehab", hint: "aggressive spread + fee" },
