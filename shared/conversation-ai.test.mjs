@@ -277,3 +277,12 @@ test("the realm check and the math switch normalize, and realm_check is an outbo
   assert.deepEqual(st.parties.agent.intentRules.realm_yes.actions.map((a) => a.type), ["add_tags", "mark_offer_realm_yes"]);
   assert.match(st.parties.agent.instructions, /REALM CHECK/);
 });
+
+test("the starter teaches the bot to pick a dead offer back up rather than start cold", () => {
+  const c = starterConfig({ signer: "Matt" });
+  assert.match(c.parties.agent.instructions, /PICK BACK UP/);
+  assert.match(c.parties.agent.instructions, /anything else you've got that needs work/);
+  const agentEx = c.examples.filter((e) => e.party === "agent");
+  assert.ok(agentEx.some((e) => /123 Main offer didn't work out/.test(e.weSay)), "an example of the move itself");
+  assert.ok(c.examples.some((e) => e.party === "investor" && /another buyer/.test(e.weSay)));
+});

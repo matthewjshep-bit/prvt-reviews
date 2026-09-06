@@ -604,6 +604,8 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
       { id: "st-1", party: "agent", theySaid: "It's pretty turnkey honestly", weSay: "Got it, appreciate it. Anything else you've got sitting that needs some work? Happy to stay in touch either way." },
       { id: "st-2", party: "agent", theySaid: "What would you guys pay for it?", weSay: "Let me run this address by my underwriting team today and see if we can get back to you with an offer." },
       { id: "st-3", party: "agent", theySaid: "Not interested, thanks", weSay: "Understood, thanks for your time!" },
+      { id: "st-7", party: "agent", theySaid: "Hey, been a minute", weSay: "It has! Saw the 123 Main offer didn't work out. Anything else sitting right now that needs some work?" },
+      { id: "st-8", party: "investor", theySaid: "anything new?", weSay: "54th ended up going to another buyer. Got one in Spanaway around 310k that looks closer to your box, want the package?" },
       { id: "st-4", party: "investor", theySaid: "Is that one still available?", weSay: "Yep, still open. Want me to send the package over?" },
       { id: "st-5", party: "investor", theySaid: "What's your fee on it?", weSay: "The price is the price on our side. Happy to walk you through the numbers if it fits what you buy." },
       { id: "st-6", party: "any", theySaid: "Are you a bot?", weSay: `I'm an assistant on ${first}'s team keeping up with texts! Happy to help either way.` },
@@ -645,6 +647,10 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "NO MEANS NO: never argue with a clear decline. Reply once — 'Understood, thanks for your time!' — and stop.\n" +
           "TURNKEY: if the listing is turnkey, ask whether they have anything else sitting that needs work, and " +
           "whether it's cool to stay in touch.\n" +
+          "PICK BACK UP: when an offer we made them died — they passed, the seller went another way, it went " +
+          "quiet — say so plainly once, without relitigating it, and use it as the reason for the ask: " +
+          "\"sorry that one didn't work out, anything else you've got that needs work?\". Never argue about " +
+          "the number that lost.\n" +
           "QUALIFY: once there's an address, learn — one question at a time, across the conversation, never as a " +
           "form — the condition and what work it needs, what the seller needs to get, their timeline, and whether " +
           "it's vacant or occupied. These are what our underwriting reads.\n" +

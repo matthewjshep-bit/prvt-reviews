@@ -53,6 +53,26 @@ const COMMITMENTS = {
     "set needsHuman to true so a person picks it up.",
 };
 
+// The records in the context are a memory of working together, not a file to
+// read back. This is what turns "we have your offer history" into "saw the
+// 123 Main offer didn't work out — anything else sitting that needs work?".
+const CONTINUITY = {
+  agent:
+    "CONTINUITY: the offers and properties listed above are your memory of working with this person. Use them. " +
+    "When it fits the moment, name ONE specific property by its street and what happened to it, in a single " +
+    "clause, and then make the ask — \"saw the 123 Main offer didn't work out, anything else sitting that needs " +
+    "work?\" or \"we never got a shot at 7 Pine; what happened with it?\". Rules: one property per message and " +
+    "never a list; never re-open a dead offer as if it were still live; never bring up the same passed property " +
+    "twice; and never sound like a file being read back (no \"our records show\", no \"per our system\"). If " +
+    "nothing in the record fits what they just said, don't force one in.",
+  investor:
+    "CONTINUITY: the deals listed above are your memory of working with this person. Use them. When it fits, " +
+    "name ONE and where it went — \"54th ended up going to another buyer\" — and pivot to what is open that " +
+    "suits what they buy. One deal per message, never a list, never a file being read back, and never a deal " +
+    "that is not in the context.",
+  unknown: "",
+};
+
 const CLOSING =
   "If the newest message needs no reply at all (a thanks, an ok, a thumbs up), set intent to small_talk, " +
   "needsHuman to false, and return an empty reply. " +
@@ -109,6 +129,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     "Never more than one such touch per message, never on every message, never something old as if it were " +
     "yesterday, and never anything that would read as surveillance or as a script."
   );
+  if (CONTINUITY[party]) parts.push(CONTINUITY[party]);
   parts.push(COMMITMENTS[party] || COMMITMENTS.unknown);
   if (party === "agent") {
     parts.push(playbook.showMath
