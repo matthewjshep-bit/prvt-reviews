@@ -5,6 +5,12 @@
   base = "messaging-app"
   command = "npm run build"
   publish = "dist"
+  # With `base` set, Netlify's default is to SKIP the build when nothing under
+  # that directory changed. The app also bundles /shared via the @shared Vite
+  # alias, so a shared-only commit (a config schema, the Conversation AI
+  # starter) built a stale console and said nothing — the deploy simply never
+  # ran. Watch both directories. Paths are relative to `base`; exit 0 = skip.
+  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- . ../shared"
 
 # The pre-overhaul entry points (home.html/dashboard.html/settings.html) no
 # longer exist — send anything that isn't a real file to the app. Query strings

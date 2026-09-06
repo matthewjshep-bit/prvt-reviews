@@ -19,8 +19,8 @@ const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
 
 const EXAMPLES = {
-  agent: ["Hey, still interested in the house?", "Any chance you'd do 425k?", "Can you send proof of funds?", "Seller wants to know your timeline."],
-  investor: ["What's the price on that one?", "Got anything in Tacoma right now?", "Is it still available?", "What's your fee on it?"],
+  agent: ["Hey, been a minute", "Hey, still interested in the house?", "Any chance you'd do 425k?", "Can you send proof of funds?", "Seller wants to know your timeline."],
+  investor: ["anything new?", "What's the price on that one?", "Got anything in Tacoma right now?", "What's your fee on it?"],
 };
 
 function ContactPicker({ value, onPick }) {
