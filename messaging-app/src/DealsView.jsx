@@ -9,6 +9,7 @@ import {
   ExternalLink, FileText, Loader2, Lock, Paperclip, Pencil, Sparkles, Target, Trash2, Upload, X,
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
+import { summarizeFeedback } from "@shared/conversation-ai.js";
 import {
   addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
   removeDeal, removeDealInvestor, searchContacts, suggestInvestors, updateDeal, updateDealInvestor,
@@ -85,6 +86,37 @@ function InvestorSummary({ deal }) {
       <span className={`h-1.5 w-1.5 rounded-full ${committed ? STATUS_DOT.committed : STATUS_DOT.sent}`} />
       {committed ? "buyer committed" : `${live} of ${inv.length} live`}
     </span>
+  );
+}
+
+// Why buyers said no. The rollup is the point: one buyer calling a deal
+// expensive is an opinion, four of them is a price. The Conversation AI files
+// these from replies to a dispo blast; the picker's status menu doesn't, so a
+// deal can show plenty of passes and no feedback at all.
+function BuyerFeedback({ deal }) {
+  const rows = deal.feedback || [];
+  if (!rows.length) return null;
+  const { total, byCode } = summarizeFeedback(rows);
+  return (
+    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/60 px-2.5 py-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-900">
+          What buyers said ({total})
+        </span>
+        {byCode.map((c) => (
+          <span key={c.code} className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-amber-900 ring-1 ring-amber-200">
+            {c.label}{c.count > 1 ? ` ×${c.count}` : ""}
+          </span>
+        ))}
+      </div>
+      <ul className="mt-1.5 space-y-0.5">
+        {rows.filter((r) => r.note).slice(-6).reverse().map((r, n) => (
+          <li key={`${r.contactId}-${r.code}-${n}`} className="text-[11px] leading-snug text-slate-600">
+            <span className="font-medium text-slate-700">{r.name || "a buyer"}:</span> “{r.note}”
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -518,6 +550,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   </div>
                 ))}
               </div>
+              <BuyerFeedback deal={deal} />
               <div className="mt-2">
                 <InvestorPicker existingIds={investorIds} busy={busy}
                   onPick={(c) => run(() => addDealInvestor(offer.id, { contactId: c.id, name: c.name }))} />

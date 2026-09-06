@@ -44,7 +44,7 @@ import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { fmtMoney } from "./shared/offer-calc.js";
 import {
   normalizeConversationAi, INTENTS, NEVER_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
-  SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutActions,
+  SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutActions, normalizePassReason,
 } from "./shared/conversation-ai.js";
 import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
@@ -200,6 +200,8 @@ export async function draftReply({
     summary: String(p.summary || "").trim().slice(0, 300),
     propertyAddress: String(p.propertyAddress || "").trim().slice(0, 200),
     counterAmount: Math.max(0, Number(p.counterAmount) || 0),
+    // Investors only, and only when they turned something down.
+    passReason: normalizePassReason(p.passReason),
     profile: normalizeProfile(p.profile),
   };
 }
@@ -1002,6 +1004,9 @@ async function runReply(job, ctx) {
     summary: draft.summary,
     propertyAddress: draft.propertyAddress,
     counterAmount: draft.counterAmount || null,
+    // Why they turned it down. Rides on the draft so the feedback actions
+    // have it, and so the row can show it whether or not they ran.
+    passReason: draft.passReason || null,
     autoSendable: gate.ok,
     flags: gate.flags,
     party,

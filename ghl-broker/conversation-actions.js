@@ -96,11 +96,27 @@ const EXECUTORS = {
     if (!r?.ok) return r?.reason || "no open offer to note";
     return `${r.address}: in the realm — send the formal offer`;
   },
+  // A pass is only half the value; the reason is the other half. It goes on
+  // the deal (so the next blast is priced or aimed differently) and on the
+  // buyer (so we stop sending them the same thing).
   async mark_investor_passed({ deps, contactId, draft }) {
     if (typeof deps?.setInvestorStatus !== "function") throw new Error("investor status is not wired on this broker");
-    const r = await deps.setInvestorStatus({ contactId, addressHint: draft?.propertyAddress || "", status: "passed" });
+    const r = await deps.setInvestorStatus({
+      contactId, addressHint: draft?.propertyAddress || "", status: "passed", reason: draft?.passReason || null,
+    });
     if (!r?.ok) return r?.reason || "no deal to mark";
-    return `passed on ${r.address}`;
+    return `passed on ${r.address}${r.reasonLabel ? ` — ${r.reasonLabel}` : ""}`;
+  },
+  // Short of a pass: they pushed on price or told us why it doesn't work,
+  // but they're still on the deal. Files the feedback and leaves them be.
+  async record_deal_feedback({ deps, contactId, draft }) {
+    if (typeof deps?.recordDealFeedback !== "function") throw new Error("deal feedback is not wired on this broker");
+    if (!draft?.passReason) return "nothing they said reads as a reason";
+    const r = await deps.recordDealFeedback({
+      contactId, addressHint: draft?.propertyAddress || "", reason: draft.passReason,
+    });
+    if (!r?.ok) return r?.reason || "no deal to file it against";
+    return `filed on ${r.address} — ${r.reasonLabel}`;
   },
   async mark_investor_committed({ deps, contactId, draft }) {
     if (typeof deps?.setInvestorStatus !== "function") throw new Error("investor status is not wired on this broker");

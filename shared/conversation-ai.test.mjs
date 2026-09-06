@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   normalizeConversationAi, CONVERSATION_AI_DEFAULTS, INTENTS, NEVER_AUTO, autoEligible, OUTBOUND_INTENTS,
   draftStats, substituteTokens, actionAllowedFor, isValidTimeZone,
+  normalizePassReason, summarizeFeedback, ASK_ONLY_ACTIONS,
 } from "./conversation-ai.js";
 
 test("an empty doc is the defaults, and normalizing twice changes nothing", () => {
@@ -285,4 +286,37 @@ test("the starter teaches the bot to pick a dead offer back up rather than start
   const agentEx = c.examples.filter((e) => e.party === "agent");
   assert.ok(agentEx.some((e) => /123 Main offer didn't work out/.test(e.weSay)), "an example of the move itself");
   assert.ok(c.examples.some((e) => e.party === "investor" && /another buyer/.test(e.weSay)));
+});
+
+test("a pass reason normalizes to a code we recognise, and keeps their own words", () => {
+  assert.deepEqual(normalizePassReason({ code: "price", note: "needs to be under 400 for me" }),
+    { code: "price", note: "needs to be under 400 for me" });
+  // The model reaching for a near-miss spelling still lands somewhere useful.
+  assert.deepEqual(normalizePassReason({ code: "Rehab-Scope", note: "" }), { code: "rehab_scope", note: "" });
+  // A reason we can't code is still a reason: "other" is honest, silence is not.
+  assert.deepEqual(normalizePassReason({ code: "vibes", note: "wife hated it" }), { code: "other", note: "wife hated it" });
+  assert.equal(normalizePassReason({ code: "", note: "" }), null, "no code and no words is not feedback");
+  assert.equal(normalizePassReason(null), null);
+  assert.equal(normalizePassReason({ code: "price", note: "x".repeat(400) }).note.length, 200);
+});
+
+test("deal feedback rolls up to the thing to fix, commonest first", () => {
+  const r = summarizeFeedback([
+    { code: "price" }, { code: "area" }, { code: "price" }, { code: "price" }, { code: "nonsense" },
+  ]);
+  assert.equal(r.total, 5);
+  assert.deepEqual(r.byCode.map((c) => [c.code, c.count]), [["price", 3], ["area", 1], ["other", 1]]);
+  assert.equal(r.byCode[0].label, "Price too high");
+  assert.deepEqual(summarizeFeedback([]), { total: 0, byCode: [] });
+});
+
+test("a buyer's no is wired to be filed, and a price gripe short of a no is filed too", () => {
+  const st = starterConfig({ signer: "Matt" });
+  assert.deepEqual(st.parties.investor.intentRules.passing.actions.map((a) => a.type), ["mark_investor_passed"]);
+  assert.deepEqual(st.parties.investor.intentRules.price_pushback.actions.map((a) => a.type), ["record_deal_feedback"]);
+  // Feedback is a broker-side write about a buyer; an agent has no deal to give it to.
+  assert.equal(actionAllowedFor("investor", "record_deal_feedback"), true);
+  assert.equal(actionAllowedFor("agent", "record_deal_feedback"), false);
+  // It changes nothing outward, so it may run on its own.
+  assert.equal(ASK_ONLY_ACTIONS.has("record_deal_feedback"), false);
 });

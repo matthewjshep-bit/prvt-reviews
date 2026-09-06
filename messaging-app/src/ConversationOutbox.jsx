@@ -8,7 +8,7 @@
 
 import React, { useEffect, useState } from "react";
 import { AlertTriangle, Check, Clock, Loader2, Pause, Play, Send } from "lucide-react";
-import { INTENT_LABEL, PARTY_LABEL } from "@shared/conversation-ai.js";
+import { INTENT_LABEL, PARTY_LABEL, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { applyDraftAction, dismissReplyDraft, holdReplyDraft, sendReplyDraft } from "./api.js";
 import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
 
@@ -153,6 +153,15 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
         </div>
       )}
       {d.summary && <div className="mt-0.5 text-xs text-slate-500">{d.summary}</div>}
+      {/* What the bot heard as the reason. Shown whether or not the action
+          that files it ran, so a rule you haven't wired yet still tells you
+          something. */}
+      {d.passReason?.code && (
+        <div className="mt-1 text-xs text-amber-800">
+          <span className="text-slate-400">Read as:</span> {PASS_REASON_LABEL[d.passReason.code] || d.passReason.code}
+          {d.passReason.note ? ` — “${d.passReason.note}”` : ""}
+        </div>
+      )}
 
       {scheduled ? (
         <div className="mt-1 flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">

@@ -6,7 +6,7 @@
 // me" is a textarea, not a redeploy, and an investor is answered by someone
 // who knows they are an investor. Pure.
 
-import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES } from "./shared/conversation-ai.js";
+import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS } from "./shared/conversation-ai.js";
 
 const LENGTH_RULE = {
   short: "One to three sentences.",
@@ -174,6 +174,19 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "and zeros when there is nothing new. Never restate what is already known."
     );
   }
+  if (party === "investor") {
+    parts.push(
+      "WHY THEY SAID NO: whenever they decline a deal, push back on the price, or tell you it doesn't work for " +
+      "them, fill `passReason`. `code` is the single closest of:\n" +
+      PASS_REASONS.map((c) => `- ${c}: ${PASS_REASON_GLOSS[c]}`).join("\n") +
+      "\n`note` is their own reason in their own words, under 25 words — not your paraphrase and not a sales " +
+      "read of it. Leave `code` empty when they did not decline anything. This is how we learn what to send them " +
+      "next; never mention to them that you are recording it.\n" +
+      "A no is also a buy-box fact. When the reason implies one they have not told us before — \"under 400 for me\", " +
+      "\"I don't go north of the ship canal\", \"nothing that needs a foundation\" — put it in `profile` as well " +
+      "(priceMax, marketAreas, exclusions, rehabAppetite) so we stop sending them the wrong thing."
+    );
+  }
   return parts.join("\n\n");
 }
 
@@ -242,7 +255,8 @@ export function schemaFor(party = "agent", { profile = true, outbound = null } =
   return {
     type: "object",
     additionalProperties: false,
-    required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount", ...(profile ? ["profile"] : [])],
+    required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount",
+      ...(party === "investor" ? ["passReason"] : []), ...(profile ? ["profile"] : [])],
     properties: {
       ...(profile ? { profile: profileSchemaFor(party) } : {}),
       intent: { type: "string", enum: intents },
@@ -253,9 +267,22 @@ export function schemaFor(party = "agent", { profile = true, outbound = null } =
       summary: { type: "string", description: "One line for the operator" },
       propertyAddress: { type: "string", description: "The property this message is about, if one is identifiable; else empty" },
       counterAmount: { type: "integer", description: "A dollar figure they named, in whole dollars; 0 if none" },
+      ...(party === "investor" ? { passReason: PASS_REASON_SCHEMA } : {}),
     },
   };
 }
+
+// Only investors get this: an agent turning down our offer is an offer
+// status, and that already has its own place to live.
+const PASS_REASON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["code", "note"],
+  properties: {
+    code: { type: "string", enum: ["", ...PASS_REASONS], description: "Why they declined or pushed back; empty if they did neither" },
+    note: { type: "string", description: "Their own words, under 25 words; empty if none" },
+  },
+};
 
 export { PARTY_LABEL };
 

@@ -130,3 +130,18 @@ test("a dispo blast tag is recognised as 'sent to them', and a finished deal is 
   assert.equal(ctx.text.includes("Unseen St"), false, "a finished deal they never saw isn't mentioned");
   assert.equal(ctx.summary.goneDeals, 1);
 });
+
+test("what a buyer already turned down, and why, is in front of the model", () => {
+  const offer = deal({ deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000,
+    investors: [{ contactId: "c1", status: "passed", reason: { code: "price", note: "no meat on the bone at 445" } }] } });
+  const ctx = buildInvestorContext({ investor: INVESTOR, deals: [{ offer }], contactId: "c1", now: NOW });
+  assert.match(ctx.text, /they are passed — their reason: Price too high — "no meat on the bone at 445"/);
+  // Their own words are the useful half; the label alone still beats nothing.
+  const bare = deal({ deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000,
+    investors: [{ contactId: "c1", status: "passed", reason: { code: "area" } }] } });
+  assert.match(buildInvestorContext({ investor: INVESTOR, deals: [{ offer: bare }], contactId: "c1", now: NOW }).text,
+    /their reason: Wrong area(?! —)/);
+  // A buyer with nothing on record reads exactly as it did before.
+  const clean = deal({ deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000, investors: [{ contactId: "c1", status: "evaluating" }] } });
+  assert.equal(buildInvestorContext({ investor: INVESTOR, deals: [{ offer: clean }], contactId: "c1", now: NOW }).text.includes("their reason"), false);
+});

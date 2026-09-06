@@ -131,3 +131,30 @@ test("leaving a workflow they weren't in is not a failure, and the status action
     ["failed", "which deal? — no property named"],
   ]);
 });
+
+test("a buyer's no carries its reason to the deal, and a gripe with no reason files nothing", async () => {
+  const seen = [];
+  const out = await runActions({
+    client: { call: async () => ({}) }, locationId: "LOC", contactId: "c9",
+    draft: { propertyAddress: "22018 76th Ave W", passReason: { code: "price", note: "no meat on the bone at 498" } },
+    actions: [{ id: "a1", type: "mark_investor_passed" }, { id: "a2", type: "record_deal_feedback" }],
+    deps: {
+      setInvestorStatus: async (args) => { seen.push(["status", args]); return { ok: true, address: "22018 76th Ave W", status: "passed", reasonLabel: "Price too high" }; },
+      recordDealFeedback: async (args) => { seen.push(["feedback", args]); return { ok: true, address: "22018 76th Ave W", reasonLabel: "Price too high" }; },
+    },
+  });
+  assert.deepEqual(out.map((a) => [a.status, a.detail]), [
+    ["done", "passed on 22018 76th Ave W — Price too high"],
+    ["done", "filed on 22018 76th Ave W — Price too high"],
+  ]);
+  assert.deepEqual(seen[0][1].reason, { code: "price", note: "no meat on the bone at 498" });
+  assert.deepEqual(seen[1][1].reason, { code: "price", note: "no meat on the bone at 498" });
+
+  // Nothing they said reads as a reason — no write, and not an error either.
+  const quiet = await runActions({
+    client: { call: async () => ({}) }, locationId: "LOC", contactId: "c9", draft: { passReason: null },
+    actions: [{ id: "b1", type: "record_deal_feedback" }],
+    deps: { recordDealFeedback: async () => { throw new Error("should not be called"); } },
+  });
+  assert.deepEqual(quiet.map((a) => [a.status, a.detail]), [["done", "nothing they said reads as a reason"]]);
+});

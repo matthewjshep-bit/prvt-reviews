@@ -85,7 +85,7 @@ import {
   startReply, startProactive, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig,
 } from "../reply-agent.js";
-import { normalizeConversationAi, draftStats } from "../shared/conversation-ai.js";
+import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
 import { issueDataroomInvite } from "../dataroom.js";
 import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
 import { fetchRemoteImage, sniffImageType, sniffPdf } from "../fetch-image.js";
@@ -3281,15 +3281,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // The investor's standing on a deal: passed, or the committed buyer
     // (which advances an under-contract deal to buyer_found, as the Deals
     // page does). Links them first if they weren't.
-    setInvestorStatus: async ({ contactId, addressHint, status }) => {
+    setInvestorStatus: async ({ contactId, addressHint, status, reason = null }) => {
       if (!INVESTOR_STATUSES.includes(status)) return { ok: false, reason: `not an investor status: ${status}` };
-      const live = (await store.listDeals(locationId)).filter((o) => LIVE_DEAL_STAGES.has(o.deal?.stage));
-      let offer = pickDealByAddress(live, addressHint);
-      if (!offer) {
-        const mine = live.filter((o) => (o.deal.investors || []).some((i) => i.contactId === contactId));
-        offer = mine.length === 1 ? mine[0] : null;
-      }
-      if (!offer) return { ok: false, reason: live.length ? "which deal? — no property named" : "no live deals" };
+      const found = await findLiveDealFor({ contactId, addressHint });
+      if (!found.ok) return found;
+      const offer = found.offer;
       offer.deal.investors = offer.deal.investors || [];
       const ts = new Date().toISOString();
       let inv = offer.deal.investors.find((i) => i.contactId === contactId);
@@ -3302,6 +3298,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         inv.status = status;
         inv.updatedAt = ts;
       }
+      const said = status === "passed" ? normalizePassReason(reason) : null;
+      if (said) {
+        inv.reason = { ...said, at: ts };
+        recordFeedback(offer, { contactId, name: inv.name, code: said.code, note: said.note, status, ts });
+      }
       if (status === "committed" && offer.deal.stage === "under_contract") {
         offer.deal.stage = "buyer_found";
         (offer.deal.stageHistory = offer.deal.stageHistory || []).push({ stage: "buyer_found", ts });
@@ -3312,9 +3313,31 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       offer.deal.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
-      await appendDealHistory(client, locationId, contactId, "investor_deal_history", historyLine(ts, offer.address, status));
+      await appendDealHistory(client, locationId, contactId, "investor_deal_history",
+        historyLine(ts, offer.address, status, said ? feedbackPhrase(said) : ""));
       await syncInvestorDealTag(client, locationId, contactId);
-      return { ok: true, address: offer.address, status };
+      return { ok: true, address: offer.address, status, reasonLabel: said ? PASS_REASON_LABEL[said.code] : "" };
+    },
+    // Feedback without a status change: a price gripe, a "wrong side of the
+    // freeway for me". They stay where they are on the deal; we keep what
+    // they said.
+    recordDealFeedback: async ({ contactId, addressHint, reason }) => {
+      const said = normalizePassReason(reason);
+      if (!said) return { ok: false, reason: "nothing to file" };
+      const found = await findLiveDealFor({ contactId, addressHint });
+      if (!found.ok) return found;
+      const offer = found.offer;
+      const ts = new Date().toISOString();
+      let name = "";
+      const known = (offer.deal.investors || []).find((i) => i.contactId === contactId);
+      if (known) name = known.name;
+      else { try { name = contactName(await getContact(client, contactId)) || contactId; } catch { name = contactId; } }
+      recordFeedback(offer, { contactId, name, code: said.code, note: said.note, status: known?.status || "", ts });
+      offer.deal.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      await appendDealHistory(client, locationId, contactId, "investor_deal_history",
+        historyLine(ts, offer.address, "feedback", feedbackPhrase(said)));
+      return { ok: true, address: offer.address, reasonLabel: PASS_REASON_LABEL[said.code] };
     },
     issueDataroomInvite: async ({ contactId, addressHint }) => {
       const live = (await store.listDeals(locationId)).filter((o) => LIVE_DEAL_STAGES.has(o.deal?.stage));
@@ -3591,6 +3614,44 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       res.json({ ok: true, ...out });
     } catch (err) { fail(res, err); }
   });
+
+  /* ---- what buyers told us about a deal ---- */
+
+  // Which live deal is this person talking about: the one they named, else
+  // the only one they're on. Shared by every investor-side write so a pass
+  // and a piece of feedback can never land on different properties.
+  async function findLiveDealFor({ contactId, addressHint = "" }) {
+    const live = (await store.listDeals(locationId)).filter((o) => LIVE_DEAL_STAGES.has(o.deal?.stage));
+    let offer = pickDealByAddress(live, addressHint);
+    if (!offer) {
+      const mine = live.filter((o) => (o.deal.investors || []).some((i) => i.contactId === contactId));
+      offer = mine.length === 1 ? mine[0] : null;
+    }
+    if (!offer) return { ok: false, reason: live.length ? "which deal? — no property named" : "no live deals" };
+    return { ok: true, offer };
+  }
+
+  // Append to the deal's feedback ledger. One entry per buyer per reason:
+  // a buyer who says "too expensive" three times across a thread is one
+  // data point, not three, or the rollup lies about how many buyers balked.
+  function recordFeedback(offer, entry) {
+    offer.deal.feedback = offer.deal.feedback || [];
+    const dupe = offer.deal.feedback.find((f) => f.contactId === entry.contactId && f.code === entry.code);
+    if (dupe) {
+      dupe.note = entry.note || dupe.note;
+      dupe.status = entry.status || dupe.status;
+      dupe.ts = entry.ts;
+      return dupe;
+    }
+    offer.deal.feedback.push(entry);
+    // Twenty buyers is a big blast; anything past that is noise on the row.
+    if (offer.deal.feedback.length > 40) offer.deal.feedback = offer.deal.feedback.slice(-40);
+    return entry;
+  }
+
+  // How the reason reads on the buyer's own Property History ledger.
+  const feedbackPhrase = (said) =>
+    dealStr(said.note ? `${PASS_REASON_LABEL[said.code]}: ${said.note}` : PASS_REASON_LABEL[said.code], 200);
 
   /* ---- an investor who showed interest ---- */
   // Link an investor to the live deal they are talking about, as

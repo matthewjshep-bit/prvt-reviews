@@ -18,6 +18,7 @@ import { dealToQuery } from "./dispo.js";
 import { dealNumbers } from "./dataroom.js";
 import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
+import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -190,6 +191,11 @@ export function investorFacingPrice({ offer, room = null, settings = {} }) {
   return { price: Math.round(price) || 0, arv: Math.round(arv) || 0, repairs: Math.round(repairs) || 0, forbidden };
 }
 
+// A recorded pass reason, in words the model can use. Their own note first —
+// "needs to be under 400 for me" says more than "Price too high".
+const reasonWords = (r) =>
+  r?.code ? (r.note ? `${PASS_REASON_LABEL[r.code]} — "${String(r.note).slice(0, 140)}"` : PASS_REASON_LABEL[r.code]) : "";
+
 const dealLine = (d) => {
   const money = [
     d.price ? `buyer price ${fmtMoney(d.price)}` : "price not set yet",
@@ -197,11 +203,14 @@ const dealLine = (d) => {
     d.repairs ? `est. repairs ${fmtMoney(d.repairs)}` : "",
   ].filter(Boolean).join(", ");
   const status = d.linkStatus ? ` — they are ${d.linkStatus === "sent" ? "sent it, no answer yet" : d.linkStatus}` : "";
+  // Why they said no last time. The point of carrying it: don't re-pitch the
+  // same objection back at them as if they never raised it.
+  const said = d.reason ? ` — their reason: ${d.reason}` : "";
   const stage = d.stage === "buyer_found" ? " — a buyer is already lined up" : "";
   const invite = d.invite
     ? ` — dataroom link sent ${dateWord(d.invite.sentAt || d.invite.createdAt)}${d.invite.viewCount ? `, opened ${d.invite.viewCount}× (last ${dateWord(d.invite.lastViewedAt)})` : ", not opened yet"}`
     : "";
-  return `- ${d.address}: ${money}${status}${stage}${invite}`;
+  return `- ${d.address}: ${money}${status}${said}${stage}${invite}`;
 };
 
 /**
@@ -246,7 +255,7 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
     const link = (offer.deal.investors || []).find((i) => i.contactId === contactId) || null;
     const blasted = blastTagged(tags, offer.address, blastPrefix);
     if (GONE_DEAL_STAGES.has(offer.deal.stage)) {
-      if (link || blasted) gone.push({ address: offer.address || "a property", stage: offer.deal.stage, at: offer.deal.updatedAt || "", theirs: link?.status || null });
+      if (link || blasted) gone.push({ address: offer.address || "a property", stage: offer.deal.stage, at: offer.deal.updatedAt || "", theirs: link?.status || null, reason: reasonWords(link?.reason) });
       continue;
     }
     if (!INVESTOR_DEAL_STAGES.has(offer.deal.stage)) continue;
@@ -255,7 +264,7 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
       address: offer.address || "a property", stage: offer.deal.stage,
       linkStatus: link?.status || (blasted ? "sent" : null), blasted,
       price: n.price, arv: n.arv, repairs: n.repairs, invite: room ? inviteByRoom.get(room.id) || null : null,
-      offerId: offer.id,
+      offerId: offer.id, reason: reasonWords(link?.reason),
     };
     if (link || blasted) linked.push(row);
     else {
@@ -278,7 +287,7 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
   const fields = fieldLines(custom, INVESTOR_FIELD_KEYS);
   const history = historyTail(investor.dealHistory || custom.investor_deal_history);
   const standing = { committed: "they were the buyer", passed: "they passed on it", evaluating: "they were looking at it", sent: "it was sent to them" };
-  const goneLines = gone.slice(0, 3).map((g) => `- ${g.address}: ${GONE_WORD[g.stage] || g.stage}${g.theirs && standing[g.theirs] ? ` — ${standing[g.theirs]}` : ""}`);
+  const goneLines = gone.slice(0, 3).map((g) => `- ${g.address}: ${GONE_WORD[g.stage] || g.stage}${g.theirs && standing[g.theirs] ? ` — ${standing[g.theirs]}` : ""}${g.reason ? ` (${g.reason})` : ""}`);
   const text = [
     `INVESTOR PROFILE (their buy box, as we understand it):\n${profile}`,
     linked.length ? `DEALS THEY ARE ALREADY ON (sent to them, or they asked):\n${linked.map(dealLine).join("\n")}` : "DEALS THEY ARE ALREADY ON: none.",

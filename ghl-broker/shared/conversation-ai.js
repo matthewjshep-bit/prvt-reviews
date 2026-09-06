@@ -107,12 +107,82 @@ export const NEVER_AUTO = {
 export const autoEligible = (party) =>
   [...(INTENTS[party] || []), ...(OUTBOUND_INTENTS[party] || [])].filter((i) => !(NEVER_AUTO[party] || []).includes(i));
 
+/* ---------- why a buyer said no ---------- */
+
+// A pass is the most useful thing an investor ever tells us, and it is worth
+// exactly nothing as free text scattered across threads. One closed
+// vocabulary, so a deal can say "four passed, three on price" and a buyer's
+// record can say "he passes on price every time we send him Tacoma".
+export const PASS_REASONS = [
+  "price", "area", "property_type", "rehab_scope", "condition",
+  "timing", "capital", "already_bought", "other",
+];
+export const PASS_REASON_LABEL = {
+  price: "Price too high",
+  area: "Wrong area",
+  property_type: "Wrong property type",
+  rehab_scope: "Too much rehab",
+  condition: "Condition / structural",
+  timing: "Bad timing",
+  capital: "No capital right now",
+  already_bought: "Already spoken for elsewhere",
+  other: "Other",
+};
+// What the model is told each code means. Kept separate from the label so the
+// UI stays short and the prompt stays precise.
+export const PASS_REASON_GLOSS = {
+  price: "the number is too high for them, no spread, they'd need it cheaper",
+  area: "they don't buy that neighborhood, city or county",
+  property_type: "wrong type — condo, multi, land, mobile, too small or too big",
+  rehab_scope: "more work than they take on",
+  condition: "a specific defect: foundation, fire, septic, title, tenants",
+  timing: "not right now — closing window, travel, out of season",
+  capital: "money is tied up, funds not free, too many projects open",
+  already_bought: "they already have it, saw it elsewhere, or it's under contract to them",
+  other: "a real reason that fits none of the above",
+};
+
+/**
+ * normalizePassReason(v) → { code, note } | null
+ *
+ * Anything the model hands back, reduced to a code we recognise and their own
+ * words. A note with no usable code still counts — "he said something" beats
+ * silence, and "other" is honest about what we know.
+ */
+export function normalizePassReason(v) {
+  if (!v || typeof v !== "object") return null;
+  const note = String(v.note == null ? "" : v.note).trim().slice(0, 200);
+  const raw = String(v.code || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const code = PASS_REASONS.includes(raw) ? raw : "";
+  if (!code && !note) return null;
+  return { code: code || "other", note };
+}
+
+/**
+ * summarizeFeedback(rows) → { total, byCode: [{ code, label, count }] }
+ *
+ * The deal-level read: what did buyers actually say. Sorted by how often we
+ * heard it, so the top line is the thing to fix.
+ */
+export function summarizeFeedback(rows = []) {
+  const counts = new Map();
+  for (const r of rows) {
+    const code = PASS_REASONS.includes(r?.code) ? r.code : "other";
+    counts.set(code, (counts.get(code) || 0) + 1);
+  }
+  const byCode = [...counts.entries()]
+    .map(([code, count]) => ({ code, label: PASS_REASON_LABEL[code], count }))
+    .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
+  return { total: rows.length, byCode };
+}
+
 /* ---------- actions: what an intent may trigger in GHL, or here ---------- */
 
 export const ACTION_TYPES = [
   "add_tags", "remove_tags", "set_field", "add_to_workflow", "remove_from_workflow",
   "link_deal_evaluating", "start_underwrite", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
+  "record_deal_feedback",
 ];
 export const ACTION_LABEL = {
   add_tags: "Add tags", remove_tags: "Remove tags", set_field: "Set a custom field",
@@ -122,6 +192,7 @@ export const ACTION_LABEL = {
   mark_offer_countered: "Mark their offer countered", mark_offer_passed: "Mark their offer passed",
   mark_offer_realm_yes: "Note on the offer that the number is in the realm",
   mark_investor_passed: "Mark them passed on the deal", mark_investor_committed: "Mark them the committed buyer",
+  record_deal_feedback: "File what they said about the deal as feedback",
 };
 // Actions that run on the broker rather than in GHL, and which party each
 // makes sense for. An investor can't be underwritten; an agent isn't invited
@@ -129,10 +200,11 @@ export const ACTION_LABEL = {
 export const INTERNAL_ACTIONS = new Set([
   "link_deal_evaluating", "start_underwrite", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
+  "record_deal_feedback",
 ]);
 export const INTERNAL_ACTIONS_FOR = {
   agent: ["start_underwrite", "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes"],
-  investor: ["link_deal_evaluating", "suggest_dataroom_invite", "mark_investor_passed", "mark_investor_committed"],
+  investor: ["link_deal_evaluating", "suggest_dataroom_invite", "mark_investor_passed", "mark_investor_committed", "record_deal_feedback"],
 };
 // Never automatic: a dataroom link is a document going out, and a committed
 // buyer advances the deal — both are applied by a person.
@@ -722,7 +794,11 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           buybox_update: { mode: "auto", actions: [{ type: "add_tags", tags: ["investor-active"] }, ...enroll("dispoTier2")] },
           wants_to_buy: { mode: "ask", actions: [{ type: "add_tags", tags: ["investor-hot"] }, ...enroll("dispoTier1"), { type: "link_deal_evaluating" }, { type: "mark_investor_committed" }] },
           wants_walkthrough: { mode: "ask", actions: [{ type: "add_tags", tags: ["investor-hot"] }, ...enroll("dispoTier1"), { type: "link_deal_evaluating" }] },
+          // A no is feedback. The pass marks them off the deal and carries
+          // the reason with it; a price gripe short of a pass is filed the
+          // same way without touching their standing on the deal.
           passing: { mode: "auto", actions: [{ type: "mark_investor_passed" }] },
+          price_pushback: { mode: "auto", actions: [{ type: "record_deal_feedback" }] },
         },
       },
     },
