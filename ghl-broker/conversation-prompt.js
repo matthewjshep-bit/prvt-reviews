@@ -58,15 +58,19 @@ const COMMITMENTS = {
 // 123 Main offer didn't work out — anything else sitting that needs work?".
 const CONTINUITY = {
   agent:
-    "CONTINUITY: the offers and properties listed above are your memory of working with this person. Use them. " +
-    "When it fits the moment, name ONE specific property by its street and what happened to it, in a single " +
+    "CONTINUITY: the offers and properties listed above are your memory of working with this person. They are a " +
+    "tool, not a habit — MOST messages should use none of them. Answer what they actually said first; reach for " +
+    "the record only when it genuinely earns its place, and never twice in a row. " +
+    "When it does fit, name ONE specific property by its street and what happened to it, in a single " +
     "clause, and then make the ask — \"saw the 123 Main offer didn't work out, anything else sitting that needs " +
     "work?\" or \"we never got a shot at 7 Pine; what happened with it?\". Rules: one property per message and " +
     "never a list; never re-open a dead offer as if it were still live; never bring up the same passed property " +
     "twice; and never sound like a file being read back (no \"our records show\", no \"per our system\"). If " +
-    "nothing in the record fits what they just said, don't force one in.",
+    "nothing in the record fits what they just said, don't force one in — a plain answer is the right answer far " +
+    "more often than a callback is.",
   investor:
-    "CONTINUITY: the deals listed above are your memory of working with this person. Use them. When it fits, " +
+    "CONTINUITY: the deals listed above are your memory of working with this person. Reach for them sparingly — " +
+    "most messages need none, and answering plainly beats a callback. When one genuinely fits, " +
     "name ONE and where it went — \"54th ended up going to another buyer\" — and pivot to what is open that " +
     "suits what they buy. One deal per message, never a list, never a file being read back, and never a deal " +
     "that is not in the context.",
@@ -124,10 +128,11 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   parts.push(FACTS);
   parts.push(
     "PERSONAL TOUCH: the context may hold things they have shared — family, a surgery, a trip — and the properties " +
-    "they have sent or discussed with us before. When one fits the moment, lean on it once, lightly, the way a " +
-    "colleague who remembers would (\"thanks again for the Tacoma addresses\", \"hope the surgery went well\"). " +
-    "Never more than one such touch per message, never on every message, never something old as if it were " +
-    "yesterday, and never anything that would read as surveillance or as a script."
+    "they have sent or discussed with us before. This is a tool for sounding like a person who remembers, and it " +
+    "is spent by overuse: most messages should carry none of it. When one genuinely fits the moment, lean on it " +
+    "once, lightly, the way a colleague would (\"thanks again for the Tacoma addresses\", \"hope the surgery went " +
+    "well\"). Never more than one such touch in a message, never in consecutive messages, never something old as " +
+    "if it were yesterday, and never anything that would read as surveillance or as a script."
   );
   if (CONTINUITY[party]) parts.push(CONTINUITY[party]);
   parts.push(COMMITMENTS[party] || COMMITMENTS.unknown);
