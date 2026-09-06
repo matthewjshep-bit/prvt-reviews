@@ -3382,6 +3382,38 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // The kill switch. One click, saved at once — not a form field you have to
+  // remember to Save, because the moment you want this is the moment you
+  // don't want to think. Turning it off also HOLDS every reply already
+  // counting down to an auto-send: "it's acting up" means the one queued
+  // three minutes ago is exactly the one that must not go out.
+  router.post("/automations/conversation/enabled", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const b = req.body || {};
+      const enabled = b.enabled === true || String(b.enabled).toLowerCase() === "true";
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const config = normalizeConversationAi({ ...conversationConfig(saved), enabled });
+      await store.saveOfferSettings(locationId, { ...saved, conversationAi: config });
+
+      let held = 0;
+      if (!enabled) {
+        const scheduled = await store.listReplyDrafts(locationId, { status: "scheduled", limit: 200 }).catch(() => []);
+        for (const d of scheduled) {
+          const ts = new Date().toISOString();
+          const ok = await store.updateReplyDraft(d.id, {
+            ...d, status: "draft", sendAt: null, heldAt: ts,
+            flags: [...(d.flags || []), "held: the Conversation AI was switched off"],
+            autoSend: { ...(d.autoSend || {}), decided: false, reason: "the Conversation AI was switched off" },
+            updatedAt: ts,
+          }).catch(() => false);
+          if (ok !== false) held++;
+        }
+      }
+      res.json({ ok: true, config, held });
+    } catch (err) { fail(res, err); }
+  });
+
   // The location's GHL workflows, for the action picker. A missing scope is
   // an answer, not an error — the page shows what to add.
   router.get("/automations/conversation/workflows", async (req, res) => {

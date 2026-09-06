@@ -97,7 +97,7 @@ const inFlight = new Set();
  * twice. When the broker's send gate is off, due drafts are returned to the
  * outbox with a flag rather than left counting down to nothing.
  */
-export async function sendDueDrafts({ store, locations = [], live = false, now = Date.now(), send, log = () => {} }) {
+export async function sendDueDrafts({ store, locations = [], live = false, now = Date.now(), send, enabledFor = null, log = () => {} }) {
   const out = { sent: 0, failed: 0, recovered: 0, returned: 0 };
   for (const { locationId, client } of locations) {
     let scheduled = [];
@@ -119,9 +119,25 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
       }).catch(() => {});
       out.recovered++;
     }
+    // Belt and braces behind the kill switch: the route that switches the
+    // bot off already holds what was counting down, but a config written any
+    // other way must not leave a scheduled reply free to go out.
+    let switchedOff = false;
+    if (enabledFor && scheduled.some((d) => Date.parse(d.sendAt || "") <= now)) {
+      switchedOff = !(await enabledFor(locationId).catch(() => true));
+    }
     for (const d of scheduled) {
       const due = Date.parse(d.sendAt || "");
       if (!Number.isFinite(due) || due > now || inFlight.has(d.id)) continue;
+      if (switchedOff) {
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "draft", sendAt: null,
+          flags: [...(d.flags || []), "held: the Conversation AI was switched off"],
+          updatedAt: new Date(now).toISOString(),
+        }).catch(() => {});
+        out.returned++;
+        continue;
+      }
       if (!live) {
         await store.updateReplyDraft(d.id, {
           ...d, status: "draft", sendAt: null,

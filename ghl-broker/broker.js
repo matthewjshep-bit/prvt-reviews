@@ -189,7 +189,10 @@ setInterval(async () => {
       .map((locationId) => ({ locationId, token: getTokenFor(locationId) }))
       .filter((l) => l.token)
       .map(({ locationId, token }) => ({ locationId, client: makeClient(token) }));
-    const r = await sendDueDrafts({ store, locations, live: CONVERSATION_SENDS_LIVE, send: sendReplyDraft, log: console.log });
+    const r = await sendDueDrafts({
+      store, locations, live: CONVERSATION_SENDS_LIVE, send: sendReplyDraft, log: console.log,
+      enabledFor: async (locationId) => conversationConfig((await store.getOfferSettings(locationId)) || {}).enabled,
+    });
     if (r.failed || r.recovered || r.returned) console.warn(`conversation scheduler: ${JSON.stringify(r)}`);
     // Once a day: settled drafts past the tab's retention go.
     if (Date.now() - lastPrune > 24 * 3600 * 1000) {

@@ -110,3 +110,28 @@ test("with sends off on the broker nothing goes out, and the countdown doesn't l
   assert.equal(store.rows.get("d1").status, "draft");
   assert.match(store.rows.get("d1").flags[0], /CARD_SENDS_ENABLED/);
 });
+
+test("a switched-off bot never sends what was already counting down", async () => {
+  const store = fakeStore([draft(), draft({ id: "d2", sendAt: "2026-09-04T19:00:00Z" })]);
+  let calls = 0;
+  const r = await sendDueDrafts({
+    store, locations: [{ locationId: "LOC", client: {} }], live: true, now,
+    send: async () => { calls++; }, enabledFor: async () => false,
+  });
+  assert.equal(calls, 0);
+  assert.equal(r.returned, 1, "the due one is handed back");
+  assert.equal(store.rows.get("d1").status, "draft");
+  assert.equal(store.rows.get("d1").sendAt, null);
+  assert.match(store.rows.get("d1").flags.join(" · "), /switched off/);
+  assert.equal(store.rows.get("d2").status, "scheduled", "one that isn't due yet is left alone");
+});
+
+test("the enabled check costs nothing when there is nothing due", async () => {
+  const store = fakeStore([draft({ sendAt: "2026-09-04T19:00:00Z" })]);
+  let asked = 0;
+  await sendDueDrafts({
+    store, locations: [{ locationId: "LOC", client: {} }], live: true, now,
+    send: async () => {}, enabledFor: async () => { asked++; return true; },
+  });
+  assert.equal(asked, 0, "no settings read on an idle tick");
+});

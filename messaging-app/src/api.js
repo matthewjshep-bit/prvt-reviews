@@ -223,6 +223,10 @@ export const cancelUnderwrite = (jobId) =>
 // route — Settings never writes it.
 export const getConversationAi = () =>
   fetch(`${API_BASE}/api/offers/automations/conversation/config?${locq()}`).then(j);
+// The kill switch: saved the instant it's clicked, and it reports how many
+// counting-down replies it held.
+export const setConversationEnabled = (enabled) =>
+  post(`/api/offers/automations/conversation/enabled`, { enabled });
 export const saveConversationAi = (config) =>
   post(`/api/offers/automations/conversation/config`, { config }, "PUT").then((r) => r.config);
 export const listWorkflows = () =>

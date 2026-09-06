@@ -7,9 +7,9 @@
 // the page owns only its own blob, and Settings never writes it.
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, Loader2, Power } from "lucide-react";
 import { INTENT_LABEL, PARTY_LABEL, normalizeConversationAi, starterConfig } from "@shared/conversation-ai.js";
-import { getConversationAi, getConversationHistory, listWorkflows, saveConversationAi } from "./api.js";
+import { getConversationAi, getConversationHistory, listWorkflows, saveConversationAi, setConversationEnabled } from "./api.js";
 import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, SkeletonRows, TableCard } from "./ui.jsx";
 import ReplyStrip from "./ReplyStrip.jsx";
 import ConversationTryIt from "./ConversationTryIt.jsx";
@@ -32,6 +32,8 @@ export default function ConversationAi({ settings }) {
   const [history, setHistory] = useState(null);
   const [days, setDays] = useState(30);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [toggling, setToggling] = useState(false);
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     getConversationAi()
@@ -48,6 +50,23 @@ export default function ConversationAi({ settings }) {
 
   const dirty = useMemo(() => form && config && JSON.stringify(normalizeConversationAi(form)) !== JSON.stringify(config), [form, config]);
   const patch = (partial) => { setSaved(false); setForm((f) => ({ ...f, ...partial })); };
+
+  // On and off take effect the moment they're clicked — no Save, because the
+  // moment you reach for this is the moment you don't want to think. Off also
+  // holds every reply already counting down to send itself.
+  async function setEnabled(next) {
+    if (!next && !window.confirm("Turn the Conversation AI off?\n\nNo new drafts are written, and anything counting down to send itself is held for you.")) return;
+    setToggling(true); setError(""); setNotice("");
+    try {
+      const r = await setConversationEnabled(next);
+      setConfig(r.config);
+      setForm((f) => ({ ...f, enabled: r.config.enabled }));
+      setNotice(next
+        ? "Conversation AI is back on."
+        : `Conversation AI is off.${r.held ? ` ${r.held} repl${r.held === 1 ? "y that was" : "ies that were"} counting down ${r.held === 1 ? "was" : "were"} held.` : ""}`);
+    } catch (e) { setError(e.message); }
+    setToggling(false);
+  }
 
   async function save() {
     setSaving(true); setError("");
@@ -71,11 +90,34 @@ export default function ConversationAi({ settings }) {
 
   return (
     <div className="space-y-4">
+      {!form.enabled && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
+          <Power size={16} className="shrink-0 text-red-700" />
+          <span className="text-sm font-bold text-red-800">Conversation AI is off</span>
+          <span className="text-xs text-red-700">
+            Nothing is being drafted and nothing can send itself. Inbound texts are waiting on you until it's back on.
+          </span>
+          <button type="button" disabled={toggling} onClick={() => setEnabled(true)}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-40">
+            {toggling ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />} Turn it back on
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
-        <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-          <input type="checkbox" checked={form.enabled} onChange={(e) => patch({ enabled: e.target.checked })} />
-          Conversation AI is {form.enabled ? "on" : "off"}
-        </label>
+        <button type="button" disabled={toggling} onClick={() => setEnabled(!form.enabled)}
+          title={form.enabled ? "Stop it drafting, and hold anything counting down to send" : "Start drafting again"}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-sm font-semibold transition-colors disabled:opacity-40 ${
+            form.enabled
+              ? "border border-red-300 bg-white text-red-700 hover:bg-red-50"
+              : "bg-emerald-600 text-white hover:bg-emerald-700"}`}>
+          {toggling ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />}
+          {form.enabled ? "Turn off" : "Turn on"}
+        </button>
+        <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-800">
+          <span className={`h-2 w-2 rounded-full ${form.enabled ? "bg-emerald-500" : "bg-red-500"}`} aria-hidden="true" />
+          {form.enabled ? "On" : "Off"}
+        </span>
         <label className="flex items-center gap-2 text-sm text-slate-600">
           Daily cap
           <input type="number" min="1" className="w-20 rounded-lg border border-slate-300 px-2 py-1 text-sm" value={form.dailyCap}
@@ -119,6 +161,7 @@ export default function ConversationAi({ settings }) {
         </div>
       </div>
       {error && <ErrorBar>{error}</ErrorBar>}
+      {notice && <div className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">{notice}</div>}
 
       <KpiRow items={kpis} />
 
