@@ -936,6 +936,19 @@ ok("garbage is refused", r.status === 400, r.status);
 r = await putNumbers({ repairs: 60000, contractPrice: 1 });
 ok("the contract price can't be edited from the room", r.body.dataroom.snapshot.numbers.contractPrice === 430000 && r.body.dataroom.snapshot.numbers.repairs === 60000);
 
+// The offer editor reads pins off the deal list so it can admit, beside the
+// ARV and rehab fields, that a room is showing something else. Without this
+// the operator retypes a figure, saves, and the deal page never moves.
+console.log("\n== pins are visible from the offer list ==");
+r = await jget(`${B}/api/datarooms?offer_id=${offer.id}&location_id=${LOC}`);
+let listed = (r.body.datarooms || []).find((d) => d.id === room.id);
+ok("the room's pinned rehab travels with the list", listed?.pins?.repairs === 60000, JSON.stringify(listed?.pins));
+ok("and an unpinned figure isn't claimed as one", !listed.pins.arv && !listed.pins.investorPrice, JSON.stringify(listed.pins));
+await putNumbers({ repairs: null });
+r = await jget(`${B}/api/datarooms?offer_id=${offer.id}&location_id=${LOC}`);
+listed = (r.body.datarooms || []).find((d) => d.id === room.id);
+ok("unpinning empties it", Object.keys(listed.pins).length === 0, JSON.stringify(listed.pins));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 server.close();
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });

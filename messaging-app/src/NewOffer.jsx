@@ -5,9 +5,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, ExternalLink, FileSignature, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
-  addContactNote, createOffer, getContactDetail, getContactNotes, ghlContactUrl, listOffers,
-  previewDocument, promoteDeal, saveDraft, saveOfferWorkspace, saveSettings, searchContacts,
-  setOfferStatus, suggestAddresses, updateOffer, zillowUrl,
+  addContactNote, createOffer, getContactDetail, getContactNotes, ghlContactUrl, listDatarooms,
+  listOffers, previewDocument, promoteDeal, saveDraft, saveOfferWorkspace, saveSettings,
+  searchContacts, setOfferStatus, suggestAddresses, updateDataroom, updateOffer, zillowUrl,
 } from "./api.js";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
@@ -493,6 +493,32 @@ const legacyTermsToRows = (t, s) =>
     ...(String(t?.earnestMoney || "").trim() ? { earnestMoney: Number(String(t.earnestMoney).replace(/[^\d]/g, "")) || undefined } : {}),
   });
 
+// A room worth mentioning on this form: one pinning ARV or rehab. A pinned
+// purchase price is the assignment number and belongs to the deal page alone —
+// this form never sets it, so it isn't this form's business to unpin.
+const hasFigurePin = (r) => Number(r?.pins?.arv) > 0 || Number(r?.pins?.repairs) > 0;
+
+// A deal page can pin its own ARV or rehab (DataroomModal's "Headline
+// numbers"), and a pin deliberately outranks the offer — which, from this
+// form, looks exactly like an edit that didn't take. So say it beside the
+// field being typed in, and give the one click that hands the figure back to
+// the offer. Rooms re-sync from the offer the moment the pin is gone.
+function PinNotice({ rooms, field, busy, onFollow }) {
+  const pinned = rooms.filter((r) => Number(r.pins?.[field]) > 0);
+  if (!pinned.length) return null;
+  const amounts = [...new Set(pinned.map((r) => fmtMoney(Number(r.pins[field]))))];
+  return (
+    <p className="mt-1 text-xs text-amber-700">
+      Deal page shows {amounts.join(" / ")}
+      {pinned.length > 1 ? ` (${pinned.length} rooms)` : ""} — set there, so this number won't reach investors.{" "}
+      <button type="button" disabled={busy} onClick={onFollow}
+        className="font-semibold text-blue-700 underline hover:text-blue-900 disabled:opacity-50">
+        {busy ? "Clearing…" : "Follow this offer"}
+      </button>
+    </p>
+  );
+}
+
 export default function NewOffer({ settings, initialContactId, restore, onReset, onSettingsSaved, onOpenOffer, onOfferSaved, onDeal }) {
   // `restore` reopens a saved draft or an existing offer. Both carry a full
   // form snapshot (drafts in .draft, created offers in .snapshot) so the
@@ -653,6 +679,40 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       .catch(() => { /* the strip is a convenience — never block the form */ });
     return () => { live = false; };
   }, [contact?.id]);
+
+  // Deal pages built from this offer that are showing a pinned ARV or rehab
+  // instead of the offer's own. Read here so the two fields below can admit it
+  // — otherwise the operator retypes an ARV, saves, and the deal page never
+  // moves, with nothing on this screen explaining why.
+  const [pinnedRooms, setPinnedRooms] = useState([]);
+  const [unpinning, setUnpinning] = useState("");
+
+  useEffect(() => {
+    const id = fromOffer?.id;
+    if (!id) { setPinnedRooms([]); return; }
+    let live = true;
+    listDatarooms(id)
+      .then((rooms) => { if (live) setPinnedRooms((rooms || []).filter(hasFigurePin)); })
+      .catch(() => { /* a note beside a field — never block the form */ });
+    return () => { live = false; };
+  }, [fromOffer?.id]);
+
+  // Unpin one figure on every room holding it. The room's own PUT re-derives
+  // the number from the offer as it stands today, so the deal page lands on
+  // whatever this form last saved — no second save needed here.
+  async function followOffer(field) {
+    const rooms = pinnedRooms.filter((r) => Number(r.pins?.[field]) > 0);
+    if (!rooms.length || unpinning) return;
+    setUnpinning(field);
+    setError("");
+    try {
+      await Promise.all(rooms.map((r) => updateDataroom(r.id, { numbers: { [field]: null } })));
+      setPinnedRooms((list) => list
+        .map((r) => ({ ...r, pins: { ...r.pins, [field]: 0 } }))
+        .filter(hasFigurePin));
+    } catch (e) { setError(e.message); }
+    setUnpinning("");
+  }
 
   // "Mark under contract" from the popout, when the shell can take us to the
   // Deals tab. Without that navigation the button would strand you, so the
@@ -1244,12 +1304,18 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               </a>
             )}
           </div>
-          <Field label="After-repair value / ARV ($)">
-            <input className={INPUT_CLS} inputMode="numeric" value={inputs.arv} onChange={setMoney("arv")} placeholder="from comps below" />
-          </Field>
-          <Field label="Estimated repairs ($)">
-            <input className={INPUT_CLS} inputMode="numeric" value={inputs.repairs} onChange={setMoney("repairs")} placeholder="from scope below" />
-          </Field>
+          <div>
+            <Field label="After-repair value / ARV ($)">
+              <input className={INPUT_CLS} inputMode="numeric" value={inputs.arv} onChange={setMoney("arv")} placeholder="from comps below" />
+            </Field>
+            <PinNotice rooms={pinnedRooms} field="arv" busy={unpinning === "arv"} onFollow={() => followOffer("arv")} />
+          </div>
+          <div>
+            <Field label="Estimated repairs ($)">
+              <input className={INPUT_CLS} inputMode="numeric" value={inputs.repairs} onChange={setMoney("repairs")} placeholder="from scope below" />
+            </Field>
+            <PinNotice rooms={pinnedRooms} field="repairs" busy={unpinning === "repairs"} onFollow={() => followOffer("repairs")} />
+          </div>
           <Field label="Asking price ($, optional)">
             <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={setMoney("askingPrice")} placeholder="for %-of-asking context" />
           </Field>

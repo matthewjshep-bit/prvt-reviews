@@ -347,6 +347,13 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
         return {
           id: r.id, offerId: r.offerId, address: r.address, status: r.status,
           createdAt: r.createdAt, updatedAt: r.updatedAt,
+          // The figures pinned on this room, if any: { investorPrice, arv,
+          // repairs }. A pin outranks the offer's own number on the deal page,
+          // which from the offer editor looks like an edit that didn't take —
+          // so the editor reads these and says so beside the field you're
+          // typing in. Only pins travel; the rest of the numbers belong to the
+          // room's own screen.
+          pins: { ...(r.snapshot?.overrides || {}) },
           // Personal invites only; the shared link isn't someone we "invited".
           inviteCount: invites.filter((i) => i.status === "active" && !i.doc?.share).length,
           // Views across both kinds of link — the honest "is anyone looking" number.
