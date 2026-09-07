@@ -3526,7 +3526,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // GHL exposes them as a list, a URL string, or a count depending on
       // the trigger. Any of those is enough to know there was one.
       const attachments = countAttachments(b.attachments ?? b.attachment ?? b.customData?.attachments ?? b.message?.attachments);
-      if (!message.trim() && !attachments) return res.status(400).json({ error: "message required — pass {{message.body}}" });
+      if (!message.trim() && !attachments) {
+        // Say exactly what arrived. This line lands in the GHL workflow's
+        // execution log, which is the only place the real payload shape is
+        // visible from — guessing at it cost us a day.
+        const shape = Object.keys(b).slice(0, 12).join(", ") || "(empty body)";
+        const mt = b.message === undefined ? "absent" : Array.isArray(b.message) ? "array" : typeof b.message;
+        const stringified = [b.message, b.body, b.text, b.customData?.message].some(isStringifiedObject);
+        return res.status(400).json({
+          error: stringified
+            ? "the message field arrived already stringified as \"[object Object]\" — the workflow is sending {{message}}; send {{message.body}} instead"
+            : `message required — pass {{message.body}}. Body had: ${shape}; message was ${mt}`,
+          receivedKeys: Object.keys(b).slice(0, 20),
+          messageType: mt,
+        });
+      }
       // GHL names the channel in several places depending on the trigger.
       const rawChannel = String(
         b.channel || b.messageType || b.type || b.customData?.channel ||

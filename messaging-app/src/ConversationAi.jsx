@@ -118,14 +118,20 @@ export default function ConversationAi({ settings }) {
           <span className={`h-2 w-2 rounded-full ${form.enabled ? "bg-emerald-500" : "bg-red-500"}`} aria-hidden="true" />
           {form.enabled ? "On" : "Off"}
         </span>
-        <label className="flex items-center gap-2 text-sm text-slate-600">
+        {/* 0 on either box means no cap. The caps are there to bound a
+            runaway loop, not to ration a busy day — a blast to a big buyer
+            list is a real day's traffic. */}
+        <label className="flex items-center gap-2 text-sm text-slate-600" title="0 means no cap">
           Daily cap
-          <input type="number" min="1" className="w-20 rounded-lg border border-slate-300 px-2 py-1 text-sm" value={form.dailyCap}
+          <input type="number" min="0" className="w-20 rounded-lg border border-slate-300 px-2 py-1 text-sm" value={form.dailyCap}
             onChange={(e) => patch({ dailyCap: Number(e.target.value) })} />
           drafts, and
-          <input type="number" min="1" className="w-16 rounded-lg border border-slate-300 px-2 py-1 text-sm" value={form.dailyCapPerContact}
+          <input type="number" min="0" className="w-16 rounded-lg border border-slate-300 px-2 py-1 text-sm" value={form.dailyCapPerContact}
             onChange={(e) => patch({ dailyCapPerContact: Number(e.target.value) })} />
           per contact
+          <span className="text-xs text-slate-400">
+            {form.dailyCap === 0 && form.dailyCapPerContact === 0 ? "no caps" : "0 = no cap"}
+          </span>
         </label>
         {!sendsEnabled && (
           <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800" title="Set CARD_SENDS_ENABLED=true on the broker">

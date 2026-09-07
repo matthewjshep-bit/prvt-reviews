@@ -459,8 +459,10 @@ export function normalizeConversationAi(doc, seed = {}) {
   return {
     version: 1,
     enabled: bool(d.enabled, D.enabled),
-    dailyCap: int(d.dailyCap ?? seedFor.dailyCap, D.dailyCap, 1, 1000),
-    dailyCapPerContact: int(d.dailyCapPerContact, D.dailyCapPerContact, 1, 200),
+    // 0 = no cap, on both. Above that the ceiling is generous rather than
+    // opinionated: a blast to a big buyer list is a real day, not a runaway.
+    dailyCap: int(d.dailyCap ?? seedFor.dailyCap, D.dailyCap, 0, 100000),
+    dailyCapPerContact: int(d.dailyCapPerContact, D.dailyCapPerContact, 0, 1000),
     retentionDays: int(d.retentionDays, D.retentionDays, 0, 3650),
     profile: {
       enabled: bool(profile.enabled, D.profile.enabled),

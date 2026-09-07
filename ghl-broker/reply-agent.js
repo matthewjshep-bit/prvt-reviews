@@ -674,10 +674,14 @@ export async function startReply({
   const config = conversationConfig(saved);
   if (!config.enabled) return { skipped: "Conversation AI is switched off on the Conversation AI page", job: null };
 
-  const cap = config.dailyCap || RA_DEFAULT_DAILY_CAP;
-  const usedToday = await countToday({ store, locationId });
-  if (usedToday >= cap) {
-    return { skipped: `daily cap reached (${usedToday}/${cap})`, job: null };
+  // 0 means no cap. The caps exist to bound a runaway loop, not to ration a
+  // busy day — an operator who has decided to run without one gets to.
+  const cap = config.dailyCap;
+  if (cap > 0) {
+    const usedToday = await countToday({ store, locationId });
+    if (usedToday >= cap) {
+      return { skipped: `daily cap reached (${usedToday}/${cap})`, job: null };
+    }
   }
   const perContact = config.dailyCapPerContact || 0;
   if (perContact) {

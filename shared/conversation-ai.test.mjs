@@ -36,7 +36,13 @@ test("numbers, enums and strings are coerced rather than trusted", () => {
     autoSend: { delayMinSec: "300", delayMaxSec: "60", quietHours: { start: "25:00", end: "20:30", timeZone: "Mars/Olympus" }, channels: ["sms", "fax", "email"] },
     routing: { priority: "nobody", unknown: "panic", agentTags: "Agent, AGENT-*,, agent" },
   });
-  assert.equal(c.dailyCap, 1000);
+  assert.equal(c.dailyCap, 100000, "clamped to the ceiling, which is generous rather than opinionated");
+  // 0 is a real value on both caps, not a fall-through to the default: it
+  // means no cap, and an operator is allowed to choose that.
+  const uncapped = normalizeConversationAi({ dailyCap: 0, dailyCapPerContact: 0 });
+  assert.equal(uncapped.dailyCap, 0);
+  assert.equal(uncapped.dailyCapPerContact, 0);
+  assert.equal(normalizeConversationAi({ dailyCap: -5 }).dailyCap, 0, "negative is not a cap either");
   assert.equal(c.enabled, false);
   assert.equal(c.persona.name, "Matt");
   assert.equal(c.persona.length, "short");

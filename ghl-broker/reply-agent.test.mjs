@@ -1190,3 +1190,30 @@ test("'in the realm' notes the offer and tags the agent; the math stays hidden u
   assert.match(seen2.context.text, /\[our math: ARV \$620,000, repairs \$55,000\]/);
   assert.ok(seen2.context.amounts.includes(620000) && seen2.context.amounts.includes(55000));
 });
+
+test("a cap of 0 is no cap, on the location and on the contact", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  // A store that would trip any cap above zero: plenty of drafts already today.
+  const store = fakeStore();
+  const today = new Date().toISOString();
+  for (let i = 0; i < 40; i++) {
+    store.rows.set(`old${i}`, { id: `old${i}`, jobId: `j${i}`, locationId: "LOC", contactId: "c1", status: "sent", createdAt: today });
+  }
+  const uncapped = { ...STARTER_NOW, conversationAi: { ...STARTER_NOW.conversationAi, dailyCap: 0, dailyCapPerContact: 0 } };
+  const { skipped, job } = await startReply({
+    client, locationId: "LOC", saved: uncapped, store, contactId: "c1", message: "still interested?",
+    deps: { draft: async () => DRAFT },
+  });
+  assert.equal(skipped, null, "no cap means no cap");
+  assert.ok(job);
+
+  // And a cap that is set still bites.
+  _resetJobs();
+  const capped = { ...STARTER_NOW, conversationAi: { ...STARTER_NOW.conversationAi, dailyCap: 5 } };
+  const r = await startReply({
+    client, locationId: "LOC", saved: capped, store, contactId: "c1", message: "still interested?",
+    deps: { draft: async () => DRAFT },
+  });
+  assert.match(r.skipped, /daily cap reached \(40\/5\)/);
+});
