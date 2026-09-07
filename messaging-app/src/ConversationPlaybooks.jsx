@@ -187,10 +187,10 @@ export function RoutingCard({ config, patch, version }) {
         <Field label="Hands-off tags" hint="A contact carrying one is yours: no draft, no send, nothing. Tag them in GHL when you take a thread over.">
           <TagList value={r.botOffTags} onChange={set("botOffTags")} placeholder="stop bot, bot-off" version={version} />
         </Field>
-        <Field label="People you're already working" hint="The bot stands down for the agent or seller on a property under contract, and for any buyer standing at evaluating or committed on it. A buyer it hasn't heard from, or one who passed, is still its to talk to.">
+        <Field label="People you're already working" hint="The bot stands down for the agent or seller on a property under contract, and for the one buyer marked committed. Buyers who are evaluating stay its job — working them toward a walkthrough is the point.">
           <Select value={r.holdOnLiveDeal} onChange={set("holdOnLiveDeal")} options={[
-            ["working", "Hands off anyone you're working a deal with"],
-            ["acquisition", "Only the agent or seller — keep talking to buyers"],
+            ["working", "Hands off the agent or seller, and the committed buyer"],
+            ["acquisition", "Only the agent or seller — keep talking to every buyer"],
             ["off", "Keep replying to everyone"],
           ]} />
         </Field>

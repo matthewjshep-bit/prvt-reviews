@@ -890,42 +890,41 @@ test("the agent on a property you have under contract is yours, not the bot's", 
   assert.notEqual(r.job.status, "held");
 });
 
-test("the bot catches a buyer's interest, then hands the deal to you", async () => {
-  // A buyer nobody has linked yet is the bot's to pitch: this is the blast.
-  _resetJobs();
+test("the bot works evaluating buyers and stops at the one who signs", async () => {
   const { client } = ghlStubFor(["investor"]);
-  const store = fakeStore();
   const investors = [];
-  store.listDeals = async () => [{ id: "o1", address: "22018 76th Ave W", deal: { stage: "under_contract", investors } }];
-  const first = await startReply({
-    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "yeah I'm interested, send it over",
-    deps: { draft: async () => DRAFT },
-  });
-  await settle();
-  assert.notEqual(first.job.status, "held", "nobody is working them yet");
+  const storeFor = () => {
+    const st = fakeStore();
+    st.listDeals = async () => [{ id: "o1", address: "22018 76th Ave W", deal: { stage: "under_contract", investors } }];
+    return st;
+  };
+  const send = async (message) => {
+    _resetJobs();
+    const r = await startReply({
+      client, locationId: "LOC", saved: STARTER_NOW, store: storeFor(), contactId: "c1", message,
+      deps: { draft: async () => DRAFT },
+    });
+    await settle();
+    return r.job;
+  };
 
-  // link_deal_evaluating has now put them on the deal. The next text is yours.
-  _resetJobs();
+  // Nobody has linked them: this is the blast landing.
+  assert.notEqual((await send("yeah I'm interested, send it over")).status, "held");
+
+  // link_deal_evaluating has put them on the deal. Evaluating is a pipeline,
+  // not a handoff — the bot keeps working them toward a walkthrough.
   investors.push({ contactId: "c1", status: "evaluating" });
-  let drafted = false;
-  const second = await startReply({
-    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "what's the ARV on that again?",
-    deps: { draft: async () => { drafted = true; return DRAFT; } },
-  });
-  await settle();
-  assert.equal(second.job.status, "held");
-  assert.match(second.job.heldReason, /buyer on your live deal at 22018 76th Ave W/);
-  assert.equal(drafted, false);
+  assert.notEqual((await send("what's the ARV on that again?")).status, "held");
 
-  // They pass, and they are the bot's again for the next deal.
-  _resetJobs();
+  // They sign. From here it is paperwork, and the bot has nothing to add.
+  investors[0].status = "committed";
+  const signed = await send("when do we close?");
+  assert.equal(signed.status, "held");
+  assert.match(signed.heldReason, /buyer on your live deal at 22018 76th Ave W/);
+
+  // They pass instead, and they are in the pool for the next deal.
   investors[0].status = "passed";
-  const third = await startReply({
-    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "anything else in that pocket?",
-    deps: { draft: async () => DRAFT },
-  });
-  await settle();
-  assert.notEqual(third.job.status, "held");
+  assert.notEqual((await send("anything else in that pocket?")).status, "held");
 });
 
 test("an agent reply with no fit lands in Tier 3 — unless they already have a tier", async () => {

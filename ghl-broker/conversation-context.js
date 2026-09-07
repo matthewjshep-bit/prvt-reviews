@@ -193,12 +193,11 @@ export const WORKING_DEAL_STAGES = new Set(["under_contract", "buyer_found", "as
  * contract. An accepted offer turns cold outreach into a live negotiation,
  * and none of that should be answered by a bot.
  *
- * BUYERS — held by their standing on the deal, not by being linked to it.
- * Being on the deal at "evaluating" or "committed" means a person took the
- * conversation over, which is exactly what the bot's own link_deal_evaluating
- * does when a buyer says they're interested: it catches the interest, then
- * hands off. A buyer who passed is free again, and one who was never linked
- * is still the bot's to pitch — that is the whole dispositions blast.
+ * BUYERS — only the one who is "committed", the buyer signing the assignment.
+ * Past that point the deal is paperwork and a bot has nothing to add.
+ * "evaluating" is not a handoff: it is every buyer actively weighing the
+ * deal, a dozen of them on a good blast, and working them toward a
+ * walkthrough is the whole job. A buyer who passed is free for the next one.
  *
  * `mode`: "working" (both sides, the default) | "acquisition" (that side
  * only, so the bot keeps talking to buyers mid-deal) | "off".
@@ -217,10 +216,8 @@ export async function liveDealHold({ store, locationId, contactId, mode = "worki
     if (!link) continue;
     const status = investorStatus(link.status);
     if (!WORKING_INVESTOR_STATUSES.has(status)) continue;
-    // Committed outranks evaluating: if they are the buyer on one deal and
-    // browsing another, say the one that matters.
-    if (!found || status === "committed") found = { address: o.address || "a property", role: "buyer", stage: o.deal.stage, status };
-    if (status === "committed") break;
+    found = { address: o.address || "a property", role: "buyer", stage: o.deal.stage, status };
+    break;
   }
   return found;
 }

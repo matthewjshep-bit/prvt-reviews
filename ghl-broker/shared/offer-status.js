@@ -176,10 +176,14 @@ export const STATUS_HISTORY_PHRASE = {
 // invite trail. It bought a status and paid for it in ambiguity: nothing
 // could tell "not answered yet" from "we never asked".
 export const INVESTOR_STATUSES = ["evaluating", "committed", "passed"];
-// Being on a deal at one of these means a person is working them, so the
-// Conversation AI stands down. "passed" does not: they're free for the next
-// deal and the bot should be able to bring them one.
-export const WORKING_INVESTOR_STATUSES = new Set(["evaluating", "committed"]);
+// The one status that stands the Conversation AI down. "committed" is a
+// single person — the buyer who signs the assignment — and everything after
+// that point is paperwork a bot has no business in.
+//
+// "evaluating" deliberately does NOT: that is every buyer actively weighing
+// the deal, often a dozen at once, and working them toward a walkthrough is
+// exactly the job. "passed" doesn't either — they're free for the next deal.
+export const WORKING_INVESTOR_STATUSES = new Set(["committed"]);
 
 /**
  * investorStatus(s) → one of INVESTOR_STATUSES

@@ -555,9 +555,10 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   onPick={(c) => run(() => addDealInvestor(offer.id, { contactId: c.id, name: c.name }))} />
               </div>
               <div className="mt-1 text-[11px] text-slate-400">
-                A buyer on this deal is one you're working: the stage advances to Buyer found the moment you set
-                someone to <span className="font-semibold">committed</span>, and the Conversation AI stops texting
-                anyone here until they're marked <span className="font-semibold">passed</span>.
+                <span className="font-semibold">Evaluating</span> is everyone actively weighing the deal — the
+                Conversation AI keeps working them toward a walkthrough. <span className="font-semibold">Committed</span>
+                is the one buyer signing the assignment: it advances the stage to Buyer found and the bot stops
+                texting them.
               </div>
 
               {/* Two different questions, deliberately kept apart: whose buy

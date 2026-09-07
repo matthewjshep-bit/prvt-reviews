@@ -168,7 +168,7 @@ test("a live deal on the acquisition side puts the bot's hands in its pockets", 
   assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "" }), null);
 });
 
-test("a buyer is held by where they stand on the deal, not by being on it", async () => {
+test("only the buyer signing the assignment stands the bot down", async () => {
   const store = {
     listOffers: async () => [],
     listDeals: async () => [
@@ -180,17 +180,16 @@ test("a buyer is held by where they stand on the deal, not by being on it", asyn
       ] } },
     ],
   };
-  // Evaluating onwards means a person took it over — which is exactly what the
-  // bot's own link_deal_evaluating does when a buyer says they're interested.
-  assert.deepEqual(await liveDealHold({ store, locationId: "LOC", contactId: "c1" }),
-    { address: "22018 76th Ave W", role: "buyer", stage: "under_contract", status: "evaluating" });
-  assert.equal((await liveDealHold({ store, locationId: "LOC", contactId: "c3" }))?.status, "committed");
-  assert.equal((await liveDealHold({ store, locationId: "LOC", contactId: "c4" }))?.status, "evaluating", "a legacy 'sent' row reads as evaluating");
+  // The one who signs is off limits; everything before that is the job.
+  assert.deepEqual(await liveDealHold({ store, locationId: "LOC", contactId: "c3" }),
+    { address: "22018 76th Ave W", role: "buyer", stage: "under_contract", status: "committed" });
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c1" }), null, "evaluating is a pipeline, not a handoff");
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c4" }), null, "a legacy 'sent' row reads as evaluating");
   assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c2" }), null, "they passed — send them the next one");
   assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c9" }), null, "never linked — still the bot's to pitch");
-  // "acquisition" keeps the bot talking to buyers mid-deal.
-  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c1", mode: "acquisition" }), null);
-  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c1", mode: "off" }), null);
+  // "acquisition" keeps the bot talking to every buyer, the signer included.
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c3", mode: "acquisition" }), null);
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c3", mode: "off" }), null);
 });
 
 test("a store that cannot answer fails open — a hold is a nicety, a dropped reply is not", async () => {

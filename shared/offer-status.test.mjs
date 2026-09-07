@@ -242,5 +242,8 @@ test("a buyer's standing on a deal has three states, and the retired fourth stil
   assert.equal(investorStatus(""), "evaluating");
   assert.equal(investorStatus(undefined), "evaluating");
   assert.equal(investorStatus("nonsense"), "evaluating");
-  assert.deepEqual([...WORKING_INVESTOR_STATUSES].sort(), ["committed", "evaluating"]);
+  // Only the signer stands the bot down. Evaluating is a pipeline, often a
+  // dozen buyers deep, and working them is the job.
+  assert.deepEqual([...WORKING_INVESTOR_STATUSES], ["committed"]);
+  assert.equal(WORKING_INVESTOR_STATUSES.has("evaluating"), false);
 });

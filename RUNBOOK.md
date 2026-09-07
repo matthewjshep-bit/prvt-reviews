@@ -612,9 +612,13 @@ with the Shep Flips setup consolidated from the three GHL bots it replaces
 the agent playbook (Tier 1 = has a deal or a new property → `tier-1`, Tier 2
 = open to investors → `tier-2`, Tier 3 = passed → `tier-3`, mirroring the
 Acquisitions pipeline stages); the dispositions bot, which had been a copy of
-the acquisitions prompt, is written properly for the first time (interested →
-`investor-active` + link to the deal + a suggested dataroom link; wants to
-buy / walk it → ask-first `investor-hot` + link). **Workflows.** The bots used to drop a contact
+the acquisitions prompt, is written properly for the first time. Its goal is
+a **walkthrough** — a buyer who walks a house buys a house — so it steers
+toward "want to get eyes on it this week?", offers once and drops it rather
+than nagging, and asks which day without ever confirming a time (interested →
+`investor-active` + Tier 1 Disposition + link to the deal + a suggested
+dataroom link; wants to buy / walk it → ask-first `investor-hot` + link, so a
+person sets the actual time). **Workflows.** The bots used to drop a contact
 straight into the GHL workflows `TIER 1` / `TIER 2` / `TIER 3` (Agent
 Wholesale Automations) and `Tier 1 Disposition` / `Tier 2 Disposition`. The
 starter does the same — `add_to_workflow` on the tier rules, alongside the
@@ -646,17 +650,15 @@ to remember. Two sides:
 - the **agent or seller** on a property at `under_contract`, `buyer_found`
   or `assigned` — an accepted offer turns outreach into a negotiation you
   are handling yourself;
-- any **buyer standing at `evaluating` or `committed`** on one of those
-  deals. Not merely linked to it: `evaluating` is the mark that a person
-  took the conversation over, and it is what the bot's own
-  `link_deal_evaluating` writes when a buyer says they're interested. So the
-  bot catches the interest, replies once, files them on the deal, and then
-  stands down.
+- the one buyer marked **`committed`** on one of those deals — the person
+  signing the assignment. Past that the deal is paperwork.
 
-A buyer who **passed** is never held — they are free for the next deal and
-the bot should be able to bring them one. A buyer who was never linked is
-still the bot's to pitch: that is the dispositions blast, which tags rather
-than links. A closed or fallen-through deal releases everyone. The routing
+**`evaluating` is not a handoff.** It is every buyer actively weighing the
+deal, a dozen of them on a good blast, and working them is the job: the
+investor playbook's goal is getting them to *walk the property*, and the bot
+keeps talking to them until they sign or pass. A buyer who **passed** is free
+for the next deal. A buyer never linked is still the bot's to pitch — that is
+the blast itself, which tags rather than links. A closed or fallen-through deal releases everyone. The routing
 card's "People you're already working" can narrow this to the acquisition
 side only, or switch it off. Both checks run before the model call, so
 neither costs anything. And when a person replied to them inside the stand-down window (30
@@ -666,8 +668,10 @@ debounce (45s on the starter) and a newer text replaces the waiting job; the
 same words twice inside two minutes are one message. Each contact also has
 its own daily cap (12).
 
-**A buyer's standing on a deal** is one of three: `evaluating`, `committed`,
-`passed`. There used to be a fourth, `sent`, meaning we had shown them the
+**A buyer's standing on a deal** is one of three: `evaluating` (actively
+weighing it — many buyers at once, and the bot's to work), `committed` (the
+one who signs the assignment; advances the stage to `buyer_found` and stands
+the bot down), `passed`. There used to be a fourth, `sent`, meaning we had shown them the
 deal and heard nothing — retired, because putting a buyer on a deal *is* the
 act of shopping it to them, and "no answer yet" was already told by the blast
 tag and the dataroom invite trail. Rows written before the change still carry
