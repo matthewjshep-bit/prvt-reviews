@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pickInboundText } from "./routes/offers.js";
+import { pickInboundText, isStringifiedObject } from "./routes/offers.js";
 
 test("the text is found whichever shape GHL sends", () => {
   // The shape that broke it: the Inbound Message trigger's own payload.
@@ -47,4 +47,24 @@ test("the first candidate that actually has words wins", () => {
   // An empty object body must not shadow a real string further down.
   assert.equal(pickInboundText({ message: {}, body: "the real text" }), "the real text");
   assert.equal(pickInboundText({ message: "   ", customData: { message: "the real text" } }), "the real text");
+});
+
+test("a stringified object is never a message, whoever produced it", () => {
+  // The belt to the braces: if some other path stringifies an object again,
+  // it reads as no message and the route refuses it, rather than spending a
+  // model call and texting a real person "that came through blank on my end".
+  assert.equal(pickInboundText({ message: "[object Object]" }), "");
+  assert.equal(pickInboundText({ body: "  [object Object]  " }), "");
+  assert.equal(pickInboundText({ message: { body: "[object Object]" } }), "");
+  // A real field further down still wins over a poisoned one above it.
+  assert.equal(pickInboundText({ message: { body: "[object Object]" }, customData: { message: "is 22018 still open?" } }), "is 22018 still open?");
+
+  assert.equal(isStringifiedObject("[object Object]"), true);
+  assert.equal(isStringifiedObject("[object Promise]"), true);
+  assert.equal(isStringifiedObject(" [object Object] "), true);
+  // Must not swallow a real message that happens to mention the words.
+  assert.equal(isStringifiedObject("object oriented design"), false);
+  assert.equal(isStringifiedObject("[object Object] is what I saw on my screen"), false);
+  assert.equal(isStringifiedObject(""), false);
+  assert.equal(isStringifiedObject(null), false);
 });

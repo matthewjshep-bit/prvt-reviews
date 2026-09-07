@@ -154,9 +154,18 @@ export function pickInboundText(b) {
   };
   for (const candidate of [b.message, b.body, b.text, b.customData?.message, b.customData?.body]) {
     const v = fromAny(candidate);
-    if (v.trim()) return v;
+    if (v.trim() && !isStringifiedObject(v)) return v;
   }
   return "";
+}
+
+// The belt to pickInboundText's braces. Another caller, or a payload shape
+// GHL has yet to invent, stringifying an object again must never reach the
+// model: it costs a call and produces "that came through blank on my end"
+// addressed to a real person. Read as no message at all, which the route
+// already refuses with a 400.
+export function isStringifiedObject(v) {
+  return /^\s*\[object [A-Za-z]+\]\s*$/.test(String(v == null ? "" : v));
 }
 
 const DEAL_STAGES = ["under_contract", "buyer_found", "assigned", "closed", "fell_through"];
