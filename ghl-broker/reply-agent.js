@@ -52,7 +52,7 @@ import {
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { resolveParty } from "./conversation-party.js";
 import {
-  loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT,
+  loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold,
 } from "./conversation-context.js";
 import {
   buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext,
@@ -483,6 +483,17 @@ export function lastOutbound(transcript = "") {
 
 // A person replied to them recently and it wasn't one of ours going out:
 // they have the thread, so the bot drafts but never sends on its own.
+// Why the bot stood down, in the words the outbox and the job show.
+export function handsOffReason(a) {
+  if (a?.botOff?.length) return `bot is off for this contact (tag: ${a.botOff[0]})`;
+  if (a?.dealHold) {
+    return a.dealHold.role === "buyer"
+      ? `they are a buyer on your live deal at ${a.dealHold.address} — you are working them yourself`
+      : `you have ${a.dealHold.address} under contract with them — the bot stays out of a live deal`;
+  }
+  return "";
+}
+
 export async function humanHasThread({ store, locationId, contactId, transcript, minutes = 30, now = Date.now() }) {
   if (!minutes || !contactId) return null;
   const last = lastOutbound(transcript);
@@ -564,6 +575,11 @@ export async function assembleConversation({
     }
   }
   const botOff = matchTagPatterns(tags, config.routing.botOffTags || []);
+  // The other hands-off rule, and the one you don't have to remember to set:
+  // a property under contract means you're working this person yourself.
+  const dealHold = light ? null : await liveDealHold({
+    store, locationId, contactId, mode: config.routing.holdOnLiveDeal,
+  }).catch(() => null);
   const typed = fakeThread ? renderFakeThread(fakeThread, channel) : "";
   const transcript = [real, typed].filter(Boolean).join("\n");
 
@@ -613,7 +629,7 @@ export async function assembleConversation({
     : null;
 
   return {
-    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, humanActive,
+    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dealHold, humanActive,
     playbook, contact, contactName: name, tags, custom, transcript, context, underwriting, instructions, signer,
   };
 }
@@ -777,8 +793,9 @@ async function runProactive(job, ctx) {
     explicitParty: "agent", now, warnings, aiApiKey,
   });
   job.contactName = a.contactName;
-  if (a.botOff?.length) {
-    job.status = "held"; job.phase = ""; job.heldReason = `bot is off for this contact (tag: ${a.botOff[0]})`; job.finishedAt = new Date().toISOString();
+  const handsOff = handsOffReason(a);
+  if (handsOff) {
+    job.status = "held"; job.phase = ""; job.heldReason = handsOff; job.finishedAt = new Date().toISOString();
     return;
   }
   const { context } = a;
@@ -894,12 +911,13 @@ async function runReply(job, ctx) {
   job.partySource = a.partySource;
   job.contactName = a.contactName;
 
-  if (a.botOff?.length) {
-    // The operator turned the bot off for this contact. No draft, no note —
-    // they know.
+  const handsOff = handsOffReason(a);
+  if (handsOff) {
+    // Either the operator tagged them off, or we are mid-deal with them. No
+    // draft, no note — they know, and a note on a live deal is noise.
     job.status = "held";
     job.phase = "";
-    job.heldReason = `bot is off for this contact (tag: ${a.botOff[0]})`;
+    job.heldReason = handsOff;
     job.finishedAt = new Date().toISOString();
     return;
   }
@@ -1190,8 +1208,9 @@ export async function previewConversation({
     actions: { auto: confidence === "high" ? optOutActions(config.optOut) : [], suggested: confidence === "high" ? [] : optOutActions(config.optOut) },
   });
   if (isOptOut) return optOutView("high", "an opt-out keyword — silence, then the opt-out actions");
-  if (a.botOff?.length) {
-    return { ...base, held: true, reason: `the bot is off for this contact (tag: ${a.botOff[0]}) — nothing would be drafted` };
+  const handsOff = handsOffReason(a);
+  if (handsOff) {
+    return { ...base, held: true, reason: `${handsOff} — nothing would be drafted` };
   }
   if (party === "unknown" && config.routing.unknown === "hold") {
     return { ...base, held: true, reason: "no agent or investor tag on the contact — the run would hold with no draft" };

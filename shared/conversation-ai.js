@@ -210,6 +210,7 @@ export const actionAllowedFor = (party, type) =>
   ACTION_TYPES.includes(type) &&
   (!INTERNAL_ACTIONS.has(type) || (INTERNAL_ACTIONS_FOR[party] || []).includes(type));
 
+export const LIVE_DEAL_HOLDS = ["acquisition", "everyone", "off"];
 export const RULE_MODES = ["auto", "ask"];
 export const LENGTHS = ["short", "medium", "long"];
 export const CHANNELS = ["sms", "email"];
@@ -260,6 +261,12 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
     // The same tag the opt-out writes belongs here, so it protects twice.
     botOffTags: ["stop bot", "bot-off"],
     priority: "agent",
+    // A property you have under contract is a live negotiation you are
+    // handling yourself. The bot stays out of it: the listing agent or seller
+    // on a deal hears from you, not from it. "everyone" extends that to the
+    // buyers linked to the deal, which also silences dispositions — off by
+    // default, because talking to buyers about a deal is the point.
+    holdOnLiveDeal: "acquisition",     // "acquisition" | "everyone" | "off"
     unknown: "hold",                   // "hold" | "generic" | "classify"
     tagOnClassify: true,               // classify: stamp the party's first plain tag so next time the tags decide
     genericInstructions: "",
@@ -475,6 +482,7 @@ export function normalizeConversationAi(doc, seed = {}) {
       investorTags,
       botOffTags,
       priority: oneOf(routing.priority, PARTIES, D.routing.priority),
+      holdOnLiveDeal: oneOf(routing.holdOnLiveDeal, LIVE_DEAL_HOLDS, D.routing.holdOnLiveDeal),
       unknown: oneOf(routing.unknown, ["hold", "generic", "classify"], D.routing.unknown),
       tagOnClassify: bool(routing.tagOnClassify, D.routing.tagOnClassify),
       genericInstructions: str(routing.genericInstructions, 2000),

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildInvestorContext, buildAgentContext, investorFacingPrice, summarizeOffers, fieldLines } from "./conversation-context.js";
+import { buildInvestorContext, buildAgentContext, investorFacingPrice, summarizeOffers, fieldLines, liveDealHold } from "./conversation-context.js";
 
 const NOW = Date.parse("2026-09-04T17:00:00Z");
 const deal = (over = {}) => ({
@@ -144,4 +144,45 @@ test("what a buyer already turned down, and why, is in front of the model", () =
   // A buyer with nothing on record reads exactly as it did before.
   const clean = deal({ deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000, investors: [{ contactId: "c1", status: "evaluating" }] } });
   assert.equal(buildInvestorContext({ investor: INVESTOR, deals: [{ offer: clean }], contactId: "c1", now: NOW }).text.includes("their reason"), false);
+});
+
+/* ---------- a deal you're working yourself ---------- */
+
+test("a live deal on the acquisition side puts the bot's hands in its pockets", async () => {
+  const store = {
+    listOffers: async () => [
+      { id: "o1", address: "9 Sold St", deal: { stage: "closed" } },
+      { id: "o2", address: "22018 76th Ave W", deal: { stage: "under_contract" } },
+    ],
+    listDeals: async () => { throw new Error("should not be reached for acquisition"); },
+  };
+  assert.deepEqual(await liveDealHold({ store, locationId: "LOC", contactId: "c1" }),
+    { address: "22018 76th Ave W", role: "acquisition", stage: "under_contract" });
+  // Signed but not closed is still a live file, and the worst time for a text.
+  const assigned = { ...store, listOffers: async () => [{ id: "o3", address: "3 Elm", deal: { stage: "assigned" } }] };
+  assert.equal((await liveDealHold({ store: assigned, locationId: "LOC", contactId: "c1" }))?.role, "acquisition");
+  // A deal that died, or never was one, is not a reason to stay quiet.
+  const done = { ...store, listOffers: async () => [{ id: "o4", address: "4 Elm", deal: { stage: "fell_through" } }, { id: "o5", address: "5 Elm" }] };
+  assert.equal(await liveDealHold({ store: done, locationId: "LOC", contactId: "c1" }), null);
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c1", mode: "off" }), null);
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "" }), null);
+});
+
+test("buyers on a deal are only held when you ask, and a buyer who passed is free", async () => {
+  const store = {
+    listOffers: async () => [],
+    listDeals: async () => [
+      { id: "d1", address: "22018 76th Ave W", deal: { stage: "under_contract", investors: [{ contactId: "c1", status: "evaluating" }, { contactId: "c2", status: "passed" }] } },
+    ],
+  };
+  // The default leaves dispositions alone — talking to buyers about deals is the job.
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c1" }), null);
+  assert.deepEqual(await liveDealHold({ store, locationId: "LOC", contactId: "c1", mode: "everyone" }),
+    { address: "22018 76th Ave W", role: "buyer", stage: "under_contract" });
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c2", mode: "everyone" }), null, "they passed — send them the next one");
+});
+
+test("a store that cannot answer fails open — a hold is a nicety, a dropped reply is not", async () => {
+  const store = { listOffers: async () => { throw new Error("db down"); }, listDeals: async () => [] };
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c1" }), null);
 });

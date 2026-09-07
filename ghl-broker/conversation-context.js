@@ -174,6 +174,41 @@ export async function loadAgentContext({ store, locationId, contactId, custom = 
   return buildAgentContext({ offers: rows, custom, now, showMath });
 }
 
+/* ---------- is this a deal you are working yourself? ---------- */
+
+// A deal that is still ours to close. "assigned" counts: the paperwork is
+// signed but the file isn't closed, and a stray bot text into that window is
+// the worst kind.
+export const WORKING_DEAL_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
+
+/**
+ * liveDealHold({ store, locationId, contactId, mode }) → { address, role, stage } | null
+ *
+ * Whether the bot should keep its hands off this contact because you are in
+ * the middle of a deal with them.
+ *
+ * "acquisition" — they are the listing agent or seller on a property we have
+ * under contract. This is the default: an accepted offer turns a cold-outreach
+ * relationship into a live negotiation, and nothing about that should be
+ * answered by a bot.
+ *
+ * "everyone" — also the buyers linked to a live deal. Deliberately not the
+ * default: talking to buyers about deals is what dispositions IS.
+ */
+export async function liveDealHold({ store, locationId, contactId, mode = "acquisition" }) {
+  if (!contactId || mode === "off") return null;
+  const theirs = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
+  const mine = theirs.find((o) => o?.deal && WORKING_DEAL_STAGES.has(o.deal.stage));
+  if (mine) return { address: mine.address || "a property", role: "acquisition", stage: mine.deal.stage };
+  if (mode !== "everyone") return null;
+  const deals = await store.listDeals(locationId).catch(() => []);
+  // A buyer who already passed is not someone you're working — they're free
+  // for the next deal, and the bot should be able to send them one.
+  const on = deals.find((o) => WORKING_DEAL_STAGES.has(o?.deal?.stage) &&
+    (o.deal.investors || []).some((i) => i.contactId === contactId && i.status !== "passed"));
+  return on ? { address: on.address || "a property", role: "buyer", stage: on.deal.stage } : null;
+}
+
 /* ---------- the investor's book ---------- */
 
 // The price an investor may be quoted on a deal, and the two figures behind

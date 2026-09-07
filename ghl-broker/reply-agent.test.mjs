@@ -862,6 +862,34 @@ test("a contact carrying the bot-off tag is left alone: no draft, no note", asyn
   assert.equal(notes.length, 0);
 });
 
+test("the agent on a property you have under contract is yours, not the bot's", async () => {
+  _resetJobs();
+  const { client, notes } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => [{ id: "o1", address: "22018 76th Ave W", deal: { stage: "under_contract" } }];
+  let called = false;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "hey, quick question on the closing",
+    deps: { draft: async () => { called = true; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(job.status, "held");
+  assert.match(job.heldReason, /22018 76th Ave W under contract with them/);
+  assert.equal(called, false, "not even drafted — nothing to spend a model call on");
+  assert.equal(notes.length, 0);
+
+  // Once the file closes, they are a lead again like anyone else.
+  _resetJobs();
+  const closed = fakeStore();
+  closed.listOffers = async () => [{ id: "o1", address: "22018 76th Ave W", deal: { stage: "closed" } }];
+  const r = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store: closed, contactId: "c1", message: "got another one for you",
+    deps: { draft: async () => DRAFT },
+  });
+  await settle();
+  assert.notEqual(r.job.status, "held");
+});
+
 test("an agent reply with no fit lands in Tier 3 — unless they already have a tier", async () => {
   _resetJobs();
   const { client, tags } = ghlStubFor(["agent"]);

@@ -187,6 +187,13 @@ export function RoutingCard({ config, patch, version }) {
         <Field label="Hands-off tags" hint="A contact carrying one is yours: no draft, no send, nothing. Tag them in GHL when you take a thread over.">
           <TagList value={r.botOffTags} onChange={set("botOffTags")} placeholder="stop bot, bot-off" version={version} />
         </Field>
+        <Field label="While a deal is live" hint="A property under contract is a negotiation you are handling yourself. Buyers are the exception by default: talking to them about deals is what dispositions is for.">
+          <Select value={r.holdOnLiveDeal} onChange={set("holdOnLiveDeal")} options={[
+            ["acquisition", "Hands off the agent or seller on the deal"],
+            ["everyone", "Hands off everyone on the deal, buyers too"],
+            ["off", "Keep replying to everyone"],
+          ]} />
+        </Field>
         <Field label="If a contact carries both" hint="A buyer who is also an agent gets the playbook you pick here.">
           <Select value={r.priority} onChange={set("priority")} options={[["agent", "Treat as a listing agent"], ["investor", "Treat as an investor"]]} />
         </Field>
