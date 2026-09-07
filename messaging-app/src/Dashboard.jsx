@@ -18,6 +18,7 @@ import { fmtMoney } from "@shared/offer-calc.js";
 import {
   getDashboardSummary, getDashboardTagCounts, getDashboardMessages, getDashboardContacts, saveSettings,
 } from "./api.js";
+import ReplyStrip from "./ReplyStrip.jsx";
 
 /* ---------- palette (validated, light surface) ---------- */
 const C_TEXTS = "#2a78d6";  // blue
@@ -457,6 +458,11 @@ export default function Dashboard({ settings, onSettingsSaved }) {
 
   return (
     <div className="space-y-4">
+      {/* Replies the Conversation AI drafted, waiting on a person. Above the
+          date filter deliberately: it is today's work, not a statistic, and
+          the range picker below has nothing to do with it. Renders nothing
+          when the outbox is empty. */}
+      <ReplyStrip />
       {/* filter row — date range scopes everything below */}
       <div className="flex flex-wrap items-center gap-2">
         {RANGES.map((r) => (

@@ -549,11 +549,11 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Conversation AI</h2>
         <p className="text-xs text-slate-500">
-          The bot that answers inbound agent and investor texts has its own tab now — <strong>Conversation AI</strong>,
-          in the header. Its voice, the rules for agents and for investors, who counts as which, what it may send on
-          its own and what it triggers in GHL all live there, along with a try-it panel and the outbox. The daily cap
-          and standing instructions that used to sit here were carried over the first time the tab opened. It still
-          uses the Anthropic key above.
+          The bot that answers inbound agent and investor texts lives on the <strong>Overview</strong> page, under its
+          own <strong>Conversation AI</strong> tab. Its voice, the rules for agents and for investors, who counts as
+          which, what it may send on its own and what it triggers in GHL all live there, along with a try-it panel,
+          the outbox and the off switch. The daily cap and standing instructions that used to sit here were carried
+          over the first time the tab opened. It still uses the Anthropic key above, saved here.
         </p>
         <div className="mt-3">
           <ConversationTryIt compact />

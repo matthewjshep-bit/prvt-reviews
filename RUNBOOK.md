@@ -535,8 +535,9 @@ An agent texts "still interested in 12 Elm?"; an investor texts "what's the
 price on 54th?". A GHL workflow hands each text to the broker, which works out
 **who is texting** from their tags, reads **the right record book** — the
 offer book for a listing agent, the deal book and buy box for an investor —
-and drafts what we would say in the voice set on the console's
-**Conversation AI** tab. A draft waits in the outbox for a person, or, for the
+and drafts what we would say in the voice set on the **Conversation AI** tab
+of the Overview app (`/dashboard`, `VITE_APP_MODE=dashboard`) — deliberately
+not in the offers console, where the outbox banner buried the offer table. A draft waits in the outbox for a person, or, for the
 intents that tab has cleared, counts down a few human minutes and sends
 itself. It can also **trigger things in GHL** on what it hears.
 
@@ -640,7 +641,15 @@ never as surveillance. Each draft row and its note say what was filed.
 
 **Hands off.** A contact carrying a hands-off tag (`stop bot`, `bot-off` on
 the starter — the same tag the opt-out writes) gets no draft, no send, no
-note. And when a person replied to them inside the stand-down window (30
+note. So does the agent or seller on a property you have **under contract**
+(`under_contract`, `buyer_found`, `assigned`): an accepted offer turns
+outreach into a negotiation you are handling yourself, and that needs no tag
+to remember. The routing card's "While a deal is live" can widen this to
+everyone on the deal — buyers included, which silences dispositions on that
+deal, so it is off by default — or switch it off. A buyer who already passed
+is never held; they are free for the next one. A closed or fallen-through
+deal releases everyone. Both checks run before the model call, so neither
+costs anything. And when a person replied to them inside the stand-down window (30
 min), the bot drafts but never sends itself: the row says "you replied to them
 N minutes ago". Three texts in a row are one reply: the draft waits the
 debounce (45s on the starter) and a newer text replaces the waiting job; the
@@ -736,7 +745,8 @@ for an agent's new property, text an investor a dataroom link. A rule runs
 click. A dataroom link is always ask-first. Every outcome is recorded on the
 draft and in the contact note.
 
-**Try it.** A chat window, on the tab and inside Settings → Conversation AI,
+**Try it.** A chat window, on the tab and inside the offers console's
+Settings → Conversation AI,
 in the shape of GHL's own "Test your agent": pick a real contact (every reply
 then has their real thread, offers, deals and buy box behind it) or talk to
 it cold as an agent or an investor, text as the lead would, and read the

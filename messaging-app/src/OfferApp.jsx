@@ -64,19 +64,24 @@ const NAV =
         { view: "settings", label: "Settings" },
       ]
     : APP_MODE === "dashboard"
-    ? [{ view: "dashboard", label: "Dashboard" }]
+    // Conversation AI lives here rather than in the offers console: its outbox
+    // is a standing to-do list, and two banners sitting above the offer table
+    // pushed the day's actual work below the fold.
+    ? [
+        { view: "dashboard", label: "Overview" },
+        { view: "conversation", label: "Conversation AI" },
+      ]
     : APP_MODE === "deals"
     ? [{ view: "deals", label: "Deals" }]
     : [
         { view: "history", label: "Offers" },
         { view: "deals", label: "Deals" },
-        { view: "conversation", label: "Conversation AI" },
         { view: "settings", label: "Settings" },
       ];
 
 const APP_TITLE =
   APP_MODE === "outreach" ? "Agent Outreach"
-  : APP_MODE === "dashboard" ? "Dashboard"
+  : APP_MODE === "dashboard" ? "Overview"
   : APP_MODE === "deals" ? "Deals"
   : APP_MODE === "dispo" ? "Dispositions"
   : "Offer Generator";
