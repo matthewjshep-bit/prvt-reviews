@@ -12,6 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { pickInboundText, isStringifiedObject } from "./routes/offers.js";
 
 test("the text is found whichever shape GHL sends", () => {
@@ -67,4 +68,18 @@ test("a stringified object is never a message, whoever produced it", () => {
   assert.equal(isStringifiedObject("[object Object] is what I saw on my screen"), false);
   assert.equal(isStringifiedObject(""), false);
   assert.equal(isStringifiedObject(null), false);
+});
+
+test("every webhook actually calls the extractor, not String() on the raw field", async () => {
+  // This test exists because the fix shipped twice without working. Both the
+  // underwrite and the conversation handler had the identical line
+  // `String(b.message || b.body || …)`, a one-occurrence replace patched the
+  // first one, and the unit tests above stayed green the whole time — they
+  // proved the helper worked, not that anybody called it.
+  const src = await readFile(new URL("./routes/offers.js", import.meta.url), "utf8");
+  const raw = src.match(/String\(\s*b\.message\b[^)]*\)/g) || [];
+  assert.deepEqual(raw, [], `read the message through pickInboundText, not String(b.message …): ${raw.join(" / ")}`);
+  // Both webhooks read it the same way.
+  assert.equal((src.match(/=\s*pickInboundText\(b\)|:\s*pickInboundText\(b\)/g) || []).length, 3,
+    "the underwrite webhook, the conversation webhook and the try-it route all extract the text the same way");
 });

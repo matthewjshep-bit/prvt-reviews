@@ -3521,7 +3521,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         b.contactId || b.contact_id || b.contact?.id || b.customData?.contact_id || ""
       ).slice(0, 64);
       if (!contactId) return res.status(400).json({ error: "contact_id required" });
-      const message = String(b.message || b.body || b.customData?.message || "").slice(0, 4000);
+      const message = pickInboundText(b).slice(0, 4000);
       // A photo with no words arrives as an empty body plus attachments —
       // GHL exposes them as a list, a URL string, or a count depending on
       // the trigger. Any of those is enough to know there was one.
@@ -3657,7 +3657,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const out = await previewConversation({
         client, locationId, saved, store,
         contactId: String(b.contactId || "").slice(0, 64),
-        message: String(b.message || "").slice(0, 4000),
+        message: pickInboundText(b).slice(0, 4000),
         attachments: countAttachments(b.attachments),
         channel: String(b.channel || "").toLowerCase().includes("email") ? "email" : "sms",
         explicitParty: "", fakeParty: ["agent", "investor"].includes(b.party) ? b.party : "",
