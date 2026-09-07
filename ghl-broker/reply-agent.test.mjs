@@ -890,6 +890,44 @@ test("the agent on a property you have under contract is yours, not the bot's", 
   assert.notEqual(r.job.status, "held");
 });
 
+test("the bot catches a buyer's interest, then hands the deal to you", async () => {
+  // A buyer nobody has linked yet is the bot's to pitch: this is the blast.
+  _resetJobs();
+  const { client } = ghlStubFor(["investor"]);
+  const store = fakeStore();
+  const investors = [];
+  store.listDeals = async () => [{ id: "o1", address: "22018 76th Ave W", deal: { stage: "under_contract", investors } }];
+  const first = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "yeah I'm interested, send it over",
+    deps: { draft: async () => DRAFT },
+  });
+  await settle();
+  assert.notEqual(first.job.status, "held", "nobody is working them yet");
+
+  // link_deal_evaluating has now put them on the deal. The next text is yours.
+  _resetJobs();
+  investors.push({ contactId: "c1", status: "evaluating" });
+  let drafted = false;
+  const second = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "what's the ARV on that again?",
+    deps: { draft: async () => { drafted = true; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(second.job.status, "held");
+  assert.match(second.job.heldReason, /buyer on your live deal at 22018 76th Ave W/);
+  assert.equal(drafted, false);
+
+  // They pass, and they are the bot's again for the next deal.
+  _resetJobs();
+  investors[0].status = "passed";
+  const third = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "anything else in that pocket?",
+    deps: { draft: async () => DRAFT },
+  });
+  await settle();
+  assert.notEqual(third.job.status, "held");
+});
+
 test("an agent reply with no fit lands in Tier 3 — unless they already have a tier", async () => {
   _resetJobs();
   const { client, tags } = ghlStubFor(["agent"]);

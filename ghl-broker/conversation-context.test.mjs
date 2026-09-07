@@ -125,7 +125,7 @@ test("a dispo blast tag is recognised as 'sent to them', and a finished deal is 
       { offer: deal({ id: "u", address: "2 Unseen St, Seattle, WA 98105", deal: { stage: "closed", contractPrice: 1, assignmentFee: 1, investors: [] } }) },
     ],
   });
-  assert.match(ctx.text, /DEALS THEY ARE ALREADY ON \(sent to them, or they asked\):\n- 2010 NE 54th St.*they are sent it, no answer yet/);
+  assert.match(ctx.text, /DEALS THEY ARE ALREADY ON \(sent to them, or they asked\):\n- 2010 NE 54th St.*we sent them this one, no answer yet/);
   assert.match(ctx.text, /NO LONGER AVAILABLE.*\n- 1 Gone St.*assigned to another buyer/);
   assert.equal(ctx.text.includes("Unseen St"), false, "a finished deal they never saw isn't mentioned");
   assert.equal(ctx.summary.goneDeals, 1);
@@ -168,18 +168,29 @@ test("a live deal on the acquisition side puts the bot's hands in its pockets", 
   assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "" }), null);
 });
 
-test("buyers on a deal are only held when you ask, and a buyer who passed is free", async () => {
+test("a buyer is held by where they stand on the deal, not by being on it", async () => {
   const store = {
     listOffers: async () => [],
     listDeals: async () => [
-      { id: "d1", address: "22018 76th Ave W", deal: { stage: "under_contract", investors: [{ contactId: "c1", status: "evaluating" }, { contactId: "c2", status: "passed" }] } },
+      { id: "d1", address: "22018 76th Ave W", deal: { stage: "under_contract", investors: [
+        { contactId: "c1", status: "evaluating" },
+        { contactId: "c2", status: "passed" },
+        { contactId: "c3", status: "committed" },
+        { contactId: "c4", status: "sent" },        // written before the status was retired
+      ] } },
     ],
   };
-  // The default leaves dispositions alone — talking to buyers about deals is the job.
-  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c1" }), null);
-  assert.deepEqual(await liveDealHold({ store, locationId: "LOC", contactId: "c1", mode: "everyone" }),
-    { address: "22018 76th Ave W", role: "buyer", stage: "under_contract" });
-  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c2", mode: "everyone" }), null, "they passed — send them the next one");
+  // Evaluating onwards means a person took it over — which is exactly what the
+  // bot's own link_deal_evaluating does when a buyer says they're interested.
+  assert.deepEqual(await liveDealHold({ store, locationId: "LOC", contactId: "c1" }),
+    { address: "22018 76th Ave W", role: "buyer", stage: "under_contract", status: "evaluating" });
+  assert.equal((await liveDealHold({ store, locationId: "LOC", contactId: "c3" }))?.status, "committed");
+  assert.equal((await liveDealHold({ store, locationId: "LOC", contactId: "c4" }))?.status, "evaluating", "a legacy 'sent' row reads as evaluating");
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c2" }), null, "they passed — send them the next one");
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c9" }), null, "never linked — still the bot's to pitch");
+  // "acquisition" keeps the bot talking to buyers mid-deal.
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c1", mode: "acquisition" }), null);
+  assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c1", mode: "off" }), null);
 });
 
 test("a store that cannot answer fails open — a hold is a nicety, a dropped reply is not", async () => {

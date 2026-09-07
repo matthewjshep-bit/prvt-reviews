@@ -641,20 +641,40 @@ never as surveillance. Each draft row and its note say what was filed.
 
 **Hands off.** A contact carrying a hands-off tag (`stop bot`, `bot-off` on
 the starter — the same tag the opt-out writes) gets no draft, no send, no
-note. So does the agent or seller on a property you have **under contract**
-(`under_contract`, `buyer_found`, `assigned`): an accepted offer turns
-outreach into a negotiation you are handling yourself, and that needs no tag
-to remember. The routing card's "While a deal is live" can widen this to
-everyone on the deal — buyers included, which silences dispositions on that
-deal, so it is off by default — or switch it off. A buyer who already passed
-is never held; they are free for the next one. A closed or fallen-through
-deal releases everyone. Both checks run before the model call, so neither
-costs anything. And when a person replied to them inside the stand-down window (30
+note. So does anyone you are actively working a deal with, which needs no tag
+to remember. Two sides:
+
+- the **agent or seller** on a property at `under_contract`, `buyer_found`
+  or `assigned` — an accepted offer turns outreach into a negotiation you
+  are handling yourself;
+- any **buyer standing at `evaluating` or `committed`** on one of those
+  deals. Not merely linked to it: `evaluating` is the mark that a person
+  took the conversation over, and it is what the bot's own
+  `link_deal_evaluating` writes when a buyer says they're interested. So the
+  bot catches the interest, replies once, files them on the deal, and then
+  stands down.
+
+A buyer who **passed** is never held — they are free for the next deal and
+the bot should be able to bring them one. A buyer who was never linked is
+still the bot's to pitch: that is the dispositions blast, which tags rather
+than links. A closed or fallen-through deal releases everyone. The routing
+card's "People you're already working" can narrow this to the acquisition
+side only, or switch it off. Both checks run before the model call, so
+neither costs anything. And when a person replied to them inside the stand-down window (30
 min), the bot drafts but never sends itself: the row says "you replied to them
 N minutes ago". Three texts in a row are one reply: the draft waits the
 debounce (45s on the starter) and a newer text replaces the waiting job; the
 same words twice inside two minutes are one message. Each contact also has
 its own daily cap (12).
+
+**A buyer's standing on a deal** is one of three: `evaluating`, `committed`,
+`passed`. There used to be a fourth, `sent`, meaning we had shown them the
+deal and heard nothing — retired, because putting a buyer on a deal *is* the
+act of shopping it to them, and "no answer yet" was already told by the blast
+tag and the dataroom invite trail. Rows written before the change still carry
+it and read as `evaluating`; there is no migration. Adding a buyer to a deal
+by hand now starts them at `evaluating`, which also stands the bot down for
+them.
 
 **Catch-all and status.** Each playbook has a fallback that runs when no
 intent rule matched, unless the contact already carries one of its tags: on

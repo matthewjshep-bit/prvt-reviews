@@ -167,6 +167,33 @@ export const STATUS_HISTORY_PHRASE = {
 // location instead of the newest hundred. Anything that needs the whole
 // document (the popout, the editor, the PSA/contract/net-sheet generators)
 // re-fetches it by id.
+/* ---------- where a buyer stands on a deal ---------- */
+
+// Three states, in the order a buyer moves through them. There used to be a
+// fourth, "sent", meaning we'd shown them the deal and heard nothing — but
+// putting someone on a deal IS the act of shopping it to them, and the
+// no-answer case was already covered by the blast tag and the dataroom
+// invite trail. It bought a status and paid for it in ambiguity: nothing
+// could tell "not answered yet" from "we never asked".
+export const INVESTOR_STATUSES = ["evaluating", "committed", "passed"];
+// Being on a deal at one of these means a person is working them, so the
+// Conversation AI stands down. "passed" does not: they're free for the next
+// deal and the bot should be able to bring them one.
+export const WORKING_INVESTOR_STATUSES = new Set(["evaluating", "committed"]);
+
+/**
+ * investorStatus(s) → one of INVESTOR_STATUSES
+ *
+ * Reads the legacy "sent" as "evaluating". Deals written before the status
+ * was retired still carry it, and there is no migration: a buyer we'd sent
+ * a deal to was being worked, which is what evaluating means.
+ */
+export function investorStatus(s) {
+  const v = String(s || "").trim().toLowerCase();
+  if (v === "sent") return "evaluating";
+  return INVESTOR_STATUSES.includes(v) ? v : "evaluating";
+}
+
 export const OFFER_LIST_FIELDS = [
   "id", "locationId", "contactId", "contactName", "address", "cashAmount",
   "status", "statusAt", "statusNote", "deal", "sends", "ghl", "warnings",

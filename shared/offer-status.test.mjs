@@ -33,6 +33,7 @@ import {
   statusAfterSend,
   statusAfterUnpromote,
   toListOffer,
+  INVESTOR_STATUSES, WORKING_INVESTOR_STATUSES, investorStatus,
 } from "./offer-status.js";
 
 const iso = (d) => d.toISOString();
@@ -227,4 +228,19 @@ test("the audit stamp survives the lean row — the table can see provenance", (
   assert.equal(isAiGenerated(row), true);
   assert.equal(needsAiReview(row), true);
   assert.equal(row.snapshot, undefined);
+});
+
+test("a buyer's standing on a deal has three states, and the retired fourth still reads", () => {
+  assert.deepEqual(INVESTOR_STATUSES, ["evaluating", "committed", "passed"]);
+  // Deals written before "sent" was retired carry it. A buyer we'd sent a deal
+  // to was being worked, which is what evaluating means — so no migration.
+  assert.equal(investorStatus("sent"), "evaluating");
+  assert.equal(investorStatus("committed"), "committed");
+  assert.equal(investorStatus("PASSED"), "passed");
+  // Anything unreadable lands on the state that holds the bot back rather than
+  // the one that lets it loose.
+  assert.equal(investorStatus(""), "evaluating");
+  assert.equal(investorStatus(undefined), "evaluating");
+  assert.equal(investorStatus("nonsense"), "evaluating");
+  assert.deepEqual([...WORKING_INVESTOR_STATUSES].sort(), ["committed", "evaluating"]);
 });

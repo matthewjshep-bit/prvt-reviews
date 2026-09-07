@@ -176,8 +176,17 @@ export async function draftReply({
       // impossible, and the server-side fallback removes the failure mode.
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
-      system,
-      output_config: { format: { type: "json_schema", schema: schemaFor(party, { outbound }) } },
+      // The system prompt is the same bytes for every draft this location
+      // sends to this party on this channel, so it caches. Replies to a blast
+      // arrive in a wave; each one after the first reads the persona, the
+      // playbook, the house rules and the examples at a tenth of the price.
+      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+      // Answering a text is not a reasoning problem. The default (high) buys
+      // thinking this job has no use for and bills it as output.
+      output_config: {
+        effort: "medium",
+        format: { type: "json_schema", schema: schemaFor(party, { outbound }) },
+      },
       messages: [{ role: "user", content: [{ type: "text", text: user }] }],
     });
   } catch (e) {
@@ -247,7 +256,11 @@ export async function classifyParty({ contact = {}, transcript = "", message = "
   try {
     response = await client.beta.messages.create({
       model: "claude-sonnet-5",
-      max_tokens: 400,
+      // Adaptive thinking is on whenever `thinking` is omitted, and 400 was a
+      // ceiling from before that — enough reasoning to run past it and hand
+      // back truncated JSON. Low effort for a three-way call, and room to land.
+      max_tokens: 1200,
+      output_config: { effort: "low" },
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       system: CLASSIFY_SYSTEM,
@@ -256,6 +269,11 @@ export async function classifyParty({ contact = {}, transcript = "", message = "
     });
   } catch (e) {
     throw anthropicErrorToHttp(e);
+  }
+  // A truncated classification is unparseable JSON; unknown is the honest
+  // answer and routing already knows what to do with it.
+  if (response.stop_reason === "max_tokens" || response.stop_reason === "refusal") {
+    return { party: "unknown", confidence: "low", reason: "classification did not complete" };
   }
   const raw = response.content.find((b) => b.type === "text")?.text || "{}";
   const p = JSON.parse(raw);

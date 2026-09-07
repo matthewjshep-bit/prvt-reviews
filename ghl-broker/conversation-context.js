@@ -12,7 +12,7 @@
 // The loaders do I/O; the builders are pure and tested.
 
 import { fmtMoney } from "./shared/offer-calc.js";
-import { effectiveStatus } from "./shared/offer-status.js";
+import { effectiveStatus, investorStatus, WORKING_INVESTOR_STATUSES } from "./shared/offer-status.js";
 import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybox.js";
 import { dealToQuery } from "./dispo.js";
 import { dealNumbers } from "./dataroom.js";
@@ -182,31 +182,47 @@ export async function loadAgentContext({ store, locationId, contactId, custom = 
 export const WORKING_DEAL_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
 
 /**
- * liveDealHold({ store, locationId, contactId, mode }) → { address, role, stage } | null
+ * liveDealHold({ store, locationId, contactId, mode }) → { address, role, stage, status? } | null
  *
- * Whether the bot should keep its hands off this contact because you are in
- * the middle of a deal with them.
+ * Whether the bot should keep its hands off this contact because a person is
+ * in the middle of a deal with them.
  *
- * "acquisition" — they are the listing agent or seller on a property we have
- * under contract. This is the default: an accepted offer turns a cold-outreach
- * relationship into a live negotiation, and nothing about that should be
- * answered by a bot.
+ * Two sides, and they hold for different reasons:
  *
- * "everyone" — also the buyers linked to a live deal. Deliberately not the
- * default: talking to buyers about deals is what dispositions IS.
+ * ACQUISITION — the listing agent or seller on a property we have under
+ * contract. An accepted offer turns cold outreach into a live negotiation,
+ * and none of that should be answered by a bot.
+ *
+ * BUYERS — held by their standing on the deal, not by being linked to it.
+ * Being on the deal at "evaluating" or "committed" means a person took the
+ * conversation over, which is exactly what the bot's own link_deal_evaluating
+ * does when a buyer says they're interested: it catches the interest, then
+ * hands off. A buyer who passed is free again, and one who was never linked
+ * is still the bot's to pitch — that is the whole dispositions blast.
+ *
+ * `mode`: "working" (both sides, the default) | "acquisition" (that side
+ * only, so the bot keeps talking to buyers mid-deal) | "off".
  */
-export async function liveDealHold({ store, locationId, contactId, mode = "acquisition" }) {
+export async function liveDealHold({ store, locationId, contactId, mode = "working" }) {
   if (!contactId || mode === "off") return null;
   const theirs = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   const mine = theirs.find((o) => o?.deal && WORKING_DEAL_STAGES.has(o.deal.stage));
   if (mine) return { address: mine.address || "a property", role: "acquisition", stage: mine.deal.stage };
-  if (mode !== "everyone") return null;
+  if (mode !== "working") return null;
   const deals = await store.listDeals(locationId).catch(() => []);
-  // A buyer who already passed is not someone you're working — they're free
-  // for the next deal, and the bot should be able to send them one.
-  const on = deals.find((o) => WORKING_DEAL_STAGES.has(o?.deal?.stage) &&
-    (o.deal.investors || []).some((i) => i.contactId === contactId && i.status !== "passed"));
-  return on ? { address: on.address || "a property", role: "buyer", stage: on.deal.stage } : null;
+  let found = null;
+  for (const o of deals) {
+    if (!WORKING_DEAL_STAGES.has(o?.deal?.stage)) continue;
+    const link = (o.deal.investors || []).find((i) => i.contactId === contactId);
+    if (!link) continue;
+    const status = investorStatus(link.status);
+    if (!WORKING_INVESTOR_STATUSES.has(status)) continue;
+    // Committed outranks evaluating: if they are the buyer on one deal and
+    // browsing another, say the one that matters.
+    if (!found || status === "committed") found = { address: o.address || "a property", role: "buyer", stage: o.deal.stage, status };
+    if (status === "committed") break;
+  }
+  return found;
 }
 
 /* ---------- the investor's book ---------- */
@@ -237,7 +253,11 @@ const dealLine = (d) => {
     d.arv ? `ARV ${fmtMoney(d.arv)}` : "",
     d.repairs ? `est. repairs ${fmtMoney(d.repairs)}` : "",
   ].filter(Boolean).join(", ");
-  const status = d.linkStatus ? ` — they are ${d.linkStatus === "sent" ? "sent it, no answer yet" : d.linkStatus}` : "";
+  // "blasted" is not a status on the deal — it means the dispo tag says the
+  // deal went out to them and nothing has come back.
+  const status = d.linkStatus
+    ? ` — ${d.linkStatus === "blasted" ? "we sent them this one, no answer yet" : `they are ${d.linkStatus}`}`
+    : "";
   // Why they said no last time. The point of carrying it: don't re-pitch the
   // same objection back at them as if they never raised it.
   const said = d.reason ? ` — their reason: ${d.reason}` : "";
@@ -297,7 +317,7 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
     const n = investorFacingPrice({ offer, room, settings });
     const row = {
       address: offer.address || "a property", stage: offer.deal.stage,
-      linkStatus: link?.status || (blasted ? "sent" : null), blasted,
+      linkStatus: link ? investorStatus(link.status) : (blasted ? "blasted" : null), blasted,
       price: n.price, arv: n.arv, repairs: n.repairs, invite: room ? inviteByRoom.get(room.id) || null : null,
       offerId: offer.id, reason: reasonWords(link?.reason),
     };
@@ -321,7 +341,7 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
 
   const fields = fieldLines(custom, INVESTOR_FIELD_KEYS);
   const history = historyTail(investor.dealHistory || custom.investor_deal_history);
-  const standing = { committed: "they were the buyer", passed: "they passed on it", evaluating: "they were looking at it", sent: "it was sent to them" };
+  const standing = { committed: "they were the buyer", passed: "they passed on it", evaluating: "they were looking at it" };
   const goneLines = gone.slice(0, 3).map((g) => `- ${g.address}: ${GONE_WORD[g.stage] || g.stage}${g.theirs && standing[g.theirs] ? ` — ${standing[g.theirs]}` : ""}${g.reason ? ` (${g.reason})` : ""}`);
   const text = [
     `INVESTOR PROFILE (their buy box, as we understand it):\n${profile}`,

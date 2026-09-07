@@ -61,6 +61,7 @@ import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../
 import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
+  INVESTOR_STATUSES, investorStatus,
 } from "../shared/offer-status.js";
 import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, buildNetSheetDocument, moneyInWords } from "../offer-doc.js";
 import { renderContractPdf } from "../contract-pdf.js";
@@ -137,7 +138,6 @@ const ALL_STATUS_TAGS = Object.values(OFFER_STATUS_TAGS);
 // stageHistory records the true sequence for KPI math.
 const DEAL_STAGES = ["under_contract", "buyer_found", "assigned", "closed", "fell_through"];
 const LIVE_DEAL_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
-const INVESTOR_STATUSES = ["sent", "evaluating", "passed", "committed"];
 // First entry wins: APP_ORIGIN may list several allowed CORS origins (broker.js
 // splits it), but a deep link written onto a contact has to name exactly one.
 const APP_ORIGIN = (process.env.APP_ORIGIN || "").split(",")[0].trim().replace(/\/$/, "");
@@ -944,7 +944,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           }
           if (type === "investor") {
             const inv = (d.investors || []).find((i) => i.contactId === req.params.id);
-            if (inv) authLines.push(historyLine(inv.updatedAt || inv.addedAt, o.address, inv.status || "sent"));
+            if (inv) authLines.push(historyLine(inv.updatedAt || inv.addedAt, o.address, investorStatus(inv.status)));
           }
         }
         if (type === "agent") {
@@ -3070,11 +3070,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         catch { name = contactId; }
       }
       const ts = new Date().toISOString();
-      offer.deal.investors.push({ contactId, name, status: "sent", addedAt: ts, updatedAt: ts });
+      // Putting a buyer on a deal IS shopping it to them, so they start as
+      // evaluating. That also stands the bot down for them — the deal is
+      // yours to work from here.
+      offer.deal.investors.push({ contactId, name, status: "evaluating", addedAt: ts, updatedAt: ts });
       offer.deal.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
       await appendDealHistory(client, locationId, contactId, "investor_deal_history",
-        historyLine(ts, offer.address, "sent"));
+        historyLine(ts, offer.address, "evaluating"));
       await syncInvestorDealTag(client, locationId, contactId);
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
@@ -3087,8 +3090,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // about — their recent messages are searched for each deal's street line,
   // in both spelled-out and USPS-abbreviated forms — and links them as an
   // "evaluating" investor: the same write the Deals UI makes, deal-history
-  // stamp and tag sync included. Idempotent: already linked as "sent"
-  // advances to "evaluating"; any other existing status is left alone.
+  // stamp and tag sync included. Idempotent: a buyer already on the deal is
+  // left where they are, unless they had passed and have come back around.
   // Auth is the standard location gate (location_id + location_key in the
   // webhook URL's query string).
   /* ---------- automation: underwrite an inbound text into an offer ---------- */
@@ -3692,10 +3695,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     offer.deal.investors = offer.deal.investors || [];
     const ts = new Date().toISOString();
     const existing = offer.deal.investors.find((i) => i.contactId === contactId);
-    if (existing && existing.status !== "sent") {
-      return { ok: true, linked: true, unchanged: true, offerId: offer.id, address: offer.address, status: existing.status };
-    }
     if (existing) {
+      // Already on the deal. A buyer who passed and came back is evaluating
+      // again; anyone else is left exactly where a person put them.
+      const was = investorStatus(existing.status);
+      if (was !== "passed") return { ok: true, linked: true, unchanged: true, offerId: offer.id, address: offer.address, status: was };
       existing.status = "evaluating";
       existing.updatedAt = ts;
     } else {

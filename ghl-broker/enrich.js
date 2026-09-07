@@ -478,7 +478,7 @@ export async function runEnrichment({ contact, currentFields, currentTags, trans
 /* ---------- deal investor suggestions ---------- */
 
 // Same vocabulary as the deal endpoints (routes/offers.js) and DealsView.
-const DEAL_INVESTOR_STATUSES = ["sent", "evaluating", "passed", "committed"];
+const DEAL_INVESTOR_STATUSES = ["evaluating", "committed", "passed"];
 
 // Given one deal and a set of investor candidates with recent-conversation
 // snippets, ask Claude which of them show evidence of interest in / active

@@ -9,6 +9,7 @@ import {
   ExternalLink, FileText, Loader2, Lock, Paperclip, Pencil, Sparkles, Target, Trash2, Upload, X,
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
+import { INVESTOR_STATUSES, investorStatus } from "@shared/offer-status.js";
 import { summarizeFeedback } from "@shared/conversation-ai.js";
 import {
   addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
@@ -30,9 +31,7 @@ import {
 export { DEAL_STAGES, STAGE, StagePill };
 const TERMINAL = new Set(["closed", "fell_through"]);
 
-const INVESTOR_STATUSES = ["sent", "evaluating", "passed", "committed"];
 const STATUS_DOT = {
-  sent: "bg-slate-400",
   evaluating: "bg-blue-500",
   passed: "bg-red-400",
   committed: "bg-emerald-500",
@@ -40,10 +39,10 @@ const STATUS_DOT = {
 
 // Display order everywhere investors are listed: hottest first, passed last,
 // alphabetical within a status so the list is stable as statuses change.
-const STATUS_ORDER = { committed: 0, evaluating: 1, sent: 2, passed: 3 };
+const STATUS_ORDER = { committed: 0, evaluating: 1, passed: 2 };
 const sortInvestors = (list) =>
   [...(list || [])].sort((a, b) =>
-    (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) ||
+    (STATUS_ORDER[investorStatus(a.status)] ?? 9) - (STATUS_ORDER[investorStatus(b.status)] ?? 9) ||
     String(a.name || "").localeCompare(String(b.name || "")));
 
 // yyyy-mm-dd parsed as a LOCAL date (same convention as the contract PDFs) so
@@ -76,14 +75,14 @@ const shortDate = (iso) =>
 function InvestorSummary({ deal }) {
   const inv = deal.investors || [];
   if (!inv.length) return <span className="text-xs text-slate-400">none yet</span>;
-  const live = inv.filter((i) => i.status !== "passed").length;
-  const committed = inv.some((i) => i.status === "committed");
+  const live = inv.filter((i) => investorStatus(i.status) !== "passed").length;
+  const committed = inv.some((i) => investorStatus(i.status) === "committed");
   return (
-    <span title={sortInvestors(inv).map((i) => `${i.name} — ${i.status}`).join("\n")}
+    <span title={sortInvestors(inv).map((i) => `${i.name} — ${investorStatus(i.status)}`).join("\n")}
       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${
         committed ? "bg-emerald-100 text-emerald-900" : "bg-slate-100 text-slate-700"
       }`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${committed ? STATUS_DOT.committed : STATUS_DOT.sent}`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${committed ? STATUS_DOT.committed : STATUS_DOT.evaluating}`} />
       {committed ? "buyer committed" : `${live} of ${inv.length} live`}
     </span>
   );
@@ -402,7 +401,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   async function addSuggested(s) {
     const r = await run(() => addDealInvestor(offer.id, { contactId: s.contactId, name: s.name }));
     if (!r?.ok) return;
-    if (s.status && s.status !== "sent") await run(() => updateDealInvestor(offer.id, s.contactId, s.status));
+    if (s.status && s.status !== "evaluating") await run(() => updateDealInvestor(offer.id, s.contactId, s.status));
     setSuggest((v) => (v?.suggestions ? { ...v, suggestions: v.suggestions.filter((x) => x.contactId !== s.contactId) } : v));
   }
   const inputCls = "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -526,11 +525,11 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   <div key={i.contactId} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5">
                     <a href={ghlContactUrl(i.contactId)} target="_blank" rel="noreferrer"
                       className="inline-flex min-w-0 items-center gap-1 text-sm font-medium underline decoration-slate-300 underline-offset-2 hover:text-slate-900">
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[i.status] || "bg-slate-400"}`} />
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[investorStatus(i.status)] || "bg-slate-400"}`} />
                       <span className="truncate">{i.name}</span> <ExternalLink size={11} className="shrink-0 text-slate-400" />
                     </a>
                     <span className="flex shrink-0 items-center gap-1">
-                      <select value={i.status} disabled={busy}
+                      <select value={investorStatus(i.status)} disabled={busy}
                         onChange={(e) => run(() => updateDealInvestor(offer.id, i.contactId, e.target.value))}
                         className="rounded-md border border-slate-300 px-1.5 py-1 text-xs focus:border-blue-500 focus:outline-none">
                         {INVESTOR_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -556,8 +555,9 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   onPick={(c) => run(() => addDealInvestor(offer.id, { contactId: c.id, name: c.name }))} />
               </div>
               <div className="mt-1 text-[11px] text-slate-400">
-                Set an investor to <span className="font-semibold">committed</span> when they take the deal —
-                the stage advances to Buyer found automatically.
+                A buyer on this deal is one you're working: the stage advances to Buyer found the moment you set
+                someone to <span className="font-semibold">committed</span>, and the Conversation AI stops texting
+                anyone here until they're marked <span className="font-semibold">passed</span>.
               </div>
 
               {/* Two different questions, deliberately kept apart: whose buy
