@@ -7,9 +7,9 @@
 // draft looks and behaves the same wherever you meet it.
 
 import React, { useEffect, useState } from "react";
-import { AlertTriangle, Check, Clock, Loader2, Pause, Play, Send } from "lucide-react";
+import { AlertTriangle, Check, Clock, ExternalLink, Loader2, Pause, Play, Send } from "lucide-react";
 import { INTENT_LABEL, PARTY_LABEL, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
-import { applyDraftAction, dismissReplyDraft, holdReplyDraft, sendReplyDraft } from "./api.js";
+import { applyDraftAction, dismissReplyDraft, ghlContactUrl, holdReplyDraft, sendReplyDraft } from "./api.js";
 import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
 
 export const LIVE = new Set(["queued", "running"]);
@@ -135,7 +135,18 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
           : d.autoSendable
           ? <Check size={14} className="shrink-0 text-emerald-600" />
           : <AlertTriangle size={14} className="shrink-0 text-amber-600" />}
-        <span className="font-semibold text-slate-900">{d.contactName || "Unknown contact"}</span>
+        {/* Straight through to the contact in GHL: the row tells you what was
+            said, the record tells you everything else. */}
+        {d.contactId ? (
+          <a href={ghlContactUrl(d.contactId)} target="_blank" rel="noreferrer"
+            title="Open this contact in GoHighLevel"
+            className="inline-flex items-center gap-1 font-semibold text-slate-900 underline decoration-slate-300 underline-offset-2 hover:text-blue-700 hover:decoration-blue-400">
+            {d.contactName || "Unknown contact"}
+            <ExternalLink size={11} className="shrink-0 text-slate-400" />
+          </a>
+        ) : (
+          <span className="font-semibold text-slate-900">{d.contactName || "Unknown contact"}</span>
+        )}
         <PartyPill party={d.party} />
         {d.propertyAddress && <span className="text-xs text-slate-500">{d.propertyAddress}</span>}
         <IntentPill party={d.party} intent={d.intent} />
@@ -196,7 +207,9 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
               className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                 a.status === "failed" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>
               {a.status === "failed" ? <AlertTriangle size={11} /> : <Check size={11} />}
-              {a.status === "failed" ? `${a.type.replace(/_/g, " ")} failed` : a.detail || a.type.replace(/_/g, " ")}
+              {a.status === "failed"
+                ? `${a.type.replace(/_/g, " ")} failed${a.error ? `: ${a.error}` : ""}`
+                : a.detail || a.type.replace(/_/g, " ")}
             </span>
           ))}
           {pending.map((a) => (

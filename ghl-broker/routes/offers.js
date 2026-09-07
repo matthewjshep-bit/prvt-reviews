@@ -3347,11 +3347,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         }).catch(() => {});
       }
       offer.deal.updatedAt = ts;
+      // The deal write is the thing that matters and is ours. The two GHL
+      // calls after it are bookkeeping on the contact — a missing scope or a
+      // flaky call there must not report the whole action as failed when the
+      // buyer's standing was in fact recorded.
       await store.updateOffer(offer.id, offer);
+      const warn = [];
       await appendDealHistory(client, locationId, contactId, "investor_deal_history",
-        historyLine(ts, offer.address, status, said ? feedbackPhrase(said) : ""));
-      await syncInvestorDealTag(client, locationId, contactId);
-      return { ok: true, address: offer.address, status, reasonLabel: said ? PASS_REASON_LABEL[said.code] : "" };
+        historyLine(ts, offer.address, status, said ? feedbackPhrase(said) : ""))
+        .catch((e) => warn.push(`ledger: ${String(e?.message || e).slice(0, 80)}`));
+      await syncInvestorDealTag(client, locationId, contactId)
+        .catch((e) => warn.push(`tag: ${String(e?.message || e).slice(0, 80)}`));
+      return {
+        ok: true, address: offer.address, status,
+        reasonLabel: said ? PASS_REASON_LABEL[said.code] : "",
+        warning: warn.join("; "),
+      };
     },
     // Feedback without a status change: a price gripe, a "wrong side of the
     // freeway for me". They stay where they are on the deal; we keep what

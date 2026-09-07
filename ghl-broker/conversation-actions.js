@@ -105,7 +105,7 @@ const EXECUTORS = {
       contactId, addressHint: draft?.propertyAddress || "", status: "passed", reason: draft?.passReason || null,
     });
     if (!r?.ok) return r?.reason || "no deal to mark";
-    return `passed on ${r.address}${r.reasonLabel ? ` — ${r.reasonLabel}` : ""}`;
+    return `passed on ${r.address}${r.reasonLabel ? ` — ${r.reasonLabel}` : ""}${r.warning ? ` (${r.warning})` : ""}`;
   },
   // Short of a pass: they pushed on price or told us why it doesn't work,
   // but they're still on the deal. Files the feedback and leaves them be.

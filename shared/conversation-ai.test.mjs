@@ -336,3 +336,18 @@ test("a buyer's no is wired to be filed, and a price gripe short of a no is file
   // It changes nothing outward, so it may run on its own.
   assert.equal(ASK_ONLY_ACTIONS.has("record_deal_feedback"), false);
 });
+
+test("a buyer who passes is taken out of the deal's drips, not left in them", () => {
+  const wf = [{ id: "d1", name: "Tier 1 Disposition" }, { id: "d2", name: "Tier 2 Disposition" }];
+  const inv = starterConfig({ signer: "Matt", workflows: wf }).parties.investor.intentRules;
+  assert.deepEqual(inv.passing.actions.map((a) => a.type),
+    ["mark_investor_passed", "remove_from_workflow", "remove_from_workflow"]);
+  assert.deepEqual(inv.passing.actions.filter((a) => a.type === "remove_from_workflow").map((a) => a.workflowName),
+    ["Tier 1 Disposition", "Tier 2 Disposition"], "a nurture drip must not keep texting someone who said no");
+  // Both dispositions tiers are wired on the way in, too.
+  assert.equal(inv.interested.actions.some((a) => a.type === "add_to_workflow" && a.workflowName === "Tier 1 Disposition"), true);
+  assert.equal(inv.looking_for_deals.actions.some((a) => a.type === "add_to_workflow" && a.workflowName === "Tier 2 Disposition"), true);
+  // A location that can't see its workflows gets the rest of the rule, not a crash.
+  const blind = starterConfig({ signer: "Matt" }).parties.investor.intentRules;
+  assert.deepEqual(blind.passing.actions.map((a) => a.type), ["mark_investor_passed"]);
+});

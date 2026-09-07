@@ -813,7 +813,13 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           // A no is feedback. The pass marks them off the deal and carries
           // the reason with it; a price gripe short of a pass is filed the
           // same way without touching their standing on the deal.
-          passing: { mode: "auto", actions: [{ type: "mark_investor_passed" }] },
+          // A pass ends this deal for them: record it with the reason, and
+          // take them OUT of the deal's follow-up drips so a nurture sequence
+          // can't keep texting a buyer who already said no. They keep
+          // investor-active — they're still a buyer, just not for this one.
+          passing: { mode: "auto", actions: [
+            { type: "mark_investor_passed" }, ...leave("dispoTier1", "dispoTier2"),
+          ] },
           price_pushback: { mode: "auto", actions: [{ type: "record_deal_feedback" }] },
         },
       },
