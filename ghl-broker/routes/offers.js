@@ -136,6 +136,29 @@ const ALL_STATUS_TAGS = Object.values(OFFER_STATUS_TAGS);
 // Active-deal tracking (offers under signed contract). Transitions are
 // deliberately permissive (any stage to any stage) so mistakes are correctable;
 // stageHistory records the true sequence for KPI math.
+// GHL's Inbound Message trigger sends `message` as an OBJECT
+// ({ body, type, attachments, … }) on some triggers and a plain string on
+// others, and a custom-body webhook can send either. String(obj) is
+// "[object Object]" — a non-empty string, so it sailed past the "message
+// required" guard and the model spent a call being asked to reply to it.
+// Every draft on the tab said "that came through blank on my end".
+export function pickInboundText(b) {
+  const fromAny = (v) => {
+    if (typeof v === "string") return v;
+    if (v && typeof v === "object") {
+      for (const k of ["body", "text", "message", "content", "snippet"]) {
+        if (typeof v[k] === "string" && v[k].trim()) return v[k];
+      }
+    }
+    return "";
+  };
+  for (const candidate of [b.message, b.body, b.text, b.customData?.message, b.customData?.body]) {
+    const v = fromAny(candidate);
+    if (v.trim()) return v;
+  }
+  return "";
+}
+
 const DEAL_STAGES = ["under_contract", "buyer_found", "assigned", "closed", "fell_through"];
 const LIVE_DEAL_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
 // First entry wins: APP_ORIGIN may list several allowed CORS origins (broker.js
@@ -3151,7 +3174,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         b.contactId || b.contact_id || b.contact?.id || b.customData?.contact_id || ""
       ).slice(0, 64);
       if (!contactId) return res.status(400).json({ error: "contact_id required" });
-      const message = String(b.message || b.body || b.customData?.message || "").slice(0, 4000);
+      const message = pickInboundText(b).slice(0, 4000);
       // An address the workflow already has — from a conversation bot that
       // confirmed the property with the agent, or a contact custom field. When
       // it's present the run trusts it and skips the extraction call entirely.
@@ -3496,7 +3519,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const attachments = countAttachments(b.attachments ?? b.attachment ?? b.customData?.attachments ?? b.message?.attachments);
       if (!message.trim() && !attachments) return res.status(400).json({ error: "message required — pass {{message.body}}" });
       // GHL names the channel in several places depending on the trigger.
-      const rawChannel = String(b.channel || b.messageType || b.type || b.customData?.channel || "").toLowerCase();
+      const rawChannel = String(
+        b.channel || b.messageType || b.type || b.customData?.channel ||
+        (b.message && typeof b.message === "object" ? b.message.messageType || b.message.type : "") || ""
+      ).toLowerCase();
       const channel = rawChannel.includes("email") ? "email" : "sms";
       const party = String(b.party || b.customData?.party || "").toLowerCase();
 
