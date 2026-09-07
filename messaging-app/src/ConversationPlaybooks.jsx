@@ -6,7 +6,7 @@ import React, { useEffect, useState } from "react";
 import { Lock, Plus, Trash2 } from "lucide-react";
 import {
   INTENTS, INTENT_LABEL, INTENT_GLOSS, NEVER_AUTO, PARTY_LABEL, ACTION_LABEL, ACTION_TYPES,
-  INTERNAL_ACTIONS, INTERNAL_ACTIONS_FOR, ASK_ONLY_ACTIONS, TOKENS, OUTBOUND_INTENTS,
+  INTERNAL_ACTIONS, INTERNAL_ACTIONS_FOR, ASK_ONLY_ACTIONS, TOKENS, OUTBOUND_INTENTS, autoEligible,
 } from "@shared/conversation-ai.js";
 import { BTN } from "./ui.jsx";
 
@@ -340,7 +340,9 @@ export function PartyPlaybooks({ config, patch, workflows }) {
   const [party, setParty] = useState("agent");
   const pb = config.parties[party];
   const setPb = (next) => patch({ parties: { ...config.parties, [party]: { ...pb, ...next } } });
-  const eligible = INTENTS[party].filter((i) => !NEVER_AUTO[party].includes(i));
+  // Matches the boxes actually drawn below, outbound intents included, so
+  // "tick everything allowed" and the count never disagree with the list.
+  const eligible = autoEligible(party);
   return (
     <Section title="Playbooks"
       intro="What it knows to do for each kind of contact. An agent is answered about your offers; an investor about your deals and their buy box.">
@@ -388,10 +390,27 @@ export function PartyPlaybooks({ config, patch, workflows }) {
           </div>
         )}
         <div className="rounded-lg border border-slate-200 p-3">
-          <Toggle checked={pb.autoSend.enabled} onChange={(v) => setPb({ autoSend: { ...pb.autoSend, enabled: v } })}>
+          {/* Turning this on with nothing ticked used to change nothing, which
+              read as the switch being broken. On means on: everything the
+              gates allow, and you untick what you'd rather see first. */}
+          <Toggle checked={pb.autoSend.enabled}
+            onChange={(v) => setPb({ autoSend: {
+              ...pb.autoSend, enabled: v,
+              intents: v && !pb.autoSend.intents.length ? eligible : pb.autoSend.intents,
+            } })}>
             <span className="font-semibold">Let it send on its own to {PARTY_LABEL[party].toLowerCase()}s</span>
           </Toggle>
           <p className={HINT}>Only for the intents ticked below, only when every gate passes, and only after the delay above. Everything else still waits for you.</p>
+          {pb.autoSend.enabled && (
+            <div className="mt-1.5 flex items-center gap-2 text-xs">
+              <button type="button" className="font-semibold text-blue-700 hover:underline"
+                onClick={() => setPb({ autoSend: { ...pb.autoSend, intents: eligible } })}>Tick everything allowed</button>
+              <span className="text-slate-300">·</span>
+              <button type="button" className="font-semibold text-slate-500 hover:underline"
+                onClick={() => setPb({ autoSend: { ...pb.autoSend, intents: [] } })}>Untick all</button>
+              <span className="text-slate-400">{pb.autoSend.intents.length} of {eligible.length} on</span>
+            </div>
+          )}
           <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
             {[...INTENTS[party], ...(OUTBOUND_INTENTS[party] || [])].map((intent) => {
               const locked = NEVER_AUTO[party].includes(intent);

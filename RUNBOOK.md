@@ -614,8 +614,7 @@ the agent playbook (Tier 1 = has a deal or a new property → `tier-1`, Tier 2
 Acquisitions pipeline stages); the dispositions bot, which had been a copy of
 the acquisitions prompt, is written properly for the first time (interested →
 `investor-active` + link to the deal + a suggested dataroom link; wants to
-buy / walk it → ask-first `investor-hot` + link). Every auto-send stays off
-until a person ticks it. **Workflows.** The bots used to drop a contact
+buy / walk it → ask-first `investor-hot` + link). **Workflows.** The bots used to drop a contact
 straight into the GHL workflows `TIER 1` / `TIER 2` / `TIER 3` (Agent
 Wholesale Automations) and `Tier 1 Disposition` / `Tier 2 Disposition`. The
 starter does the same — `add_to_workflow` on the tier rules, alongside the
@@ -700,8 +699,9 @@ creates an offer, the underwriter's `onOfferCreated` hook calls
 around 410k as-is, quick close; is that in the realm for the seller before I
 send it over?" — with the number from the offer book (so the money guard
 allows it) and the letter's terms. It waits in the outbox like any reply,
-labelled "floated our number"; tick `realm_check` on the agent's auto-send
-list to let it go by itself. The agent's answer is read as `realm_yes` (tag
+labelled "floated our number", and on the starter it goes by itself — the one
+message the bot STARTS rather than answers. Untick `realm_check` on the
+agent's auto-send list, or turn `realmCheck` off, to make it wait. The agent's answer is read as `realm_yes` (tag
 `realm-yes`, the offer noted "in the realm" and a ledger line, so History
 and the next context both know) or as a `counter` / `rejection` like any
 other. The agent book now also carries each offer's terms (close days,
@@ -742,7 +742,15 @@ is allowed. The first switch that is off is recorded on the draft and shown
 on the row ("Would have been safe to send on its own. Didn't, because
 auto-send is off for agents").
 
-**Auto-send.** Off by default for both parties. When a reply clears
+**Auto-send.** **On** out of the box for both parties, with the allowlist set
+to everything `NEVER_AUTO` doesn't forbid — reviewing every text is the thing
+that stops a bot being used, and the allowlist is only what the gates would
+let through anyway. What it can never include: a counter, an acceptance, a
+call, a showing time, proof of funds, a new property, a price pushback, a
+buying decision. Those are locked out of the list, not merely unticked. Turn
+the whole thing off with the switch at the top of the tab, a party at a time
+with its own switch, or an intent at a time on the allowlist. When a reply
+clears
 everything it is **scheduled**, not sent: `sendAt` = now + a random delay in
 the configured band (default 2–4 minutes), pushed to the next opening if that
 lands outside the sending window (default 08:00–20:00 America/Los_Angeles).
@@ -781,10 +789,10 @@ again.
 
 **Graduating an intent.** The history table on the tab shows, per party and
 intent, how many drafts the gates would have let go (*auto-sendable*) and how
-many a person then sent **as written**. When those agree for a couple of weeks,
-tick the intent on the party's allowlist and turn the party's auto-send on.
-Counters, calls, showings, proof of funds and buying decisions stay yours for
-good.
+many a person then sent **as written**. Read it the other way round now that
+auto-send ships on: an intent whose sent-as-written rate is poor is one to
+untick. Counters, calls, showings, proof of funds and buying decisions stay
+yours for good, whatever the numbers say.
 
 **Where the config lives.** `settings.conversationAi`, written only by
 `PUT /api/offers/automations/conversation/config` — the Settings page re-attaches the stored

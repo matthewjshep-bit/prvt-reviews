@@ -187,15 +187,25 @@ test("a dataroom invite inside an auto rule no longer drags the tags down to ask
   assert.equal(c.parties.investor.intentRules.interested.mode, "auto");
 });
 
-test("the starter playbook is a valid config with the real tags, and every auto-send is off", () => {
+test("the starter playbook is a valid config with the real tags, and sends what the gates allow", () => {
   const c = starterConfig({ signer: "Matt Shepherd" });
   assert.deepEqual(normalizeConversationAi(c), c, "idempotent");
   assert.equal(c.persona.name, "Matt");
   assert.match(c.persona.ifAskedIfBot, /assistant on Matt's team/);
   assert.equal(c.routing.unknown, "classify");
   assert.ok(c.routing.investorTags.includes("dispo-*"));
-  assert.equal(c.parties.agent.autoSend.enabled, false);
-  assert.equal(c.parties.investor.autoSend.enabled, false);
+  // On out of the box: reviewing every text is the thing that stops a bot
+  // being used. The allowlist is exactly what the gates would let through
+  // anyway — everything that commits us is locked out of it, not merely
+  // unticked, so "on" can never mean a counter or a showing time.
+  assert.equal(c.parties.agent.autoSend.enabled, true);
+  assert.equal(c.parties.investor.autoSend.enabled, true);
+  for (const party of ["agent", "investor"]) {
+    assert.deepEqual(c.parties[party].autoSend.intents, autoEligible(party));
+    for (const never of NEVER_AUTO[party]) {
+      assert.equal(c.parties[party].autoSend.intents.includes(never), false, `${party}/${never} must never be on the list`);
+    }
+  }
   const a = c.parties.agent.intentRules;
   assert.deepEqual(a.deal_available.actions[0], { type: "add_tags", tags: ["tier-1"] });
   assert.deepEqual(a.investor_open.actions[0], { type: "add_tags", tags: ["tier-2"] });

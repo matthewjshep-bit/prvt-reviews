@@ -747,7 +747,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
         mayNotCommit:
           "Quote or estimate any number. Agree to terms or a price. Book a showing, inspection or call time on your own. " +
           "Mention off-market deals. Promise proof of funds. Send a link.",
-        autoSend: { enabled: false, intents: [] },
+        autoSend: { enabled: true, intents: autoEligible("agent") },
         intentRules: {
           deal_available: tierRule("tier-1", ["tier-2", "tier-3"], "tier1", ["tier2", "tier3"], subject),
           new_property: tierRule("tier-1", ["tier-2", "tier-3"], "tier1", ["tier2", "tier3"], subject),
@@ -788,7 +788,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
         mayNotCommit:
           "Lower a price or agree to terms. Promise a deal to one buyer. Confirm a walkthrough time. Quote our fee, " +
           "contract price or margin. Send a link yourself. Describe a property that isn't in the context.",
-        autoSend: { enabled: false, intents: [] },
+        autoSend: { enabled: true, intents: autoEligible("investor") },
         // Dispositions pipeline: Tier 1 = interested in THIS property, Tier 2 =
         // interested in working together. The tier workflows carry the
         // follow-up; the tags keep the book's filters honest.

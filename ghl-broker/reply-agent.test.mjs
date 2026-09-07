@@ -1119,10 +1119,16 @@ test("when an underwrite lands, the bot drafts a realm check that floats the num
   assert.match(seen.context.text, /our cash offer \$410,000 \(asking \$525,000\) terms: 14-day close, \$2,500 earnest money, as-is/);
   const d = await store.getReplyDraft(job.draftId);
   assert.equal(d.intent, "realm_check");
-  assert.equal(d.status, "draft");
   assert.equal(d.outbound.address, "12 Elm St, Renton, WA 98056");
   assert.equal(d.autoSendable, true, d.flags.join(" · "));
-  assert.match(d.autoSend.reason, /auto-send is off for listing agents/, "waits for a person until the switch and the allowlist say otherwise");
+  // The starter lets it go on its own, so this counts down instead of
+  // waiting — the one message the bot STARTS rather than answers. The number
+  // it floats came from the offer book and nowhere else; the money guard
+  // above is what makes that safe, and the realmCheck switch turns just this
+  // off without touching replies.
+  assert.equal(d.status, "scheduled");
+  assert.ok(d.sendAt, "counting down");
+  assert.equal(d.autoSend.decided, true, d.autoSend.reason);
   assert.deepEqual(tags, [["POST", ["reply-draft"]]]);
   assert.match(notes[0], /AI drafted a realm check on 12 Elm St.*\(\$410,000\)/);
 });
