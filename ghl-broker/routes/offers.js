@@ -3318,7 +3318,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // page does). Links them first if they weren't.
     setInvestorStatus: async ({ contactId, addressHint, status, reason = null }) => {
       if (!INVESTOR_STATUSES.includes(status)) return { ok: false, reason: `not an investor status: ${status}` };
-      const found = await findLiveDealFor({ contactId, addressHint });
+      const found = await findLiveDealFor({ locationId, contactId, addressHint });
       if (!found.ok) return found;
       const offer = found.offer;
       offer.deal.investors = offer.deal.investors || [];
@@ -3370,7 +3370,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     recordDealFeedback: async ({ contactId, addressHint, reason }) => {
       const said = normalizePassReason(reason);
       if (!said) return { ok: false, reason: "nothing to file" };
-      const found = await findLiveDealFor({ contactId, addressHint });
+      const found = await findLiveDealFor({ locationId, contactId, addressHint });
       if (!found.ok) return found;
       const offer = found.offer;
       const ts = new Date().toISOString();
@@ -3683,7 +3683,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // Which live deal is this person talking about: the one they named, else
   // the only one they're on. Shared by every investor-side write so a pass
   // and a piece of feedback can never land on different properties.
-  async function findLiveDealFor({ contactId, addressHint = "" }) {
+  // locationId is a REQUEST value, not a router one — it has to be passed in.
+  // Reading it as a free variable here threw ReferenceError on every call and
+  // reported it as "mark investor passed failed".
+  async function findLiveDealFor({ locationId, contactId, addressHint = "" }) {
     const live = (await store.listDeals(locationId)).filter((o) => LIVE_DEAL_STAGES.has(o.deal?.stage));
     let offer = pickDealByAddress(live, addressHint);
     if (!offer) {

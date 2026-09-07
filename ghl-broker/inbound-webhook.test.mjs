@@ -83,3 +83,26 @@ test("every webhook actually calls the extractor, not String() on the raw field"
   assert.equal((src.match(/=\s*pickInboundText\(b\)|:\s*pickInboundText\(b\)/g) || []).length, 3,
     "the underwrite webhook, the conversation webhook and the try-it route all extract the text the same way");
 });
+
+test("no router-scope helper reads locationId as a free variable", async () => {
+  // This shipped: findLiveDealFor was lifted out of conversationDeps, where
+  // locationId was a parameter, into the router factory, where it is nothing.
+  // Every call threw ReferenceError and the outbox reported it as
+  // "mark investor passed failed" — a scope bug wearing a domain error's
+  // clothes. locationId is a REQUEST value; a helper must take it.
+  const src = await readFile(new URL("./routes/offers.js", import.meta.url), "utf8");
+  const lines = src.split("\n");
+  const free = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^  (?:async )?function ([A-Za-z0-9_]+)\(([^)]*)\)/.exec(lines[i]);
+    if (!m) continue;
+    let body = "";
+    for (let j = i + 1; j < lines.length && !/^  \}/.test(lines[j]); j++) body += lines[j] + "\n";
+    if (!/\blocationId\b/.test(body)) continue;
+    const declared = /\blocationId\b/.test(m[2]) ||
+      /(?:const|let)\s*\{[^}]*\blocationId\b[^}]*\}\s*=/.test(body) ||
+      /(?:const|let)\s+locationId\b/.test(body);
+    if (!declared) free.push(`${m[1]} (line ${i + 1})`);
+  }
+  assert.deepEqual(free, [], `these read locationId from a scope that has none: ${free.join(", ")}`);
+});
