@@ -830,9 +830,13 @@ test("em dashes are scrubbed from a draft, and the tag rules from the starter fi
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
   assert.deepEqual(d.actions.map((a) => [a.type, a.tags || a.key, a.status]), [
-    ["add_tags", ["tier-1"], "done"], ["remove_tags", ["tier-2", "tier-3"], "done"], ["set_field", "subject_property", "done"],
+    ["add_tags", ["tier-1"], "done"], ["remove_tags", ["tier-2", "tier-3"], "done"],
   ]);
-  assert.equal(d.actions[2].detail, "subject_property = 12 Elm St", "the address the agent named aims the underwriter");
+  // Subject Property is filed by the pipeline now, not by an intent rule, so
+  // it lands on every agent message that names a property rather than only on
+  // a tier-1 read.
+  assert.ok(d.profileUpdates?.learned?.includes("subject property: 12 Elm St"),
+    `the address the agent named aims the underwriter — got ${JSON.stringify(d.profileUpdates)}`);
   assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("tier-1")));
   assert.ok(tags.some(([m, t]) => m === "DELETE" && t.includes("tier-2")));
 });
@@ -1216,4 +1220,49 @@ test("a cap of 0 is no cap, on the location and on the contact", async () => {
     deps: { draft: async () => DRAFT },
   });
   assert.match(r.skipped, /daily cap reached \(40\/5\)/);
+});
+
+test("Subject Property follows the newest property the agent surfaces, on any intent", async () => {
+  const filed = [];
+  const client = { call: async (path, o = {}) => {
+    if (o.method === "PUT" && /\/contacts\//.test(path)) { filed.push(o.body?.customFields); return {}; }
+    return { customField: { id: "f1" }, customFields: [], contact: { id: "c1", tags: ["agent"] }, contacts: [] };
+  } };
+  const run = async ({ propertyAddress, intent = "question", custom = {} }) =>
+    applyProfileUpdates({
+      client, locationId: "LOC", contactId: "c1", party: "agent",
+      profile: null, custom, subjectProperty: propertyAddress, config: { profile: {} },
+    });
+
+  // A question is not a tier-1 read, and it still moves the aim — an agent can
+  // raise a new property anywhere in a thread.
+  assert.ok((await run({ propertyAddress: "1130 NW 57th St, Seattle, WA 98107", intent: "question" }))
+    .learned.includes("subject property: 1130 NW 57th St, Seattle, WA 98107"));
+
+  // Already on that property: no write, so the contact's audit trail is not
+  // churned with the same value. Spelling differences don't count as a move.
+  assert.deepEqual((await run({
+    propertyAddress: "1130 Northwest 57th Street, Seattle, WA 98107",
+    custom: { subject_property: "1130 NW 57th St, Seattle, WA 98107" },
+  })).written, [], "the same property written two ways is not a new property");
+
+  // They turn to a different one: the aim follows.
+  assert.ok((await run({
+    propertyAddress: "22018 76th Ave W, Edmonds, WA 98026",
+    custom: { subject_property: "1130 NW 57th St, Seattle, WA 98107" },
+  })).learned.some((l) => l.startsWith("subject property: 22018")));
+
+  // Prose is not an aim. The underwriter would search on this and find a
+  // different house, so it must leave the field pointing where it was.
+  for (const vague of ["the Tacoma one", "her listing", "that one we discussed", ""]) {
+    assert.deepEqual((await run({
+      propertyAddress: vague, custom: { subject_property: "1130 NW 57th St, Seattle, WA 98107" },
+    })).written, [], `"${vague}" must not become the underwriter's aim`);
+  }
+
+  // An investor naming a property never touches it — it aims acquisitions.
+  assert.deepEqual((await applyProfileUpdates({
+    client, locationId: "LOC", contactId: "c1", party: "investor",
+    profile: null, custom: {}, subjectProperty: "22018 76th Ave W, Edmonds, WA 98026", config: { profile: {} },
+  })).written, []);
 });

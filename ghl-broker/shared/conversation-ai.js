@@ -658,9 +658,12 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
     { type: "add_tags", tags: [tier] }, ...(remove.length ? [{ type: "remove_tags", tags: remove }] : []),
     ...enroll(key), ...leave(...leaveKeys), ...extra,
   ] });
-  // The address the agent just named becomes the Subject Property the
-  // underwriter reads. Empty tokens write nothing (see conversation-actions).
-  const subject = [{ type: "set_field", key: "subject_property", value: "{{propertyAddress}}" }];
+  // Subject Property is no longer a per-intent rule: the pipeline files the
+  // address on EVERY agent message that names one (see applyProfileUpdates),
+  // because an agent can raise a new property in a question or a status check
+  // just as easily as in a "got one for you". Kept as an explicit action only
+  // so an existing saved config that carries it still works.
+  const subject = [];
   return normalizeConversationAi({
     persona: {
       name: first,

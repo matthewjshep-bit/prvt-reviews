@@ -37,11 +37,12 @@
 // nobody answers. The spend cap reads from the store for the same reason.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { buildTranscript, enrichFieldDefs, mergeHistory } from "./enrich.js";
+import { buildTranscript, enrichFieldDefs, mergeHistory, SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { fmtMoney } from "./shared/offer-calc.js";
+import { parseUsAddress, addressKey } from "./shared/us-address.js";
 import {
   normalizeConversationAi, INTENTS, NEVER_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
   SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutActions, normalizePassReason,
@@ -415,6 +416,26 @@ export function mergeFacts(existing, additions, max = 1500) {
 }
 
 /**
+ * underwritableAddress(raw) → string | ""
+ *
+ * Subject Property aims the auto-underwriter, so only something it could
+ * actually look up may be written there. "the Tacoma one" and "her listing"
+ * are real answers to "what is this message about" and useless as an aim: a
+ * house number and a street word are the minimum.
+ */
+export function underwritableAddress(raw) {
+  const v = String(raw || "").trim();
+  if (v.length < 6 || v.length > 200) return "";
+  const p = parseUsAddress(v);
+  // House number plus a street is the bar. Deliberately NOT "must have a city
+  // and state": "12 Elm St" is what an agent actually texts, and the
+  // underwriter has its own extraction to fall back on. The bar exists to
+  // keep prose out — "the Tacoma one", "her listing", "that one we discussed"
+  // are honest answers to what the message is about and useless as an aim.
+  return p.houseNo && p.street ? v : "";
+}
+
+/**
  * applyProfileUpdates({ client, locationId, contactId, party, profile, custom, summary, config, now })
  *
  * Files what the reply's model call learned into the contact's CRM fields —
@@ -423,45 +444,58 @@ export function mergeFacts(existing, additions, max = 1500) {
  * the two never fight. Returns { learned: [line], written: [key] }. Never
  * throws; a field write that fails is a warning on the draft.
  */
-export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", config, now = Date.now(), warnings = [] }) {
-  if (!profile || !contactId || party === "unknown") return { learned: [], written: [] };
+export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", subjectProperty = "", config, now = Date.now(), warnings = [] }) {
+  if ((!profile && !subjectProperty) || !contactId || party === "unknown") return { learned: [], written: [] };
   const type = party === "investor" ? "investor" : "agent";
   const defs = new Map(enrichFieldDefs(type).map((f) => [f.key, f]));
+  if (!defs.has("subject_property")) defs.set("subject_property", SUBJECT_PROPERTY_FIELD);
   const today = new Date(now).toISOString().slice(0, 10);
   const writes = {};
   const learned = [];
   const cur = (k) => String(custom?.[k] ?? "").trim();
 
-  if (profile.personalDetails) {
+  // The property the agent is on about, on EVERY message that names one —
+  // not just the two intents that used to carry a set_field rule. This is
+  // what the auto-underwriter aims at, so a stale value points it at a house
+  // we already priced. Only written when it moved: re-writing the same
+  // address churns the contact's audit trail for nothing.
+  if (type === "agent") {
+    const aim = underwritableAddress(subjectProperty);
+    if (aim && addressKey(aim) !== addressKey(cur("subject_property"))) {
+      writes.subject_property = aim;
+      learned.push(`subject property: ${aim}`);
+    }
+  }
+  if (profile?.personalDetails) {
     const merged = mergeFacts(cur("personal_details"), profile.personalDetails);
     if (merged !== cur("personal_details")) { writes.personal_details = merged; learned.push(`personal: ${profile.personalDetails}`); }
   }
   const areasKey = type === "investor" ? "buybox_areas" : "agent_market_area";
-  if (profile.marketAreas) {
+  if (profile?.marketAreas) {
     const merged = mergeFacts(cur(areasKey), profile.marketAreas, 600);
     if (merged !== cur(areasKey)) { writes[areasKey] = merged; learned.push(`areas: ${profile.marketAreas}`); }
   }
-  if (profile.dealHistoryLine && profile.dealHistoryLine.includes("|")) {
+  if (profile?.dealHistoryLine && profile.dealHistoryLine?.includes("|")) {
     const key = type === "investor" ? "investor_deal_history" : "agent_deal_history";
     const line = /^\d{4}-\d{2}-\d{2}/.test(profile.dealHistoryLine) ? profile.dealHistoryLine : `${today} | ${profile.dealHistoryLine}`;
     const merged = mergeHistory(cur(key), [line]);
     if (merged !== cur(key)) { writes[key] = merged; learned.push(`history: ${profile.dealHistoryLine}`); }
   }
-  if (profile.nextAction && profile.nextAction !== cur("suggested_next_action")) {
+  if (profile?.nextAction && profile?.nextAction !== cur("suggested_next_action")) {
     writes.suggested_next_action = profile.nextAction;
   }
   if (type === "investor") {
     const num = (k) => Number(String(cur(k)).replace(/[$,\s]/g, "")) || 0;
-    if (profile.priceMin && profile.priceMin !== num("buybox_price_min")) { writes.buybox_price_min = profile.priceMin; learned.push(`buys from ${fmtMoney(profile.priceMin)}`); }
-    if (profile.priceMax && profile.priceMax !== num("buybox_price_max")) { writes.buybox_price_max = profile.priceMax; learned.push(`buys up to ${fmtMoney(profile.priceMax)}`); }
-    if (profile.propertyTypes) {
+    if (profile?.priceMin && profile.priceMin !== num("buybox_price_min")) { writes.buybox_price_min = profile.priceMin; learned.push(`buys from ${fmtMoney(profile.priceMin)}`); }
+    if (profile?.priceMax && profile.priceMax !== num("buybox_price_max")) { writes.buybox_price_max = profile.priceMax; learned.push(`buys up to ${fmtMoney(profile.priceMax)}`); }
+    if (profile?.propertyTypes) {
       const allowed = defs.get("buybox_property_types")?.values || [];
       const types = profile.propertyTypes.split(",").map((t) => t.trim().replace(/[\s-]+/g, "_")).filter((t) => allowed.includes(t));
       const merged = mergeFacts(cur("buybox_property_types"), types.join(", "), 200);
       if (types.length && merged !== cur("buybox_property_types")) { writes.buybox_property_types = merged; learned.push(`types: ${types.join(", ")}`); }
     }
-    if (profile.rehabAppetite && profile.rehabAppetite !== cur("rehab_appetite")) { writes.rehab_appetite = profile.rehabAppetite; learned.push(`rehab: ${profile.rehabAppetite.replace(/_/g, " ")}`); }
-    if (profile.exclusions) {
+    if (profile?.rehabAppetite && profile.rehabAppetite !== cur("rehab_appetite")) { writes.rehab_appetite = profile.rehabAppetite; learned.push(`rehab: ${profile.rehabAppetite.replace(/_/g, " ")}`); }
+    if (profile?.exclusions) {
       const merged = mergeFacts(cur("buybox_exclusions"), profile.exclusions, 500);
       if (merged !== cur("buybox_exclusions")) { writes.buybox_exclusions = merged; learned.push(`must-haves: ${profile.exclusions}`); }
     }
@@ -1068,11 +1102,14 @@ async function runReply(job, ctx) {
   job.draftId = record.id;
 
   /* --- 4b. what we learned about them --- */
-  if (config.profile?.enabled && draft.profile) {
+  // Subject Property is not profile memory, it is the underwriter's aim, so
+  // it is filed even when profile learning is switched off.
+  const learnable = config.profile?.enabled ? draft.profile : null;
+  if (learnable || (party === "agent" && draft.propertyAddress)) {
     job.phase = "filing";
     const filed = await applyProfileUpdates({
-      client, locationId, contactId: job.contactId, party, profile: draft.profile, custom: a.custom,
-      summary: draft.summary, config, now, warnings,
+      client, locationId, contactId: job.contactId, party, profile: learnable, custom: a.custom,
+      summary: draft.summary, subjectProperty: draft.propertyAddress, config, now, warnings,
     });
     if (filed.learned.length || filed.written.length) {
       record = { ...record, profileUpdates: { learned: filed.learned, written: filed.written }, warnings: warnings.slice(0, 6), updatedAt: new Date().toISOString() };

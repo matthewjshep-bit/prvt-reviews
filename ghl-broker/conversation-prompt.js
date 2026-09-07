@@ -265,7 +265,14 @@ export function schemaFor(party = "agent", { profile = true, outbound = null } =
       needsHuman: { type: "boolean", description: "True when the message asks for anything that commits us" },
       humanReason: { type: "string", description: "Why a person must look, or empty" },
       summary: { type: "string", description: "One line for the operator" },
-      propertyAddress: { type: "string", description: "The property this message is about, if one is identifiable; else empty" },
+      propertyAddress: {
+        type: "string",
+        description:
+          "The property THIS message is about, as a full street address with city and state when they are known or " +
+          "in the record. If they name several, take the one they most recently raised or most want us to act on, " +
+          "not the oldest. Copy the address as they wrote it; never invent a city, state or zip they did not give " +
+          "and the record does not have. Empty when no property is identifiable.",
+      },
       counterAmount: { type: "integer", description: "A dollar figure they named, in whole dollars; 0 if none" },
       ...(party === "investor" ? { passReason: PASS_REASON_SCHEMA } : {}),
     },

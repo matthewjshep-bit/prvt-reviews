@@ -679,6 +679,17 @@ it and read as `evaluating`; there is no migration. Adding a buyer to a deal
 by hand now starts them at `evaluating`, which also stands the bot down for
 them.
 
+**Subject Property** is the underwriter's aim, so the pipeline keeps it
+current on **every agent message that names a property** — not only on the
+tier-1 intents that used to carry a `set_field` rule, because an agent raises
+a new address in a question or a status check as readily as in a "got one for
+you". It is written only when the property actually moved (compared on
+`addressKey`, so a spelling difference is not a move) and only when the model
+returned something an underwriter could search: a house number and a street.
+"the Tacoma one" and "her listing" are honest answers to what a message is
+about and useless as an aim, so they leave the field where it was. Investors
+never touch it. It is filed even when profile learning is switched off.
+
 **Catch-all and status.** Each playbook has a fallback that runs when no
 intent rule matched, unless the contact already carries one of its tags: on
 the starter, any agent reply with no fit is Tier 3 (tag + TIER 3 workflow),

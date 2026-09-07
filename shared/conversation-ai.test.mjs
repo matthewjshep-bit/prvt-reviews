@@ -249,7 +249,7 @@ test("the starter wires the five GHL workflows by name when it can see them, and
   assert.deepEqual(wfIn("investor", "buybox_update"), ["d2"]);
   assert.equal(c.parties.agent.intentRules.deal_available.actions[0].type, "add_tags", "the tags still come first");
   const bare = starterConfig({ signer: "Matt" });
-  assert.deepEqual(bare.parties.agent.intentRules.deal_available.actions.map((a) => a.type), ["add_tags", "remove_tags", "set_field"], "no workflows visible, no workflow actions");
+  assert.deepEqual(bare.parties.agent.intentRules.deal_available.actions.map((a) => a.type), ["add_tags", "remove_tags"], "no workflows visible, no workflow actions");
 });
 
 test("fallback rules, bot-off tags, debounce, human-active, profile and notes all normalize", () => {
@@ -274,8 +274,10 @@ test("fallback rules, bot-off tags, debounce, human-active, profile and notes al
   assert.deepEqual(c.parties.agent.fallback, { mode: "auto", actions: [{ type: "add_tags", tags: ["tier-3"] }], unlessTags: ["tier-1"] });
   assert.deepEqual(c.parties.investor.fallback, { mode: "ask", actions: [], unlessTags: [] });
   const st = starterConfig({ signer: "Matt", workflows: [{ id: "w2", name: "TIER 2" }, { id: "w3", name: "TIER 3" }] });
-  assert.deepEqual(st.parties.agent.intentRules.deal_available.actions.map((a) => a.type), ["add_tags", "remove_tags", "remove_from_workflow", "remove_from_workflow", "set_field"]);
-  assert.equal(st.parties.agent.intentRules.deal_available.actions.at(-1).value, "{{propertyAddress}}");
+  assert.deepEqual(st.parties.agent.intentRules.deal_available.actions.map((a) => a.type), ["add_tags", "remove_tags", "remove_from_workflow", "remove_from_workflow"]);
+  // Subject Property is no longer a per-intent rule — the pipeline files it on
+  // every agent message that names a property, not only on a tier-1 read.
+  assert.equal(st.parties.agent.intentRules.deal_available.actions.some((a) => a.type === "set_field"), false);
   assert.equal(st.parties.agent.intentRules.counter.actions[0].type, "mark_offer_countered");
   assert.equal(st.parties.investor.intentRules.passing.actions[0].type, "mark_investor_passed");
   assert.equal(st.parties.investor.intentRules.wants_to_buy.actions.some((a) => a.type === "mark_investor_committed"), true);
