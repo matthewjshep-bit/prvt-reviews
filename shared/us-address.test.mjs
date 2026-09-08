@@ -98,3 +98,22 @@ test("a street with no house number keeps its whole name", () => {
   assert.equal(p.houseNo, "");
   assert.equal(p.street, "Larch Way");
 });
+
+test("the address a conversation touched last wins, whatever spelling it used", async () => {
+  const { lastMention, mostRecentlyMentioned } = await import("./us-address.js");
+  const thread = [
+    "THEM: got one at 12703 Vernon Ave SW in Lakewood, needs work",
+    "US: nice, running it now",
+    "THEM: actually forget that one, seller pulled it. Look at 9 Other Street, Kent instead — 3/2, roof is shot",
+    "US: on it",
+  ].join("\n");
+  assert.ok(lastMention(thread, "12703 Vernon Avenue SW, Lakewood, WA 98498") >= 0, "spelled-out finds the abbreviated mention");
+  assert.equal(lastMention(thread, "1 Elm St, Kent, WA"), -1);
+  assert.equal(lastMention(thread, "9 Other St, Kent, WA 98030") > lastMention(thread, "12703 Vernon Ave SW, Lakewood, WA 98498"), true);
+  const pick = mostRecentlyMentioned(thread, ["12703 Vernon Avenue SW, Lakewood, WA 98498", "9 Other St, Kent, WA 98030", "1 Elm St, Kent, WA"]);
+  assert.equal(pick.address, "9 Other St, Kent, WA 98030");
+  assert.equal(mostRecentlyMentioned(thread, ["1 Elm St, Kent, WA"]), null, "never mentioned is not a pick");
+  assert.equal(mostRecentlyMentioned("", ["9 Other St, Kent, WA"]), null);
+  // A street line too short to be safe never matches on its own.
+  assert.equal(lastMention("meet at 1 Elm", "1 Elm"), -1);
+});

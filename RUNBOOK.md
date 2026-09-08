@@ -412,6 +412,16 @@ qualifying bot; it is cheaper and more accurate.
 One contact field, `subject_property` ("Subject Property"), answers: *if I
 underwrote something for this agent right now, which house would it be?*
 
+**Which house, when the field is stale.** The field (or the workflow body)
+is a standing answer, and standing answers go stale — set on Monday's house
+while Tuesday's thread is about a different one. So the underwriter reads
+the newest slice of the thread anyway and lets the conversation referee:
+of the standing address and every address the record has seen this agent
+raise, whichever was mentioned *last* in the thread wins. A different
+winner is used with source `thread`, a warning is logged ("subject property
+was stale: X → Y"), and Subject Property is rewritten to it. Nothing from
+the candidate list mentioned in the thread → the standing answer holds.
+
 - **Seeded** at outreach import from the hook address — the listing that made us
   reach out.
 - **Kept current** by the AI conversation sweep (it is an agent enrich field) and

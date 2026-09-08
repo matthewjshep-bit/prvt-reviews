@@ -183,6 +183,49 @@ export function addressQueryVariants(raw) {
   return [...new Set(variants.filter(Boolean))];
 }
 
+/**
+ * lastMention(text, address) → index | -1
+ *
+ * Where an address was last spoken of in a conversation: the greatest index
+ * at which any of its street-line spellings ("166th Ave NE" / "166th Avenue
+ * NE") appears in the text, case-insensitively. The street line rather than
+ * the whole address, because people text "the Vernon Ave place", not the
+ * zip. A street line too short to be safe (under 6 chars) never matches.
+ */
+export function lastMention(text, address) {
+  const hay = String(text || "").toLowerCase();
+  if (!hay) return -1;
+  let best = -1;
+  for (const v of addressQueryVariants(address)) {
+    const street = v.split(",")[0].trim().toLowerCase();
+    if (street.length < 6) continue;
+    const i = hay.lastIndexOf(street);
+    if (i > best) best = i;
+  }
+  return best;
+}
+
+/**
+ * mostRecentlyMentioned(text, addresses) → { address, index } | null
+ *
+ * Of several candidate addresses, the one the conversation touched last.
+ * Candidates that never appear are ignored; the same property under two
+ * spellings is one candidate (compared on addressKey), and the earliest-
+ * listed spelling is the one returned.
+ */
+export function mostRecentlyMentioned(text, addresses = []) {
+  let best = null;
+  const seen = new Set();
+  for (const a of addresses) {
+    const k = addressKey(a);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    const index = lastMention(text, a);
+    if (index >= 0 && (!best || index > best.index)) best = { address: String(a).trim(), index };
+  }
+  return best;
+}
+
 // Zillow deep link from a street address — /homes/<slug>_rb/ redirects to the
 // property page when the address resolves. USPS-abbreviated slugs resolve;
 // spelled-out ones often dump to a metro search page instead.

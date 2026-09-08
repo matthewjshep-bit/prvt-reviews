@@ -618,3 +618,18 @@ test("a tier no wider than the ARV cap records exactly what it uses", () => {
   const renovated = markRenovatedByPrice(pool, { take: tier }).comps.filter((c) => ARV_CONDITIONS.has(c.condition));
   assert.equal(renovated.length, UW_MAX_ARV_COMPS);
 });
+
+test("the conversation referees the address: a stale field loses to the house the thread is on", async () => {
+  const { refereeAddress } = await import("./auto-underwrite.js");
+  const thread = "THEM: 12703 Vernon Ave SW is gone, seller pulled it\nTHEM: but I've got 9 Other St in Kent, roof is shot\nUS: send it over";
+  // The field says Vernon; the thread has moved to Other St.
+  const r = refereeAddress({ standing: "12703 Vernon Avenue SW, Lakewood, WA 98498", recent: ["9 Other St, Kent, WA 98030", "12703 Vernon Ave SW, Lakewood, WA 98498"], transcript: thread });
+  assert.deepEqual(r, { address: "9 Other St, Kent, WA 98030", moved: true });
+  // The field is right: the thread's last mention is the field's own house.
+  const same = refereeAddress({ standing: "9 Other St, Kent, WA 98030", recent: ["12703 Vernon Ave SW, Lakewood, WA 98498"], transcript: thread });
+  assert.equal(same.moved, false);
+  assert.equal(same.address, "9 Other St, Kent, WA 98030");
+  // Nothing we know of appears in the thread: no verdict, the field holds.
+  assert.equal(refereeAddress({ standing: "1 Elm St, Kent, WA", recent: [], transcript: "THEM: hey, how's it going" }), null);
+  assert.equal(refereeAddress({ standing: "", recent: [], transcript: thread }), null);
+});

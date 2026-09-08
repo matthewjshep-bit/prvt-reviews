@@ -46,6 +46,7 @@ import {
 import { SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { learnFacts, recordEvent } from "./contact-record.js";
 import { currentFacts } from "./shared/contact-record.js";
+import { mostRecentlyMentioned } from "./shared/us-address.js";
 
 /* ---------- the dials ---------- */
 
@@ -434,6 +435,23 @@ const subjectPropertyFieldId = (client, locationId) =>
     { siblingKey: SUBJECT_PROPERTY_FIELD.folderSibling }
   );
 
+/**
+ * refereeAddress({ standing, recent, transcript }) → { address, moved } | null
+ *
+ * Pure. `standing` is the address a field or workflow handed us; `recent`
+ * is every address the record has seen this agent raise; `transcript` is
+ * the newest slice of the thread. The candidate mentioned LAST in the
+ * thread is the answer. `moved` is true when that is a different property
+ * from the standing one — the case where trusting the field would have
+ * underwritten the wrong house. No candidate in the thread → null, and the
+ * caller keeps the standing answer.
+ */
+export function refereeAddress({ standing = "", recent = [], transcript = "" } = {}) {
+  const pick = mostRecentlyMentioned(transcript, [standing, ...recent].filter(Boolean));
+  if (!pick) return null;
+  return { address: pick.address, moved: Boolean(standing) && addressKey(pick.address) !== addressKey(standing) };
+}
+
 // The contact's current Subject Property, off a contact record we already have.
 // Needs the field's id, which is created on demand like every other app field.
 async function readSubjectProperty(client, locationId, contact, { store = null, contactId = "" } = {}) {
@@ -679,8 +697,44 @@ async function runUnderwrite(job, ctx) {
   //      wrong, which is why it alone is gated on high confidence
   const fieldAddress = job.suppliedAddress ? "" : await readSubjectProperty(client, locationId, contact, { store, contactId: job.contactId });
 
+  // …but the conversation is the referee. A workflow field or a Subject
+  // Property can be stale — set on Monday's house while Tuesday's thread is
+  // about a different one — and until now a set field was trusted with high
+  // confidence and the thread never read. So: when we have a standing
+  // answer, read the newest slice of the thread anyway and let whichever
+  // candidate was mentioned LAST win. Candidates are the standing answer and
+  // every address the record has seen this agent raise. Nothing mentioned in
+  // the thread at all → the standing answer holds, as before.
+  let standing = job.suppliedAddress || fieldAddress || "";
+  let refereed = null;
+  if (standing) {
+    let recentText = "";
+    try {
+      const t = await buildTranscript(client, locationId, job.contactId, {
+        maxConversations: 1, maxPagesPerConvo: 1, maxMessages: 40, maxChars: 8000, maxCallTranscripts: 0,
+      });
+      recentText = t.text || "";
+    } catch { /* no thread to read — the standing answer holds */ }
+    let recent = [];
+    try {
+      recent = (await store.listContactEvents?.(locationId, job.contactId, { limit: 60 }) || [])
+        .filter((e) => e?.address && ["subject_property_set", "property_details", "agent_estimate", "offer_sent", "offer_revised"].includes(e.type))
+        .map((e) => e.address);
+    } catch { recent = []; }
+    refereed = refereeAddress({ standing, recent, transcript: recentText });
+  }
+
   let extraction;
-  if (job.suppliedAddress) {
+  if (refereed?.moved) {
+    extraction = {
+      address: refereed.address,
+      askingPrice: 0,
+      confidence: "high",
+      note: `The thread moved on: the ${job.suppliedAddress ? "workflow" : "Subject Property"} said ${standing}, but the newest messages are about ${refereed.address}.`,
+      source: "thread",
+    };
+    warnings.push(`subject property was stale: ${standing} → ${refereed.address}`);
+  } else if (job.suppliedAddress) {
     extraction = {
       address: job.suppliedAddress,
       askingPrice: job.suppliedAskingPrice,
