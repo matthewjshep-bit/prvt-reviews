@@ -35,7 +35,7 @@ export const RECORD_FIELD_DEFS = [
 ].filter((d, i, all) => all.findIndex((x) => x.key === d.key) === i);
 const defByKey = new Map(RECORD_FIELD_DEFS.map((d) => [d.key, d]));
 
-const contactName = (c) => [c?.firstName, c?.lastName].filter(Boolean).join(" ").trim() || c?.name || c?.contactName || "";
+export const contactName = (c) => [c?.firstName, c?.lastName].filter(Boolean).join(" ").trim() || c?.name || c?.contactName || "";
 
 /**
  * ensureProfile({ store, locationId, contactId, party, name, email, phone, tags })
@@ -197,11 +197,12 @@ export async function projectToGhl({ client, store, locationId, contactId, party
  * timeline lacks becomes an event. The record wins where it already has a
  * value, and GHL never deletes anything here — deletion is a drawer action.
  */
-export async function reconcileFromGhl({ store, locationId, contactId, party = null, client = null, contact = null, custom = null } = {}) {
+export async function reconcileFromGhl({ store, locationId, contactId, party = null, client = null, contact = null, custom = null, idKeyMap = null } = {}) {
   if (!store?.getContactProfile || !locationId || !contactId) return { facts: 0, events: 0 };
   try {
     let c = contact;
     let cu = custom;
+    if (!cu && c && idKeyMap) cu = contactCustomRecord(c, idKeyMap);
     if (!cu) {
       if (!client) return { facts: 0, events: 0 };
       ({ contact: c, custom: cu } = await readCustom({ client, locationId, contactId, contact }));

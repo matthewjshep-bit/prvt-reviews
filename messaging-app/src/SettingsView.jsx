@@ -11,6 +11,7 @@ import {
 import { getCompBookmarklet, getUnderwrites, regenerateCompToken, saveSettings, uploadPsaExhibit } from "./api.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
+import ContactBackfill from "./ContactBackfill.jsx";
 import ConversationTryIt from "./ConversationTryIt.jsx";
 
 const INPUT_CLS =
@@ -558,6 +559,17 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         <div className="mt-3">
           <ConversationTryIt compact />
         </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Contact record</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          The app keeps its own complete record of every agent and investor — what they buy, what they've told
+          us, every offer, deal, pass and dataroom view, with where each fact came from. The GoHighLevel contact
+          fields stay as they are; they are now a summary of this. Fill it once from what already exists; running
+          it again is harmless.
+        </p>
+        <ContactBackfill />
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">

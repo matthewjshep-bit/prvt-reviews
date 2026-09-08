@@ -95,6 +95,21 @@ export const getEnrichSweep = () =>
   fetch(`${API_BASE}/api/offers/enrich/sweep?${locq()}`).then(j).then((r) => r.job);
 export const cancelEnrichSweep = () => post(`/api/offers/enrich/sweep/cancel`, {});
 
+/* ---------- the contact record (the app's own memory of a person) ---------- */
+// Not getContactRecord — that name belongs to the Fields Manager below and
+// reads GHL; these read the app's record.
+export const getContactProfile = (id, { pull = false, party = "" } = {}) =>
+  fetch(`${API_BASE}/api/contacts/${encodeURIComponent(id)}/record?${locq()}${pull ? "&pull=1" : ""}${party ? `&party=${party}` : ""}`).then(j);
+export const saveContactFacts = (id, { party, add = [], remove = [] }) =>
+  post(`/api/contacts/${encodeURIComponent(id)}/facts`, { party, add, remove });
+export const addContactEvent = (id, body) =>
+  post(`/api/contacts/${encodeURIComponent(id)}/events`, body);
+export const runContactBackfill = (opts = {}) =>
+  post(`/api/contacts/backfill`, opts).then((r) => r.job);
+export const cancelContactBackfill = () => post(`/api/contacts/backfill/cancel`, {});
+export const getContactBackfill = () =>
+  fetch(`${API_BASE}/api/contacts/backfill/status?${locq()}`).then(j);
+
 /* ---------- CRM fields manager ---------- */
 export const listCustomFields = () =>
   fetch(`${API_BASE}/api/offers/custom-fields?${locq()}`).then(j).then((r) => r.fields);

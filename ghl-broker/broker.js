@@ -14,6 +14,7 @@ import createOffersRouter from "./routes/offers.js";
 import createOutreachRouter from "./routes/outreach.js";
 import createDashboardRouter from "./routes/dashboard.js";
 import createDispoRouter from "./routes/dispo.js";
+import createContactsRouter from "./routes/contacts.js";
 import { createDataroomRouter, createDataroomPublicRouter } from "./routes/dataroom.js";
 import { createOfferPageRouter, createOfferPagePublicRouter } from "./routes/offer-page.js";
 import { store } from "./store.js";
@@ -129,6 +130,9 @@ app.use("/api/offers", createOffersRouter({ resolveLocation, uploadDir: UPLOAD_D
 app.use("/api/outreach", createOutreachRouter({ resolveLocation }));
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
 app.use("/api/dispo", createDispoRouter({ resolveLocation }));
+// The contact record: the app's own memory of every agent and investor, and
+// the drawer's door to it. GHL's custom fields are a digest of this.
+app.use("/api/contacts", createContactsRouter({ resolveLocation }));
 app.use("/api/datarooms", createDataroomRouter({ resolveLocation, publicBaseUrl: DATAROOM_BASE_URL }));
 // Agent-facing offer packages. These live on the OFFERS hostname, not the
 // deals one: an agent gets links branded like the documents they already have,
