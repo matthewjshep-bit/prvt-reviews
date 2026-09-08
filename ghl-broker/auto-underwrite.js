@@ -45,6 +45,7 @@ import {
 } from "./ghl.js";
 import { SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { learnFacts, recordEvent } from "./contact-record.js";
+import { currentFacts } from "./shared/contact-record.js";
 
 /* ---------- the dials ---------- */
 
@@ -435,7 +436,15 @@ const subjectPropertyFieldId = (client, locationId) =>
 
 // The contact's current Subject Property, off a contact record we already have.
 // Needs the field's id, which is created on demand like every other app field.
-async function readSubjectProperty(client, locationId, contact) {
+async function readSubjectProperty(client, locationId, contact, { store = null, contactId = "" } = {}) {
+  // The record first: the aim the app filed outranks the GHL field, which
+  // is a copy of it (and can lag a write, or drift by key).
+  if (store?.getContactProfile && contactId) {
+    try {
+      const aim = currentFacts((await store.getContactProfile(locationId, contactId))?.facts || {}).subject_property;
+      if (aim) return String(aim).trim();
+    } catch { /* fall through to the field */ }
+  }
   if (!contact) return "";
   try {
     const id = await subjectPropertyFieldId(client, locationId);
@@ -668,7 +677,7 @@ async function runUnderwrite(job, ctx) {
   //      kept current by the AI sweep and by runs like this one
   //   3. the conversation itself — a model call, and the only one that can be
   //      wrong, which is why it alone is gated on high confidence
-  const fieldAddress = job.suppliedAddress ? "" : await readSubjectProperty(client, locationId, contact);
+  const fieldAddress = job.suppliedAddress ? "" : await readSubjectProperty(client, locationId, contact, { store, contactId: job.contactId });
 
   let extraction;
   if (job.suppliedAddress) {

@@ -19,6 +19,7 @@ import { dealNumbers } from "./dataroom.js";
 import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
+import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty } from "./shared/contact-record.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -138,7 +139,24 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
 const historyTail = (v, n = HISTORY_LINES_IN_CONTEXT) =>
   String(v || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-n);
 
-export function buildAgentContext({ offers, custom = {}, now = Date.now(), showMath = false }) {
+// The record first, GHL second. Where the app has a fact it wins; where it
+// has none the GHL field fills the gap — so a contact with an empty record
+// reads exactly as it did before the record existed, and one with a full
+// record reads from the source of truth. Same 400-char slices either way.
+const EVENTS_IN_CONTEXT = 12;
+export const recordOverCustom = (custom = {}, facts = null) =>
+  facts && !factsEmpty(facts) ? { ...custom, ...factsAsCustom(facts) } : custom;
+// The ledger the prompt shows: the newest EVENTS_IN_CONTEXT ledger events,
+// oldest first, in the same line format the GHL field carries — or the tail
+// of the GHL field when the record has nothing.
+export function historyFromRecord(events = [], party, fallbackField) {
+  const ledger = ledgerEvents(events, party).slice().sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  if (ledger.length) return ledger.slice(-EVENTS_IN_CONTEXT).map(eventToHistoryLine);
+  return historyTail(fallbackField);
+}
+
+export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null }) {
+  const custom = recordOverCustom(rawCustom, facts);
   const book = summarizeOffers(offers, { now, showMath });
   const amounts = new Set(book.amounts);
   const fields = fieldLines(custom, AGENT_FIELD_KEYS);
@@ -153,7 +171,7 @@ export function buildAgentContext({ offers, custom = {}, now = Date.now(), showM
     ? `THE LISTING WE FIRST REACHED OUT ABOUT: ${hookAddress}` +
       (hookPrice ? ` — listed at ${fmtMoney(hookPrice)}` : "") + (hookDom ? `, ${hookDom} days on market` : "")
     : "";
-  const history = historyTail(custom.agent_deal_history);
+  const history = historyFromRecord(events, "agent", custom.agent_deal_history);
 
   const text = [
     book.count
@@ -169,9 +187,21 @@ export function buildAgentContext({ offers, custom = {}, now = Date.now(), showM
   };
 }
 
+// The contact's record, when the store has one. A store without the
+// tables (a test double, a first boot) answers empty and the GHL fields
+// carry the prompt as they always did.
+async function loadRecord(store, locationId, contactId) {
+  let facts = null;
+  let events = [];
+  try { facts = (await store.getContactProfile?.(locationId, contactId))?.facts || null; } catch { facts = null; }
+  try { events = (await store.listContactEvents?.(locationId, contactId, { limit: 200 })) || []; } catch { events = []; }
+  return { facts, events };
+}
+
 export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
-  return buildAgentContext({ offers: rows, custom, now, showMath });
+  const { facts, events } = await loadRecord(store, locationId, contactId);
+  return buildAgentContext({ offers: rows, custom, now, showMath, facts, events });
 }
 
 /* ---------- is this a deal you are working yourself? ---------- */
@@ -288,8 +318,11 @@ export function blastTagged(tags = [], address = "", prefix = "dispo") {
   });
 }
 
-export function buildInvestorContext({ investor = {}, deals = [], invites = [], custom = {}, contactId = "", tags = [], blastPrefix = "dispo", now = Date.now() }) {
-  const buybox = investor.buybox || normalizeBuybox(custom);
+export function buildInvestorContext({ investor = {}, deals = [], invites = [], custom: rawCustom = {}, contactId = "", tags = [], blastPrefix = "dispo", now = Date.now(), events = [], facts = null }) {
+  const custom = recordOverCustom(rawCustom, facts);
+  // A record with facts outranks the dispo cache's buy box: the cache is a
+  // copy of GHL, and the record is what GHL is a copy of.
+  const buybox = facts && !factsEmpty(facts) ? normalizeBuybox(custom) : (investor.buybox || normalizeBuybox(custom));
   const profile = buildBuyboxProfile({ ...investor, buybox }, { maxChars: 900 });
   const inviteByRoom = new Map();
   for (const i of invites) if (i?.dataroomId) inviteByRoom.set(i.dataroomId, i);
@@ -337,7 +370,7 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
   const forbiddenAmounts = [...forbidden].filter((n) => !amounts.has(n));
 
   const fields = fieldLines(custom, INVESTOR_FIELD_KEYS);
-  const history = historyTail(investor.dealHistory || custom.investor_deal_history);
+  const history = historyFromRecord(events, "investor", investor.dealHistory || custom.investor_deal_history);
   const standing = { committed: "they were the buyer", passed: "they passed on it", evaluating: "they were looking at it" };
   const goneLines = gone.slice(0, 3).map((g) => `- ${g.address}: ${GONE_WORD[g.stage] || g.stage}${g.theirs && standing[g.theirs] ? ` — ${standing[g.theirs]}` : ""}${g.reason ? ` (${g.reason})` : ""}`);
   const text = [
@@ -399,8 +432,9 @@ export async function loadInvestorContext({ store, locationId, contactId, contac
     if (store.listDataroomInvitesByContact) invites = await store.listDataroomInvitesByContact(locationId, contactId);
   } catch { /* the invite line is decoration */ }
 
+  const { facts, events } = await loadRecord(store, locationId, contactId);
   return buildInvestorContext({
-    investor, deals, invites, custom, contactId, tags, now,
+    investor, deals, invites, custom, contactId, tags, now, facts, events,
     blastPrefix: String(settings?.dispoBlastTagPrefix || "dispo"),
   });
 }

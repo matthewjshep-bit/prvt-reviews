@@ -196,3 +196,56 @@ test("a store that cannot answer fails open — a hold is a nicety, a dropped re
   const store = { listOffers: async () => { throw new Error("db down"); }, listDeals: async () => [] };
   assert.equal(await liveDealHold({ store, locationId: "LOC", contactId: "c1" }), null);
 });
+
+/* ---------- the record in the prompt ---------- */
+
+test("an empty record reads exactly as the GHL fields did — byte for byte", () => {
+  const custom = { personal_details: "two kids", agent_market_area: "Kent, Auburn", subject_property: "1 Old St, Kent, WA",
+    agent_deal_history: "2026-07-01 | 1 Old St, Kent, WA | we offered $300,000\n2026-07-05 | 1 Old St, Kent, WA | agent countered — wants 320", hook_address: "1 Old St, Kent, WA", hook_price: "350000" };
+  const before = buildAgentContext({ offers: [], custom, now: NOW });
+  const after = buildAgentContext({ offers: [], custom, now: NOW, facts: {}, events: [] });
+  assert.equal(after.text, before.text);
+  assert.deepEqual(after.amounts, before.amounts);
+  const invBefore = buildInvestorContext({ investor: INVESTOR, deals: [], custom: { personal_details: "likes fishing" }, contactId: "c1", now: NOW });
+  const invAfter = buildInvestorContext({ investor: INVESTOR, deals: [], custom: { personal_details: "likes fishing" }, contactId: "c1", now: NOW, facts: null, events: [] });
+  assert.equal(invAfter.text, invBefore.text);
+});
+
+test("a record with facts outranks the GHL fields, and GHL still fills the gaps", () => {
+  const custom = { personal_details: "two kids", agent_market_area: "Kent", subject_property: "1 Old St, Kent, WA" };
+  const facts = {
+    agent_market_area: [{ value: "Kent", source: "import" }, { value: "Renton", source: "conversation" }],
+    subject_property: [{ value: "1 Old St, Kent, WA", source: "import" }, { value: "9 New Ave, Renton, WA", source: "conversation" }],
+  };
+  const ctx = buildAgentContext({ offers: [], custom, now: NOW, facts, events: [] });
+  assert.match(ctx.text, /9 New Ave, Renton, WA/, "the record's newest subject wins");
+  assert.doesNotMatch(ctx.text, /1 Old St, Kent, WA/);
+  assert.match(ctx.text, /Kent, Renton/, "the list is the record's union");
+  assert.match(ctx.text, /two kids/, "a field the record has nothing for still shows");
+  // An investor's buy box comes from the record when it has one, even when the dispo cache carries an older one.
+  const inv = buildInvestorContext({
+    investor: { ...INVESTOR, buybox: { areas: ["Seattle"], priceMin: 300000, priceMax: 500000, propertyTypes: [], rehabAppetite: null, lotMin: null, exclusions: "" } },
+    deals: [], custom: {}, contactId: "c1", now: NOW,
+    facts: { buybox_areas: [{ value: "Tacoma", source: "conversation" }], buybox_price_max: [{ value: "650000", source: "conversation" }] },
+  });
+  assert.match(inv.text, /Tacoma/);
+  assert.ok(inv.amounts.includes(650000), "the record's band is what they'll echo");
+});
+
+test("the ledger in the prompt is the record's newest twelve events, oldest first", () => {
+  const events = Array.from({ length: 20 }, (_, i) => ({
+    type: "offer_sent", party: "agent", at: `2026-0${1 + Math.floor(i / 9)}-${String((i % 9) + 1).padStart(2, "0")}T12:00:00Z`,
+    address: `${i} Elm St, Kent, WA`, data: { amountText: `$${i}` },
+  }));
+  const ctx = buildAgentContext({ offers: [], custom: { agent_deal_history: "2020-01-01 | 0 Ancient Rd | passed on our offer" }, now: NOW, events, facts: null });
+  const lines = ctx.text.split("\n").filter((l) => /^- \d{4}-/.test(l));
+  assert.equal(lines.length, 12);
+  assert.match(lines[0], /8 Elm St/, "the oldest of the newest twelve");
+  assert.match(lines[11], /19 Elm St/);
+  assert.doesNotMatch(ctx.text, /Ancient Rd/, "the GHL tail is the fallback, not a supplement");
+  // Non-ledger events never reach the ledger block.
+  const tagsOnly = buildAgentContext({ offers: [], custom: { agent_deal_history: "2020-01-01 | 0 Ancient Rd | passed on our offer" }, now: NOW,
+    events: [{ type: "tag_added", at: "2026-01-01T00:00:00Z", data: { tag: "tier-1" } }], facts: null });
+  assert.match(tagsOnly.text, /Ancient Rd/, "with no ledger events the GHL tail still shows");
+  assert.doesNotMatch(tagsOnly.text, /tier-1/);
+});

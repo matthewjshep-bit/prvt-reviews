@@ -18,8 +18,8 @@
 // ones, and blast carries the same double gate as the agent-outreach import.
 
 import express from "express";
-import { recordEvent, learnFacts, forgetFact } from "../contact-record.js";
-import { FACT_KEYS } from "../shared/contact-record.js";
+import { recordEvent, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
+import { FACT_KEYS, factsAsCustom, factsEmpty } from "../shared/contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
 import {
@@ -414,6 +414,22 @@ export default function createDispoRouter({ resolveLocation }) {
           buyboxText: buildBuyboxProfile({ ...doc, buybox }),
         };
       });
+
+      // The record: every synced contact's fields fill whatever the record
+      // lacks (zero extra GHL calls — the contact is in hand), and the cache's
+      // buy box is then rendered record-first, so a fact filed from a
+      // conversation an hour ago outranks a GHL field written last month.
+      const byId = new Map(contacts.map((c) => [c.id, c]));
+      for (const r of rows) {
+        try {
+          await reconcileFromGhl({ store, locationId, contactId: r.contactId, party: "investor", contact: byId.get(r.contactId), custom: r.doc.custom });
+          const facts = (await store.getContactProfile(locationId, r.contactId))?.facts || null;
+          if (facts && !factsEmpty(facts)) {
+            const merged = { ...r.doc.custom, ...factsAsCustom(facts) };
+            r.buyboxText = buildBuyboxProfile({ ...r.doc, custom: merged, buybox: normalizeBuybox(merged) });
+          }
+        } catch (e) { console.error(`dispo: record reconcile failed contact=${r.contactId}:`, e?.message); }
+      }
 
       const { created, updated } = await store.upsertInvestors(locationId, rows);
 

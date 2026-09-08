@@ -822,6 +822,58 @@ the tab (default 60, plus 12 per contact), counted from the store so a
 restart can't reset it. No Apify. Two drafts in flight per location at a
 time. Settled drafts older than the retention (180 days) are pruned daily.
 
+## Contact record (the app is the system of record; GHL is the digest)
+
+Every agent and investor has a record in the app: **facts** with provenance
+(what they buy, what they've told us, their brokerage, the property they're
+on about — each with where it came from and when) and an append-only
+**timeline** (every offer, revision, counter, pass, deal stage, blast,
+dataroom link and view, conversation summary, sweep run, tag change, note).
+Two tables, `contact_profiles` and `contact_events`; the dispo `investors`
+re-sync never touches them and nothing is ever dropped for length.
+
+**GHL's custom fields keep their exact meaning.** `personal_details`,
+`buybox_*`, `agent_deal_history` and the rest are now a *digest* rendered
+from the record: every writer that used to write only to GHL first records
+to the app, then makes the same GHL write it always made (the tests assert
+the payload is byte-identical). Your workflows, tags and filters see no
+change. What changed is that the record behind them is complete — a ledger
+field that drops its oldest lines at 2,000 characters is a summary, and now
+it is only a summary.
+
+**Precedence.** The record wins where it has a value; GHL fills the gaps. A
+field someone typed straight into GHL is pulled into the record as a fact
+with source `operator` on the next drawer open, dispo sync, or backfill.
+GHL never deletes anything from the record. Deleting is a drawer action:
+removing a fact there leaves a tombstone (the sweep cannot put it back) and
+re-renders the GHL field without it.
+
+**The drawer.** Click any contact name — an outbox row, a deal's agent or
+buyer, an offer in History, an investor in the book — and their record
+slides in on either host; `?contact=<id>` deep-links to it. Facts wear a
+source chip: violet when the AI inferred them (a text, a call, the sweep),
+slate when a person stated them or a record produced them. Add a fact there
+and it projects into GHL the same way. "Pull from GHL" re-reads the contact.
+
+**Fill it once.** Settings → *Contact record* → **Fill the record** walks
+every offer, deal, draft and dataroom invite in the app (no GHL calls), then
+reads each contact from GHL once (150 ms apart) and files its fields and
+ledger lines. Every event carries a dedupe key, so a line the app derives
+from an offer and the same line GHL already holds land on one row; running
+it again reports 0 new. Operator-triggered, never on boot.
+
+**What the model reads.** The prompt builders take the record first: the
+newest twelve ledger events rendered in the same line format, and facts
+laid over the GHL fields (record wins, GHL fills). A contact with an empty
+record reads exactly as before — the test asserts it byte for byte. The
+auto-underwriter's Subject Property read prefers the record's aim over the
+field; the dispo sync reconciles each investor from the contact it already
+holds and renders the cache's buy box record-first.
+
+**File store.** Without `DATABASE_URL` the record lives in `data/store.json`
+under `contactProfiles` and `contactEvents`, never pruned — fine for dev,
+not a production shape.
+
 ## Agent Outreach
 
 **Separate app, same Netlify site.** Agent Outreach lives at the `/agents`
