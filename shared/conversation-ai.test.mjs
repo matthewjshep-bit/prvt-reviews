@@ -353,3 +353,26 @@ test("a buyer who passes is taken out of the deal's drips, not left in them", ()
   const blind = starterConfig({ signer: "Matt" }).parties.investor.intentRules;
   assert.deepEqual(blind.passing.actions.map((a) => a.type), ["mark_investor_passed"]);
 });
+
+test("a version-1 config is brought up to 'everything on' once; version 2 is left as the page says", () => {
+  const v1 = normalizeConversationAi({
+    version: 1,
+    parties: { agent: { autoSend: { enabled: false, intents: [] }, realmCheck: { enabled: false } }, investor: { autoSend: { enabled: false, intents: ["question"] } } },
+    autoSend: { humanActiveMin: 30 },
+  });
+  assert.equal(v1.version, 2);
+  assert.equal(v1.parties.agent.autoSend.enabled, true);
+  assert.deepEqual(v1.parties.agent.autoSend.intents, autoEligible("agent"));
+  assert.equal(v1.parties.investor.autoSend.enabled, true);
+  assert.deepEqual(v1.parties.investor.autoSend.intents, autoEligible("investor"));
+  assert.equal(v1.parties.agent.realmCheck.enabled, true);
+  assert.equal(v1.parties.agent.takeCheck.enabled, true);
+  assert.equal(v1.autoSend.humanActiveMin, 0);
+  // Once saved as version 2, the operator's choices stand.
+  const v2 = normalizeConversationAi({ ...v1, parties: { ...v1.parties, agent: { ...v1.parties.agent, autoSend: { enabled: false, intents: [] } } }, autoSend: { ...v1.autoSend, humanActiveMin: 30 } });
+  assert.equal(v2.parties.agent.autoSend.enabled, false);
+  assert.equal(v2.autoSend.humanActiveMin, 30);
+  assert.deepEqual(normalizeConversationAi(v2), v2, "idempotent at version 2");
+  // A doc with no version at all (a test fixture, a hand-written blob) is not migrated.
+  assert.equal(normalizeConversationAi({ parties: { agent: { autoSend: { enabled: false, intents: [] } } } }).parties.agent.autoSend.enabled, false);
+});

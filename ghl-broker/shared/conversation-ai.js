@@ -263,7 +263,7 @@ export const DEFAULT_OPT_OUT_KEYWORDS = [
 ];
 
 export const CONVERSATION_AI_DEFAULTS = Object.freeze({
-  version: 1,
+  version: 2,
   enabled: true,
   dailyCap: 60,
   persona: { name: "", role: "", voice: "", signOff: "", length: "short", useFirstName: true, ifAskedIfBot: "" },
@@ -469,8 +469,8 @@ export function normalizeConversationAi(doc, seed = {}) {
   const investorTags = "investorTags" in routing ? list(routing.investorTags, { max: 30, each: 80, lower: true }) : [...D.routing.investorTags];
   const botOffTags = "botOffTags" in routing ? list(routing.botOffTags, { max: 20, each: 80, lower: true }) : [...D.routing.botOffTags];
 
-  return {
-    version: 1,
+  const out = {
+    version: 2,
     enabled: bool(d.enabled, D.enabled),
     // 0 = no cap, on both. Above that the ceiling is generous rather than
     // opinionated: a blast to a big buyer list is a real day, not a runaway.
@@ -537,6 +537,20 @@ export function normalizeConversationAi(doc, seed = {}) {
       humanActiveMin: int(auto.humanActiveMin, D.autoSend.humanActiveMin, 0, 1440),
     },
   };
+  // Version 1 → 2, once. A deploy never edits a saved setting — except this
+  // once, at Matt's explicit ask on 2026-09-07 ("can you enable these"):
+  // auto-send on for both parties with everything the gates allow, both
+  // floats on, and no stand-down window. A doc already at version 2 keeps
+  // whatever the page says; the first Save after this writes version 2.
+  if (Number(d.version) === 1) {
+    for (const party of PARTIES) {
+      out.parties[party].autoSend = { enabled: true, intents: autoEligible(party) };
+    }
+    out.parties.agent.realmCheck = { enabled: true };
+    out.parties.agent.takeCheck = { enabled: true };
+    out.autoSend.humanActiveMin = 0;
+  }
+  return out;
 }
 
 /* ---------- opt-out detection ---------- */
