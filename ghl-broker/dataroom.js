@@ -759,7 +759,8 @@ html.lb-open{overflow:hidden}
   object-fit:contain;border-radius:4px;transition:opacity .2s}
 .lb-f img:not([src]){visibility:hidden}
 .lb.loading .lb-f img{opacity:.35}
-.lb-f video{display:block;max-width:100%;max-height:100%;min-height:0;width:auto;height:auto;background:#000;border-radius:4px}
+.lb-f video{display:block;height:100%;max-height:100%;width:auto;max-width:100%;min-height:0;object-fit:contain;
+  background:#000;border-radius:4px}
 .lb-f img[hidden],.lb-f video[hidden]{display:none}
 .lb-c{flex:0 0 auto;color:#CBD5E1;font-size:13px;line-height:1.4;margin:10px 0 0;text-align:center;max-width:640px}
 .lb-c:empty{display:none}
