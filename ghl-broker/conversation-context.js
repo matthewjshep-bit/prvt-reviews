@@ -19,6 +19,7 @@ import { dealNumbers } from "./dataroom.js";
 import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
+import { addressKey as propertyKey } from "./shared/us-address.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
@@ -199,14 +200,33 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
       if (f.number) amounts.add(Math.round(Number(v)));
       return `- ${f.label}: ${f.number ? fmtMoney(v) : f.values ? String(v).replace(/_/g, " ") : v}`;
     });
-    const core = dossier.missing.filter((f) => f.priority === "core");
+    const core = dossier.asks.filter((f) => f.priority === "core");
     const nice = dossier.missing.filter((f) => f.priority !== "core");
     dossierText = `WHAT WE HAVE ON ${subject}:\n${haveLines.join("\n")}` +
       (core.length ? `\nSTILL MISSING (ask for ONE of these, the most useful next): ${core.map((f) => f.ask).join("; ")}` : "\nNothing we need is missing — it's ready for underwriting.") +
       (nice.length ? `\nDON'T ASK, BUT FILE IF THEY SAY IT: ${nice.map((f) => f.ask).join("; ")}` : "");
   } else if (subject) {
-    dossierText = `WHAT WE HAVE ON ${subject}: nothing yet.\nSTILL MISSING (ask for ONE of these, the most useful next): ${CORE_DETAIL_FIELDS.map((f) => f.ask).join("; ")}` +
+    const seen = new Set();
+    const coreAsks = CORE_DETAIL_FIELDS.filter((f) => { const g = f.askGroup || f.key; if (seen.has(g)) return false; seen.add(g); return true; });
+    dossierText = `WHAT WE HAVE ON ${subject}: nothing yet.\nSTILL MISSING (ask for ONE of these, the most useful next): ${coreAsks.map((f) => f.ask).join("; ")}` +
       `\nDON'T ASK, BUT FILE IF THEY SAY IT: ${PROPERTY_DETAIL_FIELDS.filter((f) => f.priority !== "core").map((f) => f.ask).join("; ")}`;
+  }
+  // Our own underwrite on the subject, when there is one and we don't yet
+  // have their take: the bot leads with ours to get theirs, the way Matt
+  // does — "I'm thinking $850K ARV and $200K+ of rehab. What do you think?"
+  // The two figures are allowed in the reply for exactly this; they are
+  // never an offer.
+  if (subject && dossier && !dossier.have.arv && !dossier.have.rehab) {
+    const mine = (offers || []).find((o) => o?.address && propertyKey(o.address) === propertyKey(subject) && (Number(o.arv) > 0 || Number(o.repairs) > 0));
+    if (mine) {
+      const arv = Math.round(Number(mine.arv) || 0);
+      const rehab = Math.round(Number(mine.repairs) || 0);
+      if (arv) amounts.add(arv);
+      if (rehab) amounts.add(rehab);
+      const k = (n) => `$${Math.round(n / 1000)}K`;
+      dossierText += `\nOUR UNDERWRITE ON IT: ${[arv ? `ARV ${fmtMoney(arv)}` : "", rehab ? `rehab about ${fmtMoney(rehab)}` : ""].filter(Boolean).join(", ")}. ` +
+        `To get their take, lead with ours as an opinion, in one question: "I'm thinking ${arv ? `${k(arv)} After Repair Value` : "…"}${arv && rehab ? " and " : ""}${rehab ? `${k(rehab)}+ of rehab` : ""}. What do you think?" — this is not an offer and must not read as one.`;
+    }
   }
 
   const text = [

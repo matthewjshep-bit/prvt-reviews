@@ -550,8 +550,11 @@ export function inviteEvents(invite, { address = "" } = {}) {
 export const PROPERTY_DETAIL_FIELDS = [
   { key: "condition", label: "Condition", ask: "the overall condition", priority: "core" },
   { key: "workNeeded", label: "Work needed", ask: "what work it needs", priority: "core" },
-  { key: "arv", label: "Their ARV", ask: "what they think it's worth fixed up", number: true, priority: "core" },
-  { key: "rehab", label: "Their rehab", ask: "what they'd budget for the work", number: true, priority: "core" },
+  // ARV and rehab are one question — "what do you think it's worth done, and
+  // what would you budget for the work?" — so they share an askGroup and the
+  // dossier reports them as one gap.
+  { key: "arv", label: "Their ARV", ask: "their take — what it's worth fixed up AND what they'd budget for the work, as one question", number: true, priority: "core", askGroup: "take" },
+  { key: "rehab", label: "Their rehab", ask: "their take — what it's worth fixed up AND what they'd budget for the work, as one question", number: true, priority: "core", askGroup: "take" },
   { key: "sellerAsk", label: "Seller wants", ask: "what the seller needs to get", number: true, priority: "nice" },
   { key: "timeline", label: "Timeline", ask: "the seller's timeline", priority: "nice" },
   { key: "occupancy", label: "Occupancy", ask: "whether it's vacant or occupied", values: ["vacant", "owner_occupied", "tenant", "unknown"], priority: "nice" },
@@ -595,7 +598,19 @@ export function propertyDossier(events = [], address) {
     }
     for (const f of PROPERTY_DETAIL_FIELDS) if (d[f.key] != null && d[f.key] !== "") have[f.key] = { value: d[f.key], at: e.at };
   }
-  return { address, have, missing: PROPERTY_DETAIL_FIELDS.filter((f) => !have[f.key]) };
+  const missing = PROPERTY_DETAIL_FIELDS.filter((f) => !have[f.key]);
+  // One line per question to ask: grouped fields collapse, and a group with
+  // either half answered is not asked again — "what would you budget" after
+  // they've given an ARV reads as a follow-up, and the model can do that on
+  // its own.
+  const seen = new Set();
+  const asks = missing.filter((f) => {
+    const g = f.askGroup || f.key;
+    if (seen.has(g)) return false;
+    seen.add(g);
+    return !f.askGroup || !PROPERTY_DETAIL_FIELDS.some((o) => o.askGroup === f.askGroup && have[o.key]);
+  });
+  return { address, have, missing, asks };
 }
 
 /* ---------- drawer helpers ---------- */
