@@ -272,8 +272,9 @@ test("the prompt carries the subject property's dossier and the next thing to as
     { type: "agent_estimate", at: "2026-09-05T00:00:00Z", address: A, data: { arv: 715000, rehab: 40000 } },
   ];
   const ctx = buildAgentContext({ offers: [], custom: { subject_property: A }, now: NOW, events, facts: null });
-  assert.match(ctx.text, /WHAT WE HAVE ON 12703 Vernon Ave SW, Lakewood, WA 98498:\n- Condition: dated, solid bones\n- Seller wants: \$480,000\n- Their ARV: \$715,000\n- Their rehab: \$40,000/);
-  assert.match(ctx.text, /STILL MISSING \(ask for ONE of these, the most useful next\): what work it needs; the seller's timeline; whether it's vacant or occupied/);
+  assert.match(ctx.text, /WHAT WE HAVE ON 12703 Vernon Ave SW, Lakewood, WA 98498:\n- Condition: dated, solid bones\n- Their ARV: \$715,000\n- Their rehab: \$40,000\n- Seller wants: \$480,000/);
+  assert.match(ctx.text, /STILL MISSING \(ask for ONE of these, the most useful next\): what work it needs\n/, "only the core gap is asked for");
+  assert.match(ctx.text, /DON'T ASK, BUT FILE IF THEY SAY IT: the seller's timeline; whether it's vacant or occupied/);
   assert.ok(ctx.amounts.includes(480000), "the seller's number may be echoed");
   // A subject with nothing on it yet lists the whole checklist; no subject, no block.
   assert.match(buildAgentContext({ offers: [], custom: { subject_property: "1 Elm St" }, now: NOW, events: [], facts: null }).text, /WHAT WE HAVE ON 1 Elm St: nothing yet\.\nSTILL MISSING/);

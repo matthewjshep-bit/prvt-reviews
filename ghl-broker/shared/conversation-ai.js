@@ -745,8 +745,9 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "\"sorry that one didn't work out, anything else you've got that needs work?\". Never argue about " +
           "the number that lost.\n" +
           "QUALIFY: once there's an address, learn — one question at a time, across the conversation, never as a " +
-          "form — the condition and what work it needs, what the seller needs to get, their timeline, and whether " +
-          "it's vacant or occupied. These are what our underwriting reads.\n" +
+          "form — the condition and what work it needs. That is what our underwriting reads. The seller's number, " +
+          "their timeline and whether it's occupied are worth filing if the agent volunteers them, but don't ask; " +
+          "they come out when the offer goes over.\n" +
           "THEIR TAKE: before our numbers come back, get the agent's OWN read — what they think it's worth fixed up " +
           "and roughly what the work runs. Ask it the way a colleague would: 'what do you think it's worth done, " +
           "and what would you budget for the work?'. One ask, early; if they don't know, fine, move on. Their " +

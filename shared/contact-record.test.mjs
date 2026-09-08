@@ -251,7 +251,7 @@ test("a property's dossier is the newest answer per field, and names what is sti
   assert.equal(d.have.sellerAsk.value, 480000);
   assert.equal(d.have.occupancy.value, "tenant");
   assert.equal(d.have.arv.value, 715000, "their take folds in");
-  assert.deepEqual(d.missing.map((f) => f.key), ["workNeeded", "timeline", "rehab"]);
+  assert.deepEqual(d.missing.map((f) => f.key), ["workNeeded", "rehab", "timeline"], "core gaps first, in ask order");
   assert.equal(propertyDossier(events, ""), null, "no address, no dossier");
   // Normalising what a message added: numbers coerce, enums validate, blanks vanish.
   assert.deepEqual(normalizePropertyDetails({ condition: " needs everything ", workNeeded: "", sellerAsk: "$480,000", timeline: "", occupancy: "Owner Occupied" }),

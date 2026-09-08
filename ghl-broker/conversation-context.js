@@ -19,7 +19,7 @@ import { dealNumbers } from "./dataroom.js";
 import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
-import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS } from "./shared/contact-record.js";
+import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -199,10 +199,14 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
       if (f.number) amounts.add(Math.round(Number(v)));
       return `- ${f.label}: ${f.number ? fmtMoney(v) : f.values ? String(v).replace(/_/g, " ") : v}`;
     });
+    const core = dossier.missing.filter((f) => f.priority === "core");
+    const nice = dossier.missing.filter((f) => f.priority !== "core");
     dossierText = `WHAT WE HAVE ON ${subject}:\n${haveLines.join("\n")}` +
-      (dossier.missing.length ? `\nSTILL MISSING (ask for ONE of these, the most useful next): ${dossier.missing.map((f) => f.ask).join("; ")}` : "\nNothing missing — it's ready for underwriting.");
+      (core.length ? `\nSTILL MISSING (ask for ONE of these, the most useful next): ${core.map((f) => f.ask).join("; ")}` : "\nNothing we need is missing — it's ready for underwriting.") +
+      (nice.length ? `\nDON'T ASK, BUT FILE IF THEY SAY IT: ${nice.map((f) => f.ask).join("; ")}` : "");
   } else if (subject) {
-    dossierText = `WHAT WE HAVE ON ${subject}: nothing yet.\nSTILL MISSING (ask for ONE of these, the most useful next): ${PROPERTY_DETAIL_FIELDS.map((f) => f.ask).join("; ")}`;
+    dossierText = `WHAT WE HAVE ON ${subject}: nothing yet.\nSTILL MISSING (ask for ONE of these, the most useful next): ${CORE_DETAIL_FIELDS.map((f) => f.ask).join("; ")}` +
+      `\nDON'T ASK, BUT FILE IF THEY SAY IT: ${PROPERTY_DETAIL_FIELDS.filter((f) => f.priority !== "core").map((f) => f.ask).join("; ")}`;
   }
 
   const text = [

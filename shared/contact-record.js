@@ -538,15 +538,22 @@ export function inviteEvents(invite, { address = "" } = {}) {
 // What we want to know about a property before it goes to underwriting, in
 // the order a colleague would ask. `label` is how the drawer and the outbox
 // name it; `ask` is how the prompt names what's still missing.
+//
+// `core` fields are what the bot asks for, in this order — the condition and
+// the work are what an underwrite needs, and the agent's own ARV and rehab
+// are the fit check. `nice` fields are filed when an agent volunteers them
+// but never asked for: the seller's number, timeline and occupancy come out
+// in the offer conversation anyway, and asking up front reads as a form.
 export const PROPERTY_DETAIL_FIELDS = [
-  { key: "condition", label: "Condition", ask: "the overall condition" },
-  { key: "workNeeded", label: "Work needed", ask: "what work it needs" },
-  { key: "sellerAsk", label: "Seller wants", ask: "what the seller needs to get", number: true },
-  { key: "timeline", label: "Timeline", ask: "the seller's timeline" },
-  { key: "occupancy", label: "Occupancy", ask: "whether it's vacant or occupied", values: ["vacant", "owner_occupied", "tenant", "unknown"] },
-  { key: "arv", label: "Their ARV", ask: "what they think it's worth fixed up", number: true },
-  { key: "rehab", label: "Their rehab", ask: "what they'd budget for the work", number: true },
+  { key: "condition", label: "Condition", ask: "the overall condition", priority: "core" },
+  { key: "workNeeded", label: "Work needed", ask: "what work it needs", priority: "core" },
+  { key: "arv", label: "Their ARV", ask: "what they think it's worth fixed up", number: true, priority: "core" },
+  { key: "rehab", label: "Their rehab", ask: "what they'd budget for the work", number: true, priority: "core" },
+  { key: "sellerAsk", label: "Seller wants", ask: "what the seller needs to get", number: true, priority: "nice" },
+  { key: "timeline", label: "Timeline", ask: "the seller's timeline", priority: "nice" },
+  { key: "occupancy", label: "Occupancy", ask: "whether it's vacant or occupied", values: ["vacant", "owner_occupied", "tenant", "unknown"], priority: "nice" },
 ];
+export const CORE_DETAIL_FIELDS = PROPERTY_DETAIL_FIELDS.filter((f) => f.priority === "core");
 
 export function normalizePropertyDetails(p) {
   if (!p || typeof p !== "object") return null;

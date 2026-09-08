@@ -179,8 +179,10 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "DETAILS: anything NEW the agent tells you about the property in this message goes under `propertyDetails` — " +
       "condition, what work it needs, what the seller needs to get (dollars), the seller's timeline, whether it's " +
       "vacant or occupied. Only what this message adds; empty for the rest. The context lists what we already " +
-      "have on the property and what's still missing: ask for ONE missing thing per reply, the most useful next " +
-      "one, and never re-ask what we have."
+      "have on the property, what's still missing, and what NOT to ask for: ask for ONE missing thing per reply, " +
+      "the most useful next one, and never re-ask what we have. The seller's number, timeline and occupancy are " +
+      "filed if the agent brings them up but never asked for — those come out when the offer goes over, and " +
+      "asking up front reads as a form."
     );
     parts.push(
       "THEIR TAKE: when the agent states what THEY think the property is worth fixed up, or what the work would " +
