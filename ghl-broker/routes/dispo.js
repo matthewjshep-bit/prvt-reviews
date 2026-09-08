@@ -18,6 +18,8 @@
 // ones, and blast carries the same double gate as the agent-outreach import.
 
 import express from "express";
+import { recordEvent, learnFacts, forgetFact } from "../contact-record.js";
+import { FACT_KEYS } from "../shared/contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
 import {
@@ -515,6 +517,28 @@ export default function createDispoRouter({ resolveLocation }) {
         locationId, contactId, doc, buildBuyboxProfile({ ...doc, buybox })
       );
 
+      // The record: an operator's edit. A list value that was there and is
+      // gone from what they submitted is forgotten with a tombstone, so the
+      // next sweep can't put it back; anything new is a fact they stated.
+      try {
+        const split = (v) => String(v || "").split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
+        const facts = [];
+        for (const [key, next] of Object.entries(changed)) {
+          if (!FACT_KEYS[key]) continue;
+          if (FACT_KEYS[key].kind === "list") {
+            const was = new Set(split(existing[key]).map((x) => x.toLowerCase()));
+            const now = split(next);
+            for (const v of split(existing[key])) if (!now.some((n) => n.toLowerCase() === v.toLowerCase())) {
+              await forgetFact({ store, locationId, contactId, party: "investor", key, value: v, ref: "dispo-buybox" });
+            }
+            for (const v of now) if (!was.has(v.toLowerCase())) facts.push({ key, value: v, source: "operator", ref: "dispo-buybox" });
+          } else if (next !== "") {
+            facts.push({ key, value: next, source: "operator", ref: "dispo-buybox" });
+          }
+        }
+        if (facts.length) await learnFacts({ store, locationId, contactId, party: "investor", facts });
+      } catch (e) { console.error(`dispo: buy-box record failed contact=${contactId}:`, e?.message); }
+
       const fresh = await store.getInvestor(locationId, contactId);
       res.json({ ok: true, changed: Object.keys(changed), investor: hydrate(fresh) });
     } catch (err) { fail(res, err); }
@@ -743,6 +767,11 @@ export default function createDispoRouter({ resolveLocation }) {
           );
           const at = new Date().toISOString();
           await store.setInvestorStatus(locationId, contactId, { lastBlastAt: at });
+          // The record: this deal went out to them. The blast knows its
+          // label, not its deal; the label is the street line by convention
+          // and blastTagged() matches it back to the deal on read.
+          await recordEvent({ store, locationId, contactId, party: "investor", type: "blast_sent", at, address: label || "",
+            source: "blast", ref: blastTag, data: { tag: blastTag, label: label || "" } });
           return { contactId, ok: true, name: row.name, tagged: true, blastedAt: at };
         } catch (e) {
           warnings.push(`${contactId}: ${e.message}`);

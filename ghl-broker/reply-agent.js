@@ -38,6 +38,8 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { buildTranscript, enrichFieldDefs, mergeHistory, mergeFacts, SUBJECT_PROPERTY_FIELD } from "./enrich.js";
+import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
+import { eventFromLedgerLine } from "./shared/contact-record.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
@@ -431,9 +433,41 @@ export function underwritableAddress(raw) {
  * the two never fight. Returns { learned: [line], written: [key] }. Never
  * throws; a field write that fails is a warning on the draft.
  */
-export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", subjectProperty = "", config, now = Date.now(), warnings = [] }) {
+export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", subjectProperty = "", config, now = Date.now(), warnings = [], store = null, draftId = null, intent = "", inbound = "" }) {
   if ((!profile && !subjectProperty) || !contactId || party === "unknown") return { learned: [], written: [] };
   const type = party === "investor" ? "investor" : "agent";
+  // The record first, GHL second. Everything the model read out of this
+  // message is filed as a fact with the draft as its source; the ledger
+  // line becomes a typed event; the conversation itself is on the timeline.
+  // The GHL writes below are unchanged — the digest keeps saying what it
+  // always said.
+  if (store && draftId) {
+    const at = new Date(now).toISOString();
+    const ref = draftId;
+    const facts = [];
+    const list = (key, v) => String(v || "").split(/[,;\n]/).map((x) => x.trim()).filter(Boolean).forEach((value) => facts.push({ key, value, source: "conversation", at, ref }));
+    if (profile?.personalDetails) list("personal_details", profile.personalDetails);
+    if (profile?.marketAreas) list(type === "investor" ? "buybox_areas" : "agent_market_area", profile.marketAreas);
+    if (profile?.nextAction) facts.push({ key: "suggested_next_action", value: profile.nextAction, source: "conversation", at, ref });
+    if (type === "investor") {
+      if (profile?.priceMin) facts.push({ key: "buybox_price_min", value: String(profile.priceMin), source: "conversation", at, ref });
+      if (profile?.priceMax) facts.push({ key: "buybox_price_max", value: String(profile.priceMax), source: "conversation", at, ref });
+      if (profile?.propertyTypes) list("buybox_property_types", profile.propertyTypes);
+      if (profile?.rehabAppetite) facts.push({ key: "rehab_appetite", value: profile.rehabAppetite, source: "conversation", at, ref });
+      if (profile?.exclusions) list("buybox_exclusions", profile.exclusions);
+    }
+    if (type === "agent" && underwritableAddress(subjectProperty)) facts.push({ key: "subject_property", value: subjectProperty, source: "conversation", at, ref });
+    if (config?.profile?.writeSummary && summary) facts.push({ key: "last_convo_summary", value: summary.slice(0, 500), source: "conversation", at, ref });
+    await learnFacts({ store, locationId, contactId, party: type, facts });
+    const events = [];
+    if (summary) events.push({ type: "text_summary", at, source: "conversation", ref, address: subjectProperty || "", data: { summary: summary.slice(0, 500), intent, inbound: String(inbound || "").slice(0, 300) } });
+    if (profile?.dealHistoryLine && profile.dealHistoryLine.includes("|")) {
+      const line = /^\d{4}-\d{2}-\d{2}/.test(profile.dealHistoryLine) ? profile.dealHistoryLine : `${at.slice(0, 10)} | ${profile.dealHistoryLine}`;
+      const ev = eventFromLedgerLine(line, { party: type, source: "conversation", ref });
+      if (ev) events.push(ev);
+    }
+    if (events.length) await recordEvents({ store, locationId, contactId, party: type, events });
+  }
   const defs = new Map(enrichFieldDefs(type).map((f) => [f.key, f]));
   if (!defs.has("subject_property")) defs.set("subject_property", SUBJECT_PROPERTY_FIELD);
   const today = new Date(now).toISOString().slice(0, 10);
@@ -451,6 +485,7 @@ export async function applyProfileUpdates({ client, locationId, contactId, party
     if (aim && addressKey(aim) !== addressKey(cur("subject_property"))) {
       writes.subject_property = aim;
       learned.push(`subject property: ${aim}`);
+      if (store && draftId) await recordEvent({ store, locationId, contactId, party: "agent", type: "subject_property_set", at: new Date(now).toISOString(), address: aim, source: "conversation", ref: draftId, data: { from: cur("subject_property") } });
     }
   }
   if (profile?.personalDetails) {
@@ -1097,6 +1132,7 @@ async function runReply(job, ctx) {
     const filed = await applyProfileUpdates({
       client, locationId, contactId: job.contactId, party, profile: learnable, custom: a.custom,
       summary: draft.summary, subjectProperty: draft.propertyAddress, config, now, warnings,
+      store, draftId: record.id, intent: draft.intent, inbound: job.message,
     });
     if (filed.learned.length || filed.written.length) {
       record = { ...record, profileUpdates: { learned: filed.learned, written: filed.written }, warnings: warnings.slice(0, 6), updatedAt: new Date().toISOString() };
@@ -1109,7 +1145,7 @@ async function runReply(job, ctx) {
     job.phase = "acting";
     const done = await runActions({
       client, locationId, contactId: job.contactId, actions: plan.auto,
-      draft: { ...record, now }, deps,
+      draft: { ...record, now }, deps, store,
     });
     const byId = new Map(done.map((x) => [x.id, x]));
     record = { ...record, actions: record.actions.map((x) => byId.get(x.id) || x), updatedAt: new Date().toISOString() };
@@ -1173,7 +1209,7 @@ async function handleOptOut(job, ctx) {
   job.draftId = record.id;
   const toRun = planned.filter((x) => x.mode === "auto");
   if (toRun.length) {
-    const done = await runActions({ client, locationId, contactId: job.contactId, actions: toRun, draft: { ...record, now: Date.now() }, deps });
+    const done = await runActions({ client, locationId, contactId: job.contactId, actions: toRun, draft: { ...record, now: Date.now() }, deps, store });
     const byId = new Map(done.map((x) => [x.id, x]));
     record = { ...record, actions: record.actions.map((x) => byId.get(x.id) || x), updatedAt: new Date().toISOString() };
     await store.updateReplyDraft(record.id, record).catch(() => {});
@@ -1376,7 +1412,7 @@ export async function applyDraftAction({ client, store, locationId, draftId, act
   const action = (d.actions || []).find((a) => a.id === actionId);
   if (!action) throw Object.assign(new Error("no such action on that draft"), { http: 404 });
   if (action.status !== "pending") throw Object.assign(new Error(`that action was already ${action.status}`), { http: 409 });
-  const [done] = await runActions({ client, locationId, contactId: d.contactId, actions: [action], draft: d, deps });
+  const [done] = await runActions({ client, locationId, contactId: d.contactId, actions: [action], draft: d, deps, store });
   const applied = { ...done, status: done.status === "done" ? "applied" : done.status };
   const updated = { ...d, actions: d.actions.map((a) => (a.id === actionId ? applied : a)), updatedAt: new Date().toISOString() };
   await store.updateReplyDraft(d.id, updated);

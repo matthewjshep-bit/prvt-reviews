@@ -158,3 +158,32 @@ test("a buyer's no carries its reason to the deal, and a gripe with no reason fi
   });
   assert.deepEqual(quiet.map((a) => [a.status, a.detail]), [["done", "nothing they said reads as a reason"]]);
 });
+
+test("tags and fields an intent rule sets are on the record, with the draft as their source", async () => {
+  const profiles = new Map(); const events = [];
+  const store = {
+    getContactProfile: async () => profiles.get("c1") || null,
+    upsertContactProfile: async (_l, id, patch) => { const row = { ...(profiles.get(id) || { facts: {} }), ...patch }; profiles.set(id, row); return row; },
+    appendContactEvents: async (_l, _id, evs) => { events.push(...evs); return { inserted: evs.length, skipped: 0 }; },
+  };
+  const client = { call: async () => ({ customFields: [], customField: { id: "f1" } }) };
+  const out = await runActions({
+    client, locationId: "LOC", contactId: "c1", store,
+    draft: { id: "d3", party: "investor", propertyAddress: "12 Elm St" },
+    actions: [
+      { id: "a1", type: "add_tags", tags: ["investor-hot", "tier-1"] },
+      { id: "a2", type: "remove_tags", tags: ["investor-stale"] },
+      { id: "a3", type: "set_field", key: "buybox_areas", value: "{{propertyAddress}}" },
+      { id: "a4", type: "set_field", key: "some_other_field", value: "x" },
+    ],
+  });
+  assert.ok(out.every((a) => a.status === "done"), JSON.stringify(out));
+  assert.deepEqual(events.filter((e) => e.type === "tag_added").map((e) => e.data.tag), ["investor-hot", "tier-1"]);
+  assert.deepEqual(events.filter((e) => e.type === "tag_removed").map((e) => e.data.tag), ["investor-stale"]);
+  assert.ok(events.every((e) => e.ref === "d3" && e.source === "conversation"));
+  assert.deepEqual(profiles.get("c1").facts.buybox_areas.map((e) => e.value), ["12 Elm St"], "a set_field on a fact key is a fact");
+  assert.equal(profiles.get("c1").facts.some_other_field, undefined, "an arbitrary field is not");
+  // No store at all: the actions still run and nothing throws.
+  const quiet = await runActions({ client, locationId: "LOC", contactId: "c1", draft: { id: "d4" }, actions: [{ id: "b1", type: "add_tags", tags: ["x"] }] });
+  assert.equal(quiet[0].status, "done");
+});

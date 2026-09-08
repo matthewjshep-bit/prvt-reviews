@@ -44,6 +44,7 @@ import {
   updateContact, findOrCreateCustomFieldByKey,
 } from "./ghl.js";
 import { SUBJECT_PROPERTY_FIELD } from "./enrich.js";
+import { learnFacts, recordEvent } from "./contact-record.js";
 
 /* ---------- the dials ---------- */
 
@@ -450,12 +451,18 @@ async function readSubjectProperty(client, locationId, contact) {
 // field updated by the run itself, so the NEXT trigger — and anyone reading the
 // contact in GHL — sees the house we're actually working. Non-fatal; a run is
 // not worth failing over a field write.
-async function writeSubjectProperty(client, locationId, contactId, address, warnings) {
+async function writeSubjectProperty(client, locationId, contactId, address, warnings, { store = null, jobId = null, from = "" } = {}) {
   try {
     const id = await subjectPropertyFieldId(client, locationId);
     await updateContact(client, contactId, { customFields: [{ id, value: address }] });
   } catch (e) {
     warnings.push(`subject property: ${e.message}`);
+  }
+  // The record: the aim moved, and the run that moved it.
+  if (store) {
+    const at = new Date().toISOString();
+    await learnFacts({ store, locationId, contactId, party: "agent", facts: [{ key: "subject_property", value: address, source: "offer", at, ref: jobId }] });
+    await recordEvent({ store, locationId, contactId, party: "agent", type: "subject_property_set", at, address, source: "offer", ref: jobId, data: { from } });
   }
 }
 
@@ -741,7 +748,7 @@ async function runUnderwrite(job, ctx) {
   // Only when this run knows better than the field does. Re-writing the same
   // value would churn the contact's audit trail for nothing.
   if (extraction.source !== "subject_property" && addressKey(extraction.address) !== addressKey(fieldAddress)) {
-    await writeSubjectProperty(client, locationId, job.contactId, extraction.address, warnings);
+    await writeSubjectProperty(client, locationId, job.contactId, extraction.address, warnings, { store, jobId: job.id, from: fieldAddress || "" });
   }
 
   const dupe = await findRecent({ store, locationId, contactId: job.contactId, address: extraction.address });

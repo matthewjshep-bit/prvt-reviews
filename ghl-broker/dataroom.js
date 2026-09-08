@@ -19,6 +19,7 @@
 import crypto from "node:crypto";
 import { fmtMoney } from "./shared/offer-calc.js";
 import { brandMarkSvg } from "./shared/brand-mark.js";
+import { recordEvent } from "./contact-record.js";
 import { zillowUrl } from "./shared/us-address.js";
 
 export const DEFAULT_EXPIRY_DAYS = 14;
@@ -71,8 +72,12 @@ export async function textInvite({ store, client, room, invite, link, message = 
     results.link = { ok: true };
   } catch (e) { results.link = { ok: false, error: e.message }; }
   if (results.link?.ok) {
-    await store.updateDataroomInvite(invite.id, { sentAt: new Date().toISOString() });
+    const at = new Date().toISOString();
+    await store.updateDataroomInvite(invite.id, { sentAt: at });
     await store.logDataroomEvent(room.id, invite.id, "sent", { to: invite.phone || null });
+    await recordEvent({ store, locationId: room.locationId, contactId: invite.contactId, party: "investor", type: "dataroom_sent", at,
+      address: room.address || room.snapshot?.property?.address || "", offerId: room.offerId || null, dealId: room.offerId || null,
+      source: "dataroom", ref: invite.id, data: { dataroomId: room.id } });
   }
   return { sent: Boolean(results.link?.ok), results };
 }

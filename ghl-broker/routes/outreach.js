@@ -23,6 +23,7 @@
 // recorded to power the month-to-date meter in the UI.
 
 import express from "express";
+import { ensureProfile, learnFacts, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
 import { scoreListing, medianPricePerSqft, distressSignals } from "../outreach-score.js";
@@ -734,6 +735,21 @@ export default function createOutreachRouter({ resolveLocation }) {
             ])
           );
           const tagged = applyTag;
+
+          // The record: a new agent, where we found them, and what we seeded.
+          try {
+            const at = new Date().toISOString();
+            await ensureProfile({ store, locationId, contactId, party: "agent", name: a.name || null, phone: a.phone ? e164(a.phone) : null, email: a.email || null });
+            const facts = [];
+            if (a.brokerage) facts.push({ key: "brokerage", value: a.brokerage, source: "import", at, ref: batch.id });
+            if (seeded) facts.push({ key: "subject_property", value: seeded, source: "import", at, ref: batch.id });
+            if (facts.length) await learnFacts({ store, locationId, contactId, party: "agent", facts });
+            await recordEvents({ store, locationId, contactId, party: "agent", events: [
+              { type: "import", at, address: hook.address || "", source: "import", ref: `${batch.id}:${contactId}`,
+                data: { action, batchId: batch.id, batchName: batch.name || "", hook: { address: hook.address || "", price: hook.price || null, dom: hook.dom || null } } },
+              ...[batchTag, ...(sessionTag ? [sessionTag] : []), ...(applyTag ? [OUTREACH_TAG] : [])].map((tag) => ({ type: "tag_added", at, source: "import", ref: batch.id, data: { tag } })),
+            ] });
+          } catch (e) { warnings.push(`${agentKey}: record: ${e.message}`); }
 
           await store.setOutreachAgentStatus(locationId, batch.id, agentKey, {
             status: "imported", contactId, importedAt: new Date().toISOString(),

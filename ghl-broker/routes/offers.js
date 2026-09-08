@@ -87,6 +87,8 @@ import {
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig,
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
+import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
+import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType } from "../shared/contact-record.js";
 import { issueDataroomInvite } from "../dataroom.js";
 import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
 import { fetchRemoteImage, sniffImageType, sniffPdf } from "../fetch-image.js";
@@ -923,10 +925,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
   router.post("/contacts/:id/notes", async (req, res) => {
     try {
-      const { client } = resolveLocation(req);
+      const { locationId, client } = resolveLocation(req);
       const body = String(req.body?.body || "").trim();
       if (!body) return res.status(400).json({ error: "note body required" });
       const note = await createContactNote(client, req.params.id, { body: body.slice(0, 5000) });
+      // A note typed by a person is a timeline event in its own right.
+      await recordEvent({ store, locationId, contactId: req.params.id, type: "note", source: "operator", ref: note?.id || null, data: { text: body.slice(0, 2000) } });
       res.json({ ok: true, note });
     } catch (err) { fail(res, err); }
   });
@@ -1141,6 +1145,30 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         } catch (e) { warnings.push(`note: ${e.message}`); }
       }
 
+      // The record: what a person approved the model's reading of. Facts
+      // carry the sweep as their source; a ledger line becomes a typed event;
+      // the run itself is on the timeline so the drawer shows when it ran.
+      try {
+        const contactId = req.params.id;
+        const at = writes.enrich_last_run;
+        const facts = [];
+        for (const [k, v] of Object.entries(writes)) {
+          if (!FACT_KEYS[k] || v === "" || v == null) continue;
+          const vals = FACT_KEYS[k].kind === "list" ? String(v).split(/[,;\n]/).map((x) => x.trim()).filter(Boolean) : [String(v)];
+          for (const value of vals) facts.push({ key: k, value, source: "sweep", at, ref: `enrich:${contactId}:${at}` });
+        }
+        await learnFacts({ store, locationId, contactId, party: type, facts });
+        const ledgerKey = type === "investor" ? "investor_deal_history" : "agent_deal_history";
+        const lines = String(writes[ledgerKey] || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        await recordEvents({ store, locationId, contactId, party: type, events: [
+          ...lines.map((l) => eventFromLedgerLine(l, { party: type, source: "sweep", ref: `enrich:${contactId}:${at}` })).filter(Boolean),
+          ...tagsAdd.map((tag) => ({ type: "tag_added", at, source: "sweep", ref: `enrich:${contactId}:${at}`, data: { tag } })),
+          ...tagsRemove.map((tag) => ({ type: "tag_removed", at, source: "sweep", ref: `enrich:${contactId}:${at}`, data: { tag } })),
+          { type: "enrich_run", at, source: "sweep", ref: `enrich:${contactId}:${at}`,
+            data: { summary: String(note || "").slice(0, 500), applied: Object.keys(writes).filter((k) => k !== "enrich_last_run"), manual: true } },
+        ] });
+      } catch (e) { warnings.push(`record: ${e.message}`); }
+
       // Best-effort refetch so the UI can show the post-apply state.
       let updated = null;
       try {
@@ -1290,9 +1318,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // the key is one the app owns.
   router.put("/contacts/:id/record", async (req, res) => {
     try {
-      const { client } = resolveLocation(req);
+      const { locationId, client } = resolveLocation(req);
 
       const fieldWrites = [];
+      const recordFacts = [];   // what the operator typed, for the record
+      const recordEventsList = [];
       for (const f of Array.isArray(req.body?.fields) ? req.body.fields : []) {
         const id = String(f?.id || "").trim();
         if (!id) return res.status(400).json({ error: "field id required" });
@@ -1315,6 +1345,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           value = value.slice(0, 2000);
         }
         fieldWrites.push({ id, value });
+        if (FACT_KEYS[key] && value !== "" && value != null) {
+          const vals = FACT_KEYS[key].kind === "list" ? String(value).split(/[,;\n]/).map((x) => x.trim()).filter(Boolean) : [String(value)];
+          for (const v of vals) recordFacts.push({ key, value: v, source: "operator", ref: "fields-manager" });
+        }
+        if ((key === "agent_deal_history" || key === "investor_deal_history") && typeof value === "string") {
+          const party = key === "investor_deal_history" ? "investor" : "agent";
+          for (const l of value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)) {
+            const ev = eventFromLedgerLine(l, { party, source: "operator", ref: "fields-manager" });
+            if (ev) recordEventsList.push(ev);
+          }
+        }
       }
 
       const standard = {};
@@ -1330,6 +1371,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ...standard,
         ...(fieldWrites.length ? { customFields: fieldWrites } : {}),
       });
+      // Mirror into the record. A value removed from a list field here is not
+      // detected (this route sees only the new value) — the drawer is the
+      // place to forget a fact, and it leaves a tombstone.
+      if (Object.keys(standard).length) {
+        await ensureProfile({ store, locationId, contactId: req.params.id,
+          name: [standard.firstName, standard.lastName].filter(Boolean).join(" ") || null, phone: standard.phone || null, email: standard.email || null });
+      }
+      if (recordFacts.length) await learnFacts({ store, locationId, contactId: req.params.id, facts: recordFacts });
+      if (recordEventsList.length) await recordEvents({ store, locationId, contactId: req.params.id, events: recordEventsList });
       res.json({ ok: true });
     } catch (err) { fail(res, err); }
   });
@@ -2166,7 +2216,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         historyLine(created.toISOString(), calc.inputs.address,
           revising
             ? `we revised our offer to ${fmtMoney(calc.offers.cash.amount)}`
-            : `we offered ${fmtMoney(calc.offers.cash.amount)}`));
+            : `we offered ${fmtMoney(calc.offers.cash.amount)}`),
+        { type: revising ? "offer_revised" : "offer_sent", offerId: offer.id, at: created.toISOString(),
+          data: { amount: calc.offers.cash.amount, amountText: fmtMoney(calc.offers.cash.amount) } });
     }
 
     // A revision re-renders the documents the agent's own page publishes, so
@@ -2734,10 +2786,29 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // even when the contact never messages (the sweep would skip them). Reads
   // the current value, merges, and writes back; never throws — the ledger is
   // a convenience mirror, not critical state.
-  async function appendDealHistory(client, locationId, contactId, fieldKey, line) {
+  // `ev` names what the line means — { type, offerId, dealId, source, data } —
+  // so the record gets a typed event rather than a parse of its own words.
+  // The GHL write below is exactly what it was; the record is a bystander.
+  async function appendDealHistory(client, locationId, contactId, fieldKey, line, ev = {}) {
     if (!contactId || !line) return;
+    const party = fieldKey === "agent_deal_history" ? "agent" : "investor";
     try {
-      const type = fieldKey === "agent_deal_history" ? "agent" : "investor";
+      const parsed = parseHistoryLine(line);
+      if (parsed) {
+        const inferred = ledgerEventType(parsed.event, party);
+        await recordEvent({
+          store, locationId, contactId, party,
+          type: ev.type || inferred.type,
+          at: parsed.date ? line.slice(0, 10) === parsed.date && /T/.test(String(ev.at || "")) ? ev.at : `${parsed.date}T12:00:00.000Z` : new Date().toISOString(),
+          address: parsed.address === "unknown property" ? "" : parsed.address,
+          offerId: ev.offerId || null, dealId: ev.dealId || null,
+          source: ev.source || "offer", ref: ev.ref || ev.offerId || null,
+          data: { ...inferred.data, ...(ev.data || {}), phrase: parsed.event, ...(parsed.note ? { note: parsed.note } : {}) },
+        });
+      }
+    } catch (e) { console.error(`offers: deal history record failed contact=${contactId}:`, e?.message); }
+    try {
+      const type = party;
       const def = enrichFieldDefs(type).find((f) => f.key === fieldKey);
       const id = await findOrCreateCustomFieldByKey(client, locationId, fieldKey, def.name, def.dataType);
       if (!id) return;
@@ -2877,7 +2948,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     }
     if (warnings.length) offer.warnings = [...(offer.warnings || []), ...warnings];
     await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
-      historyLine(ts, offer.address, "under contract"));
+      historyLine(ts, offer.address, "under contract"), { type: "deal_promoted", offerId: offer.id, dealId: offer.id, source: "deal", at: ts });
 
     await store.updateOffer(offer.id, offer);
     // Any investor room already built from this offer now quotes the deal's
@@ -2943,7 +3014,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // Best-effort CRM mirror: the ledger line keeps AI enrichment from
       // pitching an agent who already said no; the tag lets workflows branch.
       await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
-        historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), note));
+        historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), note),
+        { type: `offer_${status}`, offerId: offer.id, source: "operator", at: ts });
       await syncAgentOfferTag(client, locationId, offer.contactId);
 
       res.json({ ok: true, offer });
@@ -2980,7 +3052,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           offers.push(offer);
           if (offer.contactId) touchedContacts.add(offer.contactId);
           await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
-            historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), note));
+            historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), note),
+            { type: `offer_${status}`, offerId: offer.id, source: "operator", at: ts });
           results.push({ id, ok: true });
         } catch (e) {
           results.push({ id, ok: false, error: e.message });
@@ -3049,7 +3122,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (stageChanged) {
         await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
           historyLine(deal.updatedAt, offer.address, deal.stage.replace(/_/g, " "),
-            deal.stage === "fell_through" ? deal.fellThroughReason : ""));
+            deal.stage === "fell_through" ? deal.fellThroughReason : ""),
+          { type: deal.stage === "under_contract" ? "deal_promoted" : "deal_stage", offerId: offer.id, dealId: offer.id, source: "deal", at: deal.updatedAt, data: { stage: deal.stage } });
         // A move into/out of closed|fell_through flips whether this deal keeps
         // its investors tagged as on a live deal.
         for (const inv of deal.investors) {
@@ -3109,7 +3183,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       offer.deal.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
       await appendDealHistory(client, locationId, contactId, "investor_deal_history",
-        historyLine(ts, offer.address, "evaluating"));
+        historyLine(ts, offer.address, "evaluating"), { type: "investor_evaluating", offerId: offer.id, dealId: offer.id, source: "operator", at: ts });
       await syncInvestorDealTag(client, locationId, contactId);
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
@@ -3290,7 +3364,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       full.statusNote = full.statusNote || (answer === "yes" ? "agent says the number is in the realm" : "");
       await store.updateOffer(full.id, full);
       await appendDealHistory(client, locationId, contactId, "agent_deal_history",
-        historyLine(ts, full.address, answer === "yes" ? "number in the realm" : "number not in the realm", dealStr(note, 120)));
+        historyLine(ts, full.address, answer === "yes" ? "number in the realm" : "number not in the realm", dealStr(note, 120)),
+        { type: answer === "yes" ? "realm_yes" : "realm_no", offerId: full.id, source: "conversation", at: ts });
       return { ok: true, address: full.address, answer: full.realm.answer };
     },
     linkDealInterest: ({ contactId, addressHint }) =>
@@ -3309,7 +3384,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       recordStatus(offer, status, dealStr(note, 200), ts);
       await store.updateOffer(offer.id, offer);
       await appendDealHistory(client, locationId, contactId, "agent_deal_history",
-        historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), dealStr(note, 200)));
+        historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), dealStr(note, 200)),
+        { type: `offer_${status}`, offerId: offer.id, source: "conversation", at: ts });
       await syncAgentOfferTag(client, locationId, contactId);
       return { ok: true, address: offer.address, status };
     },
@@ -3354,7 +3430,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await store.updateOffer(offer.id, offer);
       const warn = [];
       await appendDealHistory(client, locationId, contactId, "investor_deal_history",
-        historyLine(ts, offer.address, status, said ? feedbackPhrase(said) : ""))
+        historyLine(ts, offer.address, status, said ? feedbackPhrase(said) : ""),
+        { type: `investor_${status}`, offerId: offer.id, dealId: offer.id, source: "conversation", at: ts,
+          data: said ? { code: said.code, reasonNote: said.note } : {} })
         .catch((e) => warn.push(`ledger: ${String(e?.message || e).slice(0, 80)}`));
       await syncInvestorDealTag(client, locationId, contactId)
         .catch((e) => warn.push(`tag: ${String(e?.message || e).slice(0, 80)}`));
@@ -3382,7 +3460,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       offer.deal.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
       await appendDealHistory(client, locationId, contactId, "investor_deal_history",
-        historyLine(ts, offer.address, "feedback", feedbackPhrase(said)));
+        historyLine(ts, offer.address, "feedback", feedbackPhrase(said)),
+        { type: "feedback", offerId: offer.id, dealId: offer.id, source: "conversation", at: ts, data: { code: said.code, reasonNote: said.note } });
       return { ok: true, address: offer.address, reasonLabel: PASS_REASON_LABEL[said.code] };
     },
     issueDataroomInvite: async ({ contactId, addressHint }) => {
@@ -3774,7 +3853,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     offer.deal.updatedAt = ts;
     await store.updateOffer(offer.id, offer);
     await appendDealHistory(client, locationId, contactId, "investor_deal_history",
-      historyLine(ts, offer.address, "evaluating", "Conversation AI flagged interest"));
+      historyLine(ts, offer.address, "evaluating", "Conversation AI flagged interest"),
+      { type: "investor_evaluating", offerId: offer.id, dealId: offer.id, source: "conversation", at: ts });
     await syncInvestorDealTag(client, locationId, contactId);
     return { ok: true, linked: true, offerId: offer.id, address: offer.address, status: "evaluating" };
   }
@@ -3827,7 +3907,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       offer.deal.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
       await appendDealHistory(client, locationId, inv.contactId, "investor_deal_history",
-        historyLine(ts, offer.address, status));
+        historyLine(ts, offer.address, status), { type: `investor_${status}`, offerId: offer.id, dealId: offer.id, source: "operator", at: ts });
       res.json({ ok: true, offer, warnings });
     } catch (err) { fail(res, err); }
   });

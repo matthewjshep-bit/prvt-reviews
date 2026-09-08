@@ -12,6 +12,8 @@ import {
   buildTranscript, runEnrichment, inferContactType, enrichFieldDefs,
   enrichTagVocab, ENRICH_TAG_GROUPS, mergeHistory, historyLine,
 } from "./enrich.js";
+import { learnFacts, recordEvents } from "./contact-record.js";
+import { FACT_KEYS, eventFromLedgerLine } from "./shared/contact-record.js";
 import { fmtMoney } from "./shared/offer-calc.js";
 import {
   searchConversations, getContact, updateContact, addContactTags,
@@ -351,6 +353,34 @@ async function runSweep(job, { client, locationId, saved, store }) {
       if (fieldWrites.length) await updateContact(client, contactId, { customFields: fieldWrites });
       if (tagsAdd.length) await addContactTags(client, contactId, tagsAdd);
       if (tagsRemove.size) await removeContactTags(client, contactId, [...tagsRemove]);
+
+      // The record. What the sweep read out of the conversation is filed as
+      // facts with the sweep as their source; the ledger's new lines become
+      // typed events; the run itself is on the timeline. The GHL writes
+      // above are unchanged.
+      if (store?.appendContactEvents) {
+        const at = fieldWrites.find((w) => w.id === fieldIds.get("enrich_last_run"))?.value || new Date().toISOString();
+        const ref = `sweep:${job.id}:${contactId}`;
+        const facts = [];
+        for (const a of applied) {
+          if (!FACT_KEYS[a.key] || a.value == null || a.value === "") continue;
+          const vals = FACT_KEYS[a.key].kind === "list" ? String(a.value).split(/[,;\n]/).map((x) => x.trim()).filter(Boolean) : [String(a.value)];
+          for (const value of vals) facts.push({ key: a.key, value, source: "sweep", at, ref });
+        }
+        await learnFacts({ store, locationId, contactId, party: type, facts });
+        const ledgerKey = type === "investor" ? "investor_deal_history" : "agent_deal_history";
+        const ledgerApplied = applied.find((a) => a.key === ledgerKey);
+        const before = new Set(String(currentFields[ledgerKey] || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
+        const newLines = ledgerApplied ? String(ledgerApplied.value).split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !before.has(l)) : [];
+        const usedCalls = Number(transcript.stats?.callsTranscribed) > 0;
+        await recordEvents({ store, locationId, contactId, party: type, events: [
+          ...newLines.map((l) => eventFromLedgerLine(l, { party: type, source: "sweep", ref })).filter(Boolean),
+          ...tagsAdd.map((tag) => ({ type: "tag_added", at, source: "sweep", ref, data: { tag } })),
+          ...[...tagsRemove].map((tag) => ({ type: "tag_removed", at, source: "sweep", ref, data: { tag } })),
+          ...(raw.summary ? [{ type: usedCalls ? "call_summary" : "text_summary", at, source: usedCalls ? "call" : "sweep", ref, data: { summary: String(raw.summary).slice(0, 500) } }] : []),
+          { type: "enrich_run", at, source: "sweep", ref, data: { summary: String(raw.summary || "").slice(0, 500), applied: applied.map((a) => a.key), window: job.windowLabel || "" } },
+        ] });
+      }
 
       const changed = applied.length || tagsAdd.length || tagsRemove.size;
       if (changed) {

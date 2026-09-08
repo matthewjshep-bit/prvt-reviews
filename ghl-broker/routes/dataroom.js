@@ -28,6 +28,7 @@
 // working link — if the operator loses it, they reissue.
 
 import express from "express";
+import { recordEvent } from "../contact-record.js";
 import { store } from "../store.js";
 import { effectiveSettings, fmtMoney } from "../shared/offer-calc.js";
 import { getContact, sendSms } from "../ghl.js";
@@ -987,6 +988,13 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
       await store.logDataroomEvent(room.id, invite.id, "view", {
         ip: clientIp(req), ua: String(req.headers["user-agent"] || "").slice(0, 200), name: invite.name,
       });
+      // The record: every view is an event; the first is what the timeline
+      // leads with, the count is what the drawer shows.
+      if (invite.contactId) {
+        await recordEvent({ store, locationId: room.locationId, contactId: invite.contactId, party: "investor", type: "dataroom_viewed",
+          at: new Date().toISOString(), address: room.address || room.snapshot?.property?.address || "", offerId: room.offerId || null, dealId: room.offerId || null,
+          source: "dataroom", ref: invite.id, data: { viewCount, dataroomId: room.id } });
+      }
 
       if (isPortfolio(room)) {
         // Resolved live, so a deal added or pulled today is reflected without

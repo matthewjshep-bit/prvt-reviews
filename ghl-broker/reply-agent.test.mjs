@@ -116,6 +116,20 @@ const fakeStore = (drafts = []) => {
     updateReplyDraft: async (id, doc) => { if (!rows.has(id)) return false; rows.set(id, doc); return true; },
     createReplyDraft: async (doc) => { const full = { ...doc, id: `d${rows.size + 1}`, createdAt: new Date().toISOString() }; rows.set(full.id, full); return full; },
     listOffers: async () => [],
+    // The contact record, in memory — enough for a pipeline test to read the trail it leaves.
+    profiles: new Map(), events: new Map(),
+    async getContactProfile(loc, id) { return this.profiles.get(`${loc}|${id}`) || null; },
+    async upsertContactProfile(loc, id, patch) {
+      const prev = this.profiles.get(`${loc}|${id}`) || { locationId: loc, contactId: id, facts: {}, tags: [] };
+      const row = { ...prev, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined && v !== null)) };
+      this.profiles.set(`${loc}|${id}`, row); return row;
+    },
+    async appendContactEvents(loc, id, events) {
+      const list = this.events.get(`${loc}|${id}`) || []; const keys = new Set(list.map((e) => e.dedupeKey).filter(Boolean));
+      let inserted = 0; for (const e of events) { if (e.dedupeKey && keys.has(e.dedupeKey)) continue; list.push(e); if (e.dedupeKey) keys.add(e.dedupeKey); inserted++; }
+      this.events.set(`${loc}|${id}`, list); return { inserted, skipped: events.length - inserted };
+    },
+    async listContactEvents(loc, id, { types = null } = {}) { return (this.events.get(`${loc}|${id}`) || []).filter((e) => !types || types.includes(e.type)); },
   };
 };
 const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
@@ -1265,4 +1279,73 @@ test("Subject Property follows the newest property the agent surfaces, on any in
     client, locationId: "LOC", contactId: "c1", party: "investor",
     profile: null, custom: {}, subjectProperty: "22018 76th Ave W, Edmonds, WA 98026", config: { profile: {} },
   })).written, []);
+});
+
+
+/* ---------- the record: what a draft leaves behind ---------- */
+
+test("what a draft learns is filed to the record with the draft as its source, and GHL gets the identical write", async () => {
+  const payloads = [];
+  const client = { call: async (p, o = {}) => {
+    if (o.method === "PUT") payloads.push(JSON.stringify(o.body));
+    return { customFields: [], customField: { id: "f1" } };
+  } };
+  const profile = { personalDetails: "two kids, hip surgery in August", marketAreas: "Tacoma, Gig Harbor", priceMax: 600000, propertyTypes: "sfr", rehabAppetite: "heavy", exclusions: "no condos",
+    dealHistoryLine: "22018 76th Ave W, Edmonds, WA | passed — too far", nextAction: "send her the Tacoma one" };
+  const args = { client, locationId: "LOC", contactId: "c1", party: "investor", profile, custom: {}, summary: "Passed on Edmonds, wants Tacoma.",
+    config: { profile: { writeSummary: true } }, now: Date.parse("2026-09-07T18:00:00Z") };
+  const without = await applyProfileUpdates({ ...args });
+  const store = fakeStore();
+  const withStore = await applyProfileUpdates({ ...args, store, draftId: "d42", intent: "passing", inbound: "no thanks" });
+  assert.deepEqual(withStore.learned, without.learned);
+  assert.equal(payloads[1], payloads[0], "the GHL write is byte-identical with or without the record");
+
+  const p = await store.getContactProfile("LOC", "c1");
+  const facts = Object.fromEntries(Object.entries(p.facts).map(([k, v]) => [k, v.map((e) => e.value)]));
+  assert.deepEqual(facts.personal_details, ["two kids", "hip surgery in August"]);
+  assert.deepEqual(facts.buybox_areas, ["Tacoma", "Gig Harbor"]);
+  assert.deepEqual(facts.buybox_price_max, ["600000"]);
+  assert.deepEqual(facts.rehab_appetite, ["heavy"]);
+  assert.deepEqual(facts.buybox_exclusions, ["no condos"]);
+  assert.deepEqual(facts.last_convo_summary, ["Passed on Edmonds, wants Tacoma."]);
+  assert.ok(Object.values(p.facts).flat().every((e) => e.source === "conversation" && e.ref === "d42"), "every fact names the draft");
+  const events = await store.listContactEvents("LOC", "c1");
+  const types = events.map((e) => e.type).sort();
+  assert.ok(types.includes("text_summary") && types.includes("investor_passed"), types.join(","));
+  const passed = events.find((e) => e.type === "investor_passed");
+  assert.equal(passed.data.note, "too far");
+  assert.equal(passed.at.slice(0, 10), "2026-09-07", "an undated learned line takes the draft's day");
+  assert.equal(events.find((e) => e.type === "text_summary").data.intent, "passing");
+  assert.ok(events.filter((e) => e.type === "fact_learned").length >= 6);
+});
+
+test("an agent's new property lands in the record as the subject and as an event", async () => {
+  const client = { call: async () => ({ customFields: [], customField: { id: "f1" } }) };
+  const store = fakeStore();
+  await applyProfileUpdates({ client, locationId: "LOC", contactId: "a1", party: "agent", profile: null, custom: { subject_property: "1 Old St, Kent, WA" },
+    subjectProperty: "9 New Ave, Renton, WA 98056", config: { profile: {} }, store, draftId: "d7" });
+  const p = await store.getContactProfile("LOC", "a1");
+  assert.equal(p.facts.subject_property.at(-1).value, "9 New Ave, Renton, WA 98056");
+  const ev = (await store.listContactEvents("LOC", "a1", { types: ["subject_property_set"] }))[0];
+  assert.equal(ev.address, "9 New Ave, Renton, WA 98056");
+  assert.equal(ev.data.from, "1 Old St, Kent, WA");
+  assert.equal(ev.ref, "d7");
+});
+
+test("a real run leaves the conversation on the timeline", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "interested, send me the package",
+    deps: { draft: async () => ({ ...DRAFT, intent: "interested", summary: "Wants the package.", profile: { personalDetails: "", marketAreas: "Everett", dealHistoryLine: "", nextAction: "", priceMin: 0, priceMax: 0, propertyTypes: "", rehabAppetite: "", exclusions: "" } }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const events = await store.listContactEvents("LOC", "c1");
+  const summary = events.find((e) => e.type === "text_summary");
+  assert.ok(summary, "the conversation is an event");
+  assert.equal(summary.ref, job.draftId, "keyed to the draft that was written");
+  assert.ok(events.some((e) => e.type === "tag_added" && e.data.tag === "investor-active"), "the tier tag the rule applied is on the timeline");
+  assert.deepEqual((await store.getContactProfile("LOC", "c1")).facts.buybox_areas.map((e) => e.value), ["Everett"]);
 });

@@ -15,6 +15,8 @@ import {
   addContactTags, removeContactTags, addContactToWorkflow, removeContactFromWorkflow, findOrCreateCustomFieldByKey, updateContact,
 } from "./ghl.js";
 import { fmtMoney } from "./shared/offer-calc.js";
+import { recordEvent, learnFacts } from "./contact-record.js";
+import { FACT_KEYS } from "./shared/contact-record.js";
 
 let seq = 0;
 const newActionId = () => `a-${Date.now().toString(36)}-${(seq++).toString(36)}`;
@@ -41,16 +43,25 @@ export function planActions({ party, intent, confidence = "low", playbook = {} }
   return { auto, suggested };
 }
 
+// A tag or a field an intent rule sets is on the timeline too, with the
+// draft that caused it as the source. Best-effort, after the GHL write.
+const tagEvents = ({ store, locationId, contactId, draft, type, tags }) =>
+  Promise.all((tags || []).map((tag) => recordEvent({
+    store, locationId, contactId, party: draft?.party || null, type, source: "conversation", ref: draft?.id || null, data: { tag },
+  })));
+
 const EXECUTORS = {
-  async add_tags({ client, contactId, action }) {
+  async add_tags({ client, contactId, action, store, locationId, draft }) {
     await addContactTags(client, contactId, action.tags);
+    await tagEvents({ store, locationId, contactId, draft, type: "tag_added", tags: action.tags });
     return `tagged ${action.tags.join(", ")}`;
   },
-  async remove_tags({ client, contactId, action }) {
+  async remove_tags({ client, contactId, action, store, locationId, draft }) {
     await removeContactTags(client, contactId, action.tags);
+    await tagEvents({ store, locationId, contactId, draft, type: "tag_removed", tags: action.tags });
     return `removed ${action.tags.join(", ")}`;
   },
-  async set_field({ client, locationId, contactId, action, draft }) {
+  async set_field({ client, locationId, contactId, action, draft, store }) {
     const value = substituteTokens(action.value, draft).trim();
     // A template whose tokens all came up empty ({{propertyAddress}} on a
     // message that named no property) must not blank a field that had a
@@ -59,6 +70,10 @@ const EXECUTORS = {
     const id = await findOrCreateCustomFieldByKey(client, locationId, action.key, action.key, "TEXT");
     if (!id) throw new Error(`could not find or create the field ${action.key}`);
     await updateContact(client, contactId, { customFields: [{ id, value }] });
+    if (FACT_KEYS[action.key]) {
+      await learnFacts({ store, locationId, contactId, party: draft?.party || null,
+        facts: [{ key: action.key, value, source: "conversation", ref: draft?.id || null }] });
+    }
     return `${action.key} = ${value.slice(0, 80)}`;
   },
   async add_to_workflow({ client, contactId, action }) {
@@ -149,14 +164,14 @@ const EXECUTORS = {
  * Runs each action in order and returns them with status "done" | "failed",
  * a `detail` line for the row, and `at`. Never throws.
  */
-export async function runActions({ client, locationId, contactId, draft, actions = [], deps = {} }) {
+export async function runActions({ client, locationId, contactId, draft, actions = [], deps = {}, store = null }) {
   const out = [];
   for (const a of actions) {
     const exec = EXECUTORS[a.type];
     const at = new Date().toISOString();
     if (!exec) { out.push({ ...a, status: "failed", error: `unknown action ${a.type}`, at }); continue; }
     try {
-      const detail = await exec({ client, locationId, contactId, draft, action: a, deps });
+      const detail = await exec({ client, locationId, contactId, draft, action: a, deps, store });
       out.push({ ...a, status: "done", detail: String(detail || "").slice(0, 200), at });
     } catch (e) {
       out.push({ ...a, status: "failed", error: String(e?.message || e).slice(0, 200), at });
