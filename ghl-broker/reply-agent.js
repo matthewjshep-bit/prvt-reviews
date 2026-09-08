@@ -39,7 +39,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { buildTranscript, enrichFieldDefs, mergeHistory, mergeFacts, SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
-import { eventFromLedgerLine, normalizePropertyDetails } from "./shared/contact-record.js";
+import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
@@ -850,9 +850,11 @@ export async function startProactive({ client, locationId, saved, store, contact
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
   const config = conversationConfig(saved);
   if (!config.enabled) return { skipped: "Conversation AI is switched off", job: null };
-  if (kind !== "realm_check") return { skipped: `unknown outbound kind ${kind}`, job: null };
-  if (!config.parties.agent.realmCheck?.enabled) return { skipped: "realm check is off for agents", job: null };
-  if (!offer?.cashAmount) return { skipped: "the offer has no number to float", job: null };
+  if (kind !== "realm_check" && kind !== "take_check") return { skipped: `unknown outbound kind ${kind}`, job: null };
+  if (kind === "realm_check" && !config.parties.agent.realmCheck?.enabled) return { skipped: "realm check is off for agents", job: null };
+  if (kind === "take_check" && !config.parties.agent.takeCheck?.enabled) return { skipped: "take check is off for agents", job: null };
+  if (kind === "realm_check" && !offer?.cashAmount) return { skipped: "the offer has no number to float", job: null };
+  if (kind === "take_check" && !offerNumbers(offer).arv && !offerNumbers(offer).rehab) return { skipped: "the underwrite has no ARV or rehab to float", job: null };
   if (!contactId) return { skipped: "the offer has no contact", job: null };
 
   const job = {
@@ -868,10 +870,31 @@ export async function startProactive({ client, locationId, saved, store, contact
         job.status = "error";
         job.error = String(e?.message || e).slice(0, 300);
         job.finishedAt = new Date().toISOString();
-        await note(client, contactId, `AI realm check could not be drafted — ${job.error}. The offer is in History; float the number by hand if you like.`, job.warnings);
+        await note(client, contactId, `AI ${kind === "take_check" ? "take check" : "realm check"} could not be drafted — ${job.error}. The offer is in History; float it by hand if you like.`, job.warnings);
       })
   );
   return { skipped: null, job };
+}
+
+// ARV and repairs off an offer document or its lean row.
+const offerNumbers = (offer) => ({
+  arv: Math.round(Number(offer?.arv ?? offer?.calc?.inputs?.arv) || 0),
+  rehab: Math.round(Number(offer?.repairs ?? offer?.calc?.inputs?.repairs) || 0),
+});
+// "850K", not "$850K": a dollar sign in a text trips carrier spam filters, and
+// the style gate would hold the draft for it.
+const kText = (n) => `${Math.round(n / 1000)}K`;
+
+/**
+ * chooseProactiveKind({ events, address }) → "take_check" | "realm_check"
+ *
+ * Their read before our price. If the agent has already told us what they
+ * think the property is worth and costs, there is nothing to draw out and
+ * the cash number can go; otherwise float the ARV/rehab read first.
+ */
+export function chooseProactiveKind({ events = [], address = "" } = {}) {
+  const d = address ? propertyDossier(events, address) : null;
+  return d && (d.have.arv || d.have.rehab) ? "realm_check" : "take_check";
 }
 
 async function runProactive(job, ctx) {
@@ -894,10 +917,19 @@ async function runProactive(job, ctx) {
   const closeDays = offer.terms?.closingDays || saved?.psa?.closingDays || 0;
   const terms = [closeDays ? `${closeDays}-day close` : "", "as-is"].filter(Boolean).join(", ");
   const asking = Number(offer.askingPrice || offer.calc?.inputs?.askingPrice) || 0;
-  const outbound = {
-    kind: "realm_check", address: offer.address || "the property", amount: offer.cashAmount,
-    amountText: fmtMoney(offer.cashAmount), askingText: asking ? fmtMoney(asking) : "", terms,
-  };
+  const kind = job.outbound === "take_check" ? "take_check" : "realm_check";
+  const nums = offerNumbers(offer);
+  const outbound = kind === "take_check"
+    ? {
+        kind, address: offer.address || "the property",
+        arv: nums.arv, rehab: nums.rehab,
+        arvText: nums.arv ? fmtMoney(nums.arv) : "", rehabText: nums.rehab ? fmtMoney(nums.rehab) : "",
+        arvK: nums.arv ? kText(nums.arv) : "", rehabK: nums.rehab ? kText(nums.rehab) : "",
+      }
+    : {
+        kind, address: offer.address || "the property", amount: offer.cashAmount,
+        amountText: fmtMoney(offer.cashAmount), askingText: asking ? fmtMoney(asking) : "", terms,
+      };
 
   job.phase = "drafting";
   const draft = await deps.draft({
@@ -905,12 +937,18 @@ async function runProactive(job, ctx) {
     contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer,
     aiApiKey, party: "agent", config, context, channel: "sms", outbound,
   });
-  draft.intent = "realm_check";
+  draft.intent = kind;
   job.summary = draft.summary;
-  // The number it floats is the offer's; the guard sees it either way.
-  const allowed = [...new Set([...(context.amounts || []), Math.round(offer.cashAmount)])];
-  const gate = evaluateReplyGates({ draft, party: "agent", allowedAmounts: allowed, forbiddenAmounts: context.forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style });
-  const auto = decideAutoSend({ gate, party: "agent", intent: "realm_check", channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
+  // What it floats is what it may say: the cash number for a realm check,
+  // the ARV and rehab for a take check — and for a take check the cash
+  // number is NOT allowed, which is the whole point of asking first.
+  const floats = kind === "take_check" ? [nums.arv, nums.rehab].filter(Boolean) : [Math.round(offer.cashAmount)];
+  const allowed = [...new Set([...(context.amounts || []), ...floats])];
+  const forbiddenAmounts = kind === "take_check"
+    ? [...new Set([...(context.forbiddenAmounts || []), Math.round(Number(offer.cashAmount) || 0)].filter(Boolean))]
+    : context.forbiddenAmounts;
+  const gate = evaluateReplyGates({ draft, party: "agent", allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style });
+  const auto = decideAutoSend({ gate, party: "agent", intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
 
   job.phase = "saving";
   const open = [];
@@ -924,9 +962,14 @@ async function runProactive(job, ctx) {
   const ts = new Date().toISOString();
   let record = await store.createReplyDraft({
     locationId, contactId: job.contactId, contactName: job.contactName, status: "draft", channel: "sms", jobId: job.id,
-    inbound: "", outbound: { kind: "realm_check", offerId: offer.id || null, address: offer.address || "", amount: offer.cashAmount },
-    reply: draft.reply, intent: "realm_check", confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
-    summary: draft.summary || `Floats our ${fmtMoney(offer.cashAmount)} on ${offer.address} and asks if it's in the realm.`,
+    inbound: "",
+    outbound: kind === "take_check"
+      ? { kind, offerId: offer.id || null, address: offer.address || "", arv: nums.arv, rehab: nums.rehab }
+      : { kind, offerId: offer.id || null, address: offer.address || "", amount: offer.cashAmount },
+    reply: draft.reply, intent: kind, confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
+    summary: draft.summary || (kind === "take_check"
+      ? `Floats our ${[nums.arv ? `${kText(nums.arv)} ARV` : "", nums.rehab ? `${kText(nums.rehab)} rehab` : ""].filter(Boolean).join(" / ")} read on ${offer.address} and asks what they think.`
+      : `Floats our ${fmtMoney(offer.cashAmount)} on ${offer.address} and asks if it's in the realm.`),
     propertyAddress: offer.address || draft.propertyAddress || "", counterAmount: null,
     autoSendable: gate.ok, flags: gate.flags, party: "agent", partySource: "offer", matchedTags: a.matchedTags,
     contextSummary: context.summary || {}, offersInContext: context.offers?.count ?? 0,
@@ -1166,6 +1209,13 @@ async function runReply(job, ctx) {
       address: draft.propertyAddress, source: "conversation", ref: record.id,
       data: { arv: agentTake.arv, rehab: agentTake.rehab, note: agentTake.note },
     });
+    // Their read is in. If we floated ours to get it and the price is still
+    // unsaid, the realm check follows — the second half of "their read
+    // before our price". The broker decides whether such an offer exists.
+    if (typeof deps.afterAgentTake === "function") {
+      try { await deps.afterAgentTake({ contactId: job.contactId, address: draft.propertyAddress }); }
+      catch (e) { warnings.push(`realm follow-up: ${String(e?.message || e).slice(0, 120)}`); }
+    }
   }
 
   if (party === "agent" && propertyDetails && draft.propertyAddress) {

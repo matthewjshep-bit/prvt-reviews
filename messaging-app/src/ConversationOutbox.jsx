@@ -17,7 +17,7 @@ import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
 export const LIVE = new Set(["queued", "running"]);
 
 const INTENT_CLS = {
-  realm_check: "bg-violet-100 text-violet-800", realm_yes: "bg-emerald-100 text-emerald-800",
+  realm_check: "bg-violet-100 text-violet-800", take_check: "bg-violet-100 text-violet-800", realm_yes: "bg-emerald-100 text-emerald-800",
   counter: "bg-violet-100 text-violet-800", acceptance: "bg-emerald-100 text-emerald-800",
   rejection: "bg-rose-100 text-rose-700", passing: "bg-rose-100 text-rose-700",
   wants_call: "bg-amber-100 text-amber-800", scheduling: "bg-amber-100 text-amber-800",
@@ -151,7 +151,13 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
         <span className="ml-auto text-xs text-slate-500">{ago(d.createdAt)}</span>
       </div>
 
-      {d.outbound?.kind === "realm_check" ? (
+      {d.outbound?.kind === "take_check" ? (
+        <div className="mt-1 text-xs text-slate-600">
+          <span className="text-slate-400">Numbers came back:</span> our read on {d.outbound.address} is
+          {d.outbound.arv ? ` ARV $${Number(d.outbound.arv).toLocaleString()}` : ""}{d.outbound.arv && d.outbound.rehab ? "," : ""}
+          {d.outbound.rehab ? ` rehab about $${Number(d.outbound.rehab).toLocaleString()}` : ""} — this floats it to get theirs before the price is said.
+        </div>
+      ) : d.outbound?.kind === "realm_check" ? (
         <div className="mt-1 text-xs text-slate-600">
           <span className="text-slate-400">Numbers came back:</span> our offer on {d.outbound.address} is {d.outbound.amount ? `$${Number(d.outbound.amount).toLocaleString()}` : "set"} — this floats it before the formal offer goes.
         </div>

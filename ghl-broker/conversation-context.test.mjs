@@ -288,7 +288,7 @@ test("with our underwrite in the book and no take from them, the bot leads with 
   const offers = [{ id: "o1", address: "12703 Vernon Avenue SW, Lakewood, WA 98498", cashAmount: 520000, arv: 850000, repairs: 200000, status: "draft", createdAt: "2026-09-07T00:00:00Z" }];
   const ctx = buildAgentContext({ offers, custom: { subject_property: A }, now: NOW, events: [], facts: null });
   assert.match(ctx.text, /OUR UNDERWRITE ON IT: ARV \$850,000, rehab about \$200,000\./);
-  assert.match(ctx.text, /"I'm thinking \$850K After Repair Value and \$200K\+ of rehab\. What do you think\?"/);
+  assert.match(ctx.text, /"I'm thinking 850K After Repair Value and 200K\+ of rehab\. What do you think\?"/, "written like a text: no dollar signs");
   assert.match(ctx.text, /not an offer/);
   assert.ok(ctx.amounts.includes(850000) && ctx.amounts.includes(200000), "the two figures may be said, for this");
   // The take is ONE ask, not two: the checklist names it once.

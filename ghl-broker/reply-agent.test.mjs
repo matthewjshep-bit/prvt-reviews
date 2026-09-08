@@ -848,6 +848,8 @@ test("em dashes are scrubbed from a draft, and the tag rules from the starter fi
   const d = await store.getReplyDraft(job.draftId);
   assert.deepEqual(d.actions.map((a) => [a.type, a.tags || a.key, a.status]), [
     ["add_tags", ["tier-1"], "done"], ["remove_tags", ["tier-2", "tier-3"], "done"],
+    // No underwriter is wired in this stub; the rule still tried, and said so.
+    ["start_underwrite", undefined, "failed"],
   ]);
   // Subject Property is filed by the pipeline now, not by an intent rule, so
   // it lands on every agent message that names a property rather than only on
@@ -1382,4 +1384,87 @@ test("an agent's own ARV and rehab are kept as theirs, recorded on the property,
   assert.equal(ev.address, "12703 Vernon Ave SW, Lakewood, WA");
   assert.deepEqual([ev.data.arv, ev.data.rehab], [715000, 40000]);
   assert.equal(ev.ref, job.draftId);
+});
+
+/* ---------- their read before our price ---------- */
+
+test("which float goes first depends on whether we already have their take", async () => {
+  const { chooseProactiveKind } = await import("./reply-agent.js");
+  const A = "12 Elm St, Renton, WA 98056";
+  assert.equal(chooseProactiveKind({ events: [], address: A }), "take_check", "nothing from them yet: draw their read out first");
+  assert.equal(chooseProactiveKind({ events: [{ type: "agent_estimate", at: iso(1), address: "12 Elm Street, Renton, WA 98056", data: { arv: 500000 } }], address: A }), "realm_check", "their read is in: the price can go");
+  assert.equal(chooseProactiveKind({ events: [{ type: "agent_estimate", at: iso(1), address: "9 Other St", data: { arv: 1 } }], address: A }), "take_check", "a take on a different house doesn't count");
+});
+
+test("when numbers land with no take from them, the bot floats our ARV and rehab — and may not say the price", async () => {
+  _resetJobs();
+  const { client, notes } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const landed = { ...LANDED, arv: 850000, repairs: 200000 };
+  store.listOffers = async () => [landed];
+  let seen;
+  const { job, skipped } = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true,
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "take_check", reply: "Just did a quick underwrite on 12 Elm. I'm thinking 850K After Repair Value and 200K+ of rehab. What do you think?", summary: "Floats our read on 12 Elm." }; } },
+  });
+  assert.equal(skipped, null, skipped);
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(seen.outbound.kind, "take_check");
+  assert.equal(seen.outbound.arvK, "850K", "no dollar sign: the read goes out as a text");
+  assert.equal(seen.outbound.rehabK, "200K");
+  assert.match(seen.context.text, /OUR OFFERS TO THIS AGENT/);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "take_check");
+  assert.deepEqual(d.outbound, { kind: "take_check", offerId: "o9", address: LANDED.address, arv: 850000, rehab: 200000 });
+  assert.equal(d.autoSendable, true, d.flags.join(" · "));
+  assert.equal(d.status, "scheduled", "take_check is on the starter allowlist");
+  assert.match(notes[0], /AI drafted/);
+
+  // The same draft naming the cash number is held: that is the number we are
+  // deliberately not saying yet, so for a take check it is forbidden outright.
+  _resetJobs();
+  const store2 = fakeStore();
+  store2.listOffers = async () => [landed];
+  const leaky = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store: store2, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "take_check", reply: "Thinking 850K ARV, 200K rehab, so we'd be around 410,000. Thoughts?", summary: "leaks" }) },
+  });
+  await settle();
+  assert.equal(leaky.job.status, "done", leaky.job.error);
+  const ld = await store2.getReplyDraft(leaky.job.draftId);
+  assert.equal(ld.autoSendable, false);
+  assert.ok(ld.flags.some((f) => /410,000/.test(f)), `the price is the one number a take check may not say: ${ld.flags.join(" · ")}`);
+  assert.equal(ld.status, "draft", "waits for a person");
+});
+
+test("a take check needs numbers to float, and its switch", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const bare = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1", kind: "take_check", offer: LANDED, sendsEnabled: true, deps: { draft: async () => DRAFT } });
+  assert.match(bare.skipped, /no ARV or rehab to float/);
+  const off = { ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi, parties: { ...STARTER_SAVED.conversationAi.parties, agent: { ...STARTER_SAVED.conversationAi.parties.agent, takeCheck: { enabled: false } } } } };
+  const r = await startProactive({ client, locationId: "LOC", saved: off, store: fakeStore(), contactId: "c1", kind: "take_check", offer: { ...LANDED, arv: 1, repairs: 1 }, sendsEnabled: true, deps: { draft: async () => DRAFT } });
+  assert.match(r.skipped, /take check is off/);
+});
+
+test("their take arriving hands off to the realm check, and a confirmed address starts the underwrite", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const calls = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "12 Elm — I'd say 800 done, maybe 150 of work",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "new_property", propertyAddress: "12 Elm St, Renton, WA 98056", reply: "Got it, thanks. Running it now.", agentArv: 800000, agentRehab: 150000, agentTakeNote: "800 done, 150 of work" }),
+      afterAgentTake: async (args) => { calls.push(["afterAgentTake", args]); return { started: true }; },
+      startUnderwrite: async (args) => { calls.push(["startUnderwrite", args.address]); return { job: { id: "uw1", dryRun: true } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(calls.find((c) => c[0] === "afterAgentTake")[1], { contactId: "c1", address: "12 Elm St, Renton, WA 98056" });
+  assert.ok(calls.some((c) => c[0] === "startUnderwrite" && c[1] === "12 Elm St, Renton, WA 98056"), `the new_property rule kicks the underwrite off: ${JSON.stringify(calls)}`);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.ok(d.actions.some((a) => a.type === "start_underwrite" && a.status === "done"), JSON.stringify(d.actions.map((a) => [a.type, a.status, a.detail || a.error])));
 });

@@ -83,7 +83,7 @@ import {
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT,
 } from "../auto-underwrite.js";
 import {
-  startReply, startProactive, listJobs as listReplyJobs, publicJob as publicReplyJob,
+  startReply, startProactive, chooseProactiveKind, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig,
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
@@ -3335,17 +3335,51 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // allowlisted). Same hook for both doors into the underwriter.
   const underwriteDeps = ({ client, locationId, saved }) => ({
     createOffer: createOfferFromRequest,
+    // Numbers landed. Their read before our price: if the agent hasn't told
+    // us what they think it's worth and costs, float our ARV/rehab read to
+    // draw it out; if they have, float the cash number. The choice and its
+    // outcome are remembered on the offer so the follow-up can find it.
     onOfferCreated: async ({ offer }) => {
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      let events = [];
+      try { events = await store.listContactEvents(locationId, offer.contactId, { limit: 200 }); } catch { events = []; }
+      const kind = chooseProactiveKind({ events, address: offer.address });
       const r = await startProactive({
-        client, locationId, saved: fresh, store, contactId: offer.contactId, kind: "realm_check",
+        client, locationId, saved: fresh, store, contactId: offer.contactId, kind,
         offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
       });
-      if (r.skipped) console.log(`realm check skipped for ${offer.id}: ${r.skipped}`);
+      if (r.skipped) console.log(`${kind} skipped for ${offer.id}: ${r.skipped}`);
+      else await markProactive(offer.id, kind);
     },
   });
 
+  // Which floats have gone on an offer: { takeCheckAt, realmCheckAt }.
+  async function markProactive(offerId, kind) {
+    try {
+      const full = await store.getOffer(offerId);
+      if (!full) return;
+      full.proactive = { ...(full.proactive || {}), [kind === "take_check" ? "takeCheckAt" : "realmCheckAt"]: new Date().toISOString() };
+      await store.updateOffer(full.id, full);
+    } catch (e) { console.error(`offers: could not mark ${kind} on ${offerId}:`, e?.message); }
+  }
+
   const conversationDeps = ({ client, locationId, saved }) => ({
+    // The agent's read just came in. If an offer on that address had our
+    // read floated and the price is still unsaid, the realm check goes now.
+    afterAgentTake: async ({ contactId, address }) => {
+      const mine = (await store.listOffers(locationId, { contactId, limit: 50 })).filter((o) => !o.deal && o.cashAmount > 0);
+      const offer = pickDealByAddress(mine, address);
+      if (!offer?.proactive?.takeCheckAt || offer.proactive?.realmCheckAt) return { started: false };
+      const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      const full = await store.getOffer(offer.id);
+      const r = await startProactive({
+        client, locationId, saved: fresh, store, contactId, kind: "realm_check",
+        offer: full || offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
+      });
+      if (r.skipped) { console.log(`realm check after take skipped for ${offer.id}: ${r.skipped}`); return { started: false, skipped: r.skipped }; }
+      await markProactive(offer.id, "realm_check");
+      return { started: true, offerId: offer.id };
+    },
     startUnderwrite: ({ contactId, message, address }) =>
       startUnderwrite({
         client, locationId, saved, store, contactId, message, address, askingPrice: 0,

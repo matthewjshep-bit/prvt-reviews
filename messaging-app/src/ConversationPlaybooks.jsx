@@ -382,6 +382,12 @@ export function PartyPlaybooks({ config, patch, workflows }) {
               <p className={HINT}>When an auto-underwrite creates an offer for an agent, draft a text that floats the number as a soft one and asks if it's in the realm before the formal offer goes. It waits in the outbox like any reply; tick "floated our number" on the auto-send list to let it go by itself.</p>
             </div>
             <div>
+              <Toggle checked={pb.takeCheck?.enabled} onChange={(v) => setPb({ takeCheck: { enabled: v } })}>
+                <span className="font-semibold">Float our read first</span>
+              </Toggle>
+              <p className={HINT}>When numbers land and the agent hasn't given their own ARV and rehab yet, draft "just did a quick underwrite, I'm thinking $850K ARV and $200K+ of rehab, what do you think?" — their read before our price. The realm check follows once they answer. Tick "floated our read" on the auto-send list to let it go by itself.</p>
+            </div>
+            <div>
               <Toggle checked={pb.showMath} onChange={(v) => setPb({ showMath: v })}>
                 <span className="font-semibold">Show the math</span>
               </Toggle>

@@ -221,7 +221,15 @@ export function buildUserContext({
   const them = party === "investor" ? "the investor" : party === "agent" ? "the agent" : "them";
   // A message WE start. The realm check: numbers came back on a property
   // and the bot floats them as a soft number before the formal offer goes.
-  const opening = outbound?.kind === "realm_check"
+  const opening = outbound?.kind === "take_check"
+    ? `YOU ARE STARTING THIS MESSAGE — nothing new came in. We just ran a quick underwrite on ${outbound.address}: ` +
+      `${[outbound.arvText ? `ARV ${outbound.arvText}` : "", outbound.rehabText ? `rehab about ${outbound.rehabText}` : ""].filter(Boolean).join(", ")}. ` +
+      `Say so lightly ("just did a quick underwrite") and float those two as YOUR read, in one question, the way a ` +
+      `colleague would: "I'm thinking ${outbound.arvK || "…"} After Repair Value and ${outbound.rehabK || "…"}+ of rehab. What do you think?" ` +
+      `(written like a text — no dollar signs). ` +
+      `Do NOT mention an offer, a purchase price, or what we'd pay — this is a read, not a number. Reference the ` +
+      `thread so it reads as a continuation. Set intent to take_check.`
+    : outbound?.kind === "realm_check"
     ? `YOU ARE STARTING THIS MESSAGE — nothing new came in. Our underwriting just came back on ${outbound.address}: ` +
       `cash offer ${outbound.amountText}${outbound.terms ? `, ${outbound.terms}` : ""}` +
       `${outbound.askingText ? ` (they are asking ${outbound.askingText})` : ""}. Float it as a soft number ` +

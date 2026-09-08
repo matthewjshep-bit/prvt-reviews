@@ -223,7 +223,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
       const rehab = Math.round(Number(mine.repairs) || 0);
       if (arv) amounts.add(arv);
       if (rehab) amounts.add(rehab);
-      const k = (n) => `$${Math.round(n / 1000)}K`;
+      const k = (n) => `${Math.round(n / 1000)}K`;   // no dollar sign in a text
       dossierText += `\nOUR UNDERWRITE ON IT: ${[arv ? `ARV ${fmtMoney(arv)}` : "", rehab ? `rehab about ${fmtMoney(rehab)}` : ""].filter(Boolean).join(", ")}. ` +
         `To get their take, lead with ours as an opinion, in one question: "I'm thinking ${arv ? `${k(arv)} After Repair Value` : "…"}${arv && rehab ? " and " : ""}${rehab ? `${k(rehab)}+ of rehab` : ""}. What do you think?" — this is not an offer and must not read as one.`;
     }

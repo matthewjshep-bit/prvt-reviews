@@ -36,12 +36,14 @@ export const SILENT_INTENTS = new Set(["opt_out"]);
 // Messages the bot STARTS rather than answers. Not in the classifier's
 // vocabulary — the model never reads an inbound text as one of these — but
 // they need labels, gates and an allowlist slot like any other.
-export const OUTBOUND_INTENTS = { agent: ["realm_check"], investor: [] };
+// take_check floats our ARV/rehab read to draw out theirs; realm_check floats
+// the cash number. In that order when both apply: their read before our price.
+export const OUTBOUND_INTENTS = { agent: ["realm_check", "take_check"], investor: [] };
 
 export const INTENT_LABEL = {
   agent: {
     deal_available: "has a deal (tier 1)", new_property: "new property (tier 1)", investor_open: "open to investors (tier 2)",
-    realm_yes: "number is in the realm", realm_check: "floated our number",
+    realm_yes: "number is in the realm", realm_check: "floated our number", take_check: "floated our read",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
     wants_call: "wants a call", scheduling: "scheduling", proof_of_funds: "proof of funds",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
@@ -242,6 +244,10 @@ const PLAYBOOK = () => ({
   // before the formal offer goes. Sends itself only if realm_check is on the
   // party's auto-send list.
   realmCheck: { enabled: false },
+  // When an underwrite lands and we don't have the agent's own read yet, the
+  // bot floats our ARV and rehab as an opinion to get theirs — before it
+  // ever shows the price. Sends itself only if take_check is on the allowlist.
+  takeCheck: { enabled: false },
 });
 
 // Words that mean "stop". Matched deterministically, before any model call,
@@ -403,6 +409,7 @@ function normalizePlaybook(p, party, seed = {}) {
     },
     showMath: bool(src.showMath, false),
     realmCheck: { enabled: bool(src.realmCheck?.enabled, false) },
+    takeCheck: { enabled: bool(src.takeCheck?.enabled, false) },
   };
 }
 
@@ -749,7 +756,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "THEIR TAKE: get the agent's OWN read — what they think it's worth fixed up and what the work runs — as ONE " +
           "question, the way a colleague would: 'what do you think it's worth done, and what would you budget for " +
           "the work?'. If the context gives you OUR underwrite on that property, lead with ours as an opinion to " +
-          "draw theirs out: 'I'm thinking $850K After Repair Value and $200K+ of rehab. What do you think?' — that " +
+          "draw theirs out: 'I'm thinking 850K After Repair Value and 200K+ of rehab. What do you think?' — that " +
           "is a read, not an offer, and must not sound like one. One ask; if they don't know, move on. Their " +
           "numbers are theirs — never adopt them, never argue with them. They tell us whether their expectations " +
           "and ours are in the same zip code.\n" +
@@ -767,8 +774,12 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "Mention off-market deals. Promise proof of funds. Send a link.",
         autoSend: { enabled: true, intents: autoEligible("agent") },
         intentRules: {
-          deal_available: tierRule("tier-1", ["tier-2", "tier-3"], "tier1", ["tier2", "tier3"], subject),
-          new_property: tierRule("tier-1", ["tier-2", "tier-3"], "tier1", ["tier2", "tier3"], subject),
+          // A confirmed address starts the underwrite from here — the bot has
+          // the address the moment it's said. A GHL Tier-1 workflow that also
+          // fires it collapses into the same run: auto-underwrite dedupes by
+          // address for 24 hours.
+          deal_available: tierRule("tier-1", ["tier-2", "tier-3"], "tier1", ["tier2", "tier3"], [...subject, { type: "start_underwrite" }]),
+          new_property: tierRule("tier-1", ["tier-2", "tier-3"], "tier1", ["tier2", "tier3"], [...subject, { type: "start_underwrite" }]),
           investor_open: tierRule("tier-2", ["tier-3"], "tier2", ["tier3"]),
           rejection: tierRule("tier-3", [], "tier3", [], [{ type: "mark_offer_passed" }]),
           counter: { mode: "auto", actions: [{ type: "mark_offer_countered" }] },
@@ -776,6 +787,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
         },
         showMath: false,
         realmCheck: { enabled: true },
+        takeCheck: { enabled: true },
         // Any agent reply with no fit is Tier 3 — the old bot's catch-all —
         // unless they already have a tier.
         fallback: {
