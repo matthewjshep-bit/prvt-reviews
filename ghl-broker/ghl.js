@@ -587,10 +587,19 @@ export async function listWorkflows(client, locationId) {
 // Drop a contact into a workflow — the same thing a "Contact tag added"
 // trigger does, without the tag. contacts.write covers it. GHL wants an ISO
 // start time; "now" is the only one this codebase ever means.
+// GHL wants the start time "with timezone offset" and means it literally: it
+// 422s on the ISO `Z` suffix (and on milliseconds), and wants
+// `2026-09-07T18:00:00+00:00`. Every enroll from the Conversation AI failed
+// on this until a screenshot of the outbox showed the message verbatim.
+export function ghlEventTime(d = new Date()) {
+  const t = d instanceof Date ? d : new Date(d);
+  return `${t.toISOString().slice(0, 19)}+00:00`;
+}
+
 export async function addContactToWorkflow(client, contactId, workflowId, { eventStartTime } = {}) {
   return client.call(
     `/contacts/${encodeURIComponent(contactId)}/workflow/${encodeURIComponent(workflowId)}`,
-    { method: "POST", body: { eventStartTime: eventStartTime || new Date().toISOString() } }
+    { method: "POST", body: { eventStartTime: ghlEventTime(eventStartTime || new Date()) } }
   );
 }
 
