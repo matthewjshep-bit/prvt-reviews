@@ -166,6 +166,23 @@ export function mergeHistory(existing, additions, maxChars = HISTORY_MAX_CHARS) 
   return out.join("\n").slice(0, maxChars);
 }
 
+// Comma-separated facts, merged: what they told us before plus what is new,
+// deduped case-insensitively, oldest first, capped.
+export function mergeFacts(existing, additions, max = 1500) {
+  const split = (v) => String(v || "").split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
+  const out = [];
+  const seen = new Set();
+  for (const f of [...split(existing), ...split(additions)]) {
+    const k = f.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(f);
+  }
+  let text = out.join(", ");
+  while (out.length > 1 && text.length > max) { out.shift(); text = out.join(", "); }
+  return text.slice(0, max);
+}
+
 // One authoritative ledger line from an app-side record.
 export const historyLine = (dateIso, address, event, note = "") =>
   `${String(dateIso || "").slice(0, 10) || "????-??-??"} | ${String(address || "unknown property").trim()} | ` +

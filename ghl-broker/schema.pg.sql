@@ -333,3 +333,54 @@ create table if not exists reply_drafts (
 );
 create index if not exists reply_drafts_loc_idx on reply_drafts (location_id, status, created_at desc);
 create index if not exists reply_drafts_contact_idx on reply_drafts (location_id, contact_id, created_at desc);
+
+-- Contact record: the app's own memory of every agent and investor — what
+-- they like, what they buy, every deal and offer worked, why they said no.
+-- NOT a cache. Nothing re-syncs over it and the dispo `investors` prune never
+-- touches it; the GHL custom fields become a digest rendered FROM this.
+--
+-- facts:  { key: [ {value, source, at, ref} ], _removed: { key: [values] } }
+--         — the newest entry is the current value of a scalar key, the whole
+--         list is the value of a list key; _removed is the tombstone set an
+--         operator's deletion leaves so a sweep cannot resurrect a fact.
+create table if not exists contact_profiles (
+  id            uuid primary key,
+  location_id   text not null,
+  contact_id    text not null,
+  party         text,                                  -- 'agent' | 'investor' | null
+  name          text,
+  email         text,
+  phone         text,
+  tags          jsonb not null default '[]'::jsonb,    -- as last seen in GHL; display only
+  facts         jsonb not null default '{}'::jsonb,
+  ghl_seen_at   timestamptz,
+  projected_at  timestamptz,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+create unique index if not exists contact_profiles_contact_uniq on contact_profiles (location_id, contact_id);
+create index if not exists contact_profiles_party_idx on contact_profiles (location_id, party, updated_at desc);
+
+-- Append-only timeline. dedupe_key makes a replay a no-op — a backfill, a
+-- webhook that fired twice, a ledger line and a direct record of the same
+-- action all land on one row. A manual note has no key: each one is real.
+create table if not exists contact_events (
+  id            uuid primary key,
+  location_id   text not null,
+  contact_id    text not null,
+  party         text,
+  type          text not null,                         -- shared/contact-record.js EVENT_TYPES
+  at            timestamptz not null,
+  address       text,
+  offer_id      text,
+  deal_id       text,
+  source        text not null,                         -- conversation|call|sweep|operator|import|offer|deal|dataroom|blast
+  ref           text,
+  dedupe_key    text,
+  data          jsonb not null default '{}'::jsonb,
+  created_at    timestamptz not null default now()
+);
+create index if not exists contact_events_contact_idx on contact_events (location_id, contact_id, at desc);
+create index if not exists contact_events_offer_idx on contact_events (location_id, offer_id) where offer_id is not null;
+create unique index if not exists contact_events_dedupe_uniq
+  on contact_events (location_id, contact_id, dedupe_key) where dedupe_key is not null;

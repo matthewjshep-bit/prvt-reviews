@@ -664,6 +664,109 @@ const pgStore = {
     return rowCount;
   },
 
+  /* ---- contact record (the app's own memory of a person) ---- */
+  // Person-scoped and permanent: nothing re-syncs over these rows and the
+  // investor prune never sees them. See schema.pg.sql for the shapes.
+  async getContactProfile(locationId, contactId) {
+    const { rows } = await query(
+      `select id, location_id as "locationId", contact_id as "contactId", party, name, email, phone, tags, facts,
+              ghl_seen_at as "ghlSeenAt", projected_at as "projectedAt", created_at as "createdAt", updated_at as "updatedAt"
+         from contact_profiles where location_id = $1 and contact_id = $2`,
+      [locationId, contactId]
+    );
+    return rows[0] || null;
+  },
+  // Merge patch: only the keys given change. `facts` is replaced whole — the
+  // caller computed the merge with addFact/removeFact and hands back the doc.
+  async upsertContactProfile(locationId, contactId, patch = {}) {
+    const { rows } = await query(
+      `insert into contact_profiles (id, location_id, contact_id, party, name, email, phone, tags, facts, ghl_seen_at, projected_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       on conflict (location_id, contact_id) do update set
+         party = coalesce(excluded.party, contact_profiles.party),
+         name = coalesce(excluded.name, contact_profiles.name),
+         email = coalesce(excluded.email, contact_profiles.email),
+         phone = coalesce(excluded.phone, contact_profiles.phone),
+         tags = case when $12::boolean then excluded.tags else contact_profiles.tags end,
+         facts = case when $13::boolean then excluded.facts else contact_profiles.facts end,
+         ghl_seen_at = coalesce(excluded.ghl_seen_at, contact_profiles.ghl_seen_at),
+         projected_at = coalesce(excluded.projected_at, contact_profiles.projected_at),
+         updated_at = now()
+       returning id, location_id as "locationId", contact_id as "contactId", party, name, email, phone, tags, facts,
+                 ghl_seen_at as "ghlSeenAt", projected_at as "projectedAt", created_at as "createdAt", updated_at as "updatedAt"`,
+      [uuid(), locationId, contactId, patch.party ?? null, patch.name ?? null, patch.email ?? null, patch.phone ?? null,
+       JSON.stringify(patch.tags ?? []), JSON.stringify(patch.facts ?? {}), patch.ghlSeenAt ?? null, patch.projectedAt ?? null,
+       patch.tags !== undefined, patch.facts !== undefined]
+    );
+    return rows[0];
+  },
+  async listContactProfiles(locationId, { party = null, limit = 5000 } = {}) {
+    const params = [locationId];
+    let where = "";
+    if (party) { params.push(party); where = ` and party = $${params.length}`; }
+    params.push(limit);
+    const { rows } = await query(
+      `select id, location_id as "locationId", contact_id as "contactId", party, name, email, phone, tags, facts,
+              ghl_seen_at as "ghlSeenAt", projected_at as "projectedAt", created_at as "createdAt", updated_at as "updatedAt"
+         from contact_profiles where location_id = $1${where} order by updated_at desc limit $${params.length}`,
+      params
+    );
+    return rows;
+  },
+  // Append-only. A row whose dedupe key already exists is skipped, not an
+  // error — that is the whole point of the key.
+  async appendContactEvents(locationId, contactId, events = []) {
+    let inserted = 0;
+    let skipped = 0;
+    for (const e of events) {
+      if (!e?.type || !e.at) { skipped++; continue; }
+      const { rowCount } = await query(
+        `insert into contact_events (id, location_id, contact_id, party, type, at, address, offer_id, deal_id, source, ref, dedupe_key, data)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         on conflict (location_id, contact_id, dedupe_key) where dedupe_key is not null do nothing`,
+        [e.id || uuid(), locationId, contactId, e.party || null, e.type, e.at, e.address || null, e.offerId || null, e.dealId || null,
+         e.source || "operator", e.ref || null, e.dedupeKey || null, JSON.stringify(e.data || {})]
+      );
+      if (rowCount) inserted++;
+      else skipped++;
+    }
+    return { inserted, skipped };
+  },
+  async listContactEvents(locationId, contactId, { limit = 500, since = null, types = null } = {}) {
+    const params = [locationId, contactId];
+    let where = "";
+    if (since) { params.push(since); where += ` and at >= $${params.length}`; }
+    if (Array.isArray(types) && types.length) { params.push(types); where += ` and type = any($${params.length}::text[])`; }
+    params.push(limit);
+    const { rows } = await query(
+      `select id, contact_id as "contactId", party, type, at, address, offer_id as "offerId", deal_id as "dealId", source, ref,
+              dedupe_key as "dedupeKey", data, created_at as "createdAt"
+         from contact_events where location_id = $1 and contact_id = $2${where}
+         order by at desc, created_at desc limit $${params.length}`,
+      params
+    );
+    return rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at }));
+  },
+  async listContactEventsByOffer(locationId, offerId, { limit = 200 } = {}) {
+    const { rows } = await query(
+      `select id, contact_id as "contactId", party, type, at, address, offer_id as "offerId", deal_id as "dealId", source, ref,
+              dedupe_key as "dedupeKey", data, created_at as "createdAt"
+         from contact_events where location_id = $1 and offer_id = $2 order by at desc limit $3`,
+      [locationId, offerId, limit]
+    );
+    return rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at }));
+  },
+  async contactRecordStats(locationId) {
+    const { rows } = await query(
+      `select (select count(*) from contact_profiles where location_id = $1)::int as profiles,
+              (select count(*) from contact_events where location_id = $1)::int as events,
+              (select count(*) from contact_events where location_id = $1 and source = 'import')::int as "importedEvents",
+              (select max(created_at) from contact_events where location_id = $1 and source = 'import') as "lastImportAt"`,
+      [locationId]
+    );
+    return rows[0];
+  },
+
   /* ---- Zillow comp inbox ---- */
   // Resolve a location from a capture token. The bookmarklet has no
   // location_id — the token IS the credential, so this is the one lookup that
@@ -875,6 +978,8 @@ const fileStore = (() => {
       data.compCaptures = data.compCaptures || {};
       data.investors = data.investors || {};
       data.replyDrafts = data.replyDrafts || {};
+      data.contactProfiles = data.contactProfiles || {};
+      data.contactEvents = data.contactEvents || {};   // "<loc>|<contact>" → [events]; never pruned (dev backend)
       adoptLegacyOutreachRows();
     }
     return data;
@@ -1496,7 +1601,88 @@ const fileStore = (() => {
       return removed;
     },
 
-    /* ---- Zillow comp inbox ---- */
+    /* ---- contact record ---- */
+    async getContactProfile(locationId, contactId) {
+      ensure();
+      return data.contactProfiles[`${locationId}|${contactId}`] || null;
+    },
+    async upsertContactProfile(locationId, contactId, patch = {}) {
+      ensure();
+      const k = `${locationId}|${contactId}`;
+      const prev = data.contactProfiles[k];
+      const row = {
+        id: prev?.id || uuid(), locationId, contactId,
+        party: patch.party ?? prev?.party ?? null,
+        name: patch.name ?? prev?.name ?? null,
+        email: patch.email ?? prev?.email ?? null,
+        phone: patch.phone ?? prev?.phone ?? null,
+        tags: patch.tags !== undefined ? patch.tags : (prev?.tags || []),
+        facts: patch.facts !== undefined ? patch.facts : (prev?.facts || {}),
+        ghlSeenAt: patch.ghlSeenAt ?? prev?.ghlSeenAt ?? null,
+        projectedAt: patch.projectedAt ?? prev?.projectedAt ?? null,
+        createdAt: prev?.createdAt || nowIso(),
+        updatedAt: nowIso(),
+      };
+      data.contactProfiles[k] = row;
+      persist();
+      return row;
+    },
+    async listContactProfiles(locationId, { party = null, limit = 5000 } = {}) {
+      ensure();
+      return Object.values(data.contactProfiles)
+        .filter((p) => p.locationId === locationId && (!party || p.party === party))
+        .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""))
+        .slice(0, limit);
+    },
+    async appendContactEvents(locationId, contactId, events = []) {
+      ensure();
+      const k = `${locationId}|${contactId}`;
+      const list = (data.contactEvents[k] = data.contactEvents[k] || []);
+      const keys = new Set(list.map((e) => e.dedupeKey).filter(Boolean));
+      let inserted = 0;
+      let skipped = 0;
+      for (const e of events) {
+        if (!e?.type || !e.at || (e.dedupeKey && keys.has(e.dedupeKey))) { skipped++; continue; }
+        const row = {
+          id: e.id || uuid(), contactId, party: e.party || null, type: e.type, at: e.at, address: e.address || null,
+          offerId: e.offerId || null, dealId: e.dealId || null, source: e.source || "operator", ref: e.ref || null,
+          dedupeKey: e.dedupeKey || null, data: e.data || {}, createdAt: nowIso(),
+        };
+        list.push(row);
+        if (row.dedupeKey) keys.add(row.dedupeKey);
+        inserted++;
+      }
+      if (inserted) persist();
+      return { inserted, skipped };
+    },
+    async listContactEvents(locationId, contactId, { limit = 500, since = null, types = null } = {}) {
+      ensure();
+      return (data.contactEvents[`${locationId}|${contactId}`] || [])
+        .filter((e) => (!since || e.at >= since) && (!types?.length || types.includes(e.type)))
+        .sort((a, b) => String(b.at).localeCompare(String(a.at)) || String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, limit);
+    },
+    async listContactEventsByOffer(locationId, offerId, { limit = 200 } = {}) {
+      ensure();
+      return Object.entries(data.contactEvents)
+        .filter(([k]) => k.startsWith(`${locationId}|`))
+        .flatMap(([, list]) => list.filter((e) => e.offerId === offerId))
+        .sort((a, b) => String(b.at).localeCompare(String(a.at)))
+        .slice(0, limit);
+    },
+    async contactRecordStats(locationId) {
+      ensure();
+      const events = Object.entries(data.contactEvents).filter(([k]) => k.startsWith(`${locationId}|`)).flatMap(([, l]) => l);
+      const imported = events.filter((e) => e.source === "import");
+      return {
+        profiles: Object.values(data.contactProfiles).filter((p) => p.locationId === locationId).length,
+        events: events.length,
+        importedEvents: imported.length,
+        lastImportAt: imported.map((e) => e.createdAt).sort().pop() || null,
+      };
+    },
+
+  /* ---- Zillow comp inbox ---- */
     async findLocationByCaptureToken(token) {
       ensure();
       for (const [locationId, doc] of Object.entries(data.offerSettings)) {

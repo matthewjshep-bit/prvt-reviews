@@ -37,7 +37,7 @@
 // nobody answers. The spend cap reads from the store for the same reason.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { buildTranscript, enrichFieldDefs, mergeHistory, SUBJECT_PROPERTY_FIELD } from "./enrich.js";
+import { buildTranscript, enrichFieldDefs, mergeHistory, mergeFacts, SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
@@ -398,22 +398,9 @@ async function note(client, contactId, body, warnings) {
 
 /* ---------- profile memory ---------- */
 
-// Comma-separated facts, merged: what they told us before plus what is new,
-// deduped case-insensitively, oldest first, capped.
-export function mergeFacts(existing, additions, max = 1500) {
-  const split = (v) => String(v || "").split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
-  const out = [];
-  const seen = new Set();
-  for (const f of [...split(existing), ...split(additions)]) {
-    const k = f.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(f);
-  }
-  let text = out.join(", ");
-  while (out.length > 1 && text.length > max) { out.shift(); text = out.join(", "); }
-  return text.slice(0, max);
-}
+// mergeFacts lives in enrich.js beside mergeHistory now; re-exported so
+// nothing that imported it from here has to move.
+export { mergeFacts };
 
 /**
  * underwritableAddress(raw) → string | ""
