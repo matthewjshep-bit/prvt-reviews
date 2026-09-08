@@ -328,8 +328,13 @@ export function moneyIn(text) {
  * adds the page's own switches. But `ok` is recorded beside every draft, so
  * "could this have gone out by itself?" is a count, not a guess.
  */
+// How sure is sure enough. "medium" lets a draft the model was fairly sure
+// of go on its own; "high" waits for a person unless it was certain.
+const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
+
 export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], inboundMessage = "", channel = "sms", style = null,
+  minConfidence = "high", holdOnNeedsHuman = true,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -340,10 +345,14 @@ export function evaluateReplyGates({
   if (never.includes(draft.intent) || !known.includes(draft.intent)) {
     flags.push(`a ${String(draft.intent).replace(/_/g, " ")} is a person's call`);
   }
-  if (draft.needsHuman) {
+  // The model's own "needs a human" is usually about an ACTION beside the
+  // reply — "a person has to send the package" — not the reply itself. The
+  // page decides whether it holds the send; the reason is kept on the draft
+  // either way.
+  if (draft.needsHuman && holdOnNeedsHuman) {
     flags.push(draft.humanReason || "the model asked for a person");
   }
-  if (draft.confidence !== "high") {
+  if ((CONFIDENCE_RANK[draft.confidence] ?? 0) < (CONFIDENCE_RANK[minConfidence] ?? 2)) {
     flags.push(`the model was only ${draft.confidence} confidence`);
   }
   if (draft.intent !== "small_talk" && !draft.reply) {
@@ -947,7 +956,7 @@ async function runProactive(job, ctx) {
   const forbiddenAmounts = kind === "take_check"
     ? [...new Set([...(context.forbiddenAmounts || []), Math.round(Number(offer.cashAmount) || 0)].filter(Boolean))]
     : context.forbiddenAmounts;
-  const gate = evaluateReplyGates({ draft, party: "agent", allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style });
+  const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft, party: "agent", allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style });
   const auto = decideAutoSend({ gate, party: "agent", intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
 
   job.phase = "saving";
@@ -1099,7 +1108,7 @@ async function runReply(job, ctx) {
     return;
   }
 
-  const gate = evaluateReplyGates({
+  const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts,
     inboundMessage: job.message, channel: job.channel, style: config.style,
   });
@@ -1328,6 +1337,9 @@ function draftNote(d) {
     ``,
     d.outbound ? `Why: ${d.summary || "numbers came back"}` : `${whoWord(d)}: ${d.summary || d.intent}`,
     d.flags.length ? `Needs you because: ${d.flags.join("; ")}` : `Would have been safe to send on its own.`,
+    // The model's own reason rides along even when the page chose not to
+    // hold on it — it is still the most useful line on the note.
+    ...(d.needsHuman && d.humanReason && !d.flags.includes(d.humanReason) ? [`The model notes: ${d.humanReason}`] : []),
     ...(acted.length ? [``, `Done automatically:`, ...acted] : []),
     ...(failed.length ? [``, `Could not do:`, ...failed] : []),
     ...(asks.length ? [``, `Suggested (apply in the app):`, ...asks] : []),
@@ -1391,7 +1403,7 @@ export async function previewConversation({
       instructions: a.instructions, signer: a.signer, aiApiKey, party, config, context, channel,
     });
   if (SILENT_INTENTS.has(draft.intent)) return optOutView(draft.confidence, draft.summary || "the model read an opt-out");
-  const gate = evaluateReplyGates({
+  const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, inboundMessage: message, channel, style: config.style,
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive });

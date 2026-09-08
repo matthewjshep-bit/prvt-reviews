@@ -269,7 +269,7 @@ test("a counter is saved flagged, and the note says why", async () => {
   assert.equal(d.autoSendable, false);
   assert.match(d.flags[0], /a counter is a person's call/);
   assert.equal(d.counterAmount, 425000);
-  assert.match(notes[0], /Needs you because: a counter is a person's call; the agent named a higher number/);
+  assert.match(notes[0], /Needs you because: a counter is a person's call\nThe model notes: the agent named a higher number/);
 });
 
 test("a made-up number is caught before anyone sees the draft", async () => {
@@ -1467,4 +1467,24 @@ test("their take arriving hands off to the realm check, and a confirmed address 
   assert.ok(calls.some((c) => c[0] === "startUnderwrite" && c[1] === "12 Elm St, Renton, WA 98056"), `the new_property rule kicks the underwrite off: ${JSON.stringify(calls)}`);
   const d = await store.getReplyDraft(job.draftId);
   assert.ok(d.actions.some((a) => a.type === "start_underwrite" && a.status === "done"), JSON.stringify(d.actions.map((a) => [a.type, a.status, a.detail || a.error])));
+});
+
+test("the two holds that kept biting are settings now, liberal by default", async () => {
+  const { evaluateReplyGates: gates, conversationConfig } = await import("./reply-agent.js");
+  const base = { intent: "question", confidence: "medium", needsHuman: true, humanReason: "a person has to send the package", reply: "Sending it over today.", propertyAddress: "", counterAmount: 0 };
+  // Strict, as it was: both hold.
+  const strict = gates({ draft: base, party: "investor", minConfidence: "high", holdOnNeedsHuman: true });
+  assert.equal(strict.ok, false);
+  assert.match(strict.flags.join(" · "), /medium confidence/);
+  assert.match(strict.flags.join(" · "), /send the package/);
+  // Liberal: neither holds; the money guard and the never-auto list still do.
+  const liberal = gates({ draft: base, party: "investor", minConfidence: "medium", holdOnNeedsHuman: false });
+  assert.equal(liberal.ok, true, liberal.flags.join(" · "));
+  assert.equal(gates({ draft: { ...base, confidence: "low" }, party: "investor", minConfidence: "medium", holdOnNeedsHuman: false }).ok, false, "low is never sure enough");
+  assert.equal(gates({ draft: { ...base, intent: "wants_to_buy", confidence: "high" }, party: "investor", minConfidence: "medium", holdOnNeedsHuman: false }).ok, false, "a commitment still waits");
+  assert.equal(gates({ draft: { ...base, reply: "It's yours for $1,000,000." }, party: "investor", minConfidence: "medium", holdOnNeedsHuman: false }).ok, false, "an invented number still holds");
+  // The starter and a saved config with the keys absent both come out liberal.
+  const cfg = conversationConfig({ conversationAi: { version: 2 } });
+  assert.equal(cfg.autoSend.minConfidence, "medium");
+  assert.equal(cfg.autoSend.holdOnNeedsHuman, false);
 });

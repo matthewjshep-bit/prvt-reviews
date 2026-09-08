@@ -241,6 +241,12 @@ export function AutoSendCard({ config, patch }) {
         <Field label="Wait for follow-up texts (seconds)" hint="Three texts in a row get one reply to all three. 0 drafts at once.">
           <Text type="number" value={a.debounceSec} onChange={(v) => set("debounceSec")(Number(v))} />
         </Field>
+        <Field label="Send when the model is" hint="Every draft still passes the money guard and the never-auto list. 'Fairly sure' lets a medium-confidence draft go; 'certain' holds anything short of high.">
+          <Select value={a.minConfidence} onChange={set("minConfidence")} options={[["medium", "fairly sure (medium confidence)"], ["high", "certain (high confidence only)"]]} />
+        </Field>
+        <Field label="If the model says a person is needed" hint="It usually means an action beside the reply — 'someone has to send the package' — not the reply itself. The note stays on the row either way.">
+          <Select value={a.holdOnNeedsHuman ? "hold" : "send"} onChange={(v) => set("holdOnNeedsHuman")(v === "hold")} options={[["send", "send the reply anyway; show the note"], ["hold", "hold the reply for a person"]]} />
+        </Field>
         <Field label="Stand down after you reply (minutes)" hint="If a person replied to them this recently, the bot drafts but never sends itself. 0 (the default) turns this off: the bot sends whether or not you've been in the thread.">
           <Text type="number" value={a.humanActiveMin} onChange={(v) => set("humanActiveMin")(Number(v))} />
         </Field>

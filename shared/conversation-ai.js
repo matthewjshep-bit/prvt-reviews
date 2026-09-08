@@ -307,6 +307,11 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
     // Don't auto-send when a person replied to them this recently — they
     // have the thread.
     humanActiveMin: 0,
+    // Liberal by default: a draft the model was fairly sure of goes, and its
+    // own "needs a human" note is shown on the row rather than holding the
+    // send — the action it refers to is ask-only regardless.
+    minConfidence: "medium",           // "high" | "medium"
+    holdOnNeedsHuman: false,
   },
 });
 
@@ -532,6 +537,8 @@ export function normalizeConversationAi(doc, seed = {}) {
         : [...D.autoSend.channels],
       debounceSec: int(auto.debounceSec, D.autoSend.debounceSec, 0, 600),
       humanActiveMin: int(auto.humanActiveMin, D.autoSend.humanActiveMin, 0, 1440),
+      minConfidence: oneOf(auto.minConfidence, ["high", "medium"], D.autoSend.minConfidence),
+      holdOnNeedsHuman: bool(auto.holdOnNeedsHuman, D.autoSend.holdOnNeedsHuman),
     },
   };
   // Version 1 → 2, once. A deploy never edits a saved setting — except this
