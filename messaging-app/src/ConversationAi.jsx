@@ -195,7 +195,7 @@ export default function ConversationAi({ settings }) {
 
 const outcomeOf = (d) => {
   if (d.status === "sent") return d.autoSent ? ["sent itself", "text-emerald-700"] : d.edited ? ["sent, edited", "text-slate-700"] : ["sent as written", "text-emerald-700"];
-  if (d.status === "dismissed") return ["dismissed", "text-slate-500"];
+  if (d.status === "dismissed") return d.answeredBy === "you" ? ["you answered it", "text-slate-500"] : ["dismissed", "text-slate-500"];
   if (d.status === "superseded") return ["superseded", "text-slate-400"];
   if (d.status === "handled") return [d.intent === "opt_out" ? "opted out, no reply" : "handled", "text-slate-500"];
   if (d.status === "scheduled") return ["sending soon", "text-amber-700"];

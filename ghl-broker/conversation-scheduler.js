@@ -152,9 +152,14 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
         // Claim first, so an overlapping tick (or a second process) sees
         // "sending" and leaves it alone.
         await store.updateReplyDraft(d.id, { ...d, status: "sending", sendingAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() });
-        await send({ client, store, locationId, draftId: d.id, live: true, auto: true });
-        out.sent++;
-        log(`scheduler: auto-sent ${d.id} (${d.party || "agent"} · ${d.intent}) for ${locationId}`);
+        const r = await send({ client, store, locationId, draftId: d.id, live: true, auto: true });
+        if (r?.skipped) {
+          out.stoodAside = (out.stoodAside || 0) + 1;
+          log(`scheduler: stood aside on ${d.id} — ${r.skipped}`);
+        } else {
+          out.sent++;
+          log(`scheduler: auto-sent ${d.id} (${d.party || "agent"} · ${d.intent}) for ${locationId}`);
+        }
       } catch (e) {
         out.failed++;
         const fresh = (await store.getReplyDraft(d.id).catch(() => null)) || d;

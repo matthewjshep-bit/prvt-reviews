@@ -1488,3 +1488,45 @@ test("the two holds that kept biting are settings now, liberal by default", asyn
   assert.equal(cfg.autoSend.minConfidence, "medium");
   assert.equal(cfg.autoSend.holdOnNeedsHuman, false);
 });
+
+test("an auto-send stands aside when you already answered, and picks up on the next inbound", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const sent = [];
+  const client = { call: async (p, o = {}) => { if (p === "/conversations/messages") sent.push(o.body); return {}; } };
+  const now = Date.now();
+  const stamp = (msAgo) => new Date(now - msAgo).toISOString().slice(0, 16).replace("T", " ");
+  const scheduled = { id: "s1", locationId: "LOC", contactId: "c1", status: "scheduled", channel: "sms", reply: "Got it, I'll watch them today.",
+    createdAt: new Date(now - 3 * 60000).toISOString(), sendAt: new Date(now).toISOString(), flags: [] };
+
+  // You jumped in a minute after the draft was written: it stands aside.
+  const store = fakeStore([scheduled]);
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "s1", live: true, auto: true, now,
+    readThread: async () => `[${stamp(4 * 60000)}] THEM sms: Sent\n[${stamp(60000)}] US sms: Perfect, watching now — is the ADU framed?` });
+  assert.equal(r.skipped, "answered by you");
+  assert.equal(sent.length, 0, "nothing went out");
+  const d = await store.getReplyDraft("s1");
+  assert.equal(d.status, "dismissed");
+  assert.equal(d.answeredBy, "you");
+  assert.match(d.flags.join(" · "), /you answered it yourself/);
+
+  // Your reply came BEFORE the draft: the draft is the answer, it sends.
+  const store2 = fakeStore([{ ...scheduled, createdAt: new Date(now - 30000).toISOString() }]);
+  const r2 = await sendReplyDraft({ client, store: store2, locationId: "LOC", draftId: "s1", live: true, auto: true, now,
+    readThread: async () => `[${stamp(4 * 60000)}] US sms: earlier reply\n[${stamp(2 * 60000)}] THEM sms: Sent` });
+  assert.equal(r2.skipped, undefined);
+  assert.equal(sent.length, 1);
+
+  // The bot's own earlier send is not "you": it goes.
+  const store3 = fakeStore([{ ...scheduled }, { id: "old", locationId: "LOC", contactId: "c1", status: "sent", sentText: "Got it, thanks.", createdAt: new Date(now - 2 * 60000).toISOString() }]);
+  const r3 = await sendReplyDraft({ client, store: store3, locationId: "LOC", draftId: "s1", live: true, auto: true, now,
+    readThread: async () => `[${stamp(60000)}] US sms: Got it, thanks.` });
+  assert.equal(r3.skipped, undefined);
+  assert.equal(sent.length, 2);
+
+  // A person pressing Send is a person deciding: no second-guessing.
+  const store4 = fakeStore([{ ...scheduled, status: "draft" }]);
+  const r4 = await sendReplyDraft({ client, store: store4, locationId: "LOC", draftId: "s1", live: true, auto: false, now,
+    readThread: async () => { throw new Error("must not be read on a manual send"); } });
+  assert.equal(r4.ok, true);
+  assert.equal(sent.length, 3);
+});

@@ -671,9 +671,14 @@ for the next deal. A buyer never linked is still the bot's to pitch — that is
 the blast itself, which tags rather than links. A closed or fallen-through deal releases everyone. The routing
 card's "People you're already working" can narrow this to the acquisition
 side only, or switch it off. Both checks run before the model call, so
-neither costs anything. And when a person replied to them inside the stand-down window (30
-min), the bot drafts but never sends itself: the row says "you replied to them
-N minutes ago". Three texts in a row are one reply: the draft waits the
+neither costs anything. The stand-down window ("stand down after you reply") ships at 0 — off —
+because Matt works the outbox by hand and wants the bot to pick back up
+around him. What replaces it is narrower and always on: an auto-send checks
+the thread the moment it comes due, and if a person answered that thread
+after the draft was written it stands aside for that one — the draft is
+dismissed with "you answered it yourself" and History shows "you answered
+it" — then picks up again on the next inbound. Pressing Send by hand is a
+person deciding and is never second-guessed. Three texts in a row are one reply: the draft waits the
 debounce (45s on the starter) and a newer text replaces the waiting job; the
 same words twice inside two minutes are one message. Each contact also has
 its own daily cap (12).

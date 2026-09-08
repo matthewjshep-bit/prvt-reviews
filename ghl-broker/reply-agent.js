@@ -1438,7 +1438,16 @@ const OPEN_STATUSES = new Set(["draft", "scheduled"]);
  * `live` false returns a preview and changes nothing, the same double gate
  * every other send in this codebase has.
  */
-export async function sendReplyDraft({ client, store, locationId, draftId, text, live, auto = false }) {
+// The newest slice of a contact's thread, for the one question the auto
+// send asks before it goes: did a person already answer this?
+const readRecentThread = async (client, locationId, contactId) => {
+  try {
+    const t = await buildTranscript(client, locationId, contactId, { maxConversations: 1, maxPagesPerConvo: 1, maxMessages: 20, maxChars: 4000, maxCallTranscripts: 0 });
+    return t.text || "";
+  } catch { return ""; }
+};
+
+export async function sendReplyDraft({ client, store, locationId, draftId, text, live, auto = false, readThread = readRecentThread, now = Date.now() }) {
   const d = await store.getReplyDraft(draftId);
   if (!d || d.locationId !== locationId) throw Object.assign(new Error("no such draft"), { http: 404 });
   const sendable = OPEN_STATUSES.has(d.status) || (auto && d.status === "sending");
@@ -1448,6 +1457,24 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
 
   if (!live) {
     return { ok: true, dryRun: true, preview: { channel: d.channel, to: d.contactId, message: body } };
+  }
+
+  // Pick back up, don't pile on. If a person answered this thread after the
+  // draft was written, the bot stands aside for this one — the draft is
+  // dismissed and says so — and picks up again on the next inbound. A
+  // person pressing Send is a person deciding, so only the auto path asks.
+  if (auto) {
+    const transcript = await readThread(client, locationId, d.contactId);
+    const theirs = await humanHasThread({ store, locationId, contactId: d.contactId, transcript, minutes: 7 * 24 * 60, now });
+    if (theirs && Date.parse(theirs.at) >= Date.parse(d.createdAt) - 60000) {
+      const ts = new Date(now).toISOString();
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "dismissed", answeredBy: "you", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), "you answered it yourself — the bot stood aside"],
+      });
+      await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      return { ok: true, skipped: "answered by you", at: theirs.at };
+    }
   }
 
   let result;
