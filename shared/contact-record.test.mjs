@@ -18,7 +18,7 @@ import {
   EVENT_TYPES, EVENT_LABEL, EVENT_ICON, FACT_KEYS, factKeysFor,
   parseHistoryLine, eventFromLedgerLine, eventToHistoryLine, eventDedupeKey, ledgerEventType, eventPhrase,
   renderLedger, ledgerEvents, addFact, removeFact, currentFacts, renderFactField, factsFromCustom, factsAsCustom,
-  offerEvents, draftEvents, draftFacts, inviteEvents, groupByDay, addressKey, eventKey,
+  offerEvents, draftEvents, draftFacts, inviteEvents, groupByDay, addressKey, eventKey, propertyDossier, normalizePropertyDetails,
 } from "./contact-record.js";
 import { STATUS_HISTORY_PHRASE } from "./offer-status.js";
 
@@ -236,4 +236,25 @@ test("the drawer groups by local day, newest first", () => {
     { at: "2026-09-06T20:00:00Z", type: "note" },
   ], "America/Los_Angeles");
   assert.deepEqual(g.map((x) => [x.day, x.events.length]), [["2026-09-06", 1], ["2026-09-05", 1]]);
+});
+
+test("a property's dossier is the newest answer per field, and names what is still missing", () => {
+  const A = "12703 Vernon Ave SW, Lakewood, WA";
+  const events = [
+    { type: "property_details", at: "2026-09-01T00:00:00Z", address: A, data: { condition: "rough", occupancy: "tenant" } },
+    { type: "agent_estimate", at: "2026-09-02T00:00:00Z", address: A, data: { arv: 715000 } },
+    { type: "property_details", at: "2026-09-03T00:00:00Z", address: "12703 Vernon Avenue SW, Lakewood, WA", data: { condition: "dated but solid", sellerAsk: 480000 } },
+    { type: "property_details", at: "2026-09-03T00:00:00Z", address: "9 Other St", data: { timeline: "asap" } },
+  ];
+  const d = propertyDossier(events, A);
+  assert.equal(d.have.condition.value, "dated but solid", "the newest answer wins, across address spellings");
+  assert.equal(d.have.sellerAsk.value, 480000);
+  assert.equal(d.have.occupancy.value, "tenant");
+  assert.equal(d.have.arv.value, 715000, "their take folds in");
+  assert.deepEqual(d.missing.map((f) => f.key), ["workNeeded", "timeline", "rehab"]);
+  assert.equal(propertyDossier(events, ""), null, "no address, no dossier");
+  // Normalising what a message added: numbers coerce, enums validate, blanks vanish.
+  assert.deepEqual(normalizePropertyDetails({ condition: " needs everything ", workNeeded: "", sellerAsk: "$480,000", timeline: "", occupancy: "Owner Occupied" }),
+    { condition: "needs everything", sellerAsk: 480000, occupancy: "owner_occupied" });
+  assert.equal(normalizePropertyDetails({ condition: "", sellerAsk: 0, occupancy: "unknown" }), null, "nothing new is nothing");
 });

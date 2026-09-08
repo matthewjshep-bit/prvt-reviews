@@ -26,6 +26,10 @@
 import { STATUS_HISTORY_PHRASE } from "./offer-status.js";
 import { PROPERTY_TYPES } from "./buybox.js";
 import { PASS_REASON_LABEL } from "./conversation-ai.js";
+// USPS-normalised ("Avenue" is "Ave"): the dossier's notion of "same property".
+// Deliberately NOT the event dedupe key, which must stay byte-compatible with
+// mergeHistory's own normalisation.
+import { addressKey as propertyKey } from "./us-address.js";
 
 /* ---------- vocabulary ---------- */
 
@@ -37,7 +41,7 @@ export const EVENT_TYPES = [
   "blast_sent", "dataroom_sent", "dataroom_viewed",
   "call_summary", "text_summary", "note",
   "enrich_run", "tag_added", "tag_removed",
-  "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate",
+  "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate", "property_details",
 ];
 
 export const EVENT_LABEL = {
@@ -51,7 +55,7 @@ export const EVENT_LABEL = {
   call_summary: "call", text_summary: "text conversation", note: "note",
   enrich_run: "AI enrichment ran", tag_added: "tag added", tag_removed: "tag removed",
   subject_property_set: "subject property set", fact_learned: "learned about them", fact_removed: "fact removed",
-  import: "imported", agent_estimate: "agent's own take",
+  import: "imported", agent_estimate: "agent's own take", property_details: "property details",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -64,7 +68,7 @@ export const EVENT_ICON = {
   blast_sent: "Megaphone", dataroom_sent: "FolderOpen", dataroom_viewed: "Eye",
   call_summary: "Phone", text_summary: "MessageSquare", note: "StickyNote",
   enrich_run: "Sparkles", tag_added: "Tag", tag_removed: "Tag",
-  subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator",
+  subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator", property_details: "ClipboardList",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast"];
@@ -233,6 +237,9 @@ export function eventDedupeKey(ev) {
   if (t === "subject_property_set") return ev.address ? `subject_property_set:${addressKey(ev.address)}:${day}` : null;
   // One take per property per day; a restated number the same day is a correction, not a second event.
   if (t === "agent_estimate") return ev.address ? `agent_estimate:${addressKey(ev.address)}:${day}` : null;
+  // Details arrive one answer at a time across a thread; each draft's
+  // contribution is its own event, keyed to the draft.
+  if (t === "property_details") return ev.ref && ev.address ? `property_details:${addressKey(ev.address)}:${ev.ref}` : null;
   if (t === "fact_learned" || t === "fact_removed") return d.key ? `${t}:${d.key}:${String(d.value || "").toLowerCase().trim()}` : null;
   if (t === "import") return ev.ref ? `import:${ev.ref}` : null;
   return ev.ref ? `${t}:${ev.ref}` : null;
@@ -524,6 +531,61 @@ export function inviteEvents(invite, { address = "" } = {}) {
     out.push(withKey({ ...base, type: "dataroom_viewed", at: invite.lastViewedAt, data: { viewCount: Number(invite.viewCount) } }));
   }
   return out;
+}
+
+/* ---------- the dossier on one property ---------- */
+
+// What we want to know about a property before it goes to underwriting, in
+// the order a colleague would ask. `label` is how the drawer and the outbox
+// name it; `ask` is how the prompt names what's still missing.
+export const PROPERTY_DETAIL_FIELDS = [
+  { key: "condition", label: "Condition", ask: "the overall condition" },
+  { key: "workNeeded", label: "Work needed", ask: "what work it needs" },
+  { key: "sellerAsk", label: "Seller wants", ask: "what the seller needs to get", number: true },
+  { key: "timeline", label: "Timeline", ask: "the seller's timeline" },
+  { key: "occupancy", label: "Occupancy", ask: "whether it's vacant or occupied", values: ["vacant", "owner_occupied", "tenant", "unknown"] },
+  { key: "arv", label: "Their ARV", ask: "what they think it's worth fixed up", number: true },
+  { key: "rehab", label: "Their rehab", ask: "what they'd budget for the work", number: true },
+];
+
+export function normalizePropertyDetails(p) {
+  if (!p || typeof p !== "object") return null;
+  const out = {};
+  for (const f of PROPERTY_DETAIL_FIELDS) {
+    if (f.key === "arv" || f.key === "rehab") continue;   // those ride on agent_estimate
+    const v = p[f.key];
+    if (v == null || v === "") continue;
+    if (f.number) { const n = Math.round(Number(String(v).replace(/[$,\s]/g, "")) || 0); if (n > 0) out[f.key] = n; continue; }
+    if (f.values) { const e = String(v).toLowerCase().replace(/[\s-]+/g, "_"); if (f.values.includes(e) && e !== "unknown") out[f.key] = e; continue; }
+    const t = String(v).trim().slice(0, 200);
+    if (t) out[f.key] = t;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * propertyDossier(events, address) → { address, have: {key: {value, at}}, missing: [field] }
+ *
+ * Everything we've been told about one property, newest answer per field,
+ * from every property_details and agent_estimate event on it — and the
+ * fields still blank, so the next reply can ask for exactly one of them.
+ */
+export function propertyDossier(events = [], address) {
+  const k = propertyKey(address);
+  if (!k) return null;
+  const have = {};
+  const mine = events.filter((e) => e?.address && propertyKey(e.address) === k && (e.type === "property_details" || e.type === "agent_estimate"))
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  for (const e of mine) {
+    const d = e.data || {};
+    if (e.type === "agent_estimate") {
+      if (d.arv) have.arv = { value: d.arv, at: e.at };
+      if (d.rehab) have.rehab = { value: d.rehab, at: e.at };
+      continue;
+    }
+    for (const f of PROPERTY_DETAIL_FIELDS) if (d[f.key] != null && d[f.key] !== "") have[f.key] = { value: d[f.key], at: e.at };
+  }
+  return { address, have, missing: PROPERTY_DETAIL_FIELDS.filter((f) => !have[f.key]) };
 }
 
 /* ---------- drawer helpers ---------- */

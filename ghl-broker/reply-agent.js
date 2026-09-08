@@ -39,7 +39,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { buildTranscript, enrichFieldDefs, mergeHistory, mergeFacts, SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
-import { eventFromLedgerLine } from "./shared/contact-record.js";
+import { eventFromLedgerLine, normalizePropertyDetails } from "./shared/contact-record.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
@@ -216,6 +216,8 @@ export async function draftReply({
     passReason: normalizePassReason(p.passReason),
     // Agents only: what THEY think it's worth and costs. Theirs, never ours.
     agentTake: normalizeAgentTake(p),
+    // Agents only: what this message added to the property's dossier.
+    propertyDetails: normalizePropertyDetails(p.propertyDetails),
     profile: normalizeProfile(p.profile),
   };
 }
@@ -1096,8 +1098,9 @@ async function runReply(job, ctx) {
     await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
   }
   const ts = new Date().toISOString();
-  // The agent's own numbers, whichever shape the draft arrived in.
+  // The agent's own numbers and the property details, whichever shape the draft arrived in.
   const agentTake = draft.agentTake ?? normalizeAgentTake(draft);
+  const propertyDetails = draft.propertyDetails ?? null;
   let record = await store.createReplyDraft({
     locationId,
     contactId: job.contactId,
@@ -1118,6 +1121,7 @@ async function runReply(job, ctx) {
     // have it, and so the row can show it whether or not they ran.
     passReason: draft.passReason || null,
     agentTake,
+    propertyDetails: propertyDetails || null,
     autoSendable: gate.ok,
     flags: gate.flags,
     party,
@@ -1161,6 +1165,13 @@ async function runReply(job, ctx) {
       store, locationId, contactId: job.contactId, party: "agent", type: "agent_estimate", at: new Date(now).toISOString(),
       address: draft.propertyAddress, source: "conversation", ref: record.id,
       data: { arv: agentTake.arv, rehab: agentTake.rehab, note: agentTake.note },
+    });
+  }
+
+  if (party === "agent" && propertyDetails && draft.propertyAddress) {
+    await recordEvent({
+      store, locationId, contactId: job.contactId, party: "agent", type: "property_details", at: new Date(now).toISOString(),
+      address: draft.propertyAddress, source: "conversation", ref: record.id, data: propertyDetails,
     });
   }
 

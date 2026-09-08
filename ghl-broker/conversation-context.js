@@ -19,7 +19,7 @@ import { dealNumbers } from "./dataroom.js";
 import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
-import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey } from "./shared/contact-record.js";
+import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -187,10 +187,29 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
     return `- ${e.address}: ${[d.arv ? `worth ${fmtMoney(d.arv)} done` : "", d.rehab ? `about ${fmtMoney(d.rehab)} of work` : ""].filter(Boolean).join(", ")}${d.note ? ` — "${d.note}"` : ""}`;
   });
 
+  // The dossier on the property they're on about — what we have, and the
+  // next thing to ask. The subject property is the one the underwriter
+  // will read, so it is the one the checklist is for.
+  const subject = String(custom.subject_property || "").trim();
+  const dossier = subject ? propertyDossier(events, subject) : null;
+  let dossierText = "";
+  if (dossier && (Object.keys(dossier.have).length || dossier.missing.length < PROPERTY_DETAIL_FIELDS.length)) {
+    const haveLines = PROPERTY_DETAIL_FIELDS.filter((f) => dossier.have[f.key]).map((f) => {
+      const v = dossier.have[f.key].value;
+      if (f.number) amounts.add(Math.round(Number(v)));
+      return `- ${f.label}: ${f.number ? fmtMoney(v) : f.values ? String(v).replace(/_/g, " ") : v}`;
+    });
+    dossierText = `WHAT WE HAVE ON ${subject}:\n${haveLines.join("\n")}` +
+      (dossier.missing.length ? `\nSTILL MISSING (ask for ONE of these, the most useful next): ${dossier.missing.map((f) => f.ask).join("; ")}` : "\nNothing missing — it's ready for underwriting.");
+  } else if (subject) {
+    dossierText = `WHAT WE HAVE ON ${subject}: nothing yet.\nSTILL MISSING (ask for ONE of these, the most useful next): ${PROPERTY_DETAIL_FIELDS.map((f) => f.ask).join("; ")}`;
+  }
+
   const text = [
     book.count
       ? `OUR OFFERS TO THIS AGENT (newest first — the only numbers you may quote):\n${book.text}`
       : "OUR OFFERS TO THIS AGENT: none on record.",
+    dossierText,
     takeLines.length ? `THE AGENT'S OWN TAKE (their numbers, not ours — don't ask again, don't adopt them):\n${takeLines.join("\n")}` : "",
     hook,
     history.length ? `PROPERTIES THEY'VE SENT OR DISCUSSED WITH US BEFORE (oldest first):\n${history.map((l) => `- ${l}`).join("\n")}` : "",

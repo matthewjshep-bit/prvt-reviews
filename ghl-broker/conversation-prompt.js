@@ -176,6 +176,13 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   }
   if (party === "agent") {
     parts.push(
+      "DETAILS: anything NEW the agent tells you about the property in this message goes under `propertyDetails` — " +
+      "condition, what work it needs, what the seller needs to get (dollars), the seller's timeline, whether it's " +
+      "vacant or occupied. Only what this message adds; empty for the rest. The context lists what we already " +
+      "have on the property and what's still missing: ask for ONE missing thing per reply, the most useful next " +
+      "one, and never re-ask what we have."
+    );
+    parts.push(
       "THEIR TAKE: when the agent states what THEY think the property is worth fixed up, or what the work would " +
       "cost, put the dollar figures in `agentArv` and `agentRehab` (whole dollars; 0 when not stated) and their " +
       "words in `agentTakeNote` (under 25 words). A range becomes its midpoint. These are the agent's numbers, " +
@@ -264,7 +271,7 @@ export function schemaFor(party = "agent", { profile = true, outbound = null } =
     type: "object",
     additionalProperties: false,
     required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount",
-      ...(party === "investor" ? ["passReason"] : []), ...(party === "agent" ? ["agentArv", "agentRehab", "agentTakeNote"] : []), ...(profile ? ["profile"] : [])],
+      ...(party === "investor" ? ["passReason"] : []), ...(party === "agent" ? ["propertyDetails", "agentArv", "agentRehab", "agentTakeNote"] : []), ...(profile ? ["profile"] : [])],
     properties: {
       ...(profile ? { profile: profileSchemaFor(party) } : {}),
       intent: { type: "string", enum: intents },
@@ -284,6 +291,17 @@ export function schemaFor(party = "agent", { profile = true, outbound = null } =
       counterAmount: { type: "integer", description: "A dollar figure they named, in whole dollars; 0 if none" },
       ...(party === "investor" ? { passReason: PASS_REASON_SCHEMA } : {}),
       ...(party === "agent" ? {
+        propertyDetails: {
+          type: "object", additionalProperties: false,
+          required: ["condition", "workNeeded", "sellerAsk", "timeline", "occupancy"],
+          properties: {
+            condition: { type: "string", description: "Overall condition as they described it, if NEW in this message; else empty" },
+            workNeeded: { type: "string", description: "The work it needs as they described it, if NEW; else empty" },
+            sellerAsk: { type: "integer", description: "What the seller needs to get, whole dollars, if NEW; 0 otherwise" },
+            timeline: { type: "string", description: "The seller's timeline as stated, if NEW; else empty" },
+            occupancy: { type: "string", enum: ["", "vacant", "owner_occupied", "tenant", "unknown"], description: "If NEW; empty otherwise" },
+          },
+        },
         agentArv: { type: "integer", description: "What THEY think it is worth fixed up, whole dollars; 0 if not stated" },
         agentRehab: { type: "integer", description: "What THEY think the work costs, whole dollars; 0 if not stated" },
         agentTakeNote: { type: "string", description: "Their own words on value or work, under 25 words; empty if none" },

@@ -9,6 +9,7 @@
 import React, { useEffect, useState } from "react";
 import { AlertTriangle, Check, Clock, Loader2, Pause, Play, Send } from "lucide-react";
 import { INTENT_LABEL, PARTY_LABEL, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
+import { PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
 import { applyDraftAction, dismissReplyDraft, holdReplyDraft, sendReplyDraft } from "./api.js";
 import ContactLink from "./ContactLink.jsx";
 import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
@@ -172,6 +173,15 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
           {d.agentTake.arv && d.agentTake.rehab ? " ·" : ""}
           {d.agentTake.rehab ? ` about $${Number(d.agentTake.rehab).toLocaleString()} of work` : ""}
           {d.agentTake.note ? <span className="text-slate-500"> — “{d.agentTake.note}”</span> : null}
+        </div>
+      )}
+      {d.propertyDetails && Object.keys(d.propertyDetails).length > 0 && (
+        <div className="mt-1 text-xs text-slate-700">
+          <span className="text-slate-400">Details:</span>{" "}
+          {PROPERTY_DETAIL_FIELDS.filter((f) => d.propertyDetails[f.key] != null).map((f) => {
+            const v = d.propertyDetails[f.key];
+            return `${f.label.toLowerCase()} ${f.number ? `$${Number(v).toLocaleString()}` : f.values ? String(v).replace(/_/g, " ") : v}`;
+          }).join(" · ")}
         </div>
       )}
       {d.passReason?.code && (
