@@ -187,3 +187,11 @@ test("tags and fields an intent rule sets are on the record, with the draft as t
   const quiet = await runActions({ client, locationId: "LOC", contactId: "c1", draft: { id: "d4" }, actions: [{ id: "b1", type: "add_tags", tags: ["x"] }] });
   assert.equal(quiet[0].status, "done");
 });
+
+test("auto actions clear at the same confidence the page lets a reply send at", () => {
+  const strict = planActions({ party: "investor", intent: "interested", confidence: "medium", playbook: PLAYBOOK, minConfidence: "high" });
+  assert.equal(strict.auto.length, 0, "high bar: a medium read only suggests");
+  const liberal = planActions({ party: "investor", intent: "interested", confidence: "medium", playbook: PLAYBOOK, minConfidence: "medium" });
+  assert.deepEqual(liberal.auto.map((a) => a.type), ["add_tags"], "medium bar: the tag goes; the dataroom invite is ask-only regardless");
+  assert.equal(planActions({ party: "investor", intent: "interested", confidence: "low", playbook: PLAYBOOK, minConfidence: "medium" }).auto.length, 0, "low never clears");
+});

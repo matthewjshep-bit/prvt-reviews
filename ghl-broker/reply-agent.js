@@ -44,7 +44,7 @@ import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { fmtMoney } from "./shared/offer-calc.js";
-import { parseUsAddress, addressKey } from "./shared/us-address.js";
+import { parseUsAddress, addressKey, lastMention } from "./shared/us-address.js";
 import {
   normalizeConversationAi, INTENTS, NEVER_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
   SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutActions, normalizePassReason,
@@ -1113,7 +1113,7 @@ async function runReply(job, ctx) {
     inboundMessage: job.message, channel: job.channel, style: config.style,
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive });
-  const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook }) : { auto: [], suggested: [] };
+  const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
   if (a.stampTag) {
     plan.auto.unshift({ id: `a-route-${job.id}`, type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", party, why: "routed by the message" });
   }
@@ -1197,6 +1197,7 @@ async function runReply(job, ctx) {
   /* --- 4b. what we learned about them --- */
   // Subject Property is not profile memory, it is the underwriter's aim, so
   // it is filed even when profile learning is switched off.
+  let filedLearned = [];
   const learnable = config.profile?.enabled ? draft.profile : null;
   if (learnable || (party === "agent" && draft.propertyAddress)) {
     job.phase = "filing";
@@ -1209,6 +1210,7 @@ async function runReply(job, ctx) {
       record = { ...record, profileUpdates: { learned: filed.learned, written: filed.written }, warnings: warnings.slice(0, 6), updatedAt: new Date().toISOString() };
       await store.updateReplyDraft(record.id, record).catch(() => {});
     }
+    filedLearned = filed.learned;
   }
 
   /* --- 4c. the agent's own take on the property --- */
@@ -1232,6 +1234,39 @@ async function runReply(job, ctx) {
       store, locationId, contactId: job.contactId, party: "agent", type: "property_details", at: new Date(now).toISOString(),
       address: draft.propertyAddress, source: "conversation", ref: record.id, data: propertyDetails,
     });
+  }
+
+  /* --- 4d. a new property is a new property, whatever the intent was --- */
+  // The tier-1 rule is keyed to the intents "has a deal" / "new property",
+  // and a six-text burst that includes an address often reads as a
+  // question or a check-in instead. But Subject Property just moved to a
+  // house we hadn't seen — that IS the event. Run the new-property rule's
+  // actions that the intent's own rule didn't already plan.
+  // Two fences. Not on an offer-lifecycle intent — a counter, an
+  // acceptance, a realm answer are about a house we already priced, and
+  // the field being empty on first sight doesn't make it new. And not when
+  // the address is already in our offer book for this agent, for the same
+  // reason: "a house we hadn't seen" means the record, not the field.
+  const LIFECYCLE = new Set(["counter", "acceptance", "rejection", "realm_yes", "realm_check", "proof_of_funds", "opt_out"]);
+  // …and a third: the agent has to have SAID the address in this message.
+  // A model can return a property off the context for a reply that named
+  // none; only an address in their own words is them bringing a house.
+  let subjectMoved = party === "agent" && Array.isArray(filedLearned) && filedLearned.some((l) => l.startsWith("subject property:"))
+    && lastMention(job.message, draft.propertyAddress) >= 0;
+  if (subjectMoved && draft.propertyAddress) {
+    const known = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    if (known.some((o) => o?.address && addressKey(o.address) === addressKey(draft.propertyAddress))) subjectMoved = false;
+  }
+  if (subjectMoved && playbook && !LIFECYCLE.has(draft.intent)) {
+    const already = new Set([...plan.auto, ...plan.suggested].map((a) => `${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`));
+    const extra = planActions({ party, intent: "new_property", confidence: "high", playbook, minConfidence: "high" });
+    const fresh = [...extra.auto, ...extra.suggested].filter((a) => !already.has(`${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`))
+      .map((a) => ({ ...a, via: "subject moved" }));
+    if (fresh.length) {
+      for (const a of fresh) (a.mode === "auto" ? plan.auto : plan.suggested).push(a);
+      record = { ...record, actions: [...record.actions, ...fresh], updatedAt: new Date().toISOString() };
+      await store.updateReplyDraft(record.id, record).catch(() => {});
+    }
   }
 
   /* --- 5. the automatic actions --- */
@@ -1407,7 +1442,7 @@ export async function previewConversation({
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, inboundMessage: message, channel, style: config.style,
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive });
-  const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook }) : { auto: [], suggested: [] };
+  const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
   if (a.stampTag) plan.auto.unshift({ type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", why: "routed by the message" });
   if (!plan.auto.length && !plan.suggested.length && playbook?.fallback?.actions?.length &&
       !(draft.intent === "small_talk" && !draft.reply) && !matchTagPatterns(a.tags, playbook.fallback.unlessTags || []).length) {

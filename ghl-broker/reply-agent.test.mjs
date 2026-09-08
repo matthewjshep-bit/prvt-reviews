@@ -1530,3 +1530,30 @@ test("an auto-send stands aside when you already answered, and picks up on the n
   assert.equal(r4.ok, true);
   assert.equal(sent.length, 3);
 });
+
+test("a new Subject Property fires the tier-1 rule and the underwrite, whatever intent the burst read as", async () => {
+  _resetJobs();
+  const { client, tags } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const calls = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", sendsEnabled: true,
+    message: "Ok sounds good. Here is the Auburn home. Address is 311 R st NE Auburn. Seller is a flipper, needs finishes, ADU not started.",
+    deps: {
+      // A burst like this often reads as a check-in, at medium confidence.
+      draft: async () => ({ ...DRAFT, intent: "status_check", confidence: "medium", propertyAddress: "311 R St NE, Auburn, WA", reply: "Got it, running 311 R St by underwriting today." }),
+      startUnderwrite: async (args) => { calls.push(args.address); return { job: { id: "uw1", dryRun: true } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const via = d.actions.filter((a) => a.via === "subject moved");
+  assert.ok(via.length, "the new-property rule ran because the subject moved");
+  assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("tier-1")), "tier-1 tag applied");
+  assert.deepEqual(calls, ["311 R St NE, Auburn, WA"], "the underwrite started on the new address");
+  assert.ok(d.actions.some((a) => a.type === "start_underwrite" && a.status === "done"));
+  assert.equal(d.status, "scheduled", "the medium-confidence check-in reply still sends itself");
+  // (An unchanged subject never counts as a move — that is the addressKey
+  // comparison in applyProfileUpdates, tested with the Subject Property rule.)
+});

@@ -28,16 +28,22 @@ const newActionId = () => `a-${Date.now().toString(36)}-${(seq++).toString(36)}`
  * A rule in auto mode still waits for a person when the model was not sure:
  * a wrongly-tagged contact starts a GHL workflow that texts people.
  */
-export function planActions({ party, intent, confidence = "low", playbook = {} }) {
+const RANK = { low: 0, medium: 1, high: 2 };
+
+export function planActions({ party, intent, confidence = "low", playbook = {}, minConfidence = "high" }) {
   const rule = playbook?.intentRules?.[intent];
   if (!rule || !Array.isArray(rule.actions) || !rule.actions.length) return { auto: [], suggested: [] };
   const auto = [];
   const suggested = [];
+  // The same bar the reply uses to send itself: if the page says a medium
+  // read may go, the tier move and the underwrite go with it. A reply that
+  // sends while its actions sit as suggestions is the worst of both.
+  const sure = (RANK[confidence] ?? 0) >= (RANK[minConfidence] ?? 2);
   for (const a of rule.actions) {
     const askOnly = ASK_ONLY_ACTIONS.has(a.type);
     const mode = askOnly ? "ask" : rule.mode === "auto" ? "auto" : "ask";
     const action = { ...a, id: newActionId(), mode, status: "pending", party };
-    if (mode === "auto" && confidence === "high") auto.push(action);
+    if (mode === "auto" && sure) auto.push(action);
     else suggested.push(action);
   }
   return { auto, suggested };
