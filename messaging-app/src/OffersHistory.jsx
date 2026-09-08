@@ -24,6 +24,7 @@ import {
   setOfferStatus, setOfferStatusBulk,
 } from "./api.js";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
+import ContactLink from "./ContactLink.jsx";
 import ContractModal from "./ContractModal.jsx";
 import PsaModal from "./PsaModal.jsx";
 import AssignmentModal from "./AssignmentModal.jsx";
@@ -482,12 +483,9 @@ export default function OffersHistory({ onEdit, onDeal }) {
                       <span className="inline-flex items-center gap-1.5">
                         {isOpen ? <ChevronDown size={15} className="text-slate-400" aria-hidden="true" /> : <ChevronRight size={15} className="text-slate-400" aria-hidden="true" />}
                         {g.contactId ? (
-                          <a href={ghlContactUrl(g.contactId)} target="_blank" rel="noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center gap-1 font-semibold underline decoration-slate-300 underline-offset-2 hover:text-slate-900"
-                            title="Open contact in GHL">
-                            {g.contactName || g.contactId} <ExternalLink size={12} className="text-slate-400" aria-hidden="true" />
-                          </a>
+                          <ContactLink contactId={g.contactId} name={g.contactName || g.contactId} party="agent" className="font-semibold" stopPropagation>
+                            {g.contactName || g.contactId}
+                          </ContactLink>
                         ) : (
                           <span className="font-semibold">{g.contactName || "No contact"}</span>
                         )}

@@ -17,6 +17,7 @@ import {
   uploadDealDoc, zillowUrl,
 } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
+import ContactLink from "./ContactLink.jsx";
 import DataroomModal from "./DataroomModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 import MatchInvestorsModal from "./MatchInvestorsModal.jsx";
@@ -424,10 +425,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             <div className="text-sm text-slate-500">
               Agent:{" "}
               {offer.contactId ? (
-                <a href={ghlContactUrl(offer.contactId)} target="_blank" rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-slate-700 underline hover:text-slate-900">
-                  {offer.contactName || offer.contactId} <ExternalLink size={12} />
-                </a>
+                <ContactLink contactId={offer.contactId} name={offer.contactName || offer.contactId} party="agent" className="text-slate-700" />
               ) : (
                 offer.contactName || "—"
               )}
@@ -523,11 +521,10 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               <div className="space-y-1.5">
                 {sortInvestors(deal.investors).map((i) => (
                   <div key={i.contactId} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5">
-                    <a href={ghlContactUrl(i.contactId)} target="_blank" rel="noreferrer"
-                      className="inline-flex min-w-0 items-center gap-1 text-sm font-medium underline decoration-slate-300 underline-offset-2 hover:text-slate-900">
+                    <span className="inline-flex min-w-0 items-center gap-1 text-sm font-medium">
                       <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[investorStatus(i.status)] || "bg-slate-400"}`} />
-                      <span className="truncate">{i.name}</span> <ExternalLink size={11} className="shrink-0 text-slate-400" />
-                    </a>
+                      <ContactLink contactId={i.contactId} name={i.name} party="investor" className="min-w-0" />
+                    </span>
                     <span className="flex shrink-0 items-center gap-1">
                       <select value={investorStatus(i.status)} disabled={busy}
                         onChange={(e) => run(() => updateDealInvestor(offer.id, i.contactId, e.target.value))}
@@ -604,10 +601,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                     {suggest.suggestions.map((s) => (
                       <div key={s.contactId} className="rounded-lg border border-amber-200 bg-amber-50/60 px-2.5 py-2">
                         <div className="flex items-center justify-between gap-2">
-                          <a href={ghlContactUrl(s.contactId)} target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-sm font-semibold underline decoration-amber-300 underline-offset-2">
-                            {s.name} <ExternalLink size={11} className="text-slate-400" />
-                          </a>
+                          <ContactLink contactId={s.contactId} name={s.name} party="investor" className="text-sm font-semibold" />
                           <span className="flex items-center gap-1.5">
                             <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">{s.status}</span>
                             <button type="button" disabled={busy} onClick={() => addSuggested(s)}
@@ -774,12 +768,9 @@ export default function DealsView({ settings, onEdit }) {
                       <td className="max-w-[24rem] truncate px-4 py-2.5 font-medium" title={o.address || undefined}>{o.address || "—"}</td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         {o.contactId ? (
-                          <a href={ghlContactUrl(o.contactId)} target="_blank" rel="noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center gap-1 underline decoration-slate-300 underline-offset-2 hover:text-slate-900"
-                            title="Open contact in GHL">
-                            {o.contactName || o.contactId} <ExternalLink size={12} className="text-slate-400" />
-                          </a>
+                          <ContactLink contactId={o.contactId} name={o.contactName || o.contactId} party="agent" stopPropagation>
+                            {o.contactName || o.contactId}
+                          </ContactLink>
                         ) : (o.contactName || "—")}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5"><StagePill stage={d.stage} /></td>

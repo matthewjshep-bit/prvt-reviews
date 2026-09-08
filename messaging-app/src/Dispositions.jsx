@@ -11,8 +11,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle, ChevronDown, ChevronUp, ExternalLink, Loader2, Megaphone,
-  Pencil, RefreshCw, Search, X,
-} from "lucide-react";
+  Pencil, RefreshCw, Search, X, Eye } from "lucide-react";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_LABELS, REHAB_APPETITES, REHAB_APPETITE_LABELS,
   buyboxIsEmpty, normalizeQuery, priceBandText, queryChips, queryIsEmpty, removeChip,
@@ -22,6 +21,7 @@ import {
   searchInvestors, setInvestorStatus, syncInvestors,
 } from "./api.js";
 import { EmptyState, ErrorBar, Spinner, TableCard } from "./ui.jsx";
+import ContactLink from "./ContactLink.jsx";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -303,10 +303,9 @@ function InvestorDetail({ investor, onSaved }) {
           </ul>
         )}
         <div className="mt-3 flex items-center gap-3">
-          <a href={ghlContactUrl(investor.contactId)} target="_blank" rel="noreferrer"
-            className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700">
-            Open in GoHighLevel <ExternalLink size={11} />
-          </a>
+          <ContactLink contactId={investor.contactId} party="investor" className="text-xs font-semibold text-blue-600" title="Their full record">
+            Full record
+          </ContactLink>
           {investor.lastBlastAt && (
             <span className="text-xs text-slate-500">Last blasted {fmtAgo(investor.lastBlastAt)}</span>
           )}
@@ -881,11 +880,9 @@ export default function Dispositions() {
                       )}
                       <td className="sticky right-0 bg-white px-4 py-2.5 group-hover:bg-slate-50">
                         <div className="flex items-center justify-end gap-2">
-                          <a href={ghlContactUrl(inv.contactId)} target="_blank" rel="noreferrer"
-                            onClick={(e) => e.stopPropagation()} title="Open in GoHighLevel"
-                            className="text-slate-400 hover:text-slate-700">
-                            <ExternalLink size={14} />
-                          </a>
+                          <ContactLink contactId={inv.contactId} party="investor" iconOnly stopPropagation title="Their full record">
+                            <Eye size={14} />
+                          </ContactLink>
                           <button type="button" onClick={() => setExpanded(open ? "" : inv.contactId)}
                             className="text-slate-400 hover:text-slate-700">
                             {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}

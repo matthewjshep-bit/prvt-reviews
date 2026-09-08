@@ -22,6 +22,8 @@ import Dispositions from "./Dispositions.jsx";
 import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
 import ConversationAi from "./ConversationAi.jsx";
+import ContactDrawer from "./ContactDrawer.jsx";
+import { ContactDrawerContext } from "./ContactLink.jsx";
 import { getLocationId, getLocationKey, getOffer, getSettings } from "./api.js";
 
 // The offer editor lives in the main app — from the standalone Deals page,
@@ -154,6 +156,21 @@ export default function OfferApp() {
   };
   const [settings, setSettings] = useState(null);
   const [settingsError, setSettingsError] = useState("");
+  // The contact drawer: one person's whole record, opened from any name in
+  // any view. Lives here, outside the view switch, so every host has it.
+  // ?contact=<id> deep-links to it (distinct from ?contact_id=, which
+  // prefills the New Offer form).
+  const [contact, setContact] = useState(() => { const id = readParam("contact"); return id ? { id, party: null } : null; });
+  const drawer = React.useMemo(() => ({
+    open: (id, { party = null, name = null } = {}) => {
+      setContact({ id, party, name });
+      try { const p = new URLSearchParams(window.location.search); p.set("contact", id); window.history.replaceState(window.history.state, "", `${window.location.pathname}?${p}`); } catch { /* noop */ }
+    },
+    close: () => {
+      setContact(null);
+      try { const p = new URLSearchParams(window.location.search); p.delete("contact"); window.history.replaceState(window.history.state, "", `${window.location.pathname}?${p}`); } catch { /* noop */ }
+    },
+  }), []);
 
   useEffect(() => {
     getSettings()
@@ -211,7 +228,9 @@ export default function OfferApp() {
   const containerWidth = view === "new" ? "mx-auto max-w-7xl" : "";
 
   return (
+    <ContactDrawerContext.Provider value={drawer}>
     <div className="min-h-screen bg-slate-50 text-slate-900">
+      {contact && <ContactDrawer contactId={contact.id} party={contact.party} onClose={drawer.close} />}
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className={`flex items-center gap-3 px-4 py-2.5 sm:px-6 lg:px-8 ${containerWidth}`}>
           <div className="mr-2 flex items-center gap-2.5">
@@ -291,5 +310,6 @@ export default function OfferApp() {
         )}
       </div>
     </div>
+    </ContactDrawerContext.Provider>
   );
 }
