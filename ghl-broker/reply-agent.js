@@ -214,8 +214,20 @@ export async function draftReply({
     counterAmount: Math.max(0, Number(p.counterAmount) || 0),
     // Investors only, and only when they turned something down.
     passReason: normalizePassReason(p.passReason),
+    // Agents only: what THEY think it's worth and costs. Theirs, never ours.
+    agentTake: normalizeAgentTake(p),
     profile: normalizeProfile(p.profile),
   };
+}
+
+// The agent's own read on a property — ARV and rehab as they see it. Kept
+// apart from every number of ours so it can be laid beside them, never
+// mistaken for them.
+export function normalizeAgentTake(p) {
+  const arv = Math.max(0, Math.round(Number(p?.agentArv) || 0));
+  const rehab = Math.max(0, Math.round(Number(p?.agentRehab) || 0));
+  const note = String(p?.agentTakeNote || "").trim().slice(0, 200);
+  return arv || rehab ? { arv, rehab, note } : null;
 }
 
 // What the model learned, trimmed to what the fields can hold.
@@ -1084,6 +1096,8 @@ async function runReply(job, ctx) {
     await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
   }
   const ts = new Date().toISOString();
+  // The agent's own numbers, whichever shape the draft arrived in.
+  const agentTake = draft.agentTake ?? normalizeAgentTake(draft);
   let record = await store.createReplyDraft({
     locationId,
     contactId: job.contactId,
@@ -1103,6 +1117,7 @@ async function runReply(job, ctx) {
     // Why they turned it down. Rides on the draft so the feedback actions
     // have it, and so the row can show it whether or not they ran.
     passReason: draft.passReason || null,
+    agentTake,
     autoSendable: gate.ok,
     flags: gate.flags,
     party,
@@ -1138,6 +1153,15 @@ async function runReply(job, ctx) {
       record = { ...record, profileUpdates: { learned: filed.learned, written: filed.written }, warnings: warnings.slice(0, 6), updatedAt: new Date().toISOString() };
       await store.updateReplyDraft(record.id, record).catch(() => {});
     }
+  }
+
+  /* --- 4c. the agent's own take on the property --- */
+  if (party === "agent" && agentTake && draft.propertyAddress) {
+    await recordEvent({
+      store, locationId, contactId: job.contactId, party: "agent", type: "agent_estimate", at: new Date(now).toISOString(),
+      address: draft.propertyAddress, source: "conversation", ref: record.id,
+      data: { arv: agentTake.arv, rehab: agentTake.rehab, note: agentTake.note },
+    });
   }
 
   /* --- 5. the automatic actions --- */

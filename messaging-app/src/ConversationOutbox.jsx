@@ -163,6 +163,17 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
       {/* What the bot heard as the reason. Shown whether or not the action
           that files it ran, so a rule you haven't wired yet still tells you
           something. */}
+      {/* The agent's own numbers, beside nothing of ours — the point is to
+          eyeball whether their expectations and ours are in the same zip code. */}
+      {d.agentTake && (d.agentTake.arv || d.agentTake.rehab) && (
+        <div className="mt-1 text-xs text-slate-700">
+          <span className="text-slate-400">Their take:</span>
+          {d.agentTake.arv ? ` worth $${Number(d.agentTake.arv).toLocaleString()} done` : ""}
+          {d.agentTake.arv && d.agentTake.rehab ? " ·" : ""}
+          {d.agentTake.rehab ? ` about $${Number(d.agentTake.rehab).toLocaleString()} of work` : ""}
+          {d.agentTake.note ? <span className="text-slate-500"> — “{d.agentTake.note}”</span> : null}
+        </div>
+      )}
       {d.passReason?.code && (
         <div className="mt-1 text-xs text-amber-800">
           <span className="text-slate-400">Read as:</span> {PASS_REASON_LABEL[d.passReason.code] || d.passReason.code}

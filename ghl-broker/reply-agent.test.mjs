@@ -1349,3 +1349,33 @@ test("a real run leaves the conversation on the timeline", async () => {
   assert.ok(events.some((e) => e.type === "tag_added" && e.data.tag === "investor-active"), "the tier tag the rule applied is on the timeline");
   assert.deepEqual((await store.getContactProfile("LOC", "c1")).facts.buybox_areas.map((e) => e.value), ["Everett"]);
 });
+
+test("an agent's own ARV and rehab are kept as theirs, recorded on the property, and never become ours", async () => {
+  const { normalizeAgentTake } = await import("./reply-agent.js");
+  assert.deepEqual(normalizeAgentTake({ agentArv: 715000, agentRehab: 40000, agentTakeNote: "comps support 715, cosmetic" }), { arv: 715000, rehab: 40000, note: "comps support 715, cosmetic" });
+  assert.equal(normalizeAgentTake({ agentArv: 0, agentRehab: 0, agentTakeNote: "" }), null, "nothing stated is nothing");
+  assert.deepEqual(normalizeAgentTake({ agentArv: "715000.6", agentRehab: -5 }), { arv: 715001, rehab: 0, note: "" });
+
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1",
+    message: "12703 Vernon Ave SW — I'd say 715 done, maybe 40k of work, mostly cosmetic",
+    deps: { draft: async () => ({ ...DRAFT, intent: "new_property", propertyAddress: "12703 Vernon Ave SW, Lakewood, WA",
+      reply: "Got it, 715 done and about 40k of work. Running it by underwriting today.", agentArv: 715000, agentRehab: 40000, agentTakeNote: "715 done, ~40k mostly cosmetic" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(d.agentTake, { arv: 715000, rehab: 40000, note: "715 done, ~40k mostly cosmetic" });
+  // A new property is always a person's call, so this holds — but for that
+  // reason alone. Echoing THEIR numbers back must not read as inventing one.
+  assert.ok(!d.flags.some((f) => /not in the offer book|contract price/.test(f)), `their own numbers echoed back are not invented: ${d.flags.join(" · ")}`);
+  assert.ok(d.flags.some((f) => /new property is a person's call/.test(f)));
+  const ev = (await store.listContactEvents("LOC", "c1", { types: ["agent_estimate"] }))[0];
+  assert.ok(ev, "recorded on the property");
+  assert.equal(ev.address, "12703 Vernon Ave SW, Lakewood, WA");
+  assert.deepEqual([ev.data.arv, ev.data.rehab], [715000, 40000]);
+  assert.equal(ev.ref, job.draftId);
+});

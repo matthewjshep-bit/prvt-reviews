@@ -249,3 +249,18 @@ test("the ledger in the prompt is the record's newest twelve events, oldest firs
   assert.match(tagsOnly.text, /Ancient Rd/, "with no ledger events the GHL tail still shows");
   assert.doesNotMatch(tagsOnly.text, /tier-1/);
 });
+
+test("the agent's own take is in front of the model, newest per property, and their figures are allowed", () => {
+  const events = [
+    { type: "agent_estimate", at: "2026-09-01T00:00:00Z", address: "12703 Vernon Ave SW", data: { arv: 700000, rehab: 60000 } },
+    { type: "agent_estimate", at: "2026-09-05T00:00:00Z", address: "12703 Vernon Ave SW", data: { arv: 715000, rehab: 40000, note: "comps support 715" } },
+    { type: "agent_estimate", at: "2026-09-03T00:00:00Z", address: "9 Other St", data: { rehab: 25000 } },
+  ];
+  const ctx = buildAgentContext({ offers: [], custom: {}, now: NOW, events, facts: null });
+  assert.match(ctx.text, /THE AGENT'S OWN TAKE \(their numbers, not ours/);
+  assert.match(ctx.text, /12703 Vernon Ave SW: worth \$715,000 done, about \$40,000 of work — "comps support 715"/);
+  assert.doesNotMatch(ctx.text, /\$700,000/, "the older take on the same property is superseded");
+  assert.match(ctx.text, /9 Other St: about \$25,000 of work/);
+  assert.ok(ctx.amounts.includes(715000) && ctx.amounts.includes(40000), "echoing their number back is not inventing one");
+  assert.doesNotMatch(buildAgentContext({ offers: [], custom: {}, now: NOW, events: [], facts: null }).text, /OWN TAKE/);
+});

@@ -13,7 +13,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   X, ExternalLink, RefreshCw, Loader2, Plus, Send, RefreshCw as Revise, ArrowLeftRight, XCircle, Clock, CheckCircle2,
   ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake, MessageSquareQuote, Megaphone, FolderOpen, Phone,
-  MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download, Circle, Trash2,
+  MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download, Circle, Trash2, Calculator,
 } from "lucide-react";
 import { EVENT_LABEL, EVENT_ICON, FACT_KEYS, factKeysFor, AI_SOURCES, SOURCE_LABEL, groupByDay } from "@shared/contact-record.js";
 import { PASS_REASON_LABEL } from "@shared/conversation-ai.js";
@@ -25,7 +25,7 @@ import { PartyPill, DraftRow } from "./ConversationOutbox.jsx";
 
 const ICONS = {
   Send, RefreshCw: Revise, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
-  MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download,
+  MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download, Calculator,
 };
 const EventIcon = ({ type, size = 13 }) => { const I = ICONS[EVENT_ICON[type]] || Circle; return <I size={size} className="shrink-0" />; };
 const INPUT = "rounded-lg border border-slate-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none";
@@ -116,6 +116,7 @@ function eventLine(ev) {
     case "offer_sent":
     case "offer_revised": return d.amountText ? `${d.amountText}${d.note ? ` — ${d.note}` : ""}` : d.note || "";
     case "dataroom_viewed": return d.viewCount > 1 ? `view ${d.viewCount}` : "first view";
+    case "agent_estimate": return [d.arv ? `worth ${money(d.arv)} done` : "", d.rehab ? `about ${money(d.rehab)} of work` : ""].filter(Boolean).join(" · ") + (d.note ? ` — “${d.note}”` : "");
     case "enrich_run": return d.summary || "";
     case "import": return d.batchName ? `from batch ${d.batchName}` : "";
     default: return d.note || "";

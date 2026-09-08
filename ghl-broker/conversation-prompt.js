@@ -174,6 +174,14 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "and zeros when there is nothing new. Never restate what is already known."
     );
   }
+  if (party === "agent") {
+    parts.push(
+      "THEIR TAKE: when the agent states what THEY think the property is worth fixed up, or what the work would " +
+      "cost, put the dollar figures in `agentArv` and `agentRehab` (whole dollars; 0 when not stated) and their " +
+      "words in `agentTakeNote` (under 25 words). A range becomes its midpoint. These are the agent's numbers, " +
+      "never ours: do not echo them as an offer, an ARV of ours, or a promise."
+    );
+  }
   if (party === "investor") {
     parts.push(
       "WHY THEY SAID NO: whenever they decline a deal, push back on the price, or tell you it doesn't work for " +
@@ -256,7 +264,7 @@ export function schemaFor(party = "agent", { profile = true, outbound = null } =
     type: "object",
     additionalProperties: false,
     required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount",
-      ...(party === "investor" ? ["passReason"] : []), ...(profile ? ["profile"] : [])],
+      ...(party === "investor" ? ["passReason"] : []), ...(party === "agent" ? ["agentArv", "agentRehab", "agentTakeNote"] : []), ...(profile ? ["profile"] : [])],
     properties: {
       ...(profile ? { profile: profileSchemaFor(party) } : {}),
       intent: { type: "string", enum: intents },
@@ -275,6 +283,11 @@ export function schemaFor(party = "agent", { profile = true, outbound = null } =
       },
       counterAmount: { type: "integer", description: "A dollar figure they named, in whole dollars; 0 if none" },
       ...(party === "investor" ? { passReason: PASS_REASON_SCHEMA } : {}),
+      ...(party === "agent" ? {
+        agentArv: { type: "integer", description: "What THEY think it is worth fixed up, whole dollars; 0 if not stated" },
+        agentRehab: { type: "integer", description: "What THEY think the work costs, whole dollars; 0 if not stated" },
+        agentTakeNote: { type: "string", description: "Their own words on value or work, under 25 words; empty if none" },
+      } : {}),
     },
   };
 }

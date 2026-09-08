@@ -37,7 +37,7 @@ export const EVENT_TYPES = [
   "blast_sent", "dataroom_sent", "dataroom_viewed",
   "call_summary", "text_summary", "note",
   "enrich_run", "tag_added", "tag_removed",
-  "subject_property_set", "fact_learned", "fact_removed", "import",
+  "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate",
 ];
 
 export const EVENT_LABEL = {
@@ -51,7 +51,7 @@ export const EVENT_LABEL = {
   call_summary: "call", text_summary: "text conversation", note: "note",
   enrich_run: "AI enrichment ran", tag_added: "tag added", tag_removed: "tag removed",
   subject_property_set: "subject property set", fact_learned: "learned about them", fact_removed: "fact removed",
-  import: "imported",
+  import: "imported", agent_estimate: "agent's own take",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -64,7 +64,7 @@ export const EVENT_ICON = {
   blast_sent: "Megaphone", dataroom_sent: "FolderOpen", dataroom_viewed: "Eye",
   call_summary: "Phone", text_summary: "MessageSquare", note: "StickyNote",
   enrich_run: "Sparkles", tag_added: "Tag", tag_removed: "Tag",
-  subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download",
+  subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast"];
@@ -231,6 +231,8 @@ export function eventDedupeKey(ev) {
   if (t === "enrich_run") return ev.ref ? `enrich_run:${ev.ref}` : null;
   if (t === "tag_added" || t === "tag_removed") return d.tag ? `${t}:${String(d.tag).toLowerCase()}:${day}` : null;
   if (t === "subject_property_set") return ev.address ? `subject_property_set:${addressKey(ev.address)}:${day}` : null;
+  // One take per property per day; a restated number the same day is a correction, not a second event.
+  if (t === "agent_estimate") return ev.address ? `agent_estimate:${addressKey(ev.address)}:${day}` : null;
   if (t === "fact_learned" || t === "fact_removed") return d.key ? `${t}:${d.key}:${String(d.value || "").toLowerCase().trim()}` : null;
   if (t === "import") return ev.ref ? `import:${ev.ref}` : null;
   return ev.ref ? `${t}:${ev.ref}` : null;

@@ -741,6 +741,12 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "QUALIFY: once there's an address, learn — one question at a time, across the conversation, never as a " +
           "form — the condition and what work it needs, what the seller needs to get, their timeline, and whether " +
           "it's vacant or occupied. These are what our underwriting reads.\n" +
+          "THEIR TAKE: before our numbers come back, get the agent's OWN read — what they think it's worth fixed up " +
+          "and roughly what the work runs. Ask it the way a colleague would: 'what do you think it's worth done, " +
+          "and what would you budget for the work?'. One ask, early; if they don't know, fine, move on. Their " +
+          "numbers are theirs — never adopt them as ours, never argue with them, never quote ours back yet. " +
+          "They tell us whether their expectations and ours are in the same zip code before we spend a day " +
+          "underwriting.\n" +
           "REALM CHECK: when our number comes back you may float it as a soft number ('we'd likely land around " +
           "410k as-is, quick close') and ask whether that's in the realm for the seller before the formal offer " +
           "goes over. If they say it works, say you'll send it over today. If they push back with a number, " +
@@ -748,7 +754,8 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           `IF ASKED IF YOU'RE A BOT: give the standard line, then ask if they have any stale or pocket listings right now.`,
         mayCommit:
           "Confirm we buy as-is for cash with a 10 to 14 day target close. Say we'll run an address by underwriting " +
-          "today. Ask for an address, price expectations and seller timeline. Ask if it's cool to stay in touch.",
+          "today. Ask for an address, price expectations and seller timeline. Ask what they think it's worth fixed " +
+          "up and what they'd budget for the work. Ask if it's cool to stay in touch.",
         mayNotCommit:
           "Quote or estimate any number. Agree to terms or a price. Book a showing, inspection or call time on your own. " +
           "Mention off-market deals. Promise proof of funds. Send a link.",

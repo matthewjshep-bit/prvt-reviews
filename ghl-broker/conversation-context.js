@@ -19,7 +19,7 @@ import { dealNumbers } from "./dataroom.js";
 import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
-import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty } from "./shared/contact-record.js";
+import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey } from "./shared/contact-record.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -172,11 +172,26 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
       (hookPrice ? ` — listed at ${fmtMoney(hookPrice)}` : "") + (hookDom ? `, ${hookDom} days on market` : "")
     : "";
   const history = historyFromRecord(events, "agent", custom.agent_deal_history);
+  // What the agent said a property is worth and costs — newest per address.
+  // Shown so the reply doesn't ask twice and can hold their number next to
+  // ours; their figures are allowed in a reply (they said them) but are
+  // never ours to quote as an offer.
+  const takes = new Map();
+  for (const e of [...events].sort((a, b) => String(a.at).localeCompare(String(b.at)))) {
+    if (e?.type === "agent_estimate" && e.address) takes.set(addressKey(e.address), e);
+  }
+  const takeLines = [...takes.values()].slice(-4).map((e) => {
+    const d = e.data || {};
+    if (d.arv) amounts.add(Math.round(d.arv));
+    if (d.rehab) amounts.add(Math.round(d.rehab));
+    return `- ${e.address}: ${[d.arv ? `worth ${fmtMoney(d.arv)} done` : "", d.rehab ? `about ${fmtMoney(d.rehab)} of work` : ""].filter(Boolean).join(", ")}${d.note ? ` — "${d.note}"` : ""}`;
+  });
 
   const text = [
     book.count
       ? `OUR OFFERS TO THIS AGENT (newest first — the only numbers you may quote):\n${book.text}`
       : "OUR OFFERS TO THIS AGENT: none on record.",
+    takeLines.length ? `THE AGENT'S OWN TAKE (their numbers, not ours — don't ask again, don't adopt them):\n${takeLines.join("\n")}` : "",
     hook,
     history.length ? `PROPERTIES THEY'VE SENT OR DISCUSSED WITH US BEFORE (oldest first):\n${history.map((l) => `- ${l}`).join("\n")}` : "",
     fields.length ? `WHAT WE KNOW ABOUT THEM:\n${fields.join("\n")}` : "",
