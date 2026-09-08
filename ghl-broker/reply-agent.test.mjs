@@ -58,11 +58,14 @@ test("a counter is a person's call even when the model is sure", () => {
 });
 
 test("the auto-sendable list is short and excludes everything that commits us", () => {
-  for (const i of ["counter", "acceptance", "wants_call", "scheduling", "proof_of_funds", "new_property", "other"]) {
+  for (const i of ["counter", "acceptance", "wants_call", "scheduling", "proof_of_funds", "other"]) {
     assert.equal(AUTO_SENDABLE_INTENTS.has(i), false, i);
   }
   assert.equal(AUTO_SENDABLE_INTENTS.has("question"), true);
   assert.equal(AUTO_SENDABLE_INTENTS.has("rejection"), true);
+  // "I have a property" → "what's the address?" commits nothing; it may send.
+  assert.equal(AUTO_SENDABLE_INTENTS.has("new_property"), true);
+  assert.equal(AUTO_SENDABLE_INTENTS.has("deal_available"), true);
 });
 
 test("medium confidence holds", () => {
@@ -1369,10 +1372,11 @@ test("an agent's own ARV and rehab are kept as theirs, recorded on the property,
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
   assert.deepEqual(d.agentTake, { arv: 715000, rehab: 40000, note: "715 done, ~40k mostly cosmetic" });
-  // A new property is always a person's call, so this holds — but for that
-  // reason alone. Echoing THEIR numbers back must not read as inventing one.
+  // Echoing THEIR numbers back must not read as inventing one: a new
+  // property with their own take on it is exactly the reply that should be
+  // free to send itself.
   assert.ok(!d.flags.some((f) => /not in the offer book|contract price/.test(f)), `their own numbers echoed back are not invented: ${d.flags.join(" · ")}`);
-  assert.ok(d.flags.some((f) => /new property is a person's call/.test(f)));
+  assert.equal(d.autoSendable, true, d.flags.join(" · "));
   const ev = (await store.listContactEvents("LOC", "c1", { types: ["agent_estimate"] }))[0];
   assert.ok(ev, "recorded on the property");
   assert.equal(ev.address, "12703 Vernon Ave SW, Lakewood, WA");

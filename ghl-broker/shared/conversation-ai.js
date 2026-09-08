@@ -100,8 +100,14 @@ export const INTENT_GLOSS = {
 // Never auto-sendable, whatever the page says. Each of these commits us to
 // something — a number, a time, a document, a deal — and stays a person's
 // call. The allowlist an operator can build is everything NOT here.
+//
+// new_property used to be here. It isn't a commitment: the reply is "what's
+// the address?", and the tier move and workflow enroll beside it were
+// already automatic. The money guard and the model's own needs-a-human flag
+// still hold on every message; what a new address triggers next (an
+// underwrite, an offer) is its own gate.
 export const NEVER_AUTO = {
-  agent: ["counter", "acceptance", "wants_call", "scheduling", "proof_of_funds", "new_property", "opt_out", "other"],
+  agent: ["counter", "acceptance", "wants_call", "scheduling", "proof_of_funds", "opt_out", "other"],
   investor: ["price_pushback", "wants_to_buy", "wants_walkthrough", "wants_call", "opt_out", "other"],
 };
 export const autoEligible = (party) =>
