@@ -10,7 +10,7 @@ import React, { useEffect, useState } from "react";
 import { AlertTriangle, Check, Clock, Loader2, Pause, Play, Send } from "lucide-react";
 import { INTENT_LABEL, PARTY_LABEL, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
-import { applyDraftAction, dismissReplyDraft, holdReplyDraft, sendReplyDraft } from "./api.js";
+import { applyDraftAction, dismissReplyDraft, holdReplyDraft, resumeConversationBot, sendReplyDraft } from "./api.js";
 import ContactLink from "./ContactLink.jsx";
 import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
 
@@ -83,6 +83,14 @@ export function OutboxList({ jobs = [], drafts = [], sendsEnabled, serverOffsetM
           <span className={`text-xs ${job.status === "held" ? "text-amber-800" : "text-red-700"}`}>
             {job.status === "held" ? job.heldReason || "held" : `${job.error || "drafting failed"} — answer by hand`}
           </span>
+          {/* A hands-off tag is often the OLD GHL bot's, left on a contact years
+              ago. One click takes it off; the next text goes through. */}
+          {job.status === "held" && job.contactId && /bot is off for this contact/.test(job.heldReason || "") && (
+            <button type="button" className={`${BTN} ml-auto`} title="Remove the hands-off tag so the bot may answer them again"
+              onClick={async () => { try { await resumeConversationBot(job.contactId); onDone?.(); } catch (e) { alert(e.message); } }}>
+              <Play size={12} /> Resume bot
+            </button>
+          )}
         </li>
       ))}
       {drafts.map((d) => (

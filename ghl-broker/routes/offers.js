@@ -3569,6 +3569,25 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // don't want to think. Turning it off also HOLDS every reply already
   // counting down to an auto-send: "it's acting up" means the one queued
   // three minutes ago is exactly the one that must not go out.
+  // Let the bot back in for one contact. The hands-off tags are the same
+  // ones the old GHL bot used, so contacts it silenced years ago still carry
+  // them; the held row shows the tag and this is its one-click undo.
+  router.post("/automations/conversation/resume", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = dealStr(req.body?.contactId, 64);
+      if (!contactId) return res.status(400).json({ error: "contactId required" });
+      const config = conversationConfig((await store.getOfferSettings(locationId)) || {});
+      const tags = (config.routing?.botOffTags || []).filter((t) => !t.includes("*"));
+      if (!tags.length) return res.json({ ok: true, removed: [] });
+      await removeContactTags(client, contactId, tags);
+      await recordEvents({ store, locationId, contactId, events: tags.map((tag) => ({
+        type: "tag_removed", at: new Date().toISOString(), source: "operator", ref: "resume-bot", data: { tag },
+      })) });
+      res.json({ ok: true, removed: tags });
+    } catch (err) { fail(res, err); }
+  });
+
   router.post("/automations/conversation/enabled", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);

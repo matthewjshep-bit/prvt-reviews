@@ -242,6 +242,9 @@ export const getConversationAi = () =>
 // counting-down replies it held.
 export const setConversationEnabled = (enabled) =>
   post(`/api/offers/automations/conversation/enabled`, { enabled });
+// Take the hands-off tags off one contact so the bot may answer them again.
+export const resumeConversationBot = (contactId) =>
+  post(`/api/offers/automations/conversation/resume`, { contactId });
 export const saveConversationAi = (config) =>
   post(`/api/offers/automations/conversation/config`, { config }, "PUT").then((r) => r.config);
 export const listWorkflows = () =>

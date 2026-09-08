@@ -225,7 +225,8 @@ export function buildUserContext({
     ? `YOU ARE STARTING THIS MESSAGE — nothing new came in. We just ran a quick underwrite on ${outbound.address}: ` +
       `${[outbound.arvText ? `ARV ${outbound.arvText}` : "", outbound.rehabText ? `rehab about ${outbound.rehabText}` : ""].filter(Boolean).join(", ")}. ` +
       `Say so lightly ("just did a quick underwrite") and float those two as YOUR read, in one question, the way a ` +
-      `colleague would: "I'm thinking ${outbound.arvK || "…"} After Repair Value and ${outbound.rehabK || "…"}+ of rehab. What do you think?" ` +
+      `colleague would — either "I'm thinking ${outbound.arvK || "…"} After Repair Value and ${outbound.rehabK || "…"}+ of rehab. What do you think?" ` +
+      `or "we'd likely have to do ${outbound.rehabK || "…"} in rehab and I'm seeing the ARV in the area around ${outbound.arvK || "…"}, what do you think?" ` +
       `(written like a text — no dollar signs). ` +
       `Do NOT mention an offer, a purchase price, or what we'd pay — this is a read, not a number. Reference the ` +
       `thread so it reads as a continuation. Set intent to take_check.`
