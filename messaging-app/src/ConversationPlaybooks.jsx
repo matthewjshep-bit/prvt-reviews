@@ -241,7 +241,7 @@ export function AutoSendCard({ config, patch }) {
         <Field label="Wait for follow-up texts (seconds)" hint="Three texts in a row get one reply to all three. 0 drafts at once.">
           <Text type="number" value={a.debounceSec} onChange={(v) => set("debounceSec")(Number(v))} />
         </Field>
-        <Field label="Stand down after you reply (minutes)" hint="If a person replied to them this recently, the bot drafts but never sends itself.">
+        <Field label="Stand down after you reply (minutes)" hint="If a person replied to them this recently, the bot drafts but never sends itself. 0 (the default) turns this off: the bot sends whether or not you've been in the thread.">
           <Text type="number" value={a.humanActiveMin} onChange={(v) => set("humanActiveMin")(Number(v))} />
         </Field>
         <div className="flex flex-col justify-end gap-1 pb-1">

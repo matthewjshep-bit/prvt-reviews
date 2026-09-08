@@ -297,7 +297,7 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
     debounceSec: 0,
     // Don't auto-send when a person replied to them this recently — they
     // have the thread.
-    humanActiveMin: 30,
+    humanActiveMin: 0,
   },
 });
 
@@ -834,7 +834,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
         },
       },
     },
-    autoSend: { debounceSec: 45, humanActiveMin: 30 },
+    autoSend: { debounceSec: 45, humanActiveMin: 0 },
     profile: { enabled: true, callTranscripts: 2, writeSummary: true },
     notes: { onDraft: true, onAutoSend: true },
   });
