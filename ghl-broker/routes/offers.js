@@ -3166,7 +3166,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const pkg = await feedbackPackage({ locationId, client, offer, pitch });
       const html = renderFeedbackHtml(pkg, {
         wrap: true, from: saved.company?.signer || "", brand: saved.company?.name || "",
-        fullNames: req.query.names === "full", showPrice: req.query.price !== "hide",
+        // Hidden by default: the agent holds the contract price, and the
+        // buyer-facing number beside it is our fee by subtraction.
+        fullNames: req.query.names === "full", showPrice: req.query.showPrice === "1",
       });
       res.type("html").send(html);
     } catch (err) { fail(res, err); }

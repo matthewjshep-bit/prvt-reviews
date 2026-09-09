@@ -96,6 +96,7 @@ test("the agent-facing page shortens buyer names and never prints our fee", () =
   assert.doesNotMatch(html, /Romatowski/);
   assert.doesNotMatch(html, /\$9,000\b/);
   assert.doesNotMatch(html, /480,000/, "the contract price is the agent's to know, not this page's to print");
+  assert.doesNotMatch(html, /489,000/, "the buyer-facing price is our fee by subtraction");
   assert.match(html, /<title>22018 76th Avenue West — What buyers said<\/title>/);
 });
 
@@ -149,4 +150,20 @@ test("a quote is trimmed to the sentences about this house", () => {
   const t = trimToDeal("Thanks Matt, I'll take a look at this one. I think this may work for a partner, I'm not getting into that market. I'm also going to pass on Edmonds. I saw it on the market and it needs way over $30k.", ["edmonds"]);
   assert.equal(t, "I'm also going to pass on Edmonds. I saw it on the market and it needs way over $30k.");
   assert.equal(trimToDeal("Yes", ["edmonds"]), "Yes");
+});
+
+test("a buyer repeating our price back is redacted, but the number they would do is kept", () => {
+  const pkg = buildFeedbackPackage({ offer: OFFER, buyers: [buyer({
+    thread: PITCH + "\n[2026-09-08 17:22] THEM sms: I like the Edmonds one. At $485k it's tighter than I'd like, closer to $470k would work."
+      + "\n[2026-09-08 20:17] THEM call TRANSCRIPT:\nSpeaker 1: It was the 489,000 purchase price in Edmonds, right?",
+    reason: { code: "price" },
+  })], options: { pitch: { price: 489000 } } });
+  const html = renderFeedbackHtml(pkg);
+  assert.doesNotMatch(html, /485k/);
+  assert.doesNotMatch(html, /489,000/);
+  assert.match(html, /\[our price\]/);
+  assert.match(html, /\$470,000/);
+  assert.match(html, /470k would work/);
+  const open = renderFeedbackHtml(pkg, { showPrice: true });
+  assert.match(open, /489,000/);
 });

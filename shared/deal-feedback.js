@@ -268,9 +268,20 @@ const fmtDate = (iso) => {
  * adds the doctype/html/body shell for the broker route; the artifact host
  * supplies its own.
  */
-export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = false, showPrice = true, wrap = false } = {}) {
+export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = false, showPrice = false, wrap = false } = {}) {
   const nm = (b) => (fullNames ? b.name : b.shortName);
   const words = pkg.words || [];
+  // The listing agent holds the contract price. Any figure a buyer repeats
+  // back that sits between that and what buyers were asked is our assignment
+  // fee by subtraction — so unless showPrice is on, those figures are redacted
+  // in quotes and transcripts too, not just in the pitch table. A buyer's own
+  // lower number (what THEY would do) is theirs to say and stays.
+  const lo = round(pkg.internal?.contractPrice) || round(pkg.pitch?.price) * 0.97;
+  const hi = Math.max(round(pkg.pitch?.price), lo + round(pkg.internal?.assignmentFee)) + 500;
+  const redact = (text) => showPrice || !(hi > lo) ? text : String(text || "").replace(/\$?\s?(\d{3}),(\d{3})\b|\$?\s?(\d{3})\s?[kK]\b/g, (m, a, b, k) => {
+    const n = a ? Number(a + b) : Number(k) * 1000;
+    return n >= lo && n <= hi ? "[our price]" : m;
+  });
   const p = pkg.property; const f = pkg.funnel; const r = pkg.room;
   const numbers = pkg.aboutTheNumbers; const other = pkg.aboutTheBuyer;
   const replied = pkg.buyers.filter((b) => b.replied);
@@ -279,13 +290,13 @@ export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = fal
 
   const quoteBlock = (b, q) => `
     <figure class="quote">
-      <blockquote>${esc(q.text).replace(/\n+/g, "<br>")}</blockquote>
+      <blockquote>${esc(redact(q.text)).replace(/\n+/g, "<br>")}</blockquote>
       <figcaption><span class="who">${esc(nm(b))}${q.fromCall ? " · on the phone" : ""}</span><span class="when">${esc(fmtDate(q.at))}</span></figcaption>
     </figure>`;
   const callBlock = (b, c) => `
     <div class="call">
       <div class="call-head"><span class="mono">${esc(fmtDate(c.at))}</span> · phone call with ${esc(nm(b))}</div>
-      ${c.lines.map((l) => `<p class="line"><span class="spk">${l.speaker === "1" || l.speaker === "3" ? esc(nm(b)) : "Us"}</span>${esc(l.text)}</p>`).join("")}
+      ${c.lines.map((l) => `<p class="line"><span class="spk">${l.speaker === "1" || l.speaker === "3" ? esc(nm(b)) : "Us"}</span>${esc(redact(l.text))}</p>`).join("")}
     </div>`;
 
   const body = `
@@ -376,7 +387,7 @@ export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = fal
       <div class="row"><span>After-repair value</span><strong>${money(pkg.pitch.arv)}</strong></div>
     </div>
     <div>
-      <p class="muted" style="font-size:0.95rem">Every buyer got the same pitch: the address, photos and a walk-through video, the scope of work, and a link to the package with comps. ${r?.downloads ? `${r.downloads} of them downloaded the comps.` : ""}</p>
+      <p class="muted" style="font-size:0.95rem">Every buyer got the same pitch: the address, photos and a walk-through video, the scope of work${showPrice ? "" : ", the price"}, and a link to the package with comps. ${r?.downloads ? `${r.downloads} of them downloaded the comps.` : ""}</p>
     </div>
   </div>
 
@@ -397,7 +408,7 @@ export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = fal
   ${numbers.map((o) => `
     <div class="obj">
       <h3>${esc(o.label)}<span class="count">${o.count} buyer${o.count === 1 ? "" : "s"}</span></h3>
-      ${o.buyers.map((b) => (b.quote ? quoteBlock(b, { text: b.quote, at: b.at, fromCall: b.fromCall }) : `<p class="muted">${esc(nm(b))} — ${esc(b.note)}</p>`)).join("")}
+      ${o.buyers.map((b) => (b.quote ? quoteBlock(b, { text: b.quote, at: b.at, fromCall: b.fromCall }) : `<p class="muted">${esc(nm(b))} — ${esc(redact(b.note))}</p>`)).join("")}
     </div>`).join("")}
   ${pkg.askedFor.length ? `<p style="margin-top:1rem">Where a buyer named a number they would do, it was: ${pkg.askedFor.map((a) => `<strong>${money(a.amount)}</strong> (${esc(a.shortName)})`).join(", ")}.</p>` : ""}` : ""}
 
@@ -407,7 +418,7 @@ export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = fal
   ${other.map((o) => `
     <div class="obj soft">
       <h3>${esc(o.label)}<span class="count">${o.count}</span></h3>
-      ${o.buyers.map((b) => (b.quote && (o.code !== "other" || /interested|pass/i.test(b.quote)) ? quoteBlock(b, { text: b.quote, at: b.at }) : `<p class="muted">${esc(nm(b))} — ${esc(b.note || "no reason given")}</p>`)).join("")}
+      ${o.buyers.map((b) => (b.quote && (o.code !== "other" || /interested|pass/i.test(b.quote)) ? quoteBlock(b, { text: b.quote, at: b.at }) : `<p class="muted">${esc(nm(b))} — ${esc(redact(b.note || "no reason given"))}</p>`)).join("")}
     </div>`).join("")}` : ""}
 
   ${replied.some((b) => b.calls.length) ? `
@@ -423,7 +434,7 @@ export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = fal
         <td><strong>${esc(nm(b))}</strong>${b.sourceFlip ? `<div class="muted" style="font-size:0.8rem">${esc(b.sourceFlip)}</div>` : ""}</td>
         <td class="mono nowrap">${esc(fmtDate(b.sentAt))}</td>
         <td><span class="st ${b.status}">${b.status === "passed" ? (b.reason ? esc(PASS_REASON_LABEL[b.reason.code] || "passed") : "passed") : b.status === "committed" ? "committed" : b.replied ? "looking at it" : "no reply yet"}</span></td>
-        <td>${b.quotes.length ? esc(trimToDeal((b.quotes.find((q) => q.aboutDeal && PASS_RE.test(q.text)) || b.quotes.find((q) => q.namesDeal) || b.quotes.find((q) => q.aboutDeal) || b.quotes[0]).text, words).slice(0, 220)) : b.calls.length ? `<span class="muted">by phone — see the calls below</span>` : `<span class="muted">—</span>`}</td>
+        <td>${b.quotes.length ? esc(redact(trimToDeal((b.quotes.find((q) => q.aboutDeal && PASS_RE.test(q.text)) || b.quotes.find((q) => q.namesDeal) || b.quotes.find((q) => q.aboutDeal) || b.quotes[0]).text, words)).slice(0, 220)) : b.calls.length ? `<span class="muted">by phone — see the calls below</span>` : `<span class="muted">—</span>`}</td>
       </tr>`).join("")}
     </tbody>
   </table></div>
