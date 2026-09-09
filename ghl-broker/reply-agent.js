@@ -1371,6 +1371,22 @@ async function runReply(job, ctx) {
   const guard = await evaluateBandFor({ store, locationId, party, draft, config, saved, job, now });
   const auto = releaseUnderGuard({ base, party, intent: draft.intent, config, guard });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
+  // The re-quote toggle has to mean something on its own. Without this it is
+  // inert unless the operator also wires the action onto a rule by hand, and a
+  // switch that does nothing until you find a second switch is a trap.
+  //
+  // It goes in on a counter or a rejection — "that's way too low" classifies
+  // as either — and only when the model was sure, because re-pricing the wrong
+  // house on a misread is the failure that costs something. It concedes no
+  // money either way, which is why it may run unattended at all.
+  if (party === "agent" && config.parties.agent.requote?.enabled &&
+      ["counter", "rejection"].includes(draft.intent) &&
+      ![...plan.auto, ...plan.suggested].some((a) => a.type === "requote_from_agent_numbers")) {
+    const action = { id: `a-rq-${job.id}`, type: "requote_from_agent_numbers", status: "pending", party,
+      why: "they pushed back on the number — re-run it on theirs" };
+    if (draft.confidence === "high") plan.auto.push({ ...action, mode: "auto" });
+    else plan.suggested.push({ ...action, mode: "ask" });
+  }
   // A released counter is answered in words and handed over: re-issuing the
   // paper at their number is one click, by a person. ASK_ONLY_ACTIONS makes
   // that permanent — an operator cannot promote it to auto by editing a rule.

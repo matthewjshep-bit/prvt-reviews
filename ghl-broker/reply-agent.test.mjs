@@ -1760,3 +1760,64 @@ test("an acceptance is judged by the acceptance guard, not the counter one", asy
   assert.equal(v.kind, "acceptance_band");
   assert.equal(v.passed, true, v.reason);
 });
+
+/* ---------- the re-quote toggle stands on its own ---------- */
+
+test("switching re-quoting on is enough — it does not also need a rule wired by hand", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const saved = { ...SAVED, conversationAi: normalizeConversationAi({
+    enabled: true, parties: { agent: { requote: { enabled: true } } },
+  }) };
+  let ran = null;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "that's way too low, seller wants $340,000",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", counterAmount: 340000, reply: "Let me run it properly and come back to you." }),
+      requoteFromAgentNumbers: async (a) => { ran = a; return { ok: true, address: "12 Elm St", from: 250000, to: 262000, floated: true }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.ok(ran, "the re-quote ran without an intent rule");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.ok(d.actions.some((a) => a.type === "requote_from_agent_numbers" && a.status === "done"));
+});
+
+test("a re-quote the model was unsure about waits for a person", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const saved = { ...SAVED, conversationAi: normalizeConversationAi({
+    enabled: true, parties: { agent: { requote: { enabled: true } } },
+  }) };
+  let ran = false;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "hmm",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "low", reply: "Let me check." }),
+      requoteFromAgentNumbers: async () => { ran = true; return { ok: true }; },
+    },
+  });
+  await settle();
+  assert.equal(ran, false, "re-pricing the wrong house on a misread is the expensive failure");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.ok(d.actions.some((a) => a.type === "requote_from_agent_numbers" && a.mode === "ask"));
+});
+
+test("re-quoting stays off unless the operator switched it on", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  let ran = false;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "way too low",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", reply: "Let me check." }),
+      requoteFromAgentNumbers: async () => { ran = true; return { ok: true }; },
+    },
+  });
+  await settle();
+  assert.equal(ran, false);
+});
