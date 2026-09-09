@@ -12,6 +12,7 @@
 // green #008300 / violet #4a3aa7. Text never wears series color; identity
 // comes from legend swatches and tooltip line-keys.
 
+import FunnelView from "./FunnelView.jsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Pencil, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
@@ -727,6 +728,13 @@ export default function Dashboard({ settings, onSettingsSaved }) {
           </div>
         )}
       </Card>
+
+      {/* Outcomes, not activity. Everything above counts what we did; this
+          counts what came back. Read-only — it changes no setting. */}
+      <div>
+        <h2 className="mb-2 text-sm font-bold">Outcomes</h2>
+        <FunnelView days={viewDays} end={endDate} />
+      </div>
     </div>
   );
 }

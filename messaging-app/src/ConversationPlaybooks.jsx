@@ -3,11 +3,12 @@
 // its own. Pure editing of a config object; the tab owns loading and saving.
 
 import React, { useEffect, useState } from "react";
-import { Lock, Plus, Trash2 } from "lucide-react";
+import { Lock, Plus, Trash2, X } from "lucide-react";
 import {
   INTENTS, INTENT_LABEL, INTENT_GLOSS, NEVER_AUTO, PARTY_LABEL, ACTION_LABEL, ACTION_TYPES,
   INTERNAL_ACTIONS, INTERNAL_ACTIONS_FOR, ASK_ONLY_ACTIONS, TOKENS, OUTBOUND_INTENTS, autoEligible,
 } from "@shared/conversation-ai.js";
+import { FOLLOW_UP_KINDS, kindsFor } from "@shared/follow-up.js";
 import { BTN } from "./ui.jsx";
 
 export const INPUT_CLS =
@@ -72,6 +73,222 @@ function TagList({ value = [], onChange, placeholder, version }) {
         setText(e.target.value);
         onChange(e.target.value.split(",").map((t) => t.trim()).filter(Boolean));
       }} />
+  );
+}
+
+/* ---------- the follow-up clock ---------- */
+
+// Days are edited as chips rather than a text field because the thing an
+// operator wants to see at a glance is the SHAPE of the ladder — three touches
+// over two weeks — not a comma list they have to parse.
+function DayChips({ steps = [], onChange }) {
+  const [draft, setDraft] = useState("");
+  const add = () => {
+    const n = Math.round(Number(draft));
+    if (!Number.isFinite(n) || n < 1 || n > 120 || steps.includes(n)) { setDraft(""); return; }
+    onChange([...steps, n].sort((a, b) => a - b));
+    setDraft("");
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {steps.map((d, i) => (
+        <span key={d} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+          <span className="text-slate-400">{i + 1}.</span> day {d}
+          <button type="button" aria-label={`Remove day ${d}`} className="text-slate-400 hover:text-slate-700"
+            onClick={() => onChange(steps.filter((x) => x !== d))}>
+            <X size={11} />
+          </button>
+        </span>
+      ))}
+      <input className="w-20 rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-xs focus:border-blue-500 focus:outline-none"
+        value={draft} placeholder="+ day" inputMode="numeric"
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+        onBlur={add} />
+    </div>
+  );
+}
+
+export function FollowUpCard({ config, patch }) {
+  const [party, setParty] = useState("agent");
+  const pb = config.parties[party];
+  const fu = pb.followUp;
+  const kinds = kindsFor(party);
+  const allow = pb.autoSend?.intents || [];
+  const setFu = (next) => patch({ parties: { ...config.parties, [party]: { ...pb, followUp: { ...fu, ...next } } } });
+  const setLadder = (kind, next) => setFu({ ladders: { ...fu.ladders, [kind]: { ...fu.ladders[kind], ...next } } });
+
+  return (
+    <Section title="Following up"
+      intro="Nobody answered. These are the days it says something — counted from when we last put it in front of them, not from the last nudge. Anything they say ends the ladder.">
+      <div className="mb-3 inline-flex rounded-lg border border-slate-300 bg-white p-0.5">
+        {["agent", "investor"].map((p) => (
+          <button key={p} type="button" onClick={() => setParty(p)} aria-pressed={party === p}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium ${party === p ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
+            {PARTY_LABEL[p]}s
+          </button>
+        ))}
+      </div>
+
+      <Toggle checked={fu.enabled} onChange={(v) => setFu({ enabled: v })}>
+        Follow up with {PARTY_LABEL[party].toLowerCase()}s who go quiet
+      </Toggle>
+
+      {fu.enabled && (
+        <div className="mt-3 space-y-3">
+          {kinds.map((kind) => {
+            const l = fu.ladders[kind];
+            const sending = allow.includes(kind);
+            return (
+              <div key={kind} className="rounded-lg border border-slate-200 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <Toggle checked={l.enabled} onChange={(v) => setLadder(kind, { enabled: v })}>
+                    <span className="font-medium">{FOLLOW_UP_KINDS[kind].label}</span>
+                  </Toggle>
+                  {/* Two switches is the guard, and the operator has to know
+                      it is two: with the ladder on and the intent off, nudges
+                      draft into the outbox and never send. That is the
+                      shakedown mode, and it is worth saying so here. */}
+                  {l.enabled && (
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${sending ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                      {sending ? "sends itself" : "drafts only"}
+                    </span>
+                  )}
+                </div>
+                {l.enabled && (
+                  <div className="mt-2 space-y-2 pl-6">
+                    <DayChips steps={l.steps} onChange={(steps) => setLadder(kind, { steps })} />
+                    {!sending && (
+                      <p className="text-xs text-amber-700">
+                        These will wait in the outbox for you. To let them go on their own, tick
+                        {" "}<span className="font-medium">{INTENT_LABEL[party]?.[kind] || kind}</span> in the auto-send list under Playbooks.
+                      </p>
+                    )}
+                    {kind === "offer_nudge" && (
+                      <Field label="When the ladder runs out">
+                        <Select value={l.onExhausted} onChange={(v) => setLadder(kind, { onExhausted: v })}
+                          options={[["mark_no_response", "Mark the offer no response"], ["stop", "Just stop"]]} />
+                      </Field>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Most nudges in a week" hint="Across every ladder. One person working three of your properties still hears from you twice.">
+              <Text type="number" value={fu.maxPerContactPerWeek} onChange={(v) => setFu({ maxPerContactPerWeek: Number(v) })} />
+            </Field>
+            <Field label="Hours between nudges" hint="Two overdue rungs never land the same day.">
+              <Text type="number" value={fu.minHoursBetween} onChange={(v) => setFu({ minHoursBetween: Number(v) })} />
+            </Field>
+          </div>
+          <Toggle checked={fu.stopOnAnyInbound} onChange={(v) => setFu({ stopOnAnyInbound: v })}>
+            Anything they say ends the ladder
+          </Toggle>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+/* ---------- the counter band ---------- */
+
+export function CounterBandCard({ config, patch, example = null }) {
+  const pb = config.parties.agent;
+  const band = pb.counterBand;
+  const set = (next) => patch({ parties: { ...config.parties, agent: { ...pb, counterBand: { ...band, ...next } } } });
+  return (
+    <Section title="Counters"
+      intro="A counter is normally yours to answer. This lets the bot say yes on its own — but only at or under what your own calculator would have produced at its most generous, and only in words.">
+      <Toggle checked={band.enabled} onChange={(v) => set({ enabled: v })}>
+        Let it agree to a counter inside the band
+      </Toggle>
+
+      {band.enabled && (
+        <div className="mt-3 space-y-3">
+          {/* The worked example is the whole card. An operator should not have
+              to trust a description of the ceiling — they should see it, in
+              dollars, on a house they recognise. */}
+          {example?.computable ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+              <div className="font-medium text-slate-800">{example.address}</div>
+              <div className="mt-1 text-slate-600">
+                We offered <span className="font-semibold">{example.oursText}</span>. At a $10k assignment our models top out
+                at <span className="font-semibold text-emerald-700">{example.ceilingText}</span> ({example.basis}).
+              </div>
+              <div className="mt-1 text-slate-600">A counter up to {example.ceilingText} would go by itself.</div>
+            </div>
+          ) : (
+            <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+              {example?.reason ? `Your most recent offer has no band: ${example.reason}.` : "Send an offer and this will show you the ceiling on it."}
+            </p>
+          )}
+
+          <ul className="space-y-1 text-xs text-slate-500">
+            <li>· The number has to appear in their own message — not just be something the model read into it.</li>
+            <li>· One automatic agreement per offer, ever. A second is a negotiation, and it does not negotiate.</li>
+            <li>· It says yes in words and stops. Re-issuing the paper and promoting the deal are both one click, by you.</li>
+          </ul>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Most per day" hint="Counted from what actually went out, so a restart never resets it.">
+              <Text type="number" value={band.dailyCap} onChange={(v) => set({ dailyCap: Number(v) })} />
+            </Field>
+            <Field label="Never above" hint="An optional hard cap in dollars. 0 leaves the calculated ceiling alone.">
+              <Text type="number" value={band.maxAmount} onChange={(v) => set({ maxAmount: Number(v) })} />
+            </Field>
+          </div>
+
+          <Toggle checked={band.acceptance} onChange={(v) => set({ acceptance: v })}>
+            Also confirm when they say the seller accepted our number
+          </Toggle>
+          {band.acceptance && (
+            <p className={HINT}>
+              It replies about next steps only — no date, no document, no price — and puts the deal on your desk with one
+              button. It never mints the deal itself.
+            </p>
+          )}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+/* ---------- re-quoting ---------- */
+
+export function RequoteCard({ config, patch }) {
+  const pb = config.parties.agent;
+  const rq = pb.requote;
+  const set = (next) => patch({ parties: { ...config.parties, agent: { ...pb, requote: { ...rq, ...next } } } });
+  return (
+    <Section title="When they say it's too low"
+      intro="Instead of paying more, re-run your own numbers on the ARV and rehab they just gave you, and float what comes out. It concedes nothing — if their figures are real the offer moves, and if they are wishful it barely does.">
+      <Toggle checked={rq.enabled} onChange={(v) => set({ enabled: v })}>
+        Re-quote on their numbers
+      </Toggle>
+      {rq.enabled && (
+        <div className="mt-3 space-y-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Re-quotes per offer" hint="A second one is a ratchet.">
+              <Text type="number" value={rq.maxPerOffer} onChange={(v) => set({ maxPerOffer: Number(v) })} />
+            </Field>
+            <Field label="Most they can raise the ARV" hint="Percent above yours.">
+              <Text type="number" value={rq.maxArvLiftPct} onChange={(v) => set({ maxArvLiftPct: Number(v) })} />
+            </Field>
+            <Field label="Most they can cut the rehab" hint="Percent below yours.">
+              <Text type="number" value={rq.maxRepairCutPct} onChange={(v) => set({ maxRepairCutPct: Number(v) })} />
+            </Field>
+          </div>
+          <p className={HINT}>
+            Their numbers are read from what they actually told you about the property, never from prose and never from the
+            price they asked for. The result can't land above the counter ceiling either — so it can't talk itself past the
+            point where it would have agreed with them outright.
+          </p>
+        </div>
+      )}
+    </Section>
   );
 }
 

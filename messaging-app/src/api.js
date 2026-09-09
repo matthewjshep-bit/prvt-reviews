@@ -259,6 +259,11 @@ export const dismissReplyDraft = (id) =>
   post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/dismiss`, {});
 export const holdReplyDraft = (id) =>
   post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/hold`, {});
+// The clock: what would go out today (preview writes nothing), and a manual run.
+export const getFollowUps = (preview = false) =>
+  fetch(`${API_BASE}/api/offers/automations/conversation/follow-ups?${locq()}${preview ? "&preview=1" : ""}`).then(j);
+export const runFollowUps = (dryRun = true) =>
+  post(`/api/offers/automations/conversation/follow-ups/run`, { dryRun });
 export const applyDraftAction = (id, actionId) =>
   post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/actions/${encodeURIComponent(actionId)}/apply`, {});
 // Run the whole pipeline in preview on a real contact or a typed thread.
@@ -424,6 +429,8 @@ const tzq = () => `&tz_offset=${new Date().getTimezoneOffset()}`;
 const endq = (end) => (end ? `&end=${encodeURIComponent(end)}` : "");
 export const getDashboardSummary = (days = 30, end = "") =>
   fetch(`${API_BASE}/api/dashboard/summary?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
+export const getDashboardFunnel = (days = 30, end = "") =>
+  fetch(`${API_BASE}/api/dashboard/funnel?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
 export const getDashboardTagCounts = (tags) =>
   fetch(`${API_BASE}/api/dashboard/ghl/tags?${locq()}&tags=${encodeURIComponent((tags || []).join(","))}`).then(j);
 export const getDashboardMessages = (days = 30, end = "") =>

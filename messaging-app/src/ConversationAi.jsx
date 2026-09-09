@@ -9,13 +9,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Power } from "lucide-react";
 import { INTENT_LABEL, PARTY_LABEL, normalizeConversationAi, starterConfig } from "@shared/conversation-ai.js";
-import { getConversationAi, getConversationHistory, listWorkflows, saveConversationAi, setConversationEnabled } from "./api.js";
+import { getConversationAi, getConversationHistory, getSettings, listOffers, listWorkflows, saveConversationAi, setConversationEnabled } from "./api.js";
+import { autoAcceptCeiling } from "@shared/auto-accept.js";
+import { fmtMoney } from "@shared/offer-calc.js";
 import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, SkeletonRows, TableCard } from "./ui.jsx";
 import ReplyStrip from "./ReplyStrip.jsx";
 import ConversationTryIt from "./ConversationTryIt.jsx";
 import {
-  AutoSendCard, ExamplesEditor, INPUT_CLS, MediaCard, OptOutCard, PartyPlaybooks, PersonaCard, ProfileCard, RoutingCard,
-  RulesEditor, Section, StyleCard,
+  AutoSendCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, MediaCard, OptOutCard, PartyPlaybooks,
+  PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
 } from "./ConversationPlaybooks.jsx";
 import { IntentPill, PartyPill, ago } from "./ConversationOutbox.jsx";
 
@@ -29,6 +31,11 @@ export default function ConversationAi({ settings }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [workflows, setWorkflows] = useState({ list: [], loading: true, scopeMissing: false, error: "" });
+  // The counter band's worked example. An operator shouldn't have to trust a
+  // description of the ceiling — they should see it in dollars on a house they
+  // recognise. Computed from the newest offer that has numbers on it, through
+  // the same pure function the broker gates on.
+  const [bandExample, setBandExample] = useState(null);
   const [history, setHistory] = useState(null);
   const [days, setDays] = useState(30);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -42,6 +49,16 @@ export default function ConversationAi({ settings }) {
     listWorkflows()
       .then((r) => setWorkflows({ list: r.workflows || [], loading: false, scopeMissing: Boolean(r.scopeMissing), error: r.error || "" }))
       .catch((e) => setWorkflows({ list: [], loading: false, scopeMissing: false, error: e.message }));
+    Promise.all([listOffers({ limit: 25, lean: true }), getSettings()])
+      .then(([offers, settings]) => {
+        // listOffers and getSettings both unwrap their envelope already.
+        const offer = (offers || []).find((x) => x.arv > 0 && x.repairs > 0 && x.cashAmount > 0);
+        if (!offer) return setBandExample(null);
+        const c = autoAcceptCeiling({ offer, settings: settings || {} });
+        setBandExample({ ...c, address: offer.address,
+          oursText: fmtMoney(offer.cashAmount), ceilingText: fmtMoney(c.ceiling) });
+      })
+      .catch(() => setBandExample(null));
   }, []);
 
   useEffect(() => {
@@ -178,7 +195,10 @@ export default function ConversationAi({ settings }) {
       <PersonaCard config={form} patch={patch} />
       <RoutingCard config={form} patch={patch} version={version} />
       <PartyPlaybooks config={form} patch={patch} workflows={workflows} />
+      <FollowUpCard config={form} patch={patch} />
       <AutoSendCard config={form} patch={patch} />
+      <CounterBandCard config={form} patch={patch} example={bandExample} />
+      <RequoteCard config={form} patch={patch} />
       <ProfileCard config={form} patch={patch} />
       <StyleCard config={form} patch={patch} />
       <OptOutCard config={form} patch={patch} version={version} workflows={workflows} />

@@ -25,8 +25,20 @@ const INTENT_CLS = {
   price_pushback: "bg-violet-100 text-violet-800", wants_to_buy: "bg-emerald-100 text-emerald-800",
   new_property: "bg-sky-100 text-sky-800", interested: "bg-sky-100 text-sky-800",
   looking_for_deals: "bg-sky-100 text-sky-800", buybox_update: "bg-sky-100 text-sky-800",
+  offer_nudge: "bg-indigo-100 text-indigo-800", blast_nudge: "bg-indigo-100 text-indigo-800",
+  dataroom_nudge: "bg-indigo-100 text-indigo-800",
 };
 const PARTY_CLS = { agent: "bg-slate-200 text-slate-700", investor: "bg-sky-100 text-sky-800", unknown: "bg-amber-100 text-amber-800" };
+
+// Why the clock woke this one up. Said in the operator's terms, not the
+// kind's — "we sent them an offer and they went quiet" beats "offer_nudge".
+const money = (n) => `$${Math.round(Number(n) || 0).toLocaleString()}`;
+
+const NUDGE_KINDS = {
+  offer_nudge: (a) => `we sent an offer on ${a || "a property"} and heard nothing back`,
+  blast_nudge: (a) => `we sent them ${a || "a deal"} and heard nothing back`,
+  dataroom_nudge: (a) => `they opened the package on ${a || "a deal"} and went quiet`,
+};
 
 const PHASE = {
   queued: "Queued", waiting: "Waiting for follow-up texts", reading: "Reading the thread", drafting: "Drafting",
@@ -167,7 +179,15 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
         </div>
       ) : d.outbound?.kind === "realm_check" ? (
         <div className="mt-1 text-xs text-slate-600">
-          <span className="text-slate-400">Numbers came back:</span> our offer on {d.outbound.address} is {d.outbound.amount ? `$${Number(d.outbound.amount).toLocaleString()}` : "set"} — this floats it before the formal offer goes.
+          <span className="text-slate-400">Numbers came back:</span> our offer on {d.outbound.address} is {d.outbound.amount ? `$${Number(d.outbound.amount).toLocaleString()}` : "set"} —
+          {d.outbound.requote
+            ? " re-run on their numbers, so this one goes out as a real underwrite."
+            : " this floats it as a rough first pass, before the formal offer goes."}
+        </div>
+      ) : NUDGE_KINDS[d.outbound?.kind] ? (
+        <div className="mt-1 text-xs text-slate-600">
+          <span className="text-slate-400">Nobody answered:</span> {NUDGE_KINDS[d.outbound.kind](d.outbound.address)}
+          {d.outbound.stepLabel ? ` — ${d.outbound.stepLabel}.` : "."}
         </div>
       ) : (
         <div className="mt-1 text-xs text-slate-600">
@@ -220,6 +240,33 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
         <div className="mt-0.5 text-xs text-emerald-700">
           Would have been safe to send on its own.
           {d.autoSend && !d.autoSend.decided && d.autoSend.reason ? <span className="text-slate-500"> Didn’t, because {d.autoSend.reason}.</span> : null}
+        </div>
+      )}
+
+      {/* The counter band's verdict, on every draft it could have applied to.
+          A FAILED one is the row worth reading: it says how far over the
+          ceiling they came and which model set it, which is the only way to
+          judge whether the ceiling is in the right place. */}
+      {d.exception && (
+        <div className={`mt-1 rounded-md px-2 py-1 text-[11px] ${d.exception.passed ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}>
+          <span className="font-medium">{d.exception.passed ? "Inside the band" : "Outside the band"}</span>
+          {d.exception.passed
+            ? d.exception.ceiling
+              ? ` — ${money(d.exception.theirAmount)} against a ${money(d.exception.ceiling)} ceiling${d.exception.basis ? ` (${d.exception.basis})` : ""}.`
+              : "."
+            : d.exception.reason ? ` — ${d.exception.reason}.` : "."}
+          {d.exception.checks?.length > 0 && (
+            <details className="mt-0.5">
+              <summary className="cursor-pointer text-[11px] opacity-70">what it checked</summary>
+              <ul className="mt-1 space-y-0.5">
+                {d.exception.checks.map((c) => (
+                  <li key={c.name} className={c.ok ? "opacity-60" : "font-medium"}>
+                    {c.ok ? "✓" : "✗"} {c.name.replace(/_/g, " ")}{c.detail ? ` — ${c.detail}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       )}
 
