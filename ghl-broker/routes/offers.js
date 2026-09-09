@@ -3474,6 +3474,48 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       return { ok: true, address: revised.address, from: plan.from, to: plan.to,
                clamped: plan.clamped, basis: plan.basis, floated };
     },
+    // A person confirmed the acceptance and clicked. This is the ONE path that
+    // mints a deal, exactly as it was before the band existed — the band only
+    // ever put the suggestion on the row.
+    promoteToDeal: async ({ contactId, addressHint }) => {
+      const open = (await store.listOffers(locationId, { contactId, limit: 50 }))
+        .filter((o) => !o.deal && OPEN_STATUSES.has(effectiveStatus(o)));
+      if (!open.length) return { ok: false, reason: "no open offer to promote" };
+      const offer = pickDealByAddress(open, addressHint) || (open.length === 1 ? open[0] : null);
+      if (!offer) return { ok: false, reason: "more than one open offer and no address named" };
+      const full = await store.getOffer(offer.id);
+      if (!full) return { ok: false, reason: "offer vanished" };
+      await promoteToDeal({ locationId, client, offer: full });
+      return { ok: true, address: full.address };
+    },
+    // The counter band said yes in words and a person clicked. Re-issue the
+    // paper at their number through the SAME path a hand-made revision takes,
+    // so the letter, the links, the revision ledger and the expiry all behave
+    // identically. The band itself never reaches this — it is ask-only.
+    reviseOfferToCounter: async ({ contactId, addressHint, amount, draftId = null }) => {
+      const price = Math.round(Number(amount) || 0);
+      if (!price) return { ok: false, reason: "no number to re-issue at" };
+      const open = (await store.listOffers(locationId, { contactId, limit: 50 }))
+        .filter((o) => !o.deal && OPEN_STATUSES.has(effectiveStatus(o)));
+      if (!open.length) return { ok: false, reason: "no open offer to re-issue" };
+      const offer = pickDealByAddress(open, addressHint) || (open.length === 1 ? open[0] : null);
+      if (!offer) return { ok: false, reason: "more than one open offer and no address named" };
+      const full = await store.getOffer(offer.id);
+      if (!full) return { ok: false, reason: "offer vanished" };
+      const out = await createOfferFromRequest({
+        locationId, client, existing: full,
+        body: { contactId, scope: full.scope,
+                // priceOverride is the manual final price: the letter prints
+                // their number while the breakdown still shows the model that
+                // anchored it, which is exactly what happened here.
+                inputs: { ...(full.calc?.inputs || {}), priceOverride: price },
+                settings: full.calc?.settings },
+      });
+      const revised = out?.offer || (await store.getOffer(full.id));
+      revised.counterBand = { ...(revised.counterBand || {}), acceptedAt: new Date().toISOString(), amount: price, draftId };
+      await store.updateOffer(revised.id, revised);
+      return { ok: true, address: revised.address, amount: price };
+    },
     // "In the realm": remembered on the offer, so the book says so next time
     // and History can show which offers are cleared to send.
     setOfferRealm: async ({ contactId, addressHint, answer, note = "" }) => {

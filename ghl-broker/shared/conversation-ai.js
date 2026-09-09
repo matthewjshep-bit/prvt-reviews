@@ -134,6 +134,19 @@ export const NEVER_AUTO = {
   agent: ["counter", "acceptance", "wants_call", "scheduling", "proof_of_funds", "opt_out", "other"],
   investor: ["price_pushback", "wants_to_buy", "wants_walkthrough", "wants_call", "opt_out", "other"],
 };
+// Intents a structural, verifiable guard may release from NEVER_AUTO — per
+// message, per offer, never per config.
+//
+// This is NOT a second allowlist, and nothing here can be switched on by
+// ticking a box: NEVER_AUTO and autoEligible are untouched, so `counter` can
+// never appear on the auto-send grid. A release needs its own switch, its own
+// numbers, and a guard that passed on THIS message — and it can overturn one
+// specific objection ("a counter is a person's call") and no other. A draft
+// held because it invented a number, because the bot is off, or because a
+// person is already in the thread is never released.
+export const GUARDED_AUTO = { agent: ["counter", "acceptance"], investor: [] };
+export const guardedFor = (party) => GUARDED_AUTO[party] || [];
+
 export const autoEligible = (party) =>
   [...(INTENTS[party] || []), ...(OUTBOUND_INTENTS[party] || [])].filter((i) => !(NEVER_AUTO[party] || []).includes(i));
 
@@ -212,7 +225,7 @@ export const ACTION_TYPES = [
   "add_tags", "remove_tags", "set_field", "add_to_workflow", "remove_from_workflow",
   "link_deal_evaluating", "start_underwrite", "requote_from_agent_numbers", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
-  "record_deal_feedback",
+  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal",
 ];
 export const ACTION_LABEL = {
   add_tags: "Add tags", remove_tags: "Remove tags", set_field: "Set a custom field",
@@ -224,6 +237,8 @@ export const ACTION_LABEL = {
   mark_offer_realm_yes: "Note on the offer that the number is in the realm",
   mark_investor_passed: "Mark them passed on the deal", mark_investor_committed: "Mark them the committed buyer",
   record_deal_feedback: "File what they said about the deal as feedback",
+  revise_offer_to_counter: "Re-issue the offer at their number",
+  promote_to_deal: "Promote it to a deal",
 };
 // Actions that run on the broker rather than in GHL, and which party each
 // makes sense for. An investor can't be underwritten; an agent isn't invited
@@ -231,15 +246,25 @@ export const ACTION_LABEL = {
 export const INTERNAL_ACTIONS = new Set([
   "link_deal_evaluating", "start_underwrite", "requote_from_agent_numbers", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
-  "record_deal_feedback",
+  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal",
 ]);
 export const INTERNAL_ACTIONS_FOR = {
-  agent: ["start_underwrite", "requote_from_agent_numbers", "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes"],
+  agent: ["start_underwrite", "requote_from_agent_numbers", "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes",
+          "revise_offer_to_counter", "promote_to_deal"],
   investor: ["link_deal_evaluating", "suggest_dataroom_invite", "mark_investor_passed", "mark_investor_committed", "record_deal_feedback"],
 };
 // Never automatic: a dataroom link is a document going out, and a committed
 // buyer advances the deal — both are applied by a person.
-export const ASK_ONLY_ACTIONS = new Set(["suggest_dataroom_invite", "mark_investor_committed"]);
+// Never automatic: a dataroom link is a document going out, a committed buyer
+// advances the deal, re-issuing the paper at their number is a new offer, and
+// promoting to a deal is the one write that mints a contract price and an
+// assignment fee. planActions forces everything here to "ask" whatever a rule
+// says, so an operator cannot promote one to auto by editing the rule — which
+// is what makes "the band says yes in words and hands off" a property of the
+// system rather than a setting.
+export const ASK_ONLY_ACTIONS = new Set([
+  "suggest_dataroom_invite", "mark_investor_committed", "revise_offer_to_counter", "promote_to_deal",
+]);
 export const actionAllowedFor = (party, type) =>
   ACTION_TYPES.includes(type) &&
   (!INTERNAL_ACTIONS.has(type) || (INTERNAL_ACTIONS_FOR[party] || []).includes(type));
@@ -278,6 +303,17 @@ const PLAYBOOK = () => ({
   // they just gave us, and float what falls out. Concedes nothing: it is the
   // move to exhaust before anything ever auto-concedes on price.
   requote: { ...REQUOTE_DEFAULTS },
+  // The one door through NEVER_AUTO. When the agent counters at or under what
+  // our own calculator would have produced at its most generous, the bot may
+  // say yes in words — and then hand off. It never mints a deal and never
+  // sends a contract. See shared/auto-accept.js for the ceiling, which is
+  // derived and has no knobs; what is configurable here is only safety.
+  counterBand: {
+    enabled: false,
+    dailyCap: 2,          // releases per location per day, counted from the store
+    acceptance: false,    // the "they accepted our number" half, separately
+    maxAmount: 0,         // optional absolute cap; 0 = the derived ceiling stands
+  },
   // The clock. Off by default, and off again per ladder — and even switched
   // on a nudge only DRAFTS unless its intent is also ticked on the auto-send
   // allowlist above. Two switches is the guard, deliberately.
@@ -456,6 +492,12 @@ function normalizePlaybook(p, party, seed = {}) {
     realmCheck: { enabled: bool(src.realmCheck?.enabled, false) },
     takeCheck: { enabled: bool(src.takeCheck?.enabled, false) },
     followUp: normalizeFollowUp(src.followUp, party),
+    counterBand: {
+      enabled: bool(src.counterBand?.enabled, false),
+      dailyCap: int(src.counterBand?.dailyCap, 2, 1, 50),
+      acceptance: bool(src.counterBand?.acceptance, false),
+      maxAmount: int(src.counterBand?.maxAmount, 0, 0, 100000000),
+    },
     requote: {
       enabled: bool(src.requote?.enabled, false),
       maxPerOffer: int(src.requote?.maxPerOffer, REQUOTE_DEFAULTS.maxPerOffer, 1, 5),

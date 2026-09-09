@@ -504,7 +504,14 @@ test("with sends off on the broker nothing is scheduled, and the draft says why"
 test("decideAutoSend names the first switch that is off", () => {
   const ok = { ok: true, flags: [] };
   const cfg = conversationConfig(AUTO_SAVED);
-  assert.deepEqual(decideAutoSend({ gate: ok, party: "agent", intent: "question", config: cfg, sendsEnabled: true }), { send: true, reason: "" });
+  assert.deepEqual(decideAutoSend({ gate: ok, party: "agent", intent: "question", config: cfg, sendsEnabled: true }), { send: true, code: "", reason: "" });
+  // The code is what the counter band keys on, so each refusal has to carry
+  // its own — a draft held for one reason must never be released by a guard
+  // that answers a different one.
+  assert.equal(decideAutoSend({ gate: ok, party: "agent", intent: "counter", config: cfg, sendsEnabled: true }).code, "never_auto");
+  assert.equal(decideAutoSend({ gate: ok, party: "agent", intent: "rejection", config: cfg, sendsEnabled: true }).code, "not_allowlisted");
+  assert.equal(decideAutoSend({ gate: ok, party: "agent", intent: "question", config: cfg, sendsEnabled: false }).code, "sends_off");
+  assert.equal(decideAutoSend({ gate: { ok: false, flags: ["x"] }, party: "agent", intent: "counter", config: cfg, sendsEnabled: true }).code, "gates");
   assert.match(decideAutoSend({ gate: ok, party: "agent", intent: "rejection", config: cfg, sendsEnabled: true }).reason, /not on the agent auto-send list/);
   assert.match(decideAutoSend({ gate: ok, party: "investor", intent: "question", config: cfg, sendsEnabled: true }).reason, /auto-send is off for investors/);
   assert.match(decideAutoSend({ gate: ok, party: "agent", intent: "question", channel: "email", config: cfg, sendsEnabled: true }).reason, /email replies don't auto-send/);
@@ -1571,4 +1578,185 @@ test("a new Subject Property fires the tier-1 rule and the underwrite, whatever 
   assert.equal(d.status, "scheduled", "the medium-confidence check-in reply still sends itself");
   // (An unchanged subject never counts as a move — that is the addressKey
   // comparison in applyProfileUpdates, tested with the Subject Property rule.)
+});
+
+/* ---------- the counter band: the one door through NEVER_AUTO ---------- */
+
+import { releaseUnderGuard } from "./reply-agent.js";
+import { GUARDED_AUTO, ASK_ONLY_ACTIONS, autoEligible, NEVER_AUTO, normalizeConversationAi } from "./shared/conversation-ai.js";
+import { planActions } from "./conversation-actions.js";
+
+const bandOn = (over = {}) => normalizeConversationAi({
+  enabled: true,
+  autoSend: { channels: ["sms"] },
+  parties: { agent: { autoSend: { enabled: true, intents: ["question"] }, counterBand: { enabled: true, dailyCap: 2, ...over } } },
+});
+const passing = { kind: "counter_band", passed: true, theirAmount: 280000, ceiling: 285000, checks: [] };
+const failing = { kind: "counter_band", passed: false, reason: "$320,000 is over the $285,000 ceiling", checks: [] };
+
+test("a counter inside the band is released when the band is on", () => {
+  const base = { send: false, code: "never_auto", reason: "a counter is a person's call" };
+  const out = releaseUnderGuard({ base, party: "agent", intent: "counter", config: bandOn(), guard: passing });
+  assert.equal(out.send, true);
+  assert.match(out.reason, /released under the counter band/);
+  assert.equal(out.exception.passed, true);
+});
+
+test("a counter inside the band still parks when the band is off", () => {
+  const base = { send: false, code: "never_auto", reason: "a counter is a person's call" };
+  const out = releaseUnderGuard({ base, party: "agent", intent: "counter", config: normalizeConversationAi({ enabled: true }), guard: passing });
+  assert.equal(out.send, false);
+  assert.equal(out.exception, null);
+});
+
+test("the band can only ever overturn one objection", () => {
+  // THE test. A draft held for any reason other than "this intent is a
+  // person's call" is never released, however well the arithmetic checks out.
+  for (const code of ["gates", "bot_off", "human_active", "sends_off", "party_off", "not_allowlisted", "channel"]) {
+    const out = releaseUnderGuard({ base: { send: false, code, reason: code }, party: "agent", intent: "counter", config: bandOn(), guard: passing });
+    assert.equal(out.send, false, `${code} must not be releasable`);
+    assert.equal(out.exception, null);
+  }
+});
+
+test("a failed guard keeps the draft parked and says how far off it was", () => {
+  const base = { send: false, code: "never_auto", reason: "a counter is a person's call" };
+  const out = releaseUnderGuard({ base, party: "agent", intent: "counter", config: bandOn(), guard: failing });
+  assert.equal(out.send, false);
+  assert.match(out.reason, /over the \$285,000 ceiling/);
+  assert.equal(out.exception.passed, false, "the verdict is kept even on a failure — that row is the tuning signal");
+});
+
+test("an intent outside the guarded set is never released", () => {
+  const base = { send: false, code: "never_auto", reason: "a wants call is a person's call" };
+  for (const intent of ["wants_call", "scheduling", "proof_of_funds", "opt_out"]) {
+    assert.equal(releaseUnderGuard({ base, party: "agent", intent, config: bandOn(), guard: passing }).send, false, intent);
+  }
+});
+
+test("an investor is never released — the band is an agent feature", () => {
+  assert.deepEqual(GUARDED_AUTO.investor, []);
+  const base = { send: false, code: "never_auto", reason: "price pushback is a person's call" };
+  assert.equal(releaseUnderGuard({ base, party: "investor", intent: "price_pushback", config: bandOn(), guard: passing }).send, false);
+});
+
+test("a decision that was already a yes is untouched", () => {
+  const out = releaseUnderGuard({ base: { send: true, code: "", reason: "" }, party: "agent", intent: "question", config: bandOn(), guard: null });
+  assert.equal(out.send, true);
+  assert.equal(out.exception, null);
+});
+
+test("counter and acceptance still cannot be added to the auto-send allowlist", () => {
+  // The band is not a second allowlist. NEVER_AUTO and autoEligible are
+  // untouched, so the UI still renders a lock rather than a checkbox.
+  for (const intent of GUARDED_AUTO.agent) {
+    assert.ok(NEVER_AUTO.agent.includes(intent), `${intent} must stay in NEVER_AUTO`);
+    assert.ok(!autoEligible("agent").includes(intent), `${intent} must never be eligible`);
+  }
+  const saved = normalizeConversationAi({ parties: { agent: { autoSend: { enabled: true, intents: ["counter", "acceptance", "question"] } } } });
+  assert.deepEqual(saved.parties.agent.autoSend.intents, ["question"]);
+});
+
+test("re-issuing the paper and promoting a deal can never be automated", () => {
+  // The band says yes in words. Both follow-on moves are ask-only, and
+  // planActions forces that whatever a rule says — so "it hands off" is a
+  // property of the system, not a setting somebody can change.
+  for (const type of ["revise_offer_to_counter", "promote_to_deal"]) {
+    assert.ok(ASK_ONLY_ACTIONS.has(type), type);
+    const { auto, suggested } = planActions({
+      party: "agent", intent: "counter", confidence: "high",
+      playbook: { intentRules: { counter: { mode: "auto", actions: [{ type }] } } },
+    });
+    assert.equal(auto.length, 0, `${type} must never run on its own`);
+    assert.equal(suggested.length, 1);
+  }
+});
+
+/* ---------- the band, reading the book ---------- */
+
+import { evaluateBandFor, bandReleasesToday } from "./reply-agent.js";
+
+const BAND_OFFER = {
+  id: "bo1", locationId: "LOC", contactId: "c1", address: "12 Elm St, Renton, WA",
+  cashAmount: 265000, arv: 500000, repairs: 85000, status: "sent", createdAt: iso(2000),
+};
+const bandStore = (offers = [BAND_OFFER], drafts = []) => {
+  const s = fakeStore(drafts);
+  s.listOffers = async () => offers;
+  s.getOffer = async (id) => offers.find((o) => o.id === id) || null;
+  return s;
+};
+const bandCfg = normalizeConversationAi({
+  enabled: true,
+  parties: { agent: { counterBand: { enabled: true, dailyCap: 2 } } },
+});
+
+test("the band reads the offer book and opens on a counter inside the ceiling", async () => {
+  const v = await evaluateBandFor({
+    store: bandStore(), locationId: "LOC", party: "agent", config: bandCfg, saved: {},
+    draft: { intent: "counter", counterAmount: 280000, confidence: "high", propertyAddress: BAND_OFFER.address },
+    job: { contactId: "c1", message: "seller would do $280,000" }, now: Date.now(),
+  });
+  assert.equal(v.passed, true, v.reason);
+  assert.ok(v.ceiling > 265000);
+});
+
+test("the band is not even computed when it is switched off", async () => {
+  const v = await evaluateBandFor({
+    store: bandStore(), locationId: "LOC", party: "agent", saved: {},
+    config: normalizeConversationAi({ enabled: true }),
+    draft: { intent: "counter", counterAmount: 280000, confidence: "high" },
+    job: { contactId: "c1", message: "$280,000" },
+  });
+  assert.equal(v, null, "no verdict, and no store reads, on the ordinary path");
+});
+
+test("the band is not computed for an intent no guard can release", async () => {
+  const v = await evaluateBandFor({
+    store: bandStore(), locationId: "LOC", party: "agent", config: bandCfg, saved: {},
+    draft: { intent: "question", counterAmount: 0, confidence: "high" },
+    job: { contactId: "c1", message: "what's the address" },
+  });
+  assert.equal(v, null);
+});
+
+test("an agent with nothing open gets a verdict that says so rather than a ceiling", async () => {
+  const v = await evaluateBandFor({
+    store: bandStore([]), locationId: "LOC", party: "agent", config: bandCfg, saved: {},
+    draft: { intent: "counter", counterAmount: 280000, confidence: "high" },
+    job: { contactId: "c1", message: "$280,000" },
+  });
+  assert.equal(v.passed, false);
+  assert.match(v.reason, /no open offer/);
+});
+
+test("the daily cap is counted from the store, not from memory", async () => {
+  // A crash loop must not hand a misconfigured setup a fresh budget.
+  const today = new Date().toISOString();
+  const store = bandStore(undefined, [
+    { id: "d1", locationId: "LOC", status: "sent", createdAt: today, exception: { kind: "counter_band", passed: true } },
+    { id: "d2", locationId: "LOC", status: "sent", createdAt: today, exception: { kind: "counter_band", passed: true } },
+  ]);
+  store.listReplyDrafts = async () => [
+    { exception: { passed: true } }, { exception: { passed: true } }, { exception: { passed: false } },
+  ];
+  assert.equal(await bandReleasesToday({ store, locationId: "LOC" }), 2, "failed verdicts don't spend the budget");
+  const v = await evaluateBandFor({
+    store, locationId: "LOC", party: "agent", config: bandCfg, saved: {},
+    draft: { intent: "counter", counterAmount: 280000, confidence: "high", propertyAddress: BAND_OFFER.address },
+    job: { contactId: "c1", message: "$280,000" },
+  });
+  assert.equal(v.passed, false);
+  assert.equal(v.checks.find((c) => !c.ok).name, "under_daily_cap");
+});
+
+test("an acceptance is judged by the acceptance guard, not the counter one", async () => {
+  const cfg = normalizeConversationAi({ enabled: true, parties: { agent: { counterBand: { enabled: true, acceptance: true } } } });
+  const v = await evaluateBandFor({
+    store: bandStore(), locationId: "LOC", party: "agent", config: cfg, saved: {},
+    draft: { intent: "acceptance", counterAmount: 0, confidence: "high", propertyAddress: BAND_OFFER.address },
+    job: { contactId: "c1", message: "seller signed off" },
+  });
+  assert.equal(v.kind, "acceptance_band");
+  assert.equal(v.passed, true, v.reason);
 });

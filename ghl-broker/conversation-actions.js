@@ -177,6 +177,28 @@ const EXECUTORS = {
     return `re-ran ${r.address} on their numbers: ${fmtMoney(r.from)} → ${fmtMoney(r.to)}` +
       `${r.clamped ? ` (${r.basis})` : ""}${r.floated ? " — floating it now" : ""}`;
   },
+  // The band said yes in words; this is the paper. Ask-only, always: the text
+  // is a social commitment at a number we had already decided we would pay,
+  // and the ceiling is where that decision lives. A re-issued offer is a
+  // document going to a counterparty, and no structural check makes that safe
+  // to do unattended.
+  async revise_offer_to_counter({ deps, contactId, draft, action }) {
+    if (typeof deps?.reviseOfferToCounter !== "function") throw new Error("re-issuing an offer is not wired on this broker");
+    const amount = Math.round(Number(action?.amount ?? draft?.counterAmount) || 0);
+    if (!amount) return "no number to re-issue at";
+    const r = await deps.reviseOfferToCounter({ contactId, addressHint: draft?.propertyAddress || "", amount, draftId: draft?.id || null });
+    if (!r?.ok) return r?.reason || "no offer to re-issue";
+    return `re-issued ${r.address} at ${fmtMoney(amount)}`;
+  },
+  // Minting the deal sets a contract price and an assignment fee, fires GHL
+  // writes and re-prices every dataroom built off the offer — on the evidence
+  // of one sentence. A person confirms it.
+  async promote_to_deal({ deps, contactId, draft }) {
+    if (typeof deps?.promoteToDeal !== "function") throw new Error("promoting a deal is not wired on this broker");
+    const r = await deps.promoteToDeal({ contactId, addressHint: draft?.propertyAddress || "", draftId: draft?.id || null });
+    if (!r?.ok) return r?.reason || "no offer to promote";
+    return `${r.address} is a deal`;
+  },
   async suggest_dataroom_invite({ deps, contactId, draft }) {
     if (typeof deps?.issueDataroomInvite !== "function") throw new Error("dataroom invites are not wired on this broker");
     const r = await deps.issueDataroomInvite({ contactId, addressHint: draft?.propertyAddress || "" });

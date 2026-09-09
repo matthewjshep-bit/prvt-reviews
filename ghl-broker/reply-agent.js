@@ -41,13 +41,17 @@ import { buildTranscript, enrichFieldDefs, mergeHistory, mergeFacts, SUBJECT_PRO
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
+import { evaluateCounterBand, evaluateAcceptance } from "./shared/auto-accept.js";
+// Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus } from "./shared/offer-status.js";
+import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { fmtMoney } from "./shared/offer-calc.js";
 import { parseUsAddress, addressKey, lastMention } from "./shared/us-address.js";
 import {
-  normalizeConversationAi, INTENTS, NEVER_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
+  normalizeConversationAi, INTENTS, NEVER_AUTO, GUARDED_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
   SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutActions, normalizePassReason,
 } from "./shared/conversation-ai.js";
 import {
@@ -396,17 +400,116 @@ export function evaluateReplyGates({
  * before it is asked.
  */
 export function decideAutoSend({ gate, party = "agent", intent = "other", channel = "sms", config, sendsEnabled = false, humanActive = null }) {
-  if (!gate?.ok) return { send: false, reason: gate?.flags?.[0] ? `needs a person: ${gate.flags[0]}` : "the gates did not pass" };
-  if (!config?.enabled) return { send: false, reason: "Conversation AI is switched off" };
-  if (humanActive) return { send: false, reason: `you replied to them ${humanActive.minutesAgo} minute${humanActive.minutesAgo === 1 ? "" : "s"} ago — you have the thread` };
-  if (!sendsEnabled) return { send: false, reason: "sends are off on the broker (CARD_SENDS_ENABLED)" };
+  if (!gate?.ok) return { send: false, code: "gates", reason: gate?.flags?.[0] ? `needs a person: ${gate.flags[0]}` : "the gates did not pass" };
+  if (!config?.enabled) return { send: false, code: "bot_off", reason: "Conversation AI is switched off" };
+  if (humanActive) return { send: false, code: "human_active", reason: `you replied to them ${humanActive.minutesAgo} minute${humanActive.minutesAgo === 1 ? "" : "s"} ago — you have the thread` };
+  if (!sendsEnabled) return { send: false, code: "sends_off", reason: "sends are off on the broker (CARD_SENDS_ENABLED)" };
   const playbook = config.parties?.[party];
-  if (!playbook) return { send: false, reason: "an unknown contact never auto-sends" };
-  if (!playbook.autoSend?.enabled) return { send: false, reason: `auto-send is off for ${PARTY_LABEL[party].toLowerCase()}s` };
-  if ((NEVER_AUTO[party] || []).includes(intent)) return { send: false, reason: `a ${intent.replace(/_/g, " ")} is a person's call` };
-  if (!(playbook.autoSend.intents || []).includes(intent)) return { send: false, reason: `${intent.replace(/_/g, " ")} is not on the ${party} auto-send list` };
-  if (!(config.autoSend?.channels || []).includes(channel)) return { send: false, reason: `${channel} replies don't auto-send` };
-  return { send: true, reason: "" };
+  if (!playbook) return { send: false, code: "unknown_party", reason: "an unknown contact never auto-sends" };
+  if (!playbook.autoSend?.enabled) return { send: false, code: "party_off", reason: `auto-send is off for ${PARTY_LABEL[party].toLowerCase()}s` };
+  // The one refusal the counter band may overturn — and the ONLY one. The
+  // code is what releaseUnderGuard keys on, so a draft held for any other
+  // reason can never be released by a guard passing.
+  if ((NEVER_AUTO[party] || []).includes(intent)) return { send: false, code: "never_auto", reason: `a ${intent.replace(/_/g, " ")} is a person's call` };
+  if (!(playbook.autoSend.intents || []).includes(intent)) return { send: false, code: "not_allowlisted", reason: `${intent.replace(/_/g, " ")} is not on the ${party} auto-send list` };
+  if (!(config.autoSend?.channels || []).includes(channel)) return { send: false, code: "channel", reason: `${channel} replies don't auto-send` };
+  return { send: true, code: "", reason: "" };
+}
+
+/**
+ * releaseUnderGuard({ base, party, intent, config, guard }) → { send, reason, exception }
+ *
+ * The one door through NEVER_AUTO, and it opens only when every one of these
+ * holds: the base decision was blocked BY NEVER_AUTO AND BY NOTHING ELSE, the
+ * intent is in GUARDED_AUTO, the band is switched on, and a structural guard —
+ * a check on numbers, not a judgment on words — passed on this very message.
+ *
+ * `base.code === "never_auto"` is the load-bearing line. It means the band can
+ * overturn one specific objection and no other: a draft that invented a
+ * number, or arrived while the bot was off, or while a person had the thread,
+ * is never released however well the arithmetic checks out.
+ */
+export function releaseUnderGuard({ base, party = "agent", intent = "other", config, guard = null }) {
+  if (base?.send) return { ...base, exception: null };
+  if (base?.code !== "never_auto") return { ...base, exception: null };
+  if (!(GUARDED_AUTO[party] || []).includes(intent)) return { ...base, exception: null };
+  const band = config?.parties?.[party]?.counterBand;
+  if (!band?.enabled) return { ...base, exception: null };
+  if (!guard) return { ...base, exception: null };
+  if (!guard.passed) {
+    return { send: false, code: "guard_failed", reason: `needs a person: ${guard.reason || "the band did not open"}`, exception: guard };
+  }
+  return {
+    send: true, code: "released",
+    reason: `released under the counter band — ${fmtMoney(guard.theirAmount)} is at or under the ${fmtMoney(guard.ceiling)} ceiling`,
+    exception: guard,
+  };
+}
+
+
+/* ---------- the counter band ---------- */
+
+/**
+ * bandReleasesToday({ store, locationId, now }) → number
+ *
+ * How many drafts the band has already released today, read from the STORE
+ * rather than a counter in memory — the same discipline the underwriter's
+ * spend rails keep, and for the same reason: a crash loop must not hand a
+ * misconfigured setup a fresh budget every restart.
+ */
+export async function bandReleasesToday({ store, locationId, now = Date.now() }) {
+  const d = new Date(now);
+  const dayStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
+  const rows = await store.listReplyDrafts(locationId, { since: dayStart, limit: 500 }).catch(() => []);
+  return rows.filter((r) => r?.exception?.passed).length;
+}
+
+/**
+ * evaluateBandFor({ store, locationId, party, draft, config, saved, job, now })
+ *   → verdict | null
+ *
+ * Runs the guard whenever the intent is one a guard COULD release and the band
+ * is switched on — pass OR fail, because the verdict is written onto every
+ * such draft and a failed one is the most useful row in the outbox.
+ *
+ * Returns null when the band is off or the intent isn't guardable, so nothing
+ * is computed (and no store reads happen) on the ordinary path.
+ */
+export async function evaluateBandFor({ store, locationId, party, draft, config, saved, job, now = Date.now() }) {
+  const band = config?.parties?.[party]?.counterBand;
+  if (!band?.enabled) return null;
+  if (!(GUARDED_AUTO[party] || []).includes(draft?.intent)) return null;
+
+  const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+  const open = rows.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
+  if (!open.length) {
+    return { kind: draft.intent === "acceptance" ? "acceptance_band" : "counter_band", passed: false,
+             checks: [{ name: "offer_live", ok: false, detail: "no open offer" }],
+             reason: "no open offer to answer", at: new Date(now).toISOString() };
+  }
+  const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
+  // The full doc, for the calc settings the offer was priced with — the lean
+  // row deliberately drops them, and the ceiling wants the snapshot.
+  const full = picked ? (await store.getOffer(picked.id).catch(() => null)) || picked : null;
+  const releasedToday = await bandReleasesToday({ store, locationId, now });
+  const args = { offer: full, draft, inboundMessage: job.message || "", settings: saved || {},
+                 band, openOffers: open, releasedToday, now, moneyIn };
+  return draft.intent === "acceptance" ? evaluateAcceptance(args) : evaluateCounterBand(args);
+}
+
+// The offer the message is about. Exact address key first, then a loose
+// containment match on the street line — the same two-step the routes use.
+function pickOfferByAddress(offers, hint) {
+  const want = String(hint || "").trim();
+  if (!want) return null;
+  const key = propertyKey(want);
+  const exact = offers.find((o) => propertyKey(o.address) === key);
+  if (exact) return exact;
+  const lower = want.toLowerCase();
+  return offers.find((o) => {
+    const a = String(o.address || "").toLowerCase();
+    return a && (a.includes(lower) || lower.includes(a.split(",")[0].trim()));
+  }) || null;
 }
 
 /* ---------- GHL writeback ---------- */
@@ -1260,8 +1363,25 @@ async function runReply(job, ctx) {
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts,
     inboundMessage: job.message, channel: job.channel, style: config.style,
   });
-  const auto = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive });
+  const base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive });
+  // The counter band. Evaluated whenever the intent is one a guard COULD
+  // release and the band is on — pass or fail — because a failed band is the
+  // most useful row in the outbox: it says how far off the counter was, and
+  // therefore whether the ceiling is in the right place.
+  const guard = await evaluateBandFor({ store, locationId, party, draft, config, saved, job, now });
+  const auto = releaseUnderGuard({ base, party, intent: draft.intent, config, guard });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
+  // A released counter is answered in words and handed over: re-issuing the
+  // paper at their number is one click, by a person. ASK_ONLY_ACTIONS makes
+  // that permanent — an operator cannot promote it to auto by editing a rule.
+  if (auto.exception?.passed && draft.intent === "counter") {
+    plan.suggested.push({ id: `a-band-${job.id}`, type: "revise_offer_to_counter", mode: "ask", status: "pending", party,
+      amount: guard.theirAmount, why: `they countered at ${fmtMoney(guard.theirAmount)}, inside the ${fmtMoney(guard.ceiling)} ceiling` });
+  }
+  if (auto.exception?.passed && draft.intent === "acceptance") {
+    plan.suggested.push({ id: `a-acc-${job.id}`, type: "promote_to_deal", mode: "ask", status: "pending", party,
+      why: "they say the seller accepted — mint the deal when you've confirmed it" });
+  }
   if (a.stampTag) {
     plan.auto.unshift({ id: `a-route-${job.id}`, type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", party, why: "routed by the message" });
   }
@@ -1332,6 +1452,10 @@ async function runReply(job, ctx) {
     contextSummary: context.summary || {},
     offersInContext: context.offers?.count ?? 0,
     autoSend: { decided: auto.send, reason: auto.reason },
+    // The band's verdict, on every draft it could have applied to — pass AND
+    // fail. A failed one is the row that says how far off the counter was and
+    // therefore whether the ceiling is in the right place.
+    exception: auto.exception || null,
     humanActive: a.humanActive || null,
     actions: [...plan.auto, ...plan.suggested],
     supersededIds: open.map((o) => o.id),
