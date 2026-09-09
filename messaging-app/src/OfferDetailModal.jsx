@@ -19,7 +19,8 @@ import {
 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { OFFER_STATUS, aiHoldReasons } from "@shared/offer-status.js";
-import { ghlContactUrl, zillowUrl } from "./api.js";
+import { PROPERTY_DETAIL_FIELDS, propertyDossier, addressKey } from "@shared/contact-record.js";
+import { getContactProfile, ghlContactUrl, zillowUrl } from "./api.js";
 import { CHANNEL_LABELS } from "./SendModal.jsx";
 import { AttachWarning, StagePill, StatusMenu, StatusPill } from "./ui.jsx";
 
@@ -87,6 +88,78 @@ function AiProvenance({ offer }) {
       {uw.message && (
         <p className="mt-2 text-xs italic text-slate-500">The text this came from: "{uw.message}"</p>
       )}
+    </div>
+  );
+}
+
+// What the agent told us about this property, beside what we assumed.
+//
+// Read from the contact record, not stored on the offer: the reply agent
+// files an agent_estimate event when the agent states a value or a repair
+// figure, and property_details when they describe the condition. This card
+// is the newest answer per field for THIS address, so the agent revising
+// their number in a later text shows up here without anyone copying it.
+// The thing you actually want is the gap — "she says 630, we said 598" —
+// so their number and ours sit on one line.
+const shortWhen = (iso) => (iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
+
+function Gap({ theirs, ours }) {
+  if (!theirs || !ours) return null;
+  const d = theirs - ours;
+  if (!d) return <span className="text-slate-400">same as ours</span>;
+  return (
+    <span className={d > 0 ? "text-rose-600" : "text-emerald-700"}>
+      {d > 0 ? "+" : "−"}{fmtMoney(Math.abs(d))} vs our {fmtMoney(ours)}
+    </span>
+  );
+}
+
+function AgentTake({ offer }) {
+  const [rec, setRec] = useState(null);
+  const contactId = offer.contactId;
+  const address = offer.address;
+  useEffect(() => {
+    let live = true;
+    setRec(null);
+    if (!contactId || !address) return undefined;
+    getContactProfile(contactId, { party: "agent" })
+      .then((r) => { if (live) setRec(r || { events: [] }); })
+      .catch(() => { if (live) setRec({ events: [] }); });
+    return () => { live = false; };
+  }, [contactId, address]);
+
+  if (!contactId || !address) return null;
+  const dossier = rec ? propertyDossier(rec.events || [], address) : null;
+  const have = dossier?.have || {};
+  const keys = PROPERTY_DETAIL_FIELDS.filter((f) => have[f.key]);
+  const ourArv = Number(offer.arv ?? offer.calc?.inputs?.arv) || 0;
+  const ourRehab = Number(offer.repairs ?? offer.calc?.inputs?.repairs) || 0;
+  // The agent's own words, from the newest estimate on this address.
+  const note = (rec?.events || [])
+    .filter((e) => e?.type === "agent_estimate" && e.address && addressKey(e.address) === addressKey(address) && e.data?.note)
+    .sort((a, b) => String(b.at).localeCompare(String(a.at)))[0]?.data?.note;
+  const latestAt = keys.map((f) => have[f.key].at).sort().at(-1);
+
+  return (
+    <div className={keys.length ? "rounded-xl border border-sky-200 bg-sky-50/60 p-3.5" : CARD}>
+      <div className={`mb-1 flex items-center justify-between ${CARD_LABEL} ${keys.length ? "text-sky-800" : ""}`}>
+        <span>Agent's take</span>
+        {latestAt && <span className="font-medium normal-case tracking-normal text-slate-400">{shortWhen(latestAt)}</span>}
+      </div>
+      {!rec && <div className="text-xs text-slate-400">Loading…</div>}
+      {rec && !keys.length && (
+        <div className="text-xs text-slate-400">Nothing from the agent on this one yet. Their ARV, rehab budget and condition notes land here from the conversation.</div>
+      )}
+      {keys.map((f) => {
+        const v = have[f.key].value;
+        const value = f.key === "arv" ? <>{fmtMoney(v)} <span className="ml-1 text-xs font-normal"><Gap theirs={v} ours={ourArv} /></span></>
+          : f.key === "rehab" ? <>{fmtMoney(v)} <span className="ml-1 text-xs font-normal"><Gap theirs={v} ours={ourRehab} /></span></>
+          : f.number ? fmtMoney(v)
+          : f.values ? String(v).replace(/_/g, " ")
+          : v;
+        return <Row key={f.key} label={f.label.replace(/^Their /, "")} value={value} />;
+      })}
+      {note && <p className="mt-2 border-t border-black/5 pt-2 text-xs italic text-slate-600">“{note}”</p>}
     </div>
   );
 }
@@ -367,6 +440,7 @@ export default function OfferDetailModal({
                   <Row label="Monthly" value={`${fmtMoney(lo.monthly)} × ${lo.termMonths} mo`} />
                 </div>
               )}
+              <AgentTake offer={offer} />
               <AiProvenance offer={offer} />
               {scope.length > 0 && <RehabScope scope={scope} />}
               {(offer.warnings || []).length > 0 && (
