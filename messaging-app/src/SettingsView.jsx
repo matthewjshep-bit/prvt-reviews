@@ -273,6 +273,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const set = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, [k]: v })); };
   const setCo = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, company: { ...f.company, [k]: v } })); };
   const setPsa = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, psa: { ...f.psa, [k]: v } })); };
+  const setDispoAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), [k]: v } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
 
   // Contract clause templates (Purchase & Sale + Assignment). null/empty → the
@@ -301,6 +302,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       // the server as a string forever.
       clean.psa = coerce(form.psa || {}, DEFAULT_OFFER_SETTINGS.psa);
       if (form.outreachAutopilot) clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12 };
+      if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
       const r = await saveSettings(clean);
       onSaved?.(r.settings);
       setForm(effectiveSettings(r.settings));
@@ -686,6 +688,38 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             Each blast gets its own "&lt;prefix&gt;-&lt;deal&gt;" tag so you can target one blast in GHL later.
             Live sends also need DISPO_BLASTS_ENABLED=true on the broker.
           </p>
+        </div>
+
+        {/* The selling side on its own. Blasts from the app are outbound
+            drafts the scheduler sends, staggered; the rest are guarded. */}
+        <div className="mt-4 space-y-3 rounded-lg border border-slate-200 p-3">
+          <div className="text-sm font-semibold">Dispositions autopilot</div>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-600">How a blast goes out</span>
+            <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+              value={form.dispoAutopilot?.sendWith || "app"} onChange={(e) => setDispoAuto("sendWith")(e.target.value)}>
+              <option value="app">From the app — one text per buyer, staggered, recorded (drafts until "sent them a deal" is ticked)</option>
+              <option value="ghl">The GHL workflow — the app only applies the trigger tag</option>
+            </select>
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <Num label="Seconds between texts" value={form.dispoAutopilot?.spreadSec ?? 60} onChange={setDispoAuto("spreadSec")} />
+            <Num label="Buyers on the first wave" value={form.dispoAutopilot?.autoBlastCount ?? 25} onChange={setDispoAuto("autoBlastCount")} />
+            <Num label="Second wave after" suffix="hours" value={form.dispoAutopilot?.secondWaveHours ?? 48} onChange={setDispoAuto("secondWaveHours")} />
+            <Num label="Buyers on the second wave" value={form.dispoAutopilot?.secondWaveCount ?? 25} onChange={setDispoAuto("secondWaveCount")} />
+          </div>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.autoBlastOnPromote)} onChange={(e) => setDispoAuto("autoBlastOnPromote")(e.target.checked)} />
+            <span><span className="font-semibold">Blast on promote</span><span className="block text-xs text-slate-500">When an offer becomes a deal, blast the strong buy-box fits; with nobody committed after the delay, the possible fits.</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.autoInvite)} onChange={(e) => setDispoAuto("autoInvite")(e.target.checked)} />
+            <span><span className="font-semibold">Dataroom link on its own</span><span className="block text-xs text-slate-500">When a buyer already evaluating a deal asks for details and their buy box fits it, the tracked link is texted without a click. A cold "send me details" still asks you.</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.paperworkOnCommit)} onChange={(e) => setDispoAuto("paperworkOnCommit")(e.target.checked)} />
+            <span><span className="font-semibold">Draft the assignment when a buyer commits</span><span className="block text-xs text-slate-500">The assignment PDF is generated from the deal and the buyer for you to review. Nothing is sent.</span></span>
+          </label>
         </div>
       </section>
       )}

@@ -61,7 +61,7 @@ export const SILENT_INTENTS = new Set(["opt_out"]);
 // opts a nudge into sending itself exactly the way they opt in a question.
 export const OUTBOUND_INTENTS = {
   agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "outreach_nudge"],
-  investor: ["blast_nudge", "dataroom_nudge"],
+  investor: ["blast_open", "blast_nudge", "dataroom_nudge"],
 };
 
 export const INTENT_LABEL = {
@@ -80,6 +80,7 @@ export const INTENT_LABEL = {
     wants_walkthrough: "wants to walk it", passing: "passing", wants_call: "wants a call",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
     blast_nudge: "followed up on a deal we sent", dataroom_nudge: "followed up after they opened the package",
+    blast_open: "sent them a deal (blast)",
   },
 };
 
@@ -108,6 +109,7 @@ export const INTENT_GLOSS = {
     other: "anything else",
   },
   investor: {
+    blast_open: "the text that puts a deal in front of them: street, size, the work, the buyer price — sent to a shortlist, staggered",
     media: "the message is only a photo or attachment",
     opt_out: "asks us to stop texting, says wrong number, or is plainly angry — reply with nothing at all",
     question: "asks something answerable from the thread or the deals in context",
@@ -237,6 +239,9 @@ export const ACTION_TYPES = [
   "link_deal_evaluating", "start_underwrite", "requote_from_agent_numbers", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
   "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal", "send_offer", "book_call",
+  // Injected by the broker's own guard only (see reply-agent.js); absent
+  // from INTERNAL_ACTIONS_FOR, so no rule may carry it.
+  "send_dataroom_invite",
 ];
 // What send_offer may attach. Same keys the Send modal and POST /:id/send use.
 export const OFFER_DOC_KEYS = ["image", "pdf", "psa", "scope", "comps", "netsheet"];
@@ -258,6 +263,7 @@ export const ACTION_LABEL = {
   promote_to_deal: "Promote it to a deal",
   send_offer: "Send the formal offer (the documents)",
   book_call: "Book the time they picked on the calendar",
+  send_dataroom_invite: "Send the dataroom link (buy box fits, already evaluating)",
 };
 // Actions that run on the broker rather than in GHL, and which party each
 // makes sense for. An investor can't be underwritten; an agent isn't invited
@@ -265,7 +271,7 @@ export const ACTION_LABEL = {
 export const INTERNAL_ACTIONS = new Set([
   "link_deal_evaluating", "start_underwrite", "requote_from_agent_numbers", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
-  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal", "send_offer", "book_call",
+  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal", "send_offer", "book_call", "send_dataroom_invite",
 ]);
 export const INTERNAL_ACTIONS_FOR = {
   agent: ["start_underwrite", "requote_from_agent_numbers", "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes",

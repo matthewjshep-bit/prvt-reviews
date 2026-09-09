@@ -26,6 +26,10 @@ export default function MatchInvestorsModal({ offer, existingIds, onClose, onLin
   const [selected, setSelected] = useState(() => new Set());
   const [blast, setBlast] = useState(null);
   const [blasting, setBlasting] = useState(false);
+  // "app": the deal goes as staggered texts from the app (drafts unless
+  // "sent them a deal" is on the investor auto-send list); off: the GHL tag
+  // and the workflow template, as before.
+  const [viaApp, setViaApp] = useState(true);
 
   const load = async (opts = {}) => {
     setData(null);
@@ -55,10 +59,12 @@ export default function MatchInvestorsModal({ offer, existingIds, onClose, onLin
 
   const doBlast = async () => {
     const n = selected.size;
-    if (!window.confirm(`Tag ${n} investor${n === 1 ? "" : "s"} in GoHighLevel so the blast workflow sends them ${offer.address}?`)) return;
+    if (!window.confirm(viaApp
+      ? `Blast ${offer.address} to ${n} investor${n === 1 ? "" : "s"} from the app? One text each, staggered over the auto-send hours (drafts only until "sent them a deal" is ticked on the investor auto-send list).`
+      : `Tag ${n} investor${n === 1 ? "" : "s"} in GoHighLevel so the blast workflow sends them ${offer.address}?`)) return;
     setBlasting(true);
     try {
-      const r = await blastInvestors({
+      const r = await blastInvestors({ sendWith: viaApp ? "app" : null,
         contactIds: [...selected],
         offerId: offer.id,
         label: offer.address,
@@ -171,10 +177,14 @@ export default function MatchInvestorsModal({ offer, existingIds, onClose, onLin
                 {data.rankedByAi > 0 ? " · ranked by AI" : " · ordered by criteria matched"}
                 {data.linked?.length > 0 && ` · ${data.linked.length} already on the deal`}
               </span>
+              <label className="mr-2 flex items-center gap-1.5 text-xs text-slate-600" title="Staggered texts from the app, recorded on every buyer. Untick to use the GHL trigger tag and workflow instead.">
+                <input type="checkbox" checked={viaApp} onChange={(e) => setViaApp(e.target.checked)} />
+                Send from the app
+              </label>
               <button type="button" onClick={doBlast} disabled={!selected.size || blasting}
                 className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3.5 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">
                 {blasting ? <Loader2 size={14} className="animate-spin" /> : <Megaphone size={14} />}
-                Tag &amp; blast {selected.size || ""}
+                {viaApp ? "Blast" : "Tag & blast"} {selected.size || ""}
               </button>
             </div>
 

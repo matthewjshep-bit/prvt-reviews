@@ -1046,6 +1046,43 @@ them by **buy box**, and hands a shortlist to a GHL workflow.
    `DISPO_BLASTS_ENABLED=true` on the broker; otherwise every blast is a
    dry-run preview.
 
+### Dispositions autopilot
+
+Settings → Dispositions → "Dispositions autopilot".
+
+**Blasts from the app.** With "How a blast goes out" = *from the app* (the
+default), Tag & blast on a deal ("Find buyers" → tick → Blast, with "Send
+from the app" on) no longer applies the trigger tag. Each buyer gets one
+outbound draft (`blast_open`, investor party) — the deal in one text:
+street, size, the work, the buyer price in k, no dollar signs, no links,
+three phrasings rotated. The drafts are **scheduled**, `spreadSec` apart
+from the next open minute inside the auto-send hours, and the 30-second
+scheduler sends them; Hold works on each. They schedule only when
+`CARD_SENDS_ENABLED`, `DISPO_BLASTS_ENABLED`, and "sent them a deal"
+(`blast_open`) is ticked on the investor auto-send list — otherwise they sit
+in the outbox as drafts, with the reason on the row. Every send writes
+`blast_sent` (with the offer id) and the buyer's `lastBlastAt`, so the
+feedback package and the second wave need no scan. The deal's own blast tag
+is still applied for GHL filtering; `deal.blasts` records each wave.
+`POST /api/dispo/blast` with `sendWith: "app"` and `offerId`.
+
+**Blast on promote.** When an offer becomes a deal, the strong buy-box fits
+(documented buy box, not on a live deal, not already pitched this deal) are
+blasted, up to the first-wave cap. With nobody committed after the wave
+delay, the daily dispo sweep (`DISPO_SWEEP_UTC_HOUR`, default 17,
+`job_cursors` row `dispo`) blasts the *possible* fits. Off by default.
+
+**Dataroom link on its own.** `suggest_dataroom_invite` stays ask-only. A
+separate `send_dataroom_invite` action — which no rule can carry — is
+injected by the broker's guard when an investor already evaluating a live
+deal (or being linked to it by the same reply) asks for details on it and
+their stated buy box fits ≥70%, and the deal has a room. Anything short of
+that becomes the usual suggestion with the reason on it. Off by default.
+
+**Assignment on commit.** Marking a buyer committed drafts the assignment
+PDF from the deal, the buyer and the company settings (`offer.assignment`),
+for review. Off by default.
+
 ## Dataroom photos from a Google Drive folder
 
 The dataroom photo box takes a Drive **folder** link and imports everything in

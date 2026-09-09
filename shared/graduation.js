@@ -107,7 +107,7 @@ const sw = (key, label, state, note = "", group = "conversation") => ({ key, lab
  * `config` is the normalized Conversation AI blob. The env facts come from the
  * caller because a pure module cannot read process.env.
  */
-export function autopilotSummary({ config = {}, sendsEnabled = false, underwriteLive = false, underwriteWired = true, outreach = null, importsEnabled = false } = {}) {
+export function autopilotSummary({ config = {}, sendsEnabled = false, underwriteLive = false, underwriteWired = true, outreach = null, importsEnabled = false, dispo = null, blastsEnabled = false } = {}) {
   const out = [];
   const parties = config.parties || {};
 
@@ -166,6 +166,18 @@ export function autopilotSummary({ config = {}, sendsEnabled = false, underwrite
         clear ? "goes out after a clean underwrite" : sendsUnasked ? "goes out when they say the number works" : sendRules.length ? "offered as a one-click action on the reply" : "every offer is sent by you", party));
     }
 
+    if (party === "investor") {
+      const da = dispo || {};
+      const viaApp = da.sendWith !== "ghl";
+      out.push(sw("blast", "Deal blasts", !viaApp ? "off" : allow.includes("blast_open") && canSend && blastsEnabled ? "on" : "drafting",
+        !viaApp ? "a GHL workflow sends them — the app only tags" : !blastsEnabled ? "DISPO_BLASTS_ENABLED is not set" : allow.includes("blast_open") ? "staggered texts from the app" : "queued as drafts until 'sent them a deal' is ticked", party));
+      out.push(sw("auto_blast", "Blast on promote", da.autoBlastOnPromote ? "on" : "off",
+        da.autoBlastOnPromote ? `top ${da.autoBlastCount || 25} fits, second wave after ${da.secondWaveHours || 48}h` : "you pick the shortlist", party));
+      out.push(sw("auto_invite", "Dataroom invite", da.autoInvite ? "on" : "off",
+        da.autoInvite ? "sent itself to an evaluating buyer whose buy box fits" : "always a click", party));
+      out.push(sw("paperwork", "Assignment on commit", da.paperworkOnCommit ? "on" : "off",
+        da.paperworkOnCommit ? "the assignment PDF drafts itself" : "you generate the assignment", party));
+    }
     const fu = pb.followUp || {};
     for (const kind of kindsFor(party)) {
       const ladder = fu.ladders?.[kind] || {};

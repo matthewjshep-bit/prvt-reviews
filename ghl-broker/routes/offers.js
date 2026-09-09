@@ -98,6 +98,9 @@ import {
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
 import { nextSendTime } from "../conversation-scheduler.js";
+import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
+import { dealToQuery } from "../dispo.js";
+import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
 import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType } from "../shared/contact-record.js";
 import { issueDataroomInvite } from "../dataroom.js";
@@ -2638,13 +2641,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   //         Assignee/Assignor document shell. This document goes to the END
   //         BUYER — it is deliberately NOT part of the /send doc set, which
   //         only ever texts/emails the seller-side contact.
-  router.post("/:id/assignment", async (req, res) => {
-    try {
-      const { locationId } = resolveLocation(req);
-      const offer = await store.getOffer(req.params.id);
-      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
-
-      const raw = req.body?.fields || {};
+  /**
+   * generateAssignment({ locationId, offer, fields }) → offer
+   * The assignment PDF, from the route or from a buyer committing.
+   */
+  async function generateAssignment({ locationId, offer, fields: fieldsIn = {} }) {
+      const raw = fieldsIn || {};
       const str = (k, max = 200) => String(raw[k] ?? "").trim().slice(0, max);
       const money = (k) => {
         const n = Number(String(raw[k] ?? "").replace(/[$,\s]/g, ""));
@@ -2725,6 +2727,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       offer.assignment = { fields, generatedAt: new Date().toISOString() };
       offer.assignmentPdfUrl = url;
       await store.updateOffer(offer.id, offer);
+      return offer;
+  }
+
+  router.post("/:id/assignment", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const offer = await store.getOffer(req.params.id);
+      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
+      await generateAssignment({ locationId, offer, fields: req.body?.fields || {} });
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
   });
@@ -2915,6 +2926,29 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // Promote an offer to an active deal. Shared by POST /:id/deal and by
   // setting the status to "accepted", so there is exactly one code path that
   // can record an acceptance. Throws with .http for the caller to surface.
+  // The dispo router's own match + blast, handed in by the broker once both
+  // routers exist (router.setDispoDeps). Absent in tests: promotion just
+  // promotes.
+  let dispoDeps = null;
+  router.setDispoDeps = (d) => { dispoDeps = d; };
+
+  // Blast on promote. Fire-and-forget after the deal is minted: the strong
+  // buy-box fits, up to the cap, as staggered drafts. Any failure is a
+  // warning on the deal, never a failed promote.
+  async function autoBlastOnPromote({ locationId, client, offer }) {
+    try {
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const da = normalizeDispoAutopilot(saved.dispoAutopilot);
+      if (!da.autoBlastOnPromote || !dispoDeps) return;
+      const m = await dispoDeps.matchForDeal(locationId, offer, { fits: ["strong"], exclude: "blasted" });
+      const picked = (m.results || []).slice(0, da.autoBlastCount).map((r) => ({ contactId: r.contactId, name: r.name }));
+      if (!picked.length) { console.log(`auto-blast: no strong fits for ${offer.address}`); return; }
+      const r = await dispoDeps.blastFromApp({ locationId, client, offer, investors: picked, saved, wave: 1 });
+      console.log(`auto-blast on promote: ${offer.address} → ${picked.length} buyers (${r.scheduled ? "scheduled" : `drafts: ${r.reason}`})`);
+      await createContactNote(client, offer.contactId, { body: `Blasted ${offer.address} to ${picked.length} buyer${picked.length === 1 ? "" : "s"} whose buy box fits${r.scheduled ? "" : " (queued as drafts)"}.` }).catch(() => {});
+    } catch (e) { console.error(`auto-blast on promote failed for ${offer.id}: ${e?.message}`); }
+  }
+
   async function promoteToDeal({ locationId, client, offer, body = {} }) {
     if (offer.status === "draft") {
       throw Object.assign(new Error("drafts can't be promoted — create the offer first"), { http: 400 });
@@ -2975,6 +3009,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       historyLine(ts, offer.address, "under contract"), { type: "deal_promoted", offerId: offer.id, dealId: offer.id, source: "deal", at: ts });
 
     await store.updateOffer(offer.id, offer);
+    autoBlastOnPromote({ locationId, client, offer }).catch(() => {});
     // Any investor room already built from this offer now quotes the deal's
     // assignment contract rather than the bare cash offer.
     await syncDealNumbers({ store, offer, settings });
@@ -3766,6 +3801,29 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // pass. Same write the History table's status menu makes — ledger line,
     // tag reconcile and all — on their newest open offer, or the one whose
     // address the message named.
+    // The dataroom invite's guard (reply-agent.js injects the action only on
+    // an ok). Structural: the deal the message names is live and has a room,
+    // the buyer is evaluating it (or is being linked right now), and their
+    // stated buy box fits it. Returns { ok, reason, address, score }.
+    dataroomInviteGuard: async ({ contactId, addressHint = "", linking = false }) => {
+      const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      const da = normalizeDispoAutopilot(fresh.dispoAutopilot);
+      if (!da.autoInvite) return { ok: false, reason: "" };
+      const live = (await store.listDeals(locationId)).filter((o) => LIVE_DEAL_STAGES.has(o.deal?.stage));
+      const offer = pickDealByAddress(live, addressHint);
+      if (!offer) return { ok: false, reason: "" };
+      const link = (offer.deal.investors || []).find((i) => i.contactId === contactId);
+      if (link?.status === "passed") return { ok: false, reason: `they passed on ${offer.address}`, address: offer.address };
+      if (!(link?.status === "evaluating" || link?.status === "committed" || linking)) return { ok: false, reason: `not yet evaluating ${offer.address}`, address: offer.address };
+      const rooms = await store.listDatarooms(locationId, { offerId: offer.id, limit: 5 });
+      if (!rooms.some((r) => r.status === "active" && r.kind !== "portfolio" && r.kind !== "offer")) return { ok: false, reason: `no dataroom built for ${offer.address}`, address: offer.address };
+      const row = await store.getInvestor(locationId, contactId).catch(() => null);
+      const buybox = normalizeBuybox(row?.doc?.custom || {});
+      if (buyboxIsEmpty(buybox)) return { ok: false, reason: "no buy box on file", address: offer.address };
+      const m = matchBuybox(buybox, dealToQuery(offer).query);
+      if (!m.pass || m.score < 70) return { ok: false, reason: `buy box is a ${m.score}% fit`, address: offer.address };
+      return { ok: true, address: offer.address, score: m.score };
+    },
     // The calendar. Books the appointment, records it, leaves a note. The
     // guard already checked the time was ours to offer and still free; this
     // is the write.
@@ -3879,6 +3937,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (status === "committed" && offer.deal.stage === "under_contract") {
         offer.deal.stage = "buyer_found";
         (offer.deal.stageHistory = offer.deal.stageHistory || []).push({ stage: "buyer_found", ts });
+        // The paperwork: an assignment PDF drafted from the deal and the
+        // buyer, when the page asks for it. A draft to review, never sent.
+        try {
+          const fresh = (await store.getOfferSettings(locationId)) || {};
+          if (normalizeDispoAutopilot(fresh.dispoAutopilot).paperworkOnCommit) {
+            const settings = effectiveSettings(fresh);
+            await generateAssignment({ locationId, offer, fields: {
+              effectiveDate: ts.slice(0, 10), assignorName: settings.company?.signer || "", assignorCompany: settings.company?.name || "",
+              assigneeName: inv.name || "", assigneeCompany: "", address: offer.address || "",
+              totalPrice: (Number(offer.deal.contractPrice) || 0) + (Number(offer.deal.assignmentFee) || 0),
+              deposit: Number(settings.earnestMoney) || 0, depositDueDate: "", closingDate: offer.deal.closingDate || "",
+            } });
+            offer.deal.paperwork = { assignmentDraftedAt: ts, for: contactId };
+          }
+        } catch (e) { console.error(`assignment on commit failed for ${offer.id}: ${e?.message}`); }
         await createContactNote(client, contactId, {
           body: `COMMITTED BUYER — ${offer.address || "property"} (${dateLabel()})` +
             (offer.deal.assignmentFee ? `\nAssignment fee: ${fmtMoney(offer.deal.assignmentFee)}` : ""),

@@ -1951,3 +1951,61 @@ test("re-quoting stays off unless the operator switched it on", async () => {
   await settle();
   assert.equal(ran, false);
 });
+
+/* ---------- the guarded dataroom invite ---------- */
+
+test("an evaluating buyer whose buy box fits gets the dataroom link on its own; a cold ask still asks", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  client.call = ((orig) => async (path, opts) => {
+    if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Ravi", lastName: "Patel", tags: ["investor"] } };
+    return orig(path, opts);
+  })(client.call);
+  const store = fakeStore();
+  const saved = { ...SAVED, conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["interested"] } } } } };
+  const invites = [];
+  const deps = {
+    draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Sending the package over now.", propertyAddress: "22018 76th Ave W", counterAmount: 0 }),
+    dataroomInviteGuard: async ({ addressHint }) => (addressHint ? { ok: true, address: "22018 76th Ave W", score: 100 } : { ok: false, reason: "" }),
+    issueDataroomInvite: async (a) => { invites.push(a); return { sent: true, address: "22018 76th Ave W" }; },
+  };
+  const { job } = await startReply({ client, locationId: "LOC", saved, store, contactId: "c1", message: "send me the details on 76th", channel: "sms", sendsEnabled: true, deps });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const act = d.actions.find((a) => a.type === "send_dataroom_invite");
+  assert.ok(act, "the guarded invite was planned");
+  assert.equal(act.mode, "auto");
+  assert.equal(act.status, "done");
+  assert.equal(invites.length, 1);
+
+  // the guard says no with a reason → a suggestion, not a send
+  _resetJobs();
+  const store2 = fakeStore();
+  const { job: job2 } = await startReply({ client, locationId: "LOC", saved, store: store2, contactId: "c1", message: "send me the details on 76th", channel: "sms", sendsEnabled: true,
+    deps: { ...deps, dataroomInviteGuard: async () => ({ ok: false, reason: "buy box is a 33% fit", address: "22018 76th Ave W" }) } });
+  await settle();
+  const d2 = await store2.getReplyDraft(job2.draftId);
+  assert.equal(d2.actions.find((a) => a.type === "send_dataroom_invite"), undefined);
+  const sug = d2.actions.find((a) => a.type === "suggest_dataroom_invite");
+  assert.equal(sug.mode, "ask");
+  assert.match(sug.why, /33% fit/);
+  assert.equal(invites.length, 1, "nothing more was sent");
+});
+
+test("sending a blast draft records blast_sent and the buyer's lastBlastAt", async () => {
+  const open = { ...openDraft(), party: "investor", intent: "blast_open", contactName: "Ravi", inbound: "",
+    outbound: { kind: "blast_open", offerId: "o1", address: "22018 76th Ave W, Edmonds, WA", label: "dispo-22018-76th-ave-w" }, propertyAddress: "22018 76th Ave W, Edmonds, WA" };
+  const store = fakeStore([open]);
+  const marks = [];
+  store.setInvestorStatus = async (_l, id, patch) => { marks.push([id, patch]); };
+  const client = { call: async () => ({ messageId: "m1" }) };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true });
+  const ev = await store.listContactEvents("LOC", "c1", { types: ["blast_sent"] });
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].offerId, "o1");
+  assert.equal(ev[0].dedupeKey, "blast:o1:c1");
+  assert.equal(ev[0].data.via, "app");
+  assert.equal(marks.length, 1);
+  assert.ok(marks[0][1].lastBlastAt);
+});

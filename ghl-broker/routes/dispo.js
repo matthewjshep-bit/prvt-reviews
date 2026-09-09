@@ -22,6 +22,7 @@ import { recordEvent, learnFacts, forgetFact, reconcileFromGhl } from "../contac
 import { FACT_KEYS, factsAsCustom, factsEmpty } from "../shared/contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
+import { queueBlastDrafts } from "../dispo-autopilot.js";
 import {
   searchAllContactsByTags, getContact, updateContact, listLocationTags,
   findOrCreateCustomFieldByKey, customFieldIdKeyMapForDefs, contactCustomRecord,
@@ -37,6 +38,7 @@ import {
 } from "../shared/buybox.js";
 
 const DISPO_BLASTS_ENABLED = process.env.DISPO_BLASTS_ENABLED === "true";
+const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
 const DISPO_TAG = process.env.DISPO_TAG || "dispo-blast";
 
 // Contacts carrying any of these tags are investors. Overridable per location
@@ -766,6 +768,24 @@ export default function createDispoRouter({ resolveLocation }) {
       const applyTag = req.body?.applyTag !== false;
       const dryRun = req.body?.dryRun !== false || !DISPO_BLASTS_ENABLED;
 
+      // The app-side blast: the deal in one text per buyer, staggered, sent
+      // by the scheduler. Needs the deal (offerId). Tags the deal's own blast
+      // tag for GHL filtering but never the trigger tag — the workflow must
+      // not text them as well.
+      if (req.body?.sendWith === "app") {
+        const offerId = String(req.body?.offerId || "").slice(0, 64);
+        if (!offerId) return res.status(400).json({ error: "sendWith app needs offerId — blast from the deal" });
+        const offer = await store.getOffer(offerId);
+        if (!offer || offer.locationId !== locationId || !offer.deal) return res.status(404).json({ error: "deal not found" });
+        const investors = [];
+        for (const contactId of contactIds) {
+          const row = await store.getInvestor(locationId, contactId);
+          if (row) investors.push({ contactId, name: row.name || row.doc?.name || "" });
+        }
+        const r = await blastFromApp({ locationId, client, offer, investors, saved, dryRun: req.body?.dryRun !== false, label: label || slugStreet(offer.address), wave: 1 });
+        return res.json({ ok: true, sendWith: "app", blastTag: r.blastTag, ...r });
+      }
+
       const warnings = [];
       const results = await mapPool(contactIds, 2, async (contactId) => {
         try {
@@ -816,6 +836,63 @@ export default function createDispoRouter({ resolveLocation }) {
       });
     } catch (err) { fail(res, err); }
   });
+
+  const slugStreet = (address) => sanitizeTag(String(address || "").split(",")[0]);
+
+  /**
+   * blastFromApp({ locationId, client, offer, investors, saved, dryRun, label, wave })
+   *
+   * The deal as staggered outbound drafts (dispo-autopilot.js), plus the
+   * deal's own blast tag on each contact and a `blasts` entry on the deal so
+   * the second wave and the feedback package know. Never the trigger tag.
+   */
+  async function blastFromApp({ locationId, client, offer, investors = [], saved = null, dryRun = false, label = "", wave = 1, now = Date.now() }) {
+    const settings = saved || await getSettings(locationId);
+    const prefix = sanitizeTag(settings?.dispoBlastTagPrefix || "dispo") || "dispo";
+    const blastTag = sanitizeTag(`${prefix}-${label || slugStreet(offer.address) || "deal"}`);
+    const r = await queueBlastDrafts({ store, locationId, offer, investors, saved: settings, now, dryRun, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED, label: blastTag });
+    if (!dryRun && (r.queued || r.drafted)) {
+      const warnings = [];
+      await mapPool(investors, 2, async (inv) => {
+        try { await sleep(120); await withRetry(() => addContactTags(client, inv.contactId, [blastTag])); }
+        catch (e) { warnings.push(`${inv.contactId}: tag: ${e.message}`); }
+      });
+      const full = await store.getOffer(offer.id);
+      if (full?.deal) {
+        full.deal.blastTags = [...new Set([...(full.deal.blastTags || []), blastTag])];
+        full.deal.blasts = [...(full.deal.blasts || []), { at: new Date(now).toISOString(), count: investors.length, queued: r.queued, drafted: r.drafted, via: "app", wave, tag: blastTag }];
+        await store.updateOffer(full.id, full);
+      }
+      r.warnings = warnings;
+    }
+    return { ...r, blastTag };
+  }
+
+  /**
+   * matchForDeal(locationId, offer, { fits, exclude }) → shortlist result
+   *
+   * The deal's own shortlist, for the autopilot: `fits` keeps only those
+   * bands; `exclude: "blasted"` drops anyone already pitched this deal.
+   */
+  async function matchForDeal(locationId, offer, { fits = ["strong"], exclude = "blasted" } = {}) {
+    const saved = await getSettings(locationId);
+    const target = dealToQuery(offer);
+    const skip = new Set((offer.deal?.investors || []).map((i) => i.contactId));
+    if (exclude === "blasted") {
+      const since = new Date(Date.now() - 90 * 86400000).toISOString();
+      const ev = await store.listContactEventsSince(locationId, since, { types: ["blast_sent"], limit: 5000 }).catch(() => []);
+      for (const e of ev) if (e.offerId === offer.id && e.contactId) skip.add(e.contactId);
+    }
+    const out = await shortlist({
+      locationId, parsed: target.query, target, aiApiKey: String(saved?.aiApiKey || "").trim(),
+      extraInstructions: String(saved?.enrichExtraInstructions || "").trim(), strict: false, excludeIds: skip,
+      filters: { excludeOnDeal: true, buyboxStatus: "documented", replyStatus: "all", notBlastedDays: 0 },
+    });
+    return { ...out, results: out.results.filter((r) => fits.includes(r.fit)) };
+  }
+
+  router.matchForDeal = matchForDeal;
+  router.blastFromApp = blastFromApp;
 
   return router;
 }

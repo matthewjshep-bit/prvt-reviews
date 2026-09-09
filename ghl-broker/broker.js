@@ -23,6 +23,7 @@ import { sendDueDrafts } from "./conversation-scheduler.js";
 import { maybeStartFollowUpSweep, FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.js";
 import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agent.js";
 import { maybeStartOutreachSweep, OUTREACH_SWEEP_UTC_HOUR } from "./outreach-sweep.js";
+import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -148,7 +149,9 @@ const outreachRouter = createOutreachRouter({
 });
 app.use("/api/outreach", outreachRouter);
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
-app.use("/api/dispo", createDispoRouter({ resolveLocation }));
+const dispoRouter = createDispoRouter({ resolveLocation });
+app.use("/api/dispo", dispoRouter);
+offersRouter.setDispoDeps({ matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp });
 // The contact record: the app's own memory of every agent and investor, and
 // the drawer's door to it. GHL's custom fields are a digest of this.
 app.use("/api/contacts", createContactsRouter({ resolveLocation }));
@@ -207,6 +210,12 @@ setInterval(async () => {
         deps: { runPull: outreachRouter.runPull, importAgents: outreachRouter.importAgents },
       });
       if (pulled) console.log(`outreach sweep started for ${locationId}`);
+      // The second wave: deals blasted once, nobody committed, the delay past.
+      const waved = await maybeStartDispoSweep({
+        client: makeClient(token), locationId, saved, store, utcHour: DISPO_SWEEP_UTC_HOUR,
+        deps: { matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp },
+      });
+      if (waved) console.log(`dispo second wave started for ${locationId}`);
     } catch (e) {
       console.error(`nightly sweep check failed for ${locationId}: ${e.message}`);
     }

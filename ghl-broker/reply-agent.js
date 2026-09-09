@@ -1513,6 +1513,23 @@ async function runReply(job, ctx) {
     if (bookingVerdict?.passed) plan.auto.push({ ...action, mode: "auto" });
     else plan.suggested.push({ ...action, mode: "ask" });
   }
+  // The dataroom invite, unattended — under a guard, never from a rule.
+  // suggest_dataroom_invite stays ask-only; this is a separate action the
+  // broker's own check injects when the buyer is already evaluating the deal
+  // the message names (or is being linked to it right now) AND their stated
+  // buy box fits it. A cold "send me details" still asks.
+  if (party === "investor" && draft.intent === "interested" && typeof deps.dataroomInviteGuard === "function" && draft.confidence !== "low") {
+    try {
+      const linking = plan.auto.some((x) => x.type === "link_deal_evaluating");
+      const g = await deps.dataroomInviteGuard({ contactId: job.contactId, addressHint: draft.propertyAddress || "", linking });
+      if (g?.ok) {
+        plan.auto.push({ id: `a-invite-${job.id}`, type: "send_dataroom_invite", mode: "auto", status: "pending", party,
+          why: `evaluating ${g.address} and their buy box fits (${g.score}%)` });
+      } else if (g?.reason && g?.address) {
+        plan.suggested.push({ id: `a-invite-${job.id}`, type: "suggest_dataroom_invite", mode: "ask", status: "pending", party, why: g.reason });
+      }
+    } catch (e) { warnings.push(`invite guard: ${String(e?.message || e).slice(0, 120)}`); }
+  }
   if (a.stampTag) {
     plan.auto.unshift({ id: `a-route-${job.id}`, type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", party, why: "routed by the message" });
   }
@@ -1945,6 +1962,17 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
   // The first cold text is the outreach ladder's trigger, so it goes on the
   // timeline the moment it actually leaves — not when it was drafted.
+  if (d.outbound?.kind === "blast_open") {
+    // The record the feedback package needs: who was pitched, when, which
+    // deal. And the investor's own lastBlastAt, which the shortlist filters on.
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "investor", type: "blast_sent", at: ts,
+      address: d.outbound.address || d.propertyAddress || "", offerId: d.outbound.offerId || null, source: "blast", ref: d.id,
+      dedupeKey: `blast:${d.outbound.offerId || "deal"}:${d.contactId}`,
+      data: { draftId: d.id, auto: Boolean(auto), label: d.outbound.label || "", via: "app" },
+    }).catch(() => {});
+    await store.setInvestorStatus?.(locationId, d.contactId, { lastBlastAt: ts }).catch(() => {});
+  }
   if (d.outbound?.kind === "outreach_open") {
     await recordEvent({
       store, locationId, contactId: d.contactId, party: "agent", type: "outreach_sent", at: ts,

@@ -240,6 +240,7 @@ export default function createDashboardRouter({ resolveLocation }) {
         config, sendsEnabled: CARD_SENDS_ENABLED, underwriteLive: AUTO_UNDERWRITE_ENABLED,
         underwriteWired: Boolean(process.env.AUTO_UNDERWRITE_SECRET || process.env.GHL_LOCATION_KEYS),
         outreach: saved?.outreachAutopilot || null, importsEnabled: process.env.OUTREACH_IMPORTS_ENABLED === "true",
+        dispo: saved?.dispoAutopilot || null, blastsEnabled: process.env.DISPO_BLASTS_ENABLED === "true",
       });
       autopilot.readyToGraduate = graduationReport({ stats: draftStats(recentDrafts), config }).ready;
       autopilot.windowDays = GRADUATION.windowDays;

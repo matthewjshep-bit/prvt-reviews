@@ -333,6 +333,16 @@ export function buildPipeline({
       const id = push({ ...base, kind: "draft_waiting", severity: hot ? "now" : "soon", title,
         detail: x && !x.passed ? (x.basis || x.reason || "") : (d.autoSend?.reason || ""), ops: [] });
       if (card) card.actionIds.push(id);
+    } else if (d.status === "scheduled" && d.outbound?.kind === "blast_open") {
+      // A blast is one decision, not two hundred rows: one line per deal.
+      const key = `blast:${d.outbound.offerId || d.propertyAddress || "deal"}`;
+      const existing = actions.find((a) => a.id === key);
+      if (existing) { existing.count++; existing.title = `Blast on ${existing.address || "a deal"}: ${existing.count} texts sending themselves`; }
+      else {
+        const id = push({ ...base, id: key, kind: "draft_scheduled", severity: "fyi", count: 1,
+          address: d.outbound.address || base.address, title: `Blast on ${d.outbound.address || base.address || "a deal"}: 1 text sending itself`, detail: "staggered over the auto-send hours", ops: [] });
+        if (card) card.actionIds.push(id);
+      }
     } else if (d.status === "scheduled") {
       const id = push({ ...base, kind: "draft_scheduled", severity: "fyi",
         title: `${d.contactName || "Someone"}: sends itself${d.sendAt ? ` at ${d.sendAt}` : ""}`, detail: "", ops: [] });

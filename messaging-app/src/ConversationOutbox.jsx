@@ -184,6 +184,10 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
             ? " re-run on their numbers, so this one goes out as a real underwrite."
             : " this floats it as a rough first pass, before the formal offer goes."}
         </div>
+      ) : d.outbound?.kind === "blast_open" ? (
+        <p className="text-xs text-slate-600">
+          <span className="text-slate-400">Deal blast:</span> puts {d.outbound.address} in front of them — one of a staggered set to the shortlist.
+        </p>
       ) : NUDGE_KINDS[d.outbound?.kind] ? (
         <div className="mt-1 text-xs text-slate-600">
           <span className="text-slate-400">Nobody answered:</span> {NUDGE_KINDS[d.outbound.kind](d.outbound.address)}
