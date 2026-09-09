@@ -39,6 +39,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { buildTranscript, enrichFieldDefs, mergeHistory, mergeFacts, SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
+import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
+import { getFreeSlots } from "./ghl.js";
+import { GUARD_FOR_INTENT } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance } from "./shared/auto-accept.js";
@@ -161,7 +164,7 @@ export async function countToday({ store, locationId, now = Date.now() }) {
 export async function draftReply({
   message, transcript = "", offers = { text: "", amounts: [], count: 0 }, contact = {},
   underwriting = [], instructions = "", signer = "", aiApiKey,
-  party = "agent", config = null, context = null, channel = "sms", outbound = null,
+  party = "agent", config = null, context = null, channel = "sms", outbound = null, booking = false,
 }) {
   const client = new Anthropic({ apiKey: aiApiKey, timeout: 120_000 });
   const cfg = config || normalizeConversationAi(null);
@@ -193,7 +196,7 @@ export async function draftReply({
       // thinking this job has no use for and bills it as output.
       output_config: {
         effort: "medium",
-        format: { type: "json_schema", schema: schemaFor(party, { outbound }) },
+        format: { type: "json_schema", schema: schemaFor(party, { outbound, booking: Boolean(booking) }) },
       },
       messages: [{ role: "user", content: [{ type: "text", text: user }] }],
     });
@@ -224,6 +227,10 @@ export async function draftReply({
     // Agents only: what this message added to the property's dossier.
     propertyDetails: normalizePropertyDetails(p.propertyDetails),
     profile: normalizeProfile(p.profile),
+    // The calendar: which of the handed-in times the reply used, and which
+    // previously offered one this message picked. Checked, not trusted.
+    offeredSlots: Array.isArray(p.offeredSlots) ? p.offeredSlots.map(String).slice(0, 5) : [],
+    chosenSlot: String(p.chosenSlot || "").trim().slice(0, 40),
   };
 }
 
@@ -388,7 +395,14 @@ export function evaluateReplyGates({
   if (invented.length) {
     flags.push(`the draft names ${[...new Set(invented)].map((n) => fmtMoney(n)).join(", ")}, which is not in the ${party === "investor" ? "deal book" : "offer book"}`);
   }
-  return { ok: flags.length === 0, flags };
+  // `ok` is the row's word — a counter is not auto-sendable, full stop. But
+  // the lock is the ONE flag a guard may overturn, so it is named apart from
+  // the rest: `clean` says every OTHER gate passed. decideAutoSend lets a
+  // locked-but-clean draft fall through to the never_auto code, which is the
+  // only code releaseUnderGuard will open. Without this the band and the
+  // calendar could never release anything — the lock tripped "gates" first.
+  const locked = flags.find((f) => / is a person's call$/.test(f)) || null;
+  return { ok: flags.length === 0, flags, locked, clean: flags.filter((f) => f !== locked).length === 0 };
 }
 
 /**
@@ -400,7 +414,7 @@ export function evaluateReplyGates({
  * before it is asked.
  */
 export function decideAutoSend({ gate, party = "agent", intent = "other", channel = "sms", config, sendsEnabled = false, humanActive = null }) {
-  if (!gate?.ok) return { send: false, code: "gates", reason: gate?.flags?.[0] ? `needs a person: ${gate.flags[0]}` : "the gates did not pass" };
+  if (!gate?.ok && !(gate?.locked && gate?.clean)) return { send: false, code: "gates", reason: gate?.flags?.[0] ? `needs a person: ${gate.flags[0]}` : "the gates did not pass" };
   if (!config?.enabled) return { send: false, code: "bot_off", reason: "Conversation AI is switched off" };
   if (humanActive) return { send: false, code: "human_active", reason: `you replied to them ${humanActive.minutesAgo} minute${humanActive.minutesAgo === 1 ? "" : "s"} ago — you have the thread` };
   if (!sendsEnabled) return { send: false, code: "sends_off", reason: "sends are off on the broker (CARD_SENDS_ENABLED)" };
@@ -433,17 +447,64 @@ export function releaseUnderGuard({ base, party = "agent", intent = "other", con
   if (base?.send) return { ...base, exception: null };
   if (base?.code !== "never_auto") return { ...base, exception: null };
   if (!(GUARDED_AUTO[party] || []).includes(intent)) return { ...base, exception: null };
-  const band = config?.parties?.[party]?.counterBand;
-  if (!band?.enabled) return { ...base, exception: null };
   if (!guard) return { ...base, exception: null };
+  // The guard has to be the RIGHT guard for the intent: a passing counter
+  // band never releases a "wants a call", and a booking never releases a
+  // counter. Each family has its own switch on the page.
+  const family = guard.kind === "booking" ? "booking" : "band";
+  if (GUARD_FOR_INTENT[intent] !== family) return { ...base, exception: null };
+  const on = family === "booking" ? config?.booking?.enabled : config?.parties?.[party]?.counterBand?.enabled;
+  if (!on) return { ...base, exception: null };
   if (!guard.passed) {
-    return { send: false, code: "guard_failed", reason: `needs a person: ${guard.reason || "the band did not open"}`, exception: guard };
+    return { send: false, code: "guard_failed", reason: `needs a person: ${guard.reason || (family === "booking" ? "the calendar did not open" : "the band did not open")}`, exception: guard };
   }
   return {
     send: true, code: "released",
-    reason: `released under the counter band — ${fmtMoney(guard.theirAmount)} is at or under the ${fmtMoney(guard.ceiling)} ceiling`,
+    reason: family === "booking"
+      ? `released under the calendar — ${guard.reason}`
+      : `released under the counter band — ${fmtMoney(guard.theirAmount)} is at or under the ${fmtMoney(guard.ceiling)} ceiling`,
     exception: guard,
   };
+}
+
+/* ---------- the calendar ---------- */
+
+const BOOKING_LOOKBACK_MS = 7 * 86400000;
+
+/**
+ * prepareBooking({ client, store, locationId, contactId, party, message, config, now, deps })
+ *   → { offered, previouslyOffered, freeSlots } | null
+ *
+ * Reads the calendar only when a time could be on the table: the page has
+ * booking on with a calendar picked, and either this message sounds like
+ * scheduling or we recently offered them times (so a bare "the second one"
+ * still resolves). One GHL read; `deps.freeSlots` replaces it in tests.
+ */
+export async function prepareBooking({ client, store, locationId, contactId, party, message = "", config, now = Date.now(), deps = {} }) {
+  const bk = config?.booking;
+  if (!bk?.enabled || !bk.calendarId || !BOOKING_INTENTS[party]) return null;
+  let previouslyOffered = [];
+  try {
+    const rows = await store.listReplyDrafts(locationId, { contactId, since: new Date(now - BOOKING_LOOKBACK_MS).toISOString(), limit: 20 });
+    const last = rows
+      .filter((d) => (d.status === "sent" || d.status === "scheduled") && Array.isArray(d.booking?.offered) && d.booking.offered.length)
+      .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))[0];
+    previouslyOffered = last ? last.booking.offered : [];
+  } catch { previouslyOffered = []; }
+  if (!previouslyOffered.length && !looksLikeScheduling(message)) return null;
+
+  const timeZone = config.autoSend?.quietHours?.timeZone || "America/Los_Angeles";
+  const read = typeof deps.freeSlots === "function"
+    ? deps.freeSlots
+    : ({ startMs, endMs }) => getFreeSlots(client, bk.calendarId, { startMs, endMs, timeZone });
+  let freeSlots = [];
+  try {
+    freeSlots = await read({ startMs: now, endMs: now + bk.daysAhead * 86400000, calendarId: bk.calendarId, timeZone });
+  } catch (e) {
+    return { offered: [], previouslyOffered, freeSlots: [], error: String(e?.message || e).slice(0, 160) };
+  }
+  const offered = pickSlots(freeSlots, { now, count: bk.slotsToOffer, minLeadHours: bk.minLeadHours, timeZone });
+  return { offered, previouslyOffered, freeSlots, error: null };
 }
 
 
@@ -1357,6 +1418,12 @@ async function runReply(job, ctx) {
     return;
   }
 
+  /* --- 1b. the calendar, when a time is on the table --- */
+  const booking = await prepareBooking({ client, store, locationId, contactId: job.contactId, party, message: job.message, config, now, deps }).catch(() => null);
+  if (booking?.error) warnings.push(`calendar: ${booking.error}`);
+  const bookingText = booking ? bookingContextText(booking) : "";
+  const draftContext = bookingText ? { ...context, text: [context.text, bookingText].filter(Boolean).join("\n\n") } : context;
+
   /* --- 2. the draft --- */
   job.phase = "drafting";
   let draft;
@@ -1374,7 +1441,7 @@ async function runReply(job, ctx) {
       instructions: a.instructions,
       signer: a.signer,
       aiApiKey,
-      party, config, context, channel: job.channel,
+      party, config, context: draftContext, channel: job.channel, booking: Boolean(bookingText),
     });
   }
   job.intent = draft.intent;
@@ -1396,8 +1463,18 @@ async function runReply(job, ctx) {
   // release and the band is on — pass or fail — because a failed band is the
   // most useful row in the outbox: it says how far off the counter was, and
   // therefore whether the ceiling is in the right place.
-  const guard = await evaluateBandFor({ store, locationId, party, draft, config, saved, job, now });
+  // Which guard applies is the intent's business: a counter goes to the
+  // band, a request for a time (or a pick of one we offered, whatever the
+  // intent read as) goes to the calendar.
+  const bookingApplies = Boolean(booking) && ((BOOKING_INTENTS[party] || []).includes(draft.intent) || (draft.chosenSlot && booking.previouslyOffered.length));
+  const guard = bookingApplies
+    ? evaluateBookingGuard({ draft, offered: booking.offered, previouslyOffered: booking.previouslyOffered, freeSlots: booking.freeSlots, config: config.booking, now })
+    : await evaluateBandFor({ store, locationId, party, draft, config, saved, job, now });
+  // A booking guard on an intent that is not itself locked (a "question"
+  // that picks a time) has nothing to release; the pass still books.
   const auto = releaseUnderGuard({ base, party, intent: draft.intent, config, guard });
+  const bookingVerdict = guard?.kind === "booking" ? guard : null;
+  const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
   // The re-quote toggle has to mean something on its own. Without this it is
   // inert unless the operator also wires the action onto a rule by hand, and a
@@ -1425,6 +1502,16 @@ async function runReply(job, ctx) {
   if (auto.exception?.passed && draft.intent === "acceptance") {
     plan.suggested.push({ id: `a-acc-${job.id}`, type: "promote_to_deal", mode: "ask", status: "pending", party,
       why: "they say the seller accepted — mint the deal when you've confirmed it" });
+  }
+  // They picked a time we offered. Booked on its own when the guard passed
+  // (offered by us, still free, confirmed in our words); otherwise a person
+  // books it from the row, or doesn't.
+  if (bookingVerdict?.chosen || (draft.chosenSlot && booking?.previouslyOffered?.length)) {
+    const chosen = bookingVerdict?.chosen || { iso: draft.chosenSlot, label: (booking.previouslyOffered.find((s) => Date.parse(s.iso) === Date.parse(draft.chosenSlot)) || {}).label || draft.chosenSlot };
+    const action = { id: `a-book-${job.id}`, type: "book_call", status: "pending", party, startTime: chosen.iso, label: chosen.label,
+      why: bookingVerdict?.passed ? `they picked ${chosen.label}` : `they picked ${chosen.label} — ${bookingVerdict?.reason || "check the calendar"}` };
+    if (bookingVerdict?.passed) plan.auto.push({ ...action, mode: "auto" });
+    else plan.suggested.push({ ...action, mode: "ask" });
   }
   if (a.stampTag) {
     plan.auto.unshift({ id: `a-route-${job.id}`, type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", party, why: "routed by the message" });
@@ -1499,7 +1586,10 @@ async function runReply(job, ctx) {
     // The band's verdict, on every draft it could have applied to — pass AND
     // fail. A failed one is the row that says how far off the counter was and
     // therefore whether the ceiling is in the right place.
-    exception: auto.exception || null,
+    exception: autoWithVerdict.exception || null,
+    // The calendar: what this reply offers (so the next message can pick
+    // one) and what it booked.
+    booking: bookingVerdict ? { offered: bookingVerdict.passed ? bookingVerdict.offered : [], chosen: bookingVerdict.chosen || null } : null,
     humanActive: a.humanActive || null,
     actions: [...plan.auto, ...plan.suggested],
     supersededIds: open.map((o) => o.id),
@@ -1586,6 +1676,7 @@ async function runReply(job, ctx) {
   }
 
   /* --- 5. the automatic actions --- */
+  let holdForBooking = "";
   if (plan.auto.length) {
     job.phase = "acting";
     const done = await runActions({
@@ -1594,6 +1685,13 @@ async function runReply(job, ctx) {
     });
     const byId = new Map(done.map((x) => [x.id, x]));
     record = { ...record, actions: record.actions.map((x) => byId.get(x.id) || x), updatedAt: new Date().toISOString() };
+    // A reply that says "you're booked" must not leave if the calendar
+    // refused the booking. The draft stays, with the reason, for a person.
+    const failedBooking = done.find((x) => x.type === "book_call" && x.status === "failed");
+    if (failedBooking) {
+      holdForBooking = `the booking failed: ${failedBooking.error || "calendar error"}`;
+      record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
+    }
     await store.updateReplyDraft(record.id, record).catch(() => {});
   }
 
@@ -1602,7 +1700,7 @@ async function runReply(job, ctx) {
   catch (e) { warnings.push(`tag: ${e.message}`); }
 
   /* --- 7. schedule, or wait for a person --- */
-  if (auto.send && draft.reply) {
+  if (auto.send && draft.reply && !holdForBooking) {
     job.phase = "scheduling";
     const random = typeof deps.random === "function" ? deps.random : Math.random;
     const sendAt = nextSendTime({ now, delayMs: pickDelayMs(config, random), quietHours: config.autoSend.quietHours });

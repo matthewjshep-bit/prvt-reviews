@@ -10,14 +10,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Power } from "lucide-react";
 import { INTENT_LABEL, PARTY_LABEL, normalizeConversationAi, starterConfig } from "@shared/conversation-ai.js";
 import { VERDICT_LABEL } from "@shared/graduation.js";
-import { getConversationAi, getConversationHistory, getSettings, listOffers, listWorkflows, saveConversationAi, setConversationEnabled } from "./api.js";
+import { getConversationAi, getConversationHistory, getSettings, listCalendars, listOffers, listWorkflows, saveConversationAi, setConversationEnabled } from "./api.js";
 import { autoAcceptCeiling } from "@shared/auto-accept.js";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, Pill, SkeletonRows, TableCard } from "./ui.jsx";
 import ReplyStrip from "./ReplyStrip.jsx";
 import ConversationTryIt from "./ConversationTryIt.jsx";
 import {
-  AutoSendCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, MediaCard, OptOutCard, PartyPlaybooks,
+  AutoSendCard, BookingCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, MediaCard, OptOutCard, PartyPlaybooks,
   PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
 } from "./ConversationPlaybooks.jsx";
 import { IntentPill, PartyPill, ago } from "./ConversationOutbox.jsx";
@@ -32,6 +32,7 @@ export default function ConversationAi({ settings }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [workflows, setWorkflows] = useState({ list: [], loading: true, scopeMissing: false, error: "" });
+  const [calendars, setCalendars] = useState({ list: [], loading: true, scopeMissing: false, error: "" });
   // The counter band's worked example. An operator shouldn't have to trust a
   // description of the ceiling — they should see it in dollars on a house they
   // recognise. Computed from the newest offer that has numbers on it, through
@@ -50,6 +51,9 @@ export default function ConversationAi({ settings }) {
     listWorkflows()
       .then((r) => setWorkflows({ list: r.workflows || [], loading: false, scopeMissing: Boolean(r.scopeMissing), error: r.error || "" }))
       .catch((e) => setWorkflows({ list: [], loading: false, scopeMissing: false, error: e.message }));
+    listCalendars()
+      .then((r) => setCalendars({ list: r.calendars || [], loading: false, scopeMissing: Boolean(r.scopeMissing), error: r.error || "" }))
+      .catch((e) => setCalendars({ list: [], loading: false, scopeMissing: false, error: e.message }));
     Promise.all([listOffers({ limit: 25, lean: true }), getSettings()])
       .then(([offers, settings]) => {
         // listOffers and getSettings both unwrap their envelope already.
@@ -219,6 +223,7 @@ export default function ConversationAi({ settings }) {
       <FollowUpCard config={form} patch={patch} />
       <AutoSendCard config={form} patch={patch} />
       <CounterBandCard config={form} patch={patch} example={bandExample} />
+      <BookingCard config={form} patch={patch} calendars={calendars} />
       <RequoteCard config={form} patch={patch} />
       <ProfileCard config={form} patch={patch} />
       <StyleCard config={form} patch={patch} />

@@ -252,6 +252,8 @@ export const resumeConversationBot = (contactId) =>
   post(`/api/offers/automations/conversation/resume`, { contactId });
 export const saveConversationAi = (config) =>
   post(`/api/offers/automations/conversation/config`, { config }, "PUT").then((r) => r.config);
+export const listCalendars = () =>
+  fetch(`${API_BASE}/api/offers/automations/conversation/calendars?${locq()}`).then(j);
 export const listWorkflows = () =>
   fetch(`${API_BASE}/api/offers/automations/conversation/workflows?${locq()}`).then(j);
 export const getReplyDrafts = () =>

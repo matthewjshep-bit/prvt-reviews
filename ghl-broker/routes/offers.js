@@ -117,7 +117,8 @@ import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
   customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField, getContactNotes,
-  searchContactsByTag, listWorkflows, listLocationTags, searchAllContactsByTags } from "../ghl.js";
+  searchContactsByTag, listWorkflows, listLocationTags, searchAllContactsByTags, listCalendars, createAppointment,
+} from "../ghl.js";
 import {
   enrichFieldDefs, enrichTagVocab, ENRICH_TAG_GROUPS, inferContactType,
   buildTranscript, runEnrichment, suggestDealInvestors, mergeHistory, historyLine,
@@ -3765,6 +3766,36 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // pass. Same write the History table's status menu makes — ledger line,
     // tag reconcile and all — on their newest open offer, or the one whose
     // address the message named.
+    // The calendar. Books the appointment, records it, leaves a note. The
+    // guard already checked the time was ours to offer and still free; this
+    // is the write.
+    bookAppointment: async ({ contactId, startTime, label = "", draftId = null, party = null }) => {
+      const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      const bk = conversationConfig(fresh).booking;
+      if (!bk?.enabled) return { ok: false, reason: "booking is switched off" };
+      if (!bk.calendarId) return { ok: false, reason: "no calendar is picked on the Conversation AI page" };
+      const startMs = Date.parse(startTime);
+      if (!Number.isFinite(startMs)) return { ok: false, reason: `not a time: ${startTime}` };
+      const endMs = startMs + bk.durationMin * 60000;
+      let name = "";
+      try { name = contactName(await getContact(client, contactId)) || ""; } catch { name = ""; }
+      const title = String(bk.title || "Call with {{name}}").replace(/\{\{name\}\}/g, name || "contact").slice(0, 120);
+      let appt;
+      try {
+        appt = await createAppointment(client, { calendarId: bk.calendarId, locationId, contactId, startTime: new Date(startMs), endTime: new Date(endMs), title });
+      } catch (e) {
+        return { ok: false, reason: `calendar: ${String(e?.message || e).slice(0, 160)}` };
+      }
+      const at = new Date().toISOString();
+      const when = label || new Date(startMs).toISOString();
+      await recordEvent({
+        store, locationId, contactId, party, type: "call_booked", at, source: "conversation", ref: draftId || appt.id || null,
+        dedupeKey: `booking:${contactId}:${new Date(startMs).toISOString()}`,
+        data: { startTime: new Date(startMs).toISOString(), durationMin: bk.durationMin, calendarId: bk.calendarId, appointmentId: appt.id, label: when },
+      }).catch(() => {});
+      await createContactNote(client, contactId, { body: `Booked ${when} on ${bk.calendarName || "the calendar"} (${bk.durationMin} min)${draftId ? " from a Conversation AI reply" : ""}.` }).catch(() => {});
+      return { ok: true, label: when, appointmentId: appt.id, calendarName: bk.calendarName || "" };
+    },
     // The paper, from an intent rule (send_offer) or the clean-underwrite
     // path. Picks the agent's open offer — the one the message named, else
     // the only one — and refuses an ambiguous match: the wrong house's
@@ -4014,6 +4045,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
   // The location's GHL workflows, for the action picker. A missing scope is
   // an answer, not an error — the page shows what to add.
+  // The calendars the booking guard may offer times from. Degrades like the
+  // workflow list when the token lacks calendars.readonly.
+  router.get("/automations/conversation/calendars", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      try {
+        res.json({ ok: true, calendars: await listCalendars(client, locationId) });
+      } catch (e) {
+        if (e?.status === 401 || e?.status === 403) {
+          return res.json({ ok: false, scopeMissing: true, calendars: [], error: "the token lacks the calendars.readonly scope — add it (and calendars/events.write) to the Private Integration" });
+        }
+        res.json({ ok: false, calendars: [], error: e?.message || "could not list calendars" });
+      }
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/automations/conversation/workflows", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);

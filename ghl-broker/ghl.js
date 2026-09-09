@@ -610,6 +610,43 @@ export async function removeContactFromWorkflow(client, contactId, workflowId) {
   );
 }
 
+/* ---------- calendars ---------- */
+
+// Needs calendars.readonly. Returns [{ id, name, isActive }].
+export async function listCalendars(client, locationId) {
+  const data = await client.call(`/calendars/?locationId=${encodeURIComponent(locationId)}`);
+  const rows = Array.isArray(data?.calendars) ? data.calendars : [];
+  return rows.map((c) => ({ id: String(c.id || ""), name: String(c.name || ""), isActive: c.isActive !== false })).filter((c) => c.id);
+}
+
+// Free slots between two instants (epoch ms; GHL caps the range at 31 days).
+// The answer is keyed by day: { "2026-09-11": { slots: ["2026-09-11T10:00:00-07:00", …] } }.
+// Flattened to one sorted list of ISO strings.
+export async function getFreeSlots(client, calendarId, { startMs, endMs, timeZone = "" } = {}) {
+  const q = new URLSearchParams({ startDate: String(Math.round(startMs)), endDate: String(Math.round(endMs)) });
+  if (timeZone) q.set("timezone", timeZone);
+  const data = await client.call(`/calendars/${encodeURIComponent(calendarId)}/free-slots?${q.toString()}`);
+  const out = [];
+  for (const [day, v] of Object.entries(data || {})) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+    for (const s of v?.slots || []) if (typeof s === "string") out.push(s);
+  }
+  return out.sort((a, b) => Date.parse(a) - Date.parse(b));
+}
+
+// Needs calendars/events.write. Times are ISO with an offset (the same
+// literal-mindedness as workflows: no `Z`, no milliseconds).
+export async function createAppointment(client, { calendarId, locationId, contactId, startTime, endTime, title, assignedUserId = "" }) {
+  const body = {
+    calendarId, locationId, contactId, title,
+    startTime: ghlEventTime(startTime), endTime: ghlEventTime(endTime),
+    appointmentStatus: "confirmed", ignoreDateRange: false, toNotify: true,
+    ...(assignedUserId ? { assignedUserId } : {}),
+  };
+  const data = await client.call(`/calendars/events/appointments`, { method: "POST", body });
+  return { id: String(data?.id || data?.event?.id || ""), raw: data };
+}
+
 /* ---------- messaging ---------- */
 
 export async function sendSms(client, { contactId, message, attachments }) {

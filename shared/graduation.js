@@ -118,6 +118,10 @@ export function autopilotSummary({ config = {}, sendsEnabled = false, underwrite
   out.push(sw("underwrite", "Auto-underwrite", !underwriteWired ? "off" : underwriteLive ? "on" : "drafting",
     !underwriteWired ? "no webhook secret configured" : underwriteLive ? "publishes offers to History" : "AUTO_UNDERWRITE_ENABLED is not set — every run is a dry run", "broker"));
 
+  const bk = config.booking || {};
+  out.push(sw("booking", "Booking calls on the calendar", bk.enabled && config.enabled && sendsEnabled ? "on" : bk.enabled ? "drafting" : "off",
+    bk.enabled ? `${bk.calendarName || bk.calendarId || "no calendar picked"} · offers ${bk.slotsToOffer} times` : "'let's talk Thursday' is handed to you", "broker"));
+
   for (const party of PARTIES) {
     const pb = parties[party] || {};
     const allow = pb.autoSend?.enabled ? (pb.autoSend.intents || []) : [];

@@ -299,3 +299,21 @@ test("an action may ask inside an auto rule, and send_offer goes through the sen
   const [none] = await runActions({ client: {}, locationId: "LOC", contactId: "c1", draft: {}, actions: [{ id: "a4", type: "send_offer" }], deps: {} });
   assert.equal(none.status, "failed");
 });
+
+test("book_call goes through the booking dep with the time from the action or the draft, and a refusal is a failure", async () => {
+  const seen = [];
+  const deps = { bookAppointment: async (a) => { seen.push(a); return { ok: true, label: a.label, calendarName: "Matt" }; } };
+  const [done] = await runActions({ client: {}, locationId: "LOC", contactId: "c1", draft: { id: "d1", party: "agent" },
+    actions: [{ id: "a1", type: "book_call", startTime: "2026-09-11T17:00:00Z", label: "Fri Sep 11 at 10:00am" }], deps });
+  assert.equal(done.status, "done");
+  assert.equal(done.detail, "booked Fri Sep 11 at 10:00am on Matt");
+  assert.equal(seen[0].startTime, "2026-09-11T17:00:00Z");
+  const [fromDraft] = await runActions({ client: {}, locationId: "LOC", contactId: "c1", draft: { id: "d2", booking: { chosen: { iso: "2026-09-12T17:00:00Z", label: "Sat" } } },
+    actions: [{ id: "a2", type: "book_call" }], deps });
+  assert.equal(seen[1].startTime, "2026-09-12T17:00:00Z");
+  assert.equal(fromDraft.status, "done");
+  const [refused] = await runActions({ client: {}, locationId: "LOC", contactId: "c1", draft: {}, actions: [{ id: "a3", type: "book_call", startTime: "2026-09-12T17:00:00Z" }],
+    deps: { bookAppointment: async () => ({ ok: false, reason: "slot taken" }) } });
+  assert.equal(refused.status, "failed");
+  assert.match(refused.error, /slot taken/);
+});

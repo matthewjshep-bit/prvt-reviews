@@ -837,6 +837,27 @@ the tab (default 60, plus 12 per contact), counted from the store so a
 restart can't reset it. No Apify. Two drafts in flight per location at a
 time. Settled drafts older than the retention (180 days) are pruned daily.
 
+### Booking calls (the calendar as a guard)
+
+Conversation AI page → "Booking calls". Pick a calendar (needs
+`calendars.readonly` and `calendars/events.write` on the Private
+Integration; a calendar id can be pasted without the list). When a message
+sounds like scheduling — or we recently offered times — the broker reads the
+calendar's free slots for the next N days, hands the model two or three of
+them with exact labels ("Fri Sep 11 at 10:00am"), and the reply may name
+ONLY those. The guard (`shared/booking.js`) checks every time the model says
+it offered is on that list and appears verbatim in the text; when they pick
+one, it checks it was one we offered and is still free, then `book_call`
+runs and the appointment lands on the calendar with a `call_booked` event
+and a note. A reply that confirms a booking the calendar refused is held.
+
+"Wants a call", "scheduling" and "wants to walk it" stay locked on the
+auto-send list; this is the one door through that lock, and it opens per
+message, exactly like the counter band. Both guards now actually release:
+the gate used to trip "a counter is a person's call" before the release
+code ran, so the band could never open in production — fixed alongside
+this (`evaluateReplyGates` now names the lock apart from the other gates).
+
 ### The offer sends itself
 
 Two doors, both shut by default.

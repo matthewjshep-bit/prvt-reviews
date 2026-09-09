@@ -47,6 +47,8 @@ export const EVENT_TYPES = [
   // The first cold text to a listing agent went out — from the app, so the
   // outreach ladder has something to count from.
   "outreach_sent",
+  // The bot (or a person) put a call or a visit on the calendar.
+  "call_booked",
   "call_summary", "text_summary", "note",
   "enrich_run", "tag_added", "tag_removed",
   "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate", "property_details",
@@ -66,6 +68,7 @@ export const EVENT_LABEL = {
   import: "imported", agent_estimate: "agent's own take", property_details: "property details",
   follow_up_sent: "we followed up",
   outreach_sent: "we reached out about their listing",
+  call_booked: "call booked",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -81,6 +84,7 @@ export const EVENT_ICON = {
   subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator", property_details: "ClipboardList",
   follow_up_sent: "BellRing",
   outreach_sent: "Send",
+  call_booked: "CalendarCheck",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast"];

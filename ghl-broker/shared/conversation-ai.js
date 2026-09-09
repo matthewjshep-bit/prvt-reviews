@@ -14,6 +14,7 @@
 // the machinery underneath.
 
 import { DEFAULT_LADDERS, ON_EXHAUSTED, kindsFor, normalizeSteps } from "./follow-up.js";
+import { BOOKING_DEFAULTS } from "./booking.js";
 
 // The re-quote guard's defaults. They live here rather than in requote.js
 // because requote.js reaches offer-calc, and offer-calc reaches back here to
@@ -147,7 +148,14 @@ export const NEVER_AUTO = {
 // specific objection ("a counter is a person's call") and no other. A draft
 // held because it invented a number, because the bot is off, or because a
 // person is already in the thread is never released.
-export const GUARDED_AUTO = { agent: ["counter", "acceptance"], investor: [] };
+// Two guards today: the counter band (a number against a ceiling) and the
+// calendar (a time against the free slots). Which guard may release which
+// intent is fixed here; releaseUnderGuard checks the guard's KIND matches.
+export const GUARDED_AUTO = { agent: ["counter", "acceptance", "wants_call", "scheduling"], investor: ["wants_call", "wants_walkthrough"] };
+export const GUARD_FOR_INTENT = {
+  counter: "band", acceptance: "band",
+  wants_call: "booking", scheduling: "booking", wants_walkthrough: "booking",
+};
 export const guardedFor = (party) => GUARDED_AUTO[party] || [];
 
 export const autoEligible = (party) =>
@@ -228,7 +236,7 @@ export const ACTION_TYPES = [
   "add_tags", "remove_tags", "set_field", "add_to_workflow", "remove_from_workflow",
   "link_deal_evaluating", "start_underwrite", "requote_from_agent_numbers", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
-  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal", "send_offer",
+  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal", "send_offer", "book_call",
 ];
 // What send_offer may attach. Same keys the Send modal and POST /:id/send use.
 export const OFFER_DOC_KEYS = ["image", "pdf", "psa", "scope", "comps", "netsheet"];
@@ -249,6 +257,7 @@ export const ACTION_LABEL = {
   revise_offer_to_counter: "Re-issue the offer at their number",
   promote_to_deal: "Promote it to a deal",
   send_offer: "Send the formal offer (the documents)",
+  book_call: "Book the time they picked on the calendar",
 };
 // Actions that run on the broker rather than in GHL, and which party each
 // makes sense for. An investor can't be underwritten; an agent isn't invited
@@ -256,12 +265,12 @@ export const ACTION_LABEL = {
 export const INTERNAL_ACTIONS = new Set([
   "link_deal_evaluating", "start_underwrite", "requote_from_agent_numbers", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
-  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal", "send_offer",
+  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal", "send_offer", "book_call",
 ]);
 export const INTERNAL_ACTIONS_FOR = {
   agent: ["start_underwrite", "requote_from_agent_numbers", "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes",
-          "revise_offer_to_counter", "promote_to_deal", "send_offer"],
-  investor: ["link_deal_evaluating", "suggest_dataroom_invite", "mark_investor_passed", "mark_investor_committed", "record_deal_feedback"],
+          "revise_offer_to_counter", "promote_to_deal", "send_offer", "book_call"],
+  investor: ["link_deal_evaluating", "suggest_dataroom_invite", "mark_investor_passed", "mark_investor_committed", "record_deal_feedback", "book_call"],
 };
 // Never automatic: a dataroom link is a document going out, and a committed
 // buyer advances the deal — both are applied by a person.
@@ -389,6 +398,10 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // on; an em dash is what a bot sounds like. The first two are gates (a
   // draft that breaks them holds), the third is scrubbed from the draft.
   style: { noDollarSigns: true, noLinks: true, noEmDashes: true, maxSmsChars: 320 },
+  // The calendar. When on, "let's talk Thursday" is answered with real free
+  // slots and booked when they pick one — released under the booking guard
+  // (shared/booking.js), the way a counter is released under the band.
+  booking: { ...BOOKING_DEFAULTS },
   optOut: { enabled: true, keywords: DEFAULT_OPT_OUT_KEYWORDS, tags: ["dnc"], removeTags: [], workflowId: "" },
   media: { reply: "Thanks for the images, taking a look!" },
   parties: { agent: PLAYBOOK(), investor: PLAYBOOK() },
@@ -665,6 +678,19 @@ export function normalizeConversationAi(doc, seed = {}) {
       noEmDashes: bool(style.noEmDashes, D.style.noEmDashes),
       maxSmsChars: int(style.maxSmsChars, D.style.maxSmsChars, 60, 1600),
     },
+    booking: (() => {
+      const b = d.booking && typeof d.booking === "object" ? d.booking : {};
+      return {
+        enabled: bool(b.enabled, false),
+        calendarId: str(b.calendarId, 80),
+        calendarName: str(b.calendarName, 120),
+        daysAhead: int(b.daysAhead, BOOKING_DEFAULTS.daysAhead, 1, 31),
+        slotsToOffer: int(b.slotsToOffer, BOOKING_DEFAULTS.slotsToOffer, 1, 5),
+        durationMin: int(b.durationMin, BOOKING_DEFAULTS.durationMin, 5, 240),
+        minLeadHours: int(b.minLeadHours, BOOKING_DEFAULTS.minLeadHours, 0, 72),
+        title: str(b.title, 120) || BOOKING_DEFAULTS.title,
+      };
+    })(),
     optOut: {
       enabled: bool(optOut.enabled, D.optOut.enabled),
       keywords: "keywords" in optOut ? list(optOut.keywords, { max: 40, each: 40, lower: true }) : [...D.optOut.keywords],

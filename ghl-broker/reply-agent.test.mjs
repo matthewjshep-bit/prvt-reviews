@@ -1656,11 +1656,119 @@ test("an intent outside the guarded set is never released", () => {
   }
 });
 
-test("an investor is never released — the band is an agent feature", () => {
-  assert.deepEqual(GUARDED_AUTO.investor, []);
+test("an investor is never released by the band — it is an agent feature; only the calendar reaches investors", () => {
+  assert.deepEqual(GUARDED_AUTO.investor, ["wants_call", "wants_walkthrough"]);
   const base = { send: false, code: "never_auto", reason: "price pushback is a person's call" };
   assert.equal(releaseUnderGuard({ base, party: "investor", intent: "price_pushback", config: bandOn(), guard: passing }).send, false);
+  // a passing BAND guard on a scheduling intent is the wrong guard
+  assert.equal(releaseUnderGuard({ base, party: "investor", intent: "wants_call", config: bandOn(), guard: passing }).send, false);
 });
+
+/* ---------- the calendar as a guard ---------- */
+
+const bookingOn = () => normalizeConversationAi({ enabled: true, booking: { enabled: true, calendarId: "cal1", calendarName: "Matt" } });
+const bookingPass = { kind: "booking", passed: true, reason: "offers Fri Sep 11 at 10:00am", offered: [{ iso: "2026-09-11T17:00:00Z", label: "Fri Sep 11 at 10:00am" }], chosen: null };
+const bookingFail = { kind: "booking", passed: false, reason: "no time was offered — a person should answer this one", offered: [], chosen: null };
+
+test("a request for a call is released under the calendar when the guard passed and the page has it on", () => {
+  const base = { send: false, code: "never_auto", reason: "a wants call is a person's call" };
+  for (const [party, intent] of [["agent", "wants_call"], ["agent", "scheduling"], ["investor", "wants_call"], ["investor", "wants_walkthrough"]]) {
+    const out = releaseUnderGuard({ base, party, intent, config: bookingOn(), guard: bookingPass });
+    assert.equal(out.send, true, `${party}/${intent}`);
+    assert.match(out.reason, /released under the calendar/);
+  }
+  // off on the page: parked, and the verdict is not even kept
+  assert.equal(releaseUnderGuard({ base, party: "agent", intent: "wants_call", config: normalizeConversationAi({ enabled: true }), guard: bookingPass }).exception, null);
+  // failed guard: parked with the reason, verdict kept
+  const held = releaseUnderGuard({ base, party: "agent", intent: "wants_call", config: bookingOn(), guard: bookingFail });
+  assert.equal(held.send, false);
+  assert.match(held.reason, /no time was offered/);
+  assert.equal(held.exception.passed, false);
+  // the calendar never releases a counter, and only never_auto can be overturned
+  assert.equal(releaseUnderGuard({ base, party: "agent", intent: "counter", config: bookingOn(), guard: bookingPass }).send, false);
+  assert.equal(releaseUnderGuard({ base: { send: false, code: "gates", reason: "x" }, party: "agent", intent: "wants_call", config: bookingOn(), guard: bookingPass }).send, false);
+  // and the scheduling intents stay locked on the allowlist
+  for (const intent of ["wants_call", "scheduling"]) assert.ok(!autoEligible("agent").includes(intent), intent);
+});
+
+test("end to end: they ask for a call, the bot offers calendar times and the reply sends itself; they pick one and it is booked", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const store = fakeStore();
+  const saved = { ...SAVED, conversationAi: { enabled: true, booking: { enabled: true, calendarId: "cal1", calendarName: "Matt", slotsToOffer: 2, minLeadHours: 1 },
+    parties: { agent: { autoSend: { enabled: true, intents: ["question"] } } } } };
+  const now = Date.parse("2026-09-10T16:00:00Z");
+  const free = ["2026-09-11T17:00:00Z", "2026-09-11T21:00:00Z", "2026-09-14T17:00:00Z"];
+  const freeSlots = async () => free;
+  let seenContext = "";
+  // 1. "can you call me tomorrow?" → the model offers the two handed-in times, verbatim
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "can you give me a call tomorrow?", channel: "sms", sendsEnabled: true,
+    deps: { now: () => now, freeSlots, draft: async (args) => { seenContext = args.context.text; assert.equal(args.booking, true);
+      return { ...DRAFT, intent: "wants_call", confidence: "high", reply: "Sure — does Fri Sep 11 at 10:00am or Mon Sep 14 at 10:00am work?", counterAmount: 0,
+        offeredSlots: ["2026-09-11T17:00:00Z", "2026-09-14T17:00:00Z"], chosenSlot: "" }; } },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.match(seenContext, /TIMES YOU MAY PROPOSE/);
+  const d1 = await store.getReplyDraft(job.draftId);
+  assert.equal(d1.status, "scheduled", d1.autoSend?.reason);
+  assert.match(d1.autoSend.reason, /released under the calendar/);
+  assert.deepEqual(d1.booking.offered.map((s) => s.iso), ["2026-09-11T17:00:00Z", "2026-09-14T17:00:00Z"]);
+  // mark it sent so it counts as what we told them
+  await store.updateReplyDraft(d1.id, { ...d1, status: "sent", updatedAt: new Date(now + 60000).toISOString() });
+
+  // 2. "the Friday one works" → booked on its own, reply confirms
+  const booked = [];
+  const { job: job2 } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "friday 10 works", channel: "sms", sendsEnabled: true,
+    deps: { now: () => now + 3600000, freeSlots,
+      bookAppointment: async (args) => { booked.push(args); return { ok: true, label: args.label, calendarName: "Matt" }; },
+      draft: async (args) => { assert.match(args.context.text, /TIMES WE ALREADY OFFERED/);
+        return { ...DRAFT, intent: "scheduling", confidence: "high", reply: "Great, Fri Sep 11 at 10:00am it is. Talk then.", counterAmount: 0, offeredSlots: [], chosenSlot: "2026-09-11T17:00:00Z" }; } },
+  });
+  await settle();
+  assert.equal(job2.status, "done", job2.error);
+  const d2 = await store.getReplyDraft(job2.draftId);
+  assert.equal(booked.length, 1);
+  assert.equal(booked[0].startTime, "2026-09-11T17:00:00Z");
+  assert.equal(d2.actions.find((a) => a.type === "book_call").status, "done");
+  assert.equal(d2.status, "scheduled", d2.autoSend?.reason);
+  assert.equal(d2.booking.chosen.label, "Fri Sep 11 at 10:00am");
+
+  // 3. a pick of a time that is gone: not booked, reply parks with the reason, booking offered as a click
+  free.splice(0, 1);
+  const { job: job3 } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "actually can we do friday 10 instead", channel: "sms", sendsEnabled: true,
+    deps: { now: () => now + 7200000, freeSlots, bookAppointment: async () => { throw new Error("must not be called"); },
+      draft: async () => ({ ...DRAFT, intent: "scheduling", confidence: "high", reply: "Fri Sep 11 at 10:00am works.", counterAmount: 0, offeredSlots: [], chosenSlot: "2026-09-11T17:00:00Z" }) },
+  });
+  await settle();
+  const d3 = await store.getReplyDraft(job3.draftId);
+  assert.equal(d3.status, "draft");
+  assert.match(d3.autoSend.reason, /no longer free/);
+  assert.equal(d3.actions.find((a) => a.type === "book_call").mode, "ask");
+});
+
+test("a reply that invents a time, or offers none, waits for a person even with booking on", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const store = fakeStore();
+  const saved = { ...SAVED, conversationAi: { enabled: true, booking: { enabled: true, calendarId: "cal1" }, parties: { agent: { autoSend: { enabled: true, intents: ["question"] } } } } };
+  const freeSlots = async () => ["2026-09-11T17:00:00Z"];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "when can we talk?", channel: "sms", sendsEnabled: true,
+    deps: { now: () => Date.parse("2026-09-10T16:00:00Z"), freeSlots,
+      draft: async () => ({ ...DRAFT, intent: "wants_call", confidence: "high", reply: "How about Saturday at noon?", counterAmount: 0, offeredSlots: ["2026-09-12T19:00:00Z"], chosenSlot: "" }) },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /not on the calendar/);
+  assert.equal(d.exception.kind, "booking");
+  assert.deepEqual(d.booking.offered, [], "an unverified offer is not remembered as one we made");
+});
+
 
 test("a decision that was already a yes is untouched", () => {
   const out = releaseUnderGuard({ base: { send: true, code: "", reason: "" }, party: "agent", intent: "question", config: bandOn(), guard: null });

@@ -158,6 +158,18 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   );
   if (CONTINUITY[party]) parts.push(CONTINUITY[party]);
   parts.push(COMMITMENTS[party] || COMMITMENTS.unknown);
+  // The one commitment the calendar lets it keep. The times it may name are
+  // handed to it per message under TIMES YOU MAY PROPOSE; the guard checks
+  // the reply against that list, so the instruction and the gate agree.
+  if (config?.booking?.enabled) {
+    parts.push(
+      "BOOKING — the exception to the rule above on times: when they want a call" + (party === "investor" ? " or to see the property" : "") +
+      " and the context lists TIMES YOU MAY PROPOSE, offer two or three of them, written EXACTLY as labelled there (\"Fri Sep 11 at 10:00am\"), " +
+      "and set offeredSlots to their ISO values. Never name any other time, and never say a time from memory. If the context lists " +
+      "TIMES WE ALREADY OFFERED and this message picks one, confirm it using its exact label, set chosenSlot to its ISO value, and do " +
+      "not offer new times. If the context lists no times, fall back to the holding reply and needsHuman."
+    );
+  }
   if (party === "agent") {
     parts.push(playbook.showMath
       ? "MATH: when an agent pushes on a number you may explain it with the ARV and repair estimate shown beside the offer in the context, once, plainly."
@@ -387,15 +399,20 @@ export function profileSchemaFor(party = "agent") {
   return { type: "object", additionalProperties: false, required: Object.keys(props), properties: props };
 }
 
-export function schemaFor(party = "agent", { profile = true, outbound = null } = {}) {
+export function schemaFor(party = "agent", { profile = true, outbound = null, booking = false } = {}) {
   const intents = outbound ? [outbound.kind] : (INTENTS[party] || INTENTS.agent);
   return {
     type: "object",
     additionalProperties: false,
     required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount",
-      ...(party === "investor" ? ["passReason"] : []), ...(party === "agent" ? ["propertyDetails", "agentArv", "agentRehab", "agentTakeNote"] : []), ...(profile ? ["profile"] : [])],
+      ...(party === "investor" ? ["passReason"] : []), ...(party === "agent" ? ["propertyDetails", "agentArv", "agentRehab", "agentTakeNote"] : []), ...(profile ? ["profile"] : []),
+      ...(booking ? ["offeredSlots", "chosenSlot"] : [])],
     properties: {
       ...(profile ? { profile: profileSchemaFor(party) } : {}),
+      ...(booking ? {
+        offeredSlots: { type: "array", items: { type: "string" }, description: "ISO values of the TIMES YOU MAY PROPOSE that the reply names; empty if none" },
+        chosenSlot: { type: "string", description: "ISO value of the previously offered time this message picked; empty if none" },
+      } : {}),
       intent: { type: "string", enum: intents },
       confidence: { type: "string", enum: CONFIDENCES, description: "How sure you are of the intent AND that the reply is right" },
       reply: { type: "string", description: "The reply text, or empty when nothing should be sent" },

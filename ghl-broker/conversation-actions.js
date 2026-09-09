@@ -215,6 +215,17 @@ const EXECUTORS = {
     if (r.dryRun) return `would send ${r.address} by ${(r.channels || []).join(" + ")} — sends are off on the broker`;
     return `sent the offer on ${r.address} by ${(r.channels || []).join(" + ")}`;
   },
+  // The calendar. Runs unattended only when the booking guard passed on this
+  // very message (the time was one we offered and is still free); a person
+  // may also apply it from the row.
+  async book_call({ deps, contactId, draft, action }) {
+    if (typeof deps?.bookAppointment !== "function") throw new Error("booking is not wired on this broker");
+    const startTime = String(action?.startTime || draft?.booking?.chosen?.iso || "").trim();
+    if (!startTime) return "no time to book";
+    const r = await deps.bookAppointment({ contactId, startTime, label: action?.label || draft?.booking?.chosen?.label || "", draftId: draft?.id || null, party: draft?.party || null });
+    if (!r?.ok) throw new Error(r?.reason || "the calendar refused it");
+    return `booked ${r.label || startTime}${r.calendarName ? ` on ${r.calendarName}` : ""}`;
+  },
   async suggest_dataroom_invite({ deps, contactId, draft }) {
     if (typeof deps?.issueDataroomInvite !== "function") throw new Error("dataroom invites are not wired on this broker");
     const r = await deps.issueDataroomInvite({ contactId, addressHint: draft?.propertyAddress || "" });
