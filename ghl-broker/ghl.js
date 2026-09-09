@@ -610,6 +610,39 @@ export async function removeContactFromWorkflow(client, contactId, workflowId) {
   );
 }
 
+/* ---------- opportunities (pipelines) ---------- */
+
+// Needs opportunities.readonly. [{ id, name, stages: [{ id, name, position }] }]
+export async function listPipelines(client, locationId) {
+  const data = await client.call(`/opportunities/pipelines?locationId=${encodeURIComponent(locationId)}`);
+  const rows = Array.isArray(data?.pipelines) ? data.pipelines : [];
+  return rows.map((p) => ({
+    id: String(p.id || ""), name: String(p.name || ""),
+    stages: (Array.isArray(p.stages) ? p.stages : []).map((s) => ({ id: String(s.id || ""), name: String(s.name || ""), position: Number(s.position) || 0 })).sort((a, b) => a.position - b.position),
+  })).filter((p) => p.id);
+}
+
+// Needs opportunities.readonly. The opportunities on one contact, optionally in one pipeline.
+export async function searchOpportunities(client, locationId, { contactId, pipelineId = "" } = {}) {
+  const q = new URLSearchParams({ location_id: locationId, contact_id: contactId, limit: "50" });
+  if (pipelineId) q.set("pipeline_id", pipelineId);
+  const data = await client.call(`/opportunities/search?${q.toString()}`);
+  const rows = Array.isArray(data?.opportunities) ? data.opportunities : [];
+  return rows.map((o) => ({ id: String(o.id || ""), name: String(o.name || ""), pipelineId: String(o.pipelineId || ""), stageId: String(o.pipelineStageId || ""), status: String(o.status || ""), value: Number(o.monetaryValue) || 0 })).filter((o) => o.id);
+}
+
+// Needs opportunities.write.
+export async function createOpportunity(client, { locationId, pipelineId, contactId, name, stageId = "", status = "open", value = 0 }) {
+  const body = { locationId, pipelineId, contactId, name, status, ...(stageId ? { pipelineStageId: stageId } : {}), ...(value ? { monetaryValue: value } : {}) };
+  const data = await client.call(`/opportunities/`, { method: "POST", body });
+  return { id: String(data?.opportunity?.id || data?.id || "") };
+}
+
+export async function updateOpportunity(client, id, { name, stageId = "", status = "", value = null }) {
+  const body = { ...(name ? { name } : {}), ...(stageId ? { pipelineStageId: stageId } : {}), ...(status ? { status } : {}), ...(value != null ? { monetaryValue: value } : {}) };
+  return client.call(`/opportunities/${encodeURIComponent(id)}`, { method: "PUT", body });
+}
+
 /* ---------- calendars ---------- */
 
 // Needs calendars.readonly. Returns [{ id, name, isActive }].

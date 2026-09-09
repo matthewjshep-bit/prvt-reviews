@@ -29,6 +29,8 @@ import {
 import { offerFunnel, counterSpread, passReasons, followUpPerformance } from "../shared/funnel.js";
 import { buildPipeline } from "../shared/pipeline.js";
 import { autopilotSummary, graduationReport, GRADUATION } from "../shared/graduation.js";
+import { listPipelines } from "../ghl.js";
+import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR } from "../ghl-mirror.js";
 import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_UNDERWRITE_ENABLED } from "../auto-underwrite.js";
 import { draftStats } from "../shared/conversation-ai.js";
 import { conversationConfig } from "../reply-agent.js";
@@ -241,6 +243,7 @@ export default function createDashboardRouter({ resolveLocation }) {
         underwriteWired: Boolean(process.env.AUTO_UNDERWRITE_SECRET || process.env.GHL_LOCATION_KEYS),
         outreach: saved?.outreachAutopilot || null, importsEnabled: process.env.OUTREACH_IMPORTS_ENABLED === "true",
         dispo: saved?.dispoAutopilot || null, blastsEnabled: process.env.DISPO_BLASTS_ENABLED === "true",
+        mirror: saved?.ghlMirror || null,
       });
       autopilot.readyToGraduate = graduationReport({ stats: draftStats(recentDrafts), config }).ready;
       autopilot.windowDays = GRADUATION.windowDays;
@@ -350,6 +353,32 @@ export default function createDashboardRouter({ resolveLocation }) {
   });
 
   /* ---------- live GHL contact counts per tag ---------- */
+  // The GHL pipelines the mirror may write to, with their stages. Degrades
+  // like the workflow list when the token lacks opportunities.readonly.
+  router.get("/ghl/pipelines", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      try {
+        const cursor = await store.getJobCursor?.(locationId, MIRROR_CURSOR).catch(() => null);
+        res.json({ ok: true, pipelines: await listPipelines(client, locationId), lastRun: cursor || null });
+      } catch (e) {
+        if (scopeMissing(e)) return res.json({ ok: false, scopeMissing: true, pipelines: [], error: "the token lacks the opportunities.readonly scope — add it (and opportunities.write) to the Private Integration" });
+        res.json({ ok: false, pipelines: [], error: e?.message || "could not list pipelines" });
+      }
+    } catch (err) { fail(res, err); }
+  });
+
+  // Reconcile now, by hand. Same bounded pass the tick runs.
+  router.post("/ghl/mirror/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const r = await reconcileLocation({ client, locationId, saved, store, limit: Number(req.body?.limit) > 0 ? Math.min(500, Number(req.body.limit)) : 200 });
+      await store.setJobCursor?.(locationId, MIRROR_CURSOR, { at: new Date().toISOString(), doc: { wrote: r.wrote, considered: r.considered, errors: r.errors.slice(0, 5), manual: true } }).catch(() => {});
+      res.json({ ok: true, ...r });
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/ghl/tags", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);

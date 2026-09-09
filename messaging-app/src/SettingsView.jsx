@@ -8,7 +8,8 @@ import {
   CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
-import { getCompBookmarklet, getUnderwrites, regenerateCompToken, saveSettings, uploadPsaExhibit } from "./api.js";
+import { getCompBookmarklet, getUnderwrites, listPipelines, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
+import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES } from "@shared/ghl-mirror.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
 import ContactBackfill from "./ContactBackfill.jsx";
@@ -273,6 +274,16 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const set = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, [k]: v })); };
   const setCo = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, company: { ...f.company, [k]: v } })); };
   const setPsa = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, psa: { ...f.psa, [k]: v } })); };
+  const [pipelines, setPipelines] = useState(null); // null | { list, scopeMissing, error, lastRun }
+  const [mirrorRun, setMirrorRun] = useState(null);
+  useEffect(() => {
+    if (mode !== "offers") return;
+    listPipelines().then((r) => setPipelines({ list: r.pipelines || [], scopeMissing: Boolean(r.scopeMissing), error: r.error || "", lastRun: r.lastRun || null }))
+      .catch((e) => setPipelines({ list: [], scopeMissing: false, error: e.message, lastRun: null }));
+  }, [mode]);
+  const setMirror = (patch) => { setSaved(false); setForm((f) => ({ ...f, ghlMirror: { ...(f.ghlMirror || {}), ...patch } })); };
+  const setMirrorSide = (side, patch) => setMirror({ [side]: { ...((form.ghlMirror || {})[side] || {}), ...patch } });
+  const setMirrorStage = (side, key, stageId) => setMirrorSide(side, { stages: { ...(((form.ghlMirror || {})[side] || {}).stages || {}), [key]: stageId } });
   const setDispoAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), [k]: v } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
 
@@ -661,6 +672,77 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             </div>
           )}
         </div>
+      </section>
+      )}
+
+      {mode === "offers" && (
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-1 text-sm font-bold">GHL pipeline mirror</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          The Pipeline tab is the truth. This writes it onto GHL's Opportunities board — one opportunity per property per side, in the
+          pipeline and stage you map each lane to — every fifteen minutes, one way. A stage dragged in GHL is overwritten next pass.
+          Needs opportunities.readonly and opportunities.write on the Private Integration.
+        </p>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={Boolean(form.ghlMirror?.enabled)} onChange={(e) => setMirror({ enabled: e.target.checked })} />
+          <span className="font-semibold">Mirror the board onto GHL Opportunities</span>
+        </label>
+        {form.ghlMirror?.enabled && (
+          <div className="mt-3 space-y-4">
+            {pipelines?.scopeMissing && <p className="text-xs text-amber-700">{pipelines.error}</p>}
+            {[["acquisitions", "Acquisitions (offers to agents)", [...ACQ_LANES, ...ACQ_TERMINAL], { ready: "Not sent", floated: "Floated", sent: "Sent", countered: "Countered", needs_review: "Needs review", dead: "Passed / no response (marked lost)", won: "Under contract (marked won)" }],
+              ["dispositions", "Dispositions (deals to buyers)", DISPO_STAGES, { under_contract: "Under contract", buyer_found: "Buyer found", assigned: "Assigned", closed: "Closed (won)", fell_through: "Fell through (lost)" }]].map(([side, title, keys, labels]) => {
+              const cfg = (form.ghlMirror || {})[side] || {};
+              const pl = (pipelines?.list || []).find((p) => p.id === cfg.pipelineId);
+              return (
+                <div key={side} className="rounded-lg border border-slate-200 p-3">
+                  <div className="mb-2 text-sm font-semibold">{title}</div>
+                  <label className="block">
+                    <span className="text-xs font-medium text-slate-600">GHL pipeline</span>
+                    {pipelines?.list?.length ? (
+                      <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm" value={cfg.pipelineId || ""}
+                        onChange={(e) => { const p = pipelines.list.find((x) => x.id === e.target.value); setMirrorSide(side, { pipelineId: e.target.value, pipelineName: p?.name || "", stages: {} }); }}>
+                        <option value="">Not mirrored</option>
+                        {pipelines.list.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    ) : (
+                      <input className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm" placeholder={pipelines ? "pipeline id" : "loading pipelines…"}
+                        value={cfg.pipelineId || ""} onChange={(e) => setMirrorSide(side, { pipelineId: e.target.value })} />
+                    )}
+                  </label>
+                  {cfg.pipelineId && (
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {keys.map((k) => (
+                        <label key={k} className="block">
+                          <span className="text-xs text-slate-600">{labels[k]}</span>
+                          {pl ? (
+                            <select className="mt-0.5 w-full rounded-lg border border-slate-300 px-2 py-1 text-xs" value={cfg.stages?.[k] || ""} onChange={(e) => setMirrorStage(side, k, e.target.value)}>
+                              <option value="">— leave the stage alone —</option>
+                              {pl.stages.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                          ) : (
+                            <input className="mt-0.5 w-full rounded-lg border border-slate-300 px-2 py-1 text-xs" placeholder="stage id" value={cfg.stages?.[k] || ""} onChange={(e) => setMirrorStage(side, k, e.target.value)} />
+                          )}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+              <button type="button" className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                disabled={mirrorRun === "running"} title="Save your mapping first if you changed it, then write every offer whose GHL opportunity is behind"
+                onClick={async () => { setMirrorRun("running"); try { setMirrorRun(await runGhlMirror()); } catch (e) { setMirrorRun({ error: e.message }); } }}>
+                Sync now
+              </button>
+              {mirrorRun && mirrorRun !== "running" && (
+                <span className={mirrorRun.error ? "text-red-700" : ""}>{mirrorRun.error || `wrote ${mirrorRun.wrote} of ${mirrorRun.considered}${mirrorRun.errors?.length ? ` · ${mirrorRun.errors[0]}` : ""}`}</span>
+              )}
+              {pipelines?.lastRun?.at && !mirrorRun && <span>last pass {new Date(pipelines.lastRun.at).toLocaleString()} · wrote {pipelines.lastRun.doc?.wrote ?? 0}</span>}
+            </div>
+          </div>
+        )}
       </section>
       )}
 

@@ -883,6 +883,30 @@ drafts. Needs `CARD_SENDS_ENABLED`; a note is left on the contact.
 Both write an `offer_sent` event with `data.by` = `conversation` or
 `underwrite`, so the funnel can tell a machine send from a person's.
 
+## GHL pipeline mirror (Opportunities)
+
+Settings → "GHL pipeline mirror". The Pipeline tab stays the truth; this
+projects it onto GHL's Opportunities board, one way, every fifteen minutes
+on the broker's tick (bounded to 60 writes a pass; "Sync now" runs up to
+200). Map each side to a GHL pipeline and each lane to a stage:
+
+- **Acquisitions**: Not sent · Floated · Sent · Countered · Needs review,
+  plus where a passed / no-response offer goes (marked **lost**) and where an
+  offer that went under contract goes (marked **won**). A lane left as
+  "leave the stage alone" only writes the status.
+- **Dispositions**: Under contract · Buyer found · Assigned · Closed (won) ·
+  Fell through (lost). Value = contract price + assignment fee.
+
+One opportunity per property per side, named by the address, valued at our
+cash offer on the agent side. An opportunity already on the contact in that
+pipeline with the same name is adopted, not duplicated. What was written is
+remembered on the offer (`offer.mirror`, on the lean row) so unchanged
+offers cost nothing; a stage somebody drags in GHL is overwritten next
+pass. Needs `opportunities.readonly` + `opportunities.write` on the
+Private Integration. Pure plan: `shared/ghl-mirror.js`; writer:
+`ghl-broker/ghl-mirror.js`; `GET /api/dashboard/ghl/pipelines`,
+`POST /api/dashboard/ghl/mirror/run`.
+
 ## Contact record (the app is the system of record; GHL is the digest)
 
 Every agent and investor has a record in the app: **facts** with provenance

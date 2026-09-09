@@ -110,7 +110,7 @@ const sw = (key, label, state, note = "", group = "conversation") => ({ key, lab
  * `config` is the normalized Conversation AI blob. The env facts come from the
  * caller because a pure module cannot read process.env.
  */
-export function autopilotSummary({ config = {}, sendsEnabled = false, underwriteLive = false, underwriteWired = true, outreach = null, importsEnabled = false, dispo = null, blastsEnabled = false } = {}) {
+export function autopilotSummary({ config = {}, sendsEnabled = false, underwriteLive = false, underwriteWired = true, outreach = null, importsEnabled = false, dispo = null, blastsEnabled = false, mirror = null } = {}) {
   const out = [];
   const parties = config.parties || {};
 
@@ -121,6 +121,9 @@ export function autopilotSummary({ config = {}, sendsEnabled = false, underwrite
   out.push(sw("underwrite", "Auto-underwrite", !underwriteWired ? "off" : underwriteLive ? "on" : "drafting",
     !underwriteWired ? "no webhook secret configured" : underwriteLive ? "publishes offers to History" : "AUTO_UNDERWRITE_ENABLED is not set — every run is a dry run", "broker"));
 
+  const mr = mirror || {};
+  out.push(sw("mirror", "GHL Opportunities mirror", mr.enabled && (mr.acquisitions?.pipelineId || mr.dispositions?.pipelineId) ? "on" : "off",
+    mr.enabled ? `${[mr.acquisitions?.pipelineName || (mr.acquisitions?.pipelineId ? "acquisitions" : ""), mr.dispositions?.pipelineName || (mr.dispositions?.pipelineId ? "dispositions" : "")].filter(Boolean).join(" + ") || "no pipeline mapped"}` : "GHL's pipeline board stays blank", "broker"));
   const bk = config.booking || {};
   out.push(sw("booking", "Booking calls on the calendar", bk.enabled && config.enabled && sendsEnabled ? "on" : bk.enabled ? "drafting" : "off",
     bk.enabled ? `${bk.calendarName || bk.calendarId || "no calendar picked"} · offers ${bk.slotsToOffer} times` : "'let's talk Thursday' is handed to you", "broker"));

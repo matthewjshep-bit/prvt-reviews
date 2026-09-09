@@ -252,6 +252,8 @@ export const resumeConversationBot = (contactId) =>
   post(`/api/offers/automations/conversation/resume`, { contactId });
 export const saveConversationAi = (config) =>
   post(`/api/offers/automations/conversation/config`, { config }, "PUT").then((r) => r.config);
+export const listPipelines = () => fetch(`${API_BASE}/api/dashboard/ghl/pipelines?${locq()}`).then(j);
+export const runGhlMirror = () => post(`/api/dashboard/ghl/mirror/run`, {});
 export const listCalendars = () =>
   fetch(`${API_BASE}/api/offers/automations/conversation/calendars?${locq()}`).then(j);
 export const listWorkflows = () =>

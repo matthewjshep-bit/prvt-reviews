@@ -402,6 +402,20 @@ export function buildPipeline({
 
 /* ---------- placement ---------- */
 
+/**
+ * laneFor(offer) → { lane, side, stageSince, deadReason? } | null
+ *
+ * The board's placement for one offer, on its own — the GHL mirror asks
+ * this so it never re-derives what the board already decided.
+ */
+export function laneFor(o) {
+  if (!o?.id) return null;
+  const status = effectiveStatus(o);
+  if (status === "draft" && !isAiGenerated(o)) return null;
+  const aiHeld = needsAiReview(o) && aiHoldReasons(o).length > 0;
+  return placeOffer(o, { status, aiHeld });
+}
+
 // Lane is a function of recorded state only: the deal stage, the AI hold,
 // the status you set. The clock never moves a card (see the expiry chip).
 function placeOffer(o, { status, aiHeld }) {

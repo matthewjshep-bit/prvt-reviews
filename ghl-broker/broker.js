@@ -24,6 +24,7 @@ import { maybeStartFollowUpSweep, FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.j
 import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agent.js";
 import { maybeStartOutreachSweep, OUTREACH_SWEEP_UTC_HOUR } from "./outreach-sweep.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
+import { maybeMirror } from "./ghl-mirror.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -216,6 +217,8 @@ setInterval(async () => {
         deps: { matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp },
       });
       if (waved) console.log(`dispo second wave started for ${locationId}`);
+      // The board, onto GHL's Opportunities. Every tick, bounded.
+      await maybeMirror({ client: makeClient(token), locationId, saved, store, log: console.log });
     } catch (e) {
       console.error(`nightly sweep check failed for ${locationId}: ${e.message}`);
     }

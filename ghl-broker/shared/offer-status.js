@@ -212,6 +212,9 @@ export const OFFER_LIST_FIELDS = [
   // The outcome ledger ({status, ts, note} rows) — a counter with its number
   // is the one thing the Conversation AI needs from it, and it's small.
   "statusHistory", "realm",
+  // What the GHL Opportunities mirror last wrote ({ acquisitions, dispositions }),
+  // so the reconcile can tell "unchanged" from a lean row.
+  "mirror",
   // The newest counter with its number ({amount, at, source}), hoisted off
   // statusHistory so the auto-accept band can read it from a lean row.
   "counter",
