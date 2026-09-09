@@ -505,6 +505,25 @@ export function AutoSendCard({ config, patch }) {
         <Field label="Time zone" hint="An IANA name. Outside the window a reply waits for the next opening.">
           <Text value={a.quietHours.timeZone} onChange={setQh("timeZone")} placeholder="America/Los_Angeles" />
         </Field>
+        <Field label="Quick replies (seconds, min–max)" hint="Questions, check-ins, small talk, 'send me details' — a person answers these fast.">
+          <div className="flex gap-2">
+            <Text type="number" value={a.quick?.minSec ?? 45} onChange={(v) => set("quick")({ ...(a.quick || {}), minSec: Number(v) })} />
+            <Text type="number" value={a.quick?.maxSec ?? 180} onChange={(v) => set("quick")({ ...(a.quick || {}), maxSec: Number(v) })} />
+          </div>
+        </Field>
+        <Field label="Slow replies (seconds, min–max)" hint="A new deal, a counter, a pass, 'we want to buy' — the things a person sits with before answering. Never faster than the reply takes to type, whatever the band.">
+          <div className="flex gap-2">
+            <Text type="number" value={a.slow?.minSec ?? 600} onChange={(v) => set("slow")({ ...(a.slow || {}), minSec: Number(v) })} />
+            <Text type="number" value={a.slow?.maxSec ?? 2400} onChange={(v) => set("slow")({ ...(a.slow || {}), maxSec: Number(v) })} />
+          </div>
+        </Field>
+        <Field label="Weekends" hint="What the machine starts (nudges, cold opens, blasts) waits for Monday unless you allow it.">
+          <Select value={a.weekends || "replies_only"} onChange={set("weekends")}
+            options={[["replies_only", "answer what comes in, start nothing"], ["all", "like a weekday"], ["none", "send nothing until Monday"]]} />
+        </Field>
+        <Field label="Spread nudges over (hours)" hint="Follow-ups, cold opens and blasts land somewhere in the first N hours of the day, not all at the opening bell.">
+          <Text type="number" value={a.nudgeSpreadHours ?? 8} onChange={(v) => set("nudgeSpreadHours")(Number(v))} />
+        </Field>
         <Field label="Wait for follow-up texts (seconds)" hint="Three texts in a row get one reply to all three. 0 drafts at once.">
           <Text type="number" value={a.debounceSec} onChange={(v) => set("debounceSec")(Number(v))} />
         </Field>

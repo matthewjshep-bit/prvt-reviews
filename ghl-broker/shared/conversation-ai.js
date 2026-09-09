@@ -414,6 +414,18 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   autoSend: {
     delayMinSec: 120,
     delayMaxSec: 240,
+    // A person answers "still interested?" in a minute and "we'd take 425"
+    // after thinking about it. The default band above is for everything
+    // else; these two are the quick and the slow intents.
+    quick: { minSec: 45, maxSec: 180 },
+    slow: { minSec: 600, maxSec: 2400 },
+    // Nudges, cold opens and blasts are spread across this many hours from
+    // the day's opening rather than landing in one burst.
+    nudgeSpreadHours: 8,
+    // Saturday and Sunday: "replies_only" answers what comes in but starts
+    // nothing (no nudges, no cold opens, no blasts); "all" behaves like a
+    // weekday; "none" sends nothing until Monday.
+    weekends: "replies_only",
     quietHours: { start: "08:00", end: "20:00", timeZone: "America/Los_Angeles" },
     channels: ["sms"],
     // Wait this long after a text before drafting, so three texts in a row
@@ -712,6 +724,10 @@ export function normalizeConversationAi(doc, seed = {}) {
     autoSend: {
       delayMinSec: delayMin,
       delayMaxSec: delayMax,
+      quick: (() => { const q = auto.quick && typeof auto.quick === "object" ? auto.quick : {}; const lo = int(q.minSec, D.autoSend.quick.minSec, 0, 3600); return { minSec: lo, maxSec: Math.max(lo, int(q.maxSec, D.autoSend.quick.maxSec, 0, 3600)) }; })(),
+      slow: (() => { const q = auto.slow && typeof auto.slow === "object" ? auto.slow : {}; const lo = int(q.minSec, D.autoSend.slow.minSec, 0, 14400); return { minSec: lo, maxSec: Math.max(lo, int(q.maxSec, D.autoSend.slow.maxSec, 0, 14400)) }; })(),
+      nudgeSpreadHours: int(auto.nudgeSpreadHours, D.autoSend.nudgeSpreadHours, 0, 12),
+      weekends: oneOf(auto.weekends, ["all", "replies_only", "none"], D.autoSend.weekends),
       quietHours: {
         start: hhmm(qh.start, D.autoSend.quietHours.start),
         end: hhmm(qh.end, D.autoSend.quietHours.end),

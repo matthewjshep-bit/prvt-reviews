@@ -500,7 +500,8 @@ test("an allowlisted intent on an auto-send party is scheduled a few minutes out
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
   assert.equal(d.status, "scheduled");
-  assert.equal(d.sendAt, "2026-09-04T17:32:00.000Z", "now + the minimum delay");
+  // "still interested?" is a quick intent: the quick band's floor (45s), not the default band's (120s).
+  assert.equal(d.sendAt, "2026-09-04T17:30:45.000Z", "now + the quick band's minimum delay");
   assert.equal(d.autoSend.decided, true);
   assert.equal(job.scheduledFor, d.sendAt);
   assert.match(notes[0], /will send it itself at/);
@@ -672,7 +673,7 @@ test("a preview runs the whole pipeline and writes nothing anywhere", async () =
   assert.equal(r.draft.reply, DRAFT.reply);
   assert.equal(r.gate.ok, true);
   assert.equal(r.autoSend.would, true);
-  assert.equal(r.autoSend.sendAt, "2026-09-04T17:32:00.000Z");
+  assert.equal(r.autoSend.sendAt, "2026-09-04T17:30:45.000Z", "a quick intent: the quick band floor");
   assert.match(r.context.text, /12 Elm St/);
   assert.equal(created, 0);
   assert.equal(calls.some(([m]) => m !== "GET"), false, "no POST/PUT/DELETE reached GHL");

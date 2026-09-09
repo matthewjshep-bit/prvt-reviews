@@ -11,11 +11,58 @@
 const DAY_MS = 86400000;
 export const STUCK_SENDING_MS = 5 * 60 * 1000;
 
-// A delay somewhere in the configured band. `random` is injectable for tests.
-export function pickDelayMs(config, random = Math.random) {
-  const min = Math.max(0, Number(config?.autoSend?.delayMinSec) || 0);
-  const max = Math.max(min, Number(config?.autoSend?.delayMaxSec) || min);
-  return Math.round((min + (max - min) * random()) * 1000);
+// Which intents a person answers fast, and which they sit with.
+export const QUICK_INTENTS = new Set(["question", "small_talk", "status_check", "media", "realm_yes", "interested", "looking_for_deals", "buybox_update", "scheduling", "wants_call", "wants_walkthrough"]);
+export const SLOW_INTENTS = new Set(["deal_available", "new_property", "investor_open", "counter", "acceptance", "rejection", "price_pushback", "wants_to_buy", "passing", "proof_of_funds"]);
+// Nobody types faster than this; a 300-character reply that lands in 40
+// seconds is a bot however long the band says.
+export const TYPING_CHARS_PER_SEC = 4;
+
+// A delay somewhere in the band for this intent, never shorter than the
+// reply takes to type. `random` is injectable for tests.
+export function pickDelayMs(config, random = Math.random, { intent = "", replyLength = 0 } = {}) {
+  const a = config?.autoSend || {};
+  let min = Math.max(0, Number(a.delayMinSec) || 0);
+  let max = Math.max(min, Number(a.delayMaxSec) || min);
+  if (QUICK_INTENTS.has(intent) && a.quick) { min = Math.max(0, Number(a.quick.minSec) || 0); max = Math.max(min, Number(a.quick.maxSec) || min); }
+  else if (SLOW_INTENTS.has(intent) && a.slow) { min = Math.max(0, Number(a.slow.minSec) || 0); max = Math.max(min, Number(a.slow.maxSec) || min); }
+  const picked = min + (max - min) * random();
+  const typing = Math.max(0, Number(replyLength) || 0) / TYPING_CHARS_PER_SEC;
+  return Math.round(Math.max(picked, typing) * 1000);
+}
+
+// Saturday or Sunday, on the wall clock of the zone.
+export function isWeekend(ms, timeZone = "UTC") {
+  const day = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" }).format(new Date(ms));
+  return day === "Sat" || day === "Sun";
+}
+
+/**
+ * spreadAcrossDay({ now, quietHours, hours, random, weekends }) → ISO string
+ *
+ * Somewhere in the first `hours` of the next open window — for the things
+ * the machine STARTS (nudges, cold opens, blasts), so a sweep at 9am does
+ * not put forty texts on forty phones at 9:02. With weekends "replies_only"
+ * or "none", Saturday and Sunday are skipped.
+ */
+export function spreadAcrossDay({ now = Date.now(), quietHours = {}, hours = 8, random = Math.random, weekends = "all" } = {}) {
+  const tz = quietHours.timeZone || "UTC";
+  let open = Date.parse(nextSendTime({ now, delayMs: 0, quietHours }));
+  if (weekends !== "all") {
+    // Roll to the NEXT day's opening (not the same wall time tomorrow)
+    // until it is a weekday.
+    let guard = 0;
+    while (isWeekend(open, tz) && guard++ < 4) {
+      const p = zonedParts(open, tz);
+      const nextMidnight = zonedToUtc({ y: p.y, m: p.m, d: p.d, hh: 0, mm: 0 }, tz) + DAY_MS + 60000;
+      open = Date.parse(nextSendTime({ now: nextMidnight, delayMs: 0, quietHours }));
+    }
+  }
+  const start = Math.max(open, now);
+  const end = Math.max(start, open + Math.max(0, Number(hours) || 0) * 3600000);
+  const at = start + (end - start) * random();
+  // The window may close before `end`; nextSendTime rolls past the close.
+  return nextSendTime({ now: at, delayMs: 0, quietHours });
 }
 
 // Wall-clock parts of an instant in a zone, via Intl — the one tz-aware thing
@@ -97,9 +144,16 @@ const inFlight = new Set();
  * twice. When the broker's send gate is off, due drafts are returned to the
  * outbox with a flag rather than left counting down to nothing.
  */
-export async function sendDueDrafts({ store, locations = [], live = false, now = Date.now(), send, enabledFor = null, log = () => {} }) {
-  const out = { sent: 0, failed: 0, recovered: 0, returned: 0 };
+export const MAX_SENDS_PER_TICK = 20;
+export const PACE_MS = 2500;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export async function sendDueDrafts({ store, locations = [], live = false, now = Date.now(), send, enabledFor = null, log = () => {}, maxPerTick = MAX_SENDS_PER_TICK, paceMs = PACE_MS, random = Math.random }) {
+  const out = { sent: 0, failed: 0, recovered: 0, returned: 0, deferred: 0 };
   for (const { locationId, client } of locations) {
+    // Two texts never leave in the same second, and a tick sends at most a
+    // score: a blast to two hundred buyers takes the morning, as it would.
+    let sentThisTick = 0;
     let scheduled = [];
     let sending = [];
     try {
@@ -129,6 +183,7 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
     for (const d of scheduled) {
       const due = Date.parse(d.sendAt || "");
       if (!Number.isFinite(due) || due > now || inFlight.has(d.id)) continue;
+      if (sentThisTick >= maxPerTick) { out.deferred++; continue; }
       if (switchedOff) {
         await store.updateReplyDraft(d.id, {
           ...d, status: "draft", sendAt: null,
@@ -158,7 +213,9 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
           log(`scheduler: stood aside on ${d.id} — ${r.skipped}`);
         } else {
           out.sent++;
+          sentThisTick++;
           log(`scheduler: auto-sent ${d.id} (${d.party || "agent"} · ${d.intent}) for ${locationId}`);
+          if (paceMs > 0) await wait(Math.round(paceMs * (0.6 + 0.8 * random())));
         }
       } catch (e) {
         out.failed++;

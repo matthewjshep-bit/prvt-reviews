@@ -837,6 +837,27 @@ the tab (default 60, plus 12 per contact), counted from the store so a
 restart can't reset it. No Apify. Two drafts in flight per location at a
 time. Settled drafts older than the retention (180 days) are pruned daily.
 
+### Sounding like a person (the send layer)
+
+Conversation AI page → "When it sends on its own". Three things beyond the
+delay band and the hours:
+
+- **Intent-aware delay.** Quick intents (a question, a check-in, "send me
+  details", a time) go in the quick band (45–180s default); slow ones (a
+  new deal, a counter, a pass, "we want to buy") in the slow band
+  (10–40 min); everything else in the default band. Whatever the band, a
+  reply never leaves faster than it takes to type at four characters a
+  second (`conversation-scheduler.js`).
+- **Spread, not bursts.** What the machine *starts* — follow-up nudges, cold
+  opens, blasts — lands somewhere in the first N hours of the day
+  (`nudgeSpreadHours`, default 8), not all at the opening bell. The ticker
+  also paces: at most 20 sends a tick, a couple of seconds apart with
+  jitter, so two texts never leave in the same second and a 200-buyer
+  blast takes the morning.
+- **Weekends.** `replies_only` (default) answers what comes in and starts
+  nothing until Monday; `all` treats Saturday like Tuesday; `none` sends
+  nothing at all until Monday.
+
 ### Booking calls (the calendar as a guard)
 
 Conversation AI page → "Booking calls". Pick a calendar (needs

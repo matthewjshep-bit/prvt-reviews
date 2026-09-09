@@ -20,7 +20,7 @@ import { store as defaultStore } from "./store.js";
 import { blastMessage, dealFacts } from "./shared/blast-text.js";
 import { dealNumbers } from "./dataroom.js";
 import { conversationConfig } from "./reply-agent.js";
-import { nextSendTime } from "./conversation-scheduler.js";
+import { nextSendTime, spreadAcrossDay } from "./conversation-scheduler.js";
 
 export const CURSOR_NAME = "dispo";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -70,7 +70,9 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
   // Cumulative: each text lands at least `spreadSec` after the one before,
   // plus a little jitter so the gaps aren't a metronome. nextSendTime rolls
   // anything past the close into the next open window.
-  let cursor = Date.parse(nextSendTime({ now, delayMs: 0, quietHours: config.autoSend.quietHours }));
+  // The first text lands at the next open minute — on a weekday, unless the
+  // page allows weekends — and the rest follow it.
+  let cursor = Date.parse(spreadAcrossDay({ now, quietHours: config.autoSend.quietHours, hours: 0, weekends: config.autoSend.weekends || "all" }));
   for (const inv of investors) {
     const contactId = inv.contactId;
     if (!contactId) continue;

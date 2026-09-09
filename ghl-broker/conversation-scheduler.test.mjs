@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pickDelayMs, nextSendTime, zonedParts, sendDueDrafts, STUCK_SENDING_MS } from "./conversation-scheduler.js";
+import { spreadAcrossDay, isWeekend, pickDelayMs, nextSendTime, zonedParts, sendDueDrafts, STUCK_SENDING_MS } from "./conversation-scheduler.js";
 
 const CFG = { autoSend: { delayMinSec: 120, delayMaxSec: 240 } };
 const QH = { start: "08:00", end: "20:00", timeZone: "America/Los_Angeles" };
@@ -134,4 +134,51 @@ test("the enabled check costs nothing when there is nothing due", async () => {
     send: async () => {}, enabledFor: async () => { asked++; return true; },
   });
   assert.equal(asked, 0, "no settings read on an idle tick");
+});
+
+/* ---------- human texture ---------- */
+
+test("the delay follows the intent: quick things fast, slow things slow, and never faster than typing", () => {
+  const config = { autoSend: { delayMinSec: 120, delayMaxSec: 240, quick: { minSec: 45, maxSec: 180 }, slow: { minSec: 600, maxSec: 2400 } } };
+  const lo = () => 0, hi = () => 1;
+  assert.equal(pickDelayMs(config, lo, { intent: "question" }), 45000);
+  assert.equal(pickDelayMs(config, hi, { intent: "question" }), 180000);
+  assert.equal(pickDelayMs(config, lo, { intent: "counter" }), 600000);
+  assert.equal(pickDelayMs(config, lo, { intent: "other" }), 120000, "unknown intents keep the default band");
+  assert.equal(pickDelayMs(config, lo, { intent: "question", replyLength: 400 }), 100000, "400 chars at 4/sec is 100s, over the 45s floor");
+  assert.equal(pickDelayMs(config, lo), 120000, "the old call shape still works");
+});
+
+test("what the machine starts is spread across the day and skips the weekend unless allowed", () => {
+  const quietHours = { start: "08:00", end: "20:00", timeZone: "America/Los_Angeles" };
+  const fri = T("2026-09-11T16:00:00Z");   // Fri 9am PT
+  const sat = T("2026-09-12T16:00:00Z");   // Sat 9am PT
+  assert.equal(isWeekend(sat, "America/Los_Angeles"), true);
+  assert.equal(isWeekend(fri, "America/Los_Angeles"), false);
+  // inside the window on a weekday: somewhere in the next N hours
+  const a = Date.parse(spreadAcrossDay({ now: fri, quietHours, hours: 8, random: () => 0.5 }));
+  assert.ok(a > fri && a < fri + 8 * 3600000, new Date(a).toISOString());
+  // saturday, replies only: rolls to monday's opening window
+  const mon = Date.parse(spreadAcrossDay({ now: sat, quietHours, hours: 8, random: () => 0, weekends: "replies_only" }));
+  assert.equal(new Date(mon).toISOString(), "2026-09-14T15:00:00.000Z", "Mon 8am PT");
+  // saturday, allowed: today
+  const today = Date.parse(spreadAcrossDay({ now: sat, quietHours, hours: 8, random: () => 0, weekends: "all" }));
+  assert.equal(new Date(today).toISOString(), new Date(sat).toISOString());
+  // before the window opens: from the opening, not from now
+  const early = T("2026-09-11T12:00:00Z"); // Fri 5am PT
+  const e = Date.parse(spreadAcrossDay({ now: early, quietHours, hours: 8, random: () => 0 }));
+  assert.equal(new Date(e).toISOString(), "2026-09-11T15:00:00.000Z");
+});
+
+test("the ticker paces its sends and stops at the per-tick cap", async () => {
+  const rows = Array.from({ length: 5 }, (_, i) => draft({ id: `p${i}` }));
+  const store = fakeStore(rows);
+  const sent = [];
+  const r = await sendDueDrafts({
+    store, locations: [{ locationId: "LOC", client: {} }], live: true, now, maxPerTick: 3, paceMs: 0,
+    send: async (args) => { sent.push(args.draftId); store.rows.set(args.draftId, { ...store.rows.get(args.draftId), status: "sent" }); },
+  });
+  assert.equal(r.sent, 3);
+  assert.equal(r.deferred, 2, "the rest wait for the next tick");
+  assert.equal([...store.rows.values()].filter((d) => d.status === "scheduled").length, 2);
 });

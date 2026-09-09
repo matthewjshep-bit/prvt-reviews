@@ -69,7 +69,23 @@ import {
   buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext,
 } from "./conversation-prompt.js";
 import { planActions, runActions } from "./conversation-actions.js";
-import { pickDelayMs, nextSendTime } from "./conversation-scheduler.js";
+import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend } from "./conversation-scheduler.js";
+
+// What the machine STARTS is spread across the day and skips weekends
+// (unless the page says otherwise); what it ANSWERS goes in human minutes.
+const STARTED_KINDS = new Set(["offer_nudge", "blast_nudge", "dataroom_nudge", "outreach_nudge", "outreach_open"]);
+function scheduleFor({ config, now, kind = null, intent = "", replyLength = 0, random = Math.random }) {
+  const a = config.autoSend || {};
+  if (kind && STARTED_KINDS.has(kind)) {
+    return spreadAcrossDay({ now, quietHours: a.quietHours, hours: a.nudgeSpreadHours ?? 8, random, weekends: a.weekends || "all" });
+  }
+  const at = nextSendTime({ now, delayMs: pickDelayMs(config, random, { intent, replyLength }), quietHours: a.quietHours });
+  // A reply on a weekend goes unless the page says nothing does.
+  if (a.weekends === "none" && isWeekend(Date.parse(at), a.quietHours?.timeZone || "UTC")) {
+    return spreadAcrossDay({ now: Date.parse(at), quietHours: a.quietHours, hours: 0, random, weekends: "none" });
+  }
+  return at;
+}
 
 export { summarizeOffers, RA_OFFERS_IN_CONTEXT };
 
@@ -1331,7 +1347,7 @@ async function runProactive(job, ctx) {
   if (auto.send && draft.reply) {
     job.phase = "scheduling";
     const random = typeof deps.random === "function" ? deps.random : Math.random;
-    const sendAt = nextSendTime({ now, delayMs: pickDelayMs(config, random), quietHours: config.autoSend.quietHours });
+    const sendAt = scheduleFor({ config, now, kind, intent: kind, replyLength: String(draft.reply || "").length, random });
     record = { ...record, status: "scheduled", sendAt, scheduledAt: new Date(now).toISOString(), updatedAt: new Date().toISOString() };
     await store.updateReplyDraft(record.id, record);
     job.scheduledFor = sendAt;
@@ -1720,7 +1736,7 @@ async function runReply(job, ctx) {
   if (auto.send && draft.reply && !holdForBooking) {
     job.phase = "scheduling";
     const random = typeof deps.random === "function" ? deps.random : Math.random;
-    const sendAt = nextSendTime({ now, delayMs: pickDelayMs(config, random), quietHours: config.autoSend.quietHours });
+    const sendAt = scheduleFor({ config, now, intent: draft.intent, replyLength: String(draft.reply || "").length, random });
     record = { ...record, status: "scheduled", sendAt, scheduledAt: new Date(now).toISOString(), updatedAt: new Date().toISOString() };
     await store.updateReplyDraft(record.id, record);
     job.scheduledFor = sendAt;
@@ -1881,7 +1897,7 @@ export async function previewConversation({
     if (playbook.fallback.mode === "auto") plan.auto.push(...fb); else plan.suggested.push(...fb);
   }
   const sendAt = auto.send
-    ? nextSendTime({ now, delayMs: pickDelayMs(config, deps.random || Math.random), quietHours: config.autoSend.quietHours })
+    ? scheduleFor({ config, now, intent: draft.intent, replyLength: String(draft.reply || "").length, random: deps.random || Math.random })
     : null;
   return {
     ...base, held: false, draft, gate, humanActive: a.humanActive || null,
