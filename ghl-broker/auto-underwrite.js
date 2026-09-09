@@ -534,7 +534,7 @@ async function note(client, contactId, body, warnings) {
  * automated offer travels the identical code path as a hand-built one.
  */
 export async function startUnderwrite({
-  client, locationId, saved, store, contactId, message, address, askingPrice, dryRun, deps,
+  client, locationId, saved, store, contactId, message, address, askingPrice, dryRun, deps, origin = "workflow",
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
@@ -570,6 +570,9 @@ export async function startUnderwrite({
     // failure mode. Blank falls back to reading the conversation.
     suppliedAddress: String(address || "").trim().slice(0, 200),
     suppliedAskingPrice: Math.max(0, Number(askingPrice) || 0),
+    // "workflow" when GHL fired this; "operator" when a person pressed the
+    // Auto-underwrite button on the offer form with an address they typed.
+    origin: origin === "operator" ? "operator" : "workflow",
     address: "",
     askingPrice: null,
     addressSource: null,
@@ -707,7 +710,10 @@ async function runUnderwrite(job, ctx) {
   // the thread at all → the standing answer holds, as before.
   let standing = job.suppliedAddress || fieldAddress || "";
   let refereed = null;
-  if (standing) {
+  // An address a person just typed into the form is the answer, full stop.
+  // The referee exists for fields that can go stale; nothing is staler than
+  // a thread overruling the operator who is looking at the house right now.
+  if (standing && job.origin !== "operator") {
     let recentText = "";
     try {
       const t = await buildTranscript(client, locationId, job.contactId, {
@@ -735,13 +741,21 @@ async function runUnderwrite(job, ctx) {
     };
     warnings.push(`subject property was stale: ${standing} → ${refereed.address}`);
   } else if (job.suppliedAddress) {
-    extraction = {
-      address: job.suppliedAddress,
-      askingPrice: job.suppliedAskingPrice,
-      confidence: "high",
-      note: "Address supplied by the GHL workflow — already confirmed with the agent in conversation.",
-      source: "workflow",
-    };
+    extraction = job.origin === "operator"
+      ? {
+        address: job.suppliedAddress,
+        askingPrice: job.suppliedAskingPrice,
+        confidence: "high",
+        note: "Address typed into the offer form by the operator.",
+        source: "operator",
+      }
+      : {
+        address: job.suppliedAddress,
+        askingPrice: job.suppliedAskingPrice,
+        confidence: "high",
+        note: "Address supplied by the GHL workflow — already confirmed with the agent in conversation.",
+        source: "workflow",
+      };
   } else if (fieldAddress) {
     extraction = {
       address: fieldAddress,

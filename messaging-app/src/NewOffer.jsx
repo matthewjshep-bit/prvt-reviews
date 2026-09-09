@@ -2,13 +2,15 @@
 // offers → generate the document and attach everything to the GHL contact.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronUp, ExternalLink, FileSignature, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronUp, ExternalLink, FileSignature, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Sparkles, Trash2, X } from "lucide-react";
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
-  addContactNote, createOffer, getContactDetail, getContactNotes, ghlContactUrl, listDatarooms,
-  listOffers, previewDocument, promoteDeal, saveDraft, saveOfferWorkspace, saveSettings,
-  searchContacts, setOfferStatus, suggestAddresses, updateDataroom, updateOffer, zillowUrl,
+  addContactNote, cancelUnderwrite, createOffer, getContactDetail, getContactNotes, getOffer, getUnderwrite,
+  ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, runUnderwrite, saveDraft,
+  saveOfferWorkspace, saveSettings, searchContacts, setOfferStatus, suggestAddresses, updateDataroom,
+  updateOffer, zillowUrl,
 } from "./api.js";
+import { LIVE as UW_LIVE, PHASE as UW_PHASE } from "./UnderwriteStrip.jsx";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
 import NotesPanel from "./NotesPanel.jsx";
@@ -93,6 +95,126 @@ function AddressInput({ value, onChange, placeholder }) {
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
 const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
+
+// The Auto-underwrite button: the same robot the GHL workflow fires, pointed
+// at the address in the form. It runs in the background on the broker (two to
+// five minutes, the listing scrapes dominate), so the button turns into a
+// status row that polls the job, and when the run lands the result opens in
+// the editor — the offer it built, or the held draft with its reasons.
+//
+// It needs an EXISTING contact: the run files its notes, tags and the offer
+// on their record, and a contact that doesn't exist yet has no record.
+const UW_POLL_MS = 4000;
+
+function AutoUnderwrite({ contactId, address, askingPrice, onOpen }) {
+  const [job, setJob] = useState(null);     // the polled job, once started
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState("");
+  const [opening, setOpening] = useState(false);
+  const timer = useRef(null);
+
+  // Poll while the job is live; stop when it lands.
+  useEffect(() => {
+    if (!job?.id || !UW_LIVE.has(job.status)) return undefined;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const j = await getUnderwrite(job.id);
+        if (!alive) return;
+        if (j) setJob(j);
+      } catch { /* a blip; the next tick tries again */ }
+      if (alive) timer.current = setTimeout(tick, UW_POLL_MS);
+    };
+    timer.current = setTimeout(tick, UW_POLL_MS);
+    return () => { alive = false; clearTimeout(timer.current); };
+  }, [job?.id, job?.status]);
+
+  const ready = Boolean(contactId) && Boolean(String(address || "").trim());
+  const why = !contactId ? "Pick an existing contact first — the run is filed on their record"
+    : !String(address || "").trim() ? "Type the property address first" : "";
+
+  async function start() {
+    setError("");
+    setStarting(true);
+    try {
+      const r = await runUnderwrite({ contactId, address: address.trim(), askingPrice: askingPrice || 0 });
+      setJob({ id: r.jobId, status: "queued", phase: "queued", dryRun: r.dryRun, startedAt: new Date().toISOString() });
+    } catch (e) {
+      setError(e.message || "Couldn't start the underwrite.");
+    } finally { setStarting(false); }
+  }
+
+  async function open() {
+    if (!job?.offerId) return;
+    setOpening(true);
+    try { onOpen?.(await getOffer(job.offerId)); }
+    catch (e) { setError(e.message || "Couldn't open the result."); }
+    finally { setOpening(false); }
+  }
+
+  const live = job && UW_LIVE.has(job.status);
+  const btn = "inline-flex items-center gap-1.5 rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50";
+
+  if (!job) {
+    return (
+      <div className="mt-2">
+        <button type="button" className={btn} disabled={!ready || starting} title={why || "Pull comps, grade them, scan the listing photos and build the offer — 2 to 5 minutes"} onClick={start}>
+          {starting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+          Auto-underwrite this address
+        </button>
+        {why && <span className="ml-2 text-[11px] text-slate-400">{why}</span>}
+        {error && <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">{error}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`mt-2 rounded-lg border px-3 py-2 text-xs ${
+      live ? "border-violet-200 bg-violet-50/60" : job.status === "done" ? "border-emerald-200 bg-emerald-50/60"
+      : job.status === "held" ? "border-amber-300 bg-amber-50" : "border-red-200 bg-red-50"}`}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {live ? <Loader2 size={13} className="animate-spin text-violet-700" />
+          : job.status === "done" ? <Check size={13} className="text-emerald-700" />
+          : <AlertTriangle size={13} className={job.status === "held" ? "text-amber-700" : "text-red-700"} />}
+        <span className="font-semibold text-slate-800">
+          {live ? (UW_PHASE[job.phase] || "Working") + "…"
+            : job.status === "done" ? (job.duplicateOf ? "Already underwritten in the last 24 hours" : `Built: ${fmtMoney(job.cashAmount || 0)} cash`)
+            : job.status === "held" ? "Held for review" : "Didn't finish"}
+        </span>
+        {job.dryRun && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">dry run</span>}
+        {job.status === "done" && !job.duplicateOf && (
+          <span className="text-slate-600">
+            ARV {fmtMoney(job.arv || 0)} · repairs {fmtMoney(job.repairs || 0)}
+            {job.compsUsed?.length ? ` · ${job.compsUsed.length} comps` : ""}
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-2">
+          {live && (
+            <button type="button" className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50" disabled={job.stopping}
+              onClick={() => cancelUnderwrite(job.id).catch(() => {})}>
+              {job.stopping ? "Stopping…" : "Stop"}
+            </button>
+          )}
+          {!live && job.offerId && (
+            <button type="button" className="rounded-md bg-blue-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:opacity-60" disabled={opening} onClick={open}>
+              {opening ? "Opening…" : job.status === "held" ? "Review the draft" : "Open the offer"}
+            </button>
+          )}
+          {!live && (
+            <button type="button" className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50" onClick={() => { setJob(null); setError(""); }}>
+              Run again
+            </button>
+          )}
+        </span>
+      </div>
+      {job.status === "held" && (job.held || []).length > 0 && (
+        <ul className="mt-1 list-inside list-disc text-amber-900">{job.held.map((h, i) => <li key={i}>{h}</li>)}</ul>
+      )}
+      {job.status === "error" && job.error && <div className="mt-1 text-red-700">{job.error}</div>}
+      {error && <div className="mt-1 text-red-700">{error}</div>}
+    </div>
+  );
+}
 
 function Field({ label, children }) {
   return (
@@ -1334,6 +1456,12 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
                 View on Zillow ↗
               </a>
             )}
+            <AutoUnderwrite
+              contactId={mode === "existing" ? contact?.id || null : null}
+              address={inputs.address}
+              askingPrice={moneyNum(inputs.askingPrice)}
+              onOpen={onOpenOffer}
+            />
           </div>
           <div>
             <Field label="After-repair value / ARV ($)">

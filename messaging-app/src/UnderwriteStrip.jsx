@@ -21,7 +21,7 @@ const POLL_MS = 5000;
 const RECENT_MS = 60 * 60 * 1000;   // how long a held run keeps nagging
 
 // Phase names the operator recognizes, not the ones the code uses.
-const PHASE = {
+export const PHASE = {
   queued: "Queued",
   extracting: "Reading the address",
   subject: "Reading the listing",
@@ -32,7 +32,7 @@ const PHASE = {
   creating: "Building the offer",
 };
 
-const LIVE = new Set(["queued", "running"]);
+export const LIVE = new Set(["queued", "running"]);
 
 const elapsed = (job) => {
   const from = Date.parse(job.startedAt || "");

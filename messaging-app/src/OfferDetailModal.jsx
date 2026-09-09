@@ -69,6 +69,7 @@ function AiProvenance({ offer }) {
       <Row
         label="Address from"
         value={uw.addressSource === "workflow" ? "the GHL workflow"
+          : uw.addressSource === "operator" ? "the offer form"
           : uw.addressSource === "subject_property" ? "the Subject Property field"
           : `the conversation (${uw.confidence || "?"} confidence)`}
       />

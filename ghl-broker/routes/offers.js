@@ -3480,6 +3480,33 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // The operator's door into the same underwriter: the Auto-underwrite
+  // button on the offer form. The address is typed, so extraction is
+  // skipped; the contact is the one picked in the form. Gated like every
+  // other console spend (comps pulls, enrich sweeps): by the location, not
+  // the webhook secret — this is a person clicking, not a workflow firing.
+  //
+  //   POST { contactId, address, askingPrice } → 202 { ok, jobId, dryRun }
+  router.post("/automations/underwrite/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      const contactId = String(b.contactId || "").trim().slice(0, 64);
+      const address = String(b.address || "").trim().slice(0, 200);
+      if (!contactId) return res.status(400).json({ error: "pick an existing contact first — the run is filed on their record" });
+      if (!address) return res.status(400).json({ error: "type the property address first" });
+      const askingPrice = Number(String(b.askingPrice ?? "").replace(/[^\d.]/g, "")) || 0;
+      const saved = await store.getOfferSettings(locationId);
+      const { skipped, job } = await startUnderwrite({
+        client, locationId, saved, store, contactId, message: "", address, askingPrice,
+        dryRun: !AUTO_UNDERWRITE_ENABLED, origin: "operator",
+        deps: underwriteDeps({ client, locationId, saved }),
+      });
+      if (skipped) return res.status(409).json({ error: skipped });
+      res.status(202).json({ ok: true, started: true, jobId: job.id, dryRun: job.dryRun });
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/automations/underwrite", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);

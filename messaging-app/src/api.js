@@ -227,6 +227,11 @@ export const gradeComps = (address, comps) =>
 // watches them. A run takes 2-5 minutes, so History polls while any is live.
 export const getUnderwrites = () =>
   fetch(`${API_BASE}/api/offers/automations/underwrite?${locq()}`).then(j);
+// The offer form's button: underwrite THIS address for THIS contact.
+export const runUnderwrite = ({ contactId, address, askingPrice }) =>
+  post(`/api/offers/automations/underwrite/run`, { contactId, address, askingPrice });
+export const getUnderwrite = (jobId) =>
+  fetch(`${API_BASE}/api/offers/automations/underwrite?${locq()}&jobId=${encodeURIComponent(jobId)}`).then(j).then((r) => r.job);
 export const cancelUnderwrite = (jobId) =>
   post(`/api/offers/automations/underwrite/${encodeURIComponent(jobId)}/cancel`, {});
 

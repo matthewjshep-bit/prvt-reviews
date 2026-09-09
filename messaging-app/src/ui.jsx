@@ -59,6 +59,7 @@ export function AiPill({ offer, small = true }) {
     uw.address
       ? `${uw.address} — ${
           uw.addressSource === "workflow" ? "address from the GHL workflow"
+          : uw.addressSource === "operator" ? "address typed into the offer form"
           : uw.addressSource === "subject_property" ? "address from the Subject Property field"
           : `read from the conversation (${uw.confidence || "?"} confidence)`}`
       : "",
