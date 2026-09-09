@@ -225,8 +225,14 @@ export const ACTION_TYPES = [
   "add_tags", "remove_tags", "set_field", "add_to_workflow", "remove_from_workflow",
   "link_deal_evaluating", "start_underwrite", "requote_from_agent_numbers", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
-  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal",
+  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal", "send_offer",
 ];
+// What send_offer may attach. Same keys the Send modal and POST /:id/send use.
+export const OFFER_DOC_KEYS = ["image", "pdf", "psa", "scope", "comps", "netsheet"];
+export const OFFER_DOC_LABEL = {
+  image: "offer letter (image)", pdf: "offer letter (PDF)", psa: "purchase & sale agreement",
+  scope: "rehab scope", comps: "comps", netsheet: "seller net sheet",
+};
 export const ACTION_LABEL = {
   add_tags: "Add tags", remove_tags: "Remove tags", set_field: "Set a custom field",
   add_to_workflow: "Add to a GHL workflow", remove_from_workflow: "Remove from a GHL workflow",
@@ -239,6 +245,7 @@ export const ACTION_LABEL = {
   record_deal_feedback: "File what they said about the deal as feedback",
   revise_offer_to_counter: "Re-issue the offer at their number",
   promote_to_deal: "Promote it to a deal",
+  send_offer: "Send the formal offer (the documents)",
 };
 // Actions that run on the broker rather than in GHL, and which party each
 // makes sense for. An investor can't be underwritten; an agent isn't invited
@@ -246,11 +253,11 @@ export const ACTION_LABEL = {
 export const INTERNAL_ACTIONS = new Set([
   "link_deal_evaluating", "start_underwrite", "requote_from_agent_numbers", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
-  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal",
+  "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal", "send_offer",
 ]);
 export const INTERNAL_ACTIONS_FOR = {
   agent: ["start_underwrite", "requote_from_agent_numbers", "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes",
-          "revise_offer_to_counter", "promote_to_deal"],
+          "revise_offer_to_counter", "promote_to_deal", "send_offer"],
   investor: ["link_deal_evaluating", "suggest_dataroom_invite", "mark_investor_passed", "mark_investor_committed", "record_deal_feedback"],
 };
 // Never automatic: a dataroom link is a document going out, and a committed
@@ -295,6 +302,12 @@ const PLAYBOOK = () => ({
   // before the formal offer goes. Sends itself only if realm_check is on the
   // party's auto-send list.
   realmCheck: { enabled: false },
+  // The formal offer, sent by the machine. `onClearUnderwrite`: when an
+  // auto-underwrite clears every gate on an agent who has already talked to
+  // us, send the documents without a realm check — inside the auto-send
+  // hours, never at night. The realm-yes path is an intent rule action
+  // (send_offer) with its own ask/auto mode.
+  sendOffer: { onClearUnderwrite: false, channels: ["sms"], docs: ["image", "pdf"] },
   // The first text to a listing agent the outreach page imported, drafted by
   // the bot from the hook listing instead of sent by a GHL workflow template.
   // Sends itself only if outreach_open is on the party's auto-send list.
@@ -456,6 +469,15 @@ function normalizeAction(a, party) {
       if (!workflowId) return null;
       return { type, workflowId, workflowName: str(a.workflowName, 120) };
     }
+    // The documents going to a counterparty. Not ask-only — an operator may
+    // let it run once realm-yes has earned it — but it carries its OWN mode,
+    // so it can sit inside an auto rule (tag + note) and still ask. The
+    // starter ships it as "ask".
+    case "send_offer": {
+      const channels = list(a.channels, { max: 2, each: 10, lower: true }).filter((c) => CHANNELS.includes(c));
+      const docs = list(a.docs, { max: 6, each: 20, lower: true }).filter((d) => OFFER_DOC_KEYS.includes(d));
+      return { type, mode: a.mode === "auto" ? "auto" : "ask", channels: channels.length ? channels : ["sms"], docs: docs.length ? docs : ["image", "pdf"] };
+    }
     default:
       return { type };
   }
@@ -496,6 +518,12 @@ function normalizePlaybook(p, party, seed = {}) {
     realmCheck: { enabled: bool(src.realmCheck?.enabled, false) },
     takeCheck: { enabled: bool(src.takeCheck?.enabled, false) },
     outreach: { enabled: bool(src.outreach?.enabled, false) },
+    sendOffer: (() => {
+      const so = src.sendOffer && typeof src.sendOffer === "object" ? src.sendOffer : {};
+      const channels = list(so.channels, { max: 2, each: 10, lower: true }).filter((c) => CHANNELS.includes(c));
+      const docs = list(so.docs, { max: 6, each: 20, lower: true }).filter((d) => OFFER_DOC_KEYS.includes(d));
+      return { onClearUnderwrite: bool(so.onClearUnderwrite, false), channels: channels.length ? channels : ["sms"], docs: docs.length ? docs : ["image", "pdf"] };
+    })(),
     followUp: normalizeFollowUp(src.followUp, party),
     counterBand: {
       enabled: bool(src.counterBand?.enabled, false),
@@ -930,7 +958,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           investor_open: tierRule("tier-2", ["tier-3"], "tier2", ["tier3"]),
           rejection: tierRule("tier-3", [], "tier3", [], [{ type: "mark_offer_passed" }]),
           counter: { mode: "auto", actions: [{ type: "mark_offer_countered" }] },
-          realm_yes: { mode: "auto", actions: [{ type: "add_tags", tags: ["realm-yes"] }, { type: "mark_offer_realm_yes" }] },
+          realm_yes: { mode: "auto", actions: [{ type: "add_tags", tags: ["realm-yes"] }, { type: "mark_offer_realm_yes" }, { type: "send_offer", mode: "ask" }] },
         },
         showMath: false,
         realmCheck: { enabled: true },

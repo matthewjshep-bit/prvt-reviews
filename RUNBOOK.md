@@ -837,6 +837,31 @@ the tab (default 60, plus 12 per contact), counted from the store so a
 restart can't reset it. No Apify. Two drafts in flight per location at a
 time. Settled drafts older than the retention (180 days) are pruned daily.
 
+### The offer sends itself
+
+Two doors, both shut by default.
+
+**On realm-yes.** The starter's `realm_yes` rule now carries a `send_offer`
+action beside the tag and the note. It has its own mode: **ask** (the row
+shows "Send the formal offer" as a one-click action, and it also appears in
+the Pipeline queue under "One click from you") or **send it on its own**
+(the documents go the moment the intent is read with confidence). Channels
+and documents are set on the action (text with the letter image + PDF by
+default). The rule's mode is a ceiling — an action can never run inside an
+ask rule. Behind it is the same function the Send button uses, so the
+lifecycle, the `sends` record and the status advance are identical; an offer
+that already went out is reported, not re-sent.
+
+**After a clean underwrite.** Agent playbook → "Send the offer after a clean
+underwrite". When an auto-underwrite finishes with status `new` (every gate
+passed — a gate-held DRAFT never qualifies), the agent has replied to us at
+least once, and the clock is inside the auto-send hours, the documents go by
+the playbook's channels with no realm check. Otherwise the usual float
+drafts. Needs `CARD_SENDS_ENABLED`; a note is left on the contact.
+
+Both write an `offer_sent` event with `data.by` = `conversation` or
+`underwrite`, so the funnel can tell a machine send from a person's.
+
 ## Contact record (the app is the system of record; GHL is the digest)
 
 Every agent and investor has a record in the app: **facts** with provenance

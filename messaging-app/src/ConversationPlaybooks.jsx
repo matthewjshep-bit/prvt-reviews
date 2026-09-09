@@ -5,7 +5,7 @@
 import React, { useEffect, useState } from "react";
 import { Lock, Plus, Trash2, X } from "lucide-react";
 import {
-  INTENTS, INTENT_LABEL, INTENT_GLOSS, NEVER_AUTO, PARTY_LABEL, ACTION_LABEL, ACTION_TYPES,
+  INTENTS, INTENT_LABEL, INTENT_GLOSS, NEVER_AUTO, PARTY_LABEL, ACTION_LABEL, ACTION_TYPES, OFFER_DOC_KEYS, OFFER_DOC_LABEL,
   INTERNAL_ACTIONS, INTERNAL_ACTIONS_FOR, ASK_ONLY_ACTIONS, TOKENS, OUTBOUND_INTENTS, autoEligible,
 } from "@shared/conversation-ai.js";
 import { FOLLOW_UP_KINDS, kindsFor } from "@shared/follow-up.js";
@@ -617,6 +617,12 @@ export function PartyPlaybooks({ config, patch, workflows }) {
               <p className={HINT}>When numbers land and the agent hasn't given their own ARV and rehab yet, draft "just did a quick underwrite, I'm thinking $850K ARV and $200K+ of rehab, what do you think?" — their read before our price. The realm check follows once they answer. Tick "floated our read" on the auto-send list to let it go by itself.</p>
             </div>
             <div>
+              <Toggle checked={pb.sendOffer?.onClearUnderwrite} onChange={(v) => setPb({ sendOffer: { ...(pb.sendOffer || {}), onClearUnderwrite: v } })}>
+                <span className="font-semibold">Send the offer after a clean underwrite</span>
+              </Toggle>
+              <p className={HINT}>When an auto-underwrite clears every gate on an agent who has already talked to us, the documents go out by text on their own, inside the auto-send hours — no realm check first. An agent who has never replied still gets the float. Off keeps every offer behind your Send button.</p>
+            </div>
+            <div>
               <Toggle checked={pb.showMath} onChange={(v) => setPb({ showMath: v })}>
                 <span className="font-semibold">Show the math</span>
               </Toggle>
@@ -808,6 +814,29 @@ function ActionEditor({ action: a, allowedTypes, workflows, onChange, onRemove }
             placeholder={workflows?.loading ? "loading workflows…" : "workflow id (the list needs the workflows.readonly scope)"}
             value={a.workflowId || ""} onChange={(e) => onChange({ ...a, workflowId: e.target.value })} />
         )
+      )}
+      {a.type === "send_offer" && (
+        <>
+          <select className="rounded-lg border border-slate-300 px-2 py-1 text-xs" value={a.mode || "ask"} onChange={(e) => onChange({ ...a, mode: e.target.value })}
+            title="Its own switch, inside the rule: the tag and the note can run while the documents still wait for you">
+            <option value="ask">ask me first</option>
+            <option value="auto">send it on its own</option>
+          </select>
+          {["sms", "email"].map((ch) => (
+            <label key={ch} className="flex items-center gap-1 text-xs text-slate-600">
+              <input type="checkbox" checked={(a.channels || ["sms"]).includes(ch)}
+                onChange={(e) => { const cur = new Set(a.channels || ["sms"]); e.target.checked ? cur.add(ch) : cur.delete(ch); onChange({ ...a, channels: [...cur] }); }} />
+              {ch === "sms" ? "text" : "email"}
+            </label>
+          ))}
+          <select className="rounded-lg border border-slate-300 px-2 py-1 text-xs" value={(a.docs || ["image", "pdf"]).join(",")}
+            onChange={(e) => onChange({ ...a, docs: e.target.value.split(",") })} title="Which documents go">
+            <option value="image,pdf">letter (image + PDF)</option>
+            <option value="image">letter image only</option>
+            <option value="image,pdf,psa">letter + purchase agreement</option>
+            <option value={OFFER_DOC_KEYS.join(",")}>everything the offer has</option>
+          </select>
+        </>
       )}
       {INTERNAL_ACTIONS.has(a.type) && <span className="text-xs text-slate-400">runs on the broker</span>}
       <button type="button" className={BTN} aria-label="Remove action" onClick={onRemove}><Trash2 size={13} /></button>

@@ -97,6 +97,7 @@ import {
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
+import { nextSendTime } from "../conversation-scheduler.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
 import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType } from "../shared/contact-record.js";
 import { issueDataroomInvite } from "../dataroom.js";
@@ -3558,6 +3559,34 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
       let events = [];
       try { events = await store.listContactEvents(locationId, offer.contactId, { limit: 200 }); } catch { events = []; }
+
+      // The offer itself, unattended — only for a CLEAN underwrite (status
+      // "new", not a gate-held draft), only to an agent who has already
+      // talked to us, only inside the auto-send hours. Anything else falls
+      // through to the float below, which is a draft.
+      const cfg = conversationConfig(fresh);
+      const so = cfg.parties.agent.sendOffer;
+      if (so.onClearUnderwrite && cfg.enabled && CARD_SENDS_ENABLED && effectiveStatus(offer) === "new" && !offer.deal) {
+        const why = await (async () => {
+          const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
+          if (!drafts.some((d) => d.inbound)) return "they have never replied to us";
+          const dueAt = nextSendTime({ now: Date.now(), delayMs: 0, quietHours: cfg.autoSend.quietHours });
+          if (Date.parse(dueAt) - Date.now() > 60000) return `outside the auto-send hours (next window ${dueAt})`;
+          return null;
+        })();
+        if (!why) {
+          const r = await conversationDeps({ client, locationId, saved: fresh }).sendOfferDocs({ contactId: offer.contactId, addressHint: offer.address });
+          if (r.ok && !r.dryRun && !r.unchanged) {
+            console.log(`offer ${offer.id} sent itself after a clean underwrite (${r.channels.join("+")})`);
+            await createContactNote(client, offer.contactId, { body: `Sent our offer on ${offer.address} (${fmtMoney(offer.cashAmount)}) automatically after a clean underwrite — ${r.channels.join(" + ")}.` }).catch(() => {});
+            return;
+          }
+          console.log(`clean-underwrite send skipped for ${offer.id}: ${r.reason || (r.dryRun ? "sends off" : "already sent")}`);
+        } else {
+          console.log(`clean-underwrite send skipped for ${offer.id}: ${why}`);
+        }
+      }
+
       const kind = chooseProactiveKind({ events, address: offer.address });
       const r = await startProactive({
         client, locationId, saved: fresh, store, contactId: offer.contactId, kind,
@@ -3736,6 +3765,41 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // pass. Same write the History table's status menu makes — ledger line,
     // tag reconcile and all — on their newest open offer, or the one whose
     // address the message named.
+    // The paper, from an intent rule (send_offer) or the clean-underwrite
+    // path. Picks the agent's open offer — the one the message named, else
+    // the only one — and refuses an ambiguous match: the wrong house's
+    // documents are worse than none. An offer that already went out is
+    // reported, not re-sent.
+    sendOfferDocs: async ({ contactId, addressHint = "", channels = null, docs = null, draftId = null }) => {
+      const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      const so = conversationConfig(fresh).parties.agent.sendOffer;
+      const open = (await store.listOffers(locationId, { contactId, limit: 50 }))
+        .filter((o) => o.status !== "draft" && !o.deal && o.cashAmount > 0 && OPEN_STATUSES.has(effectiveStatus(o)));
+      if (!open.length) return { ok: false, reason: "no open offer to send" };
+      const picked = pickDealByAddress(open, addressHint);
+      if (!picked && open.length > 1) return { ok: false, reason: "more than one open offer and the message named no address" };
+      const lean = picked || open[0];
+      const offer = await store.getOffer(lean.id);
+      if (!offer) return { ok: false, reason: "offer vanished" };
+      const already = (offer.sends || []).find((x) => Object.values(x.results || {}).some((r) => r?.ok));
+      if (already) return { ok: true, unchanged: true, address: offer.address, sentAt: already.ts };
+      const ch = (Array.isArray(channels) && channels.length ? channels : so.channels).filter((c) => c === "sms" || c === "email");
+      const dk = Array.isArray(docs) && docs.length ? docs : so.docs;
+      let r;
+      try {
+        r = await sendOfferDocs({ locationId, client, offer, channels: ch, docKeys: dk, live: CARD_SENDS_ENABLED });
+      } catch (e) {
+        if (e.http === 502) return { ok: false, reason: `send failed — ${e.detail}` };
+        return { ok: false, reason: e.message };
+      }
+      if (r.dryRun) return { ok: true, dryRun: true, address: offer.address, channels: ch };
+      await recordEvent({
+        store, locationId, contactId, party: "agent", type: "offer_sent", at: new Date().toISOString(),
+        address: offer.address, offerId: offer.id, source: "conversation", ref: draftId,
+        data: { channels: ch, docs: dk, by: draftId ? "conversation" : "underwrite" },
+      }).catch(() => {});
+      return { ok: true, address: offer.address, channels: ch, results: r.results };
+    },
     setOfferStatus: async ({ contactId, addressHint, status, note = "", amount = 0 }) => {
       if (!["countered", "passed", "no_response"].includes(status)) return { ok: false, reason: `not a status this can set: ${status}` };
       const open = (await store.listOffers(locationId, { contactId, limit: 50 })).filter((o) => o.status !== "draft" && !o.deal);
@@ -4620,18 +4684,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // requires CARD_SENDS_ENABLED=true on the server (same safety gate the old
   // send engine used). Live sends are recorded on the offer as offer.sends.
   const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  router.post("/:id/send", async (req, res) => {
-    try {
-      const { locationId, client } = resolveLocation(req);
-      const offer = await store.getOffer(req.params.id);
-      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
-
-      const b = req.body || {};
-      const { message = "", emailSubject = "", dryRun = true } = b;
-      const channels = (Array.isArray(b.channels) ? b.channels : ["sms"]).filter((c) => c === "sms" || c === "email");
-      const docKeys = Array.isArray(b.docs) ? b.docs : ["image"];
-      if (!channels.length) return res.status(400).json({ error: "no channel selected" });
-
+  /**
+   * sendOfferDocs({ locationId, client, offer, message, emailSubject, channels, docKeys, live })
+   *
+   * The Send button, as a function: the same documents, the same message,
+   * the same per-channel delivery and the same lifecycle advance whether a
+   * person pressed it, an intent rule applied it, or a clean underwrite
+   * sent itself. `live` false returns the preview and writes nothing.
+   * Throws { http: 400 } with nothing to send, { http: 502 } when every
+   * channel failed.
+   */
+  async function sendOfferDocs({ locationId, client, offer, message = "", emailSubject = "", channels = ["sms"], docKeys = ["image"], live = false }) {
       // Requested documents, filtered to what this offer actually has.
       const DOC_DEFS = [
         ["pdf", "Offer letter (PDF)", offer.pdfUrl],
@@ -4642,7 +4705,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ["image", "Offer letter (image)", offer.imageUrl],
       ];
       const picked = DOC_DEFS.filter(([key, , url]) => docKeys.includes(key) && url);
-      if (!picked.length) return res.status(400).json({ error: "no documents selected (or the offer has none)" });
+      if (!picked.length) throw Object.assign(new Error("no documents selected (or the offer has none)"), { http: 400 });
       const imagePicked = picked.some(([key]) => key === "image");
 
       // Destination phone/email live on the GHL contact, not the offer. A
@@ -4692,9 +4755,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         signoffLines.length ? `<p>${signoffLines.map(esc).join("<br>")}</p>` : "",
       ].filter(Boolean).join("\n");
 
-      const live = dryRun === false && CARD_SENDS_ENABLED;
       if (!live) {
-        return res.json({
+        return {
           ok: true,
           dryRun: true,
           sendsEnabled: CARD_SENDS_ENABLED,
@@ -4719,7 +4781,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
               },
             } : {}),
           },
-        });
+        };
       }
 
       // Live send — each channel independently; one failing never blocks the other.
@@ -4770,14 +4832,32 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!outcomes.some((r) => r.ok)) {
         // Nothing went out — error response, like the old route on a failed text.
         const detail = Object.entries(results).map(([ch, r]) => `${ch}: ${r.error}`).join("; ");
-        return res.status(502).json({ error: "send failed", detail, results, sends: offer.sends });
+        throw Object.assign(new Error("send failed"), { http: 502, detail, results, sends: offer.sends });
       }
-      // status/statusHistory come back too: a send can advance the lifecycle,
-      // and the history row has to show that without a refetch of the fat doc.
-      res.json({
+      return {
         ok: outcomes.every((r) => r.ok), sent: true, results,
-        sends: offer.sends, status: offer.status, statusHistory: offer.statusHistory,
-      });
+        sends: offer.sends, status: offer.status, statusHistory: offer.statusHistory, channels,
+      };
+  }
+
+  router.post("/:id/send", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const offer = await store.getOffer(req.params.id);
+      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
+
+      const b = req.body || {};
+      const { message = "", emailSubject = "", dryRun = true } = b;
+      const channels = (Array.isArray(b.channels) ? b.channels : ["sms"]).filter((c) => c === "sms" || c === "email");
+      const docKeys = Array.isArray(b.docs) ? b.docs : ["image"];
+      if (!channels.length) return res.status(400).json({ error: "no channel selected" });
+      const live = dryRun === false && CARD_SENDS_ENABLED;
+      try {
+        res.json(await sendOfferDocs({ locationId, client, offer, message, emailSubject, channels, docKeys, live }));
+      } catch (e) {
+        if (e.http === 502) return res.status(502).json({ error: "send failed", detail: e.detail, results: e.results, sends: e.sends });
+        throw e;
+      }
     } catch (err) { fail(res, err); }
   });
 

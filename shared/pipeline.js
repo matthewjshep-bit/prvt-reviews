@@ -339,7 +339,9 @@ export function buildPipeline({
       if (card) card.actionIds.push(id);
     }
     for (const a of d.actions || []) {
-      if (a?.status !== "pending" || !ASK_ONLY_ACTIONS.has(a.type)) continue;
+      // The hand-offs: the structurally ask-only actions, plus the offer
+      // documents when their own switch says ask.
+      if (a?.status !== "pending" || !(ASK_ONLY_ACTIONS.has(a.type) || (a.type === "send_offer" && a.mode !== "auto"))) continue;
       const id = push({ ...base, kind: "handoff", severity: "now", actionId: a.id,
         title: ACTION_LABEL[a.type] || String(a.type).replace(/_/g, " "),
         detail: a.why || (base.address ? `on ${base.address}` : ""),

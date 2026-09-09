@@ -293,7 +293,12 @@ test("the realm check and the math switch normalize, and realm_check is an outbo
   const st = starterConfig({ signer: "Matt" });
   assert.equal(st.parties.agent.realmCheck.enabled, true);
   assert.equal(st.parties.agent.showMath, false);
-  assert.deepEqual(st.parties.agent.intentRules.realm_yes.actions.map((a) => a.type), ["add_tags", "mark_offer_realm_yes"]);
+  assert.deepEqual(st.parties.agent.intentRules.realm_yes.actions.map((a) => a.type), ["add_tags", "mark_offer_realm_yes", "send_offer"]);
+  // The paper ships as ask inside an auto rule: the tag and the note run, the documents wait for a click.
+  const send = st.parties.agent.intentRules.realm_yes.actions.find((a) => a.type === "send_offer");
+  assert.equal(send.mode, "ask");
+  assert.deepEqual(send.channels, ["sms"]);
+  assert.deepEqual(send.docs, ["image", "pdf"]);
   assert.match(st.parties.agent.instructions, /REALM CHECK/);
 });
 
@@ -419,4 +424,19 @@ test("a nudge intent an operator ticked survives a save", () => {
     parties: { agent: { autoSend: { enabled: true, intents: ["offer_nudge"] } } },
   });
   assert.deepEqual(c.parties.agent.autoSend.intents, ["offer_nudge"]);
+});
+
+test("send_offer keeps its own mode and options through a save, and the clean-underwrite switch ships off", () => {
+  const c = normalizeConversationAi({ parties: { agent: {
+    intentRules: { realm_yes: { mode: "auto", actions: [{ type: "send_offer", mode: "auto", channels: ["email", "fax"], docs: ["pdf", "bogus"] }, { type: "send_offer" }] } },
+    sendOffer: { onClearUnderwrite: "true", channels: [], docs: ["scope"] },
+  } } });
+  const [a, b] = c.parties.agent.intentRules.realm_yes.actions;
+  assert.deepEqual(a, { type: "send_offer", mode: "auto", channels: ["email"], docs: ["pdf"] });
+  assert.deepEqual(b, { type: "send_offer", mode: "ask", channels: ["sms"], docs: ["image", "pdf"] });
+  assert.deepEqual(c.parties.agent.sendOffer, { onClearUnderwrite: true, channels: ["sms"], docs: ["scope"] });
+  assert.equal(normalizeConversationAi({}).parties.agent.sendOffer.onClearUnderwrite, false);
+  // an investor playbook never carries it
+  const inv = normalizeConversationAi({ parties: { investor: { intentRules: { interested: { mode: "auto", actions: [{ type: "send_offer" }] } } } } });
+  assert.deepEqual(inv.parties.investor.intentRules.interested?.actions || [], []);
 });

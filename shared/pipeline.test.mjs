@@ -341,3 +341,17 @@ test("a cold agent whose outreach ladder ran out is a queue item with no card; a
   const off = buildPipeline({ offers: [], drafts: [], now, config: normalizeConversationAi({}), events: [opened("cold"), rung("cold", 2, 10), rung("cold", 5, 7)] });
   assert.equal(off.actions.filter((a) => a.kind === "outreach_no_reply").length, 0);
 });
+
+test("a pending send_offer on a realm-yes reply is one click from a person", () => {
+  const o = offer({ id: "o1", contactId: "c1", status: "sent" });
+  const d = draft({ id: "d1", contactId: "c1", status: "draft", intent: "realm_yes",
+    actions: [{ id: "a1", type: "add_tags", status: "done" }, { id: "a2", type: "send_offer", mode: "ask", status: "pending" }] });
+  const r = build({ offers: [o], drafts: [d] });
+  const h = r.actions.find((a) => a.kind === "handoff");
+  assert.ok(h, "a handoff row exists");
+  assert.equal(h.actionId, "a2");
+  assert.equal(h.title, "Send the formal offer (the documents)");
+  // in auto mode it is the machine's, not the queue's
+  const auto = build({ offers: [o], drafts: [{ ...d, actions: [{ id: "a2", type: "send_offer", mode: "auto", status: "pending" }] }] });
+  assert.equal(auto.actions.filter((a) => a.kind === "handoff").length, 0);
+});

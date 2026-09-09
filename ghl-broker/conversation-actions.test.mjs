@@ -270,3 +270,32 @@ test("re-quoting may be set to run on its own — it is not ask-only", async () 
   });
   assert.equal(auto.length, 1);
 });
+
+test("an action may ask inside an auto rule, and send_offer goes through the send dep", async () => {
+  const pb = { intentRules: { realm_yes: { mode: "auto", actions: [{ type: "add_tags", tags: ["realm-yes"] }, { type: "send_offer", mode: "ask", channels: ["sms"], docs: ["image", "pdf"] }] } } };
+  const plan = planActions({ party: "agent", intent: "realm_yes", confidence: "high", playbook: pb });
+  assert.deepEqual(plan.auto.map((a) => a.type), ["add_tags"]);
+  assert.deepEqual(plan.suggested.map((a) => a.type), ["send_offer"]);
+  // and an auto one inside an auto rule runs
+  const pb2 = { intentRules: { realm_yes: { mode: "auto", actions: [{ type: "send_offer", mode: "auto" }] } } };
+  assert.equal(planActions({ party: "agent", intent: "realm_yes", confidence: "high", playbook: pb2 }).auto.length, 1);
+  // but never inside an ask rule
+  const pb3 = { intentRules: { realm_yes: { mode: "ask", actions: [{ type: "send_offer", mode: "auto" }] } } };
+  assert.equal(planActions({ party: "agent", intent: "realm_yes", confidence: "high", playbook: pb3 }).auto.length, 0);
+
+  const seen = [];
+  const deps = { sendOfferDocs: async (args) => { seen.push(args); return { ok: true, address: "12 Elm St", channels: ["sms"] }; } };
+  const [done] = await runActions({ client: {}, locationId: "LOC", contactId: "c1", draft: { id: "d1", propertyAddress: "12 Elm St" },
+    actions: [{ id: "a1", type: "send_offer", channels: ["sms"], docs: ["image"] }], deps });
+  assert.equal(done.status, "done");
+  assert.match(done.detail, /sent the offer on 12 Elm St by sms/);
+  assert.deepEqual(seen[0], { contactId: "c1", addressHint: "12 Elm St", channels: ["sms"], docs: ["image"], draftId: "d1" });
+  const [dry] = await runActions({ client: {}, locationId: "LOC", contactId: "c1", draft: {}, actions: [{ id: "a2", type: "send_offer" }],
+    deps: { sendOfferDocs: async () => ({ ok: true, dryRun: true, address: "12 Elm St", channels: ["sms"] }) } });
+  assert.match(dry.detail, /would send .* sends are off/);
+  const [again] = await runActions({ client: {}, locationId: "LOC", contactId: "c1", draft: {}, actions: [{ id: "a3", type: "send_offer" }],
+    deps: { sendOfferDocs: async () => ({ ok: true, unchanged: true, address: "12 Elm St", sentAt: "2026-09-01T10:00:00Z" }) } });
+  assert.match(again.detail, /already went out on 2026-09-01/);
+  const [none] = await runActions({ client: {}, locationId: "LOC", contactId: "c1", draft: {}, actions: [{ id: "a4", type: "send_offer" }], deps: {} });
+  assert.equal(none.status, "failed");
+});

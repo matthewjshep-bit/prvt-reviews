@@ -41,7 +41,9 @@ export function planActions({ party, intent, confidence = "low", playbook = {}, 
   const sure = (RANK[confidence] ?? 0) >= (RANK[minConfidence] ?? 2);
   for (const a of rule.actions) {
     const askOnly = ASK_ONLY_ACTIONS.has(a.type);
-    const mode = askOnly ? "ask" : rule.mode === "auto" ? "auto" : "ask";
+    // The rule's mode is a ceiling: an action can ask inside an auto rule
+    // (send_offer ships that way) but can never run inside an ask rule.
+    const mode = askOnly || a.mode === "ask" ? "ask" : rule.mode === "auto" ? "auto" : "ask";
     const action = { ...a, id: newActionId(), mode, status: "pending", party };
     if (mode === "auto" && sure) auto.push(action);
     else suggested.push(action);
@@ -198,6 +200,20 @@ const EXECUTORS = {
     const r = await deps.promoteToDeal({ contactId, addressHint: draft?.propertyAddress || "", draftId: draft?.id || null });
     if (!r?.ok) return r?.reason || "no offer to promote";
     return `${r.address} is a deal`;
+  },
+  // The paper. Picks the agent's open offer (by the address the message
+  // named, else the only one), and sends it the way the Send button would —
+  // same documents, same channels, same double gate. Idempotent: an offer
+  // that already went out is reported, not re-sent.
+  async send_offer({ deps, contactId, draft, action }) {
+    if (typeof deps?.sendOfferDocs !== "function") throw new Error("sending offers is not wired on this broker");
+    const r = await deps.sendOfferDocs({
+      contactId, addressHint: draft?.propertyAddress || "", channels: action?.channels, docs: action?.docs, draftId: draft?.id || null,
+    });
+    if (!r?.ok) return r?.reason || "no open offer to send";
+    if (r.unchanged) return `offer on ${r.address} already went out ${r.sentAt ? `on ${String(r.sentAt).slice(0, 10)}` : ""}`.trim();
+    if (r.dryRun) return `would send ${r.address} by ${(r.channels || []).join(" + ")} — sends are off on the broker`;
+    return `sent the offer on ${r.address} by ${(r.channels || []).join(" + ")}`;
   },
   async suggest_dataroom_invite({ deps, contactId, draft }) {
     if (typeof deps?.issueDataroomInvite !== "function") throw new Error("dataroom invites are not wired on this broker");

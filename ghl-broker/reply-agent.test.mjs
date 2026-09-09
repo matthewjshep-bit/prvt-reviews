@@ -1243,7 +1243,9 @@ test("'in the realm' notes the offer and tags the agent; the math stays hidden u
   assert.equal(seen.context.text.includes("our math"), false, "ARV and repairs stay out of the prompt");
   assert.equal(seen.context.amounts.includes(620000), false);
   const d = await store.getReplyDraft(job.draftId);
-  assert.deepEqual(d.actions.map((a) => [a.type, a.status]), [["add_tags", "done"], ["mark_offer_realm_yes", "done"]]);
+  // The documents ride the same rule but ask: a person clicks Send.
+  assert.deepEqual(d.actions.map((a) => [a.type, a.status]), [["add_tags", "done"], ["mark_offer_realm_yes", "done"], ["send_offer", "pending"]]);
+  assert.equal(d.actions.find((a) => a.type === "send_offer").mode, "ask");
   assert.equal(realm[0].answer, "yes");
   assert.ok(tags.some(([m, t]) => m === "POST" && t.includes("realm-yes")));
 

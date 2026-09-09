@@ -154,6 +154,15 @@ export function autopilotSummary({ config = {}, sendsEnabled = false, underwrite
       const rq = pb.requote || {};
       out.push(sw("requote", "Re-quote on their numbers", rq.enabled ? "on" : "off",
         rq.enabled ? "" : "'too low' is answered by you", party));
+      // The documents. "on" when any agent rule may send them unasked or a
+      // clean underwrite sends them; "drafting" when the rule exists but asks.
+      const rules = Object.values(pb.intentRules || {});
+      const sendRules = rules.flatMap((r) => (r.actions || []).filter((a) => a.type === "send_offer").map((a) => ({ rule: r, a })));
+      const sendsUnasked = sendRules.some(({ rule, a }) => rule.mode === "auto" && a.mode === "auto");
+      const clear = pb.sendOffer?.onClearUnderwrite;
+      out.push(sw("send_offer", "The offer itself",
+        (sendsUnasked || clear) && canSend ? "on" : sendRules.length ? "drafting" : "off",
+        clear ? "goes out after a clean underwrite" : sendsUnasked ? "goes out when they say the number works" : sendRules.length ? "offered as a one-click action on the reply" : "every offer is sent by you", party));
     }
 
     const fu = pb.followUp || {};
