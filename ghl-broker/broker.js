@@ -20,6 +20,7 @@ import { createOfferPageRouter, createOfferPagePublicRouter } from "./routes/off
 import { store } from "./store.js";
 import { checkObjectStore } from "./r2.js";
 import { sendDueDrafts } from "./conversation-scheduler.js";
+import { maybeStartFollowUpSweep, FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.js";
 import { sendReplyDraft, conversationConfig } from "./reply-agent.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -126,7 +127,9 @@ function resolveLocation(req) {
   return { locationId: loc, client: makeClient(token) };
 }
 
-app.use("/api/offers", createOffersRouter({ resolveLocation, uploadDir: UPLOAD_DIR, publicBaseUrl: PUBLIC_BASE_URL, dataroomBaseUrl: DATAROOM_BASE_URL }));
+const CONVERSATION_SENDS_LIVE = process.env.CARD_SENDS_ENABLED === "true";
+const offersRouter = createOffersRouter({ resolveLocation, uploadDir: UPLOAD_DIR, publicBaseUrl: PUBLIC_BASE_URL, dataroomBaseUrl: DATAROOM_BASE_URL });
+app.use("/api/offers", offersRouter);
 app.use("/api/outreach", createOutreachRouter({ resolveLocation }));
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
 app.use("/api/dispo", createDispoRouter({ resolveLocation }));
@@ -172,6 +175,16 @@ setInterval(async () => {
         client: makeClient(token), locationId, saved, store, utcHour: SWEEP_UTC_HOUR,
       });
       if (started) console.log(`nightly enrich sweep started for ${locationId}`);
+      // The follow-up clock rides the same tick rather than a third timer:
+      // it is a once-a-day decision with the same four gates and the same
+      // per-location try/catch. What it decides lands in the outbox, and the
+      // 30s scheduler below is what actually sends it.
+      const nudged = await maybeStartFollowUpSweep({
+        client: makeClient(token), locationId, saved, store,
+        sendsEnabled: CONVERSATION_SENDS_LIVE, utcHour: FOLLOW_UP_UTC_HOUR,
+        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
+      });
+      if (nudged) console.log(`follow-up sweep started for ${locationId}`);
     } catch (e) {
       console.error(`nightly sweep check failed for ${locationId}: ${e.message}`);
     }
@@ -185,7 +198,6 @@ setInterval(async () => {
 // is on — without CARD_SENDS_ENABLED nothing is ever scheduled in the first
 // place, and anything left over from before the flag flipped is handed back
 // to the outbox with a flag rather than left counting down.
-const CONVERSATION_SENDS_LIVE = process.env.CARD_SENDS_ENABLED === "true";
 let lastPrune = 0;
 setInterval(async () => {
   try {

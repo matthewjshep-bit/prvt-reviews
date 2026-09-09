@@ -42,6 +42,11 @@ export const EVENT_TYPES = [
   "deal_promoted", "deal_stage",
   "investor_evaluating", "investor_committed", "investor_passed", "feedback",
   "blast_sent", "dataroom_sent", "dataroom_viewed",
+  // The follow-up clock's claim AND its record. Written before the draft is
+  // started, so the unique dedupe key is what stops two ticks nudging the
+  // same person twice. Deliberately not a LEDGER_TYPE: our own reminder to
+  // ourselves is not deal history.
+  "follow_up_sent",
   "call_summary", "text_summary", "note",
   "enrich_run", "tag_added", "tag_removed",
   "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate", "property_details",
@@ -59,6 +64,7 @@ export const EVENT_LABEL = {
   enrich_run: "AI enrichment ran", tag_added: "tag added", tag_removed: "tag removed",
   subject_property_set: "subject property set", fact_learned: "learned about them", fact_removed: "fact removed",
   import: "imported", agent_estimate: "agent's own take", property_details: "property details",
+  follow_up_sent: "we followed up",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -72,6 +78,7 @@ export const EVENT_ICON = {
   call_summary: "Phone", text_summary: "MessageSquare", note: "StickyNote",
   enrich_run: "Sparkles", tag_added: "Tag", tag_removed: "Tag",
   subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator", property_details: "ClipboardList",
+  follow_up_sent: "BellRing",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast"];

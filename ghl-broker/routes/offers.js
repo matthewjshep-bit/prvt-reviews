@@ -64,6 +64,11 @@ import {
   INVESTOR_STATUSES, investorStatus,
 } from "../shared/offer-status.js";
 import { planRequote } from "../shared/requote.js";
+import {
+  startFollowUpSweep, getFollowUpJob, publicFollowUpJob, cancelFollowUpSweep,
+  agentCandidates, investorCandidates,
+} from "../follow-up-sweep.js";
+import { dueStep } from "../shared/follow-up.js";
 import { autoAcceptCeiling } from "../shared/auto-accept.js";
 import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, buildNetSheetDocument, moneyInWords } from "../offer-doc.js";
 import { renderContractPdf } from "../contract-pdf.js";
@@ -3796,6 +3801,60 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   router.post("/automations/reply", conversationWebhook);
   router.post("/automations/conversation", conversationWebhook);
 
+  /* ---- the follow-up clock ---- */
+  // The preview is the point of this pair. An operator is being asked to let
+  // the bot text people unprompted, and "show me exactly who would get one
+  // today, without sending anything" is the only honest way to ask.
+
+  router.get("/automations/conversation/follow-ups", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const job = publicFollowUpJob(getFollowUpJob(locationId));
+      if (req.query.preview !== "1" && req.query.preview !== "true") return res.json({ ok: true, job, sendsEnabled: CARD_SENDS_ENABLED });
+      const config = conversationConfig(saved);
+      const now = Date.now();
+      const [agents, investors] = await Promise.all([
+        agentCandidates({ store, locationId, config, now }),
+        investorCandidates({ store, locationId, config, now }),
+      ]);
+      const due = [];
+      for (const c of [...agents, ...investors]) {
+        const fu = config.parties[c.party].followUp;
+        const d = dueStep({
+          steps: c.ladder.steps, startedAt: c.startedAt, sentSteps: c.sentSteps,
+          lastInboundAt: c.lastInboundAt || null, lastTouchAt: c.lastTouchAt || null, now,
+          stopOnAnyInbound: fu.stopOnAnyInbound, minHoursBetween: fu.minHoursBetween,
+        });
+        due.push({ contactId: c.contactId, party: c.party, kind: c.kind, address: c.address,
+                   startedAt: c.startedAt, due: d.due, step: d.step ?? null, reason: d.reason || "" });
+      }
+      res.json({ ok: true, job, sendsEnabled: CARD_SENDS_ENABLED, considered: due.length, candidates: due });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/automations/conversation/follow-ups/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      // Same double gate as every other send in here: a live run has to be
+      // asked for explicitly AND the broker's send flag has to be on.
+      const dryRun = req.body?.dryRun !== false;
+      const job = startFollowUpSweep({
+        client, locationId, saved, store, sendsEnabled: CARD_SENDS_ENABLED, dryRun,
+        trigger: "manual", deps: conversationDeps({ client, locationId, saved }),
+      });
+      res.status(202).json({ ok: true, job: publicFollowUpJob(job) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/automations/conversation/follow-ups/cancel", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ ok: true, canceled: cancelFollowUpSweep(locationId) });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---- the outbox ---- */
   // Every draft waiting on a person or counting down to an auto-send, plus
   // anything being drafted right now, plus whether Send would actually send.
@@ -4449,6 +4508,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       });
     } catch (err) { fail(res, err); }
   });
+
+  // The follow-up sweep runs on the broker's own tick, outside any request,
+  // but it has to be able to write an offer's outcome when a ladder runs out —
+  // and that write is `conversationDeps.setOfferStatus`, which lives in this
+  // closure so it can reach the store, the ledger and the tag reconcile
+  // together. Exposed rather than duplicated: two ways to record an outcome is
+  // exactly the thing recordStatus exists to prevent.
+  router.conversationDepsFor = ({ locationId, client, saved }) => conversationDeps({ client, locationId, saved });
 
   return router;
 }
