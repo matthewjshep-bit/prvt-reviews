@@ -1121,10 +1121,20 @@ const LANDED = {
   status: "new", createdAt: iso(1000), terms: { closingDays: 14, earnestMoney: 2500, condition: "as-is" },
 };
 
+// The agent has already given us their read. In production that is what
+// afterAgentTake waits for before it fires the realm check — a price with
+// nothing anchoring it reads as a lowball, so the take check goes first.
+const withTheirTake = (store, contactId = "c1") => {
+  store.events.set(`LOC|${contactId}`, [
+    { type: "agent_estimate", at: iso(900), address: LANDED.address, data: { arv: 520000, rehab: 85000 } },
+  ]);
+  return store;
+};
+
 test("when an underwrite lands, the bot drafts a realm check that floats the number from the book", async () => {
   _resetJobs();
   const { client, notes, tags } = ghlStubFor(["agent"]);
-  const store = fakeStore();
+  const store = withTheirTake(fakeStore());
   store.listOffers = async () => [LANDED];
   let seen;
   const { job } = await startProactive({
@@ -1158,20 +1168,25 @@ test("when an underwrite lands, the bot drafts a realm check that floats the num
 test("the realm check respects the playbook switch, the hands-off tag, and the allowlist", async () => {
   _resetJobs();
   const off = { ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi, parties: { ...STARTER_SAVED.conversationAi.parties, agent: { ...STARTER_SAVED.conversationAi.parties.agent, realmCheck: { enabled: false } } } } };
-  const r = await startProactive({ client: deadClient, locationId: "LOC", saved: off, store: fakeStore(), contactId: "c1", offer: LANDED });
+  const r = await startProactive({ client: deadClient, locationId: "LOC", saved: off, store: withTheirTake(fakeStore()), contactId: "c1", offer: LANDED });
   assert.match(r.skipped, /realm check is off/);
-  const noNumber = await startProactive({ client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1", offer: { ...LANDED, cashAmount: null } });
+  const noNumber = await startProactive({ client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store: withTheirTake(fakeStore()), contactId: "c1", offer: { ...LANDED, cashAmount: null } });
   assert.match(noNumber.skipped, /no number to float/);
 
+  // A price with nothing anchoring it never goes: with the take check on and
+  // no read from them on record, the realm check stands aside for it.
+  const noTake = await startProactive({ client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1", offer: LANDED });
+  assert.match(noTake.skipped, /take check goes first/);
+
   const { client } = ghlStubFor(["agent", "stop bot"]);
-  const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1", offer: LANDED, deps: { draft: async () => DRAFT } });
+  const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: withTheirTake(fakeStore()), contactId: "c1", offer: LANDED, deps: { draft: async () => DRAFT } });
   await settle();
   assert.equal(job.status, "held");
 
   _resetJobs();
   const on = { ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi, parties: { ...STARTER_SAVED.conversationAi.parties, agent: { ...STARTER_SAVED.conversationAi.parties.agent, autoSend: { enabled: true, intents: ["realm_check"] } } } } };
   const { client: c2 } = ghlStubFor(["agent"]);
-  const store = fakeStore();
+  const store = withTheirTake(fakeStore());
   store.listOffers = async () => [LANDED];
   const { job: j2 } = await startProactive({
     client: c2, locationId: "LOC", saved: on, store, contactId: "c1", offer: LANDED, sendsEnabled: true,

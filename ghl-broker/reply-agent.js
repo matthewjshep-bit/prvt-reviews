@@ -40,6 +40,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { buildTranscript, enrichFieldDefs, mergeHistory, mergeFacts, SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
+import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
@@ -843,53 +844,152 @@ export async function startReply({
 const DEDUPE_MS = 2 * 60 * 1000;
 const waiting = new Map();   // `${locationId}:${contactId}` -> { job, timer }
 
-/**
- * startProactive({ client, locationId, saved, store, contactId, kind, offer, sendsEnabled, deps })
- *
- * A message the bot STARTS. Today one kind: the realm check — an
- * auto-underwrite just landed an offer for this agent, and before the formal
- * offer goes over the bot floats the number as a soft one and asks whether
- * it's in the realm. Same lane, same gates, same outbox as a reply; the
- * number is in the offer book, so the money guard allows it. Sends itself
- * only when realm_check is on the agent's auto-send list. Returns the job,
- * or { skipped } when the playbook has it off.
- */
-export async function startProactive({ client, locationId, saved, store, contactId, kind = "realm_check", offer, sendsEnabled = false, deps = {} }) {
-  const aiApiKey = String(saved?.aiApiKey || "").trim();
-  if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
-  const config = conversationConfig(saved);
-  if (!config.enabled) return { skipped: "Conversation AI is switched off", job: null };
-  if (kind !== "realm_check" && kind !== "take_check") return { skipped: `unknown outbound kind ${kind}`, job: null };
-  if (kind === "realm_check" && !config.parties.agent.realmCheck?.enabled) return { skipped: "realm check is off for agents", job: null };
-  if (kind === "take_check" && !config.parties.agent.takeCheck?.enabled) return { skipped: "take check is off for agents", job: null };
-  if (kind === "realm_check" && !offer?.cashAmount) return { skipped: "the offer has no number to float", job: null };
-  if (kind === "take_check" && !offerNumbers(offer).arv && !offerNumbers(offer).rehab) return { skipped: "the underwrite has no ARV or rehab to float", job: null };
-  if (!contactId) return { skipped: "the offer has no contact", job: null };
-
-  const job = {
-    id: newJobId(), locationId, contactId, contactName: "", status: "queued", phase: "queued",
-    channel: "sms", message: "", attachments: 0, party: "agent", partySource: "offer", outbound: kind,
-    offerId: offer.id || null, draftId: null, intent: kind, summary: "", heldReason: null, scheduledFor: null,
-    warnings: [], error: null, startedAt: new Date().toISOString(), finishedAt: null,
-  };
-  jobs.set(job.id, job);
-  runOnLane(locationId, () =>
-    runProactive(job, { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, config, deps: { ...deps, draft: deps.draft || draftReply } })
-      .catch(async (e) => {
-        job.status = "error";
-        job.error = String(e?.message || e).slice(0, 300);
-        job.finishedAt = new Date().toISOString();
-        await note(client, contactId, `AI ${kind === "take_check" ? "take check" : "realm check"} could not be drafted — ${job.error}. The offer is in History; float it by hand if you like.`, job.warnings);
-      })
-  );
-  return { skipped: null, job };
-}
-
 // ARV and repairs off an offer document or its lean row.
 const offerNumbers = (offer) => ({
   arv: Math.round(Number(offer?.arv ?? offer?.calc?.inputs?.arv) || 0),
   rehab: Math.round(Number(offer?.repairs ?? offer?.calc?.inputs?.repairs) || 0),
 });
+/* ---------- the kinds of message the bot starts ---------- */
+
+/**
+ * OUTBOUND_KINDS — one row per message the bot may START, replacing what used
+ * to be a chain of `if (kind === ...)` branches.
+ *
+ *   party    which record book to load — an investor nudge reads the deal
+ *            book, the buy box and the dataroom trail, exactly as an inbound
+ *            reply from them would.
+ *   enabled  the playbook switch that has to be on.
+ *   ready    a per-message precondition, returning true or the reason why not.
+ *   floats   the numbers THIS message is allowed to introduce, on top of the
+ *            record book. See the note below — it is the money guard.
+ *   forbids  numbers this message must not say even though the book has them.
+ *
+ * THE NUDGES FLOAT NOTHING. `floats: () => []` means allowedAmounts is exactly
+ * the record book, so a follow-up that invents "still open at 310k" is flagged
+ * and parks like any other draft. That is the whole difference between a
+ * follow-up and a new offer: a nudge re-raises a conversation, it never
+ * introduces a number.
+ */
+export const OUTBOUND_KINDS = {
+  take_check: {
+    party: "agent",
+    enabled: (pb) => pb?.takeCheck?.enabled,
+    ready: ({ offer }) => {
+      const n = offerNumbers(offer);
+      return n.arv || n.rehab ? true : "the underwrite has no ARV or rehab to float";
+    },
+    // Our read goes out; our PRICE explicitly does not. Asking what they think
+    // the property is worth while showing them what we would pay for it is not
+    // asking, and the forbid is what makes the question real.
+    floats: ({ offer }) => { const n = offerNumbers(offer); return [n.arv, n.rehab].filter(Boolean); },
+    forbids: ({ offer }) => [Math.round(Number(offer?.cashAmount) || 0)].filter(Boolean),
+  },
+  realm_check: {
+    party: "agent",
+    enabled: (pb) => pb?.realmCheck?.enabled,
+    ready: ({ offer, config, dossier }) => {
+      if (!offer?.cashAmount) return "the offer has no number to float";
+      // Their read before our price. A number that arrives with nothing
+      // anchoring it reads as a lowball and ends the thread — so unless the
+      // operator has deliberately switched the first step off, the take check
+      // goes first and this waits for their answer.
+      const takeOn = config?.parties?.agent?.takeCheck?.enabled;
+      const haveTheirs = Boolean(dossier?.have?.arv || dossier?.have?.rehab);
+      if (takeOn && !haveTheirs) return "no read from the agent yet — the take check goes first";
+      return true;
+    },
+    floats: ({ offer }) => [Math.round(Number(offer.cashAmount) || 0)],
+    forbids: () => [],
+  },
+  offer_nudge: {
+    party: "agent",
+    enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.offer_nudge?.enabled,
+    ready: ({ offer }) => (offer?.address ? true : "nothing to follow up on"),
+    floats: () => [],
+    forbids: () => [],
+  },
+  blast_nudge: {
+    party: "investor",
+    enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.blast_nudge?.enabled,
+    ready: ({ subject }) => (subject?.address ? true : "nothing to follow up on"),
+    floats: () => [],
+    forbids: () => [],
+  },
+  dataroom_nudge: {
+    party: "investor",
+    enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.dataroom_nudge?.enabled,
+    ready: ({ subject }) => (subject?.address ? true : "nothing to follow up on"),
+    floats: () => [],
+    forbids: () => [],
+  },
+};
+
+const outboundLabel = (kind) => String(kind || "").replace(/_/g, " ");
+
+/**
+ * startProactive({ client, locationId, saved, store, contactId, kind,
+ *                  offer, subject, sendsEnabled, deps })
+ *
+ * A message the bot STARTS, rather than one it answers. Two families:
+ *
+ *   The anchor pair. An auto-underwrite lands an offer; take_check floats our
+ *   ARV and rehab read to draw out theirs, and once they have answered
+ *   realm_check floats a price — as a rough first pass, not an offer.
+ *
+ *   The follow-up nudges, from the clock (shared/follow-up.js): an offer
+ *   nobody answered, a deal we blasted, a dataroom somebody opened and then
+ *   went quiet on.
+ *
+ * Same lane, same gates, same outbox as a reply. `offer` carries the anchor
+ * kinds; `subject` is the generic slot the nudges use ({ address, step,
+ * steps, viewedAt, blastedAt }). Returns the job, or { skipped } with the
+ * reason when the playbook has it off or the message has nothing to say.
+ */
+export async function startProactive({
+  client, locationId, saved, store, contactId, kind = "realm_check",
+  offer = null, subject = null, sendsEnabled = false, deps = {},
+}) {
+  const aiApiKey = String(saved?.aiApiKey || "").trim();
+  if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
+  const config = conversationConfig(saved);
+  if (!config.enabled) return { skipped: "Conversation AI is switched off", job: null };
+  const spec = OUTBOUND_KINDS[kind];
+  if (!spec) return { skipped: `unknown outbound kind ${kind}`, job: null };
+  const playbook = config.parties?.[spec.party];
+  if (!spec.enabled(playbook)) return { skipped: `${outboundLabel(kind)} is off for ${PARTY_LABEL[spec.party].toLowerCase()}s`, job: null };
+  if (!contactId) return { skipped: "there is nobody to send it to", job: null };
+
+  // The realm check needs to know whether the agent has given us their read,
+  // which lives on the contact's timeline rather than on the offer.
+  let dossier = null;
+  if (kind === "realm_check" && offer?.address) {
+    try {
+      const events = await store.listContactEvents(locationId, contactId, { limit: 200 });
+      dossier = propertyDossier(events, offer.address);
+    } catch { dossier = null; }
+  }
+  const ready = spec.ready({ offer, subject, config, dossier });
+  if (ready !== true) return { skipped: ready, job: null };
+
+  const job = {
+    id: newJobId(), locationId, contactId, contactName: "", status: "queued", phase: "queued",
+    channel: "sms", message: "", attachments: 0, party: spec.party, partySource: "offer", outbound: kind,
+    offerId: offer?.id || null, draftId: null, intent: kind, summary: "", heldReason: null, scheduledFor: null,
+    step: subject?.step ?? null,
+    warnings: [], error: null, startedAt: new Date().toISOString(), finishedAt: null,
+  };
+  jobs.set(job.id, job);
+  runOnLane(locationId, () =>
+    runProactive(job, { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, subject, spec, config, dossier, deps: { ...deps, draft: deps.draft || draftReply } })
+      .catch(async (e) => {
+        job.status = "error";
+        job.error = String(e?.message || e).slice(0, 300);
+        job.finishedAt = new Date().toISOString();
+        await note(client, contactId, `AI ${outboundLabel(kind)} could not be drafted — ${job.error}. Pick it up by hand if you like.`, job.warnings);
+      })
+  );
+  return { skipped: null, job };
+}
 // "850K", not "$850K": a dollar sign in a text trips carrier spam filters, and
 // the style gate would hold the draft for it.
 const kText = (n) => `${Math.round(n / 1000)}K`;
@@ -906,15 +1006,74 @@ export function chooseProactiveKind({ events = [], address = "" } = {}) {
   return d && (d.have.arv || d.have.rehab) ? "realm_check" : "take_check";
 }
 
+// The descriptor the prompt reads for one outbound kind: everything the model
+// needs to write this particular message, and nothing about how it was chosen.
+function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
+  const address = offer?.address || subject?.address || "the property";
+  const step = subject?.step ?? null;
+  const steps = subject?.steps || [];
+  const base = { kind, address, ...(step != null ? { step, stepLabel: stepLabel(step, steps), stepIndex: normalizeSteps(steps).indexOf(step) + 1, stepCount: normalizeSteps(steps).length } : {}) };
+  if (kind === "take_check") {
+    const n = offerNumbers(offer);
+    return { ...base,
+      arv: n.arv, rehab: n.rehab,
+      arvText: n.arv ? fmtMoney(n.arv) : "", rehabText: n.rehab ? fmtMoney(n.rehab) : "",
+      arvK: n.arv ? kText(n.arv) : "", rehabK: n.rehab ? kText(n.rehab) : "" };
+  }
+  if (kind === "realm_check") {
+    const closeDays = offer.terms?.closingDays || saved?.psa?.closingDays || 0;
+    const terms = [closeDays ? `${closeDays}-day close` : "", "as-is"].filter(Boolean).join(", ");
+    const asking = Number(offer.askingPrice || offer.calc?.inputs?.askingPrice) || 0;
+    // THEIR numbers, so the price can be framed as a consequence of what they
+    // told us rather than a figure out of nowhere. Without these the caveat is
+    // a hedge; with them it is an explanation.
+    const theirArv = Math.round(Number(dossier?.have?.arv?.value) || 0);
+    const theirRehab = Math.round(Number(dossier?.have?.rehab?.value) || 0);
+    return { ...base,
+      amount: offer.cashAmount, amountText: fmtMoney(offer.cashAmount),
+      amountK: kText(Number(offer.cashAmount) || 0),
+      askingText: asking ? fmtMoney(asking) : "", terms,
+      theirArv, theirRehab,
+      theirArvK: theirArv ? kText(theirArv) : "", theirRehabK: theirRehab ? kText(theirRehab) : "",
+      requote: Boolean(subject?.requote) };
+  }
+  // The nudges. They carry what the message is ABOUT and no numbers at all.
+  return { ...base,
+    blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
+    lastTouchAt: subject?.lastTouchAt || null };
+}
+
+// The one-liner the outbox row shows when the model didn't write its own.
+function outboundSummary({ kind, offer, outbound }) {
+  const where = outbound.address;
+  const rung = outbound.stepLabel ? ` (${outbound.stepLabel})` : "";
+  switch (kind) {
+    case "take_check": {
+      const parts = [outbound.arv ? `${outbound.arvK} ARV` : "", outbound.rehab ? `${outbound.rehabK} rehab` : ""].filter(Boolean);
+      return `Floats our ${parts.join(" / ")} read on ${where} and asks what they think.`;
+    }
+    case "realm_check":
+      return outbound.requote
+        ? `Comes back on ${where} with ${fmtMoney(offer.cashAmount)} after re-running their numbers.`
+        : `Floats ${fmtMoney(offer.cashAmount)} on ${where} as a rough first pass and asks if it's in the realm.`;
+    case "offer_nudge":   return `Follows up on our offer on ${where}${rung}.`;
+    case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
+    case "dataroom_nudge": return `Follows up on ${where} — they opened the package and went quiet${rung}.`;
+    default: return `Starts a message about ${where}${rung}.`;
+  }
+}
+
 async function runProactive(job, ctx) {
-  const { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, config, deps } = ctx;
+  const { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, subject, spec, config, dossier, deps } = ctx;
   const now = typeof deps.now === "function" ? deps.now() : Date.now();
   const warnings = job.warnings;
+  const kind = job.outbound;
+  const party = spec.party;
   job.status = "running";
   job.phase = "reading";
   const a = await assembleConversation({
     client, locationId, saved, store, contactId: job.contactId, message: "", channel: "sms",
-    explicitParty: "agent", now, warnings, aiApiKey,
+    explicitParty: party, now, warnings, aiApiKey,
   });
   job.contactName = a.contactName;
   const handsOff = handsOffReason(a);
@@ -923,41 +1082,27 @@ async function runProactive(job, ctx) {
     return;
   }
   const { context } = a;
-  const closeDays = offer.terms?.closingDays || saved?.psa?.closingDays || 0;
-  const terms = [closeDays ? `${closeDays}-day close` : "", "as-is"].filter(Boolean).join(", ");
-  const asking = Number(offer.askingPrice || offer.calc?.inputs?.askingPrice) || 0;
-  const kind = job.outbound === "take_check" ? "take_check" : "realm_check";
-  const nums = offerNumbers(offer);
-  const outbound = kind === "take_check"
-    ? {
-        kind, address: offer.address || "the property",
-        arv: nums.arv, rehab: nums.rehab,
-        arvText: nums.arv ? fmtMoney(nums.arv) : "", rehabText: nums.rehab ? fmtMoney(nums.rehab) : "",
-        arvK: nums.arv ? kText(nums.arv) : "", rehabK: nums.rehab ? kText(nums.rehab) : "",
-      }
-    : {
-        kind, address: offer.address || "the property", amount: offer.cashAmount,
-        amountText: fmtMoney(offer.cashAmount), askingText: asking ? fmtMoney(asking) : "", terms,
-      };
+  const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier });
 
   job.phase = "drafting";
   const draft = await deps.draft({
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
     contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer,
-    aiApiKey, party: "agent", config, context, channel: "sms", outbound,
+    aiApiKey, party, config, context, channel: "sms", outbound,
   });
   draft.intent = kind;
   job.summary = draft.summary;
-  // What it floats is what it may say: the cash number for a realm check,
-  // the ARV and rehab for a take check — and for a take check the cash
-  // number is NOT allowed, which is the whole point of asking first.
-  const floats = kind === "take_check" ? [nums.arv, nums.rehab].filter(Boolean) : [Math.round(offer.cashAmount)];
+  // What this kind floats is what it may say, on top of the record book — and
+  // what it forbids is subtracted even though the book has it. A nudge floats
+  // nothing, so its allowance is exactly the book.
+  const floats = spec.floats({ offer, subject }).filter(Boolean);
   const allowed = [...new Set([...(context.amounts || []), ...floats])];
-  const forbiddenAmounts = kind === "take_check"
-    ? [...new Set([...(context.forbiddenAmounts || []), Math.round(Number(offer.cashAmount) || 0)].filter(Boolean))]
+  const extraForbidden = spec.forbids({ offer, subject }).filter(Boolean);
+  const forbiddenAmounts = extraForbidden.length
+    ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]
     : context.forbiddenAmounts;
-  const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft, party: "agent", allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style });
-  const auto = decideAutoSend({ gate, party: "agent", intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
+  const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style });
+  const auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
 
   job.phase = "saving";
   const open = [];
@@ -972,15 +1117,18 @@ async function runProactive(job, ctx) {
   let record = await store.createReplyDraft({
     locationId, contactId: job.contactId, contactName: job.contactName, status: "draft", channel: "sms", jobId: job.id,
     inbound: "",
-    outbound: kind === "take_check"
-      ? { kind, offerId: offer.id || null, address: offer.address || "", arv: nums.arv, rehab: nums.rehab }
-      : { kind, offerId: offer.id || null, address: offer.address || "", amount: offer.cashAmount },
+    // What the row is about, in the shape the outbox renders. The nudges carry
+    // their rung so a person approving one can see how far in we are.
+    outbound: {
+      kind, offerId: offer?.id || null, address: outbound.address,
+      ...(kind === "take_check" ? { arv: outbound.arv, rehab: outbound.rehab } : {}),
+      ...(kind === "realm_check" ? { amount: offer.cashAmount, requote: outbound.requote } : {}),
+      ...(outbound.step != null ? { step: outbound.step, steps: subject?.steps || [], stepLabel: outbound.stepLabel } : {}),
+    },
     reply: draft.reply, intent: kind, confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
-    summary: draft.summary || (kind === "take_check"
-      ? `Floats our ${[nums.arv ? `${kText(nums.arv)} ARV` : "", nums.rehab ? `${kText(nums.rehab)} rehab` : ""].filter(Boolean).join(" / ")} read on ${offer.address} and asks what they think.`
-      : `Floats our ${fmtMoney(offer.cashAmount)} on ${offer.address} and asks if it's in the realm.`),
-    propertyAddress: offer.address || draft.propertyAddress || "", counterAmount: null,
-    autoSendable: gate.ok, flags: gate.flags, party: "agent", partySource: "offer", matchedTags: a.matchedTags,
+    summary: draft.summary || outboundSummary({ kind, offer, outbound }),
+    propertyAddress: outbound.address || draft.propertyAddress || "", counterAmount: null,
+    autoSendable: gate.ok, flags: gate.flags, party, partySource: "offer", matchedTags: a.matchedTags,
     contextSummary: context.summary || {}, offersInContext: context.offers?.count ?? 0,
     autoSend: { decided: auto.send, reason: auto.reason }, humanActive: a.humanActive || null, actions: [],
     supersededIds: open.map((o) => o.id), warnings: warnings.slice(0, 6), noteOnAutoSend: config.notes?.onAutoSend !== false,

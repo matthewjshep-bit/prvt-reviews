@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dbEnabled, query, migrate } from "./db.js";
-import { OFFER_LIST_FIELDS, toListOffer } from "./shared/offer-status.js";
+import { OFFER_LIST_FIELDS, toListOffer, effectiveStatus, OPEN_STATUSES } from "./shared/offer-status.js";
 
 // pg hands bigint back as a string and real as a float; the API speaks numbers.
 const videoRow = (r) => ({
@@ -51,6 +51,32 @@ export function offerListQuery({ locationId, contactId = null, limit = 50, lean 
   };
 }
 
+// Candidates for a time-based nudge: the location's open offers whose status
+// has not moved since `before`, oldest first — the most neglected offer is the
+// one to look at first. Built as { text, params } here for the same reason
+// offerListQuery is: it gets a unit test without a database.
+//
+// The status/status_at columns this reads are a mirror of `doc`, kept for the
+// index. The sweep re-checks effectiveStatus on the full row before it acts,
+// so a stale mirror costs a missed nudge and never a wrong send.
+export function followUpQuery({ locationId, statuses = [...OPEN_STATUSES], before, limit = 200 }) {
+  const params = [locationId];
+  const ph = (v) => `$${params.push(v)}`;
+  const lean = `coalesce((select jsonb_object_agg(k, v) from jsonb_each(doc) as e(k, v)
+                  where k = any(${ph(OFFER_LIST_FIELDS)}::text[])), '{}'::jsonb) as doc`;
+  const where = [`location_id = $1`, `status = any(${ph(statuses)}::text[])`];
+  // A row whose status_at never got written (an offer that predates the
+  // column and has no statusAt in its doc either) is a candidate, not a
+  // silent omission — the sweep will read it properly and decide.
+  if (before) where.push(`(status_at is null or status_at <= ${ph(before)})`);
+  return {
+    text: `select ${lean} from offers
+            where ${where.join(" and ")}
+            order by status_at asc nulls first limit ${ph(limit)}`,
+    params,
+  };
+}
+
 /* ============================================================= *
  * Postgres backend
  * ============================================================= */
@@ -74,6 +100,34 @@ const pgStore = {
     } catch (e) {
       console.error("store: legacy outreach batch adoption failed:", e.message);
     }
+    await this.backfillOfferStatusColumns().catch((e) =>
+      console.error("store: offer status backfill failed:", e.message));
+  },
+
+  // Fill the mirrored status columns on offers written before they existed.
+  // Idempotent: after the first run no null-status rows remain, so a redeploy
+  // pages once, finds nothing and stops.
+  //
+  // Derived in JS through the shared effectiveStatus, never in SQL. The rule
+  // ("no status? then a send makes it sent, a deal makes it accepted, else
+  // new") already exists in one place, and a second copy written in SQL is a
+  // copy that drifts.
+  async backfillOfferStatusColumns({ pageSize = 500 } = {}) {
+    let filled = 0;
+    for (;;) {
+      const { rows } = await query(
+        `select id, doc, created_at as "createdAt" from offers where status is null limit $1`, [pageSize]);
+      if (!rows.length) break;
+      for (const r of rows) {
+        const doc = r.doc || {};
+        await query(`update offers set status = $2, status_at = $3 where id = $1`,
+          [r.id, effectiveStatus(doc), doc.statusAt || doc.createdAt || r.createdAt || null]);
+        filled++;
+      }
+      if (rows.length < pageSize) break;
+    }
+    if (filled) console.log(`store: backfilled status on ${filled} offer(s)`);
+    return filled;
   },
 
   /* ---- offers ---- */
@@ -82,9 +136,10 @@ const pgStore = {
     const ts = nowIso();
     const full = { ...doc, id, createdAt: ts };
     await query(
-      `insert into offers (id, location_id, contact_id, address, cash_amount, doc, created_at)
-       values ($1,$2,$3,$4,$5,$6,$7)`,
-      [id, full.locationId, full.contactId || null, full.address || null, full.cashAmount || null, full, ts]
+      `insert into offers (id, location_id, contact_id, address, cash_amount, doc, created_at, status, status_at, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())`,
+      [id, full.locationId, full.contactId || null, full.address || null, full.cashAmount || null, full, ts,
+       full.status || effectiveStatus(full), full.statusAt || ts]
     );
     return full;
   },
@@ -130,10 +185,19 @@ const pgStore = {
   // another, permanently. Every caller passes a whole doc, so mirror all three.
   async updateOffer(id, doc) {
     const { rowCount } = await query(
-      `update offers set doc = $2, contact_id = $3, address = $4, cash_amount = $5 where id = $1`,
-      [id, doc, doc.contactId || null, doc.address || null, doc.cashAmount || null]
+      `update offers set doc = $2, contact_id = $3, address = $4, cash_amount = $5,
+                         status = $6, status_at = $7, updated_at = now() where id = $1`,
+      [id, doc, doc.contactId || null, doc.address || null, doc.cashAmount || null,
+       doc.status || effectiveStatus(doc), doc.statusAt || doc.createdAt || null]
     );
     return rowCount > 0;
+  },
+  // See followUpQuery. Lean rows, oldest-first; the caller re-reads the full
+  // doc before acting on any of them.
+  async listOffersForFollowUp(locationId, { statuses, before = null, limit = 200 } = {}) {
+    const { text, params } = followUpQuery({ locationId, statuses, before, limit });
+    const { rows } = await query(text, params);
+    return rows.map((r) => toListOffer(r.doc));
   },
   async deleteOffer(id) {
     await query(`delete from offer_documents where offer_id = $1`, [id]).catch(() => {});
@@ -756,6 +820,63 @@ const pgStore = {
     );
     return rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at }));
   },
+  // Everything that happened in this location since `since`, oldest first.
+  // The per-contact index cannot serve this; contact_events_loc_at_idx can.
+  // The investor follow-up ladder and the funnel report are both built on it.
+  async listContactEventsSince(locationId, sinceIso, { types = null, limit = 5000 } = {}) {
+    const params = [locationId, sinceIso];
+    let where = "";
+    if (Array.isArray(types) && types.length) { params.push(types); where = ` and type = any($${params.length}::text[])`; }
+    params.push(limit);
+    const { rows } = await query(
+      `select id, contact_id as "contactId", party, type, at, address, offer_id as "offerId", deal_id as "dealId", source, ref,
+              dedupe_key as "dedupeKey", data, created_at as "createdAt"
+         from contact_events where location_id = $1 and at >= $2${where}
+         order by at asc limit $${params.length}`,
+      params
+    );
+    return rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at }));
+  },
+  // The outcome projection the funnel report reads: enough of each offer to
+  // count a status transition, a counter spread and a pass reason, and nothing
+  // else. Note the window is on created_at — a status can land on an offer
+  // created long before it, so callers widen the horizon themselves.
+  async listOfferOutcomesSince(locationId, sinceIso, { limit = 5000 } = {}) {
+    const { rows } = await query(
+      `select id, contact_id as "contactId", address, created_at as "createdAt",
+              cash_amount as "cashAmount", status, status_at as "statusAt",
+              coalesce(doc->'statusHistory', '[]'::jsonb) as "statusHistory",
+              doc->'counter' as counter, doc->'deal' as deal,
+              doc->'arv' as arv, doc->'repairs' as repairs
+         from offers where location_id = $1 and created_at >= $2
+         order by created_at asc limit $3`,
+      [locationId, sinceIso, limit]
+    );
+    return rows.map((r) => ({
+      ...r,
+      createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
+      statusAt: r.statusAt instanceof Date ? r.statusAt.toISOString() : r.statusAt,
+      cashAmount: r.cashAmount == null ? null : Number(r.cashAmount),
+    }));
+  },
+
+  /* ---- job cursors ---- */
+  async getJobCursor(locationId, name) {
+    const { rows } = await query(
+      `select at, doc from job_cursors where location_id = $1 and name = $2`, [locationId, name]);
+    if (!rows[0]) return null;
+    const at = rows[0].at;
+    return { at: at instanceof Date ? at.toISOString() : at, doc: rows[0].doc || {} };
+  },
+  async setJobCursor(locationId, name, { at = nowIso(), doc = {} } = {}) {
+    await query(
+      `insert into job_cursors (location_id, name, at, doc) values ($1,$2,$3,$4)
+       on conflict (location_id, name) do update set at = excluded.at, doc = excluded.doc`,
+      [locationId, name, at, doc]
+    );
+    return { at, doc };
+  },
+
   async contactRecordStats(locationId) {
     const { rows } = await query(
       `select (select count(*) from contact_profiles where location_id = $1)::int as profiles,
@@ -977,6 +1098,7 @@ const fileStore = (() => {
       data.dealDocs = data.dealDocs || {};
       data.compCaptures = data.compCaptures || {};
       data.investors = data.investors || {};
+      data.jobCursors = data.jobCursors || {};
       data.replyDrafts = data.replyDrafts || {};
       data.contactProfiles = data.contactProfiles || {};
       data.contactEvents = data.contactEvents || {};   // "<loc>|<contact>" → [events]; never pruned (dev backend)
@@ -1052,6 +1174,20 @@ const fileStore = (() => {
         .sort((a, b) => (b.deal.createdAt || "").localeCompare(a.deal.createdAt || ""))
         .slice(0, limit);
     },
+    // The file backend has no columns to mirror, so it filters the docs the
+    // Postgres index exists to avoid scanning. Same answer, same order.
+    async listOffersForFollowUp(locationId, { statuses = [...OPEN_STATUSES], before = null, limit = 200 } = {}) {
+      ensure();
+      const want = new Set(statuses);
+      return Object.values(data.offers)
+        .filter((o) => o.locationId === locationId && want.has(effectiveStatus(o)))
+        .filter((o) => !before || !(o.statusAt || o.createdAt) || (o.statusAt || o.createdAt) <= before)
+        .sort((a, b) => String(a.statusAt || a.createdAt || "").localeCompare(String(b.statusAt || b.createdAt || "")))
+        .slice(0, limit)
+        .map(toListOffer);
+    },
+    // Nothing to fill: the file backend reads status off the doc every time.
+    async backfillOfferStatusColumns() { return 0; },
     async listOffersSince(locationId, sinceIso) {
       ensure();
       return Object.values(data.offers)
@@ -1661,6 +1797,39 @@ const fileStore = (() => {
         .filter((e) => (!since || e.at >= since) && (!types?.length || types.includes(e.type)))
         .sort((a, b) => String(b.at).localeCompare(String(a.at)) || String(b.createdAt).localeCompare(String(a.createdAt)))
         .slice(0, limit);
+    },
+    async listContactEventsSince(locationId, sinceIso, { types = null, limit = 5000 } = {}) {
+      ensure();
+      return Object.entries(data.contactEvents)
+        .filter(([k]) => k.startsWith(`${locationId}|`))
+        .flatMap(([, list]) => list)
+        .filter((e) => e.at >= sinceIso && (!types?.length || types.includes(e.type)))
+        .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+        .slice(0, limit);
+    },
+    async listOfferOutcomesSince(locationId, sinceIso, { limit = 5000 } = {}) {
+      ensure();
+      return Object.values(data.offers)
+        .filter((o) => o.locationId === locationId && (o.createdAt || "") >= sinceIso)
+        .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")))
+        .slice(0, limit)
+        .map((o) => ({
+          id: o.id, contactId: o.contactId || null, address: o.address || null,
+          createdAt: o.createdAt, cashAmount: o.cashAmount ?? null,
+          status: o.status || effectiveStatus(o), statusAt: o.statusAt || o.createdAt || null,
+          statusHistory: o.statusHistory || [], counter: o.counter || null, deal: o.deal || null,
+          arv: o.arv ?? null, repairs: o.repairs ?? null,
+        }));
+    },
+    async getJobCursor(locationId, name) {
+      ensure();
+      return data.jobCursors[`${locationId}|${name}`] || null;
+    },
+    async setJobCursor(locationId, name, { at = nowIso(), doc = {} } = {}) {
+      ensure();
+      data.jobCursors[`${locationId}|${name}`] = { at, doc };
+      persist();
+      return { at, doc };
     },
     async listContactEventsByOffer(locationId, offerId, { limit = 200 } = {}) {
       ensure();

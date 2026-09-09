@@ -13,6 +13,19 @@
 // own" set; what they share is the persona, the house rules, the examples and
 // the machinery underneath.
 
+import { DEFAULT_LADDERS, ON_EXHAUSTED, kindsFor, normalizeSteps } from "./follow-up.js";
+
+// The re-quote guard's defaults. They live here rather than in requote.js
+// because requote.js reaches offer-calc, and offer-calc reaches back here to
+// normalize a settings blob — so the config module has to be the end of the
+// chain, not a link in it.
+export const REQUOTE_DEFAULTS = {
+  enabled: false,
+  maxPerOffer: 1,        // one automatic re-quote per property, ever
+  maxArvLiftPct: 10,     // they can't raise our ARV without bound
+  maxRepairCutPct: 25,   // nor cut our repair estimate without bound
+};
+
 export const PARTIES = ["agent", "investor"];
 export const PARTY_LABEL = { agent: "Listing agent", investor: "Investor", unknown: "Unknown" };
 export const CONFIDENCES = ["high", "medium", "low"];
@@ -41,12 +54,20 @@ export const SILENT_INTENTS = new Set(["opt_out"]);
 // they need labels, gates and an allowlist slot like any other.
 // take_check floats our ARV/rehab read to draw out theirs; realm_check floats
 // the cash number. In that order when both apply: their read before our price.
-export const OUTBOUND_INTENTS = { agent: ["realm_check", "take_check"], investor: [] };
+// offer_nudge / blast_nudge / dataroom_nudge are the follow-up clock's voice
+// (shared/follow-up.js). They are ordinary auto-sendable intents: not in
+// NEVER_AUTO, so autoEligible() offers them as checkboxes and an operator
+// opts a nudge into sending itself exactly the way they opt in a question.
+export const OUTBOUND_INTENTS = {
+  agent: ["realm_check", "take_check", "offer_nudge"],
+  investor: ["blast_nudge", "dataroom_nudge"],
+};
 
 export const INTENT_LABEL = {
   agent: {
     deal_available: "has a deal (tier 1)", new_property: "new property (tier 1)", investor_open: "open to investors (tier 2)",
     realm_yes: "number is in the realm", realm_check: "floated our number", take_check: "floated our read",
+    offer_nudge: "followed up on our offer",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
     wants_call: "wants a call", scheduling: "scheduling", proof_of_funds: "proof of funds",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
@@ -56,6 +77,7 @@ export const INTENT_LABEL = {
     question: "question", price_pushback: "pushing on price", wants_to_buy: "wants to buy",
     wants_walkthrough: "wants to walk it", passing: "passing", wants_call: "wants a call",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
+    blast_nudge: "followed up on a deal we sent", dataroom_nudge: "followed up after they opened the package",
   },
 };
 
@@ -188,7 +210,7 @@ export function summarizeFeedback(rows = []) {
 
 export const ACTION_TYPES = [
   "add_tags", "remove_tags", "set_field", "add_to_workflow", "remove_from_workflow",
-  "link_deal_evaluating", "start_underwrite", "suggest_dataroom_invite",
+  "link_deal_evaluating", "start_underwrite", "requote_from_agent_numbers", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
   "record_deal_feedback",
 ];
@@ -197,6 +219,7 @@ export const ACTION_LABEL = {
   add_to_workflow: "Add to a GHL workflow", remove_from_workflow: "Remove from a GHL workflow",
   link_deal_evaluating: "Link them to the deal as evaluating",
   start_underwrite: "Start an auto-underwrite", suggest_dataroom_invite: "Suggest a dataroom invite",
+  requote_from_agent_numbers: "Re-run the numbers on what they told us",
   mark_offer_countered: "Mark their offer countered", mark_offer_passed: "Mark their offer passed",
   mark_offer_realm_yes: "Note on the offer that the number is in the realm",
   mark_investor_passed: "Mark them passed on the deal", mark_investor_committed: "Mark them the committed buyer",
@@ -206,12 +229,12 @@ export const ACTION_LABEL = {
 // makes sense for. An investor can't be underwritten; an agent isn't invited
 // to a dataroom; an offer belongs to an agent, a deal status to an investor.
 export const INTERNAL_ACTIONS = new Set([
-  "link_deal_evaluating", "start_underwrite", "suggest_dataroom_invite",
+  "link_deal_evaluating", "start_underwrite", "requote_from_agent_numbers", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
   "record_deal_feedback",
 ]);
 export const INTERNAL_ACTIONS_FOR = {
-  agent: ["start_underwrite", "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes"],
+  agent: ["start_underwrite", "requote_from_agent_numbers", "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes"],
   investor: ["link_deal_evaluating", "suggest_dataroom_invite", "mark_investor_passed", "mark_investor_committed", "record_deal_feedback"],
 };
 // Never automatic: a dataroom link is a document going out, and a committed
@@ -251,6 +274,20 @@ const PLAYBOOK = () => ({
   // bot floats our ARV and rehab as an opinion to get theirs — before it
   // ever shows the price. Sends itself only if take_check is on the allowlist.
   takeCheck: { enabled: false },
+  // "That's way too low" → re-run our own arithmetic on the ARV and rehab
+  // they just gave us, and float what falls out. Concedes nothing: it is the
+  // move to exhaust before anything ever auto-concedes on price.
+  requote: { ...REQUOTE_DEFAULTS },
+  // The clock. Off by default, and off again per ladder — and even switched
+  // on a nudge only DRAFTS unless its intent is also ticked on the auto-send
+  // allowlist above. Two switches is the guard, deliberately.
+  followUp: {
+    enabled: false,
+    ladders: {},                 // filled per party from DEFAULT_LADDERS
+    maxPerContactPerWeek: 2,
+    stopOnAnyInbound: true,      // anything they say ends the ladder
+    minHoursBetween: 40,         // never two nudges inside ~two days
+  },
 });
 
 // Words that mean "stop". Matched deterministically, before any model call,
@@ -418,6 +455,41 @@ function normalizePlaybook(p, party, seed = {}) {
     showMath: bool(src.showMath, false),
     realmCheck: { enabled: bool(src.realmCheck?.enabled, false) },
     takeCheck: { enabled: bool(src.takeCheck?.enabled, false) },
+    followUp: normalizeFollowUp(src.followUp, party),
+    requote: {
+      enabled: bool(src.requote?.enabled, false),
+      maxPerOffer: int(src.requote?.maxPerOffer, REQUOTE_DEFAULTS.maxPerOffer, 1, 5),
+      maxArvLiftPct: int(src.requote?.maxArvLiftPct, REQUOTE_DEFAULTS.maxArvLiftPct, 0, 50),
+      maxRepairCutPct: int(src.requote?.maxRepairCutPct, REQUOTE_DEFAULTS.maxRepairCutPct, 0, 90),
+    },
+  };
+}
+
+// A party's ladders, filled from the defaults and coerced. Only the kinds that
+// belong to this party survive — an operator cannot save a dataroom ladder on
+// the agent playbook, and a stored one from a hand-edited blob is dropped.
+function normalizeFollowUp(src = {}, party = "agent") {
+  const f = src && typeof src === "object" ? src : {};
+  const ladders = {};
+  for (const kind of kindsFor(party)) {
+    const d = DEFAULT_LADDERS[kind];
+    const one = f.ladders?.[kind] || {};
+    const steps = normalizeSteps(one.steps ?? d.steps);
+    ladders[kind] = {
+      enabled: bool(one.enabled, false),
+      // An empty ladder can never be due, so a saved blob with every day
+      // deleted falls back to the default rather than silently switching the
+      // feature off while the toggle still reads "on".
+      steps: steps.length ? steps : [...d.steps],
+      onExhausted: oneOf(one.onExhausted, ON_EXHAUSTED, d.onExhausted),
+    };
+  }
+  return {
+    enabled: bool(f.enabled, false),
+    ladders,
+    maxPerContactPerWeek: int(f.maxPerContactPerWeek, 2, 1, 20),
+    stopOnAnyInbound: bool(f.stopOnAnyInbound, true),
+    minHoursBetween: int(f.minHoursBetween, 40, 0, 720),
   };
 }
 

@@ -213,30 +213,101 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
  * The per-message block: who they are, what we know, the thread, the message.
  * `context.text` is the party-specific record block from conversation-context.js.
  */
+/* ---------- messages the bot STARTS ---------- */
+
+// The instruction block for a message with no inbound to answer. Two families:
+// the anchor pair (take_check draws out their read, realm_check gives a price
+// once we have it) and the follow-up nudges from the clock.
+//
+// Every one of them says "reference the thread so it reads as a continuation",
+// because the failure mode of an unprompted text is sounding like a broadcast.
+const START = "YOU ARE STARTING THIS MESSAGE — nothing new came in.";
+const CONTINUE = "Reference the thread so it reads as a continuation.";
+
+// How hard the nudge leans, by rung. The first is a light bump; by the third
+// the useful thing is to make it easy to say no and then stop.
+function nudgePressure(outbound) {
+  const i = Number(outbound?.stepIndex) || 1;
+  const n = Number(outbound?.stepCount) || 1;
+  if (i <= 1) return "This is the first follow-up: one short line, friendly, no pressure.";
+  if (i >= n) return "This is the LAST follow-up — say so lightly, give them an easy way out " +
+    "(\"if it's not one for you just say so and I'll leave it\"), and do not ask a second question.";
+  return "This is a repeat follow-up: keep it shorter than the last one and give them an easy out.";
+}
+
+export function outboundOpening(outbound) {
+  if (!outbound?.kind) return "";
+  const o = outbound;
+  switch (o.kind) {
+    case "take_check":
+      return `${START} We just ran a quick underwrite on ${o.address}: ` +
+        `${[o.arvText ? `ARV ${o.arvText}` : "", o.rehabText ? `rehab about ${o.rehabText}` : ""].filter(Boolean).join(", ")}. ` +
+        `Say so lightly ("just did a quick underwrite") and float those two as YOUR read, in one question, the way a ` +
+        `colleague would — either "I'm thinking ${o.arvK || "…"} After Repair Value and ${o.rehabK || "…"}+ of rehab. What do you think?" ` +
+        `or "we'd likely have to do ${o.rehabK || "…"} in rehab and I'm seeing the ARV in the area around ${o.arvK || "…"}, what do you think?" ` +
+        `(written like a text — no dollar signs). ` +
+        `Do NOT mention an offer, a purchase price, or what we'd pay — this is a read, not a number. ${CONTINUE} ` +
+        `Set intent to take_check.`;
+
+    // The price, at last — and the whole job of this block is to stop it
+    // landing as a lowball. An agent who reads a bare number as our offer
+    // stops replying; one who reads it as a first pass off the back of THEIR
+    // numbers argues with the inputs instead, which is the conversation we
+    // want. So: tie it to what they told us, say plainly that it is rough,
+    // and offer to do it properly if it is nowhere near.
+    case "realm_check": {
+      if (o.requote) {
+        return `${START} We went back and ran ${o.address} properly using THEIR numbers` +
+          `${[o.theirArvK ? `${o.theirArvK} ARV` : "", o.theirRehabK ? `${o.theirRehabK} of work` : ""].filter(Boolean).length
+            ? ` (${[o.theirArvK ? `${o.theirArvK} ARV` : "", o.theirRehabK ? `${o.theirRehabK} of work` : ""].filter(Boolean).join(", ")})` : ""}` +
+          `, and it comes out at ${o.amountK}. Tell them you re-ran it on their numbers and this is where it lands — ` +
+          `this one is a real underwrite, not a guess, so present it with more confidence than the first pass. ` +
+          `Ask whether that works for the seller. ${CONTINUE} Set intent to realm_check.`;
+      }
+      const theirs = [o.theirArvK ? `an ARV around ${o.theirArvK}` : "", o.theirRehabK ? `about ${o.theirRehabK} of work` : ""].filter(Boolean).join(" and ");
+      return `${START} ${theirs ? `They came back on ${o.address} with ${theirs}.` : `We have numbers on ${o.address}.`} ` +
+        `Give them a ROUGH, OFF-THE-TOP-OF-YOUR-HEAD number — ${o.amountK} — and be explicit that is exactly what it is: ` +
+        `a first pass, not an underwritten offer. ` +
+        (theirs ? `Tie it to THEIR numbers, e.g. "with your ARV and that kind of rehab, off the top of my head we'd probably be somewhere around ${o.amountK}". ` : "") +
+        `NEVER present it as an offer, a maximum, or a final number — no "we can do", no "our offer is". ` +
+        `Ask whether that's in the realm for the seller. If they come back that it's nowhere close, we can run a full ` +
+        `underwrite — so it's fine to say you'd be glad to dig into it properly. ` +
+        `Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
+    }
+
+    // The nudges. They introduce NO number — the money guard would flag one
+    // anyway, but the instruction has to match the gate or every draft parks.
+    case "offer_nudge":
+      return `${START} We sent this agent an offer on ${o.address} and they haven't answered. ` +
+        `${nudgePressure(o)} Check in on it in one or two lines. You may refer to the offer we sent, but do NOT ` +
+        `name a number, sweeten it, or imply we'd go higher — that is a person's call. Asking whether they got it, ` +
+        `whether the seller has seen it, or where it stands are all good. ${CONTINUE} Set intent to offer_nudge.`;
+
+    case "blast_nudge":
+      return `${START} We sent this buyer the deal on ${o.address} and they never replied. ` +
+        `${nudgePressure(o)} One short line asking whether it's of interest. Do NOT name a price, a spread, or ` +
+        `any number — the deal book has what they were sent and you may refer to it, but this message introduces ` +
+        `nothing new. ${CONTINUE} Set intent to blast_nudge.`;
+
+    case "dataroom_nudge":
+      return `${START} This buyer opened the deal package on ${o.address} and then went quiet. ` +
+        `That they looked is the whole reason to write — so ask what they made of it, lightly, without being ` +
+        `creepy about having watched: "did you get a chance to look at ${o.address}?" is right, "I saw you opened ` +
+        `it twice" is not. ${nudgePressure(o)} Do NOT name a price or any number. ${CONTINUE} ` +
+        `Set intent to dataroom_nudge.`;
+
+    default:
+      return "";
+  }
+}
+
 export function buildUserContext({
   party = "agent", contact = {}, signer = "", instructions = "", context = { text: "" },
   underwriting = [], transcript = "", message = "", outbound = null,
 } = {}) {
   const label = party === "investor" ? "INVESTOR" : party === "agent" ? "AGENT" : "CONTACT";
   const them = party === "investor" ? "the investor" : party === "agent" ? "the agent" : "them";
-  // A message WE start. The realm check: numbers came back on a property
-  // and the bot floats them as a soft number before the formal offer goes.
-  const opening = outbound?.kind === "take_check"
-    ? `YOU ARE STARTING THIS MESSAGE — nothing new came in. We just ran a quick underwrite on ${outbound.address}: ` +
-      `${[outbound.arvText ? `ARV ${outbound.arvText}` : "", outbound.rehabText ? `rehab about ${outbound.rehabText}` : ""].filter(Boolean).join(", ")}. ` +
-      `Say so lightly ("just did a quick underwrite") and float those two as YOUR read, in one question, the way a ` +
-      `colleague would — either "I'm thinking ${outbound.arvK || "…"} After Repair Value and ${outbound.rehabK || "…"}+ of rehab. What do you think?" ` +
-      `or "we'd likely have to do ${outbound.rehabK || "…"} in rehab and I'm seeing the ARV in the area around ${outbound.arvK || "…"}, what do you think?" ` +
-      `(written like a text — no dollar signs). ` +
-      `Do NOT mention an offer, a purchase price, or what we'd pay — this is a read, not a number. Reference the ` +
-      `thread so it reads as a continuation. Set intent to take_check.`
-    : outbound?.kind === "realm_check"
-    ? `YOU ARE STARTING THIS MESSAGE — nothing new came in. Our underwriting just came back on ${outbound.address}: ` +
-      `cash offer ${outbound.amountText}${outbound.terms ? `, ${outbound.terms}` : ""}` +
-      `${outbound.askingText ? ` (they are asking ${outbound.askingText})` : ""}. Float it as a soft number ` +
-      `("we'd likely land around …") and ask, in one natural question, whether that's in the realm for the seller ` +
-      `before you send the formal offer over. Reference the thread so it reads as a continuation. Set intent to realm_check.`
-    : "";
+  const opening = outboundOpening(outbound);
   return [
     `${label}: ${contact.name || "unknown name"}${contact.tags?.length ? ` (tags: ${contact.tags.slice(0, 8).join(", ")})` : ""}`,
     signer ? `YOU ARE: ${signer}` : "",

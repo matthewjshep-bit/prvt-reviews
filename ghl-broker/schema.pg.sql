@@ -17,6 +17,20 @@ create table if not exists offers (
 create index if not exists offers_location_idx on offers (location_id, created_at desc);
 create index if not exists offers_contact_idx on offers (location_id, contact_id);
 
+-- The offer's lifecycle, mirrored out of `doc` the way reply_drafts mirrors
+-- its own status: the follow-up sweep's question is "every open offer in this
+-- location whose status hasn't moved in N days", and inside jsonb that is a
+-- scan of the whole book on every tick.
+--
+-- These columns are an INDEX, NOT A TRUTH. The sweep uses them only to narrow
+-- candidates; it then loads the full row and re-checks effectiveStatus(doc)
+-- before it acts on one. A stale mirror can cost a missed nudge. It can never
+-- cause a wrong send.
+alter table offers add column if not exists status     text;
+alter table offers add column if not exists status_at  timestamptz;
+alter table offers add column if not exists updated_at timestamptz;
+create index if not exists offers_status_idx on offers (location_id, status, status_at);
+
 -- Per-location calculation defaults (percentages, terms, company info printed
 -- on the document). One row per location.
 create table if not exists offer_settings (
@@ -381,6 +395,24 @@ create table if not exists contact_events (
   created_at    timestamptz not null default now()
 );
 create index if not exists contact_events_contact_idx on contact_events (location_id, contact_id, at desc);
+-- Location-wide, time-ordered. The per-contact index above cannot serve
+-- "everything that happened here in the last N days" — which is what the
+-- investor follow-up ladder and the funnel report both ask.
+create index if not exists contact_events_loc_at_idx on contact_events (location_id, at desc);
 create index if not exists contact_events_offer_idx on contact_events (location_id, offer_id) where offer_id is not null;
 create unique index if not exists contact_events_dedupe_uniq
   on contact_events (location_id, contact_id, dedupe_key) where dedupe_key is not null;
+
+-- Where a recurring sweep remembers it already ran. The nightly enrichment
+-- sweep keeps this in memory, so a redeploy inside its trigger hour can run it
+-- twice; for enrichment that costs money, and for follow-ups it would text
+-- people twice. Its own table rather than a key in offer_settings, because
+-- that blob is read-modify-written by two routes and a sweep writing into it
+-- would race an operator pressing Save.
+create table if not exists job_cursors (
+  location_id  text not null,
+  name         text not null,
+  at           timestamptz not null,
+  doc          jsonb not null default '{}'::jsonb,
+  primary key (location_id, name)
+);

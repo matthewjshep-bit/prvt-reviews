@@ -376,3 +376,47 @@ test("a version-1 config is brought up to 'everything on' once; version 2 is lef
   // A doc with no version at all (a test fixture, a hand-written blob) is not migrated.
   assert.equal(normalizeConversationAi({ parties: { agent: { autoSend: { enabled: false, intents: [] } } } }).parties.agent.autoSend.enabled, false);
 });
+
+/* ---------- the follow-up ladder ---------- */
+
+test("normalizing a config twice leaves the follow-up ladder unchanged", () => {
+  const once = normalizeConversationAi({});
+  const twice = normalizeConversationAi(once);
+  assert.deepEqual(twice.parties.agent.followUp, once.parties.agent.followUp);
+  assert.deepEqual(twice.parties.investor.followUp, once.parties.investor.followUp);
+});
+
+test("the follow-up ladders ship switched off on both parties", () => {
+  const c = normalizeConversationAi({});
+  for (const party of ["agent", "investor"]) {
+    assert.equal(c.parties[party].followUp.enabled, false);
+    for (const l of Object.values(c.parties[party].followUp.ladders)) assert.equal(l.enabled, false);
+  }
+});
+
+test("a party never carries the other party's ladder", () => {
+  const c = normalizeConversationAi({
+    parties: { agent: { followUp: { ladders: { dataroom_nudge: { enabled: true } } } } },
+  });
+  assert.deepEqual(Object.keys(c.parties.agent.followUp.ladders), ["offer_nudge"]);
+});
+
+test("a ladder saved with every day deleted falls back to the default rather than reading as on but silent", () => {
+  const c = normalizeConversationAi({
+    parties: { agent: { followUp: { enabled: true, ladders: { offer_nudge: { enabled: true, steps: [] } } } } },
+  });
+  assert.deepEqual(c.parties.agent.followUp.ladders.offer_nudge.steps, [3, 7, 14]);
+});
+
+test("the nudge intents are auto-sendable so the allowlist can offer them as checkboxes", () => {
+  assert.ok(autoEligible("agent").includes("offer_nudge"));
+  assert.ok(autoEligible("investor").includes("blast_nudge"));
+  assert.ok(autoEligible("investor").includes("dataroom_nudge"));
+});
+
+test("a nudge intent an operator ticked survives a save", () => {
+  const c = normalizeConversationAi({
+    parties: { agent: { autoSend: { enabled: true, intents: ["offer_nudge"] } } },
+  });
+  assert.deepEqual(c.parties.agent.autoSend.intents, ["offer_nudge"]);
+});

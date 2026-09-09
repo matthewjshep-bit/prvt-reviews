@@ -59,10 +59,12 @@ import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../shared/offer-calc.js";
 import {
-  SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK,
+  SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isExpired,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
   INVESTOR_STATUSES, investorStatus,
 } from "../shared/offer-status.js";
+import { planRequote } from "../shared/requote.js";
+import { autoAcceptCeiling } from "../shared/auto-accept.js";
 import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, buildNetSheetDocument, moneyInWords } from "../offer-doc.js";
 import { renderContractPdf } from "../contract-pdf.js";
 import { renderPsaPdf } from "../psa-pdf.js";
@@ -2851,11 +2853,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // Write a status onto the offer doc and append to its ledger. Mirrors the
   // deal's stage/stageHistory pair — the current value is what the UI reads,
   // the history is what the KPI math trusts.
-  function recordStatus(offer, status, note = "", ts = new Date().toISOString()) {
+  //
+  // `extra.amount` is the number the other side named — their counter. It goes
+  // on the ledger row AND is hoisted to offer.counter, because "what did they
+  // come back with" is a question the auto-accept band and the funnel report
+  // both ask, and walking a ledger for it (or worse, regexing the note) is not
+  // an answer. The note text is unchanged: it is what the operator reads on
+  // the row, and forking it would fork history for no gain.
+  function recordStatus(offer, status, note = "", ts = new Date().toISOString(), extra = {}) {
+    const amount = Math.max(0, Math.round(Number(extra.amount) || 0));
     offer.status = status;
     offer.statusAt = ts;
     offer.statusNote = note;
-    offer.statusHistory = [...(offer.statusHistory || []), { status, ts, ...(note ? { note } : {}) }];
+    offer.statusHistory = [...(offer.statusHistory || []), { status, ts, ...(note ? { note } : {}), ...(amount ? { amount } : {}) }];
+    if (status === "countered" && amount) {
+      offer.counter = { amount, at: ts, source: extra.source || "operator" };
+    }
     return offer;
   }
 
@@ -3385,6 +3398,77 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         client, locationId, saved, store, contactId, message, address, askingPrice: 0,
         dryRun: !AUTO_UNDERWRITE_ENABLED, deps: underwriteDeps({ client, locationId, saved }),
       }),
+    // The agent says our number is way off. Re-run OUR arithmetic on the ARV
+    // and rehab THEY gave us, revise the offer in place, and float the new
+    // number. This concedes nothing — it is the move that has to be exhausted
+    // before anything auto-concedes on price — and it is bounded twice: the
+    // clamps in shared/requote.js stop an inflated ARV driving our number,
+    // and the outcome may not exceed the same auto-accept ceiling the counter
+    // band uses, so the bot can never talk itself past where it would have
+    // said yes outright.
+    //
+    // Deliberately NOT startUnderwrite: that pipeline is comps, scrapes and
+    // two vision calls, gated by a spend cap because each run costs money.
+    // This is arithmetic on numbers we already have.
+    requoteFromAgentNumbers: async ({ contactId, addressHint, draftId = null }) => {
+      const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      const band = conversationConfig(fresh).parties.agent.requote;
+      const mine = (await store.listOffers(locationId, { contactId, limit: 50 }))
+        .filter((o) => !o.deal && o.cashAmount > 0 && OPEN_STATUSES.has(effectiveStatus(o)));
+      if (!mine.length) return { ok: false, reason: "no open offer to re-quote" };
+      const picked = pickDealByAddress(mine, addressHint);
+      // An ambiguous match is a person's call: re-pricing the wrong house is
+      // worse than not re-pricing at all.
+      if (!picked && mine.length > 1) return { ok: false, reason: "more than one open offer and the message named no address" };
+      const offer = picked || mine[0];
+      if (isExpired(offer, Date.now())) return { ok: false, reason: "that offer has expired — re-offering is a person's call" };
+      const full = await store.getOffer(offer.id);
+      if (!full) return { ok: false, reason: "offer vanished" };
+
+      // Their read, from typed events only. Never free text, and never the
+      // price they asked for — a number they want is not an input to our math.
+      let take = {};
+      try {
+        const events = await store.listContactEvents(locationId, contactId, { limit: 200 });
+        const d = propertyDossier(events, full.address);
+        take = { arv: Number(d?.have?.arv?.value) || 0, rehab: Number(d?.have?.rehab?.value) || 0,
+                 at: d?.have?.arv?.at || d?.have?.rehab?.at || null };
+      } catch { take = {}; }
+
+      const ceiling = autoAcceptCeiling({ offer: full, settings: fresh }).ceiling;
+      const plan = planRequote({ offer: full, take, band, settings: fresh, ceiling });
+      if (!plan.ok) return { ok: false, reason: plan.reason, address: full.address };
+
+      const out = await createOfferFromRequest({
+        locationId, client, existing: full,
+        body: { contactId, scope: full.scope,
+                inputs: { ...(full.calc?.inputs || {}), arv: plan.arv, repairs: plan.repairs },
+                settings: full.calc?.settings },
+      });
+      const revised = out?.offer || (await store.getOffer(full.id));
+      revised.requotes = [...(revised.requotes || []),
+        { ts: new Date().toISOString(), from: plan.from, to: plan.to, arv: plan.arv, repairs: plan.repairs,
+          clamped: plan.clamped, basis: plan.basis, draftId }];
+      // Clear the realm mark so the new number is allowed to go out: the last
+      // one is no longer the number we are standing behind.
+      revised.proactive = { ...(revised.proactive || {}), realmCheckAt: null };
+      await store.updateOffer(revised.id, revised);
+      // No event is written here on purpose. offerEvents derives offer_revised
+      // from revisions[] with a phrase that carries the money — so a live
+      // write would have to match it exactly or the backfill duplicates. The
+      // revision IS the record, exactly as it is for a hand-made one.
+
+      let floated = false;
+      const r = await startProactive({
+        client, locationId, saved: fresh, store, contactId, kind: "realm_check",
+        offer: revised, subject: { requote: true, address: revised.address },
+        sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
+      });
+      if (r.skipped) console.log(`requote float skipped for ${revised.id}: ${r.skipped}`);
+      else { floated = true; await markProactive(revised.id, "realm_check"); }
+      return { ok: true, address: revised.address, from: plan.from, to: plan.to,
+               clamped: plan.clamped, basis: plan.basis, floated };
+    },
     // "In the realm": remembered on the offer, so the book says so next time
     // and History can show which offers are cleared to send.
     setOfferRealm: async ({ contactId, addressHint, answer, note = "" }) => {
@@ -3408,20 +3492,25 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // pass. Same write the History table's status menu makes — ledger line,
     // tag reconcile and all — on their newest open offer, or the one whose
     // address the message named.
-    setOfferStatus: async ({ contactId, addressHint, status, note = "" }) => {
+    setOfferStatus: async ({ contactId, addressHint, status, note = "", amount = 0 }) => {
       if (!["countered", "passed", "no_response"].includes(status)) return { ok: false, reason: `not a status this can set: ${status}` };
       const open = (await store.listOffers(locationId, { contactId, limit: 50 })).filter((o) => o.status !== "draft" && !o.deal);
       if (!open.length) return { ok: false, reason: "no open offer to mark" };
       const offer = pickDealByAddress(open, addressHint) || open[0];
       if (effectiveStatus(offer) === status) return { ok: true, unchanged: true, address: offer.address, status };
       const ts = new Date().toISOString();
-      recordStatus(offer, status, dealStr(note, 200), ts);
+      const counter = Math.max(0, Math.round(Number(amount) || 0));
+      recordStatus(offer, status, dealStr(note, 200), ts, { amount: counter, source: "conversation" });
       await store.updateOffer(offer.id, offer);
       await appendDealHistory(client, locationId, contactId, "agent_deal_history",
         historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), dealStr(note, 200)),
-        { type: `offer_${status}`, offerId: offer.id, source: "conversation", at: ts });
+        // The number rides in `data` only. offer_countered's dedupe key is
+        // built from its PHRASE, which is a constant — so a backfill lands on
+        // the row this write already made. Putting the amount in the phrase
+        // would fork every key and duplicate the whole counter history.
+        { type: `offer_${status}`, offerId: offer.id, source: "conversation", at: ts, ...(counter ? { data: { amount: counter } } : {}) });
       await syncAgentOfferTag(client, locationId, contactId);
-      return { ok: true, address: offer.address, status };
+      return { ok: true, address: offer.address, status, amount: counter };
     },
     // The investor's standing on a deal: passed, or the committed buyer
     // (which advances an under-contract deal to buyer_found, as the Deals

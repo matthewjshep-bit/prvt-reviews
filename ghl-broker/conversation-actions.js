@@ -101,7 +101,13 @@ const EXECUTORS = {
   async mark_offer_countered({ deps, contactId, draft }) {
     if (typeof deps?.setOfferStatus !== "function") throw new Error("offer status is not wired on this broker");
     const note = draft?.counterAmount ? `countered at ${fmtMoney(draft.counterAmount)}` : String(draft?.summary || "").slice(0, 200);
-    const r = await deps.setOfferStatus({ contactId, addressHint: draft?.propertyAddress || "", status: "countered", note });
+    // The number the model read goes through as a NUMBER. It used to survive
+    // only inside that sentence, which meant "what is the spread between our
+    // offers and their counters" could not be answered without regexing notes.
+    const r = await deps.setOfferStatus({
+      contactId, addressHint: draft?.propertyAddress || "", status: "countered", note,
+      amount: draft?.counterAmount || 0,
+    });
     if (!r?.ok) return r?.reason || "no open offer to mark";
     return r.unchanged ? `offer on ${r.address} was already countered` : `offer on ${r.address} marked countered`;
   },
@@ -156,6 +162,20 @@ const EXECUTORS = {
     const r = await deps.startUnderwrite({ contactId, message: draft?.inbound || "", address: draft?.propertyAddress || "" });
     if (r?.skipped) throw new Error(r.skipped);
     return `underwrite started${r?.job?.dryRun ? " (dry run)" : ""}`;
+  },
+  // "That's way too low." Rather than conceding, re-run our own arithmetic on
+  // the ARV and rehab THEY gave us and float what falls out. The reply itself
+  // still parks for a person when the intent is a counter — this action sends
+  // no text and moves no price of its own; it produces a revised offer, and
+  // the revised number goes out as a fresh realm check.
+  async requote_from_agent_numbers({ deps, contactId, draft }) {
+    if (typeof deps?.requoteFromAgentNumbers !== "function") throw new Error("re-quoting is not wired on this broker");
+    const r = await deps.requoteFromAgentNumbers({
+      contactId, addressHint: draft?.propertyAddress || "", draftId: draft?.id || null,
+    });
+    if (!r?.ok) return r?.reason || "nothing to re-quote";
+    return `re-ran ${r.address} on their numbers: ${fmtMoney(r.from)} → ${fmtMoney(r.to)}` +
+      `${r.clamped ? ` (${r.basis})` : ""}${r.floated ? " — floating it now" : ""}`;
   },
   async suggest_dataroom_invite({ deps, contactId, draft }) {
     if (typeof deps?.issueDataroomInvite !== "function") throw new Error("dataroom invites are not wired on this broker");

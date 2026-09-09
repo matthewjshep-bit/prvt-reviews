@@ -436,7 +436,19 @@ export function offerEvents(offer) {
   // What the agent said about it.
   for (const h of offer.statusHistory || []) {
     if (!h?.status || !h.ts || !STATUS_HISTORY_PHRASE[h.status]) continue;
-    push(agent, "agent", { type: `offer_${h.status}`, at: h.ts, data: h.note ? { note: String(h.note).slice(0, 200) } : {} });
+    // The counter's number rides in `data` and NOWHERE ELSE. offer_countered
+    // is a LEDGER_TYPE whose dedupe key is built from eventPhrase(), and that
+    // phrase is the constant STATUS_HISTORY_PHRASE.countered regardless of
+    // data — so the key here is identical to the one the live write already
+    // made, and a backfill lands on that row instead of beside it. Put the
+    // amount in the phrase and every key forks: the whole counter history
+    // duplicates, once, silently. (Contrast offer_revised above, whose phrase
+    // has always carried its money — so it is consistent either way.)
+    const amount = Math.round(Number(h.amount) || 0);
+    push(agent, "agent", { type: `offer_${h.status}`, at: h.ts, data: {
+      ...(h.note ? { note: String(h.note).slice(0, 200) } : {}),
+      ...(amount ? { amount, amountText: money(amount) } : {}),
+    } });
   }
   if (offer.realm?.ts) {
     push(agent, "agent", { type: offer.realm.answer === "yes" ? "realm_yes" : "realm_no", at: offer.realm.ts, data: offer.realm.note ? { note: String(offer.realm.note).slice(0, 120) } : {} });

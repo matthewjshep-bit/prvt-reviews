@@ -208,6 +208,9 @@ export const OFFER_LIST_FIELDS = [
   // The outcome ledger ({status, ts, note} rows) — a counter with its number
   // is the one thing the Conversation AI needs from it, and it's small.
   "statusHistory", "realm",
+  // The newest counter with its number ({amount, at, source}), hoisted off
+  // statusHistory so the auto-accept band can read it from a lean row.
+  "counter",
   "createdAt", "updatedAt", "dateLabel", "validLabel",
   "pdfUrl", "imageUrl", "scopePdfUrl", "compsPdfUrl",
   "psaPdfUrl", "contractPdfUrl", "assignmentPdfUrl", "netSheetPdfUrl",

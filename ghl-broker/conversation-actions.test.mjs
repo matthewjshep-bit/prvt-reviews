@@ -195,3 +195,78 @@ test("auto actions clear at the same confidence the page lets a reply send at", 
   assert.deepEqual(liberal.auto.map((a) => a.type), ["add_tags"], "medium bar: the tag goes; the dataroom invite is ask-only regardless");
   assert.equal(planActions({ party: "investor", intent: "interested", confidence: "low", playbook: PLAYBOOK, minConfidence: "medium" }).auto.length, 0, "low never clears");
 });
+
+/* ---------- re-quoting on their numbers ---------- */
+// The action that makes "that's way too low" self-driving without conceding a
+// dollar: it sends no text and moves no price of its own — it re-runs our
+// arithmetic on their ARV and rehab and lets the revised number speak.
+
+const requoteAction = [{ id: "r1", type: "requote_from_agent_numbers" }];
+const aCounter = { id: "d9", propertyAddress: "12 Elm St", counterAmount: 310000 };
+
+test("re-quoting reports the move it made in the operator's terms", async () => {
+  const out = await runActions({
+    client: {}, locationId: "LOC", contactId: "c1", draft: aCounter, actions: requoteAction,
+    deps: { requoteFromAgentNumbers: async () => ({ ok: true, address: "12 Elm St", from: 259000, to: 272000, clamped: false, floated: true }) },
+  });
+  assert.equal(out[0].status, "done");
+  assert.match(out[0].detail, /12 Elm St/);
+  assert.match(out[0].detail, /\$259,000 → \$272,000/);
+  assert.match(out[0].detail, /floating it now/);
+});
+
+test("a re-quote that had to clamp their numbers says so on the row", async () => {
+  // The operator has to be able to see that we did NOT swallow the agent's
+  // ARV whole — the reply is told to say "with your numbers, adjusted".
+  const out = await runActions({
+    client: {}, locationId: "LOC", contactId: "c1", draft: aCounter, actions: requoteAction,
+    deps: { requoteFromAgentNumbers: async () => ({ ok: true, address: "12 Elm St", from: 259000, to: 266000, clamped: true, basis: "their ARV was capped against ours", floated: false }) },
+  });
+  assert.match(out[0].detail, /their ARV was capped against ours/);
+});
+
+test("re-quoting with nothing new from them reports it rather than failing", async () => {
+  // Not an error: the action is wired to a counter, and plenty of counters
+  // arrive with no new ARV attached. A red row would train the operator to
+  // ignore red rows.
+  const out = await runActions({
+    client: {}, locationId: "LOC", contactId: "c1", draft: aCounter, actions: requoteAction,
+    deps: { requoteFromAgentNumbers: async () => ({ ok: false, reason: "nothing new from them to re-quote on" }) },
+  });
+  assert.equal(out[0].status, "done");
+  assert.equal(out[0].detail, "nothing new from them to re-quote on");
+});
+
+test("re-quoting is not wired on a broker without the dependency and says so", async () => {
+  const out = await runActions({
+    client: {}, locationId: "LOC", contactId: "c1", draft: aCounter, actions: requoteAction, deps: {},
+  });
+  assert.equal(out[0].status, "failed");
+  assert.match(out[0].error, /not wired/);
+});
+
+test("a counter still parks for a person even when the re-quote is wired to it", async () => {
+  // The action runs; the REPLY does not send. counter is in NEVER_AUTO and
+  // nothing in this phase touches that — which is the whole reason the
+  // re-quote is safe to automate.
+  const { NEVER_AUTO } = await import("./shared/conversation-ai.js");
+  assert.ok(NEVER_AUTO.agent.includes("counter"));
+});
+
+test("re-quoting is an agent move and is never offered on the investor playbook", async () => {
+  const { actionAllowedFor } = await import("./shared/conversation-ai.js");
+  assert.equal(actionAllowedFor("agent", "requote_from_agent_numbers"), true);
+  assert.equal(actionAllowedFor("investor", "requote_from_agent_numbers"), false);
+});
+
+test("re-quoting may be set to run on its own — it is not ask-only", async () => {
+  // Unlike a dataroom invite or a committed buyer, this commits us to nothing,
+  // so an operator is allowed to let it fire unattended.
+  const { ASK_ONLY_ACTIONS } = await import("./shared/conversation-ai.js");
+  assert.equal(ASK_ONLY_ACTIONS.has("requote_from_agent_numbers"), false);
+  const { auto } = planActions({
+    party: "agent", intent: "counter", confidence: "high",
+    playbook: { intentRules: { counter: { mode: "auto", actions: [{ type: "requote_from_agent_numbers" }] } } },
+  });
+  assert.equal(auto.length, 1);
+});

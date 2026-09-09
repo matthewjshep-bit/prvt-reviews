@@ -467,7 +467,7 @@ export function censusLabel(matchedAddress) {
   return [head, [state, zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
 }
 
-const titleCase = (s) =>
+export const titleCase = (s) =>
   String(s).toLowerCase().replace(/[A-Za-z0-9']+/g, (w) => {
     if (/^[nsew]$|^[ns][ew]$/.test(w)) return w.toUpperCase();   // directionals
     if (/^\d+(st|nd|rd|th)$/.test(w)) return w;                  // 128th, not 128Th
