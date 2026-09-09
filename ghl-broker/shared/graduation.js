@@ -110,7 +110,7 @@ const sw = (key, label, state, note = "", group = "conversation") => ({ key, lab
  * `config` is the normalized Conversation AI blob. The env facts come from the
  * caller because a pure module cannot read process.env.
  */
-export function autopilotSummary({ config = {}, sendsEnabled = false, underwriteLive = false, underwriteWired = true } = {}) {
+export function autopilotSummary({ config = {}, sendsEnabled = false, underwriteLive = false, underwriteWired = true, outreach = null, importsEnabled = false } = {}) {
   const out = [];
   const parties = config.parties || {};
 
@@ -133,6 +133,16 @@ export function autopilotSummary({ config = {}, sendsEnabled = false, underwrite
       !config.enabled ? "" : allow.length ? `${allow.length} of ${eligible.length} intents send themselves` : "every reply waits for you", party));
 
     if (party === "agent") {
+      // The top of the funnel: a daily pull and a capped import, then the
+      // first text. `outreach` is the location's outreachAutopilot settings.
+      const oa = outreach || {};
+      out.push(sw("outreach_pull", "Daily listing pull + import",
+        !oa.enabled ? "off" : importsEnabled ? "on" : "drafting",
+        !oa.enabled ? "new agents are pulled and imported by hand"
+          : importsEnabled ? `up to ${oa.dailyCap || 12} new agents a day` : "OUTREACH_IMPORTS_ENABLED is not set — pulls run, imports are dry runs", party));
+      const fo = pb.outreach?.enabled;
+      out.push(sw("outreach_open", "First text to a new agent", !fo ? "off" : allow.includes("outreach_open") && canSend ? "on" : "drafting",
+        fo ? "" : "the first text is a GHL workflow template, not the bot", party));
       const rc = pb.realmCheck?.enabled, tc = pb.takeCheck?.enabled;
       out.push(sw("take_check", "Float our read", !tc ? "off" : allow.includes("take_check") && canSend ? "on" : "drafting",
         tc ? "" : "asks the agent for their ARV and rehab before our price", party));

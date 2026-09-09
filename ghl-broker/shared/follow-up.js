@@ -19,6 +19,10 @@
 // Pure. No I/O, no clock of its own — `now` is always passed in.
 
 export const FOLLOW_UP_KINDS = {
+  // The cold cadence. Until this existed the twelve touches after a first
+  // text lived in a GHL workflow the app could not see, so "gone quiet" on a
+  // cold agent was not a thing the queue could say.
+  outreach_nudge: { party: "agent",    trigger: "outreach_sent",   label: "Reached out, no reply" },
   offer_nudge:    { party: "agent",    trigger: "offer_open",      label: "Offer with no reply" },
   blast_nudge:    { party: "investor", trigger: "blast_sent",      label: "Blasted, no reply" },
   dataroom_nudge: { party: "investor", trigger: "dataroom_viewed", label: "Opened the package, went quiet" },
@@ -35,6 +39,9 @@ export const ON_EXHAUSTED = ["stop", "mark_no_response"];
 // is a follow-up; anything tighter is a campaign, and this ships to an
 // operator who has not watched it work yet.
 export const DEFAULT_LADDERS = {
+  // Six touches over a month for a cold agent: the first two close together
+  // while the listing is still fresh in their mind, then it spaces out.
+  outreach_nudge: { enabled: false, steps: [2, 5, 9, 14, 21, 30], onExhausted: "stop" },
   offer_nudge:    { enabled: false, steps: [3, 7, 14], onExhausted: "mark_no_response" },
   blast_nudge:    { enabled: false, steps: [2, 6],     onExhausted: "stop" },
   dataroom_nudge: { enabled: false, steps: [1, 4],     onExhausted: "stop" },

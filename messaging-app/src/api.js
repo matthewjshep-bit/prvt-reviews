@@ -494,12 +494,16 @@ export const getAgentListings = (agentKey, batchId) =>
     .then(j)
     .then((r) => r.listings);
 export const pullOutreach = (params = {}) => post(`/api/outreach/pull`, params);
-export const importOutreachAgents = ({ agentKeys, applyTag = true, dryRun = true, batchId, sessionTag }) =>
+export const importOutreachAgents = ({ agentKeys, applyTag = true, dryRun = true, batchId, sessionTag, openWith = null }) =>
   post(`/api/outreach/import`, {
     agentKeys, applyTag, dryRun,
     ...(batchId ? { batchId } : {}),
     ...(sessionTag ? { sessionTag } : {}),
+    ...(openWith ? { openWith } : {}),
   });
+// The daily outreach sweep: its settings, its last run, and a way to run it now.
+export const getOutreachAutopilot = () => fetch(`${API_BASE}/api/outreach/autopilot?${locq()}`).then(j);
+export const runOutreachAutopilot = (dryRun = true) => post(`/api/outreach/autopilot/run`, { dryRun });
 export const setOutreachStatus = (agentKey, status, batchId) =>
   post(`/api/outreach/agents/${encodeURIComponent(agentKey)}/status`, { status, ...(batchId ? { batchId } : {}) });
 export const clearOutreach = (batchId) => post(`/api/outreach/clear`, batchId ? { batchId } : {});

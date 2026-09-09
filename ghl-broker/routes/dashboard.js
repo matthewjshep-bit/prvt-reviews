@@ -45,6 +45,7 @@ const PIPELINE_EVENT_TYPES = [
   "blast_sent", "dataroom_sent", "dataroom_viewed",
   "investor_evaluating", "investor_committed", "investor_passed",
   "follow_up_sent", "text_summary", "call_summary",
+  "outreach_sent",
 ];
 
 const DAY_MS = 86400000;
@@ -238,6 +239,7 @@ export default function createDashboardRouter({ resolveLocation }) {
       const autopilot = autopilotSummary({
         config, sendsEnabled: CARD_SENDS_ENABLED, underwriteLive: AUTO_UNDERWRITE_ENABLED,
         underwriteWired: Boolean(process.env.AUTO_UNDERWRITE_SECRET || process.env.GHL_LOCATION_KEYS),
+        outreach: saved?.outreachAutopilot || null, importsEnabled: process.env.OUTREACH_IMPORTS_ENABLED === "true",
       });
       autopilot.readyToGraduate = graduationReport({ stats: draftStats(recentDrafts), config }).ready;
       autopilot.windowDays = GRADUATION.windowDays;

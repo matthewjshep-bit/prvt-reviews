@@ -297,6 +297,24 @@ export function outboundOpening(outbound) {
         `Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
     }
 
+    // The cold open. There is no thread to continue: this is the first thing
+    // the agent ever hears from us, and the failure mode is sounding like a
+    // wholesaler blast. One specific listing, one plain question.
+    case "outreach_open":
+      return `${START} This is the FIRST text this listing agent has ever had from us. We found their listing at ` +
+        `${o.address}${o.hookDom ? ` (on the market ${o.hookDom} days)` : ""}. Two or three short lines, like a local ` +
+        `investor texting an agent they don't know yet: say you saw the listing on ${o.address.split(",")[0]}, that you ` +
+        `buy houses as-is for cash in the area and close fast, and ask ONE question — whether they've got anything ` +
+        `that needs work, or a seller who'd take a quick cash offer. Do NOT name a price, a number, a percentage, ` +
+        `or a link. Do NOT ask about this listing's price. Do NOT say "I'm reaching out" or "I hope this finds you ` +
+        `well". Use their first name once if you have it. Set intent to outreach_open.`;
+
+    case "outreach_nudge":
+      return `${START} We texted this agent about their listing at ${o.address} and they never answered. ` +
+        `${nudgePressure(o)} One or two lines. You may mention the listing again; do NOT name a number, and do NOT ` +
+        `repeat the first text's wording. A different angle each time: what we buy, that we're easy to work with, ` +
+        `that we can move quickly. Set intent to outreach_nudge.`;
+
     // The nudges. They introduce NO number — the money guard would flag one
     // anyway, but the instruction has to match the gate or every draft parks.
     case "offer_nudge":

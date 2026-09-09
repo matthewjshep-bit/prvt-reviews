@@ -273,6 +273,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const set = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, [k]: v })); };
   const setCo = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, company: { ...f.company, [k]: v } })); };
   const setPsa = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, psa: { ...f.psa, [k]: v } })); };
+  const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
 
   // Contract clause templates (Purchase & Sale + Assignment). null/empty → the
   // built-in default language; the first edit materializes a copy into the form
@@ -299,6 +300,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       // walk above never reaches them, and a string "10" would come back from
       // the server as a string forever.
       clean.psa = coerce(form.psa || {}, DEFAULT_OFFER_SETTINGS.psa);
+      if (form.outreachAutopilot) clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12 };
       const r = await saveSettings(clean);
       onSaved?.(r.settings);
       setForm(effectiveSettings(r.settings));
@@ -620,6 +622,42 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             <Txt label="State" value={form.outreachState || ""} onChange={set("outreachState")} placeholder="WA" />
           </div>
           <Num label="Max listing age" suffix="days" value={form.outreachDaysOld} onChange={set("outreachDaysOld")} />
+        </div>
+
+        {/* The daily sweep. Pull on the defaults above, import the most
+            distressed new agents under the cap, and have the Conversation AI
+            say hello. The import needs OUTREACH_IMPORTS_ENABLED on the broker;
+            the hello needs "First text to new agents" on the agent playbook. */}
+        <div className="mt-4 rounded-lg border border-slate-200 p-3">
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.outreachAutopilot?.enabled)}
+              onChange={(e) => setOutreachAuto("enabled")(e.target.checked)} />
+            <span>
+              <span className="font-semibold">Run outreach every day on its own</span>
+              <span className="block text-xs text-slate-500">
+                Each morning: pull the defaults above, pick the most distressed agents nobody has talked to, import them, and draft the first text.
+                Nothing sends unless "first text about their listing" is ticked on the agent auto-send list.
+              </span>
+            </span>
+          </label>
+          {form.outreachAutopilot?.enabled && (
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <Num label="New agents a day" value={form.outreachAutopilot?.dailyCap ?? 12} onChange={setOutreachAuto("dailyCap")} />
+              <label className="block">
+                <span className="text-xs font-medium text-slate-600">Who says hello</span>
+                <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                  value={form.outreachAutopilot?.firstTouch || "app"} onChange={(e) => setOutreachAuto("firstTouch")(e.target.value)}>
+                  <option value="app">The Conversation AI drafts it (no GHL trigger tag)</option>
+                  <option value="ghl">The GHL workflow template (trigger tag, as before)</option>
+                </select>
+              </label>
+              <label className="col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={form.outreachAutopilot?.requireDistress !== false}
+                  onChange={(e) => setOutreachAuto("requireDistress")(e.target.checked)} />
+                Only agents with at least one distressed listing
+              </label>
+            </div>
+          )}
         </div>
       </section>
       )}

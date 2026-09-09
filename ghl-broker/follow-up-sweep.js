@@ -102,6 +102,54 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
 }
 
 /**
+ * outreachCandidates({ store, locationId, config, now }) → [candidate]
+ *
+ * Cold agents: the app sent a first text (outreach_sent) and nothing has
+ * come back. One ladder per contact, counted from the first text. An offer
+ * on anything of theirs, a realm-yes, or a deal ends it — they are a warm
+ * conversation now, and the offer ladder takes over. Replies end it the
+ * usual way (runSweep reads the draft rows for an agent's inbound).
+ */
+export const OUTREACH_WINDOW_DAYS = 60;
+export async function outreachCandidates({ store, locationId, config, now = Date.now() }) {
+  const pb = config?.parties?.agent;
+  const ladder = pb?.followUp?.ladders?.outreach_nudge;
+  if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
+
+  const since = iso(now - OUTREACH_WINDOW_DAYS * DAY_MS);
+  const events = await store.listContactEventsSince(locationId, since, {
+    types: ["outreach_sent", "follow_up_sent", "offer_sent", "realm_yes", "deal_promoted", "text_summary", "call_summary"],
+    limit: 5000,
+  }).catch(() => []);
+
+  const byContact = new Map();
+  for (const e of events) {
+    if (!e?.contactId) continue;
+    if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
+    byContact.get(e.contactId).push(e);
+  }
+
+  const out = [];
+  for (const [contactId, list] of byContact) {
+    list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const opened = list.filter((e) => e.type === "outreach_sent").at(-1);
+    if (!opened) continue;
+    const after = (t) => list.some((e) => e.type === t && String(e.at) > String(opened.at));
+    if (after("offer_sent") || after("realm_yes") || after("deal_promoted")) continue;
+    const lastInboundAt = list.filter((e) => e.type === "text_summary" || e.type === "call_summary").at(-1)?.at || null;
+    const lastTouchAt = list.filter((e) => e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge").at(-1)?.at || null;
+    out.push({
+      kind: "outreach_nudge", party: "agent", contactId, subjectId: contactId,
+      offerId: null, address: opened.address || "", startedAt: opened.at,
+      sentSteps: list.filter((e) => e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge").map((e) => Number(e.data?.step)),
+      lastInboundAt, lastTouchAt,
+      ladder,
+    });
+  }
+  return out;
+}
+
+/**
  * investorCandidates({ store, locationId, config, now }) → [candidate]
  *
  * One location-wide event read, grouped by contact. A blast or a dataroom open
@@ -207,6 +255,7 @@ async function runSweep(job, ctx) {
 
   const candidates = [
     ...(await agentCandidates({ store, locationId, config, now })),
+    ...(await outreachCandidates({ store, locationId, config, now })),
     ...(await investorCandidates({ store, locationId, config, now })),
   ];
   job.considered = candidates.length;
@@ -228,8 +277,12 @@ async function runSweep(job, ctx) {
     if (c.party === "agent") {
       try {
         const rows = await store.listReplyDrafts(locationId, { contactId: c.contactId, limit: 20 });
-        lastInboundAt = rows.filter((d) => d.inbound).map((d) => d.createdAt).sort().at(-1) || null;
-        lastTouchAt = rows.filter((d) => d.outbound?.kind && d.status === "sent").map((d) => d.updatedAt || d.createdAt).sort().at(-1) || null;
+        const fromDrafts = rows.filter((d) => d.inbound).map((d) => d.createdAt).sort().at(-1) || null;
+        const touched = rows.filter((d) => d.outbound?.kind && d.status === "sent").map((d) => d.updatedAt || d.createdAt).sort().at(-1) || null;
+        // A cold agent's candidate row already carries the event stream's
+        // answer; whichever source saw them most recently wins.
+        lastInboundAt = [lastInboundAt, fromDrafts].filter(Boolean).sort().at(-1) || null;
+        lastTouchAt = [lastTouchAt, touched].filter(Boolean).sort().at(-1) || null;
       } catch { /* no drafts to read is not a reason to skip a nudge */ }
     }
 

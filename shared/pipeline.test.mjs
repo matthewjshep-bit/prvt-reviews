@@ -315,3 +315,29 @@ test("days until a date counts today as zero", () => {
   assert.equal(daysUntilYmd(ymd(-3), NOW), -3);
   assert.equal(daysUntilYmd("", NOW), null);
 });
+
+/* ---------- cold agents ---------- */
+
+test("a cold agent whose outreach ladder ran out is a queue item with no card; a reply or an offer clears it", () => {
+  const DAY = 86400000, now = Date.parse("2026-09-20T17:00:00Z"), ago = (d) => new Date(now - d * DAY).toISOString();
+  const config = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, ladders: { outreach_nudge: { enabled: true, steps: [2, 5] } } } } } });
+  const opened = (c) => ({ contactId: c, type: "outreach_sent", at: ago(12), address: "9 Cold Creek Rd", data: { contactName: "Sam" } });
+  const rung = (c, step, d) => ({ contactId: c, type: "follow_up_sent", at: ago(d), data: { kind: "outreach_nudge", step } });
+  const r = buildPipeline({ offers: [], drafts: [], now, config, events: [
+    opened("cold"), rung("cold", 2, 10), rung("cold", 5, 7),
+    opened("replied"), rung("replied", 2, 10), { contactId: "replied", type: "text_summary", at: ago(6) },
+    opened("pending"),                                            // no rungs sent yet: day 5 is still DUE, so the ladder is not over
+  ], contactNames: { cold: "Sam Okafor" } });
+  const items = r.actions.filter((a) => a.kind === "outreach_no_reply");
+  assert.deepEqual(items.map((a) => a.contactId), ["cold"]);
+  const sam = items.find((a) => a.contactId === "cold");
+  assert.equal(sam.title, "Sam Okafor: 3 texts, no reply");
+  assert.match(sam.detail, /12d ago about 9 Cold Creek Rd/);
+  assert.equal(r.cards.length, 0, "no card for a contact with no property");
+  // an offer on anything of theirs moves them off the cold list
+  const withOffer = buildPipeline({ offers: [{ id: "o1", contactId: "cold", address: "1 Any St", status: "sent", createdAt: ago(1) }], drafts: [], now, config, events: [opened("cold"), rung("cold", 2, 10), rung("cold", 5, 7)] });
+  assert.equal(withOffer.actions.filter((a) => a.kind === "outreach_no_reply").length, 0);
+  // ladder off: nothing to say
+  const off = buildPipeline({ offers: [], drafts: [], now, config: normalizeConversationAi({}), events: [opened("cold"), rung("cold", 2, 10), rung("cold", 5, 7)] });
+  assert.equal(off.actions.filter((a) => a.kind === "outreach_no_reply").length, 0);
+});

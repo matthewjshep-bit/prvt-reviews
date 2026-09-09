@@ -10,7 +10,7 @@ import {
   Pencil, Plus, RefreshCw, RotateCcw, Search, Trash2,
 } from "lucide-react";
 import {
-  getOutreachAgents, getAgentListings, pullOutreach, importOutreachAgents,
+  getOutreachAgents, getAgentListings, pullOutreach, importOutreachAgents, getOutreachAutopilot, runOutreachAutopilot,
   setOutreachStatus, clearOutreach, getOutreachBatches, createOutreachBatch,
   renameOutreachBatch, deleteOutreachBatch,
   ghlContactUrl, getLocationId, getLocationKey, zillowUrl,
@@ -175,6 +175,22 @@ export default function AgentOutreach({ settings }) {
   };
   const [sessionTag, setSessionTag] = useState(sessionSuffixNow);
   const [applyTag, setApplyTag] = useState(true);
+  // "app": the Conversation AI drafts the first text for every contact this
+  // import CREATES; the GHL trigger tag is then left off so the workflow
+  // template can't text them too. Default follows the autopilot setting.
+  const [openWith, setOpenWith] = useState(false);
+  const [autopilot, setAutopilot] = useState(null);
+  const [autoBusy, setAutoBusy] = useState(false);
+  const refreshAutopilot = () => getOutreachAutopilot().then((r) => {
+    setAutopilot(r);
+    if (r.settings?.firstTouch === "app" && r.firstTouchOn) { setOpenWith(true); setApplyTag(false); }
+  }).catch(() => {});
+  useEffect(() => { refreshAutopilot(); }, []);
+  useEffect(() => {
+    if (!autopilot?.job || autopilot.job.status !== "running") return;
+    const t = setTimeout(refreshAutopilot, 3000);
+    return () => clearTimeout(t);
+  }, [autopilot]);
   const [previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [preview, setPreview] = useState(null); // dry-run response
@@ -354,7 +370,7 @@ export default function AgentOutreach({ settings }) {
     setPreview(null);
     setImportResult(null);
     try {
-      setPreview(await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: true, batchId, sessionTag: sessionTag.trim() }));
+      setPreview(await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: true, batchId, sessionTag: sessionTag.trim(), openWith: openWith ? "app" : null }));
     } catch (e) {
       setPreview({ error: e.message });
     } finally {
@@ -369,11 +385,11 @@ export default function AgentOutreach({ settings }) {
     const tagList = [batchTag, ...(suffix ? [`${batchTag}-${suffix}`] : [])].map((t) => `"${t}"`).join(" + ");
     if (!window.confirm(
       `Import ${n} agent${n === 1 ? "" : "s"} to GoHighLevel with tags ${tagList}` +
-      `${applyTag ? ` and the "${data?.tag}" trigger tag (starts outreach)` : " (no trigger tag — start the automation manually)"}?`
+      `${applyTag ? ` and the "${data?.tag}" trigger tag (starts outreach)` : openWith ? " — the Conversation AI drafts the first text for each new contact" : " (no trigger tag — start the automation manually)"}?`
     )) return;
     setImporting(true);
     try {
-      const r = await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: false, batchId, sessionTag: suffix });
+      const r = await importOutreachAgents({ agentKeys: [...selected], applyTag, dryRun: false, batchId, sessionTag: suffix, openWith: openWith ? "app" : null });
       setImportResult(r);
       setPreview(null);
       if (!r.dryRun) {
@@ -427,6 +443,42 @@ export default function AgentOutreach({ settings }) {
 
   return (
     <div className="space-y-4">
+      {/* ---- autopilot strip ---- */}
+      {autopilot && (
+        <div className={`flex flex-wrap items-center gap-3 rounded-xl border px-4 py-2.5 text-sm ${autopilot.settings?.enabled ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white"}`}>
+          <span className="font-semibold">{autopilot.settings?.enabled ? "Runs itself every morning" : "Runs by hand"}</span>
+          <span className="text-xs text-slate-500">
+            {autopilot.settings?.enabled
+              ? `up to ${autopilot.settings.dailyCap} new agents a day · ${autopilot.settings.firstTouch === "app" ? "the bot says hello" : "GHL workflow says hello"}${autopilot.importsEnabled ? "" : " · imports are dry runs until OUTREACH_IMPORTS_ENABLED is set"}`
+              : "turn on the daily sweep in Settings → Agent Outreach"}
+            {autopilot.lastRunAt ? ` · last ran ${new Date(autopilot.lastRunAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}
+          </span>
+          {autopilot.job && (
+            <span className={`text-xs ${autopilot.job.status === "error" ? "text-red-700" : "text-slate-600"}`}>
+              {autopilot.job.status === "running" ? `running: ${autopilot.job.phase}…`
+                : autopilot.job.status === "error" ? `failed: ${autopilot.job.error}`
+                : `${autopilot.job.dryRun ? "would import" : "imported"} ${autopilot.job.dryRun ? autopilot.job.picked : autopilot.job.imported} of ${autopilot.job.candidates} new${autopilot.job.opened ? `, ${autopilot.job.opened} first texts drafted` : ""}`}
+            </span>
+          )}
+          <div className="ml-auto flex gap-2">
+            <button type="button" disabled={autoBusy || autopilot.job?.status === "running" || !autopilot.hasKey}
+              title="Pull (free on a cache hit), pick, and list who would be imported today. Writes nothing to GHL."
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+              onClick={async () => { setAutoBusy(true); try { await runOutreachAutopilot(true); await refreshAutopilot(); } catch (e) { setError(e.message); } setAutoBusy(false); }}>
+              Preview today's sweep
+            </button>
+            <button type="button" disabled={autoBusy || autopilot.job?.status === "running" || !autopilot.hasKey}
+              className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
+              onClick={async () => {
+                if (!window.confirm(`Run the outreach sweep now? It pulls, imports up to ${autopilot.settings?.dailyCap ?? 12} new agents${autopilot.importsEnabled ? "" : " (dry run — imports are off on the broker)"}, and drafts their first texts.`)) return;
+                setAutoBusy(true); try { await runOutreachAutopilot(false); await refreshAutopilot(); } catch (e) { setError(e.message); } setAutoBusy(false);
+              }}>
+              Run it now
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ---- pull controls ---- */}
       <div className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="mb-3 flex items-center justify-between">
@@ -627,6 +679,12 @@ export default function AgentOutreach({ settings }) {
                 <label className="flex items-center gap-1.5 text-sm text-slate-700">
                   <input type="checkbox" checked={applyTag} onChange={(e) => setApplyTag(e.target.checked)} />
                   Apply "{data.tag}" tag (starts the outreach texts)
+                </label>
+                <label className="flex items-center gap-1.5 text-sm text-slate-700"
+                  title={autopilot?.firstTouchOn ? "Drafts land in the Conversation AI outbox; they send themselves only if that intent is on the allowlist" : "Turn on 'First text to new agents' on the agent playbook first"}>
+                  <input type="checkbox" checked={openWith} disabled={!autopilot?.firstTouchOn}
+                    onChange={(e) => { setOpenWith(e.target.checked); if (e.target.checked) setApplyTag(false); }} />
+                  Bot drafts the first text
                 </label>
                 <label className="flex items-center gap-1.5 text-xs text-slate-500"
                   title="This import session's tag = batch tag + this suffix, so same-day imports stay individually filterable in GHL. Clear it to apply only the batch tag.">

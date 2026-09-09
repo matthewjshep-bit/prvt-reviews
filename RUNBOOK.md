@@ -924,12 +924,41 @@ switch between, rename, and delete from the batch picker (auto-named
    filtering on the batch tag.
 4. Live imports require `OUTREACH_IMPORTS_ENABLED=true` on the broker;
    otherwise every import is a dry-run preview.
-5. Pulls are manual (button) today. For a nightly sync later, add a Render
-   Cron Job: `curl -fsS -X POST "$BROKER_URL/api/outreach/pull" -H
-   'Content-Type: application/json' -d '{"location_id":"<LOCATION>"}'` —
-   the endpoint defaults its market params from Settings and lands in the
+5. Pulls can still be run by hand; `POST /api/outreach/pull` with just
+   `location_id` defaults its market params from Settings and lands in the
    most recent batch (auto-creating one if none exists); pass `"batchId"` to
    target a specific batch.
+
+### The daily sweep (outreach autopilot)
+
+Settings → Agent Outreach → "Run outreach every day on its own". Once a day
+(the `OUTREACH_SWEEP_UTC_HOUR` hour, default 15 ≈ 7–8am Pacific, on the
+broker's 15-minute tick, `job_cursors` row `outreach`) the broker runs the
+same pull the button runs on the saved defaults, picks the most distressed
+agents nobody has talked to (status new, no GHL match, a phone, at least one
+distressed listing unless you untick that), imports up to the daily cap
+(default 12), and asks the Conversation AI for the first text.
+
+**Who says hello** is a setting. `app`: the bot drafts the first text from
+the hook listing (`outreach_open` on the agent playbook — turn on "First text
+to new agents" there) and the GHL trigger tag is *not* applied, so the
+workflow template cannot text them too. `ghl`: the trigger tag as before and
+no bot draft. Either way the import needs `OUTREACH_IMPORTS_ENABLED=true`;
+without it the sweep pulls and reports who it would have imported.
+
+The first text is draft-only until `first text about their listing` is ticked
+on the agent auto-send list — that is the shakedown. When it actually leaves,
+an `outreach_sent` event lands on the contact, and that is what the
+"Reached out, no reply" ladder (2/5/9/14/21/30 by default, off by default)
+counts from. Any reply, an offer, a realm-yes, or a deal ends the ladder;
+when it runs out the agent shows in the Pipeline queue under "Cold agents
+who never answered".
+
+On the Agents page the strip at the top says whether the sweep is on, when
+it last ran, and offers "Preview today's sweep" (pull + pick, writes nothing
+to GHL — a cold cache still spends RentCast requests) and "Run it now".
+`GET /api/outreach/autopilot` returns the same; `POST /api/outreach/autopilot/run`
+with `{ "dryRun": false }` runs it.
 
 ## Dispositions (investor book)
 

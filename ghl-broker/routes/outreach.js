@@ -31,6 +31,10 @@ import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
 import { OUTREACH_FIELDS } from "../field-registry.js";
 import { SUBJECT_PROPERTY_FIELD, seedSubjectProperty } from "../enrich.js";
+import {
+  startOutreachSweep, getOutreachJob, publicOutreachJob, normalizeOutreachAutopilot,
+  CURSOR_NAME as OUTREACH_CURSOR, OUTREACH_SWEEP_UTC_HOUR,
+} from "../outreach-sweep.js";
 
 // Subject Property is created and seeded here but OWNED by the conversation
 // (see its definition in enrich.js) — hence its own list rather than a new
@@ -119,7 +123,12 @@ async function rentcastPage(apiKey, params) {
   return Array.isArray(data) ? data : data.listings || [];
 }
 
-export default function createOutreachRouter({ resolveLocation }) {
+// `firstTouch({ locationId, client, contactId, hook, name })` is injected by
+// the broker: it starts the Conversation AI's cold open for one imported
+// agent. The import never sends anything itself — the draft lands in the
+// outbox like any other outbound, and goes on its own only if outreach_open
+// is on the allowlist. Absent (tests), the import just tags.
+export default function createOutreachRouter({ resolveLocation, firstTouch = null }) {
   const router = express.Router();
   const fail = (res, err) => {
     const code = err.http || err.status || 500;
@@ -608,14 +617,18 @@ export default function createOutreachRouter({ resolveLocation }) {
 
   /* ---------- import ---------- */
 
-  router.post("/import", async (req, res) => {
-    try {
-      const { locationId, client } = resolveLocation(req);
-      const agentKeys = Array.isArray(req.body?.agentKeys) ? req.body.agentKeys.slice(0, 200) : [];
-      if (!agentKeys.length) return res.status(400).json({ error: "agentKeys required" });
-      const applyTag = req.body?.applyTag !== false;
-      const batch = await resolveBatch(locationId, req.body?.batchId);
-      if (!batch) return res.status(400).json({ error: "no batch — pull listings first" });
+  /**
+   * importAgents({ locationId, client, agentKeys, applyTag, batchId, sessionSuffix, dryRun, openWith })
+   *
+   * The import, callable without a request so the daily sweep can run it.
+   * `openWith: "app"` asks the Conversation AI for the first text after a
+   * live import (instead of, or as well as, the GHL trigger tag).
+   */
+  async function importAgents({ locationId, client, agentKeys = [], applyTag = true, batchId = null, sessionSuffix = "", dryRun = true, openWith = null }) {
+      agentKeys = Array.isArray(agentKeys) ? agentKeys.slice(0, 200) : [];
+      if (!agentKeys.length) throw Object.assign(new Error("agentKeys required"), { http: 400 });
+      const batch = await resolveBatch(locationId, batchId);
+      if (!batch) throw Object.assign(new Error("no batch — pull listings first"), { http: 400 });
       // Batch tag (e.g. "agent-outreach-queen-anne-fixers") — applied to every
       // contact regardless of applyTag, so the batch can be targeted in GHL
       // later (manual automation triggers). Derived from the batch name, so
@@ -624,11 +637,11 @@ export default function createOutreachRouter({ resolveLocation }) {
       // Session tag — batch tag + a caller-supplied suffix (the UI defaults it
       // to date+time), unique per import click so same-day imports from one
       // batch stay individually targetable in GHL. Empty suffix = no session tag.
-      const sessionSuffix = sanitizeTag(req.body?.sessionTag);
+      sessionSuffix = sanitizeTag(sessionSuffix);
       const sessionTag = sessionSuffix ? sanitizeTag(`${batchTag}-${sessionSuffix}`) : null;
       // Live only when explicitly requested AND enabled server-side — same
       // double gate as offer sends (CARD_SENDS_ENABLED).
-      const dryRun = req.body?.dryRun !== false || !OUTREACH_IMPORTS_ENABLED;
+      dryRun = dryRun !== false || !OUTREACH_IMPORTS_ENABLED;
 
       const warnings = [];
       // Resolve custom-field ids once per batch (created on first use).
@@ -754,20 +767,42 @@ export default function createOutreachRouter({ resolveLocation }) {
           await store.setOutreachAgentStatus(locationId, batch.id, agentKey, {
             status: "imported", contactId, importedAt: new Date().toISOString(),
           });
-          return { agentKey, ok: true, name: a.name, action, contactId, tagged };
+
+          // The first text, from the app. Only for a contact we CREATED: an
+          // agent already in GHL has a thread, and a cold open on top of it
+          // is the bot forgetting who it's talking to.
+          let opened = null;
+          if (openWith === "app" && typeof firstTouch === "function" && action === "created") {
+            try {
+              const r = await firstTouch({ locationId, client, contactId, name: a.name || "", hook: { ...hook, brokerage: a.brokerage || "" } });
+              opened = r?.skipped ? { skipped: r.skipped } : { jobId: r?.job?.id || null };
+            } catch (e) { opened = { skipped: e.message }; warnings.push(`${agentKey}: first text: ${e.message}`); }
+          }
+          return { agentKey, ok: true, name: a.name, action, contactId, tagged, ...(opened ? { opened } : {}) };
         } catch (e) {
           warnings.push(`${agentKey}: ${e.message}`);
           return { agentKey, ok: false, error: e.message };
         }
       });
 
-      res.json({
+      return {
         ok: true, dryRun, importsEnabled: OUTREACH_IMPORTS_ENABLED, tag: OUTREACH_TAG,
         batchTag, sessionTag, batchId: batch.id,
         results,
         imported: results.filter((r) => r.ok && r.action).length,
+        opened: results.filter((r) => r.opened?.jobId).length,
         warnings,
-      });
+      };
+  }
+
+  router.post("/import", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      res.json(await importAgents({
+        locationId, client, agentKeys: b.agentKeys, applyTag: b.applyTag !== false, batchId: b.batchId || null,
+        sessionSuffix: b.sessionTag, dryRun: b.dryRun, openWith: b.openWith === "app" ? "app" : null,
+      }));
     } catch (err) { fail(res, err); }
   });
 
@@ -804,6 +839,48 @@ export default function createOutreachRouter({ resolveLocation }) {
       res.json({ ok: true, status });
     } catch (err) { fail(res, err); }
   });
+
+  /* ---------- autopilot: the daily sweep, read and run by hand ---------- */
+
+  router.get("/autopilot", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const cursor = await store.getJobCursor?.(locationId, OUTREACH_CURSOR).catch(() => null);
+      res.json({
+        ok: true,
+        settings: normalizeOutreachAutopilot(saved.outreachAutopilot),
+        importsEnabled: OUTREACH_IMPORTS_ENABLED,
+        hasKey: Boolean(String(saved.rentcastApiKey || "").trim()),
+        firstTouchOn: Boolean(saved.conversationAi?.parties?.agent?.outreach?.enabled),
+        utcHour: OUTREACH_SWEEP_UTC_HOUR,
+        lastRunAt: cursor?.at || null,
+        job: publicOutreachJob(getOutreachJob(locationId)),
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Body: { dryRun }. dryRun true = pull (a cache hit is free), pick, and say
+  // who WOULD be imported; nothing is written to GHL. The pull itself still
+  // happens, so a dry run on a cold cache costs RentCast requests.
+  router.post("/autopilot/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const dryRun = req.body?.dryRun !== false;
+      const job = startOutreachSweep({
+        locationId, client, saved, store, dryRun, trigger: "manual",
+        deps: { runPull: router.runPull, importAgents: importAgents },
+      });
+      res.status(202).json({ ok: true, job: publicOutreachJob(job) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // For the daily outreach sweep (outreach-sweep.js): the same pull and
+  // import the buttons run, without a request.
+  router.runPull = (locationId, client, body = {}) => runPull(locationId, client, body);
+  router.importAgents = importAgents;
+  router.resolveBatch = resolveBatch;
 
   return router;
 }

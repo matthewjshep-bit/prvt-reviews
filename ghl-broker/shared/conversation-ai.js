@@ -59,7 +59,7 @@ export const SILENT_INTENTS = new Set(["opt_out"]);
 // NEVER_AUTO, so autoEligible() offers them as checkboxes and an operator
 // opts a nudge into sending itself exactly the way they opt in a question.
 export const OUTBOUND_INTENTS = {
-  agent: ["realm_check", "take_check", "offer_nudge"],
+  agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "outreach_nudge"],
   investor: ["blast_nudge", "dataroom_nudge"],
 };
 
@@ -68,6 +68,7 @@ export const INTENT_LABEL = {
     deal_available: "has a deal (tier 1)", new_property: "new property (tier 1)", investor_open: "open to investors (tier 2)",
     realm_yes: "number is in the realm", realm_check: "floated our number", take_check: "floated our read",
     offer_nudge: "followed up on our offer",
+    outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
     wants_call: "wants a call", scheduling: "scheduling", proof_of_funds: "proof of funds",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
@@ -86,6 +87,8 @@ export const INTENT_LABEL = {
 // the model was told it means.
 export const INTENT_GLOSS = {
   agent: {
+    outreach_open: "the text it starts when a new agent is imported: saw their listing, we buy as-is for cash, anything distressed?",
+    outreach_nudge: "a follow-up on that first text when nothing came back",
     deal_available: "the listing we asked about (or one they've got) is available and needs work — condition, price expectations, seller timeline",
     investor_open: "no deal right now, but open to working with investors or happy for us to stay in touch",
     realm_yes: "says the number we floated works, is in the realm, or to go ahead and send the formal offer",
@@ -295,6 +298,10 @@ const PLAYBOOK = () => ({
   // before the formal offer goes. Sends itself only if realm_check is on the
   // party's auto-send list.
   realmCheck: { enabled: false },
+  // The first text to a listing agent the outreach page imported, drafted by
+  // the bot from the hook listing instead of sent by a GHL workflow template.
+  // Sends itself only if outreach_open is on the party's auto-send list.
+  outreach: { enabled: false },
   // When an underwrite lands and we don't have the agent's own read yet, the
   // bot floats our ARV and rehab as an opinion to get theirs — before it
   // ever shows the price. Sends itself only if take_check is on the allowlist.
@@ -491,6 +498,7 @@ function normalizePlaybook(p, party, seed = {}) {
     showMath: bool(src.showMath, false),
     realmCheck: { enabled: bool(src.realmCheck?.enabled, false) },
     takeCheck: { enabled: bool(src.takeCheck?.enabled, false) },
+    outreach: { enabled: bool(src.outreach?.enabled, false) },
     followUp: normalizeFollowUp(src.followUp, party),
     counterBand: {
       enabled: bool(src.counterBand?.enabled, false),

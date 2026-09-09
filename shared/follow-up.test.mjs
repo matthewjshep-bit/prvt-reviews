@@ -140,7 +140,7 @@ test("a rung keeps its identity when the operator inserts one before it", () => 
 /* ---------- the vocabulary ---------- */
 
 test("each party owns only its own ladders", () => {
-  assert.deepEqual(kindsFor("agent"), ["offer_nudge"]);
+  assert.deepEqual(kindsFor("agent"), ["outreach_nudge", "offer_nudge"]);
   assert.deepEqual(kindsFor("investor"), ["blast_nudge", "dataroom_nudge"]);
 });
 

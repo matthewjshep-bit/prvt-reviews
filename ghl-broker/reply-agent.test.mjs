@@ -351,6 +351,26 @@ test("a live send goes out as SMS with the operator's text, and records the edit
   assert.ok(calls.some(([p, o]) => p.endsWith("/tags") && o.method === "DELETE"), "the reply-draft tag is cleared");
 });
 
+test("sending the first cold text writes outreach_sent — the ladder's trigger — and nothing else does", async () => {
+  const open = { ...openDraft(), party: "agent", intent: "outreach_open", contactName: "Dana", inbound: "",
+    outbound: { kind: "outreach_open", address: "9 Cold Creek Rd, Kent, WA" }, propertyAddress: "9 Cold Creek Rd, Kent, WA" };
+  const store = fakeStore([open, { ...openDraft(), id: "d2", contactId: "c2" }]);
+  const client = { call: async () => ({ messageId: "m1" }) };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true });
+  const ev = await store.listContactEvents("LOC", "c1", { types: ["outreach_sent"] });
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].address, "9 Cold Creek Rd, Kent, WA");
+  assert.equal(ev[0].dedupeKey, "outreach:c1:d1");
+  assert.equal(ev[0].data.contactName, "Dana");
+  // a plain reply leaves no such trace
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", live: true });
+  assert.equal((await store.listContactEvents("LOC", "c2", { types: ["outreach_sent"] })).length, 0);
+  // and a dry run of the cold open writes nothing
+  const store2 = fakeStore([open]);
+  await sendReplyDraft({ client, store: store2, locationId: "LOC", draftId: "d1", live: false });
+  assert.equal((await store2.listContactEvents("LOC", "c1", { types: ["outreach_sent"] })).length, 0);
+});
+
 test("an email draft goes out as an email with the address as its subject", async () => {
   const store = fakeStore([{ ...openDraft(), channel: "email", reply: "First line.\n\nSecond <para>." }]);
   const calls = [];

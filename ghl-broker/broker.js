@@ -21,7 +21,8 @@ import { store } from "./store.js";
 import { checkObjectStore } from "./r2.js";
 import { sendDueDrafts } from "./conversation-scheduler.js";
 import { maybeStartFollowUpSweep, FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.js";
-import { sendReplyDraft, conversationConfig } from "./reply-agent.js";
+import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agent.js";
+import { maybeStartOutreachSweep, OUTREACH_SWEEP_UTC_HOUR } from "./outreach-sweep.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -130,7 +131,22 @@ function resolveLocation(req) {
 const CONVERSATION_SENDS_LIVE = process.env.CARD_SENDS_ENABLED === "true";
 const offersRouter = createOffersRouter({ resolveLocation, uploadDir: UPLOAD_DIR, publicBaseUrl: PUBLIC_BASE_URL, dataroomBaseUrl: DATAROOM_BASE_URL });
 app.use("/api/offers", offersRouter);
-app.use("/api/outreach", createOutreachRouter({ resolveLocation }));
+// The first text to an agent the outreach import just created: the
+// Conversation AI's cold open, drafted from the hook listing. Draft-only
+// unless outreach_open is on the agent allowlist.
+const outreachRouter = createOutreachRouter({
+  resolveLocation,
+  firstTouch: async ({ locationId, client, contactId, hook = {} }) => {
+    const saved = (await store.getOfferSettings(locationId)) || {};
+    return startProactive({
+      client, locationId, saved, store, contactId, kind: "outreach_open",
+      subject: { address: hook.address || "", hookPrice: hook.price || 0, hookDom: hook.dom || 0, brokerage: hook.brokerage || "" },
+      sendsEnabled: CONVERSATION_SENDS_LIVE,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }),
+    });
+  },
+});
+app.use("/api/outreach", outreachRouter);
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
 app.use("/api/dispo", createDispoRouter({ resolveLocation }));
 // The contact record: the app's own memory of every agent and investor, and
@@ -185,6 +201,12 @@ setInterval(async () => {
         deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
       });
       if (nudged) console.log(`follow-up sweep started for ${locationId}`);
+      // The top of the funnel, same tick: pull, pick, import, say hello.
+      const pulled = await maybeStartOutreachSweep({
+        client: makeClient(token), locationId, saved, store, utcHour: OUTREACH_SWEEP_UTC_HOUR,
+        deps: { runPull: outreachRouter.runPull, importAgents: outreachRouter.importAgents },
+      });
+      if (pulled) console.log(`outreach sweep started for ${locationId}`);
     } catch (e) {
       console.error(`nightly sweep check failed for ${locationId}: ${e.message}`);
     }

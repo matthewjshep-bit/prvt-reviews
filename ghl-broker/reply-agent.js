@@ -974,6 +974,24 @@ const offerNumbers = (offer) => ({
  * introduces a number.
  */
 export const OUTBOUND_KINDS = {
+  // The first text to an agent the outreach page imported. It floats nothing
+  // — the hook listing's price is on the contact for context, not for
+  // quoting — and it is the one message where the thread is empty by
+  // definition, so the prompt has to carry the whole introduction.
+  outreach_open: {
+    party: "agent",
+    enabled: (pb) => pb?.outreach?.enabled,
+    ready: ({ subject }) => (subject?.address ? true : "no listing to open with"),
+    floats: () => [],
+    forbids: () => [],
+  },
+  outreach_nudge: {
+    party: "agent",
+    enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.outreach_nudge?.enabled,
+    ready: ({ subject }) => (subject?.address ? true : "nothing to follow up on"),
+    floats: () => [],
+    forbids: () => [],
+  },
   take_check: {
     party: "agent",
     enabled: (pb) => pb?.takeCheck?.enabled,
@@ -1140,6 +1158,14 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       theirArvK: theirArv ? kText(theirArv) : "", theirRehabK: theirRehab ? kText(theirRehab) : "",
       requote: Boolean(subject?.requote) };
   }
+  if (kind === "outreach_open") {
+    // What we know about the listing, for the introduction. Price and days
+    // on market are colour ("been sitting a while"), never a number to quote.
+    const price = Math.round(Number(subject?.hookPrice) || 0);
+    return { ...base,
+      hookPrice: price, hookPriceK: price ? kText(price) : "", hookDom: Number(subject?.hookDom) || 0,
+      brokerage: String(subject?.brokerage || "") };
+  }
   // The nudges. They carry what the message is ABOUT and no numbers at all.
   return { ...base,
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
@@ -1160,6 +1186,8 @@ function outboundSummary({ kind, offer, outbound }) {
         ? `Comes back on ${where} with ${fmtMoney(offer.cashAmount)} after re-running their numbers.`
         : `Floats ${fmtMoney(offer.cashAmount)} on ${where} as a rough first pass and asks if it's in the realm.`;
     case "offer_nudge":   return `Follows up on our offer on ${where}${rung}.`;
+    case "outreach_open": return `First text: saw their listing at ${where}, asks if they have anything distressed.`;
+    case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
     case "dataroom_nudge": return `Follows up on ${where} — they opened the package and went quiet${rung}.`;
     default: return `Starts a message about ${where}${rung}.`;
@@ -1817,6 +1845,16 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   };
   await store.updateReplyDraft(d.id, updated);
   await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+  // The first cold text is the outreach ladder's trigger, so it goes on the
+  // timeline the moment it actually leaves — not when it was drafted.
+  if (d.outbound?.kind === "outreach_open") {
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "agent", type: "outreach_sent", at: ts,
+      address: d.outbound.address || d.propertyAddress || "", source: "conversation", ref: d.id,
+      dedupeKey: `outreach:${d.contactId}:${d.id}`,
+      data: { draftId: d.id, auto: Boolean(auto), contactName: d.contactName || "" },
+    }).catch(() => {});
+  }
   if (auto && d.noteOnAutoSend !== false) {
     await createContactNote(client, d.contactId, {
       body: `Conversation AI sent this reply itself (${d.party || "agent"} · ${String(d.intent || "").replace(/_/g, " ")}):\n\n${body}`,

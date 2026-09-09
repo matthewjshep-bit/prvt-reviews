@@ -58,6 +58,7 @@ export const ACTION_KINDS = [
   { key: "underwrite_held",   label: "Underwrites that need a look" },
   { key: "offer_ready",       label: "Priced, not floated" },
   { key: "ladder_exhausted",  label: "Followed up, no reply" },
+  { key: "outreach_no_reply", label: "Cold agents who never answered" },
   { key: "offer_expired",     label: "Expired" },
   { key: "deal_no_buyers",    label: "Deals with nobody on them" },
   { key: "blast_no_opens",    label: "Blasted, nobody opened it" },
@@ -344,6 +345,39 @@ export function buildPipeline({
         detail: a.why || (base.address ? `on ${base.address}` : ""),
         ops: [{ key: "apply", label: "Do it", intent: "primary" }, { key: "show_draft", label: "See the draft", intent: "secondary" }] });
       if (card) card.actionIds.push(id);
+    }
+  }
+
+  /* cold agents: reached out from the app, the ladder ran out, nothing back */
+  // No card — a card is a property, and a cold agent has none yet. The
+  // moment they answer, a draft exists and they leave this list; the moment
+  // we offer on something, they have a card.
+  const outreachLadder = ladders.agent?.ladders?.outreach_nudge || null;
+  if (ladders.agent?.enabled && outreachLadder?.enabled) {
+    const cold = new Map();
+    for (const e of events) {
+      if (!e?.contactId) continue;
+      if (e.type === "outreach_sent" || (e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge")
+          || e.type === "text_summary" || e.type === "call_summary") {
+        if (!cold.has(e.contactId)) cold.set(e.contactId, []);
+        cold.get(e.contactId).push(e);
+      }
+    }
+    for (const [contactId, list] of cold) {
+      if (byContact.has(contactId)) continue;                 // they have an offer now
+      list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+      const opened = list.filter((e) => e.type === "outreach_sent").at(-1);
+      if (!opened) continue;
+      const answered = list.some((e) => (e.type === "text_summary" || e.type === "call_summary") && String(e.at) > String(opened.at));
+      if (answered) continue;
+      const sentSteps = list.filter((e) => e.type === "follow_up_sent" && String(e.at) > String(opened.at)).map((e) => Number(e.data?.step));
+      if (!exhausted({ steps: outreachLadder.steps, sentSteps, startedAt: opened.at, now })) continue;
+      const ageDays = Math.floor((now - ms(opened.at)) / DAY_MS);
+      push({ contactId, contactName: contactNames[contactId] || opened.data?.contactName || "", address: opened.address || "",
+        kind: "outreach_no_reply", severity: "fyi",
+        title: `${contactNames[contactId] || opened.data?.contactName || "An agent"}: ${sentSteps.length + 1} texts, no reply`,
+        detail: `first text ${ageDays}d ago${opened.address ? ` about ${opened.address}` : ""}`,
+        ops: [] });
     }
   }
 
