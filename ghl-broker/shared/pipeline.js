@@ -144,7 +144,7 @@ export function buildPipeline({
     // A hand-made draft is the editor's business, not the board's.
     if (status === "draft" && !isAiGenerated(o)) { counts.hidden.drafts++; continue; }
 
-    const placed = placeOffer(o, { status, aiHeld, expired, now });
+    const placed = placeOffer(o, { status, aiHeld });
     if (!placed) { counts.hidden.drafts++; continue; }
     const { lane, side, stageSince, deadReason } = placed;
 
@@ -165,7 +165,7 @@ export function buildPipeline({
       ai: { made: isAiGenerated(o), held },
       chips: [], draftIds: myDrafts.map((d) => d.id),
       lastInboundAt, silentDays: Math.max(0, Math.floor((now - silentSince) / DAY_MS)),
-      expiresAt: expiresAt ? expiresAt.toISOString() : null, expiresInDays,
+      expiresAt: expiresAt ? expiresAt.toISOString() : null, expiresInDays, expired,
       deal: null, deadReason: deadReason || null, actionIds: [],
     };
 
@@ -198,7 +198,13 @@ export function buildPipeline({
         : { key: "band", label: x.ceiling && x.theirAmount ? `over by ${money(x.theirAmount - x.ceiling)}` : "outside band", tone: "bad" });
     }
     if ((o.requotes || []).length) card.chips.push({ key: "requoted", label: `requoted ×${o.requotes.length}`, tone: "neutral" });
-    if (expiresInDays != null && expiresInDays >= 0 && expiresInDays <= 7 && side === "agent" && !deadReason) {
+    // Expiry is a chip, never a lane. The offers tab counts an expired offer
+    // as still awaiting a reply, and the board has to agree with it, or the
+    // two screens report different numbers of offers out (they did). An agent
+    // answers a lapsed lowball all the time; only a recorded outcome ends it.
+    if (expired && side === "agent") {
+      card.chips.push({ key: "expired", label: "expired", tone: "bad" });
+    } else if (expiresInDays != null && expiresInDays >= 0 && expiresInDays <= 7 && side === "agent" && !deadReason) {
       card.chips.push({ key: "expiring", label: expiresInDays === 0 ? "expires today" : `expires in ${expiresInDays}d`, tone: "warn" });
     }
     if (replied) card.chips.push({ key: "replied", label: "they replied", tone: "good" });
@@ -229,17 +235,19 @@ export function buildPipeline({
         title: `${card.address} is priced and nothing has gone out`, detail: `cash ${money(o.cashAmount)}`,
         ops: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "float_realm", label: "Float the number", intent: "secondary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
     }
-    if (ladderDone && !replied) {
+    // An expired offer gets one queue item, the expiry itself (below); it
+    // already offers "mark no response", so the silence nags stand down.
+    if (ladderDone && !replied && !expired) {
       card.actionIds.push(push({ ...base, kind: "ladder_exhausted", severity: "soon",
         title: `${card.address}: ${sentSteps.length} follow-up${sentSteps.length === 1 ? "" : "s"}, no reply`,
         detail: `sent ${ageDays}d ago`,
         ops: [{ key: "mark_no_response", label: "Mark no response", intent: "primary" }, { key: "float_realm", label: "Float the number again", intent: "secondary" }, { key: "mark_passed", label: "Mark passed", intent: "danger" }] }));
-    } else if (!ladderOn && (lane === "sent" || lane === "countered") && card.silentDays >= 14) {
+    } else if (!ladderOn && !expired && (lane === "sent" || lane === "countered") && card.silentDays >= 14) {
       card.actionIds.push(push({ ...base, kind: "gone_quiet", severity: "fyi",
         title: `${card.address}: nothing for ${card.silentDays} days`, detail: "the follow-up ladder is off for agents",
         ops: [{ key: "mark_no_response", label: "Mark no response", intent: "secondary" }, { key: "float_realm", label: "Float the number again", intent: "secondary" }] }));
     }
-    if (deadReason === "expired") {
+    if (expired && side === "agent") {
       card.actionIds.push(push({ ...base, kind: "offer_expired", severity: "soon",
         title: `${card.address} expired`, detail: expiresAt ? `on ${expiresAt.toISOString().slice(0, 10)}` : "",
         ops: [{ key: "open_editor", label: "Re-issue", intent: "primary" }, { key: "mark_no_response", label: "Mark no response", intent: "secondary" }, { key: "mark_passed", label: "Mark passed", intent: "danger" }] }));
@@ -351,7 +359,9 @@ export function buildPipeline({
 
 /* ---------- placement ---------- */
 
-function placeOffer(o, { status, aiHeld, expired, now }) {
+// Lane is a function of recorded state only: the deal stage, the AI hold,
+// the status you set. The clock never moves a card (see the expiry chip).
+function placeOffer(o, { status, aiHeld }) {
   const d = o.deal;
   if (d) {
     const since = (d.stageHistory || []).filter((h) => h?.ts).at(-1)?.ts || d.updatedAt || d.createdAt || o.statusAt || o.createdAt;
@@ -362,7 +372,6 @@ function placeOffer(o, { status, aiHeld, expired, now }) {
   if (aiHeld) return { lane: "needs_review", side: "agent", stageSince: o.autoUnderwrite?.finishedAt || o.autoUnderwrite?.startedAt || o.createdAt };
   if (status === "draft") return null;
   if (DEAD_STATUSES.has(status)) return { lane: "dead", side: "agent", stageSince: o.statusAt || o.createdAt, deadReason: status };
-  if (expired) return { lane: "dead", side: "agent", stageSince: offerExpiresAt(o)?.toISOString() || o.statusAt, deadReason: "expired" };
   if (status === "countered") return { lane: "countered", side: "agent", stageSince: o.statusAt || o.counter?.at || o.createdAt };
   if (status === "sent") {
     const last = (o.sends || []).filter((s) => s?.ts).map((s) => s.ts).sort().at(-1);

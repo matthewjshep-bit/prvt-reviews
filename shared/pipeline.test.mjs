@@ -100,12 +100,28 @@ test("with the ladder off, a sent offer silent for two weeks is only an fyi", ()
   assert.equal(a.severity, "fyi");
 });
 
-test("an expired open offer is dead, counted, and an offer_expired action", () => {
+test("an expired open offer stays in its lane, wears the chip, and is an offer_expired action", () => {
   const r = build({ offers: [offer({ expiresAt: D(2) })] });
-  assert.equal(laneOf(r, "o1"), "dead");
-  assert.equal(r.cards[0].deadReason, "expired");
-  assert.equal(r.counts.hidden.dead, 1);
+  assert.equal(laneOf(r, "o1"), "sent");
+  assert.equal(r.cards[0].expired, true);
+  assert.equal(r.cards[0].deadReason, null);
+  assert.equal(r.counts.hidden.dead, 0);
+  assert.equal(r.counts.lanes.sent, 1);
+  assert.ok(r.cards[0].chips.some((c) => c.key === "expired"));
   assert.ok(r.actions.some((a) => a.kind === "offer_expired" && a.ops.some((o) => o.key === "open_editor")));
+});
+
+test("an expired offer that ran out its ladder is one queue item, not two", () => {
+  const r = build({ offers: [offer({ expiresAt: D(2), sends: [{ ts: D(20) }], statusAt: D(20),
+    followUps: [{ kind: "offer_nudge", step: 1 }, { kind: "offer_nudge", step: 2 }, { kind: "offer_nudge", step: 3 }] })] });
+  assert.equal(laneOf(r, "o1"), "sent");
+  assert.deepEqual(kinds(r), ["offer_expired"]);
+});
+
+test("an expired unsent offer stays in Not sent, like the offers tab", () => {
+  const r = build({ offers: [offer({ status: "new", sends: [], expiresAt: D(2) })] });
+  assert.equal(laneOf(r, "o1"), "ready");
+  assert.equal(r.counts.hidden.dead, 0);
 });
 
 test("an offer expiring in five days wears the chip and an fyi", () => {
