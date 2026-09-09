@@ -96,6 +96,7 @@ import {
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig,
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
+import { graduationReport } from "../shared/graduation.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
 import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType } from "../shared/contact-record.js";
 import { issueDataroomInvite } from "../dataroom.js";
@@ -4155,9 +4156,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { locationId } = resolveLocation(req);
       const days = Math.min(365, Math.max(1, Number(req.query.days) || 30));
       const since = new Date(Date.now() - days * 86400000).toISOString();
-      const rows = await store.listReplyDrafts(locationId, { since, limit: 1000 });
+      const [rows, saved] = await Promise.all([
+        store.listReplyDrafts(locationId, { since, limit: 1000 }),
+        store.getOfferSettings(locationId).catch(() => null),
+      ]);
       const lean = rows.map((d) => { const o = {}; for (const k of LEAN_DRAFT_KEYS) if (d[k] !== undefined) o[k] = d[k]; return o; });
-      res.json({ ok: true, days, drafts: lean, stats: draftStats(rows) });
+      const stats = draftStats(rows);
+      // The verdict per intent — ready to tick, or how far off — against the
+      // live allowlist, so "on" and "ready" can't both show for one intent.
+      const graduation = graduationReport({ stats, config: conversationConfig(saved || {}) });
+      res.json({ ok: true, days, drafts: lean, stats, graduation });
     } catch (err) { fail(res, err); }
   });
 

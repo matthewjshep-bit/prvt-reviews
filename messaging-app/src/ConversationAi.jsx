@@ -9,10 +9,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Power } from "lucide-react";
 import { INTENT_LABEL, PARTY_LABEL, normalizeConversationAi, starterConfig } from "@shared/conversation-ai.js";
+import { VERDICT_LABEL } from "@shared/graduation.js";
 import { getConversationAi, getConversationHistory, getSettings, listOffers, listWorkflows, saveConversationAi, setConversationEnabled } from "./api.js";
 import { autoAcceptCeiling } from "@shared/auto-accept.js";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, SkeletonRows, TableCard } from "./ui.jsx";
+import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, Pill, SkeletonRows, TableCard } from "./ui.jsx";
 import ReplyStrip from "./ReplyStrip.jsx";
 import ConversationTryIt from "./ConversationTryIt.jsx";
 import {
@@ -94,6 +95,25 @@ export default function ConversationAi({ settings }) {
     setSaving(false);
   }
 
+  // Promote: tick one intent on its party's allowlist. Saves on the spot when
+  // nothing else is pending, so the click is the decision; with other edits
+  // open it only ticks, and the Save button carries them all together.
+  async function promote(party, intent) {
+    const pb = form.parties[party];
+    const label = INTENT_LABEL[party]?.[intent] || intent;
+    if (!window.confirm(`Let "${label}" replies to ${PARTY_LABEL[party].toLowerCase()}s send themselves?\n\nEvery other gate still applies: quiet hours, the delay, the money guard, the daily cap.`)) return;
+    const next = { ...form, parties: { ...form.parties, [party]: { ...pb, autoSend: { enabled: true, intents: [...new Set([...(pb.autoSend?.intents || []), intent])] } } } };
+    if (dirty) { patch(next); setNotice(`"${label}" is ticked — press Save to keep it with your other changes.`); return; }
+    setSaving(true); setError("");
+    try {
+      const savedConfig = await saveConversationAi(next);
+      setConfig(savedConfig); setForm(savedConfig); setSaved(true);
+      setNotice(`"${label}" replies to ${PARTY_LABEL[party].toLowerCase()}s now send themselves.`);
+      setRefreshKey((k) => k + 1);
+    } catch (e) { setError(e.message); }
+    setSaving(false);
+  }
+
   if (error && !form) return <ErrorBar>{error}</ErrorBar>;
   if (!form) return <SkeletonRows cols={4} rows={4} />;
 
@@ -103,6 +123,7 @@ export default function ConversationAi({ settings }) {
     { label: "Sent itself", value: t.autoSent ?? "—", hint: "Replies that went out with nobody reading them" },
     { label: "Sent as written", value: t.sent ? `${Math.round(((t.sentUnedited || 0) / t.sent) * 100)}%` : "—", hint: "Of the replies a person sent, how many they didn't edit" },
     { label: "Waiting on you", value: t.pending ?? "—" },
+    { label: "Ready to promote", value: history?.graduation ? history.graduation.ready : "—", hint: "Intents a person has sent as written often enough to send themselves" },
   ];
 
   return (
@@ -186,7 +207,7 @@ export default function ConversationAi({ settings }) {
       {error && <ErrorBar>{error}</ErrorBar>}
       {notice && <div className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">{notice}</div>}
 
-      <KpiRow items={kpis} />
+      <KpiRow cols="sm:grid-cols-5" items={kpis} />
 
       <ReplyStrip title="Waiting on you" emptyText="Nothing waiting — every inbound text has been answered or is being drafted." refreshKey={refreshKey} />
 
@@ -206,12 +227,20 @@ export default function ConversationAi({ settings }) {
       <RulesEditor config={form} patch={patch} />
       <ExamplesEditor config={form} patch={patch} />
 
-      <HistorySection history={history} days={days} setDays={setDays} onRefresh={() => setRefreshKey((k) => k + 1)} />
+      <HistorySection history={history} days={days} setDays={setDays} onRefresh={() => setRefreshKey((k) => k + 1)} onPromote={promote} saving={saving} />
     </div>
   );
 }
 
 /* ---------- history + graduation stats ---------- */
+
+const VERDICT_STYLE = {
+  on: "bg-emerald-100 text-emerald-800",
+  ready: "bg-blue-600 text-white",
+  not_yet: "bg-amber-100 text-amber-800",
+  not_enough: "bg-slate-100 text-slate-500",
+  locked: "bg-slate-100 text-slate-400",
+};
 
 const outcomeOf = (d) => {
   if (d.status === "sent") return d.autoSent ? ["sent itself", "text-emerald-700"] : d.edited ? ["sent, edited", "text-slate-700"] : ["sent as written", "text-emerald-700"];
@@ -223,14 +252,15 @@ const outcomeOf = (d) => {
   return [d.heldAt ? "held, waiting" : "waiting", "text-amber-700"];
 };
 
-function HistorySection({ history, days, setDays, onRefresh }) {
+function HistorySection({ history, days, setDays, onRefresh, onPromote, saving }) {
   const [party, setParty] = useState("all");
   if (!history) return <Section title="History"><SkeletonRows cols={5} rows={3} /></Section>;
   const rows = (history.drafts || []).filter((d) => party === "all" || (d.party || "agent") === party);
   const byParty = history.stats?.byParty || {};
+  const graduation = history.graduation;
   return (
     <Section title="History"
-      intro="Every draft in the window, and per intent, how often a person sent the AI's draft as written. When 'sent as written' matches 'auto-sendable' for a few weeks, that intent is ready to send itself.">
+      intro={`Every draft in the window, and per intent, how often a person sent the AI's draft as written. An intent is ready to send itself once you've sent ${graduation?.rule?.minAsWrittenPct ?? 90}% of at least ${graduation?.rule?.minVerdicts ?? 20} of them untouched — press Promote and it goes on the allowlist.`}>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <FilterChips value={party} onChange={setParty} label="Party"
           options={[["all", "All"], ["agent", "Agents"], ["investor", "Investors"], ["unknown", "Unknown"]].map(([key, label]) => ({ key, label, count: key === "all" ? history.drafts?.length : (byParty[key]?.total || 0) }))} />
@@ -239,26 +269,47 @@ function HistorySection({ history, days, setDays, onRefresh }) {
         </select>
       </div>
 
-      {Object.keys(byParty).length > 0 && (
+      {graduation && (
         <div className="mb-4 grid gap-3 lg:grid-cols-2">
-          {Object.entries(byParty).filter(([p]) => party === "all" || p === party).map(([p, s]) => (
+          {Object.entries(graduation.byParty).filter(([p]) => party === "all" || p === party).map(([p, verdicts]) => (
             <TableCard key={p}>
               <table className="w-full text-xs">
                 <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
-                  <tr><th className="px-3 py-2">{PARTY_LABEL[p] || p}s · intent</th><th className="px-2 py-2 text-right">drafts</th><th className="px-2 py-2 text-right" title="The gates would have let it go">auto-sendable</th><th className="px-2 py-2 text-right" title="A person sent the AI's draft without editing it">sent as written</th><th className="px-2 py-2 text-right">sent itself</th><th className="px-2 py-2 text-right">edited</th><th className="px-2 py-2 text-right">dismissed</th></tr>
+                  <tr>
+                    <th className="px-3 py-2">{PARTY_LABEL[p] || p}s · intent</th>
+                    <th className="px-2 py-2 text-right">drafts</th>
+                    <th className="px-2 py-2 text-right" title="A person sent the AI's draft without editing it">as written</th>
+                    <th className="px-2 py-2 text-right">edited</th>
+                    <th className="px-2 py-2 text-right">dismissed</th>
+                    <th className="px-2 py-2 text-right">sent itself</th>
+                    <th className="px-2 py-2" title={`${graduation.rule.minAsWrittenPct}% as written over at least ${graduation.rule.minVerdicts} of your verdicts`}>verdict</th>
+                    <th className="px-2 py-2"></th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {Object.entries(s.byIntent).sort((a, b) => b[1].total - a[1].total).map(([intent, c]) => (
-                    <tr key={intent} className="border-t border-slate-100">
-                      <td className="px-3 py-1.5">{INTENT_LABEL[p]?.[intent] || intent}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{c.total}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{c.autoSendable}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums font-semibold text-emerald-700">{c.humanSentUnedited}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{c.autoSent}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{c.sentEdited}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{c.dismissed}</td>
-                    </tr>
-                  ))}
+                  {verdicts.filter((v) => v.verdicts > 0 || v.state === "ready" || v.state === "on" || (byParty[p]?.byIntent?.[v.intent]?.total || 0) > 0).map((v) => {
+                    const c = byParty[p]?.byIntent?.[v.intent] || {};
+                    const st = VERDICT_STYLE[v.state] || VERDICT_STYLE.not_enough;
+                    return (
+                      <tr key={v.intent} className="border-t border-slate-100">
+                        <td className="px-3 py-1.5">{v.label}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">{c.total || 0}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums font-semibold text-emerald-700">{v.asWritten}{v.pct != null && <span className="ml-1 font-normal text-slate-400">{v.pct}%</span>}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">{c.sentEdited || 0}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">{c.dismissed || 0}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">{c.autoSent || 0}</td>
+                        <td className="px-2 py-1.5">
+                          <Pill small label={VERDICT_LABEL[v.state]} cls={st}
+                            title={v.state === "not_enough" ? `${v.needed} more verdict${v.needed === 1 ? "" : "s"} needed` : v.state === "not_yet" ? `${v.pct}% as written, needs ${graduation.rule.minAsWrittenPct}%` : ""} />
+                        </td>
+                        <td className="px-2 py-1.5 text-right">
+                          {v.state === "ready" && onPromote && (
+                            <button type="button" className={BTN_PRIMARY + " !px-2.5 !py-1 !text-xs"} disabled={saving} onClick={() => onPromote(p, v.intent)}>Promote</button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </TableCard>

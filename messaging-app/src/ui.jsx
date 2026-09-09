@@ -33,7 +33,7 @@ export const BTN_ICON = "inline-flex h-7 w-7 items-center justify-center rounded
 export function Pill({ label, cls = "bg-slate-100 text-slate-600", small, title, children }) {
   return (
     <span title={title}
-      className={`inline-flex items-center gap-1 rounded-full font-semibold ${cls} ${small ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs"}`}>
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full font-semibold ${cls} ${small ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs"}`}>
       {children}
       {label}
     </span>

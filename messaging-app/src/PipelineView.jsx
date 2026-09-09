@@ -12,6 +12,7 @@ import { getDashboardPipeline } from "./api.js";
 import { BTN, ErrorBar, FilterChips, KpiRow, SearchInput, SkeletonRows } from "./ui.jsx";
 import ActionQueue from "./ActionQueue.jsx";
 import PipelineBoard from "./PipelineBoard.jsx";
+import AutopilotCard from "./AutopilotCard.jsx";
 
 const POLL_MS = 15000;
 const SIDES = [{ key: "all", label: "Everything" }, { key: "agent", label: "Acquisition" }, { key: "dispo", label: "Disposition" }];
@@ -87,6 +88,8 @@ export default function PipelineView() {
           More than the board reads in one go happened in the last 90 days — the newest buyer activity may be missing.
         </div>
       )}
+
+      <AutopilotCard autopilot={data?.autopilot} />
 
       <KpiRow cols="sm:grid-cols-5" items={[
         { label: "Now", value: counts.actions?.now ?? 0, hint: "waiting on you, urgently" },

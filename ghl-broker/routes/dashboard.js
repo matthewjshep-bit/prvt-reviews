@@ -28,7 +28,9 @@ import {
 } from "../ghl.js";
 import { offerFunnel, counterSpread, passReasons, followUpPerformance } from "../shared/funnel.js";
 import { buildPipeline } from "../shared/pipeline.js";
-import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob } from "../auto-underwrite.js";
+import { autopilotSummary, graduationReport, GRADUATION } from "../shared/graduation.js";
+import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_UNDERWRITE_ENABLED } from "../auto-underwrite.js";
+import { draftStats } from "../shared/conversation-ai.js";
 import { conversationConfig } from "../reply-agent.js";
 
 // Same expression routes/offers.js reads: the broker's one send gate. The
@@ -220,14 +222,25 @@ export default function createDashboardRouter({ resolveLocation }) {
       const { locationId } = resolveLocation(req);
       const now = Date.now();
       const since = new Date(now - PIPELINE_EVENT_DAYS * DAY_MS).toISOString();
-      const [offers, drafts, events, saved, investors] = await Promise.all([
+      const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
+      const [offers, drafts, events, saved, investors, recentDrafts] = await Promise.all([
         store.listOffers(locationId, { limit: 2000, lean: true }),
         store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }),
         store.listContactEventsSince(locationId, since, { types: PIPELINE_EVENT_TYPES, limit: PIPELINE_EVENT_LIMIT }).catch(() => []),
         store.getOfferSettings(locationId).catch(() => null),
         store.listInvestors(locationId, { limit: 2000 }).catch(() => []),
+        // The graduation window, for the "N intents are ready" line on the
+        // autopilot card. One indexed read; the verdicts themselves live on
+        // the Conversation AI tab.
+        store.listReplyDrafts(locationId, { since: gradSince, limit: 1000 }).catch(() => []),
       ]);
       const config = conversationConfig(saved || {});
+      const autopilot = autopilotSummary({
+        config, sendsEnabled: CARD_SENDS_ENABLED, underwriteLive: AUTO_UNDERWRITE_ENABLED,
+        underwriteWired: Boolean(process.env.AUTO_UNDERWRITE_SECRET || process.env.GHL_LOCATION_KEYS),
+      });
+      autopilot.readyToGraduate = graduationReport({ stats: draftStats(recentDrafts), config }).ready;
+      autopilot.windowDays = GRADUATION.windowDays;
       const contactNames = {};
       for (const i of investors) if (i?.contactId && i.name) contactNames[i.contactId] = i.name;
       const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
@@ -238,6 +251,7 @@ export default function createDashboardRouter({ resolveLocation }) {
         sendsEnabled: CARD_SENDS_ENABLED,
         conversationEnabled: config.enabled,
         ladders: { agent: config.parties.agent.followUp, investor: config.parties.investor.followUp },
+        autopilot,
         // The open drafts verbatim — the console renders them with the same
         // row the outbox uses, so send/edit/dismiss/apply come for free.
         drafts,
