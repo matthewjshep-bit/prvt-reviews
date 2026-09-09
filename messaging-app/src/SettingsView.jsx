@@ -37,6 +37,12 @@ function Num({ label, value, onChange, suffix, money }) {
   );
 }
 
+// A key field: blank on load, "set · ends abcd" as the placeholder when one
+// is stored, and a blank on save means "keep what's there".
+function Secret({ label, value, onChange, placeholder, secret }) {
+  return <Txt label={label} value={value} onChange={onChange} placeholder={secret?.set ? `set · ends ${secret.last4} — leave blank to keep, paste to replace` : placeholder} />;
+}
+
 function Txt({ label, value, onChange, placeholder }) {
   return (
     <label className="block">
@@ -420,7 +426,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           Powers the sold-comps map on the New Offer page (closed sales, same beds/baths/county, similar
           sqft). Sign up at realestateapi.com for a trial key. Leave blank to use manual comps only.
         </p>
-        <Txt label="RealEstateAPI key" value={form.compsApiKey || ""} onChange={set("compsApiKey")} placeholder="APIKEY-..." />
+        <Secret label="RealEstateAPI key" value={form.compsApiKey || ""} onChange={set("compsApiKey")} placeholder="APIKEY-..." secret={form.__secrets?.compsApiKey} />
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
@@ -476,7 +482,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           page. Get a key at console.anthropic.com → API Keys. Photo scans cost roughly $0.15–0.50
           each; enrichments and buy-box searches roughly $0.02–0.05.
         </p>
-        <Txt label="Anthropic API key" value={form.aiApiKey || ""} onChange={set("aiApiKey")} placeholder="sk-ant-..." />
+        <Secret label="Anthropic API key" value={form.aiApiKey || ""} onChange={set("aiApiKey")} placeholder="sk-ant-..." secret={form.__secrets?.aiApiKey} />
         {mode === "offers" && (<>
         <div className="mt-3">
           <p className="mb-2 text-xs text-slate-500">
@@ -484,7 +490,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             $5/month free credits): apify.com → sign up → Settings → API tokens → copy. Unofficial
             scraper — can break if Zillow changes defenses; uploading photos always works as the fallback.
           </p>
-          <Txt label="Apify API token" value={form.apifyToken || ""} onChange={set("apifyToken")} placeholder="apify_api_..." />
+          <Secret label="Apify API token" value={form.apifyToken || ""} onChange={set("apifyToken")} placeholder="apify_api_..." secret={form.__secrets?.apifyToken} />
         </div>
         <div className="mt-3">
           <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -627,7 +633,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           Sign up at rentcast.io/api (free Developer tier: 50 requests/month, each returns up to
           500 listings). The zips/city here prefill the pull form.
         </p>
-        <Txt label="RentCast API key" value={form.rentcastApiKey || ""} onChange={set("rentcastApiKey")} placeholder="..." />
+        <Secret label="RentCast API key" value={form.rentcastApiKey || ""} onChange={set("rentcastApiKey")} placeholder="..." secret={form.__secrets?.rentcastApiKey} />
         <div className="mt-3 grid grid-cols-2 gap-3">
           <Txt label="Default zip codes" value={form.outreachZips || ""} onChange={set("outreachZips")} placeholder="98092, 98002" />
           <div className="grid grid-cols-2 gap-3">
@@ -814,7 +820,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           instead of one photo at a time. A plain API key is all it needs — no Google sign-in — because
           it only ever reads folders you've shared "Anyone with the link".
         </p>
-        <Txt label="Google API key" value={form.googleApiKey || ""} onChange={set("googleApiKey")} placeholder="AIza..." />
+        <Secret label="Google API key" value={form.googleApiKey || ""} onChange={set("googleApiKey")} placeholder="AIza..." secret={form.__secrets?.googleApiKey} />
         <p className="mt-1 text-xs text-slate-500">
           console.cloud.google.com → APIs &amp; Services → <span className="font-mono">Enable APIs</span> →
           Google Drive API, then Credentials → Create credentials → API key. Restrict it to the Drive API.

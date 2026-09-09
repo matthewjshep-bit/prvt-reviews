@@ -788,11 +788,34 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   }
 
   /* ---------- settings ---------- */
+  // The API keys never leave the broker in the clear. GET hands back a blank
+  // for each with `secrets` saying whether one is set and its last four
+  // characters; PUT keeps the stored value wherever the form sent a blank.
+  // `?reveal=1` returns them only for a location that has a location key
+  // configured (and therefore presented one to get this far).
+  const SECRET_FIELDS = ["aiApiKey", "apifyToken", "compsApiKey", "rentcastApiKey", "googleApiKey", "captureToken"];
+  const locationHasKey = (locationId) => {
+    try { return Boolean(JSON.parse(process.env.GHL_LOCATION_KEYS || "{}")[locationId]); } catch { return false; }
+  };
+  const maskSecrets = (settings) => {
+    const secrets = {};
+    const out = { ...settings };
+    for (const k of SECRET_FIELDS) {
+      const v = String(settings?.[k] || "");
+      secrets[k] = { set: Boolean(v), last4: v ? v.slice(-4) : "" };
+      out[k] = "";
+    }
+    return { settings: out, secrets };
+  };
+  router.settingsSecretFields = SECRET_FIELDS;
+
   router.get("/settings", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
       const saved = await store.getOfferSettings(locationId);
-      res.json({ settings: effectiveSettings(saved || {}) });
+      const full = effectiveSettings(saved || {});
+      if (String(req.query.reveal || "") === "1" && locationHasKey(locationId)) return res.json({ settings: full, revealed: true });
+      res.json(maskSecrets(full));
     } catch (err) { fail(res, err); }
   });
 
@@ -806,9 +829,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // value stays.
       const { conversationAi: _fromForm, ...incoming } = body.settings || body;
       const current = await store.getOfferSettings(locationId);
+      // A blank secret means "leave it": the form never saw the real one.
+      for (const k of SECRET_FIELDS) {
+        if (!String(incoming[k] || "").trim() && current?.[k]) incoming[k] = current[k];
+      }
       const settings = effectiveSettings({ ...incoming, conversationAi: current?.conversationAi || null });
       await store.saveOfferSettings(locationId, settings);
-      res.json({ ok: true, settings });
+      res.json({ ok: true, ...maskSecrets(settings) });
     } catch (err) { fail(res, err); }
   });
 

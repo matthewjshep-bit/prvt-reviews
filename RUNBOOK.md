@@ -904,6 +904,32 @@ drafts. Needs `CARD_SENDS_ENABLED`; a note is left on the contact.
 Both write an `offer_sent` event with `data.by` = `conversation` or
 `underwrite`, so the funnel can tell a machine send from a person's.
 
+## Hardening notes (2026-09)
+
+- **API keys never leave the broker in the clear.** `GET /api/offers/settings`
+  returns a blank for each key with `secrets: { field: { set, last4 } }`;
+  the Settings form shows "set · ends abcd" and a blank on save means keep.
+  `?reveal=1` returns them only for a location with a `GHL_LOCATION_KEYS`
+  entry (which the request had to present). To read a token off prod for
+  debugging, set a location key first.
+- **Every daily sweep has a durable cursor** (`job_cursors`): follow-up,
+  outreach, dispo second wave, the GHL mirror, and now the nightly
+  enrichment sweep (`enrichNightly`) — a redeploy inside the trigger hour no
+  longer re-spends model calls.
+- **RentCast budget.** The outreach sweep stands down at 45 of the free
+  tier's 50 requests for the month (`rentcastMonthlyBudget` in settings
+  overrides). The buttons keep the last five.
+- **Console smoke tests.** `cd messaging-app && npm test` (vitest, server
+  rendered): the Autopilot card, the action queue, the playbooks/booking/
+  auto-send cards on the shapes the broker actually sends.
+- Still in memory, by design: the underwrite / reply / feedback-scan job
+  registries. A restart loses job *visibility* only; every write they make
+  is idempotent and every durable decision is a `contact_events` row.
+- `routes/offers.js` is past five thousand lines. Splitting it into offers /
+  deals / automations routers is mechanical and pending.
+- Render still carries `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` from the
+  review-card era; nothing reads them. Rotate and delete.
+
 ## GHL pipeline mirror (Opportunities)
 
 Settings → "GHL pipeline mirror". The Pipeline tab stays the truth; this

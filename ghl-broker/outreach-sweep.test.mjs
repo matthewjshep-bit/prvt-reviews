@@ -30,9 +30,10 @@ test("only agents nobody has touched, most distressed first, under the cap", () 
   assert.ok(pickAgentsToImport(rows, { cap: 10, requireDistress: false }).some((r) => r.agentKey === "g"));
 });
 
-const fakeStore = (rows) => ({
+const fakeStore = (rows, pulls = []) => ({
   cursors: new Map(),
   async listOutreachAgents() { return rows; },
+  async listOutreachPulls() { return pulls; },
   async getJobCursor(loc, name) { return this.cursors.get(`${loc}|${name}`) || null; },
   async setJobCursor(loc, name, v) { this.cursors.set(`${loc}|${name}`, v); return v; },
 });
@@ -92,4 +93,17 @@ test("the tick fires once a day, in its hour, only when switched on with a key",
   assert.equal(getOutreachJob("loc").status, "done");
   assert.ok(store.cursors.get(`loc|${CURSOR_NAME}`).at, "the cursor is written");
   assert.equal(await maybeStartOutreachSweep({ ...base, saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true } }, now: inHour + 600000 }), false, "already ran this day");
+});
+
+test("the sweep stands down when the month's RentCast budget is spent", async () => {
+  _resetJobs();
+  let pulled = false;
+  const deps = { runPull: async () => { pulled = true; return { batchId: "b1", warnings: [] }; }, importAgents: async () => ({}) };
+  const pulls = [{ createdAt: new Date().toISOString(), doc: { requestsUsed: 45 } }];
+  const job = startOutreachSweep({ locationId: "loc", client: {}, saved: { outreachAutopilot: { enabled: true } }, store: fakeStore([row("a")], pulls), deps });
+  await settle();
+  assert.equal(job.status, "done");
+  assert.equal(pulled, false);
+  assert.match(job.warnings[0], /RentCast budget/);
+  assert.deepEqual(job.budget, { used: 45, budget: 45 });
 });

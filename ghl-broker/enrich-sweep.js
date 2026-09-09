@@ -428,14 +428,21 @@ const NIGHTLY_MIN_GAP_MS = 20 * 3600 * 1000;
 // Called on a timer by broker.js for each known location. Runs at most one
 // nightly sweep per ~day per location; skips quietly when the toggle or the
 // AI key is missing, or when any sweep ran recently.
-export function maybeStartNightlySweep({ client, locationId, saved, store, utcHour }) {
-  if (new Date().getUTCHours() !== utcHour) return false;
+export const NIGHTLY_CURSOR = "enrichNightly";
+export async function maybeStartNightlySweep({ client, locationId, saved, store, utcHour, now = Date.now() }) {
+  if (new Date(now).getUTCHours() !== utcHour) return false;
   if (!saved?.enrichSweepNightly) return false;
   if (!String(saved?.aiApiKey || "").trim()) return false;
   const last = jobs.get(locationId);
-  if (last && (last.status === "running" || Date.now() - new Date(last.startedAt).getTime() < NIGHTLY_MIN_GAP_MS)) {
+  if (last && (last.status === "running" || now - new Date(last.startedAt).getTime() < NIGHTLY_MIN_GAP_MS)) {
     return false;
   }
+  // Durable, like the other sweeps: a redeploy inside the trigger hour used
+  // to re-run the sweep and re-spend the model calls, because the only
+  // memory of "already ran" was this process's.
+  const cursor = await store.getJobCursor?.(locationId, NIGHTLY_CURSOR).catch(() => null);
+  if (cursor?.at && now - Date.parse(cursor.at) < NIGHTLY_MIN_GAP_MS) return false;
+  await store.setJobCursor?.(locationId, NIGHTLY_CURSOR, { at: new Date(now).toISOString(), doc: {} }).catch(() => {});
   startSweep({
     client, locationId, saved, store,
     sinceIso: new Date(Date.now() - NIGHTLY_WINDOW_MS).toISOString(),

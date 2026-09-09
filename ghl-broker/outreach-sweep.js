@@ -19,6 +19,8 @@ export const CURSOR_NAME = "outreach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
 export const OUTREACH_SWEEP_UTC_HOUR = Number(process.env.OUTREACH_SWEEP_UTC_HOUR || 15); // ≈ 7–8am Pacific
 export const DEFAULT_DAILY_CAP = 12;
+// Leave a few requests for the buttons: 45 of the free tier's 50.
+export const RENTCAST_MONTHLY_BUDGET = 45;
 const OUTREACH_IMPORTS_ENABLED = process.env.OUTREACH_IMPORTS_ENABLED === "true";
 
 const iso = (ms) => new Date(ms).toISOString();
@@ -107,6 +109,22 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
   if (typeof deps.runPull !== "function" || typeof deps.importAgents !== "function") {
     throw new Error("outreach sweep needs runPull and importAgents");
   }
+
+  // 0. The RentCast meter. The free tier is 50 requests a month; a daily
+  // pull that spent the last of them would leave the buttons dead too.
+  job.phase = "budget";
+  try {
+    const pulls = await store.listOutreachPulls(locationId, { limit: 60 });
+    const monthStart = new Date(now); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
+    const used = pulls.filter((p) => new Date(p.createdAt) >= monthStart).reduce((s, p) => s + (Number(p.doc?.requestsUsed) || 0), 0);
+    const budget = Number(saved.rentcastMonthlyBudget) > 0 ? Number(saved.rentcastMonthlyBudget) : RENTCAST_MONTHLY_BUDGET;
+    job.budget = { used, budget };
+    if (used >= budget) {
+      job.warnings.push(`RentCast budget: ${used} of ${budget} requests used this month — the sweep is standing down until next month`);
+      job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
+      return;
+    }
+  } catch (e) { job.warnings.push(`budget check: ${String(e?.message || e).slice(0, 120)}`); }
 
   // 1. The pull, on the location's saved defaults. A cache hit is free.
   const pull = await deps.runPull(locationId, client, {});

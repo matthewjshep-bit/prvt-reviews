@@ -61,9 +61,12 @@ const post = (path, body, method = "POST") =>
   }).then(j);
 
 /* ---------- settings ---------- */
+// The API keys come back blank; `__secrets` says which are set (and their
+// last four) so the form can show "set" and send a blank to mean "keep".
 export const getSettings = () =>
-  fetch(`${API_BASE}/api/offers/settings?${locq()}`).then(j).then((r) => r.settings);
-export const saveSettings = (settings) => post(`/api/offers/settings`, { settings }, "PUT");
+  fetch(`${API_BASE}/api/offers/settings?${locq()}`).then(j).then((r) => ({ ...r.settings, __secrets: r.secrets || {} }));
+export const saveSettings = ({ __secrets, ...settings }) =>
+  post(`/api/offers/settings`, { settings }, "PUT").then((r) => ({ ...r, settings: { ...r.settings, __secrets: r.secrets || {} } }));
 // Store a standing PSA exhibit (earnest money check copy / proof of funds
 // letter) and get back the URL to save into settings.psa. `kind` is
 // "emdCheck" or "proofOfFunds".
