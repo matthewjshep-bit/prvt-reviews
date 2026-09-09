@@ -441,6 +441,12 @@ export function offerEditorUrl(offerId, { view = "" } = {}) {
   if (key) p.set("key", key);
   return `${OFFERS_ORIGIN}/?${p}`;
 }
+// The buyer-feedback package for a deal, as the page the listing agent sees.
+export const dealFeedbackUrl = (id, { names = "short" } = {}) => {
+  const p = new URLSearchParams(locq());
+  if (names === "full") p.set("names", "full");
+  return `${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/feedback.html?${p}`;
+};
 export const getDashboardPipeline = () =>
   fetch(`${API_BASE}/api/dashboard/pipeline?${locq()}`).then(j);
 export const floatOffer = (id, kind) =>

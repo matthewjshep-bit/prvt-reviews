@@ -64,6 +64,7 @@ import {
   INVESTOR_STATUSES, investorStatus,
 } from "../shared/offer-status.js";
 import { planRequote } from "../shared/requote.js";
+import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
 import {
   startFollowUpSweep, getFollowUpJob, publicFollowUpJob, cancelFollowUpSweep,
   agentCandidates, investorCandidates,
@@ -340,6 +341,8 @@ function offerNoteBody(offer) {
   if (zUrl) lines.push(`Zillow: ${zUrl}`);
   return lines.join("\n");
 }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export default function createOffersRouter({ resolveLocation, uploadDir, publicBaseUrl, dataroomBaseUrl = publicBaseUrl }) {
   const router = express.Router();
@@ -3106,6 +3109,69 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
   // Update deal terms / stage. Body: any of { stage, contractPrice,
   // assignmentFee, closingDate, inspectionDate, notes, fellThroughReason }.
+  // The feedback package: what the market said about a deal, for its listing
+  // agent. Reads every buyer's thread (calls transcribed, as enrich.js does
+  // for the sweep), the deal's pass reasons and the dataroom's open trail,
+  // and hands them to one pure builder. `.html` is the agent-facing page —
+  // buyers shortened to first name and initial, our fee never printed.
+  async function feedbackPackage({ locationId, client, offer, pitch = null }) {
+    const deal = offer.deal || {};
+    const buyers = [];
+    for (const inv of deal.investors || []) {
+      let thread = ""; let stats = null;
+      try { const t = await buildTranscript(client, locationId, inv.contactId, { maxCallTranscripts: 6 }); thread = t.text || ""; stats = t.stats || null; }
+      catch (e) { thread = ""; stats = { error: String(e?.message || e).slice(0, 120) }; }
+      const m = /recent flip you did at ([^\n]+?)(?: and| wondering|\n)/i.exec(thread);
+      buyers.push({ contactId: inv.contactId, name: inv.name, status: inv.status, reason: inv.reason || null, addedAt: inv.addedAt, thread, stats,
+                    sourceFlip: m ? `flipped ${m[1].trim()}` : null });
+      await sleep(120);   // GHL burst cap
+    }
+    let room = null;
+    try {
+      const rooms = await store.listDatarooms(locationId, { offerId: offer.id, limit: 5 });
+      const r = rooms.find((x) => x.status !== "archived") || rooms[0];
+      if (r) {
+        const events = await store.listDataroomEvents(r.id, { limit: 5000 });
+        const views = events.filter((e) => e.kind === "view");
+        const byDay = {};
+        for (const e of views) { const d = String(e.createdAt).slice(0, 10); byDay[d] = (byDay[d] || 0) + 1; }
+        room = { shareViews: r.shareViews ?? views.length, uniqueVisitors: new Set(views.map((e) => e.detail?.ip).filter(Boolean)).size || null,
+                 downloads: events.filter((e) => e.kind === "download").length,
+                 viewsByDay: Object.entries(byDay).sort().map(([date, count]) => ({ date, count })),
+                 lastViewedAt: r.shareLastViewedAt || null, firstViewedAt: views.map((e) => e.createdAt).sort()[0] || null };
+      }
+    } catch { room = null; }
+    return buildFeedbackPackage({ offer, buyers, room, options: { pitch } });
+  }
+
+  router.get("/:id/deal/feedback", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const offer = await store.getOffer(req.params.id);
+      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "no such offer" });
+      if (!offer.deal) return res.status(409).json({ error: "not a deal yet" });
+      const pitch = ["price", "rehab", "arv"].some((k) => req.query[k]) ? { price: req.query.price, rehab: req.query.rehab, arv: req.query.arv } : null;
+      res.json({ ok: true, package: await feedbackPackage({ locationId, client, offer, pitch }) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.get("/:id/deal/feedback.html", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const offer = await store.getOffer(req.params.id);
+      if (!offer || offer.locationId !== locationId) return res.status(404).send("no such offer");
+      if (!offer.deal) return res.status(409).send("not a deal yet");
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const pitch = ["price", "rehab", "arv"].some((k) => req.query[k]) ? { price: req.query.price, rehab: req.query.rehab, arv: req.query.arv } : null;
+      const pkg = await feedbackPackage({ locationId, client, offer, pitch });
+      const html = renderFeedbackHtml(pkg, {
+        wrap: true, from: saved.company?.signer || "", brand: saved.company?.name || "",
+        fullNames: req.query.names === "full", showPrice: req.query.price !== "hide",
+      });
+      res.type("html").send(html);
+    } catch (err) { fail(res, err); }
+  });
+
   router.patch("/:id/deal", async (req, res) => {
     try {
       const ctx = await loadDealOffer(req, res);

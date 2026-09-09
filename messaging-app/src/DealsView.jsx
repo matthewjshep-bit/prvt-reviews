@@ -6,16 +6,14 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ExternalLink, FileText, Loader2, Lock, Paperclip, Pencil, Sparkles, Target, Trash2, Upload, X,
-} from "lucide-react";
+  ExternalLink, FileText, Loader2, Lock, Paperclip, Pencil, Sparkles, Target, Trash2, Upload, X, MessageSquare } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { INVESTOR_STATUSES, investorStatus } from "@shared/offer-status.js";
 import { summarizeFeedback } from "@shared/conversation-ai.js";
 import {
   addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
   removeDeal, removeDealInvestor, searchContacts, suggestInvestors, updateDeal, updateDealInvestor,
-  uploadDealDoc, zillowUrl,
-} from "./api.js";
+  uploadDealDoc, zillowUrl, dealFeedbackUrl } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
 import ContactLink from "./ContactLink.jsx";
 import DataroomModal from "./DataroomModal.jsx";
@@ -653,6 +651,10 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 title="Generate or update the assignment of contract for the committed buyer">
                 <FileText size={13} /> {offer.assignmentPdfUrl ? "Update assignment" : "Generate assignment"}
               </button>
+              <a href={dealFeedbackUrl(offer.id)} target="_blank" rel="noreferrer" className={BTN}
+                title="What every buyer said about this one, in their words, as a page for the listing agent">
+                <MessageSquare size={13} /> Buyer feedback
+              </a>
               <button type="button" onClick={() => onDataroom(offer)}
                 className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
                 title="Build a secure investor package and text personal links to your buyers">
