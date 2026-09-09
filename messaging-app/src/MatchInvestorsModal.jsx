@@ -60,6 +60,7 @@ export default function MatchInvestorsModal({ offer, existingIds, onClose, onLin
     try {
       const r = await blastInvestors({
         contactIds: [...selected],
+        offerId: offer.id,
         label: offer.address,
         applyTag: true,
         dryRun: false,

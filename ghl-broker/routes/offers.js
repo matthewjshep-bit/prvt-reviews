@@ -65,6 +65,7 @@ import {
 } from "../shared/offer-status.js";
 import { planRequote } from "../shared/requote.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
+import { startFeedbackScan, getScanJob, publicScanJob } from "../feedback-scan.js";
 import {
   startFollowUpSweep, getFollowUpJob, publicFollowUpJob, cancelFollowUpSweep,
   agentCandidates, investorCandidates,
@@ -114,8 +115,7 @@ import {
   getContact, searchContacts, findOrCreateContactByPhone, updateContact,
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
   customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField, getContactNotes,
-  searchContactsByTag, listWorkflows,
-} from "../ghl.js";
+  searchContactsByTag, listWorkflows, listLocationTags, searchAllContactsByTags } from "../ghl.js";
 import {
   enrichFieldDefs, enrichTagVocab, ENRICH_TAG_GROUPS, inferContactType,
   buildTranscript, runEnrichment, suggestDealInvestors, mergeHistory, historyLine,
@@ -3114,17 +3114,74 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // for the sweep), the deal's pass reasons and the dataroom's open trail,
   // and hands them to one pure builder. `.html` is the agent-facing page —
   // buyers shortened to first name and initial, our fee never printed.
-  async function feedbackPackage({ locationId, client, offer, pitch = null }) {
+  // Which GHL tags this deal was blasted under. Recorded by the blast route
+  // when it knows the offer; for a tag applied by hand, any location tag under
+  // the dispo prefix whose suffix names the house (street key or city) counts.
+  async function blastTagsFor({ locationId, client, offer, extra = [] }) {
+    const saved = (await store.getOfferSettings(locationId)) || {};
+    const prefix = String(saved.dispoBlastTagPrefix || "dispo").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "dispo";
+    const tags = new Set([...(offer.deal?.blastTags || []), ...extra].map((t) => String(t || "").toLowerCase()).filter(Boolean));
+    try {
+      const street = String(offer.address || "").split(",")[0].toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const city = String(offer.address || "").split(",")[1]?.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "";
+      for (const t of await listLocationTags(client, locationId)) {
+        if (!t.startsWith(`${prefix}-`)) continue;
+        const rest = t.slice(prefix.length + 1);
+        if (rest && rest !== "blast" && ((city && rest === city) || (street && (street.includes(rest) || rest.includes(street))))) tags.add(t);
+      }
+    } catch { /* no tag scope — the recorded tags still count */ }
+    return [...tags];
+  }
+
+  async function feedbackPackage({ locationId, client, offer, pitch = null, tags = [], deep = false }) {
     const deal = offer.deal || {};
+    const blastTags = await blastTagsFor({ locationId, client, offer, extra: tags });
+    const sinceMs = Date.parse(deal.createdAt || offer.statusAt || 0) || 0;
+    // Everyone carrying a blast tag, from GHL. Threads are read only for
+    // those whose contact record moved since the blast — a tagged contact
+    // GHL hasn't touched since has nothing to say yet.
+    const recipients = [];
+    if (blastTags.length) {
+      try {
+        const { contacts } = await searchAllContactsByTags(client, locationId, blastTags, { pageLimit: 100 });
+        for (const c of contacts) {
+          const name = c.contactName || [c.firstName, c.lastName].filter(Boolean).join(" ") || "";
+          const active = deep || (Date.parse(c.dateUpdated || c.lastActivity || 0) || 0) >= sinceMs - 86400000;
+          recipients.push({ contactId: c.id, name, active, dateAdded: c.dateAdded || null });
+        }
+      } catch (e) { console.error(`feedback: tag members for ${offer.id}:`, e?.message); }
+    }
+    // The scan's record: every conversation where the house was pitched.
+    try {
+      const evs = await store.listContactEventsByOffer(locationId, offer.id, { limit: 5000 });
+      const have = new Set(recipients.map((r) => r.contactId));
+      for (const e of evs) {
+        if (e.type !== "blast_sent" || !e.contactId) continue;
+        const known = recipients.find((r) => r.contactId === e.contactId);
+        const replied = Boolean(e.data?.replied);
+        if (known) { known.active = known.active || replied; known.sentAt = known.sentAt || e.at; continue; }
+        if (have.has(e.contactId)) continue;
+        have.add(e.contactId);
+        recipients.push({ contactId: e.contactId, name: e.data?.name || "", active: replied, sentAt: e.at });
+      }
+    } catch { /* no events yet — the tags and the deal record still count */ }
+    const linked = new Set((deal.investors || []).map((i) => i.contactId));
+    const readThread = async (contactId) => {
+      try { const t = await buildTranscript(client, locationId, contactId, { maxCallTranscripts: 6 }); await sleep(120); return { thread: t.text || "", stats: t.stats || null }; }
+      catch (e) { await sleep(120); return { thread: "", stats: { error: String(e?.message || e).slice(0, 120) } }; }
+    };
+    const flipOf = (thread) => { const m = /recent flip you did at ([^\n]+?)(?: and| wondering|\n)/i.exec(thread); return m ? `flipped ${m[1].trim()}` : null; };
     const buyers = [];
     for (const inv of deal.investors || []) {
-      let thread = ""; let stats = null;
-      try { const t = await buildTranscript(client, locationId, inv.contactId, { maxCallTranscripts: 6 }); thread = t.text || ""; stats = t.stats || null; }
-      catch (e) { thread = ""; stats = { error: String(e?.message || e).slice(0, 120) }; }
-      const m = /recent flip you did at ([^\n]+?)(?: and| wondering|\n)/i.exec(thread);
-      buyers.push({ contactId: inv.contactId, name: inv.name, status: inv.status, reason: inv.reason || null, addedAt: inv.addedAt, thread, stats,
-                    sourceFlip: m ? `flipped ${m[1].trim()}` : null });
-      await sleep(120);   // GHL burst cap
+      const { thread, stats } = await readThread(inv.contactId);
+      buyers.push({ contactId: inv.contactId, name: inv.name, status: inv.status, reason: inv.reason || null, addedAt: inv.addedAt, thread, stats, sourceFlip: flipOf(thread) });
+    }
+    const reached = [];
+    for (const r of recipients) {
+      if (linked.has(r.contactId)) continue;
+      if (!r.active) { reached.push({ contactId: r.contactId, name: r.name, sentAt: r.sentAt || null }); continue; }
+      const { thread, stats } = await readThread(r.contactId);
+      reached.push({ contactId: r.contactId, name: r.name, sentAt: r.sentAt || null, thread, stats, sourceFlip: flipOf(thread) });
     }
     let room = null;
     try {
@@ -3141,8 +3198,46 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
                  lastViewedAt: r.shareLastViewedAt || null, firstViewedAt: views.map((e) => e.createdAt).sort()[0] || null };
       }
     } catch { room = null; }
-    return buildFeedbackPackage({ offer, buyers, room, options: { pitch } });
+    const pkg = buildFeedbackPackage({ offer, buyers, recipients: reached, room, options: { pitch } });
+    pkg.blastTags = blastTags;
+    return pkg;
   }
+
+  // Reading a hundred threads takes a minute; the package is cached on the
+  // deal and served from there until someone asks for a fresh one.
+  async function feedbackCached({ locationId, client, offer, pitch, tags, deep, refresh }) {
+    const cached = offer.deal?.feedbackPackage;
+    const stale = !cached || (Date.now() - Date.parse(cached.generatedAt || 0)) > 6 * 3600000;
+    if (!refresh && !stale && !pitch && !tags.length && !deep) return cached;
+    const pkg = await feedbackPackage({ locationId, client, offer, pitch, tags, deep });
+    try {
+      const full = await store.getOffer(offer.id);
+      if (full?.deal) { full.deal.feedbackPackage = pkg; await store.updateOffer(full.id, full); }
+    } catch { /* the page still renders */ }
+    return pkg;
+  }
+
+  // Find everyone the house was pitched to by reading the conversations —
+  // for a blast fired from a GHL workflow, which the app never saw. Records
+  // a blast_sent event per recipient; run once per deal.
+  router.post("/:id/deal/feedback/scan", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const offer = await store.getOffer(req.params.id);
+      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "no such offer" });
+      if (!offer.deal) return res.status(409).json({ error: "not a deal yet" });
+      const job = startFeedbackScan({ client, locationId, store, offer });
+      // The cached package is stale the moment a scan starts.
+      try { const full = await store.getOffer(offer.id); if (full?.deal?.feedbackPackage) { delete full.deal.feedbackPackage; await store.updateOffer(full.id, full); } } catch { /* fine */ }
+      res.status(202).json({ ok: true, job: publicScanJob(job) });
+    } catch (err) { fail(res, err); }
+  });
+  router.get("/:id/deal/feedback/scan", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ ok: true, job: publicScanJob(getScanJob(req.params.id)) });
+    } catch (err) { fail(res, err); }
+  });
 
   router.get("/:id/deal/feedback", async (req, res) => {
     try {
@@ -3151,7 +3246,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "no such offer" });
       if (!offer.deal) return res.status(409).json({ error: "not a deal yet" });
       const pitch = ["price", "rehab", "arv"].some((k) => req.query[k]) ? { price: req.query.price, rehab: req.query.rehab, arv: req.query.arv } : null;
-      res.json({ ok: true, package: await feedbackPackage({ locationId, client, offer, pitch }) });
+      const tags = String(req.query.tag || "").split(",").map((t) => t.trim()).filter(Boolean);
+      res.json({ ok: true, package: await feedbackCached({ locationId, client, offer, pitch, tags, deep: req.query.deep === "1", refresh: req.query.refresh === "1" }) });
     } catch (err) { fail(res, err); }
   });
 
@@ -3163,7 +3259,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!offer.deal) return res.status(409).send("not a deal yet");
       const saved = (await store.getOfferSettings(locationId)) || {};
       const pitch = ["price", "rehab", "arv"].some((k) => req.query[k]) ? { price: req.query.price, rehab: req.query.rehab, arv: req.query.arv } : null;
-      const pkg = await feedbackPackage({ locationId, client, offer, pitch });
+      const tags = String(req.query.tag || "").split(",").map((t) => t.trim()).filter(Boolean);
+      const pkg = await feedbackCached({ locationId, client, offer, pitch, tags, deep: req.query.deep === "1", refresh: req.query.refresh === "1" });
       const html = renderFeedbackHtml(pkg, {
         wrap: true, from: saved.company?.signer || "", brand: saved.company?.name || "",
         // Hidden by default: the agent holds the contract price, and the

@@ -523,7 +523,7 @@ export const searchInvestors = ({ query, parsed, strict = false, filters = {} })
   post(`/api/dispo/search`, { ...(parsed ? { parsed } : { query }), strict, ...filters });
 export const matchInvestorsToDeal = (offerId, { strict = false, filters = {} } = {}) =>
   post(`/api/dispo/match`, { offerId, strict, ...filters });
-export const blastInvestors = ({ contactIds, label, applyTag = true, dryRun = true }) =>
-  post(`/api/dispo/blast`, { contactIds, applyTag, dryRun, ...(label ? { label } : {}) });
+export const blastInvestors = ({ contactIds, label, applyTag = true, dryRun = true, offerId = "" }) =>
+  post(`/api/dispo/blast`, { contactIds, applyTag, dryRun, ...(label ? { label } : {}), ...(offerId ? { offerId } : {}) });
 
 export { API_BASE };

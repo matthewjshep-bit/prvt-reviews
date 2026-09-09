@@ -795,6 +795,18 @@ export default function createDispoRouter({ resolveLocation }) {
         }
       });
 
+      // The deal remembers what it was blasted under, so the feedback package
+      // can find every recipient later without guessing from the label.
+      const offerId = String(req.body?.offerId || "").slice(0, 64);
+      if (offerId && !dryRun) {
+        try {
+          const full = await store.getOffer(offerId);
+          if (full?.deal && full.locationId === locationId) {
+            full.deal.blastTags = [...new Set([...(full.deal.blastTags || []), blastTag])];
+            await store.updateOffer(full.id, full);
+          }
+        } catch (e) { warnings.push(`deal tag record: ${e.message}`); }
+      }
       res.json({
         ok: true, dryRun, blastsEnabled: DISPO_BLASTS_ENABLED,
         blastTag, triggerTag: applyTag ? DISPO_TAG : null,

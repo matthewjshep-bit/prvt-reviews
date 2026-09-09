@@ -26,6 +26,9 @@ export const money = (n) => `$${round(n).toLocaleString("en-US")}`;
 const kText = (n) => (round(n) >= 1000 ? `$${Math.round(round(n) / 1000)}K` : money(n));
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const streetLine = (a) => String(a || "").split(",")[0].trim();
+// A skip-traced owner comes in as "owner 23519 78th ave w" — a contact record,
+// not a person we know. Shown as such rather than as "owner 2."
+const isPlaceholderName = (name) => /^owner\b/i.test(String(name || "").trim());
 const initials = (name) => {
   const p = String(name || "").trim().split(/\s+/).filter(Boolean);
   if (!p.length) return "A buyer";
@@ -79,6 +82,12 @@ function dealWordsFor(offer, pitch = {}) {
   const priceWords = price ? [`${Math.round(price / 1000)}k`, `${Math.round(price / 1000)},`, money(price).toLowerCase()] : [];
   return [...new Set([raw, short, long, num, city, ...priceWords].filter((w) => w && w.length > 2))];
 }
+// The reasons that are about the HOUSE — the ones an agent can take to a seller.
+const HOUSE_CODES = new Set(["price", "rehab_scope", "condition", "property_type"]);
+// "Stop" is not feedback about the house. Neither is "who is this".
+const OPT_OUT_RE = /^\s*(stop|unsubscribe|remove me|wrong (number|person)|who is this\??|lose (this|dis) (number|numba)|please stop|stop opt out)\b/i;
+// A plain no, with or without a reason.
+const NO_RE = /^\s*(no\b|nope|pass\b|i('ll| will) pass|not (for me|interested|this one|right now|looking)|no thank|not a good fit|thanks,? but|i'?m (good|ok)\b)/i;
 // How a buyer says no, or names a number, without naming the house.
 const PASS_RE = /\bpass(ing|ed)?\b|not interested|no thanks|too (far|much|high|tight|small|big)|can'?t (do|make)|won'?t work|not (ready|for me|this one|right now)|aggressive|wiggle|closer to|tighter|doesn'?t (work|pencil)|way (over|more)/i;
 const mentions = (text, words) => { const t = String(text || "").toLowerCase(); return words.some((w) => t.includes(w)); };
@@ -116,14 +125,23 @@ export function inferReason(said = "", coded = null) {
   // chatted about another property's rehab did not pass over rehab.
   const sentences = String(said || "").split(/(?<=[.!?])\s+|\n+/);
   const noSentence = sentences.find((x) => PASS_RE.test(x));
-  const t = String(noSentence || said || "").toLowerCase();
+  const first = ladder(String(noSentence || "").toLowerCase(), coded);
+  return first || ladder(String(said || "").toLowerCase(), coded) || coded || { code: "other", note: "no reason given" };
+}
+// The ladder itself: null when nothing in the text says why.
+function ladder(t, coded) {
+  if (!t) return null;
   const pick = (code, note) => ({ code, note: coded?.note || note });
-  if (/rehab|repair|needs way (over|more)|work than|gut/.test(t)) return pick("rehab_scope", "doubted the rehab number");
-  if (/too far|far from|drive|that area|north|south|east ?side|not this one|neighborhood|not that market|market at/.test(t)) return pick("area", "not their area");
-  if (/wiggle|tighter|discipline|price|numbers|arv|resale|spread|closer to|aggressive|cheaper/.test(t)) return pick("price", "wanted a lower price");
-  if (/not ready|timing|busy|next (year|month)|later|another one right now|too many/.test(t)) return pick("timing", "not right now");
+  if (/retired|not doing flips|new construction|18 unit|apartment building|wasn'?t a flip|hard money loans|manufactured home|not a flipper|wrong person/.test(t)) return pick("other", "not a flipper right now");
+  if (/hwy ?99|highway|aurora|busy (street|road)|commercial|yellow lines|traffic|main road|arterial/.test(t)) return pick("condition", "the street it sits on");
+  if (/sqft|sq ft|square f|too small|tiny|bigger house|size/.test(t)) return pick("property_type", "too small");
+  if (/rehab|repair|needs way (over|more)|work than|gut|plumbing|electrical|siding|windows|contractor|light cosmetic|35k|30 ?k/.test(t)) return pick("rehab_scope", "doubted the rehab number");
+  if (/comps? sold|sold for|resale|arv|aggressive|too high|overpriced|priced|price point|numbers don'?t|spread|closer to \$?\d|wiggle|tighter/.test(t)) return pick("price", "the price or the resale number");
+  if (/too far|far from|drive|that area|north|south|east ?side|neighborhood|not that market|market at|county|so far out|far out|closer to home|outside (our|my)|seattle city|tacoma|pierce|gig harbor|out of (state|area)|i['’]?m in [a-z]{2}\b|florida|arizona|\baz\b|\bct\b|\bri\b|that far|far at the moment|bit far|closer to (home|us)|only (looking|work) in|surrounding|city limits/.test(t)) return pick("area", "not their area");
+  if (/discipline|\bprice\b|numbers|cheaper/.test(t)) return pick("price", "wanted a lower price");
+  if (/not ready|not right now|timing|busy|next (year|month)|later|another one right now|too many|plate is|full at the moment|check back|have \d+ flips|doing one currently|not doing flips|retired|new construction|too early/.test(t)) return pick("timing", "not right now");
   if (/not (a )?flip|don'?t flip|never done a flip|wrong (number|person)/.test(t)) return pick("other", "not a flipper");
-  return coded || { code: "other", note: "no reason given" };
+  return null;
 }
 
 /* ---------- the package ---------- */
@@ -138,7 +156,7 @@ export function inferReason(said = "", coded = null) {
  *   options  { pitch: { price, rehab, arv } } — what buyers were told, when it
  *            differs from the offer doc (the blast copy is the truth here)
  */
-export function buildFeedbackPackage({ offer, buyers = [], room = null, now = Date.now(), options = {} } = {}) {
+export function buildFeedbackPackage({ offer, buyers = [], recipients = [], room = null, now = Date.now(), options = {} } = {}) {
   if (!offer?.id) throw new Error("buildFeedbackPackage needs an offer");
   const deal = offer.deal || {};
   const since = ms(deal.createdAt) ?? ms(offer.statusAt) ?? 0;
@@ -150,7 +168,15 @@ export function buildFeedbackPackage({ offer, buyers = [], room = null, now = Da
   const pitch = pitch0;
   const words = dealWordsFor(offer, pitch);
 
-  const rows = buyers.map((b) => {
+  // Everyone the blast reached: the buyers on the deal record plus anyone
+  // carrying the blast tag or a blast event who was never linked. A recipient
+  // with a thread is read like a buyer; one without is counted as contacted
+  // and silent, which is what they are.
+  const seen = new Set(buyers.map((b) => b.contactId));
+  const extra = recipients.filter((r) => r?.contactId && !seen.has(r.contactId))
+    .map((r) => ({ contactId: r.contactId, name: r.name || "", status: r.status || "evaluating", reason: r.reason || null,
+                   addedAt: r.sentAt || r.addedAt || null, thread: r.thread || "", stats: r.stats || null, sourceFlip: r.sourceFlip || null, placeholder: isPlaceholderName(r.name) }));
+  const rows = [...buyers.map((b) => ({ ...b, linked: true })), ...extra].map((b) => {
     const parsed = parseThread(b.thread || "");
     const inWindow = parsed.filter((l) => (ms(l.at) ?? 0) >= since - DAY_MS);
     const theirs = inWindow.filter((l) => l.dir === "THEM" && (l.channel === "sms" || l.channel === "email") && l.body.trim() && !isReaction(l.body));
@@ -165,23 +191,39 @@ export function buildFeedbackPackage({ offer, buyers = [], room = null, now = Da
     const sentAt = ours.find((l) => mentions(l.body.toLowerCase().replace(/\b(west|east|north|south)\b/g, (w) => w[0]), [street, city].filter(Boolean)))?.at || ours[0]?.at || b.addedAt || null;
     const replies = theirs;
     // About this deal: names it, or is a no / a number with nothing else named.
-    const quotes = replies.map((l) => ({ at: l.at, text: l.body.trim().slice(0, 600), aboutDeal: mentions(l.body, words) || PASS_RE.test(l.body), namesDeal: mentions(l.body, words) }));
+    // For someone who was only ever sent THIS house, everything they said back
+    // is about it — until the moment we pitch them a different address.
+    const otherPitchAt = b.linked ? null : ours.filter((l) => (ms(l.at) ?? 0) > (ms(sentAt) ?? 0))
+      .find((l) => /\b\d{3,5}\s+[A-Za-z0-9]+.*\b(st|ave|avenue|rd|road|ln|lane|dr|drive|way|pl|place|ct|court|blvd|hwy)\b/i.test(l.body) && !mentions(l.body, words))?.at || null;
+    const onlyThisHouse = (l) => !b.linked && (otherPitchAt == null || (ms(l.at) ?? 0) < (ms(otherPitchAt) ?? Infinity) || (ms(l.at) ?? 0) - (ms(sentAt) ?? 0) < 2 * DAY_MS);
+    const quotes = replies.map((l) => ({ at: l.at, text: l.body.trim().slice(0, 600),
+      aboutDeal: mentions(l.body, words) || PASS_RE.test(l.body) || onlyThisHouse(l), namesDeal: mentions(l.body, words) }));
     const calls = inWindow.filter((l) => (l.channel === "call" || l.channel === "voicemail") && l.transcript?.length)
       .map((l) => ({ at: l.at, dir: l.dir, lines: excerptTranscript(l.transcript, words) }))
       .filter((c) => c.lines.length);
     const asked = replies.some((l) => /contract|send (me )?(more|details|info|the)|photos|pics|email|address|link/i.test(l.body));
     const walk = replies.some((l) => /walk|go (out|by|see)|tour|showing|see it|check it out|look at it/i.test(l.body));
-    const status = investorStatus(b.status);
     // The coded reason when a person or the bot filed one; otherwise read it
     // off what they said. "Not interested" with nothing else stays "other" —
     // an honest count beats a guessed one.
-    const said = [...quotes.filter((q) => q.aboutDeal).map((q) => q.text), ...calls.flatMap((c) => c.lines.map((l) => l.text))].join(" \n ");
+    // Their texts decide; a call is consulted only when the texts say nothing,
+    // because a transcript carries our half of the conversation too.
+    const saidByText = quotes.filter((q) => q.aboutDeal).map((q) => q.text).join(" \n ");
+    const said = saidByText || calls.flatMap((c) => c.lines.map((l) => l.text)).join(" \n ");
     const coded = b.reason ? normalizePassReason(b.reason) : null;
+    // Somebody nobody linked to the deal has no status on the record; their
+    // reply is the record. A no in their words is a pass; "stop" is an opt-out
+    // and counts for nothing about the house.
+    const optedOut = !b.linked && quotes.some((q) => OPT_OUT_RE.test(q.text));
+    // Telling us why is a no, whether or not the word "pass" was in it.
+    const objected = !b.linked && !optedOut && Boolean(said) && inferReason(said, null).note !== "no reason given";
+    const saidNo = !b.linked && !optedOut && (objected || quotes.some((q) => NO_RE.test(q.text) || (q.aboutDeal && PASS_RE.test(q.text))));
+    const status = b.linked ? investorStatus(b.status) : optedOut ? "opted_out" : saidNo ? "passed" : investorStatus(b.status);
     const reason = status === "passed" ? (coded && coded.code !== "other" ? coded : inferReason(said, coded)) : coded;
     return {
-      contactId: b.contactId, name: b.name || "A buyer", shortName: initials(b.name), status,
+      contactId: b.contactId, name: b.name || "A buyer", shortName: isPlaceholderName(b.name) ? "A recent flipper" : initials(b.name), status, linked: Boolean(b.linked),
       sentAt, replied: replies.length > 0, repliedAt: replies[0]?.at || null, askedForMore: asked, talkedWalkthrough: walk,
-      passed: status === "passed", reason, quotes, calls,
+      passed: status === "passed", optedOut: status === "opted_out", reason, quotes, calls,
       sourceFlip: b.sourceFlip || null,
     };
   });
@@ -199,25 +241,30 @@ export function buildFeedbackPackage({ offer, buyers = [], room = null, now = Da
     const said = (code === "price" && passing.find((q) => /\$\s?\d|\d{3}\s?k\b/i.test(q.text))) || passing[0];
     const call = r.calls.flatMap((c) => c.lines.filter((l) => PASS_RE.test(l.text)).map((l) => ({ text: l.text, at: c.at, fromCall: true })))[0];
     const named = r.quotes.find((q) => q.namesDeal);
-    const pick = said || call || named || null;
+    // Someone we only ever pitched this house to: their reply is the quote.
+    const theirs = r.linked ? null : r.quotes.find((q) => q.aboutDeal && q.text.length > 12);
+    const pick = said || call || named || theirs || null;
     g.buyers.push({ contactId: r.contactId, name: r.name, shortName: r.shortName, note: r.reason?.note || "",
       quote: pick ? trimToDeal(pick.text, words) : "", at: pick?.at || r.repliedAt, fromCall: Boolean(pick?.fromCall) });
   }
   const objections = [...byCode.values()].sort((a, b) => b.count - a.count);
   // The two objections that are about the HOUSE rather than the buyer. These
   // are the ones an agent can take to a seller.
-  const aboutTheNumbers = objections.filter((o) => ["price", "rehab_scope", "condition"].includes(o.code));
-  const aboutTheBuyer = objections.filter((o) => !["price", "rehab_scope", "condition"].includes(o.code));
+  const aboutTheNumbers = objections.filter((o) => HOUSE_CODES.has(o.code));
+  const aboutTheBuyer = objections.filter((o) => !HOUSE_CODES.has(o.code));
 
   const funnel = {
     contacted: rows.length,
     replied: rows.filter((r) => r.replied).length,
     askedForMore: rows.filter((r) => r.askedForMore).length,
     talkedWalkthrough: rows.filter((r) => r.talkedWalkthrough).length,
-    stillEvaluating: rows.filter((r) => r.status === "evaluating").length,
+    stillEvaluating: rows.filter((r) => r.status === "evaluating" && r.replied).length,
     committed: rows.filter((r) => r.status === "committed").length,
     passed: passes.length,
+    optedOut: rows.filter((r) => r.optedOut).length,
     silent: rows.filter((r) => !r.replied).length,
+    linked: buyers.length,
+    reached: rows.length,
   };
 
   // A number a buyer said they would do, wherever they said it. Only counts a
@@ -229,7 +276,7 @@ export function buildFeedbackPackage({ offer, buyers = [], room = null, now = Da
     const text = [...r.quotes.filter((q) => q.namesDeal).map((q) => q.text), r.reason?.note || ""].join(" ");
     const named = [...text.matchAll(/\$?\s?(\d{3})\s?k\b|\$(\d{3}),(\d{3})\b/gi)]
       .map((m) => (m[1] ? Number(m[1]) * 1000 : Number(m[2] + m[3])))
-      .filter((n) => n > 50000 && n < pitch.price);
+      .filter((n) => n >= pitch.price * 0.6 && n < pitch.price);
     if (named.length) askedFor.push({ contactId: r.contactId, shortName: r.shortName, name: r.name, amount: Math.min(...named) });
   }
 
@@ -271,6 +318,8 @@ const fmtDate = (iso) => {
 export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = false, showPrice = false, wrap = false } = {}) {
   const nm = (b) => (fullNames ? b.name : b.shortName);
   const words = pkg.words || [];
+  const LABEL = { condition: "The street it sits on", property_type: "Size of the house", other: "No reason given", rehab_scope: "The rehab estimate", price: "Price and resale value" };
+  const labelOf = (o) => LABEL[o.code] || o.label;
   // The listing agent holds the contract price. Any figure a buyer repeats
   // back that sits between that and what buyers were asked is our assignment
   // fee by subtraction — so unless showPrice is on, those figures are redacted
@@ -371,10 +420,10 @@ export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = fal
   <div class="eyebrow">${esc(brand || "Buyer feedback")} · ${esc(fmtDate(pkg.generatedAt))}</div>
   <h1>${esc(p.street)}</h1>
   <div class="meta">${esc(p.address)}${pkg.agent.name ? ` · prepared for ${esc(pkg.agent.name)}` : ""}${from ? ` by ${esc(from)}` : ""}</div>
-  <p class="lede">We put this house in front of ${f.contacted} active cash buyers${r ? ` and ${r.views.toLocaleString()} people opened the package` : ""}. This is what they said — in their own words, unedited — and what it tells us about where the numbers need to be.</p>
+  <p class="lede">We put this house in front of ${f.contacted.toLocaleString("en-US")} cash buyers and recent flippers${r ? `, and the package was opened ${r.views.toLocaleString()} times` : ""}. This is what they said — in their own words, unedited — and what it tells us about where the numbers need to be.</p>
 
   <div class="tiles">
-    <div class="tile"><div class="n">${f.contacted}</div><div class="l">buyers contacted</div></div>
+    <div class="tile"><div class="n">${f.contacted.toLocaleString("en-US")}</div><div class="l">people contacted</div></div>
     <div class="tile"><div class="n">${f.replied}</div><div class="l">replied</div></div>
     <div class="tile"><div class="n">${f.passed}</div><div class="l">passed</div></div>
   </div>
@@ -393,8 +442,8 @@ export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = fal
 
   <h2>How it landed</h2>
   <div class="funnel">
-    ${[["Contacted", f.contacted], ["Replied", f.replied], ["Asked for more", f.askedForMore], ["Talked about walking it", f.talkedWalkthrough], ["Still looking at it", f.stillEvaluating + f.committed], ["Passed", f.passed]].map(([l, n]) => `
-      <span>${l}</span><div class="bar"><i style="width:${Math.round((n / Math.max(1, f.contacted)) * 100)}%"></i></div><span class="n">${n}</span>`).join("")}
+    ${[["Contacted", f.contacted], ["Replied", f.replied], ["Asked for more", f.askedForMore], ["Talked about walking it", f.talkedWalkthrough], ["Still looking at it", f.stillEvaluating + f.committed], ["Passed", f.passed], ["Asked us to stop", f.optedOut]].map(([l, n]) => `
+      <span>${l}</span><div class="bar"><i style="width:${Math.max(n ? 1 : 0, Math.round((n / Math.max(1, f.contacted)) * 100))}%"></i></div><span class="n">${n.toLocaleString("en-US")}</span>`).join("")}
   </div>
   ${r && r.viewsByDay?.length ? `
   <h3>Package opens</h3>
@@ -407,8 +456,9 @@ export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = fal
   <p>These are the passes that were about the house and its numbers — the ones worth taking to the seller.</p>
   ${numbers.map((o) => `
     <div class="obj">
-      <h3>${esc(o.label)}<span class="count">${o.count} buyer${o.count === 1 ? "" : "s"}</span></h3>
-      ${o.buyers.map((b) => (b.quote ? quoteBlock(b, { text: b.quote, at: b.at, fromCall: b.fromCall }) : `<p class="muted">${esc(nm(b))} — ${esc(redact(b.note))}</p>`)).join("")}
+      <h3>${esc(labelOf(o))}<span class="count">${o.count} buyer${o.count === 1 ? "" : "s"}</span></h3>
+      ${o.buyers.slice(0, 8).map((b) => (b.quote ? quoteBlock(b, { text: b.quote, at: b.at, fromCall: b.fromCall }) : `<p class="muted">${esc(nm(b))} — ${esc(redact(b.note))}</p>`)).join("")}
+      ${o.buyers.length > 8 ? `<p class="muted" style="font-size:0.9rem">and ${o.buyers.length - 8} more who said much the same.</p>` : ""}
     </div>`).join("")}
   ${pkg.askedFor.length ? `<p style="margin-top:1rem">Where a buyer named a number they would do, it was: ${pkg.askedFor.map((a) => `<strong>${money(a.amount)}</strong> (${esc(a.shortName)})`).join(", ")}.</p>` : ""}` : ""}
 
@@ -417,8 +467,9 @@ export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = fal
   <p class="muted" style="font-size:0.95rem">Timing, area, or a buyer who turned out not to be buying. Listed so the count is honest, not because they say anything about the property.</p>
   ${other.map((o) => `
     <div class="obj soft">
-      <h3>${esc(o.label)}<span class="count">${o.count}</span></h3>
-      ${o.buyers.map((b) => (b.quote && (o.code !== "other" || /interested|pass/i.test(b.quote)) ? quoteBlock(b, { text: b.quote, at: b.at }) : `<p class="muted">${esc(nm(b))} — ${esc(redact(b.note || "no reason given"))}</p>`)).join("")}
+      <h3>${esc(labelOf(o))}<span class="count">${o.count}</span></h3>
+      ${o.buyers.slice(0, 6).map((b) => (b.quote && (o.code !== "other" || /interested|pass/i.test(b.quote)) ? quoteBlock(b, { text: b.quote, at: b.at }) : `<p class="muted">${esc(nm(b))} — ${esc(redact(b.note || "no reason given"))}</p>`)).join("")}
+      ${o.buyers.length > 6 ? `<p class="muted" style="font-size:0.9rem">and ${o.buyers.length - 6} more.</p>` : ""}
     </div>`).join("")}` : ""}
 
   ${replied.some((b) => b.calls.length) ? `
@@ -430,15 +481,15 @@ export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = fal
   <div class="tablewrap"><table>
     <thead><tr><th>Buyer</th><th>Sent</th><th>Where it stands</th><th>What they said</th></tr></thead>
     <tbody>
-      ${pkg.buyers.map((b) => `<tr>
+      ${pkg.buyers.filter((b) => !b.optedOut && (b.replied || b.status !== "evaluating" || b.quotes.length)).map((b) => `<tr>
         <td><strong>${esc(nm(b))}</strong>${b.sourceFlip ? `<div class="muted" style="font-size:0.8rem">${esc(b.sourceFlip)}</div>` : ""}</td>
         <td class="mono nowrap">${esc(fmtDate(b.sentAt))}</td>
-        <td><span class="st ${b.status}">${b.status === "passed" ? (b.reason ? esc(PASS_REASON_LABEL[b.reason.code] || "passed") : "passed") : b.status === "committed" ? "committed" : b.replied ? "looking at it" : "no reply yet"}</span></td>
+        <td><span class="st ${b.status}">${b.status === "passed" ? (b.reason ? esc(LABEL[b.reason.code] || PASS_REASON_LABEL[b.reason.code] || "passed") : "passed") : b.status === "opted_out" ? "asked us to stop" : b.status === "committed" ? "committed" : b.replied ? "looking at it" : "no reply yet"}</span></td>
         <td>${b.quotes.length ? esc(redact(trimToDeal((b.quotes.find((q) => q.aboutDeal && PASS_RE.test(q.text)) || b.quotes.find((q) => q.namesDeal) || b.quotes.find((q) => q.aboutDeal) || b.quotes[0]).text, words)).slice(0, 220)) : b.calls.length ? `<span class="muted">by phone — see the calls below</span>` : `<span class="muted">—</span>`}</td>
       </tr>`).join("")}
     </tbody>
   </table></div>
-  ${silent.length ? `<p class="muted" style="font-size:0.9rem">${silent.length} buyer${silent.length === 1 ? " has" : "s have"} not replied yet; they stay on the list.</p>` : ""}
+  <p class="muted" style="font-size:0.9rem">${silent.length ? `${silent.length} ${silent.length === 1 ? "person has" : "people have"} not replied${silent.length > 12 ? " — they are not listed one by one" : ""}. ` : ""}${f.optedOut ? `${f.optedOut} asked us to stop texting and are left out above.` : ""}</p>
 
   <div class="foot">Buyer names are shortened for their privacy. Quotes are verbatim from texts and transcribed calls. Prepared ${esc(fmtDate(pkg.generatedAt))}${from ? ` by ${esc(from)}` : ""}.</div>
 </div>`;

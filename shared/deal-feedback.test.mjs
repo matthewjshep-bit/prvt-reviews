@@ -167,3 +167,48 @@ test("a buyer repeating our price back is redacted, but the number they would do
   const open = renderFeedbackHtml(pkg, { showPrice: true });
   assert.match(open, /489,000/);
 });
+
+test("everyone the blast reached is counted, and a silent unlinked recipient is silent rather than evaluating in the table", () => {
+  const pkg = buildFeedbackPackage({ offer: OFFER, buyers: [buyer({ thread: PITCH + "\n[2026-09-09 00:41] THEM sms: I'll pass.", reason: { code: "price" } })],
+    recipients: [{ contactId: "x1", name: "Boris D" }, { contactId: "x2", name: "owner 23519 78th ave w" }, { contactId: "b1", name: "dupe of a linked buyer" }] });
+  assert.equal(pkg.funnel.contacted, 3, "the linked buyer once, plus two recipients");
+  assert.equal(pkg.funnel.silent, 2);
+  assert.equal(pkg.funnel.linked, 1);
+  const html = renderFeedbackHtml(pkg);
+  assert.match(html, /2 people have not replied/);
+  assert.doesNotMatch(html, /owner 2\./);
+  assert.doesNotMatch(html, /<td><strong>Boris D/, "silent recipients are a count, not rows");
+});
+
+test("an unlinked recipient who says no is a pass in their own words; one who says stop is an opt-out, not feedback", () => {
+  const pkg = buildFeedbackPackage({ offer: OFFER, buyers: [], recipients: [
+    { contactId: "r1", name: "Dj Reed", thread: PITCH + "\n[2026-09-08 01:00] THEM sms: Too far north." },
+    { contactId: "r2", name: "Joshua Walden", thread: PITCH + "\n[2026-09-08 01:00] THEM sms: Pass. Most recent comps sold for 620 and 630 / Too close to hwy 99" },
+    { contactId: "r3", name: "Amanda Hewitt", thread: PITCH + "\n[2026-09-08 01:00] THEM sms: Stop" },
+    { contactId: "r4", name: "Shannon Nossum", thread: PITCH + "\n[2026-09-08 01:00] THEM sms: I'll take a look!" },
+    { contactId: "r5", name: "Quiet One" },
+  ] });
+  const by = (id) => pkg.buyers.find((b) => b.contactId === id);
+  assert.equal(by("r1").status, "passed"); assert.equal(by("r1").reason.code, "area");
+  assert.equal(by("r2").status, "passed"); assert.equal(by("r2").reason.code, "condition", "a busy road is about the house");
+  assert.equal(by("r3").status, "opted_out");
+  assert.equal(by("r4").status, "evaluating");
+  assert.deepEqual([pkg.funnel.contacted, pkg.funnel.replied, pkg.funnel.passed, pkg.funnel.optedOut, pkg.funnel.silent], [5, 4, 2, 1, 1]);
+  const html = renderFeedbackHtml(pkg);
+  assert.match(html, /The street it sits on/);
+  assert.doesNotMatch(html, /Amanda H\./, "an opt-out is a count, never a row");
+  assert.match(html, /1 asked us to stop/);
+});
+
+test("pushing back on the rehab number without saying the word pass is still an objection", () => {
+  const pkg = buildFeedbackPackage({ offer: OFFER, buyers: [], recipients: [
+    { contactId: "v", name: "Viktor R", thread: PITCH + "\n[2026-09-08 01:00] THEM sms: I reviewed the photos and scope closely. I don't agree with characterizing this as a light cosmetic rehab." },
+    { contactId: "k", name: "Katie D", thread: PITCH + "\n[2026-09-08 01:00] THEM sms: Do you have anything in Tacoma? We are searching hard for more flips that are closer to home" },
+    { contactId: "j", name: "Joshua W", thread: PITCH + "\n[2026-09-08 01:00] THEM sms: Pass. Most recent comps sold for 620 and 630 / Too close to hwy 99" },
+  ] });
+  const by = (id) => pkg.buyers.find((b) => b.contactId === id);
+  assert.equal(by("v").reason.code, "rehab_scope");
+  assert.equal(by("k").reason.code, "area", "'closer to home' is where they buy, not a price");
+  assert.equal(by("j").reason.code, "condition");
+  assert.deepEqual(pkg.askedFor, [], "a rehab figure is not a price they would pay");
+});
