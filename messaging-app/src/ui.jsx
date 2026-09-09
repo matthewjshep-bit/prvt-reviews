@@ -485,3 +485,19 @@ export function rowActivation(onActivate) {
     },
   };
 }
+
+/* ---------- a titled card ---------- */
+// The Overview page's section shell, lifted so other views can share it.
+export function Card({ title, children, right, className = "" }) {
+  return (
+    <section className={`rounded-xl border border-slate-200 bg-white p-4 ${className}`}>
+      {(title || right) && (
+        <div className="mb-3 flex items-start justify-between gap-3">
+          {title && <h2 className="text-sm font-bold">{title}</h2>}
+          {right}
+        </div>
+      )}
+      {children}
+    </section>
+  );
+}

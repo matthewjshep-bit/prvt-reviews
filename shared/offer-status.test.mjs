@@ -247,3 +247,21 @@ test("a buyer's standing on a deal has three states, and the retired fourth stil
   assert.deepEqual([...WORKING_INVESTOR_STATUSES], ["committed"]);
   assert.equal(WORKING_INVESTOR_STATUSES.has("evaluating"), false);
 });
+
+test("a list row keeps the follow-up rungs and the float stamps", () => {
+  // The pipeline board reads these off lean rows, and so does the follow-up
+  // sweep's sentSteps — on Postgres the SQL trim drops anything not listed.
+  const row = toListOffer({
+    id: "o1", cashAmount: 1,
+    proactive: { takeCheckAt: "2026-09-01T00:00:00Z", realmCheckAt: null },
+    followUps: [{ kind: "offer_nudge", step: 3, at: "2026-09-04T00:00:00Z" }],
+    counterBand: { acceptedAt: "2026-09-05T00:00:00Z", amount: 300000 },
+    requotes: [{ ts: "2026-09-05T00:00:00Z", from: 1, to: 2 }],
+    calc: { settings: {} }, snapshot: { big: true },
+  });
+  assert.equal(row.proactive.takeCheckAt, "2026-09-01T00:00:00Z");
+  assert.deepEqual(row.followUps.map((f) => f.step), [3]);
+  assert.equal(row.counterBand.amount, 300000);
+  assert.equal(row.requotes.length, 1);
+  assert.equal(row.snapshot, undefined, "the heavy keys still go");
+});

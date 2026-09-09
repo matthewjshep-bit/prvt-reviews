@@ -11,6 +11,7 @@
 //   Settings  — calculation defaults + company info printed on the document.
 // Plus three sibling apps on their own paths: /agents, /dashboard, /dispo.
 
+import { offerEditorUrl } from "./api.js";
 import React, { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { brandMarkSvg } from "@shared/brand-mark.js";
@@ -22,18 +23,13 @@ import Dispositions from "./Dispositions.jsx";
 import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
 import ConversationAi from "./ConversationAi.jsx";
+import PipelineView from "./PipelineView.jsx";
 import ContactDrawer from "./ContactDrawer.jsx";
 import { ContactDrawerContext } from "./ContactLink.jsx";
 import { getLocationId, getLocationKey, getOffer, getSettings } from "./api.js";
 
 // The offer editor lives in the main app — from the standalone Deals page,
 // "Edit offer" opens it in a new tab deep-linked via the ?offer_id= flow.
-function offerEditorUrl(offerId) {
-  const p = new URLSearchParams({ location_id: getLocationId(), offer_id: offerId });
-  const key = getLocationKey();
-  if (key) p.set("key", key);
-  return `/?${p}`;
-}
 
 // Which product this page is. One deploy serves all five: /agents (any depth)
 // is the Agent Outreach app, /dispo is the investor book, /dashboard is the
@@ -71,6 +67,7 @@ const NAV =
     // pushed the day's actual work below the fold.
     ? [
         { view: "dashboard", label: "Overview" },
+        { view: "pipeline", label: "Pipeline" },
         { view: "conversation", label: "Conversation AI" },
       ]
     : APP_MODE === "deals"
@@ -302,6 +299,7 @@ export default function OfferApp() {
               : (o) => { setEditing(o); setView("new"); }} />
         )}
         {view === "conversation" && <ConversationAi settings={settings} />}
+          {view === "pipeline" && <PipelineView />}
         {view === "outreach" && <AgentOutreach settings={settings} />}
         {view === "dispo" && <Dispositions />}
         {view === "dashboard" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}

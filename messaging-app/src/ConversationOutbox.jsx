@@ -8,7 +8,7 @@
 
 import React, { useEffect, useState } from "react";
 import { AlertTriangle, Check, Clock, Loader2, Pause, Play, Send } from "lucide-react";
-import { INTENT_LABEL, PARTY_LABEL, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
+import { ACTION_LABEL, INTENT_LABEL, PARTY_LABEL, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
 import { applyDraftAction, dismissReplyDraft, holdReplyDraft, resumeConversationBot, sendReplyDraft } from "./api.js";
 import ContactLink from "./ContactLink.jsx";
@@ -342,6 +342,10 @@ function actionLabel(a) {
     case "link_deal_evaluating": return "Link to the deal";
     case "start_underwrite": return "Underwrite it";
     case "suggest_dataroom_invite": return "Text a dataroom link";
-    default: return a.type;
+    case "revise_offer_to_counter": return "Re-issue at their number";
+    case "promote_to_deal": return "Promote to a deal";
+    case "mark_investor_committed": return "Mark them the committed buyer";
+    case "requote_from_agent_numbers": return "Re-run on their numbers";
+    default: return ACTION_LABEL[a.type] || String(a.type || "").replace(/_/g, " ");
   }
 }

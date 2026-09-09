@@ -28,7 +28,8 @@
     "test:drive": "node --test drive-folder.test.mjs",
     "test:offer-update": "node --test offer-update.test.mjs",
     "test:videos": "node --test offer-videos.test.mjs",
-    "test:all": "node --test *.test.mjs ../shared/*.test.mjs"
+    "test:all": "node --test *.test.mjs ../shared/*.test.mjs",
+    "test:pipeline": "node --test ../shared/pipeline.test.mjs ../shared/offer-status.test.mjs offer-list-query.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

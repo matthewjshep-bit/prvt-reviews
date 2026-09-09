@@ -47,6 +47,10 @@ export const SETTABLE_STATUSES = OFFER_STATUS_KEYS.filter((k) => k !== "draft");
 export const OPEN_STATUSES = new Set(["new", "sent", "countered"]);
 // Nothing more will happen here without a new offer.
 export const DEAD_STATUSES = new Set(["no_response", "passed"]);
+// A deal somebody is still working. The same three stages are named locally
+// in routes/offers.js, contact-record.js and conversation-context.js; this
+// is the one the pipeline board classifies by.
+export const LIVE_DEAL_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
 
 /* ---------- provenance: which offers a robot made ---------- */
 
@@ -211,6 +215,16 @@ export const OFFER_LIST_FIELDS = [
   // The newest counter with its number ({amount, at, source}), hoisted off
   // statusHistory so the auto-accept band can read it from a lean row.
   "counter",
+  // Where the conversation stands, for the pipeline board. Each is a handful
+  // of scalars or a short array, well inside "a row must stay a row":
+  //   proactive   {takeCheckAt, realmCheckAt} — which float has gone out
+  //   followUps   ≤6 {kind, step, at, jobId} — which nudge rungs fired. The
+  //               follow-up sweep reads sentSteps off THIS row, so without it
+  //               here every exhausted rung was re-claimed daily on Postgres
+  //               (the dedupe key made that harmless, but never "step 2 of 3").
+  //   counterBand {acceptedAt, amount, draftId} — the band's one exception used
+  //   requotes    a few {ts, from, to, ...} — re-runs on the agent's numbers
+  "proactive", "followUps", "counterBand", "requotes",
   "createdAt", "updatedAt", "dateLabel", "validLabel",
   "pdfUrl", "imageUrl", "scopePdfUrl", "compsPdfUrl",
   "psaPdfUrl", "contractPdfUrl", "assignmentPdfUrl", "netSheetPdfUrl",

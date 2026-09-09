@@ -3890,6 +3890,32 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // Float a number by hand. The robot does this on its own when an underwrite
+  // lands and again when the agent's read arrives — but it logs a skip and
+  // moves on when the bot was off, the key was missing, or the take check
+  // hadn't been answered, and until now there was no way to retry from the
+  // console. Same gates as the automatic path: a realm check still waits for
+  // the agent's read unless the take check is switched off, and `skipped`
+  // says so in the operator's words.
+  router.post("/:id/float", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const kind = req.body?.kind === "take_check" ? "take_check" : "realm_check";
+      const offer = await store.getOffer(req.params.id);
+      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "no such offer" });
+      if (offer.deal) return res.status(409).json({ error: "that offer is already a deal" });
+      if (!OPEN_STATUSES.has(effectiveStatus(offer))) return res.status(409).json({ error: `nothing to float on a ${effectiveStatus(offer)} offer` });
+      if (!offer.contactId) return res.status(409).json({ error: "the offer has no contact to text" });
+      const fresh = (await store.getOfferSettings(locationId)) || {};
+      const r = await startProactive({
+        client, locationId, saved: fresh, store, contactId: offer.contactId, kind, offer,
+        sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
+      });
+      if (!r.skipped) await markProactive(offer.id, kind);
+      res.status(r.skipped ? 200 : 202).json({ ok: true, kind, skipped: r.skipped || null, job: r.job ? publicReplyJob(r.job) : null });
+    } catch (err) { fail(res, err); }
+  });
+
   router.post("/automations/conversation/follow-ups/cancel", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);

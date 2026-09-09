@@ -86,7 +86,7 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     if (o.deal) continue;                                  // it became a deal; not our business
     if (!OPEN_STATUSES.has(effectiveStatus(o))) continue;  // the mirror was stale
     // An expired offer's follow-up is a re-offer, and that is a person's call.
-    if (isExpired(o, now)) continue;
+    if (isExpired(o, new Date(now))) continue;   // isExpired wants a Date, not ms
     // Count from the last time we actually put it in front of them.
     const lastSend = (o.sends || []).filter((s) => s?.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0];
     const startedAt = lastSend?.ts || o.statusAt || o.createdAt;

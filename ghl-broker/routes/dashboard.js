@@ -27,6 +27,23 @@ import {
   countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
 } from "../ghl.js";
 import { offerFunnel, counterSpread, passReasons, followUpPerformance } from "../shared/funnel.js";
+import { buildPipeline } from "../shared/pipeline.js";
+import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob } from "../auto-underwrite.js";
+import { conversationConfig } from "../reply-agent.js";
+
+// Same expression routes/offers.js reads: the broker's one send gate. The
+// pipeline only REPORTS it, so the console can say whether a draft's Send
+// would actually send.
+const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
+// How far back the board looks for blasts, opens and replies. A blast older
+// than this is not a live disposition, it is history.
+const PIPELINE_EVENT_DAYS = 90;
+const PIPELINE_EVENT_LIMIT = 5000;
+const PIPELINE_EVENT_TYPES = [
+  "blast_sent", "dataroom_sent", "dataroom_viewed",
+  "investor_evaluating", "investor_committed", "investor_passed",
+  "follow_up_sent", "text_summary", "call_summary",
+];
 
 const DAY_MS = 86400000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -189,6 +206,42 @@ export default function createDashboardRouter({ resolveLocation }) {
           buyer: passReasons(inWindow, { by: "buyer" }),
         },
         followUps: followUpPerformance(nudges, inbound),
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The board: one card per property and where it stands, plus the queue of
+  // things the self-driving system stopped short of doing. All local reads —
+  // the offer book (lean), the open drafts, ninety days of events, the
+  // in-memory underwrite jobs — and one pure function over them. The console
+  // polls this every fifteen seconds, so it has to stay cheap.
+  router.get("/pipeline", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const now = Date.now();
+      const since = new Date(now - PIPELINE_EVENT_DAYS * DAY_MS).toISOString();
+      const [offers, drafts, events, saved, investors] = await Promise.all([
+        store.listOffers(locationId, { limit: 2000, lean: true }),
+        store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }),
+        store.listContactEventsSince(locationId, since, { types: PIPELINE_EVENT_TYPES, limit: PIPELINE_EVENT_LIMIT }).catch(() => []),
+        store.getOfferSettings(locationId).catch(() => null),
+        store.listInvestors(locationId, { limit: 2000 }).catch(() => []),
+      ]);
+      const config = conversationConfig(saved || {});
+      const contactNames = {};
+      for (const i of investors) if (i?.contactId && i.name) contactNames[i.contactId] = i.name;
+      const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
+      const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, now, eventsLimit: PIPELINE_EVENT_LIMIT });
+      res.json({
+        ok: true,
+        now: new Date(now).toISOString(),
+        sendsEnabled: CARD_SENDS_ENABLED,
+        conversationEnabled: config.enabled,
+        ladders: { agent: config.parties.agent.followUp, investor: config.parties.investor.followUp },
+        // The open drafts verbatim — the console renders them with the same
+        // row the outbox uses, so send/edit/dismiss/apply come for free.
+        drafts,
+        ...out,
       });
     } catch (err) { fail(res, err); }
   });

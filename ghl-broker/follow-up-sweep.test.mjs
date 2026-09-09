@@ -141,8 +141,11 @@ test("an expired offer is left for a person", async () => {
   _resetJobs();
   // Following up on an expired offer means re-offering, which is a decision.
   const store = fakeStore({ offers: [anOffer({ calc: { settings: { offerExpires: true, validityDays: 2 } } })] });
-  const { started } = spySweep(store);
+  const { job, started } = spySweep(store);
   await settle();
+  // The sweep must FINISH with nothing sent — not crash. This assertion used to
+  // be satisfied by a TypeError inside the candidate scan.
+  assert.equal(job.status, "done", job.error);
   assert.equal(started.length, 0);
 });
 

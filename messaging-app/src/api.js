@@ -429,6 +429,22 @@ const tzq = () => `&tz_offset=${new Date().getTimezoneOffset()}`;
 const endq = (end) => (end ? `&end=${encodeURIComponent(end)}` : "");
 export const getDashboardSummary = (days = 30, end = "") =>
   fetch(`${API_BASE}/api/dashboard/summary?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
+// A link into the offers console. Relative on the single all-modes deploy;
+// on a dedicated-hostname dashboard build "/" would be the dashboard itself,
+// so VITE_OFFERS_ORIGIN points it at the right app.
+const OFFERS_ORIGIN = import.meta.env.VITE_OFFERS_ORIGIN || "";
+export function offerEditorUrl(offerId, { view = "" } = {}) {
+  const p = new URLSearchParams({ location_id: getLocationId() });
+  if (offerId) p.set("offer_id", offerId);
+  if (view) p.set("view", view);
+  const key = getLocationKey();
+  if (key) p.set("key", key);
+  return `${OFFERS_ORIGIN}/?${p}`;
+}
+export const getDashboardPipeline = () =>
+  fetch(`${API_BASE}/api/dashboard/pipeline?${locq()}`).then(j);
+export const floatOffer = (id, kind) =>
+  post(`/api/offers/${encodeURIComponent(id)}/float`, { kind });
 export const getDashboardFunnel = (days = 30, end = "") =>
   fetch(`${API_BASE}/api/dashboard/funnel?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
 export const getDashboardTagCounts = (tags) =>
