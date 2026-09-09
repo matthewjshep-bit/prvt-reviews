@@ -5,7 +5,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronUp, ExternalLink, FileSignature, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Sparkles, Trash2, X } from "lucide-react";
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import {
-  addContactNote, cancelUnderwrite, createOffer, getContactDetail, getContactNotes, getOffer, getUnderwrite,
+  addContactNote, cancelUnderwrite, createOffer, getContactDetail, getContactNotes, getUnderwrite,
   ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, runUnderwrite, saveDraft,
   saveOfferWorkspace, saveSettings, searchContacts, setOfferStatus, suggestAddresses, updateDataroom,
   updateOffer, zillowUrl,
@@ -97,20 +97,23 @@ const INPUT_CLS =
 const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
 // The Auto-underwrite button: the same robot the GHL workflow fires, pointed
-// at the address in the form. It runs in the background on the broker (two to
-// five minutes, the listing scrapes dominate), so the button turns into a
-// status row that polls the job, and when the run lands the result opens in
-// the editor — the offer it built, or the held draft with its reasons.
+// at the address in the form — and its answer lands IN this form. It runs in
+// the background on the broker (two to five minutes, the listing scrapes
+// dominate), so the button turns into a status row that polls the job, and
+// when the run lands the workspace it built — comps, grades, ARV, the photo
+// scope, repairs — is taken into the open form. No second offer, no draft:
+// the record it belongs to is the one on screen, and Create/Save is still
+// yours to press.
 //
-// It needs an EXISTING contact: the run files its notes, tags and the offer
-// on their record, and a contact that doesn't exist yet has no record.
+// It needs an EXISTING contact: the run reads the listing for their record
+// and files its notes there, and a contact that doesn't exist yet has none.
 const UW_POLL_MS = 4000;
 
-function AutoUnderwrite({ contactId, address, askingPrice, onOpen }) {
+function AutoUnderwrite({ contactId, address, askingPrice, onApply }) {
   const [job, setJob] = useState(null);     // the polled job, once started
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
-  const [opening, setOpening] = useState(false);
+  const [applied, setApplied] = useState(false);
   const timer = useRef(null);
 
   // Poll while the job is live; stop when it lands.
@@ -129,27 +132,28 @@ function AutoUnderwrite({ contactId, address, askingPrice, onOpen }) {
     return () => { alive = false; clearTimeout(timer.current); };
   }, [job?.id, job?.status]);
 
+  // The moment the numbers are back they go into the form. Once, not on
+  // every poll, and never over a workspace the operator has since replaced.
+  useEffect(() => {
+    if (applied || job?.status !== "done" || !job.snapshot) return;
+    setApplied(true);
+    onApply?.(job.snapshot);
+  }, [job?.status, job?.snapshot, applied, onApply]);
+
   const ready = Boolean(contactId) && Boolean(String(address || "").trim());
-  const why = !contactId ? "Pick an existing contact first — the run is filed on their record"
+  const why = !contactId ? "Pick an existing contact first — the run reads the listing for their record"
     : !String(address || "").trim() ? "Type the property address first" : "";
 
   async function start() {
     setError("");
     setStarting(true);
+    setApplied(false);
     try {
       const r = await runUnderwrite({ contactId, address: address.trim(), askingPrice: askingPrice || 0 });
-      setJob({ id: r.jobId, status: "queued", phase: "queued", dryRun: r.dryRun, startedAt: new Date().toISOString() });
+      setJob({ id: r.jobId, status: "queued", phase: "queued", startedAt: new Date().toISOString() });
     } catch (e) {
       setError(e.message || "Couldn't start the underwrite.");
     } finally { setStarting(false); }
-  }
-
-  async function open() {
-    if (!job?.offerId) return;
-    setOpening(true);
-    try { onOpen?.(await getOffer(job.offerId)); }
-    catch (e) { setError(e.message || "Couldn't open the result."); }
-    finally { setOpening(false); }
   }
 
   const live = job && UW_LIVE.has(job.status);
@@ -158,7 +162,7 @@ function AutoUnderwrite({ contactId, address, askingPrice, onOpen }) {
   if (!job) {
     return (
       <div className="mt-2">
-        <button type="button" className={btn} disabled={!ready || starting} title={why || "Pull comps, grade them, scan the listing photos and build the offer — 2 to 5 minutes"} onClick={start}>
+        <button type="button" className={btn} disabled={!ready || starting} title={why || "Pull comps, grade them, scan the listing photos and fill in ARV, repairs and the scope below — 2 to 5 minutes"} onClick={start}>
           {starting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
           Auto-underwrite this address
         </button>
@@ -168,24 +172,26 @@ function AutoUnderwrite({ contactId, address, askingPrice, onOpen }) {
     );
   }
 
+  const flagged = job.status === "done" && (job.held || []).length > 0;
   return (
     <div className={`mt-2 rounded-lg border px-3 py-2 text-xs ${
-      live ? "border-violet-200 bg-violet-50/60" : job.status === "done" ? "border-emerald-200 bg-emerald-50/60"
-      : job.status === "held" ? "border-amber-300 bg-amber-50" : "border-red-200 bg-red-50"}`}>
+      live ? "border-violet-200 bg-violet-50/60"
+      : job.status === "done" ? (flagged ? "border-amber-300 bg-amber-50" : "border-emerald-200 bg-emerald-50/60")
+      : "border-red-200 bg-red-50"}`}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {live ? <Loader2 size={13} className="animate-spin text-violet-700" />
-          : job.status === "done" ? <Check size={13} className="text-emerald-700" />
-          : <AlertTriangle size={13} className={job.status === "held" ? "text-amber-700" : "text-red-700"} />}
+          : job.status === "done" ? (flagged ? <AlertTriangle size={13} className="text-amber-700" /> : <Check size={13} className="text-emerald-700" />)
+          : <AlertTriangle size={13} className="text-red-700" />}
         <span className="font-semibold text-slate-800">
           {live ? (UW_PHASE[job.phase] || "Working") + "…"
-            : job.status === "done" ? (job.duplicateOf ? "Already underwritten in the last 24 hours" : `Built: ${fmtMoney(job.cashAmount || 0)} cash`)
-            : job.status === "held" ? "Held for review" : "Didn't finish"}
+            : job.status === "done" ? (flagged ? "Filled in, with flags" : "Filled in")
+            : job.status === "held" ? "Stopped" : "Didn't finish"}
         </span>
-        {job.dryRun && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">dry run</span>}
-        {job.status === "done" && !job.duplicateOf && (
+        {job.status === "done" && (
           <span className="text-slate-600">
             ARV {fmtMoney(job.arv || 0)} · repairs {fmtMoney(job.repairs || 0)}
             {job.compsUsed?.length ? ` · ${job.compsUsed.length} comps` : ""}
+            {job.photosAnalyzed ? ` · ${job.photosAnalyzed} photos` : ""}
           </span>
         )}
         <span className="ml-auto flex items-center gap-2">
@@ -195,20 +201,18 @@ function AutoUnderwrite({ contactId, address, askingPrice, onOpen }) {
               {job.stopping ? "Stopping…" : "Stop"}
             </button>
           )}
-          {!live && job.offerId && (
-            <button type="button" className="rounded-md bg-blue-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:opacity-60" disabled={opening} onClick={open}>
-              {opening ? "Opening…" : job.status === "held" ? "Review the draft" : "Open the offer"}
-            </button>
-          )}
           {!live && (
             <button type="button" className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50" onClick={() => { setJob(null); setError(""); }}>
-              Run again
+              {job.status === "done" ? "Done" : "Try again"}
             </button>
           )}
         </span>
       </div>
-      {job.status === "held" && (job.held || []).length > 0 && (
+      {(job.held || []).length > 0 && (
         <ul className="mt-1 list-inside list-disc text-amber-900">{job.held.map((h, i) => <li key={i}>{h}</li>)}</ul>
+      )}
+      {job.status === "done" && !flagged && (
+        <div className="mt-1 text-slate-500">The comps, the grades and the photo scope are in the panes below. Check them, then create the offer.</div>
       )}
       {job.status === "error" && job.error && <div className="mt-1 text-red-700">{job.error}</div>}
       {error && <div className="mt-1 text-red-700">{error}</div>}
@@ -782,12 +786,44 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const [saveWarnings, setSaveWarnings] = useState([]);
   const rehabStateRef = useRef(snap?.rehab || null);
   const compsStateRef = useRef(snap?.comps || null);
-  const rehabInit =
-    snap?.rehab ||
-    (fromOffer?.scope?.length
-      ? { custom: fromOffer.scope.map((s, i) => ({ id: `c-${i}`, label: s.label, cost: s.cost })) }
-      : undefined);
-  const compsInit = snap?.comps || undefined;
+  // What the comps and rehab panes open on. State, not a constant, because
+  // an auto-underwrite from this form replaces both workspaces in place:
+  // the nonce remounts the two panes on the new state and nothing else.
+  const [paneInit, setPaneInit] = useState(() => ({
+    nonce: 0,
+    rehab: snap?.rehab ||
+      (fromOffer?.scope?.length
+        ? { custom: fromOffer.scope.map((s, i) => ({ id: `c-${i}`, label: s.label, cost: s.cost })) }
+        : undefined),
+    comps: snap?.comps || undefined,
+  }));
+  const rehabInit = paneInit.rehab;
+  const compsInit = paneInit.comps;
+
+  // Take an auto-underwrite's workspace into THIS form. Everything the run
+  // decided lands where a person would have put it: the numbers in the
+  // Property step, the subject facts, the priced scope, and both panes
+  // reopened on the run's comps and room-by-room rehab state. The address
+  // is left as typed — the run resolved it, and the resolved form is what
+  // the comps were pulled on, so that one is adopted.
+  const applyUnderwrite = React.useCallback((uw) => {
+    if (!uw) return;
+    const inp = uw.inputs || {};
+    setInputs((s) => ({
+      ...s,
+      address: inp.address || s.address,
+      arv: fmtN(inp.arv) || s.arv,
+      repairs: fmtN(inp.repairs) || s.repairs,
+      askingPrice: s.askingPrice || fmtN(inp.askingPrice),
+    }));
+    if (uw.subjectSqft) setSubjectSqft(String(uw.subjectSqft));
+    if (uw.subjectInfo) setSubjectInfo(uw.subjectInfo);
+    if (Array.isArray(uw.scope)) setScope(uw.scope);
+    if (uw.underwriteMode) setUnderwriteMode(uw.underwriteMode);
+    rehabStateRef.current = uw.rehab || null;
+    compsStateRef.current = uw.comps || null;
+    setPaneInit((p) => ({ nonce: p.nonce + 1, rehab: uw.rehab || undefined, comps: uw.comps || undefined }));
+  }, []);
   const [preview, setPreview] = useState(null);   // data-url image
   const [previewing, setPreviewing] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -1460,7 +1496,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               contactId={mode === "existing" ? contact?.id || null : null}
               address={inputs.address}
               askingPrice={moneyNum(inputs.askingPrice)}
-              onOpen={onOpenOffer}
+              onApply={applyUnderwrite}
             />
           </div>
           <div>
@@ -1486,6 +1522,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       </div>
 
       <CompsPane
+        key={`comps-${paneInit.nonce}`}
         address={inputs.address}
         sqft={subjectSqft}
         setSqft={setSubjectSqft}
@@ -1496,6 +1533,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       />
 
       <RehabPane
+        key={`rehab-${paneInit.nonce}`}
         sqft={subjectSqft}
         beds={Number(subjectInfo?.beds) || 0}
         baths={Number(subjectInfo?.baths) || 0}

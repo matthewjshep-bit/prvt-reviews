@@ -534,7 +534,7 @@ async function note(client, contactId, body, warnings) {
  * automated offer travels the identical code path as a hand-built one.
  */
 export async function startUnderwrite({
-  client, locationId, saved, store, contactId, message, address, askingPrice, dryRun, deps, origin = "workflow",
+  client, locationId, saved, store, contactId, message, address, askingPrice, dryRun, deps, origin = "workflow", fill = false,
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
@@ -573,6 +573,12 @@ export async function startUnderwrite({
     // "workflow" when GHL fired this; "operator" when a person pressed the
     // Auto-underwrite button on the offer form with an address they typed.
     origin: origin === "operator" ? "operator" : "workflow",
+    // FILL: the offer form asked. The run does all the same work and hands
+    // the workspace back on the job (`snapshot`) for the form to take in
+    // place — it creates no offer and no draft, because the record it
+    // belongs to is the one open on the operator's screen.
+    fill: Boolean(fill),
+    snapshot: null,
     address: "",
     askingPrice: null,
     addressSource: null,
@@ -828,7 +834,9 @@ async function runUnderwrite(job, ctx) {
     await writeSubjectProperty(client, locationId, job.contactId, extraction.address, warnings, { store, jobId: job.id, from: fieldAddress || "" });
   }
 
-  const dupe = await findRecent({ store, locationId, contactId: job.contactId, address: extraction.address });
+  // A fill run is a person asking for numbers on the form in front of them;
+  // pointing them at yesterday's offer is not an answer to that.
+  const dupe = job.fill ? null : await findRecent({ store, locationId, contactId: job.contactId, address: extraction.address });
   if (dupe) {
     job.status = "done";
     job.phase = "";
@@ -1074,6 +1082,25 @@ async function runUnderwrite(job, ctx) {
     compsData, subject, subjectSqft: sqft, nearby, grades, rehabbed,
     arv, rehabState, scope, repairs, listing, photosCount,
   };
+
+  if (job.fill) {
+    job.snapshot = buildSnapshot({
+      extraction, partial,
+      contact: { id: job.contactId, name: job.contactName || "", phone: "", email: "" },
+    });
+    job.held = gate.ok ? [] : gate.held;
+    job.status = "done";
+    job.phase = "";
+    job.repairs = repairs;
+    job.finishedAt = new Date().toISOString();
+    await setTag(client, job.contactId, UW_TAGS.done, warnings);
+    await note(client, job.contactId,
+      `Auto-underwrite from the offer form for ${extraction.address}: ARV ${fmtMoney(arv?.arv || 0)}` +
+      (job.arvBasis ? ` (${job.arvBasis})` : "") + `, repairs ${fmtMoney(repairs)} from ${job.photosAnalyzed} listing photos.` +
+      (gate.ok ? "" : ` Flagged: ${gate.held.join("; ")}.`),
+      warnings);
+    return;
+  }
 
   if (!gate.ok || job.dryRun || !AUTO_UNDERWRITE_ENABLED) {
     const held = gate.ok

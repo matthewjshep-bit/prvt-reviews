@@ -3486,7 +3486,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // other console spend (comps pulls, enrich sweeps): by the location, not
   // the webhook secret — this is a person clicking, not a workflow firing.
   //
-  //   POST { contactId, address, askingPrice } → 202 { ok, jobId, dryRun }
+  // It FILLS the open form rather than making an offer: the job comes back
+  // carrying the workspace (comps, grades, ARV, scope, repairs) and the form
+  // takes it in place, so the offer on screen stays the one offer.
+  //
+  //   POST { contactId, address, askingPrice } → 202 { ok, jobId }
   router.post("/automations/underwrite/run", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
@@ -3499,11 +3503,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const saved = await store.getOfferSettings(locationId);
       const { skipped, job } = await startUnderwrite({
         client, locationId, saved, store, contactId, message: "", address, askingPrice,
-        dryRun: !AUTO_UNDERWRITE_ENABLED, origin: "operator",
+        dryRun: false, origin: "operator", fill: true,
         deps: underwriteDeps({ client, locationId, saved }),
       });
       if (skipped) return res.status(409).json({ error: skipped });
-      res.status(202).json({ ok: true, started: true, jobId: job.id, dryRun: job.dryRun });
+      res.status(202).json({ ok: true, started: true, jobId: job.id });
     } catch (err) { fail(res, err); }
   });
 
