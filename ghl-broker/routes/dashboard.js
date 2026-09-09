@@ -26,6 +26,7 @@ import { store } from "../store.js";
 import {
   countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
 } from "../ghl.js";
+import { offerFunnel, counterSpread, passReasons, followUpPerformance } from "../shared/funnel.js";
 
 const DAY_MS = 86400000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -144,6 +145,54 @@ export default function createDashboardRouter({ resolveLocation }) {
   const scopeMissing = (err) => err.status === 401 || err.status === 403;
 
   /* ---------- local metrics: offers, sends, outreach funnel ---------- */
+  // The outcome report: what happened to the offers we sent, how far apart we
+  // and the agents actually are, why buyers said no, and whether the nudges
+  // worked.
+  //
+  // READ ONLY, on purpose. Nothing here writes, and nothing here feeds back
+  // into the offer math or the follow-up ladder. It is the operator's evidence
+  // for a decision, not an input to one the machine makes quietly.
+  //
+  // Local DB only — no GHL calls — so it stays in the fast tier beside
+  // /summary and needs none of the caching the /ghl endpoints carry.
+  router.get("/funnel", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const { days, tzOffset, end } = readWindow(req);
+      const { startMs, startIso } = windowFor(days, tzOffset, end);
+      // Same reasoning as /summary: a status lands on an offer created long
+      // before the window, so the rows are fetched from well behind it.
+      const horizonIso = new Date(startMs - 365 * DAY_MS).toISOString();
+      const rows = await store.listOfferOutcomesSince(locationId, horizonIso);
+
+      // The event window IS the window — a nudge sent before it is not this
+      // report's business. Note this is the only place a location-wide event
+      // query is asked for; nothing needed one before the follow-up clock.
+      const events = await store.listContactEventsSince(locationId, startIso, {
+        types: ["follow_up_sent", "text_summary", "call_summary"], limit: 5000,
+      }).catch(() => []);
+      const nudges = events.filter((e) => e.type === "follow_up_sent");
+      const inbound = events.filter((e) => e.type !== "follow_up_sent");
+
+      const inWindow = rows.filter((o) => msOf(o.createdAt) >= startMs ||
+        (o.statusHistory || []).some((h) => msOf(h.ts) >= startMs));
+
+      res.json({
+        ok: true,
+        window: { days, startIso, end },
+        funnel: offerFunnel(inWindow),
+        counters: counterSpread(inWindow),
+        passReasons: {
+          deal: passReasons(inWindow, { by: "deal" }),
+          area: passReasons(inWindow, { by: "area" }),
+          priceBand: passReasons(inWindow, { by: "priceBand" }),
+          buyer: passReasons(inWindow, { by: "buyer" }),
+        },
+        followUps: followUpPerformance(nudges, inbound),
+      });
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/summary", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
