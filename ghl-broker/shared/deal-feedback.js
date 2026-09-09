@@ -330,7 +330,11 @@ export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = fal
   // lower number (what THEY would do) is theirs to say and stays.
   const lo = round(pkg.internal?.contractPrice) || round(pkg.pitch?.price) * 0.97;
   const hi = Math.max(round(pkg.pitch?.price), lo + round(pkg.internal?.assignmentFee)) + 500;
-  const redact = (text) => showPrice || !(hi > lo) ? text : String(text || "").replace(/\$?\s?(\d{3}),(\d{3})\b|\$?\s?(\d{3})\s?[kK]\b/g, (m, a, b, k) => {
+  // A buyer's email or phone in a reply is theirs, not the agent's to have.
+  const scrub = (text) => String(text || "")
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "[email]")
+    .replace(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g, "[phone]");
+  const redact = (text) => showPrice || !(hi > lo) ? scrub(text) : scrub(text).replace(/\$?\s?(\d{3}),(\d{3})\b|\$?\s?(\d{3})\s?[kK]\b/g, (m, a, b, k) => {
     const n = a ? Number(a + b) : Number(k) * 1000;
     return n >= lo && n <= hi ? "[our price]" : m;
   });

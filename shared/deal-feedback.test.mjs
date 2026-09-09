@@ -212,3 +212,14 @@ test("pushing back on the rehab number without saying the word pass is still an 
   assert.equal(by("j").reason.code, "condition");
   assert.deepEqual(pkg.askedFor, [], "a rehab figure is not a price they would pay");
 });
+
+test("a buyer's email and phone number never reach the agent's page", () => {
+  const pkg = buildFeedbackPackage({ offer: OFFER, buyers: [], recipients: [
+    { contactId: "j", name: "James K", thread: PITCH + "\n[2026-09-08 01:00] THEM sms: The busy streets are a no-go for me. Add me to your list: james.k@gmail.com or 206-679-0463" },
+  ] });
+  const html = renderFeedbackHtml(pkg);
+  assert.doesNotMatch(html, /james\.k@gmail\.com/);
+  assert.doesNotMatch(html, /206-679-0463/);
+  assert.match(html, /\[email\]/);
+  assert.match(html, /\[phone\]/);
+});
