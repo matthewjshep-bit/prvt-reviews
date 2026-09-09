@@ -20,7 +20,7 @@ import DataroomModal from "./DataroomModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 import MatchInvestorsModal from "./MatchInvestorsModal.jsx";
 import {
-  DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
+  BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
   rowActivation,
 } from "./ui.jsx";
 
