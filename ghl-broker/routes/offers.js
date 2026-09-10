@@ -15,7 +15,7 @@
 //   PUT    /api/offers/:id                    save an existing offer in place (same id, re-rendered docs)
 //   PATCH  /api/offers/:id/workspace          autosave the editor's comps/rehab workspace only
 //   DELETE /api/offers/:id
-//   PATCH  /api/offers/:id/status            record an offer outcome (sent/countered/no_response/passed/accepted)
+//   PATCH  /api/offers/:id/status            record an offer outcome (sent/countered/no_response/passed/we_passed/accepted)
 //   PATCH  /api/offers/status                bulk outcome for a selection of offers
 //   POST   /api/offers/:id/send              send offer docs via text/email
 //   POST   /api/offers/:id/psa               render the Washington purchase & sale agreement package
@@ -144,12 +144,13 @@ const INVESTOR_DEAL_TAG = process.env.INVESTOR_DEAL_TAG || "on-deal";
 
 // Offer-outcome tags on the AGENT contact. Only the outcomes that need to
 // drive a GHL workflow get one: "sent" and "accepted" are already covered by
-// OFFER_TAG and DEAL_TAG. These three are mutually exclusive — see
+// OFFER_TAG and DEAL_TAG. These four are mutually exclusive — see
 // syncAgentOfferTag for why a contact can only ever carry one.
 const OFFER_STATUS_TAGS = {
   countered: process.env.OFFER_COUNTERED_TAG || "offer-countered",
   no_response: process.env.OFFER_NO_RESPONSE_TAG || "offer-no-response",
   passed: process.env.OFFER_PASSED_TAG || "offer-passed",
+  we_passed: process.env.OFFER_WE_PASSED_TAG || "offer-we-passed",
 };
 const ALL_STATUS_TAGS = Object.values(OFFER_STATUS_TAGS);
 
@@ -2899,8 +2900,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   }
 
   /* ---------- offer lifecycle status ---------- */
-  // An offer's outcome: not sent → sent → countered / no response / passed /
-  // accepted. See shared/offer-status.js for why "expired" is derived rather
+  // An offer's outcome: not sent → sent → countered / no response / passed
+  // (they did) / we_passed (we did) / accepted. See shared/offer-status.js for why "expired" is derived rather
   // than stored, and why "accepted" is the promote action under another name.
 
   // Write a status onto the offer doc and append to its ledger. Mirrors the
@@ -3967,6 +3968,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       return { ok: true, address: offer.address, channels: ch, results: r.results };
     },
     setOfferStatus: async ({ contactId, addressHint, status, note = "", amount = 0 }) => {
+      // "we_passed" is deliberately absent: walking away from a property is
+      // an operator's decision, never something a reply can trigger.
       if (!["countered", "passed", "no_response"].includes(status)) return { ok: false, reason: `not a status this can set: ${status}` };
       const open = (await store.listOffers(locationId, { contactId, limit: 50 })).filter((o) => o.status !== "draft" && !o.deal);
       if (!open.length) return { ok: false, reason: "no open offer to mark" };

@@ -33,7 +33,8 @@ function FunnelBars({ f }) {
     { label: "Sent", n: f.sent, cls: "bg-slate-400" },
     { label: "Countered", n: f.countered, cls: "bg-violet-400" },
     { label: "Accepted", n: f.accepted, cls: "bg-emerald-500" },
-    { label: "Passed", n: f.passed, cls: "bg-rose-400" },
+    { label: "They passed", n: f.passed, cls: "bg-rose-400" },
+    { label: "We passed", n: f.wePassed || 0, cls: "bg-stone-400" },
     { label: "No response", n: f.noResponse, cls: "bg-amber-400" },
   ];
   const max = Math.max(1, ...rows.map((r) => r.n));

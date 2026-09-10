@@ -38,7 +38,8 @@ export function linkFor(key, item) {
 // Ops a person should be asked about first: they end something.
 export const CONFIRM = {
   drop: (i) => `Drop the held underwrite on ${i.address || "this property"}? The draft is deleted.`,
-  mark_passed: (i) => `Mark the offer on ${i.address || "this property"} as passed?`,
+  mark_passed: (i) => `Mark the offer on ${i.address || "this property"} as passed by them?`,
+  mark_we_passed: (i) => `Mark the offer on ${i.address || "this property"} as passed by us — we're walking away?`,
 };
 
 export async function runOp(key, item) {
@@ -49,6 +50,7 @@ export async function runOp(key, item) {
     case "float_realm":        return floatOffer(item.offerId, "realm_check");
     case "mark_no_response":   return setOfferStatus(item.offerId, "no_response", "from the pipeline board");
     case "mark_passed":        return setOfferStatus(item.offerId, "passed", "from the pipeline board");
+    case "mark_we_passed":     return setOfferStatus(item.offerId, "we_passed", "from the pipeline board");
     case "mark_closed":        return updateDeal(item.offerId, { stage: "closed" });
     case "fell_through": {
       const patch = askFellThrough(item);

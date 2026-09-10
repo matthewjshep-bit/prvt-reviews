@@ -19,6 +19,18 @@ test("an offer that was sent then countered then passed counts once in each colu
   assert.equal(f.open, 0);
 });
 
+test("an offer we walked away from is dead, counted apart from the ones they refused", () => {
+  const f = offerFunnel([
+    { id: "a", createdAt: D(1), statusHistory: [h("sent", D(2)), h("we_passed", D(5))] },
+    { id: "b", createdAt: D(1), statusHistory: [h("sent", D(2)), h("passed", D(5))] },
+  ]);
+  assert.equal(f.sent, 2);
+  assert.equal(f.passed, 1);
+  assert.equal(f.wePassed, 1);
+  assert.equal(f.open, 0);
+  assert.equal(f.rates.deadOfSent, 100);
+});
+
 test("an offer sent twice is still one send", () => {
   // FIRST occurrence only — otherwise a chased offer inflates the funnel and
   // the conversion rate quietly falls as you work harder.

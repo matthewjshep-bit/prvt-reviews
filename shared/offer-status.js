@@ -29,7 +29,14 @@ export const OFFER_STATUSES = [
   { key: "sent", label: "Sent", cls: "bg-sky-100 text-sky-800", dot: "bg-sky-500" },
   { key: "countered", label: "Countered", cls: "bg-violet-100 text-violet-800", dot: "bg-violet-500" },
   { key: "no_response", label: "No response", cls: "bg-amber-100 text-amber-800", dot: "bg-amber-500" },
-  { key: "passed", label: "Passed", cls: "bg-rose-100 text-rose-700", dot: "bg-rose-400" },
+  // Two ways an offer dies by a decision. "passed" is THEIRS — the agent or
+  // seller said no — and keeps its original key so every row already marked
+  // stays what it was. "we_passed" is OURS — we withdrew, re-underwrote away
+  // from it, or let it go on purpose. The funnel and the contact's history
+  // treat them differently: a "they passed" is a reply and a tier-3 signal; a
+  // "we passed" says nothing about the agent at all.
+  { key: "passed", label: "They passed", cls: "bg-rose-100 text-rose-700", dot: "bg-rose-400" },
+  { key: "we_passed", label: "We passed", cls: "bg-stone-200 text-stone-700", dot: "bg-stone-500" },
   { key: "accepted", label: "Accepted", cls: "bg-emerald-100 text-emerald-800", dot: "bg-emerald-500" },
 ];
 
@@ -43,7 +50,7 @@ export const SETTABLE_STATUSES = OFFER_STATUS_KEYS.filter((k) => k !== "draft");
 // Still waiting on the agent: these are the offers that are actually working.
 export const OPEN_STATUSES = new Set(["new", "sent", "countered"]);
 // Nothing more will happen here without a new offer.
-export const DEAD_STATUSES = new Set(["no_response", "passed"]);
+export const DEAD_STATUSES = new Set(["no_response", "passed", "we_passed"]);
 // A deal somebody is still working. The same three stages are named locally
 // in routes/offers.js, contact-record.js and conversation-context.js; this
 // is the one the pipeline board classifies by.
@@ -84,8 +91,10 @@ export function needsAiReview(offer) {
 // Which tag a contact carries, most-advanced-wins. Used to collapse an agent's
 // many offers into the single tag GHL can hold per contact — see the ordering
 // note in syncAgentOfferTag. Higher rank beats lower.
+// "we_passed" ranks below "passed": an agent who said no told us something
+// about themselves; an offer we walked away from did not.
 export const STATUS_RANK = {
-  accepted: 5, countered: 4, sent: 3, new: 2, no_response: 1, passed: 0,
+  accepted: 6, countered: 5, sent: 4, new: 3, no_response: 2, passed: 1, we_passed: 0,
 };
 
 // The status of an offer that predates this field, without touching the row.
@@ -156,6 +165,7 @@ export const STATUS_HISTORY_PHRASE = {
   countered: "agent countered",
   no_response: "no response",
   passed: "passed on our offer",
+  we_passed: "we passed on the property",
   accepted: "accepted our offer",
 };
 

@@ -80,7 +80,7 @@ export function fieldLines(custom = {}, keys = []) {
 
 const statusWord = (s) => ({
   draft: "draft (not sent)", new: "not sent yet", sent: "sent, waiting on the agent",
-  countered: "agent countered", no_response: "no response", passed: "agent passed", accepted: "accepted",
+  countered: "agent countered", no_response: "no response", passed: "agent passed", we_passed: "we passed on it (withdrawn)", accepted: "accepted",
 }[s] || s || "unknown");
 
 // The offer book, newest first, capped, and every number here is a number the

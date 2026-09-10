@@ -34,7 +34,7 @@ import { addressKey as propertyKey } from "./us-address.js";
 /* ---------- vocabulary ---------- */
 
 export const EVENT_TYPES = [
-  "offer_sent", "offer_revised", "offer_countered", "offer_passed", "offer_no_response", "offer_accepted",
+  "offer_sent", "offer_revised", "offer_countered", "offer_passed", "offer_we_passed", "offer_no_response", "offer_accepted",
   "realm_yes", "realm_no",
   "deal_promoted", "deal_stage",
   "investor_evaluating", "investor_committed", "investor_passed", "feedback",
@@ -58,7 +58,7 @@ export const EVENT_TYPES = [
 
 export const EVENT_LABEL = {
   offer_sent: "we offered", offer_revised: "we revised our offer", offer_countered: "they countered",
-  offer_passed: "they passed on our offer", offer_no_response: "no response to our offer", offer_accepted: "they accepted our offer",
+  offer_passed: "they passed on our offer", offer_we_passed: "we passed on the property", offer_no_response: "no response to our offer", offer_accepted: "they accepted our offer",
   realm_yes: "number was in the realm", realm_no: "number was not in the realm",
   deal_promoted: "under contract", deal_stage: "deal stage changed",
   investor_evaluating: "evaluating the deal", investor_committed: "committed buyer", investor_passed: "passed on the deal",
@@ -76,7 +76,7 @@ export const EVENT_LABEL = {
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
 export const EVENT_ICON = {
-  offer_sent: "Send", offer_revised: "RefreshCw", offer_countered: "ArrowLeftRight", offer_passed: "XCircle",
+  offer_sent: "Send", offer_revised: "RefreshCw", offer_countered: "ArrowLeftRight", offer_passed: "XCircle", offer_we_passed: "Undo2",
   offer_no_response: "Clock", offer_accepted: "CheckCircle2",
   realm_yes: "ThumbsUp", realm_no: "ThumbsDown",
   deal_promoted: "FileSignature", deal_stage: "Milestone",
@@ -200,6 +200,7 @@ export function eventPhrase(ev) {
     case "offer_revised": return d.amountText ? `we revised our offer to ${d.amountText}` : "we revised our offer";
     case "offer_countered": return STATUS_HISTORY_PHRASE.countered;
     case "offer_passed": return STATUS_HISTORY_PHRASE.passed;
+    case "offer_we_passed": return STATUS_HISTORY_PHRASE.we_passed;
     case "offer_no_response": return STATUS_HISTORY_PHRASE.no_response;
     case "offer_accepted": return STATUS_HISTORY_PHRASE.accepted;
     case "realm_yes": return "number in the realm";
@@ -218,7 +219,7 @@ export function eventPhrase(ev) {
 // but was never a ledger line — a tag, a dataroom view, a fact — and putting
 // it there would change what GHL shows.
 const LEDGER_TYPES = new Set([
-  "offer_sent", "offer_revised", "offer_countered", "offer_passed", "offer_no_response", "offer_accepted",
+  "offer_sent", "offer_revised", "offer_countered", "offer_passed", "offer_we_passed", "offer_no_response", "offer_accepted",
   "realm_yes", "realm_no", "deal_promoted", "deal_stage",
   "investor_evaluating", "investor_committed", "investor_passed", "feedback",
 ]);

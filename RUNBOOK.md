@@ -86,7 +86,7 @@ S3_BUCKET=deal-videos
 # so already-issued document URLs keep resolving.
 APP_ORIGIN=https://app.shepflips.com     # frontend origin (cross-origin CORS)
 # CARD_SENDS_ENABLED=true         # leave unset until you want live SMS sends
-# OFFER_COUNTERED_TAG / OFFER_NO_RESPONSE_TAG / OFFER_PASSED_TAG — offer-outcome
+# OFFER_COUNTERED_TAG / OFFER_NO_RESPONSE_TAG / OFFER_PASSED_TAG / OFFER_WE_PASSED_TAG — offer-outcome
 # tags mirrored onto the agent contact; defaults are fine unless a GHL workflow
 # already owns those names.
 DATAROOM_FEED_LOCATIONS=          # locations allowed to publish a PUBLIC deals feed

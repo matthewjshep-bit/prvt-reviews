@@ -34,15 +34,15 @@ const dayKey = (iso) => String(iso || "").slice(0, 10);
  * book that predates the ledger still reports something true.
  */
 export function offerFunnel(rows = [], { now = Date.now() } = {}) {
-  const c = { created: 0, sent: 0, countered: 0, accepted: 0, passed: 0, noResponse: 0, open: 0 };
+  const c = { created: 0, sent: 0, countered: 0, accepted: 0, passed: 0, wePassed: 0, noResponse: 0, open: 0 };
   const daily = new Map();
   const bump = (iso, key) => {
     const d = dayKey(iso);
     if (!d) return;
-    if (!daily.has(d)) daily.set(d, { date: d, created: 0, sent: 0, countered: 0, accepted: 0, passed: 0, noResponse: 0 });
+    if (!daily.has(d)) daily.set(d, { date: d, created: 0, sent: 0, countered: 0, accepted: 0, passed: 0, wePassed: 0, noResponse: 0 });
     daily.get(d)[key]++;
   };
-  const FIELD = { sent: "sent", countered: "countered", accepted: "accepted", passed: "passed", no_response: "noResponse" };
+  const FIELD = { sent: "sent", countered: "countered", accepted: "accepted", passed: "passed", we_passed: "wePassed", no_response: "noResponse" };
 
   for (const o of rows) {
     if (!o) continue;
@@ -67,7 +67,7 @@ export function offerFunnel(rows = [], { now = Date.now() } = {}) {
     // A deal is an acceptance even when nobody wrote the status down.
     if (o.deal && !seen.has("accepted")) { c.accepted++; seen.add("accepted"); bump(o.deal.createdAt || o.statusAt, "accepted"); }
     // An offer that was sent and hasn't ended is still working.
-    if (seen.has("sent") && !seen.has("accepted") && !seen.has("passed") && !seen.has("noResponse")) c.open++;
+    if (seen.has("sent") && !seen.has("accepted") && !seen.has("passed") && !seen.has("wePassed") && !seen.has("noResponse")) c.open++;
   }
 
   return {
@@ -77,7 +77,7 @@ export function offerFunnel(rows = [], { now = Date.now() } = {}) {
       counteredOfSent: pct(c.countered, c.sent),
       acceptedOfSent: pct(c.accepted, c.sent),
       acceptedOfCountered: pct(c.accepted, c.countered),
-      deadOfSent: pct(c.passed + c.noResponse, c.sent),
+      deadOfSent: pct(c.passed + c.wePassed + c.noResponse, c.sent),
     },
     daily: [...daily.values()].sort((a, b) => a.date.localeCompare(b.date)),
   };
@@ -100,7 +100,7 @@ export function counterSpread(rows = []) {
     const theirs = round(o?.counter?.amount) || round((o?.statusHistory || []).filter((h) => h?.status === "countered" && h.amount).at(-1)?.amount);
     const ours = round(o?.cashAmount);
     if (!theirs || !ours || theirs <= ours) continue;
-    const after = (o.statusHistory || []).filter((h) => ["accepted", "passed", "no_response"].includes(h?.status)).at(-1);
+    const after = (o.statusHistory || []).filter((h) => ["accepted", "passed", "we_passed", "no_response"].includes(h?.status)).at(-1);
     items.push({
       offerId: o.id, address: o.address || "", ours, theirs,
       liftDollars: theirs - ours, liftPct: Math.round(((theirs - ours) / ours) * 1000) / 10,

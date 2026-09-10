@@ -70,6 +70,19 @@ test("every status carries display metadata and draft is not settable", () => {
   assert.equal(new Set(ranks).size, ranks.length, "ranks must be distinct");
 });
 
+test("passed is theirs, we_passed is ours — both dead, neither expires, they rank apart", () => {
+  assert.equal(OFFER_STATUS.passed.label, "They passed");
+  assert.equal(OFFER_STATUS.we_passed.label, "We passed");
+  assert.ok(DEAD_STATUSES.has("we_passed"));
+  assert.ok(!OPEN_STATUSES.has("we_passed"));
+  assert.ok(SETTABLE_STATUSES.includes("we_passed"));
+  // An agent who said no is a stronger signal than an offer we withdrew.
+  assert.ok(STATUS_RANK.passed > STATUS_RANK.we_passed);
+  assert.ok(STATUS_RANK.no_response > STATUS_RANK.passed);
+  assert.equal(effectiveStatus({ status: "we_passed", sends: [{}] }), "we_passed");
+  assert.equal(statusAfterSend({ status: "we_passed" }), "we_passed");
+});
+
 test("expiry prefers the picker, then validity days, then the printed label", () => {
   // The explicit picker wins, parsed as a LOCAL date — not UTC, which would
   // land on the previous day for anyone west of Greenwich.
@@ -100,6 +113,7 @@ test("expiry never overwrites an outcome a human recorded", () => {
 
   // These already ended — the clock has nothing left to say about them.
   assert.equal(isExpired({ ...lapsed, status: "passed" }), false);
+  assert.equal(isExpired({ ...lapsed, status: "we_passed" }), false);
   assert.equal(isExpired({ ...lapsed, status: "no_response" }), false);
   assert.equal(isExpired({ ...lapsed, status: "accepted" }), false);
   assert.equal(isExpired({ ...lapsed, status: "draft" }), false);

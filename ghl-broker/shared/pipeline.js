@@ -242,7 +242,7 @@ export function buildPipeline({
       card.actionIds.push(push({ ...base, kind: "ladder_exhausted", severity: "soon",
         title: `${card.address}: ${sentSteps.length} follow-up${sentSteps.length === 1 ? "" : "s"}, no reply`,
         detail: `sent ${ageDays}d ago`,
-        ops: [{ key: "mark_no_response", label: "Mark no response", intent: "primary" }, { key: "float_realm", label: "Float the number again", intent: "secondary" }, { key: "mark_passed", label: "Mark passed", intent: "danger" }] }));
+        ops: [{ key: "mark_no_response", label: "Mark no response", intent: "primary" }, { key: "float_realm", label: "Float the number again", intent: "secondary" }, { key: "mark_passed", label: "They passed", intent: "danger" }, { key: "mark_we_passed", label: "We passed", intent: "secondary" }] }));
     } else if (!ladderOn && !expired && (lane === "sent" || lane === "countered") && card.silentDays >= 14) {
       card.actionIds.push(push({ ...base, kind: "gone_quiet", severity: "fyi",
         title: `${card.address}: nothing for ${card.silentDays} days`, detail: "the follow-up ladder is off for agents",
@@ -251,7 +251,7 @@ export function buildPipeline({
     if (expired && side === "agent") {
       card.actionIds.push(push({ ...base, kind: "offer_expired", severity: "soon",
         title: `${card.address} expired`, detail: expiresAt ? `on ${expiresAt.toISOString().slice(0, 10)}` : "",
-        ops: [{ key: "open_editor", label: "Re-issue", intent: "primary" }, { key: "mark_no_response", label: "Mark no response", intent: "secondary" }, { key: "mark_passed", label: "Mark passed", intent: "danger" }] }));
+        ops: [{ key: "open_editor", label: "Re-issue", intent: "primary" }, { key: "mark_no_response", label: "Mark no response", intent: "secondary" }, { key: "mark_passed", label: "They passed", intent: "danger" }, { key: "mark_we_passed", label: "We passed", intent: "secondary" }] }));
     } else if (side === "agent" && !deadReason && expiresInDays != null && expiresInDays >= 0 && expiresInDays <= 7 && (lane === "sent" || lane === "countered")) {
       card.actionIds.push(push({ ...base, kind: "offer_expiring", severity: "fyi",
         title: `${card.address} expires ${expiresInDays === 0 ? "today" : `in ${expiresInDays}d`}`, detail: "",

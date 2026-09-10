@@ -94,8 +94,8 @@ const FILTERS = [
 // question being asked when you click them; names open A→Z.
 //
 // Status sorts by FUNNEL POSITION, not alphabetically: draft → not sent → sent
-// → countered → no response → passed → accepted. "Countered" landing between
-// "sent" and "passed" is the useful order; landing next to "draft" because
+// → countered → no response → they passed → we passed → accepted. "Countered"
+// landing between "sent" and "passed" is the useful order; landing next to "draft" because
 // both start with a letter near C is not.
 const SORTS = {
   agent: { natural: "asc", of: (o) => o.contactName || "" },
@@ -427,7 +427,8 @@ export default function OffersHistory({ onEdit, onDeal }) {
             <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("sent")}>Mark sent</button>
             <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("countered")}>Mark countered</button>
             <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("no_response")}>Mark no response</button>
-            <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("passed")}>Mark passed</button>
+            <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("passed")}>They passed</button>
+            <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("we_passed")}>We passed</button>
             <button type="button" className={BTN_ICON} onClick={() => setPicked(new Set())} aria-label="Clear selection">
               <X size={15} />
             </button>
