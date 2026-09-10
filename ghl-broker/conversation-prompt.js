@@ -355,11 +355,26 @@ export function outboundOpening(outbound) {
 
 export function buildUserContext({
   party = "agent", contact = {}, signer = "", instructions = "", context = { text: "" },
-  underwriting = [], transcript = "", message = "", outbound = null,
+  underwriting = [], transcript = "", message = "", outbound = null, inboundKind = "text", call = null,
 } = {}) {
   const label = party === "investor" ? "INVESTOR" : party === "agent" ? "AGENT" : "CONTACT";
   const them = party === "investor" ? "the investor" : party === "agent" ? "the agent" : "them";
-  const opening = outboundOpening(outbound);
+  // A call: the "message" is the transcript, and the reply is the text a
+  // person sends right after hanging up.
+  const isCall = inboundKind === "call";
+  const callHead = isCall
+    ? `THE PHONE CALL THAT JUST ENDED (${call?.direction === "outbound" ? "we called them" : "they called us"}${call?.durationSec ? `, ${Math.round(call.durationSec / 60)} min` : ""}; ` +
+      `transcript, US = our side, THEM = ${them}; it may be garbled in places):
+"${String(message || "").slice(0, 12000)}"
+
+` +
+      `Read the call the way you would read a text from them: intent is what THEY said or agreed to (a deal, a number, ` +
+      `a pass, a time, an address), propertyAddress is the house discussed, counterAmount / agentArv / agentRehab are numbers THEY said. ` +
+      `Then write the TEXT we send right after hanging up: one or two lines — what we took from it and the one next step ` +
+      `("I'll get you numbers on Cedar by tomorrow", "sending the package now"). Do NOT recap the call. If nothing needs ` +
+      `saying, leave reply empty.`
+    : "";
+  const opening = outboundOpening(outbound) || callHead;
   return [
     `${label}: ${contact.name || "unknown name"}${contact.tags?.length ? ` (tags: ${contact.tags.slice(0, 8).join(", ")})` : ""}`,
     signer ? `YOU ARE: ${signer}` : "",
@@ -372,7 +387,7 @@ export function buildUserContext({
       ? `THE THREAD SO FAR (US = our team, THEM = ${them}):\n${String(transcript).slice(0, 14000)}`
       : "THE THREAD SO FAR: (no earlier messages available)",
     opening || `NEWEST INBOUND MESSAGE FROM ${label === "CONTACT" ? "THEM" : `THE ${label}`} (this is what you are replying to):\n"${String(message || "").slice(0, 2000)}"`,
-    opening ? "Write the message." : "Write the reply.",
+    opening ? (isCall ? "Write the text that follows the call." : "Write the message.") : "Write the reply.",
   ].filter(Boolean).join("\n\n");
 }
 

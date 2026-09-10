@@ -180,7 +180,7 @@ export async function countToday({ store, locationId, now = Date.now() }) {
 export async function draftReply({
   message, transcript = "", offers = { text: "", amounts: [], count: 0 }, contact = {},
   underwriting = [], instructions = "", signer = "", aiApiKey,
-  party = "agent", config = null, context = null, channel = "sms", outbound = null, booking = false,
+  party = "agent", config = null, context = null, channel = "sms", outbound = null, booking = false, inboundKind = "text", call = null,
 }) {
   const client = new Anthropic({ apiKey: aiApiKey, timeout: 120_000 });
   const cfg = config || normalizeConversationAi(null);
@@ -190,7 +190,7 @@ export async function draftReply({
       : "",
   };
   const system = buildSystemPrompt({ config: cfg, party, channel });
-  const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound });
+  const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound, inboundKind, call });
   const intents = outbound ? [outbound.kind] : (INTENTS[party] || INTENTS.agent);
 
   let response;
@@ -924,7 +924,7 @@ export async function assembleConversation({
  */
 export async function startReply({
   client, locationId, saved, store, contactId, message, channel = "sms", party = "", sendsEnabled = false, deps = {},
-  attachments = 0,
+  attachments = 0, inboundKind = "text", call = null,
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
@@ -968,6 +968,10 @@ export async function startReply({
     phase: "queued",
     channel: channel === "email" ? "email" : "sms",
     message: String(message || "").slice(0, 1000),
+    // A call: the message is the transcript (kept whole on `call`), and the
+    // draft is the text after the call.
+    inboundKind: inboundKind === "call" ? "call" : "text",
+    call: inboundKind === "call" && call ? { ...call, transcript: String(call.transcript || message || "").slice(0, 12000) } : null,
     attachments: nAttachments,
     party: party === "agent" || party === "investor" ? party : "",
     partySource: null,
@@ -1387,7 +1391,11 @@ async function runReply(job, ctx) {
 
   /* --- 0. an opt-out gets silence, before anything is spent --- */
   const cfg = conversationConfig(saved);
-  if (detectOptOut(job.message, cfg.optOut)) {
+  const isCall = job.inboundKind === "call";
+  const inboundText = isCall ? String(job.call?.transcript || job.message || "") : job.message;
+  // "Stop" said in a phone call is a sentence, not an opt-out; the keyword
+  // rule is for texts.
+  if (!isCall && detectOptOut(job.message, cfg.optOut)) {
     job.phase = "reading";
     const a = await assembleConversation({
       client, locationId, saved, store, contactId: job.contactId, message: job.message, channel: job.channel,
@@ -1449,7 +1457,7 @@ async function runReply(job, ctx) {
     draft = mediaDraft(config);
   } else {
     draft = await deps.draft({
-      message: job.message,
+      message: inboundText,
       transcript: a.transcript,
       offers: context.offers || { text: "", amounts: [], count: 0 },
       contact: { name: a.contactName, tags: a.tags },
@@ -1458,6 +1466,7 @@ async function runReply(job, ctx) {
       signer: a.signer,
       aiApiKey,
       party, config, context: draftContext, channel: job.channel, booking: Boolean(bookingText),
+      inboundKind: job.inboundKind || "text", call: job.call || null,
     });
   }
   job.intent = draft.intent;
@@ -1472,9 +1481,14 @@ async function runReply(job, ctx) {
 
   const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts,
-    inboundMessage: job.message, channel: job.channel, style: config.style,
+    inboundMessage: inboundText, channel: job.channel, style: config.style,
   });
-  const base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive });
+  let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive });
+  // The text after a call is its own allowlist slot on top of the intent's:
+  // a question asked on the phone still needs "text after a call" ticked.
+  if (isCall && base.send && !(config.parties?.[party]?.autoSend?.intents || []).includes("call_followup")) {
+    base = { send: false, code: "not_allowlisted", reason: "text after a call is not on the auto-send list" };
+  }
   // The counter band. Evaluated whenever the intent is one a guard COULD
   // release and the band is on — pass or fail — because a failed band is the
   // most useful row in the outbox: it says how far off the counter was, and
@@ -1592,7 +1606,9 @@ async function runReply(job, ctx) {
     status: "draft",
     channel: job.channel,
     jobId: job.id,
-    inbound: job.message,
+    inbound: isCall ? `(call${job.call?.durationSec ? `, ${Math.round(job.call.durationSec / 60)} min` : ""}) ${inboundText.replace(/\s+/g, " ").slice(0, 240)}${inboundText.length > 240 ? "…" : ""}` : job.message,
+    inboundKind: job.inboundKind || "text",
+    call: job.call ? { messageId: job.call.messageId, direction: job.call.direction, at: job.call.at, durationSec: job.call.durationSec } : null,
     reply: draft.reply,
     intent: draft.intent,
     confidence: draft.confidence,
@@ -1632,6 +1648,15 @@ async function runReply(job, ctx) {
     updatedAt: ts,
   });
   job.draftId = record.id;
+
+  /* --- 4a. the call itself, on the timeline --- */
+  if (isCall && job.call) {
+    await recordEvent({
+      store, locationId, contactId: job.contactId, party, type: "call_summary", at: job.call.at || new Date(now).toISOString(),
+      address: draft.propertyAddress || "", source: "call", ref: job.call.messageId || record.id, dedupeKey: job.call.dedupeKey || `call:${job.call.messageId}`,
+      data: { summary: String(draft.summary || "").slice(0, 500), intent: draft.intent, direction: job.call.direction, durationSec: job.call.durationSec, transcribed: true, draftId: record.id },
+    });
+  }
 
   /* --- 4b. what we learned about them --- */
   // Subject Property is not profile memory, it is the underwriter's aim, so

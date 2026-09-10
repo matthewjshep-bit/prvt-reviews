@@ -101,6 +101,7 @@ import { nextSendTime } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent } from "../ghl-mirror.js";
+import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
@@ -4269,6 +4270,39 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   }
   router.post("/automations/reply", conversationWebhook);
   router.post("/automations/conversation", conversationWebhook);
+
+  // A phone call, as an inbound. Target of a GHL workflow "Call Status →
+  // completed → Webhook", same credential as the text webhook:
+  //   POST { location_id, contact_id, message_id?, direction?, secret }
+  // Answers 202 at once; the broker waits for GHL's transcript (up to ~10
+  // minutes), then runs the same pipeline a text goes through.
+  router.post("/automations/call", async (req, res) => {
+    try {
+      const b = req.body || {};
+      b.location_id = b.location_id || b.locationId || b.location?.id || b.customData?.location_id;
+      const { locationId, client } = resolveLocation(req);
+      if (!LOCATION_KEYS[locationId] && !secretOk(secretFrom(req))) {
+        return res.status(403).json({ error: AUTO_UNDERWRITE_SECRET ? "the secret sent doesn't match AUTO_UNDERWRITE_SECRET on the broker" : "set AUTO_UNDERWRITE_SECRET on the broker" });
+      }
+      const contactId = String(b.contactId || b.contact_id || b.contact?.id || b.customData?.contact_id || "").slice(0, 64);
+      if (!contactId) return res.status(400).json({ error: "contact_id required" });
+      const messageId = String(b.message_id || b.messageId || b.customData?.message_id || (b.message && typeof b.message === "object" ? b.message.id : "") || "").slice(0, 80);
+      const direction = String(b.direction || b.customData?.direction || b.call?.direction || "").toLowerCase();
+      const saved = await store.getOfferSettings(locationId);
+      const { skipped, job } = await startCallIntake({
+        client, locationId, saved, store, contactId, messageId, direction, sendsEnabled: CARD_SENDS_ENABLED,
+        deps: conversationDeps({ client, locationId, saved }),
+      });
+      if (skipped) return res.json({ ok: true, started: false, skipped });
+      res.status(202).json({ ok: true, started: true, jobId: job.id });
+    } catch (err) { fail(res, err); }
+  });
+  router.get("/automations/call", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ ok: true, jobs: listCallJobs(locationId).slice(-50) });
+    } catch (err) { fail(res, err); }
+  });
 
   /* ---- the follow-up clock ---- */
   // The preview is the point of this pair. An operator is being asked to let

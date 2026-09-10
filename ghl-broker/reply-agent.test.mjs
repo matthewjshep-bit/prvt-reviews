@@ -2010,3 +2010,58 @@ test("sending a blast draft records blast_sent and the buyer's lastBlastAt", asy
   assert.equal(marks.length, 1);
   assert.ok(marks[0][1].lastBlastAt);
 });
+
+/* ---------- a phone call as the inbound ---------- */
+
+test("a call transcript runs the pipeline: intent and numbers from what they said, a call_summary event, a text after the call that waits for its own allowlist slot", async () => {
+  _resetJobs();
+  const { client, notes } = ghlStub();
+  const store = fakeStore();
+  store.listOffers = async () => OFFERS;
+  const transcript = "US: hey Dana, how's the seller on Elm?\nTHEM: honestly they'd take four twenty five if you can close in two weeks. Roof is shot though.";
+  let seen;
+  const saved = { ...SAVED, conversationAi: { enabled: true, parties: { agent: { autoSend: { enabled: true, intents: ["question", "counter"] } } } } };
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: transcript, channel: "sms", sendsEnabled: true,
+    inboundKind: "call", call: { messageId: "m-call", direction: "outbound", at: "2026-09-10T17:50:00Z", durationSec: 190, dedupeKey: "call:m-call", transcript },
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "question", reply: "Good talking just now. I'll run Elm at that number with the roof and text you by tomorrow.", counterAmount: 0, propertyAddress: "12 Elm St", summary: "Seller would take 425k with a 2-week close; roof needs replacing." }; } },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(seen.inboundKind, "call");
+  assert.equal(seen.call.direction, "outbound");
+  assert.equal(seen.message, transcript, "the model reads the whole transcript");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.inboundKind, "call");
+  assert.match(d.inbound, /^\(call, 3 min\) US: hey Dana/);
+  assert.equal(d.call.messageId, "m-call");
+  // question is allowlisted, but the text after a call is its own slot
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /text after a call is not on the auto-send list/);
+  const ev = await store.listContactEvents("LOC", "c1", { types: ["call_summary"] });
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].dedupeKey, "call:m-call");
+  assert.equal(ev[0].data.intent, "question");
+  assert.match(ev[0].data.summary, /425k/);
+  assert.ok(notes.length >= 1);
+
+  // with the slot ticked it schedules like any reply
+  _resetJobs();
+  const store2 = fakeStore(); store2.listOffers = async () => OFFERS;
+  const saved2 = { ...SAVED, conversationAi: { enabled: true, parties: { agent: { autoSend: { enabled: true, intents: ["question", "call_followup"] } } } } };
+  const { job: j2 } = await startReply({ client, locationId: "LOC", saved: saved2, store: store2, contactId: "c1", message: transcript, channel: "sms", sendsEnabled: true,
+    inboundKind: "call", call: { messageId: "m-call-2", direction: "inbound", at: "2026-09-10T18:50:00Z", durationSec: 60, transcript },
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", reply: "Thanks for the call, numbers by tomorrow.", counterAmount: 0 }) } });
+  await settle();
+  assert.equal((await store2.getReplyDraft(j2.draftId)).status, "scheduled");
+
+  // "stop" inside a transcript is a word, not an opt-out
+  _resetJobs();
+  const store3 = fakeStore(); store3.listOffers = async () => OFFERS;
+  const { job: j3 } = await startReply({ client, locationId: "LOC", saved, store: store3, contactId: "c1", message: "THEM: we had to stop the inspection halfway, can you call back tomorrow", channel: "sms", sendsEnabled: true,
+    inboundKind: "call", call: { messageId: "m-call-3", direction: "inbound", at: "2026-09-10T19:50:00Z", durationSec: 60 },
+    deps: { draft: async () => ({ ...DRAFT, intent: "wants_call", reply: "Will do, I'll call tomorrow morning.", counterAmount: 0 }) } });
+  await settle();
+  assert.equal(j3.status, "done", j3.error);
+  assert.equal((await store3.getReplyDraft(j3.draftId)).intent, "wants_call");
+});

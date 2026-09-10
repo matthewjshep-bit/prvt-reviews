@@ -858,6 +858,40 @@ delay band and the hours:
   nothing until Monday; `all` treats Saturday like Tuesday; `none` sends
   nothing at all until Monday.
 
+### Phone calls as an inbound
+
+A finished call runs the same pipeline a text does. Wiring, in GHL:
+
+1. Turn on **call recording and transcription** for the numbers you use
+   (Settings → Phone Numbers → the number → call recording + transcription).
+   Without it there is nothing to read; the broker leaves a bare
+   `call_summary` event saying so.
+2. One workflow: trigger **Call Status** (filter: status *completed*; both
+   directions — your own calls to agents are the richest signal), action
+   **Webhook** `POST https://offers.shepflips.com/api/offers/automations/call`,
+   header `x-underwrite-secret` = `AUTO_UNDERWRITE_SECRET`, custom data
+   `location_id`, `contact_id`, and `message_id` if the trigger exposes it
+   (otherwise the broker takes the newest call on the contact in the last
+   six hours).
+3. The Private Integration needs `conversations/message.readonly` for the
+   transcription endpoint (it already has it for call transcripts in the
+   nightly sweep).
+
+What happens (`ghl-broker/call-intake.js`): the broker answers 202, waits for
+GHL's transcript (30s polls, up to ~10 minutes), then hands the transcript to
+the reply pipeline as `inboundKind: "call"`. Party, record book, intent and
+numbers are read from what THEY said; the actions fire as on a text (tier
+tags → pipeline, an underwrite on an address they named, offer marks, a
+booking under the calendar guard); profile facts are learned; a
+`call_summary` event with the one-line summary lands on the timeline (key
+`call:<messageId>`, so a workflow that fires twice reads the call once). The
+draft is the text a person sends right after hanging up. It sends itself only
+when **text after a call** (`call_followup`) is ticked on that party's
+auto-send list *and* the intent read from the call is allowed — a counter
+named on the phone still parks. "Stop" said in a call is a word, not an
+opt-out. Calls under 40 transcript characters are recorded and skipped.
+`GET /api/offers/automations/call` lists recent intake jobs.
+
 ### Booking calls (the calendar as a guard)
 
 Conversation AI page → "Booking calls". Pick a calendar (needs

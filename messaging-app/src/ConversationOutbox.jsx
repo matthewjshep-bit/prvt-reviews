@@ -195,7 +195,7 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
         </div>
       ) : (
         <div className="mt-1 text-xs text-slate-600">
-          <span className="text-slate-400">They said:</span> “{d.inbound}”
+          <span className="text-slate-400">{d.inboundKind === "call" ? "On the call:" : "They said:"}</span> “{d.inbound}”
         </div>
       )}
       {d.summary && <div className="mt-0.5 text-xs text-slate-500">{d.summary}</div>}

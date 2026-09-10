@@ -57,8 +57,8 @@ export const SILENT_INTENTS = new Set(["opt_out"]);
 // NEVER_AUTO, so autoEligible() offers them as checkboxes and an operator
 // opts a nudge into sending itself exactly the way they opt in a question.
 export const OUTBOUND_INTENTS = {
-  agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "outreach_nudge"],
-  investor: ["blast_open", "blast_nudge", "dataroom_nudge"],
+  agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "outreach_nudge", "call_followup"],
+  investor: ["blast_open", "blast_nudge", "dataroom_nudge", "call_followup"],
 };
 
 export const INTENT_LABEL = {
@@ -67,6 +67,7 @@ export const INTENT_LABEL = {
     realm_yes: "number is in the realm", realm_check: "floated our number", take_check: "floated our read",
     offer_nudge: "followed up on our offer",
     outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text",
+    call_followup: "text after a call",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
     wants_call: "wants a call", scheduling: "scheduling", proof_of_funds: "proof of funds",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
@@ -77,7 +78,7 @@ export const INTENT_LABEL = {
     wants_walkthrough: "wants to walk it", passing: "passing", wants_call: "wants a call",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
     blast_nudge: "followed up on a deal we sent", dataroom_nudge: "followed up after they opened the package",
-    blast_open: "sent them a deal (blast)",
+    blast_open: "sent them a deal (blast)", call_followup: "text after a call",
   },
 };
 
@@ -88,6 +89,7 @@ export const INTENT_GLOSS = {
   agent: {
     outreach_open: "the text it starts when a new agent is imported: saw their listing, we buy as-is for cash, anything distressed?",
     outreach_nudge: "a follow-up on that first text when nothing came back",
+    call_followup: "the text sent right after a phone call, drafted from the transcript: what we took from it and the next step",
     deal_available: "the listing we asked about (or one they've got) is available and needs work — condition, price expectations, seller timeline",
     investor_open: "no deal right now, but open to working with investors or happy for us to stay in touch",
     realm_yes: "says the number we floated works, is in the realm, or to go ahead and send the formal offer",
@@ -107,6 +109,7 @@ export const INTENT_GLOSS = {
   },
   investor: {
     blast_open: "the text that puts a deal in front of them: street, size, the work, the buyer price — sent to a shortlist, staggered",
+    call_followup: "the text sent right after a phone call, drafted from the transcript: what we took from it and the next step",
     media: "the message is only a photo or attachment",
     opt_out: "asks us to stop texting, says wrong number, or is plainly angry — reply with nothing at all",
     question: "asks something answerable from the thread or the deals in context",
