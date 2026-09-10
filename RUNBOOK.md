@@ -1003,6 +1003,22 @@ Private Integration. Pure plan: `shared/ghl-mirror.js`; writer:
 `ghl-broker/ghl-mirror.js`; `GET /api/dashboard/ghl/pipelines`,
 `POST /api/dashboard/ghl/mirror/run`.
 
+## Flow (the dashboard's landing tab)
+
+`/dashboard?view=flow` — the river. Twelve stages in two rows (acquisition:
+found → first text → replied → underwritten → offered → floated → countered
+→ under contract; disposition: blasted → opened → buyer → assigned/closed),
+each with its count in the window, a bar split violet (the machine on its
+own) / grey (a person), and arrows carrying the share of the previous stage
+that reached this one. Under it the Autopilot switchboard, the queue counts,
+and "What moved": every movement in the window, newest first, filterable to
+the machine / people / acquisition / disposition, with contact and offer
+links. Windows: today / 7 / 30 days, or a single past day. Polls every 30s
+while visible. Pure builder `shared/flow.js` (`buildFlow`, `machineDid`);
+route `GET /api/dashboard/flow?days=&end=&tz_offset=`, uncached local tier.
+The timeline renderer is `messaging-app/src/EventFeed.jsx`, shared with the
+contact drawer.
+
 ## Contact record (the app is the system of record; GHL is the digest)
 
 Every agent and investor has a record in the app: **facts** with provenance

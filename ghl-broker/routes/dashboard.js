@@ -29,6 +29,7 @@ import {
 import { offerFunnel, counterSpread, passReasons, followUpPerformance } from "../shared/funnel.js";
 import { buildPipeline } from "../shared/pipeline.js";
 import { autopilotSummary, graduationReport, GRADUATION } from "../shared/graduation.js";
+import { buildFlow } from "../shared/flow.js";
 import { listPipelines } from "../ghl.js";
 import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR } from "../ghl-mirror.js";
 import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_UNDERWRITE_ENABLED } from "../auto-underwrite.js";
@@ -220,6 +221,62 @@ export default function createDashboardRouter({ resolveLocation }) {
   // the offer book (lean), the open drafts, ninety days of events, the
   // in-memory underwrite jobs — and one pure function over them. The console
   // polls this every fifteen seconds, so it has to stay cheap.
+  // The switchboard, the same way for every route that shows it.
+  function autopilotFor({ saved, config, recentDrafts = [] }) {
+    const autopilot = autopilotSummary({
+      config, sendsEnabled: CARD_SENDS_ENABLED, underwriteLive: AUTO_UNDERWRITE_ENABLED,
+      underwriteWired: Boolean(process.env.AUTO_UNDERWRITE_SECRET || process.env.GHL_LOCATION_KEYS),
+      outreach: saved?.outreachAutopilot || null, importsEnabled: process.env.OUTREACH_IMPORTS_ENABLED === "true",
+      dispo: saved?.dispoAutopilot || null, blastsEnabled: process.env.DISPO_BLASTS_ENABLED === "true",
+      mirror: saved?.ghlMirror || null,
+    });
+    autopilot.readyToGraduate = graduationReport({ stats: draftStats(recentDrafts), config }).ready;
+    autopilot.windowDays = GRADUATION.windowDays;
+    return autopilot;
+  }
+
+  // The river: how work moved stage to stage in the window, the machine's
+  // share of each hop, the switchboard, the queue counts, and the feed.
+  // Same uncached local tier as /funnel and /pipeline.
+  const FLOW_EVENT_TYPES = [
+    "import", "outreach_sent", "text_summary", "call_summary", "offer_sent", "offer_revised", "offer_countered", "offer_passed",
+    "offer_no_response", "realm_yes", "realm_no", "deal_promoted", "deal_stage", "blast_sent", "dataroom_sent", "dataroom_viewed",
+    "investor_evaluating", "investor_committed", "investor_passed", "feedback", "follow_up_sent", "call_booked", "agent_estimate",
+  ];
+  router.get("/flow", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const { days, tzOffset, end } = readWindow(req);
+      const { startMs, endMs, startIso } = windowFor(days, tzOffset, end);
+      const now = Date.now();
+      const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
+      const [offers, events, drafts, saved, openDrafts, recentDrafts, investors] = await Promise.all([
+        store.listOffers(locationId, { limit: 2000, lean: true }),
+        store.listContactEventsSince(locationId, startIso, { types: FLOW_EVENT_TYPES, limit: 5000 }).catch(() => []),
+        store.listReplyDrafts(locationId, { since: startIso, limit: 1000 }).catch(() => []),
+        store.getOfferSettings(locationId).catch(() => null),
+        store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }).catch(() => []),
+        store.listReplyDrafts(locationId, { since: gradSince, limit: 1000 }).catch(() => []),
+        store.listInvestors(locationId, { limit: 2000 }).catch(() => []),
+      ]);
+      const config = conversationConfig(saved || {});
+      const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
+      const flow = buildFlow({ offers, events, drafts, jobs, now, windowStartMs: startMs, windowEndMs: endMs });
+      // Buyer names for the feed come from the investor book.
+      const names = {};
+      for (const i of investors) if (i?.contactId && i.name) names[i.contactId] = i.name;
+      for (const f of flow.feed) if (!f.contactName && names[f.contactId]) f.contactName = names[f.contactId];
+      const pipeline = buildPipeline({ offers, drafts: openDrafts, events: events.filter((e) => PIPELINE_EVENT_TYPES.includes(e.type)), jobs, config, contactNames: names, now });
+      res.json({
+        ok: true, now: new Date(now).toISOString(), window: { days, startIso, end },
+        ...flow,
+        autopilot: autopilotFor({ saved, config, recentDrafts }),
+        queue: pipeline.counts.actions,
+        conversationEnabled: config.enabled,
+      });
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/pipeline", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -238,15 +295,7 @@ export default function createDashboardRouter({ resolveLocation }) {
         store.listReplyDrafts(locationId, { since: gradSince, limit: 1000 }).catch(() => []),
       ]);
       const config = conversationConfig(saved || {});
-      const autopilot = autopilotSummary({
-        config, sendsEnabled: CARD_SENDS_ENABLED, underwriteLive: AUTO_UNDERWRITE_ENABLED,
-        underwriteWired: Boolean(process.env.AUTO_UNDERWRITE_SECRET || process.env.GHL_LOCATION_KEYS),
-        outreach: saved?.outreachAutopilot || null, importsEnabled: process.env.OUTREACH_IMPORTS_ENABLED === "true",
-        dispo: saved?.dispoAutopilot || null, blastsEnabled: process.env.DISPO_BLASTS_ENABLED === "true",
-        mirror: saved?.ghlMirror || null,
-      });
-      autopilot.readyToGraduate = graduationReport({ stats: draftStats(recentDrafts), config }).ready;
-      autopilot.windowDays = GRADUATION.windowDays;
+      const autopilot = autopilotFor({ saved, config, recentDrafts });
       const contactNames = {};
       for (const i of investors) if (i?.contactId && i.name) contactNames[i.contactId] = i.name;
       const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);

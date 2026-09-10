@@ -24,6 +24,7 @@ import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
 import ConversationAi from "./ConversationAi.jsx";
 import PipelineView from "./PipelineView.jsx";
+import FlowView from "./FlowView.jsx";
 import ContactDrawer from "./ContactDrawer.jsx";
 import { ContactDrawerContext } from "./ContactLink.jsx";
 import { getLocationId, getLocationKey, getOffer, getSettings } from "./api.js";
@@ -66,6 +67,7 @@ const NAV =
     // is a standing to-do list, and two banners sitting above the offer table
     // pushed the day's actual work below the fold.
     ? [
+        { view: "flow", label: "Flow" },
         { view: "dashboard", label: "Overview" },
         { view: "pipeline", label: "Pipeline" },
         { view: "conversation", label: "Conversation AI" },
@@ -300,6 +302,7 @@ export default function OfferApp() {
         )}
         {view === "conversation" && <ConversationAi settings={settings} />}
           {view === "pipeline" && <PipelineView />}
+        {view === "flow" && <FlowView />}
         {view === "outreach" && <AgentOutreach settings={settings} />}
         {view === "dispo" && <Dispositions />}
         {view === "dashboard" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}

@@ -15,7 +15,8 @@ import {
   ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake, MessageSquareQuote, Megaphone, FolderOpen, Phone,
   MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download, Circle, Trash2, Calculator, ClipboardList,
 } from "lucide-react";
-import { EVENT_LABEL, EVENT_ICON, FACT_KEYS, factKeysFor, AI_SOURCES, SOURCE_LABEL, groupByDay, PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
+import { EVENT_LABEL, FACT_KEYS, factKeysFor, AI_SOURCES, SOURCE_LABEL, groupByDay } from "@shared/contact-record.js";
+import { EventDayGroups, when, dayLabel } from "./EventFeed.jsx";
 import { PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { summarizeFeedback } from "@shared/conversation-ai.js";
 import { fmtMoney } from "@shared/offer-calc.js";
@@ -23,16 +24,9 @@ import { getContactProfile, saveContactFacts, addContactEvent, ghlContactUrl } f
 import { BTN, BTN_PRIMARY, Pill, StatusPill, StagePill } from "./ui.jsx";
 import { PartyPill, DraftRow } from "./ConversationOutbox.jsx";
 
-const ICONS = {
-  Send, RefreshCw: Revise, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
-  MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download, Calculator, ClipboardList,
-};
-const EventIcon = ({ type, size = 13 }) => { const I = ICONS[EVENT_ICON[type]] || Circle; return <I size={size} className="shrink-0" />; };
 const INPUT = "rounded-lg border border-slate-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none";
 const money = (v) => (Number(v) > 0 ? fmtMoney(Number(v)) : String(v));
 const fmtFact = (key, v) => (FACT_KEYS[key]?.number ? money(v) : FACT_KEYS[key]?.values ? String(v).replace(/_/g, " ") : v);
-const when = (iso) => { try { return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
-const dayLabel = (ymd) => { try { return new Date(`${ymd}T12:00:00`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }); } catch { return ymd; } };
 
 function SourceChip({ entry }) {
   const ai = AI_SOURCES.has(entry.source);
@@ -100,29 +94,6 @@ function FactsSection({ title, keys, record, busy, onRemove, onAdd }) {
   );
 }
 
-function eventLine(ev) {
-  const d = ev.data || {};
-  switch (ev.type) {
-    case "investor_passed":
-    case "feedback": return d.code ? `${PASS_REASON_LABEL[d.code] || d.code}${d.reasonNote ? ` — “${d.reasonNote}”` : ""}` : d.note || "";
-    case "text_summary":
-    case "call_summary": return d.summary || "";
-    case "note": return d.text || "";
-    case "fact_learned":
-    case "fact_removed": return `${FACT_KEYS[d.key]?.label || d.key}: ${fmtFact(d.key, d.value)}`;
-    case "tag_added":
-    case "tag_removed": return d.tag || "";
-    case "deal_stage": return String(d.stage || "").replace(/_/g, " ") + (d.note ? ` — ${d.note}` : "");
-    case "offer_sent":
-    case "offer_revised": return d.amountText ? `${d.amountText}${d.note ? ` — ${d.note}` : ""}` : d.note || "";
-    case "dataroom_viewed": return d.viewCount > 1 ? `view ${d.viewCount}` : "first view";
-    case "property_details": return PROPERTY_DETAIL_FIELDS.filter((f) => d[f.key] != null).map((f) => `${f.label.toLowerCase()}: ${f.number ? money(d[f.key]) : f.values ? String(d[f.key]).replace(/_/g, " ") : d[f.key]}`).join(" · ");
-    case "agent_estimate": return [d.arv ? `worth ${money(d.arv)} done` : "", d.rehab ? `about ${money(d.rehab)} of work` : ""].filter(Boolean).join(" · ") + (d.note ? ` — “${d.note}”` : "");
-    case "enrich_run": return d.summary || "";
-    case "import": return d.batchName ? `from batch ${d.batchName}` : "";
-    default: return d.note || "";
-  }
-}
 
 export default function ContactDrawer({ contactId, party: hint = null, onClose }) {
   const [rec, setRec] = useState(null);
@@ -224,26 +195,7 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
                 <button type="submit" disabled={busy || !note.trim()} className={BTN}><StickyNote size={12} /> Note</button>
               </form>
               {!rec.events.length && <div className="text-xs text-slate-400">Nothing yet. Fill the record from Settings, or pull from GHL above.</div>}
-              <ol className="space-y-2">
-                {shown.map((g) => (
-                  <li key={g.day}>
-                    <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{dayLabel(g.day)}</div>
-                    <ul className="space-y-0.5">
-                      {g.events.map((ev) => (
-                        <li key={ev.id || ev.dedupeKey || `${ev.type}:${ev.at}`} className="flex items-start gap-2 text-sm">
-                          <span className={`mt-1 ${AI_SOURCES.has(ev.source) ? "text-violet-500" : "text-slate-400"}`}><EventIcon type={ev.type} /></span>
-                          <span className="min-w-0 flex-1">
-                            <span className="font-medium text-slate-800">{EVENT_LABEL[ev.type] || ev.type}</span>
-                            {ev.address && <span className="text-slate-500"> · {ev.address}</span>}
-                            {eventLine(ev) && <span className="block text-xs text-slate-600">{eventLine(ev)}</span>}
-                          </span>
-                          <span className="shrink-0 text-[11px] text-slate-400" title={ev.source}>{when(ev.at).replace(/^[A-Za-z]+ \d+, /, "")}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </li>
-                ))}
-              </ol>
+              <EventDayGroups groups={shown} />
               {groups.length > 8 && !showAll && <button type="button" className={`${BTN} mt-2`} onClick={() => setShowAll(true)}>Show all {groups.length} days</button>}
             </Section>
 

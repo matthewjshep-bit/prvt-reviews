@@ -463,6 +463,8 @@ export const getDashboardPipeline = () =>
   fetch(`${API_BASE}/api/dashboard/pipeline?${locq()}`).then(j);
 export const floatOffer = (id, kind) =>
   post(`/api/offers/${encodeURIComponent(id)}/float`, { kind });
+export const getDashboardFlow = (days = 7, end = "") =>
+  fetch(`${API_BASE}/api/dashboard/flow?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
 export const getDashboardFunnel = (days = 30, end = "") =>
   fetch(`${API_BASE}/api/dashboard/funnel?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
 export const getDashboardTagCounts = (tags) =>
