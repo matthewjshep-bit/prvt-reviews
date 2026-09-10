@@ -117,6 +117,7 @@ function PipelineCard({ card, actionsById, draftsById, expanded, onToggle, sends
               <div className="mt-2 flex flex-wrap gap-2 text-xs">
                 {card.offerId && <a className="text-blue-700 hover:underline" href={linkFor("open_editor", card)} target="_blank" rel="noreferrer">Open the offer</a>}
                 {card.deal && <a className="text-blue-700 hover:underline" href={linkFor("open_deals", card)} target="_blank" rel="noreferrer">Open the deal</a>}
+                {card.deadReason === "fell_through" && card.offerId && <a className="text-rose-700 hover:underline" href={`${linkFor("open_deals", card)}&deal_id=${encodeURIComponent(card.offerId)}&postmortem=1`} target="_blank" rel="noreferrer">Post-mortem</a>}
               </div>
             </>
           )}

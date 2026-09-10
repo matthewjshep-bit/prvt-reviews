@@ -10,6 +10,9 @@ import {
 import { fmtMoney } from "@shared/offer-calc.js";
 import { INVESTOR_STATUSES, investorStatus } from "@shared/offer-status.js";
 import { summarizeFeedback } from "@shared/conversation-ai.js";
+import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL, buyerCeiling, codeFromPassReasons } from "@shared/post-mortem.js";
+import { ClipboardCheck } from "lucide-react";
+import PostMortemModal from "./PostMortemView.jsx";
 import {
   addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
   removeDeal, removeDealInvestor, searchContacts, suggestInvestors, updateDeal, updateDealInvestor,
@@ -344,6 +347,13 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   const [error, setError] = useState("");
   const [suggest, setSuggest] = useState(null); // null | {busy} | suggest-investors response | {error}
   const [matching, setMatching] = useState(false); // buy-box match modal open
+  // The fell-through form: a coded reason (the post-mortem counts it) and a
+  // line in your own words. Open when the pill is pressed; a stage change
+  // to fell_through goes through here and nowhere else.
+  const [fellForm, setFellForm] = useState(null); // null | { code, reason }
+  const [postMortemOpen, setPostMortemOpen] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("postmortem") === "1"; } catch { return false; }
+  });
   const termsDirty =
     String(terms.contractPrice) !== String(deal.contractPrice ?? "") ||
     String(terms.assignmentFee) !== String(deal.assignmentFee ?? "") ||
@@ -367,14 +377,23 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
 
   const setStage = (stage) => {
     if (stage === deal.stage) return;
-    let extra = {};
     if (stage === "fell_through") {
-      const reason = window.prompt("Why did it fall through? (optional — saved for your KPIs)", deal.fellThroughReason || "");
-      if (reason === null) return; // cancelled
-      extra = { fellThroughReason: reason };
+      const suggested = codeFromPassReasons(summarizeFeedback([...(deal.feedback || []), ...(deal.investors || []).filter((i) => i.reason?.code).map((i) => i.reason)]).byCode);
+      setFellForm({ code: deal.fellThroughCode || suggested, reason: deal.fellThroughReason || "" });
+      return;
     }
-    run(() => updateDeal(offer.id, { stage, ...extra }));
+    run(() => updateDeal(offer.id, { stage }));
   };
+  const saveFellThrough = () => {
+    const f = fellForm;
+    setFellForm(null);
+    run(() => updateDeal(offer.id, { stage: "fell_through", fellThroughCode: f.code, fellThroughReason: f.reason }));
+  };
+  // What a flipper's rule says the house is worth to them, against what the
+  // terms below ask. A readout, not a clamp — the number is still yours.
+  const ceiling = buyerCeiling({ offer, settings: settings || {}, fee: num(terms.assignmentFee) });
+  const asking = assignmentTotal(terms.contractPrice, terms.assignmentFee);
+  const overBy = ceiling.computable && asking ? asking - ceiling.noFee : 0;
 
   const saveTerms = () => run(() => updateDeal(offer.id, terms));
 
@@ -458,8 +477,27 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               </button>
             ))}
           </div>
-          {deal.stage === "fell_through" && deal.fellThroughReason && (
-            <div className="mt-1.5 text-xs text-slate-500">Reason: {deal.fellThroughReason}</div>
+          {fellForm && (
+            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="mb-1.5 text-xs font-semibold text-slate-700">Why did it fall through?</div>
+              <div className="flex flex-wrap gap-2">
+                <select className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm" value={fellForm.code}
+                  onChange={(e) => setFellForm((f) => ({ ...f, code: e.target.value }))}>
+                  {FELL_THROUGH_CODES.map((c) => <option key={c} value={c}>{FELL_THROUGH_LABEL[c]}</option>)}
+                </select>
+                <input className="min-w-[16rem] flex-1 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm" placeholder="In a line, for the post-mortem (optional)"
+                  value={fellForm.reason} onChange={(e) => setFellForm((f) => ({ ...f, reason: e.target.value }))} />
+                <button type="button" className={BTN} onClick={() => setFellForm(null)}>Cancel</button>
+                <button type="button" className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-900" disabled={busy} onClick={saveFellThrough}>Mark fell through</button>
+              </div>
+            </div>
+          )}
+          {deal.stage === "fell_through" && !fellForm && (deal.fellThroughReason || deal.fellThroughCode) && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              {deal.fellThroughCode && <span className="rounded-full bg-slate-200 px-2 py-0.5 font-semibold text-slate-700">{FELL_THROUGH_LABEL[deal.fellThroughCode] || deal.fellThroughCode}</span>}
+              {deal.fellThroughReason && <span>“{deal.fellThroughReason}”</span>}
+              <button type="button" className="underline decoration-slate-300 underline-offset-2 hover:text-slate-900" onClick={() => setFellForm({ code: deal.fellThroughCode || "other", reason: deal.fellThroughReason || "" })}>edit</button>
+            </div>
           )}
         </div>
 
@@ -486,6 +524,13 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   : "—"}
               </div>
               <div className="text-xs text-slate-500">Contract price + fee — what the end buyer pays.</div>
+              {ceiling.computable && (
+                <div className={`mt-1.5 rounded-md px-2 py-1 text-xs ${overBy > 0 ? "bg-amber-100 text-amber-900" : "bg-emerald-50 text-emerald-800"}`}
+                  title={`${ceiling.pct}% × ARV ${fmtMoney(ceiling.arv)} − repairs ${fmtMoney(ceiling.repairs)}. Every deal that fell through sat above this line; every one that sold sat at it.`}>
+                  Buyer ceiling ({ceiling.pct}% rule): <b>{fmtMoney(ceiling.noFee)}</b>
+                  {asking ? (overBy > 0 ? <> — this asks <b>{fmtMoney(overBy)}</b> more</> : <> — <b>{fmtMoney(-overBy)}</b> of room</>) : null}
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -655,6 +700,10 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 title="What every buyer said about this one, in their words, as a page for the listing agent">
                 <MessageSquare size={13} /> Buyer feedback
               </a>
+              <button type="button" onClick={() => setPostMortemOpen(true)} className={BTN}
+                title={deal.stage === "fell_through" ? "Why it died: the numbers against the buyer ceiling, what every buyer and the agent said, and what to do differently" : "The scorecard against the buyer ceiling, and the threads' reading"}>
+                <ClipboardCheck size={13} /> {deal.postMortem ? "Post-mortem" : "Write post-mortem"}
+              </button>
               <button type="button" onClick={() => onDataroom(offer)}
                 className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
                 title="Build a secure investor package and text personal links to your buyers">
@@ -670,6 +719,9 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
         </div>
       </div>
 
+      {postMortemOpen && (
+        <PostMortemModal offer={offer} onClose={() => setPostMortemOpen(false)} onUpdated={onUpdated} />
+      )}
       {matching && (
         <MatchInvestorsModal
           offer={offer}
@@ -685,7 +737,9 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
 export default function DealsView({ settings, onEdit }) {
   const [deals, setDeals] = useState(null);
   const [error, setError] = useState("");
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedId, setSelectedId] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("deal_id") || null; } catch { return null; }
+  });
   const [showTerminal, setShowTerminal] = useState(false);
   const [assigning, setAssigning] = useState(null);
   const [dataroom, setDataroom] = useState(null); // offer whose investor dataroom is open
@@ -726,12 +780,13 @@ export default function DealsView({ settings, onEdit }) {
     { label: "Active deals", value: active.length },
     { label: "Potential assignment fees", value: potentialFees ? fmtMoney(potentialFees) : "—" },
     { label: "Closed", value: closed.length },
+    { label: "Fell through", value: fell.length, hint: "Each one has a post-mortem — open the deal" },
   ];
 
   return (
     <>
       <div className="mb-3">
-        <KpiRow items={kpis} cols="sm:grid-cols-3" />
+        <KpiRow items={kpis} cols="sm:grid-cols-4" />
       </div>
 
       {deals.length === 0 ? (

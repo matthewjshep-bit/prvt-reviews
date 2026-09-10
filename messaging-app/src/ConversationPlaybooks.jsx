@@ -697,6 +697,12 @@ export function PartyPlaybooks({ config, patch, workflows }) {
               </Toggle>
               <p className={HINT}>Let it explain a number with our ARV and repair estimate when an agent pushes back. Off keeps that leverage until you decide.</p>
             </div>
+            <div>
+              <Toggle checked={pb.lessons?.enabled} onChange={(v) => setPb({ lessons: { ...(pb.lessons || {}), enabled: v } })}>
+                <span className="font-semibold">Carry the lessons</span>
+              </Toggle>
+              <p className={HINT}>Put the post-mortem digest from our own fell-through deals in front of it during a negotiation — the buyer line, "never past the ceiling", "a seller's break-even is not our number". Percentages only, never a dollar figure. The digest is the one saved on the dashboard's Lessons block; nothing here until a person saves one.</p>
+            </div>
           </div>
         )}
         <div className="rounded-lg border border-slate-200 p-3">

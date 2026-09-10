@@ -9,6 +9,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { makeClient } from "./ghl.js";
+import createPostMortemRouter from "./routes/post-mortem.js";
 import { maybeStartNightlySweep } from "./enrich-sweep.js";
 import createOffersRouter from "./routes/offers.js";
 import createOutreachRouter from "./routes/outreach.js";
@@ -134,6 +135,9 @@ function resolveLocation(req) {
 const CONVERSATION_SENDS_LIVE = process.env.CARD_SENDS_ENABLED === "true";
 const offersRouter = createOffersRouter({ resolveLocation, uploadDir: UPLOAD_DIR, publicBaseUrl: PUBLIC_BASE_URL, dataroomBaseUrl: DATAROOM_BASE_URL });
 app.use("/api/offers", offersRouter);
+// The post-mortem on a deal that fell through. Mounted beside the offers
+// router; its paths are all /:id/deal/postmortem, which GET /:id can't eat.
+app.use("/api/offers", createPostMortemRouter({ resolveLocation, feedbackFor: offersRouter.feedbackFor }));
 // The first text to an agent the outreach import just created: the
 // Conversation AI's cold open, drafted from the hook listing. Draft-only
 // unless outreach_open is on the agent allowlist.

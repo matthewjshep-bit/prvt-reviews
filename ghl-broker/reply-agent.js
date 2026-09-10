@@ -63,8 +63,7 @@ import {
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { resolveParty } from "./conversation-party.js";
 import {
-  loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold,
-} from "./conversation-context.js";
+  loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText } from "./conversation-context.js";
 import {
   buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext,
 } from "./conversation-prompt.js";
@@ -886,6 +885,10 @@ export async function assembleConversation({
     /* an opt-out needs the party and nothing else */
   } else if (party === "agent") {
     context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath) });
+    // The post-mortem digest rides along only when the switch is on AND a
+    // person saved a digest; the machine never writes one for itself.
+    const digestText = config.parties.agent?.lessons?.enabled ? lessonsContextText(saved?.postMortem?.digest) : "";
+    if (digestText) context = { ...context, text: [context.text, digestText].filter(Boolean).join("\n\n") };
     underwriting = listUnderwriteJobs(locationId)
       .filter((j) => j.contactId === contactId && (j.status === "running" || j.status === "queued"))
       .map((j) => j.address || "a property")

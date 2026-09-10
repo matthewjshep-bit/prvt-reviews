@@ -459,6 +459,17 @@ export const dealFeedbackUrl = (id, { names = "short" } = {}) => {
   if (names === "full") p.set("names", "full");
   return `${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/feedback.html?${p}`;
 };
+/* ---------- post-mortems ---------- */
+// The post-mortem on a deal that fell through: build (202 + poll), read, or
+// store a reading written by hand.
+export const buildPostMortem = (id, { refresh = false } = {}) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/postmortem?${locq()}${refresh ? "&refresh=1" : ""}`, { method: "POST" }).then(j);
+export const getPostMortem = (id) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/postmortem?${locq()}`).then(j);
+export const savePostMortemAnalysis = (id, analysis) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal/postmortem`, { analysis }, "PUT");
+export const getDashboardLessons = () =>
+  fetch(`${API_BASE}/api/dashboard/lessons?${locq()}`).then(j);
 export const getDashboardPipeline = () =>
   fetch(`${API_BASE}/api/dashboard/pipeline?${locq()}`).then(j);
 export const floatOffer = (id, kind) =>

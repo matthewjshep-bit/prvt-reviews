@@ -4,6 +4,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronUp, ExternalLink, FileSignature, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Sparkles, Trash2, X } from "lucide-react";
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
+import { buyerCeiling } from "@shared/post-mortem.js";
 import {
   addContactNote, cancelUnderwrite, createOffer, getContactDetail, getContactNotes, getUnderwrite,
   ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, runUnderwrite, saveDraft,
@@ -1048,6 +1049,18 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     }
   }, [inputs, effSettings]);
 
+  // The buyer ceiling beside the offer: what a flipper's rule says they will
+  // pay in total, so an offer that leaves no room for our fee reads as one
+  // before it is sent. A readout only — the three deals that fell through
+  // were all written above this line, and both that sold were written at it.
+  const ceiling = useMemo(() => {
+    if (!calc) return null;
+    const c = buyerCeiling({ offer: { arv: calc.inputs.arv, repairs: calc.inputs.repairs }, settings: effSettings, fee: effSettings.wholesaleFee });
+    if (!c.computable) return null;
+    const ask = Math.round(calc.offers.cash.amount) + Math.round(Number(effSettings.wholesaleFee) || 0);
+    return { ...c, ask, over: ask - c.noFee };
+  }, [calc, effSettings]);
+
   const contactName = mode === "existing" ? contact?.name || "" : newContact.name;
   const canCreate = Boolean(calc && (mode === "existing" ? contact?.id : newContact.phone.trim()));
 
@@ -1638,6 +1651,12 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               <>
                 <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Cash offer</div>
                 <div className="truncate text-lg font-black leading-tight tracking-tight">{fmtMoney(calc.offers.cash.amount)}</div>
+                {ceiling && (
+                  <div className={`truncate text-[11px] ${ceiling.over > 0 ? "font-semibold text-amber-700" : "text-slate-500"}`}
+                    title={`${ceiling.pct}% × ARV − repairs = ${fmtMoney(ceiling.noFee)}; this offer + the ${fmtMoney(effSettings.wholesaleFee)} fee = ${fmtMoney(ceiling.ask)}${ceiling.note ? `. ${ceiling.note}` : ""}`}>
+                    Buyer ceiling {fmtMoney(ceiling.noFee)} · offer + fee {ceiling.over > 0 ? `${fmtMoney(ceiling.over)} over` : `${fmtMoney(-ceiling.over)} under`}
+                  </div>
+                )}
               </>
             ) : (
               <span className="text-xs text-slate-400">Enter an ARV (or use comps) to see the offer.</span>

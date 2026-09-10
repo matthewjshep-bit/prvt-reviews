@@ -30,6 +30,8 @@ import { offerFunnel, counterSpread, passReasons, followUpPerformance } from "..
 import { buildPipeline } from "../shared/pipeline.js";
 import { autopilotSummary, graduationReport, GRADUATION } from "../shared/graduation.js";
 import { buildFlow } from "../shared/flow.js";
+import { lessons, dealScorecard } from "../shared/post-mortem.js";
+import { effectiveSettings } from "../shared/offer-calc.js";
 import { listPipelines } from "../ghl.js";
 import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR } from "../ghl-mirror.js";
 import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_UNDERWRITE_ENABLED } from "../auto-underwrite.js";
@@ -212,6 +214,41 @@ export default function createDashboardRouter({ resolveLocation }) {
           buyer: passReasons(inWindow, { by: "buyer" }),
         },
         followUps: followUpPerformance(nudges, inbound),
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // What the deals that died have to teach the next offer, beside the deals
+  // that sold. The scorecards are arithmetic on every deal; the post-mortems
+  // (written per deal by POST /api/offers/:id/deal/postmortem) carry the
+  // threads' reading. READ ONLY like /funnel: a recommendation here is a
+  // settings delta the operator applies with a click, never one the machine
+  // applies on its own.
+  router.get("/lessons", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const settings = effectiveSettings((await store.getOfferSettings(locationId)) || {});
+      const deals = await store.listDeals(locationId, { limit: 500 });
+      const postMortems = []; const controls = []; const pending = [];
+      for (const o of deals) {
+        const deal = o.deal || {};
+        if (deal.stage === "fell_through") {
+          if (deal.postMortem) postMortems.push(deal.postMortem);
+          else pending.push({ offerId: o.id, address: o.address, scorecard: dealScorecard({ offer: o, settings, feedback: deal.feedbackPackage || null }) });
+        } else if (["closed", "assigned", "buyer_found"].includes(deal.stage)) {
+          controls.push(dealScorecard({ offer: o, settings, feedback: deal.feedbackPackage || null }));
+        }
+      }
+      // A fell-through deal with no post-mortem yet still counts by its numbers.
+      const all = [...postMortems, ...pending.map((p) => ({ offerId: p.offerId, address: p.address, street: String(p.address || "").split(",")[0], scorecard: p.scorecard, negotiation: null }))];
+      const out = lessons({ postMortems: all, controls, settings });
+      const secrets = ["aiApiKey", "compsApiKey", "apifyToken", "captureToken", "rentcastApiKey", "googleApiKey", "zillowRapidApiKey"];
+      res.json({ ok: true, ...out,
+        deals: all.map((pm) => ({ offerId: pm.offerId, address: pm.address, street: pm.street, hasPostMortem: Boolean(pm.analysis) || postMortems.includes(pm), generatedAt: pm.generatedAt || null, scorecard: pm.scorecard })),
+        controls: controls.map((sc) => ({ offerId: sc.offerId, address: sc.address, street: sc.street, outcome: sc.outcome, scorecard: sc })),
+        digestSaved: settings.postMortem?.digest || "",
+        digestSavedAt: settings.postMortem?.digestSavedAt || null,
+        secretsPresent: Object.fromEntries(secrets.map((k) => [k, Boolean(settings[k])])),
       });
     } catch (err) { fail(res, err); }
   });

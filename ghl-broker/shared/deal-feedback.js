@@ -92,7 +92,7 @@ const OPT_OUT_RE = /^\s*(stop|unsubscribe|remove me|wrong (number|person)|who is
 // A plain no, with or without a reason.
 const NO_RE = /^\s*(no\b|nope|pass\b|i('ll| will) pass|not (for me|interested|this one|right now|looking)|no thank|not a good fit|thanks,? but|i'?m (good|ok)\b)/i;
 // How a buyer says no, or names a number, without naming the house.
-const PASS_RE = /\bpass(ing|ed)?\b|not interested|no thanks|too (far|much|high|tight|small|big)|can'?t (do|make)|won'?t work|not (ready|for me|this one|right now)|aggressive|wiggle|closer to|tighter|doesn'?t (work|pencil)|way (over|more)/i;
+export const PASS_RE = /\bpass(ing|ed)?\b|not interested|no thanks|too (far|much|high|tight|small|big)|can'?t (do|make)|won'?t work|not (ready|for me|this one|right now)|aggressive|wiggle|closer to|tighter|doesn'?t (work|pencil)|way (over|more)/i;
 const mentions = (text, words) => { const t = String(text || "").toLowerCase(); return words.some((w) => t.includes(w)); };
 // The sentences of a message that are about THIS house: any that name it or
 // carry a "no", plus the sentence that follows a naming one. Whole message
@@ -279,7 +279,9 @@ export function buildFeedbackPackage({ offer, buyers = [], recipients = [], room
     const text = [...r.quotes.filter((q) => q.namesDeal).map((q) => q.text), r.reason?.note || ""].join(" ");
     const named = [...text.matchAll(/\$?\s?(\d{3})\s?k\b|\$(\d{3}),(\d{3})\b/gi)]
       .map((m) => (m[1] ? Number(m[1]) * 1000 : Number(m[2] + m[3])))
-      .filter((n) => n >= pitch.price * 0.6 && n < pitch.price);
+      // Strictly under what they were asked, with a hair of room: "843k" back
+      // at a $843,121 pitch is our number rounded, not theirs.
+      .filter((n) => n >= pitch.price * 0.6 && n < pitch.price * 0.995);
     if (named.length) askedFor.push({ contactId: r.contactId, shortName: r.shortName, name: r.name, amount: Math.min(...named) });
   }
 

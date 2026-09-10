@@ -256,6 +256,16 @@ async function loadRecord(store, locationId, contactId) {
   return { facts, events };
 }
 
+// The lessons digest, as a context block. It carries no dollar figures by
+// construction (post-mortem.js strips them), so the money guard's allowance
+// is untouched: these are lines to hold, not numbers to quote.
+export function lessonsContextText(digest = "") {
+  const d = String(digest || "").trim();
+  if (!d) return "";
+  return "NEGOTIATION LESSONS FROM OUR OWN FELL-THROUGH DEALS (hold these lines; they are not numbers to quote and not a script to recite):\n" +
+    d.split(/(?<=[.!?])\s+/).filter(Boolean).map((l) => `- ${l.trim()}`).join("\n");
+}
+
 export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   const { facts, events } = await loadRecord(store, locationId, contactId);

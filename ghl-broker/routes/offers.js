@@ -72,6 +72,7 @@ import {
 } from "../follow-up-sweep.js";
 import { dueStep } from "../shared/follow-up.js";
 import { autoAcceptCeiling } from "../shared/auto-accept.js";
+import { buyerCeiling, normalizeFellThroughCode, FELL_THROUGH_LABEL } from "../shared/post-mortem.js";
 import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, buildNetSheetDocument, moneyInWords } from "../offer-doc.js";
 import { renderContractPdf } from "../contract-pdf.js";
 import { renderPsaPdf } from "../psa-pdf.js";
@@ -3008,6 +3009,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       inspectionDate: dealStr(body.inspectionDate, 40) || inspectionDefault,
       notes: "",
       fellThroughReason: "",
+      fellThroughCode: "",
       investors: [],
       ghl: { tag: false, note: false },
     };
@@ -3016,6 +3018,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
     // Mark the agent contact in GHL — best-effort, never fails the promote.
     const warnings = [];
+    // The buyer ceiling at the moment we contracted: what a flipper's 70%
+    // rule says the house is worth to them, against what we are about to ask.
+    // Recorded so the post-mortem can't be argued with later, and surfaced as
+    // a warning — never a block; the operator may know something the rule
+    // doesn't.
+    try {
+      const ceiling = buyerCeiling({ offer, settings, fee: assignmentFee });
+      offer.deal.ceilingAtPromote = ceiling;
+      const asking = (contractPrice || 0) + (assignmentFee || 0);
+      if (ceiling.computable && asking > ceiling.noFee) {
+        warnings.push(`buyer ceiling: contract + fee is ${fmtMoney(asking)}, ${fmtMoney(asking - ceiling.noFee)} over the ${ceiling.pct}% line (${fmtMoney(ceiling.noFee)}) — buyers have passed on every deal that sat here`);
+      }
+    } catch { /* the readout is a courtesy */ }
     const noteFailure = (step, e) => {
       console.error(`offers: deal attach failed [${step}] contact=${offer.contactId}:`, e?.message);
       warnings.push(`${step}: ${e.message}`);
@@ -3285,6 +3300,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     return pkg;
   }
 
+  // The post-mortem router reads the same package through this, so the two
+  // pages never disagree about what the buyers said.
+  router.feedbackFor = (args) => feedbackCached({ pitch: null, tags: [], deep: false, refresh: false, ...args });
+
   // Find everyone the house was pitched to by reading the conversations —
   // for a blast fired from a GHL workflow, which the app never saw. Records
   // a blast_sent event per recipient; run once per deal.
@@ -3347,6 +3366,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const deal = offer.deal;
       const b = req.body || {};
       let stageChanged = false;
+      // Validate everything before touching the deal: the store can hand back
+      // the same object on the next request, so a rejected body must not have
+      // half-applied itself.
+      const fellThroughCode = b.fellThroughCode !== undefined ? normalizeFellThroughCode(b.fellThroughCode) : undefined;
+      if (b.fellThroughCode && !fellThroughCode) {
+        return res.status(400).json({ error: `fellThroughCode must be one of: ${Object.keys(FELL_THROUGH_LABEL).join(", ")}` });
+      }
       if (b.stage !== undefined) {
         if (!DEAL_STAGES.includes(b.stage)) {
           return res.status(400).json({ error: `stage must be one of: ${DEAL_STAGES.join(", ")}` });
@@ -3363,6 +3389,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (b.inspectionDate !== undefined) deal.inspectionDate = dealStr(b.inspectionDate, 40);
       if (b.notes !== undefined) deal.notes = dealStr(b.notes, 4000);
       if (b.fellThroughReason !== undefined) deal.fellThroughReason = dealStr(b.fellThroughReason, 200);
+      if (fellThroughCode !== undefined) deal.fellThroughCode = fellThroughCode;
       deal.updatedAt = new Date().toISOString();
       await store.updateOffer(offer.id, offer);
       // Re-price the investor package off the new terms. The rest of its
@@ -3374,7 +3401,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
           historyLine(deal.updatedAt, offer.address, deal.stage.replace(/_/g, " "),
             deal.stage === "fell_through" ? deal.fellThroughReason : ""),
-          { type: deal.stage === "under_contract" ? "deal_promoted" : "deal_stage", offerId: offer.id, dealId: offer.id, source: "deal", at: deal.updatedAt, data: { stage: deal.stage } });
+          { type: deal.stage === "under_contract" ? "deal_promoted" : "deal_stage", offerId: offer.id, dealId: offer.id, source: "deal", at: deal.updatedAt,
+            // The reason rides on the event too, so the location-wide event
+            // stream can answer "why do our deals die" without opening each deal.
+            data: { stage: deal.stage, ...(deal.stage === "fell_through" ? { reason: deal.fellThroughReason || "", code: deal.fellThroughCode || "" } : {}) } });
         // A move into/out of closed|fell_through flips whether this deal keeps
         // its investors tagged as on a live deal.
         for (const inv of deal.investors) {

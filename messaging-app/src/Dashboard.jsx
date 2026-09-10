@@ -13,6 +13,7 @@
 // comes from legend swatches and tooltip line-keys.
 
 import FunnelView from "./FunnelView.jsx";
+import LessonsView from "./LessonsView.jsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Pencil, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
@@ -734,6 +735,13 @@ export default function Dashboard({ settings, onSettingsSaved }) {
       <div>
         <h2 className="mb-2 text-sm font-bold">Outcomes</h2>
         <FunnelView days={viewDays} end={endDate} />
+      </div>
+
+      {/* What the deals that died have to teach. Read-only until a person
+          presses Apply on a recommendation. */}
+      <div>
+        <h2 className="mb-2 text-sm font-bold">Lessons from deals that fell through</h2>
+        <LessonsView onSettingsSaved={onSettingsSaved} />
       </div>
     </div>
   );

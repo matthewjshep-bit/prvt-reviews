@@ -10,6 +10,21 @@ import {
   applyDraftAction, deleteOffer, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
   runFollowUps, setOfferStatus, updateDeal,
 } from "./api.js";
+import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL } from "@shared/post-mortem.js";
+
+// Why it fell through, asked the same way the Deals modal asks: a coded
+// reason (so the post-mortem can count it) and a line in your own words.
+// Cancel on either aborts — a fell-through with no reason is the data gap
+// this exists to close.
+export function askFellThrough(item) {
+  const menu = FELL_THROUGH_CODES.map((c, i) => `${i + 1}. ${FELL_THROUGH_LABEL[c]}`).join("\n");
+  const pick = window.prompt(`Why did ${item.address || "this deal"} fall through? Type a number:\n\n${menu}`, "1");
+  if (pick === null) return null;
+  const code = FELL_THROUGH_CODES[Math.max(0, Math.min(FELL_THROUGH_CODES.length - 1, (parseInt(pick, 10) || 1) - 1))];
+  const reason = window.prompt("In a line, for the post-mortem (optional):", "");
+  if (reason === null) return null;
+  return { stage: "fell_through", fellThroughCode: code, fellThroughReason: reason };
+}
 
 // Ops that open somewhere rather than change something.
 export function linkFor(key, item) {
@@ -23,7 +38,6 @@ export function linkFor(key, item) {
 // Ops a person should be asked about first: they end something.
 export const CONFIRM = {
   drop: (i) => `Drop the held underwrite on ${i.address || "this property"}? The draft is deleted.`,
-  fell_through: (i) => `Mark ${i.address || "this deal"} as fallen through?`,
   mark_passed: (i) => `Mark the offer on ${i.address || "this property"} as passed?`,
 };
 
@@ -36,7 +50,10 @@ export async function runOp(key, item) {
     case "mark_no_response":   return setOfferStatus(item.offerId, "no_response", "from the pipeline board");
     case "mark_passed":        return setOfferStatus(item.offerId, "passed", "from the pipeline board");
     case "mark_closed":        return updateDeal(item.offerId, { stage: "closed" });
-    case "fell_through":       return updateDeal(item.offerId, { stage: "fell_through" });
+    case "fell_through": {
+      const patch = askFellThrough(item);
+      return patch ? updateDeal(item.offerId, patch) : null;
+    }
     case "advance":            return updateDeal(item.offerId, { stage: "buyer_found" });
     case "match_investors":    return matchInvestorsToDeal(item.offerId);
     case "preview_follow_ups": return getFollowUps(true);

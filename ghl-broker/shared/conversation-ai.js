@@ -323,6 +323,9 @@ const PLAYBOOK = () => ({
   // before the formal offer goes. Sends itself only if realm_check is on the
   // party's auto-send list.
   realmCheck: { enabled: false },
+  // The lessons digest from our own fell-through deals, in the agent
+  // context. Off: the digest exists only once a person saved it.
+  lessons: { enabled: false },
   // The formal offer, sent by the machine. `onClearUnderwrite`: when an
   // auto-underwrite clears every gate on an agent who has already talked to
   // us, send the documents without a realm check — inside the auto-send
@@ -559,6 +562,9 @@ function normalizePlaybook(p, party, seed = {}) {
     showMath: bool(src.showMath, false),
     realmCheck: { enabled: bool(src.realmCheck?.enabled, false) },
     takeCheck: { enabled: bool(src.takeCheck?.enabled, false) },
+    // May the bot carry the post-mortem digest (percentages only, never a
+    // dollar figure) into an agent negotiation? Off until a person reads it.
+    lessons: { enabled: bool(src.lessons?.enabled, false) },
     outreach: { enabled: bool(src.outreach?.enabled, false) },
     sendOffer: (() => {
       const so = src.sendOffer && typeof src.sendOffer === "object" ? src.sendOffer : {};

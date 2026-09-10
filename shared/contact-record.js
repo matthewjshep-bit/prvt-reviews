@@ -50,6 +50,8 @@ export const EVENT_TYPES = [
   // The bot (or a person) put a call or a visit on the calendar.
   "call_booked",
   "call_summary", "text_summary", "note",
+  // A deal post-mortem was written to the record (by the machine or by hand).
+  "post_mortem_built",
   "enrich_run", "tag_added", "tag_removed",
   "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate", "property_details",
 ];
@@ -69,6 +71,7 @@ export const EVENT_LABEL = {
   follow_up_sent: "we followed up",
   outreach_sent: "we reached out about their listing",
   call_booked: "call booked",
+  post_mortem_built: "post-mortem written",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -85,6 +88,7 @@ export const EVENT_ICON = {
   follow_up_sent: "BellRing",
   outreach_sent: "Send",
   call_booked: "CalendarCheck",
+  post_mortem_built: "ClipboardCheck",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast"];
@@ -477,7 +481,7 @@ export function offerEvents(offer) {
   stages.forEach((s, i) => {
     if (!s?.stage || !s.ts) return;
     if (i === 0 || s.stage === "under_contract") push(agent, "agent", { ...dealBase, type: "deal_promoted", at: s.ts, data: { stage: "under_contract" } });
-    else push(agent, "agent", { ...dealBase, type: "deal_stage", at: s.ts, data: { stage: s.stage, ...(s.stage === "fell_through" && deal.fellThroughReason ? { note: deal.fellThroughReason } : {}) } });
+    else push(agent, "agent", { ...dealBase, type: "deal_stage", at: s.ts, data: { stage: s.stage, ...(s.stage === "fell_through" && deal.fellThroughReason ? { note: deal.fellThroughReason } : {}), ...(s.stage === "fell_through" && deal.fellThroughCode ? { code: deal.fellThroughCode } : {}) } });
   });
   // Every buyer's standing on it.
   for (const inv of deal.investors || []) {
