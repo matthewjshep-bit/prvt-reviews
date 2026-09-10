@@ -59,14 +59,18 @@ const tagEvents = ({ store, locationId, contactId, draft, type, tags }) =>
   })));
 
 const EXECUTORS = {
-  async add_tags({ client, contactId, action, store, locationId, draft }) {
+  async add_tags({ client, contactId, action, store, locationId, draft, deps }) {
     await addContactTags(client, contactId, action.tags);
     await tagEvents({ store, locationId, contactId, draft, type: "tag_added", tags: action.tags });
+    // A tier moved: the GHL pipeline mirror hears about it now, not at the
+    // next quarter hour. Best effort.
+    if (typeof deps?.onTagsChanged === "function") await deps.onTagsChanged({ contactId, tags: action.tags, party: draft?.party || null }).catch(() => {});
     return `tagged ${action.tags.join(", ")}`;
   },
-  async remove_tags({ client, contactId, action, store, locationId, draft }) {
+  async remove_tags({ client, contactId, action, store, locationId, draft, deps }) {
     await removeContactTags(client, contactId, action.tags);
     await tagEvents({ store, locationId, contactId, draft, type: "tag_removed", tags: action.tags });
+    if (typeof deps?.onTagsChanged === "function") await deps.onTagsChanged({ contactId, tags: action.tags, party: draft?.party || null }).catch(() => {});
     return `removed ${action.tags.join(", ")}`;
   },
   async set_field({ client, locationId, contactId, action, draft, store }) {

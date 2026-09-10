@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mirrorOffer, reconcileLocation } from "./ghl-mirror.js";
+import { mirrorOffer, reconcileLocation, mirrorAgent, reconcileAgents } from "./ghl-mirror.js";
 
 const cfg = { enabled: true,
-  acquisitions: { pipelineId: "pA", stages: { ready: "s-ready", sent: "s-sent", dead: "s-dead", won: "s-won" } },
+  acquisitions: { mode: "lanes", pipelineId: "pA", stages: { ready: "s-ready", sent: "s-sent", dead: "s-dead", won: "s-won" } },
   dispositions: { pipelineId: "pD", stages: { under_contract: "d-uc", closed: "d-closed" } } };
 const fakeGhl = () => {
   const calls = []; let n = 0;
@@ -85,4 +85,70 @@ test("the reconcile writes only what differs, bounded per tick", async () => {
   const bounded = fakeStore([offer({ id: "x" }), offer({ id: "y" }), offer({ id: "z" })]);
   const b = await reconcileLocation({ client: {}, locationId: "L", saved: { ghlMirror: cfg }, store: bounded, ghl: fakeGhl().api, limit: 2 });
   assert.equal(b.wrote, 2);
+});
+
+/* ---------- agents by tier ---------- */
+
+const tiersCfg = { enabled: true, acquisitions: { mode: "tiers", pipelineId: "pA", pipelineName: "Acquisitions", stages: { "tier-1": "s1", "tier-2": "s2", "tier-3": "s3" } }, dispositions: {} };
+const fakeGhlWithContacts = (contacts = {}) => {
+  const base = fakeGhl();
+  base.api.getContact = async (_c, id) => { base.calls.push(["getContact", id]); return contacts[id] || { id, tags: [] }; };
+  return base;
+};
+const agentStore = ({ profiles = [], offers = [], events = [] } = {}) => ({
+  profiles: new Map(profiles.map((p) => [p.contactId, p])),
+  docs: new Map(offers.map((o) => [o.id, o])),
+  events,
+  cursors: new Map(),
+  async listContactProfiles() { return [...this.profiles.values()]; },
+  async upsertContactProfile(l, id, patch) { const prev = this.profiles.get(id) || { contactId: id }; const next = { ...prev, ...patch }; this.profiles.set(id, next); return next; },
+  async getContactProfile(l, id) { return this.profiles.get(id) || null; },
+  async listOffers() { return [...this.docs.values()]; },
+  async getOffer(id) { return this.docs.get(id) || null; },
+  async updateOffer(id, doc) { this.docs.set(id, doc); return true; },
+  async listContactEventsSince(l, since, { types } = {}) { return this.events.filter((e) => e.at >= since && (!types || types.includes(e.type))); },
+  async getJobCursor(l, k) { return this.cursors.get(`${l}|${k}`) || null; },
+  async setJobCursor(l, k, v) { this.cursors.set(`${l}|${k}`, v); },
+});
+
+test("an agent lands in the stage their tier tag maps to, is remembered, and only moves when the tier does", async () => {
+  const { calls, api } = fakeGhlWithContacts();
+  const store = agentStore({ profiles: [{ contactId: "c1", party: "agent", name: "Dana Reyes", tags: ["agent", "tier-2"], ghlSeenAt: new Date().toISOString() }],
+    offers: [{ id: "o1", contactId: "c1", address: "12 Elm St", cashAmount: 410000, status: "sent", createdAt: "2026-09-01T00:00:00Z" }] });
+  const r = await mirrorAgent({ client: {}, locationId: "L", contactId: "c1", config: tiersCfg, store, ghl: api, profile: store.profiles.get("c1"), offers: [...store.docs.values()] });
+  assert.equal(r.wrote, true);
+  assert.equal(r.tier, "tier-2");
+  const create = calls.find(([k]) => k === "create");
+  assert.equal(create[1].stageId, "s2");
+  assert.equal(create[1].name, "Dana Reyes");
+  assert.equal(create[1].value, 410000);
+  // same again: nothing
+  const again = await mirrorAgent({ client: {}, locationId: "L", contactId: "c1", config: tiersCfg, store, ghl: api, profile: store.profiles.get("c1"), offers: [...store.docs.values()] });
+  assert.equal(again.skipped, true);
+  // the bot moved them to tier 1 (an app event after the GHL snapshot): one update, to s1
+  const ev = [{ contactId: "c1", type: "tag_added", at: new Date(Date.now() + 1000).toISOString(), data: { tag: "tier-1" } }];
+  const moved = await mirrorAgent({ client: {}, locationId: "L", contactId: "c1", config: tiersCfg, store, ghl: api, profile: store.profiles.get("c1"), events: ev, offers: [...store.docs.values()] });
+  assert.equal(moved.wrote, true);
+  const upd = calls.find(([k]) => k === "update");
+  assert.equal(upd[2].stageId, "s1");
+});
+
+test("the agent reconcile refreshes stale tag snapshots from GHL (bounded) and treats a live deal as tier 1", async () => {
+  const { calls, api } = fakeGhlWithContacts({ stale: { id: "stale", firstName: "Lee", lastName: "Chen", tags: ["tier-3"] }, other: { id: "other", tags: ["tier-2"] } });
+  const old = new Date(Date.now() - 3 * 86400000).toISOString();
+  const store = agentStore({
+    profiles: [{ contactId: "stale", party: "agent", name: "", tags: [], ghlSeenAt: old }, { contactId: "other", party: "agent", name: "Sam", tags: [], ghlSeenAt: old }],
+    offers: [{ id: "o9", contactId: "dealer", contactName: "Priya", address: "9 Deal St", cashAmount: 300000, status: "accepted", deal: { stage: "under_contract" }, createdAt: "2026-09-01T00:00:00Z" }],
+  });
+  const r = await reconcileAgents({ client: {}, locationId: "L", saved: { ghlMirror: tiersCfg }, store, ghl: api, refreshLimit: 1 });
+  assert.equal(r.considered, 3, "two profiles and one agent known only through an offer");
+  assert.equal(r.refreshed, 1, "one refresh a pass under the budget");
+  const refreshedId = calls.find(([k]) => k === "getContact")[1];
+  assert.equal(store.profiles.get(refreshedId).tags.length > 0, true, "the snapshot was updated");
+  const creates = calls.filter(([k]) => k === "create").map(([, b]) => [b.contactId, b.stageId]);
+  assert.ok(creates.some(([id, st]) => id === "dealer" && st === "s1"), "a live deal is tier 1 whatever the tags say");
+  assert.ok(creates.some(([id, st]) => id === refreshedId && (st === "s3" || st === "s2")), "the refreshed agent landed in the tier GHL holds");
+  // off, or lanes mode: no agent pass
+  const off = await reconcileAgents({ client: {}, locationId: "L", saved: { ghlMirror: { ...tiersCfg, acquisitions: { ...tiersCfg.acquisitions, mode: "lanes" } } }, store, ghl: api });
+  assert.equal(off.considered, 0);
 });

@@ -21,9 +21,21 @@ export const DISPO_STAGES = ["under_contract", "buyer_found", "assigned", "close
 // simply marked lost in whatever stage it last sat.
 export const ACQ_TERMINAL = ["dead", "won"];
 
+// The agent's tier, as the Acquisitions pipeline in GHL actually reads:
+// Tier 1 (has a deal / new property), Tier 2 (open to investors), Tier 3
+// (passed / no fit). A property of the AGENT, kept as tags the Conversation
+// AI's rules write. In "tiers" mode the acquisitions side is one
+// opportunity per agent in the stage their tier maps to.
+export const TIER_TAGS = ["tier-1", "tier-2", "tier-3"];
+export const TIER_KEYS = [...TIER_TAGS, "none"];
+export const ACQ_MODES = ["tiers", "lanes"];
+
 export const MIRROR_DEFAULTS = Object.freeze({
   enabled: false,
-  acquisitions: { pipelineId: "", pipelineName: "", stages: {} },   // lane → stageId
+  // mode "tiers": one opportunity per AGENT, stage = their tier (stages keyed
+  // tier-1 / tier-2 / tier-3 / none). mode "lanes": one per PROPERTY, stage =
+  // the board's lane (stages keyed ready / floated / …).
+  acquisitions: { mode: "tiers", pipelineId: "", pipelineName: "", stages: {} },
   dispositions: { pipelineId: "", pipelineName: "", stages: {} },   // stage → stageId
   valueField: "cash",   // what monetaryValue carries on the agent side: our cash offer
 });
@@ -38,9 +50,10 @@ export function normalizeMirror(v = {}) {
     for (const k of keys) if (x.stages?.[k]) stages[k] = str(x.stages[k]);
     return { pipelineId: str(x.pipelineId), pipelineName: str(x.pipelineName, 120), stages };
   };
+  const acqMode = ACQ_MODES.includes(o.acquisitions?.mode) ? o.acquisitions.mode : "tiers";
   return {
     enabled: o.enabled === true,
-    acquisitions: side(o.acquisitions, [...ACQ_LANES, ...ACQ_TERMINAL]),
+    acquisitions: { mode: acqMode, ...side(o.acquisitions, acqMode === "tiers" ? TIER_KEYS : [...ACQ_LANES, ...ACQ_TERMINAL]) },
     dispositions: side(o.dispositions, DISPO_STAGES),
     valueField: o.valueField === "none" ? "none" : "cash",
   };
@@ -65,7 +78,9 @@ export function mirrorPlan({ offer, config } = {}) {
   const value = c.valueField === "none" ? 0 : Math.round(Number(offer.cashAmount) || 0);
 
   const acq = c.acquisitions;
-  if (acq.pipelineId) {
+  // In tiers mode the acquisitions side belongs to the agent (agentPlan),
+  // not the property.
+  if (acq.pipelineId && acq.mode !== "tiers") {
     if (placed.side === "agent") {
       const dead = placed.lane === "dead";
       const stageId = dead ? (acq.stages.dead || null) : (acq.stages[placed.lane] || null);
@@ -98,4 +113,58 @@ export function mirrorDiff(current, target) {
     || (target.stageId && current.stageId !== target.stageId)
     || current.status !== target.status
     || Math.round(Number(current.value) || 0) !== Math.round(Number(target.value) || 0);
+}
+
+/* ---------- the agent's tier ---------- */
+
+const TIER_RANK = { "tier-1": 3, "tier-2": 2, "tier-3": 1 };
+const tagKey = (t) => String(t || "").trim().toLowerCase();
+
+/**
+ * tierFrom({ tags, events, ghlSeenAt, hasLiveDeal }) → "tier-1" | "tier-2" | "tier-3" | "none"
+ *
+ * The truth for an agent's tier, assembled the way the record is: the tags
+ * GHL showed us last (the snapshot on the profile), with every tag the app
+ * added or removed SINCE that snapshot replayed on top — the app writes
+ * tier tags through its actions and records each as an event, so a tier
+ * moved a minute ago is right even before GHL is read again. When more
+ * than one tier tag is present, the highest wins. A live deal on any of
+ * their properties is Tier 1 whatever the tags say.
+ */
+export function tierFrom({ tags = [], events = [], ghlSeenAt = null, hasLiveDeal = false } = {}) {
+  if (hasLiveDeal) return "tier-1";
+  const set = new Set((tags || []).map(tagKey).filter((t) => TIER_RANK[t]));
+  const since = ghlSeenAt ? Date.parse(ghlSeenAt) : 0;
+  const replay = (events || [])
+    .filter((e) => (e.type === "tag_added" || e.type === "tag_removed") && TIER_RANK[tagKey(e.data?.tag)])
+    .filter((e) => !since || Date.parse(e.at) > since)
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  for (const e of replay) {
+    const t = tagKey(e.data.tag);
+    if (e.type === "tag_added") set.add(t); else set.delete(t);
+  }
+  let best = "none";
+  for (const t of set) if (best === "none" || TIER_RANK[t] > TIER_RANK[best]) best = t;
+  return best;
+}
+
+/**
+ * agentPlan({ contactId, name, tier, openOffers, config }) → target | null
+ *
+ * The agent-level acquisitions opportunity in tiers mode. Stage = the tier's
+ * mapped stage ("none" may map too, for agents we're working with no tier
+ * yet); an unmapped tier plans nothing. Status is open — won and lost live
+ * on the deal side. Value: the newest open offer's cash number, so the
+ * board's dollar column means something.
+ */
+export function agentPlan({ contactId, name = "", tier = "none", openOffers = [], config } = {}) {
+  const c = normalizeMirror(config);
+  const acq = c.acquisitions;
+  if (!c.enabled || acq.mode !== "tiers" || !acq.pipelineId || !contactId) return null;
+  const stageId = acq.stages[tier] || null;
+  if (!stageId) return null;
+  const newest = [...openOffers].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  const value = c.valueField === "none" ? 0 : Math.round(Number(newest?.cashAmount) || 0);
+  const label = String(name || contactId).slice(0, 120);
+  return { pipelineId: acq.pipelineId, stageId, status: "open", name: label, value, tier };
 }

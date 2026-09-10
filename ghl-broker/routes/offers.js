@@ -99,6 +99,8 @@ import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_L
 import { graduationReport } from "../shared/graduation.js";
 import { nextSendTime } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
+import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
+import { mirrorAgent } from "../ghl-mirror.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
@@ -3828,6 +3830,23 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // pass. Same write the History table's status menu makes — ledger line,
     // tag reconcile and all — on their newest open offer, or the one whose
     // address the message named.
+    // A tier tag moved on an agent: reflect it on GHL's pipeline now. The
+    // 15-minute reconcile would catch it anyway; this is the "up to date"
+    // part. Only the tier tags matter here.
+    onTagsChanged: async ({ contactId, tags = [] }) => {
+      if (!tags.some((t) => TIER_TAGS.includes(String(t).toLowerCase()))) return;
+      const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      const config = normalizeMirror(fresh.ghlMirror);
+      if (!config.enabled || config.acquisitions.mode !== "tiers") return;
+      const since = new Date(Date.now() - 180 * 86400000).toISOString();
+      const [profile, events, offers] = await Promise.all([
+        store.getContactProfile?.(locationId, contactId).catch(() => null) || null,
+        store.listContactEvents(locationId, contactId, { since, types: ["tag_added", "tag_removed"], limit: 500 }).catch(() => []),
+        store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []),
+      ]);
+      const r = await mirrorAgent({ client, locationId, contactId, config, store, profile, events, offers });
+      if (r.error) console.error(`ghl mirror (tag change) ${contactId}: ${r.error}`);
+    },
     // The dataroom invite's guard (reply-agent.js injects the action only on
     // an ok). Structural: the deal the message names is live and has a room,
     // the buyer is evaluating it (or is being linked right now), and their

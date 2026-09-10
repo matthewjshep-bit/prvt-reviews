@@ -9,7 +9,7 @@ import {
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
 import { getCompBookmarklet, getUnderwrites, listPipelines, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
-import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES } from "@shared/ghl-mirror.js";
+import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
 import ContactBackfill from "./ContactBackfill.jsx";
@@ -696,13 +696,34 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         {form.ghlMirror?.enabled && (
           <div className="mt-3 space-y-4">
             {pipelines?.scopeMissing && <p className="text-xs text-amber-700">{pipelines.error}</p>}
-            {[["acquisitions", "Acquisitions (offers to agents)", [...ACQ_LANES, ...ACQ_TERMINAL], { ready: "Not sent", floated: "Floated", sent: "Sent", countered: "Countered", needs_review: "Needs review", dead: "Passed / no response (marked lost)", won: "Under contract (marked won)" }],
-              ["dispositions", "Dispositions (deals to buyers)", DISPO_STAGES, { under_contract: "Under contract", buyer_found: "Buyer found", assigned: "Assigned", closed: "Closed (won)", fell_through: "Fell through (lost)" }]].map(([side, title, keys, labels]) => {
+            {[["acquisitions", "Acquisitions", null, null],
+              ["dispositions", "Dispositions (deals to buyers)", DISPO_STAGES, { under_contract: "Under contract", buyer_found: "Buyer found", assigned: "Assigned", closed: "Closed (won)", fell_through: "Fell through (lost)" }]].map(([side, title, keysIn, labelsIn]) => {
               const cfg = (form.ghlMirror || {})[side] || {};
               const pl = (pipelines?.list || []).find((p) => p.id === cfg.pipelineId);
+              const tiers = side === "acquisitions" && (cfg.mode || "tiers") === "tiers";
+              const keys = keysIn || (tiers ? TIER_KEYS : [...ACQ_LANES, ...ACQ_TERMINAL]);
+              const labels = labelsIn || (tiers
+                ? { "tier-1": "Tier 1 — has a deal / new property", "tier-2": "Tier 2 — open to investors", "tier-3": "Tier 3 — passed / no fit", none: "No tier yet (optional)" }
+                : { ready: "Not sent", floated: "Floated", sent: "Sent", countered: "Countered", needs_review: "Needs review", dead: "Passed / no response (marked lost)", won: "Under contract (marked won)" });
               return (
                 <div key={side} className="rounded-lg border border-slate-200 p-3">
-                  <div className="mb-2 text-sm font-semibold">{title}</div>
+                  <div className="mb-2 flex flex-wrap items-center gap-3">
+                    <span className="text-sm font-semibold">{title}</span>
+                    {side === "acquisitions" && (
+                      <select className="rounded-lg border border-slate-300 px-2 py-1 text-xs" value={cfg.mode || "tiers"}
+                        onChange={(e) => setMirrorSide(side, { mode: e.target.value, stages: {} })}
+                        title="Tiers: one opportunity per agent, in the stage their tier tag maps to — the way your Acquisitions pipeline reads. Lanes: one per property, by where the offer sits on the board.">
+                        <option value="tiers">one per agent, by tier (tier-1 / tier-2 / tier-3)</option>
+                        <option value="lanes">one per property, by offer lane</option>
+                      </select>
+                    )}
+                  </div>
+                  {tiers && cfg.pipelineId && (
+                    <p className="mb-2 text-xs text-slate-500">
+                      An agent's tier is their tier tag — the one the Conversation AI's rules set and your workflows read — with a live deal counting as Tier 1.
+                      Tag snapshots older than a day are re-read from GHL, and a tier the bot moves is written to the pipeline at once.
+                    </p>
+                  )}
                   <label className="block">
                     <span className="text-xs font-medium text-slate-600">GHL pipeline</span>
                     {pipelines?.list?.length ? (

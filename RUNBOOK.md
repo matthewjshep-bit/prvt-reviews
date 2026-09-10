@@ -937,10 +937,23 @@ projects it onto GHL's Opportunities board, one way, every fifteen minutes
 on the broker's tick (bounded to 60 writes a pass; "Sync now" runs up to
 200). Map each side to a GHL pipeline and each lane to a stage:
 
-- **Acquisitions**: Not sent · Floated · Sent · Countered · Needs review,
-  plus where a passed / no-response offer goes (marked **lost**) and where an
-  offer that went under contract goes (marked **won**). A lane left as
-  "leave the stage alone" only writes the status.
+- **Acquisitions — by tier (default).** One opportunity per AGENT, in the
+  stage their tier maps to: Tier 1 (has a deal / new property), Tier 2 (open
+  to investors), Tier 3 (passed / no fit), optionally "no tier yet". This is
+  how the GHL Acquisitions pipeline actually reads. The tier is the truth
+  the record holds: the tags GHL showed us last (the profile's snapshot),
+  with every tier tag the Conversation AI added or removed since replayed on
+  top — so a tier the bot moves is on the pipeline at once (the tag action
+  fires the mirror for that agent), and a live deal counts as Tier 1
+  whatever the tags say. Snapshots older than a day are re-read from GHL,
+  thirty a pass, so tags a workflow set outside the app also land within a
+  day. Value = the newest open offer's cash number. Memory of what was
+  written: `job_cursors` rows `mirror:agent:<contactId>`.
+- **Acquisitions — by lane (optional).** One opportunity per PROPERTY:
+  Not sent · Floated · Sent · Countered · Needs review, plus where a passed /
+  no-response offer goes (marked **lost**) and where one that went under
+  contract goes (marked **won**). A lane left as "leave the stage alone"
+  only writes the status.
 - **Dispositions**: Under contract · Buyer found · Assigned · Closed (won) ·
   Fell through (lost). Value = contract price + assignment fee.
 
