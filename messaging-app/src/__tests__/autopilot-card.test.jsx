@@ -16,6 +16,19 @@ test("the autopilot card renders every switch the broker sends, grouped, with it
   for (const s of autopilot.switches) expect(html).toContain(s.label);
 });
 
+test("the dial shows all four modes, fills the current one, and says Custom when none match", () => {
+  const config = normalizeConversationAi({ enabled: true });
+  const base = autopilotSummary({ config, sendsEnabled: true });
+  let html = renderToStaticMarkup(<AutopilotCard autopilot={{ ...base, mode: "normal" }} />);
+  for (const label of ["Off", "Cautious", "Normal", "Fully autonomous"]) expect(html).toContain(label);
+  expect(html).toMatch(/aria-checked="true"[^>]*>Normal</);
+  expect(html).not.toContain(">Custom<");
+
+  html = renderToStaticMarkup(<AutopilotCard autopilot={{ ...base, mode: "custom" }} />);
+  expect(html).toContain("Custom");
+  expect(html).not.toMatch(/aria-checked="true"/);
+});
+
 test("with nothing to show it renders nothing rather than throwing", () => {
   expect(renderToStaticMarkup(<AutopilotCard autopilot={null} />)).toBe("");
 });

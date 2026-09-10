@@ -87,6 +87,19 @@ const ALL_UW_TAGS = Object.values(UW_TAGS);
 
 export const AUTO_UNDERWRITE_ENABLED = process.env.AUTO_UNDERWRITE_ENABLED === "true";
 
+// Whether a webhook run publishes an offer or only saves a draft. The broker
+// flag is the veto; with it on, a run is LIVE unless the caller opts out.
+// It used to be the other way round — the workflow had to send dryRun:"false"
+// to go live — and the TIER 1 workflow never did, so every clean underwrite
+// landed as a draft with nothing pointing at why. GHL's Custom Data is all
+// strings, so the opt-out is read as text: "true", "1", "yes" or "dry".
+export function wantsDryRun(raw, enabled = AUTO_UNDERWRITE_ENABLED) {
+  if (!enabled) return true;
+  if (raw === true) return true;
+  const v = String(raw ?? "").trim().toLowerCase();
+  return v === "true" || v === "1" || v === "yes" || v === "dry";
+}
+
 /* ---------- job registry ---------- */
 
 const jobs = new Map();     // jobId -> job

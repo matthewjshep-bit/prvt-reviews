@@ -255,6 +255,13 @@ export const resumeConversationBot = (contactId) =>
   post(`/api/offers/automations/conversation/resume`, { contactId });
 export const saveConversationAi = (config) =>
   post(`/api/offers/automations/conversation/config`, { config }, "PUT").then((r) => r.config);
+// The autonomy dial: Off / Cautious / Normal / Fully autonomous. One PUT
+// sets every self-driving switch to the mode's position and reports how
+// many counting-down replies it held (when turning down).
+export const getAutonomy = () =>
+  fetch(`${API_BASE}/api/offers/automations/autonomy?${locq()}`).then(j);
+export const setAutonomy = (mode) =>
+  post(`/api/offers/automations/autonomy`, { mode }, "PUT");
 export const listPipelines = () => fetch(`${API_BASE}/api/dashboard/ghl/pipelines?${locq()}`).then(j);
 export const runGhlMirror = () => post(`/api/dashboard/ghl/mirror/run`, {});
 export const listCalendars = () =>

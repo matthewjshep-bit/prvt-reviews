@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import {
   evaluateGates, nearbyComps, countToday, findRecent, startUnderwrite, addressToWorkFrom,
-  compsPoolReason, _resetJobs,
+  compsPoolReason, _resetJobs, wantsDryRun,
   listJobs, publicJob, cancelJob,
   UW_RADIUS_MILES, UW_MIN_REHABBED_COMPS, UW_MIN_SUBJECT_PHOTOS, UW_DEFAULT_DAILY_CAP,
   UW_MAX_ARV_COMPS,
@@ -511,22 +511,22 @@ test("a non-numeric asking price is dropped, not passed through as NaN", async (
   assert.equal(job.suppliedAskingPrice, 0);
 });
 
-test("a live run has to be asked for two ways, and GHL only speaks strings", () => {
-  // The route's rule. GHL's Custom Data has no types, so "dryRun: false" set in
-  // the workflow arrives as the STRING "false" — which is not `false`, and
-  // silently left every run dry with the setting apparently applied.
-  const isDry = (dryRun, enabled) =>
-    !(dryRun === false || String(dryRun).toLowerCase() === "false") || !enabled;
+test("with the broker flag on, a webhook run is live unless the workflow opts out", () => {
+  // GHL's Custom Data has no types, so an opt-out arrives as a STRING. And
+  // silence — GHL's default webhook payload, no custom data at all — is live.
+  assert.equal(wantsDryRun(undefined, true), false, "silence means live");
+  assert.equal(wantsDryRun("", true), false);
+  assert.equal(wantsDryRun(false, true), false);
+  assert.equal(wantsDryRun("false", true), false);
 
-  assert.equal(isDry(false, true), false, "a real false with the flag on goes live");
-  assert.equal(isDry("false", true), false, "and so does GHL's string");
-  assert.equal(isDry("FALSE", true), false);
+  assert.equal(wantsDryRun(true, true), true, "a real true opts out");
+  assert.equal(wantsDryRun("true", true), true, "and so does GHL's string");
+  assert.equal(wantsDryRun("TRUE", true), true);
+  assert.equal(wantsDryRun("1", true), true);
+  assert.equal(wantsDryRun("yes", true), true);
 
-  assert.equal(isDry(false, false), true, "the env flag still has a veto");
-  assert.equal(isDry(undefined, true), true, "silence means dry");
-  assert.equal(isDry(true, true), true);
-  assert.equal(isDry("true", true), true);
-  assert.equal(isDry("", true), true);
+  assert.equal(wantsDryRun(undefined, false), true, "the env flag still has a veto");
+  assert.equal(wantsDryRun("false", false), true);
 });
 
 /* ---------- the job record ---------- */

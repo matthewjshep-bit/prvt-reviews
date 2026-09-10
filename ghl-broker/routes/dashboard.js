@@ -36,6 +36,7 @@ import { listPipelines } from "../ghl.js";
 import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR } from "../ghl-mirror.js";
 import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_UNDERWRITE_ENABLED } from "../auto-underwrite.js";
 import { draftStats } from "../shared/conversation-ai.js";
+import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
 import { conversationConfig } from "../reply-agent.js";
 
 // Same expression routes/offers.js reads: the broker's one send gate. The
@@ -269,6 +270,9 @@ export default function createDashboardRouter({ resolveLocation }) {
     });
     autopilot.readyToGraduate = graduationReport({ stats: draftStats(recentDrafts), config }).ready;
     autopilot.windowDays = GRADUATION.windowDays;
+    // The dial's position, so the card can show one word before forty rows.
+    autopilot.mode = detectAutonomy(saved || {});
+    autopilot.modeLabel = AUTONOMY_LABEL[autopilot.mode] || autopilot.mode;
     return autopilot;
   }
 

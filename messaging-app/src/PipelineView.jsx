@@ -89,7 +89,7 @@ export default function PipelineView() {
         </div>
       )}
 
-      <AutopilotCard autopilot={data?.autopilot} />
+      <AutopilotCard autopilot={data?.autopilot} onDone={refresh} />
 
       <KpiRow cols="sm:grid-cols-5" items={[
         { label: "Now", value: counts.actions?.now ?? 0, hint: "waiting on you, urgently" },

@@ -87,7 +87,7 @@ import { geocodeAddress } from "../geocode.js";
 import { pullZillowComps } from "../comps-zillow.js";
 import { gradeComps, needsScrape } from "../comps-grade.js";
 import {
-  startUnderwrite, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs,
+  startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs,
   cancelJob as cancelUnderwriteJob, publicJob as publicUnderwriteJob,
   AUTO_UNDERWRITE_ENABLED,
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT,
@@ -98,6 +98,7 @@ import {
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
+import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy } from "../shared/autonomy.js";
 import { nextSendTime } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
@@ -3559,14 +3560,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // than the thing that's actually missing.
 
       const saved = await store.getOfferSettings(locationId);
-      // Same double gate as sends, outreach imports and dispo blasts: the
-      // caller has to ask for a live run AND the broker has to be configured
-      // for it. A dry run still does all the work — it just saves a draft.
-      // GHL's Custom Data is all strings, so a "dryRun" row set to false
-      // arrives as the STRING "false" — which is not `false`, and would have
-      // left the run dry forever with nothing to show for the setting.
-      const askedLive = b.dryRun === false || String(b.dryRun).toLowerCase() === "false";
-      const dryRun = !askedLive || !AUTO_UNDERWRITE_ENABLED;
+      // The broker flag decides; the workflow can only opt OUT (a "dryRun"
+      // custom-data row set to true). A dry run still does all the work — it
+      // just saves a draft instead of an offer. See wantsDryRun for why the
+      // default flipped.
+      const dryRun = wantsDryRun(b.dryRun ?? b.dry_run ?? b.customData?.dryRun);
 
       const { skipped, job } = await startUnderwrite({
         client, locationId, saved, store, contactId, message, address, askingPrice, dryRun,
@@ -4177,22 +4175,71 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const saved = (await store.getOfferSettings(locationId)) || {};
       const config = normalizeConversationAi({ ...conversationConfig(saved), enabled });
       await store.saveOfferSettings(locationId, { ...saved, conversationAi: config });
-
-      let held = 0;
-      if (!enabled) {
-        const scheduled = await store.listReplyDrafts(locationId, { status: "scheduled", limit: 200 }).catch(() => []);
-        for (const d of scheduled) {
-          const ts = new Date().toISOString();
-          const ok = await store.updateReplyDraft(d.id, {
-            ...d, status: "draft", sendAt: null, heldAt: ts,
-            flags: [...(d.flags || []), "held: the Conversation AI was switched off"],
-            autoSend: { ...(d.autoSend || {}), decided: false, reason: "the Conversation AI was switched off" },
-            updatedAt: ts,
-          }).catch(() => false);
-          if (ok !== false) held++;
-        }
-      }
+      const held = enabled ? 0 : await holdScheduledDrafts(locationId, "the Conversation AI was switched off");
       res.json({ ok: true, config, held });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Every reply counting down to an auto-send goes back to a plain draft.
+  // Used by the kill switch and by the autonomy dial when it turns down.
+  async function holdScheduledDrafts(locationId, reason) {
+    let held = 0;
+    const scheduled = await store.listReplyDrafts(locationId, { status: "scheduled", limit: 200 }).catch(() => []);
+    for (const d of scheduled) {
+      const ts = new Date().toISOString();
+      const ok = await store.updateReplyDraft(d.id, {
+        ...d, status: "draft", sendAt: null, heldAt: ts,
+        flags: [...(d.flags || []), `held: ${reason}`],
+        autoSend: { ...(d.autoSend || {}), decided: false, reason },
+        updatedAt: ts,
+      }).catch(() => false);
+      if (ok !== false) held++;
+    }
+    return held;
+  }
+
+  // The autonomy dial: Off / Cautious / Normal / Fully autonomous. One
+  // position for every self-driving switch at once (shared/autonomy.js),
+  // so the operator never has to set forty checkboxes to mean one thing.
+  // GET says which mode the settings match right now ("custom" when they
+  // were set by hand) and which broker env flags would still hold a mode
+  // back. PUT applies one — it writes the Conversation AI blob, the
+  // outreach sweep and the dispo waves in one save, and turning the dial
+  // DOWN holds every reply already counting down, like the kill switch.
+  const brokerFlags = () => ({
+    sendsEnabled: CARD_SENDS_ENABLED,
+    underwriteLive: AUTO_UNDERWRITE_ENABLED,
+    importsEnabled: process.env.OUTREACH_IMPORTS_ENABLED === "true",
+    blastsEnabled: process.env.DISPO_BLASTS_ENABLED === "true",
+  });
+  const autonomyView = (saved) => ({
+    mode: detectAutonomy(saved),
+    modes: AUTONOMY_MODES.map((key) => ({ key, label: AUTONOMY_LABEL[key], gloss: AUTONOMY_GLOSS[key], does: AUTONOMY_DOES[key] })),
+    broker: brokerFlags(),
+  });
+  router.get("/automations/autonomy", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      res.json({ ok: true, ...autonomyView(saved) });
+    } catch (err) { fail(res, err); }
+  });
+  router.put("/automations/autonomy", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const mode = String(req.body?.mode || "").toLowerCase();
+      if (!AUTONOMY_MODES.includes(mode)) return res.status(400).json({ error: `mode must be one of ${AUTONOMY_MODES.join(", ")}` });
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const before = detectAutonomy(saved);
+      const next = applyAutonomy(saved, mode);
+      await store.saveOfferSettings(locationId, next);
+      // Down is any move that takes an intent off an allowlist or switches
+      // the bot off. Simplest honest rule: anything but up holds.
+      const rank = { off: 0, cautious: 1, normal: 2, full: 3 };
+      const down = before === "custom" || rank[mode] < rank[before];
+      const held = down ? await holdScheduledDrafts(locationId, `the autopilot was set to ${AUTONOMY_LABEL[mode]}`) : 0;
+      console.log(`autonomy: ${locationId} ${before} → ${mode}${held ? ` (held ${held})` : ""}`);
+      res.json({ ok: true, before, held, ...autonomyView(next), config: conversationConfig(next) });
     } catch (err) { fail(res, err); }
   });
 

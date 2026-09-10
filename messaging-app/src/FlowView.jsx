@@ -149,7 +149,7 @@ export default function FlowView() {
       <River stages={data?.stages || []} />
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2"><AutopilotCard autopilot={data?.autopilot} /></div>
+        <div className="lg:col-span-2"><AutopilotCard autopilot={data?.autopilot} onDone={() => setRefreshKey((k) => k + 1)} /></div>
         <a href={pipelineHref()} className="block rounded-xl border border-slate-200 bg-white p-4 hover:border-blue-300">
           <div className="text-sm font-bold">Waiting on you</div>
           <div className="mt-2 grid grid-cols-3 gap-2 text-center">
