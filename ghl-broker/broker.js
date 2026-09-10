@@ -25,6 +25,7 @@ import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agen
 import { maybeStartOutreachSweep, OUTREACH_SWEEP_UTC_HOUR } from "./outreach-sweep.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { maybeMirror } from "./ghl-mirror.js";
+import { maybeSweepCalls } from "./call-intake.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -219,6 +220,12 @@ setInterval(async () => {
       if (waved) console.log(`dispo second wave started for ${locationId}`);
       // The board, onto GHL's Opportunities. Every tick, bounded.
       await maybeMirror({ client: makeClient(token), locationId, saved, store, log: console.log });
+      // Calls that ended since the last look, read like inbound texts. No
+      // GHL trigger needed.
+      await maybeSweepCalls({
+        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE, log: console.log,
+        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
+      });
     } catch (e) {
       console.error(`nightly sweep check failed for ${locationId}: ${e.message}`);
     }

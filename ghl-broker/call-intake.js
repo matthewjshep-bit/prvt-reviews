@@ -150,3 +150,75 @@ async function run(job, { client, locationId, saved, store, sendsEnabled, deps }
   else job.replyJobId = r.job?.id || null;
   job.status = "done"; job.phase = ""; job.finishedAt = iso();
 }
+
+/* ---------- the poller: no GHL trigger needed ---------- */
+
+export const CALLS_CURSOR = "calls";
+export const CALL_SWEEP_LOOKBACK_MS = 24 * 3600000;
+export const MAX_CALLS_PER_SWEEP = 20;
+
+/**
+ * findNewCalls({ client, locationId, sinceMs, now }) → [{ contactId, id, direction, at, durationSec }]
+ *
+ * Conversations that moved since `sinceMs`, newest first, and every call
+ * message in them newer than that. One search plus one message page per
+ * conversation that changed — a handful of requests a tick.
+ */
+export async function findNewCalls({ client, locationId, sinceMs, now = Date.now(), limit = MAX_CALLS_PER_SWEEP }) {
+  const { conversations } = await searchConversations(client, locationId, { limit: 50 });
+  const out = [];
+  for (const convo of conversations) {
+    const moved = Date.parse(convo.lastMessageDate || convo.dateUpdated || "") || 0;
+    if (moved && moved <= sinceMs) continue;
+    const lastType = String(convo.lastMessageType || "");
+    // A conversation whose newest message is a text may still hold a call
+    // behind it; only skip when GHL says nothing moved.
+    const r = await listConversationMessages(client, convo.id, { limit: 30 }).catch(() => ({ messages: [] }));
+    for (const m of r.messages) {
+      if (!isCall(m)) continue;
+      const at = Date.parse(m.dateAdded || "") || 0;
+      if (at <= sinceMs || now - at > CALL_SWEEP_LOOKBACK_MS) continue;
+      out.push({ contactId: convo.contactId || m.contactId, id: m.id || m.messageId, direction: String(m.direction || "").toLowerCase() === "inbound" ? "inbound" : "outbound",
+        at: iso(at), durationSec: Number(m.meta?.call?.duration ?? m.callDuration ?? m.duration) || 0, lastType });
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+
+/**
+ * maybeSweepCalls({ client, locationId, saved, store, sendsEnabled, deps, now }) → number started
+ *
+ * The tick's call. Runs when the Conversation AI is on and `callIntake` is
+ * switched on in its config; remembers the newest call it saw in
+ * job_cursors so each call is picked up once. A GHL workflow is not needed
+ * — but if one is wired too, the per-call dedupe makes the second arrival
+ * a no-op.
+ */
+export async function maybeSweepCalls({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now(), log = () => {} }) {
+  const cai = saved?.conversationAi || {};
+  if (cai.enabled === false || cai.callIntake?.enabled === false) return 0;
+  if (!String(saved?.aiApiKey || "").trim()) return 0;
+  const cursor = await store.getJobCursor?.(locationId, CALLS_CURSOR).catch(() => null);
+  const sinceMs = cursor?.at ? Date.parse(cursor.at) : now - 2 * 3600000;   // first run: the last two hours only
+  let calls;
+  try { calls = await (deps.findNewCalls || findNewCalls)({ client, locationId, sinceMs, now }); }
+  catch (e) {
+    if (e?.status === 401 || e?.status === 403) log(`call sweep ${locationId}: the token lacks conversations.readonly`);
+    else log(`call sweep ${locationId}: ${e?.message}`);
+    return 0;
+  }
+  let started = 0;
+  let newest = sinceMs;
+  for (const c of calls) {
+    newest = Math.max(newest, Date.parse(c.at) || 0);
+    if (!c.contactId) continue;
+    const r = await startCallIntake({ client, locationId, saved, store, contactId: c.contactId, messageId: c.id, direction: c.direction, sendsEnabled, deps, now });
+    if (!r.skipped) started++;
+  }
+  // The cursor moves to the newest call seen (or now when nothing was), so
+  // a transcript that lags is still found by its own job, not by re-reading.
+  await store.setJobCursor?.(locationId, CALLS_CURSOR, { at: iso(calls.length ? newest : now), doc: { found: calls.length, started } }).catch(() => {});
+  if (calls.length) log(`call sweep ${locationId}: ${calls.length} call(s), ${started} read`);
+  return started;
+}

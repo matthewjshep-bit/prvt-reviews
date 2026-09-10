@@ -411,6 +411,11 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // slots and booked when they pick one — released under the booking guard
   // (shared/booking.js), the way a counter is released under the band.
   booking: { ...BOOKING_DEFAULTS },
+  // Phone calls read like inbound texts: the broker polls GHL for calls
+  // that ended (every 15 minutes) and a GHL "Call Status" workflow may also
+  // push them. On by default with the bot — the draft it produces is
+  // draft-only until "text after a call" is ticked, like everything else.
+  callIntake: { enabled: true },
   optOut: { enabled: true, keywords: DEFAULT_OPT_OUT_KEYWORDS, tags: ["dnc"], removeTags: [], workflowId: "" },
   media: { reply: "Thanks for the images, taking a look!" },
   parties: { agent: PLAYBOOK(), investor: PLAYBOOK() },
@@ -699,6 +704,7 @@ export function normalizeConversationAi(doc, seed = {}) {
       noEmDashes: bool(style.noEmDashes, D.style.noEmDashes),
       maxSmsChars: int(style.maxSmsChars, D.style.maxSmsChars, 60, 1600),
     },
+    callIntake: { enabled: bool(d.callIntake?.enabled, true) },
     booking: (() => {
       const b = d.booking && typeof d.booking === "object" ? d.booking : {};
       return {

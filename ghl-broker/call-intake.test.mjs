@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fetchTranscript, findRecentCall, startCallIntake, _resetJobs } from "./call-intake.js";
+import { fetchTranscript, findRecentCall, startCallIntake, findNewCalls, maybeSweepCalls, _resetJobs } from "./call-intake.js";
 
 const settle = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
@@ -65,4 +65,35 @@ test("intake waits for the transcript, then hands it to the reply pipeline as a 
   assert.equal(store2.events[0].type, "call_summary");
   assert.equal(store2.events[0].dedupeKey, "call:c9");
   assert.equal(store2.events[0].data.transcribed, false);
+});
+
+test("the poller finds calls that ended since the cursor and reads each once", async () => {
+  _resetJobs();
+  const now = Date.parse("2026-09-10T18:00:00Z");
+  const client = { call: async (path) => {
+    if (path.startsWith("/conversations/search")) return { conversations: [
+      { id: "cv1", contactId: "a1", lastMessageDate: "2026-09-10T17:55:00Z", lastMessageType: "TYPE_CALL" },
+      { id: "cv2", contactId: "a2", lastMessageDate: "2026-09-10T12:00:00Z", lastMessageType: "TYPE_SMS" },   // nothing moved since the cursor
+    ] };
+    if (path.includes("/conversations/cv1/")) return { messages: [
+      { id: "k1", messageType: "TYPE_CALL", direction: "inbound", dateAdded: "2026-09-10T17:55:00Z" },
+      { id: "k0", messageType: "TYPE_CALL", direction: "inbound", dateAdded: "2026-09-10T15:00:00Z" },   // before the cursor
+    ] };
+    return { messages: [] };
+  } };
+  const since = Date.parse("2026-09-10T16:00:00Z");
+  const found = await findNewCalls({ client, locationId: "L", sinceMs: since, now });
+  assert.deepEqual(found.map((c) => [c.contactId, c.id]), [["a1", "k1"]]);
+
+  const store = { cursors: new Map(), events: [],
+    async getJobCursor(l, k) { return this.cursors.get(`${l}|${k}`) || null; }, async setJobCursor(l, k, v) { this.cursors.set(`${l}|${k}`, v); },
+    async listContactEvents() { return []; }, async appendContactEvents(l, id, rows) { this.events.push(...rows); return { inserted: rows.length, skipped: 0 }; },
+    async getContactProfile() { return null; }, async upsertContactProfile() { return {}; } };
+  store.cursors.set("L|calls", { at: new Date(since).toISOString() });
+  const saved = { aiApiKey: "k", conversationAi: { enabled: true } };
+  const started = await maybeSweepCalls({ client, locationId: "L", saved, store, now, deps: { findNewCalls: async () => found, findCall: async () => ({ id: "k1", direction: "inbound", at: "2026-09-10T17:55:00Z", durationSec: 90 }), transcript: async () => null, maxPolls: 1, pollMs: 1 } });
+  assert.equal(started, 1);
+  assert.equal(store.cursors.get("L|calls").at, "2026-09-10T17:55:00.000Z", "the cursor moves to the newest call seen");
+  // switched off in the config: nothing
+  assert.equal(await maybeSweepCalls({ client, locationId: "L", saved: { aiApiKey: "k", conversationAi: { enabled: true, callIntake: { enabled: false } } }, store, now }), 0);
 });

@@ -866,13 +866,15 @@ A finished call runs the same pipeline a text does. Wiring, in GHL:
    (Settings → Phone Numbers → the number → call recording + transcription).
    Without it there is nothing to read; the broker leaves a bare
    `call_summary` event saying so.
-2. One workflow: trigger **Call Status** (filter: status *completed*; both
-   directions — your own calls to agents are the richest signal), action
-   **Webhook** `POST https://offers.shepflips.com/api/offers/automations/call`,
-   header `x-underwrite-secret` = `AUTO_UNDERWRITE_SECRET`, custom data
-   `location_id`, `contact_id`, and `message_id` if the trigger exposes it
-   (otherwise the broker takes the newest call on the contact in the last
-   six hours).
+2. Nothing else. The broker **polls**: every 15 minutes it asks GHL for
+   conversations that moved since its last look (`job_cursors` row `calls`)
+   and reads every new call message through the intake — no workflow
+   trigger needed. (The "Call Status" workflow trigger exists only for LC
+   Phone numbers; if you have it, a workflow posting to
+   `POST /api/offers/automations/call` with `x-underwrite-secret`,
+   `location_id`, `contact_id` reads the call a few minutes sooner, and the
+   per-call key makes the poller's second arrival a no-op.) Switch:
+   `conversationAi.callIntake.enabled`, on with the bot.
 3. The Private Integration needs `conversations/message.readonly` for the
    transcription endpoint (it already has it for call transcripts in the
    nightly sweep).
