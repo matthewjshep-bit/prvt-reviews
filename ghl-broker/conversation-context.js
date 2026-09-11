@@ -12,7 +12,7 @@
 // The loaders do I/O; the builders are pure and tested.
 
 import { fmtMoney } from "./shared/offer-calc.js";
-import { effectiveStatus, investorStatus, WORKING_INVESTOR_STATUSES } from "./shared/offer-status.js";
+import { effectiveStatus, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor } from "./shared/offer-status.js";
 import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybox.js";
 import { dealToQuery } from "./dispo.js";
 import { dealNumbers } from "./dataroom.js";
@@ -28,7 +28,7 @@ export const MATCHING_DEALS_MAX = 5;
 export const INVESTOR_DEAL_STAGES = new Set(["under_contract", "buyer_found"]);
 // Deals that are over. An investor who asks about one gets told, not ignored.
 export const GONE_DEAL_STAGES = new Set(["assigned", "closed", "fell_through"]);
-const GONE_WORD = { assigned: "assigned to another buyer", closed: "closed", fell_through: "fell through" };
+const GONE_WORD = { assigned: "assigned to another buyer", closed: "closed", fell_through: "fell through", spoken_for: "committed to another buyer, don't pitch it or send the package" };
 export const HISTORY_LINES_IN_CONTEXT = 6;
 
 const daysAgo = (iso, now) => {
@@ -412,6 +412,12 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
       continue;
     }
     if (!INVESTOR_DEAL_STAGES.has(offer.deal.stage)) continue;
+    // Committed to someone else: never a candidate, and to a buyer who already
+    // knows it, only "spoken for" — no numbers to quote.
+    if (dealSpokenFor(offer.deal) && link?.status !== "committed") {
+      if (link || blasted) gone.push({ address: offer.address || "a property", stage: "spoken_for", at: offer.deal.updatedAt || "", theirs: link?.status || null, reason: reasonWords(link?.reason) });
+      continue;
+    }
     const n = investorFacingPrice({ offer, room, settings });
     const row = {
       address: offer.address || "a property", stage: offer.deal.stage,

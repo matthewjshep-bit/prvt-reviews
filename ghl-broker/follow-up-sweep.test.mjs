@@ -230,6 +230,17 @@ test("an investor blasted two days ago who never replied gets one nudge", async 
   assert.equal(started[0].subject.address, "9 Oak Ave");
 });
 
+test("a blast on a deal that found its buyer is never nudged to anyone else", async () => {
+  _resetJobs();
+  const store = fakeStore({
+    offers: [{ id: "d1", address: "9 Oak Ave", status: "accepted", deal: { stage: "under_contract", investors: [{ contactId: "i9", status: "committed" }] } }],
+    events: [{ contactId: "i1", type: "blast_sent", at: at(0), address: "9 Oak Ave", offerId: "d1" }],
+  });
+  const { started } = spySweep(store, { now: T0 + 2 * DAY });
+  await settle();
+  assert.equal(started.length, 0);
+});
+
 test("an investor who opened the dataroom gets the dataroom ladder, not the blast ladder", async () => {
   _resetJobs();
   const store = fakeStore({ events: [

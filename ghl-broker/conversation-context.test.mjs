@@ -299,3 +299,20 @@ test("with our underwrite in the book and no take from them, the bot leads with 
   assert.doesNotMatch(half.text, /their take — what it's worth/);
   assert.doesNotMatch(half.text, /OUR UNDERWRITE ON IT/);
 });
+
+test("a deal committed to another buyer is never pitched, and to a buyer who knows it, it's spoken for with no numbers", () => {
+  const committed = { stage: "buyer_found", contractPrice: 420000, assignmentFee: 25000, investors: [{ contactId: "other", status: "committed" }] };
+  const fresh = buildInvestorContext({ investor: INVESTOR, deals: [{ offer: deal({ deal: committed }) }], contactId: "c1", now: NOW });
+  assert.equal(fresh.text.includes("2010 NE 54th"), false, "not a candidate, not named at all");
+  assert.equal(fresh.summary.matchingDeals, 0);
+  assert.equal(fresh.amounts.includes(445000), false);
+
+  const onIt = { ...committed, stage: "under_contract", investors: [...committed.investors, { contactId: "c1", status: "evaluating" }] };
+  const linked = buildInvestorContext({ investor: INVESTOR, deals: [{ offer: deal({ deal: onIt }) }], contactId: "c1", now: NOW });
+  assert.match(linked.text, /NO LONGER AVAILABLE[^]*2010 NE 54th St.*committed to another buyer/);
+  assert.equal(linked.summary.linkedDeals, 0);
+
+  const buyer = { ...committed, investors: [{ contactId: "c1", status: "committed" }] };
+  const theirs = buildInvestorContext({ investor: INVESTOR, deals: [{ offer: deal({ deal: buyer }) }], contactId: "c1", now: NOW });
+  assert.equal(theirs.summary.linkedDeals, 1, "the committed buyer still has their deal");
+});

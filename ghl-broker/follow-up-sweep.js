@@ -21,7 +21,7 @@
 //   The dedupe key is still the real defence — the cursor just stops us
 //   spending model calls on drafts that would be superseded anyway.
 
-import { OPEN_STATUSES, effectiveStatus, isExpired } from "./shared/offer-status.js";
+import { OPEN_STATUSES, effectiveStatus, isExpired, dealSpokenFor } from "./shared/offer-status.js";
 import { dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor } from "./shared/follow-up.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
@@ -269,6 +269,17 @@ async function runSweep(job, ctx) {
     if (job.cancelRequested) break;
     const pb = config.parties[c.party];
     const fu = pb.followUp;
+
+    // A deal that found its buyer is not nudged to anyone else.
+    if (c.party === "investor" && c.offerId && typeof store.getOffer === "function") {
+      const offer = await store.getOffer(c.offerId).catch(() => null);
+      const mine = (offer?.deal?.investors || []).find((i) => i.contactId === c.contactId);
+      if (dealSpokenFor(offer?.deal) && mine?.status !== "committed") {
+        job.skipped++;
+        push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: "the deal is committed to another buyer" });
+        continue;
+      }
+    }
 
     // An agent candidate's inbound isn't on the event stream — a draft row
     // exists for every inbound, so one indexed read answers it.

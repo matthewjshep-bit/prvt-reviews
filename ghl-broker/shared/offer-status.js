@@ -199,6 +199,12 @@ export const INVESTOR_STATUSES = ["evaluating", "committed", "passed"];
 // exactly the job. "passed" doesn't either — they're free for the next deal.
 export const WORKING_INVESTOR_STATUSES = new Set(["committed"]);
 
+// A deal with a buyer: the stage says so, or somebody on it is committed.
+// From here on it is not pitched to anyone else — not its address, not its
+// numbers — by the bot or a nudge. Only the committed buyer still hears about it.
+export const dealSpokenFor = (deal) =>
+  Boolean(deal) && (deal.stage === "buyer_found" || (deal.investors || []).some((i) => i?.status === "committed"));
+
 /**
  * investorStatus(s) → one of INVESTOR_STATUSES
  *
