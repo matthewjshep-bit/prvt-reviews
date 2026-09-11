@@ -188,6 +188,10 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
         <p className="text-xs text-slate-600">
           <span className="text-slate-400">Deal blast:</span> puts {d.outbound.address} in front of them — one of a staggered set to the shortlist.
         </p>
+      ) : d.outbound?.kind === "check_in" ? (
+        <p className="text-xs text-slate-600">
+          <span className="text-slate-400">Check-in:</span> they passed on {d.outbound.address}{d.outbound.amount ? ` at $${Number(d.outbound.amount).toLocaleString()}` : ""} — asks whether the seller has come around.
+        </p>
       ) : NUDGE_KINDS[d.outbound?.kind] ? (
         <div className="mt-1 text-xs text-slate-600">
           <span className="text-slate-400">Nobody answered:</span> {NUDGE_KINDS[d.outbound.kind](d.outbound.address)}

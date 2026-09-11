@@ -4464,6 +4464,45 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // Hand-written drafts, filed straight into the outbox. Body: { drafts: [{
+  // offerId, reply, contactName? }] }. Each lands as status "draft" (never
+  // scheduled, so nothing leaves until someone presses Send) with
+  // outbound.kind "check_in", and supersedes that contact's open draft the
+  // same way a new reply would. The offer supplies contact and address.
+  router.post("/automations/conversation/drafts", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const input = Array.isArray(req.body?.drafts) ? req.body.drafts.slice(0, 100) : [];
+      if (!input.length) return res.status(400).json({ error: "drafts[] is required" });
+      const rows = [];
+      for (const x of input) {
+        const reply = String(x?.reply || "").trim();
+        const offer = x?.offerId ? await store.getOffer(String(x.offerId)) : null;
+        if (!offer || offer.locationId !== locationId) { rows.push({ offerId: x?.offerId || null, error: "no such offer" }); continue; }
+        if (!offer.contactId) { rows.push({ offerId: offer.id, error: "the offer has no contact" }); continue; }
+        if (!reply) { rows.push({ offerId: offer.id, error: "empty reply" }); continue; }
+        const contactId = offer.contactId;
+        const contactName = String(x.contactName || offer.contactName || "");
+        const open = [];
+        for (const status of ["draft", "scheduled"]) open.push(...await store.listReplyDrafts(locationId, { contactId, status, limit: 5 }).catch(() => []));
+        const ts = new Date().toISOString();
+        for (const old of open) await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: ts }).catch(() => {});
+        const record = await store.createReplyDraft({
+          locationId, contactId, contactName, status: "draft", channel: "sms", jobId: null,
+          inbound: "", outbound: { kind: "check_in", offerId: offer.id, address: offer.address || "", amount: offer.cashAmount || null },
+          reply, intent: "check_in", confidence: "high", needsHuman: false, humanReason: "",
+          summary: String(x.summary || `Checks back on ${offer.address || "the offer"} after they passed.`).slice(0, 500),
+          propertyAddress: offer.address || "", counterAmount: null, autoSendable: false, flags: [], party: "agent", partySource: "operator",
+          matchedTags: { agent: [], investor: [] }, contextSummary: {}, offersInContext: 0,
+          autoSend: { decided: false, reason: "hand-written check-in" }, humanActive: null, actions: [],
+          supersededIds: open.map((o) => o.id), warnings: [], noteOnAutoSend: false, promptVersion: 3, updatedAt: ts,
+        });
+        rows.push({ offerId: offer.id, contactId, draftId: record.id, superseded: open.length });
+      }
+      res.json({ ok: true, created: rows.filter((r) => r.draftId).length, rows });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---- the outbox ---- */
   // Every draft waiting on a person or counting down to an auto-send, plus
   // anything being drafted right now, plus whether Send would actually send.
