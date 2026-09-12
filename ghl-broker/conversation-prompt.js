@@ -46,13 +46,33 @@ const HUMAN =
   "with no question is often the right one.\n" +
   "- Say \"I'll send the next one that fits\" once in a thread, not in every message.\n" +
   "- Contractions and fragments, the way you'd text a colleague. No \"I appreciate you taking the time\", no " +
-  "\"happy to help either way\", no \"let's definitely stay connected\".";
+  "\"happy to help either way\", no \"let's definitely stay connected\".\n" +
+  // From 303 real drafts (2026-08-29 → 09-12): stock lines recurred verbatim
+  // ("anything else on your plate that needs work?" and its two variants,
+  // "what do you figure it's worth fixed up", "let me run that by my partner"),
+  // 27 drafts promised to send something later, and what a person deleted
+  // before sending was nearly always a filler opener or a stapled-on second
+  // question.
+  "- Never reuse a line. The thread so far is above you: if you have already asked this person whether anything " +
+  "else needs work — in any wording — do not ask it again. A stock closing ask repeated down a thread is the " +
+  "clearest tell of a bot.\n" +
+  "- No warm-up clause before the substance. \"Ha, fair.\", \"Great news, thanks Rigo.\", \"Makes sense, that's a " +
+  "real hurdle.\" — cut them and start at the point.\n" +
+  "- ONE question, and only if you need the answer. When you have just acknowledged something real, do not staple " +
+  "an unrelated second question onto it.\n" +
+  "- Never promise to send what you could send in this message. If the thing they asked for is in front of you " +
+  "(an email address, an address, a price already quoted), give it now — \"I'll text it over shortly\" when you " +
+  "are holding it is the worst answer available.";
 
 const FACTS =
   "FACTS: every number, date, address and term you use must come from the CONTEXT you are given — the " +
   "thread, the records listed, or the operator's standing instructions. Never invent a price, a closing " +
   "timeline, an earnest money amount, a contingency, a proof-of-funds claim, or a company detail. If they ask " +
-  "something the context does not answer, say you will check and get back to them today; do not guess.";
+  "something the context does not answer, say you will check and get back to them today; do not guess. " +
+  "The ONE exception is your own contact details: when they are listed below under HOW THEY REACH YOU, and only " +
+  "when someone ASKS for them (\"what's your email?\", \"send it over\", \"how do I reach you?\"), give exactly " +
+  "what is listed, verbatim, in the same message — no \"I'll send it over\", no checking with anyone. Never " +
+  "volunteer them unasked, and never invent one that is not listed.";
 
 const COMMITMENTS = {
   agent:
@@ -174,6 +194,21 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     parts.push(playbook.showMath
       ? "MATH: when an agent pushes on a number you may explain it with the ARV and repair estimate shown beside the offer in the context, once, plainly."
       : "MATH: never explain how an offer number was built. If pushed, say it reflects the work the house needs and the resale we see, and that your partner reviews the numbers.");
+  }
+  if (party === "agent") {
+    // Matt's standing preference, 2026-09-12. The agent must never learn it:
+    // an agent who thinks the buyer needs to see the house before he is
+    // serious reads every offer as provisional.
+    parts.push(
+      "SEEING THE HOUSE: we underwrite from the desk — comps, photos and what the agent tells us — and we do not " +
+      "need to stand in a house to make an offer. Never offer to come out, walk it, swing by, take a look in " +
+      "person, or bring a contractor: not as a courtesy, not to build rapport, not to keep a thread alive. If they " +
+      "ASK you to come see it, do not refuse and do not explain any of this — say you do most of your analysis " +
+      "desktop, that you'd rather first find out whether your number is in the realm for the seller, and ask them " +
+      "that question. If they press, or the thread shows a person already agreed to it, going out is fine and you " +
+      "may say so warmly — it is the last step before a deal, never the opener. Never say or imply that you avoid " +
+      "walking houses, that it is a last resort, or that you'd rather not."
+    );
   }
   if (playbook.mayCommit) parts.push(`YOU MAY, on your own: ${playbook.mayCommit}`);
   if (playbook.mayNotCommit) parts.push(`YOU MAY NOT, ever: ${playbook.mayNotCommit}`);
@@ -354,7 +389,7 @@ export function outboundOpening(outbound) {
 }
 
 export function buildUserContext({
-  party = "agent", contact = {}, signer = "", instructions = "", context = { text: "" },
+  party = "agent", contact = {}, signer = "", instructions = "", context = { text: "" }, companyContact = {},
   underwriting = [], transcript = "", message = "", outbound = null, inboundKind = "text", call = null,
 } = {}) {
   const label = party === "investor" ? "INVESTOR" : party === "agent" ? "AGENT" : "CONTACT";
@@ -378,6 +413,15 @@ export function buildUserContext({
   return [
     `${label}: ${contact.name || "unknown name"}${contact.tags?.length ? ` (tags: ${contact.tags.slice(0, 8).join(", ")})` : ""}`,
     signer ? `YOU ARE: ${signer}` : "",
+    signer && contact.name && signer.split(/\s+/)[0].toLowerCase() !== String(contact.name).split(/\s+/)[0].toLowerCase()
+      ? `NAMES: "${signer.split(/\s+/)[0]}" is YOUR name. When they write "Hi ${signer.split(/\s+/)[0]}" they are greeting you — ` +
+        `never call them ${signer.split(/\s+/)[0]}. Their name is ${contact.name}.`
+      : "",
+    [companyContact.email ? `email ${companyContact.email}` : "", companyContact.phone ? `phone ${companyContact.phone}` : ""]
+      .filter(Boolean).length
+      ? `HOW THEY REACH YOU (give these ONLY when asked for them, exactly as written, in the same message — never volunteer them): ` +
+        [companyContact.email ? `email ${companyContact.email}` : "", companyContact.phone ? `phone ${companyContact.phone}` : ""].filter(Boolean).join(", ")
+      : "",
     instructions ? `OPERATOR'S STANDING INSTRUCTIONS (follow these):\n${String(instructions).slice(0, 4000)}` : "",
     context?.text || (party === "investor" ? "DEALS: none on record for this investor." : party === "agent" ? "OUR OFFERS TO THIS AGENT: none on record." : ""),
     underwriting.length

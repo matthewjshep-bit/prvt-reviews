@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  evaluateReplyGates, moneyIn, summarizeOffers, countToday, startReply,
+  evaluateReplyGates, callsThemOurName, moneyIn, summarizeOffers, countToday, startReply,
   sendReplyDraft, dismissReplyDraft, listJobs, _resetJobs,
   AUTO_SENDABLE_INTENTS, RA_DEFAULT_DAILY_CAP, RA_MAX_SMS_CHARS,
 } from "./reply-agent.js";
@@ -16,6 +16,27 @@ const DRAFT = {
 };
 const gate = (over = {}, ctx = {}) =>
   evaluateReplyGates({ draft: { ...DRAFT, ...over }, allowedAmounts: [410000], inboundMessage: "still interested?", ...ctx });
+
+/* ---------- names ---------- */
+
+test("calling the agent by OUR name is flagged — Nate got 'Thanks, Matt.' (1322 N Mamer Rd)", () => {
+  const who = { selfName: "Matt Shepherd", contactName: "Nate Wright" };
+  const g = gate({ reply: "Thanks, Matt. I'll reach out if I need anything else after I see it." }, who);
+  assert.equal(g.ok, false);
+  assert.match(g.flags.join(";"), /our name/);
+  for (const r of ["Hey Matt, sounds good", "Sounds good Matt!", "Matt, I'll swing by tomorrow.", "ok matt"]) {
+    assert.equal(callsThemOurName(r, who), true, r);
+  }
+  for (const r of ["This is Matt with Shep Flips.", "I'm Matt, I buy houses as-is.", "Talk soon\nMatt", "Talk soon - Matt", "Thanks, Nate.",
+    // the check-in drafts sign off this way; signing is not addressing
+    "Hey Doug, checking back on 18408 SE 44th St. Been a couple weeks. Thanks, Matt",
+    "Hey Saundra, it's Matt. Checking back on 13041 SE 208th, still sitting?"]) {
+    assert.equal(callsThemOurName(r, who), false, r);
+  }
+  assert.equal(callsThemOurName("Talk soon, Matt S.", { ...who, signOff: "Matt S." }), false, "the persona sign-off is ours");
+  assert.equal(callsThemOurName("Thanks, Matt.", { selfName: "Matt", contactName: "Matt Jones" }), false, "they share it");
+  assert.equal(gate({}, who).ok, true);
+});
 
 /* ---------- the money guard ---------- */
 
@@ -270,6 +291,78 @@ test("a counter is saved flagged, and the note says why", async () => {
   assert.match(d.flags[0], /a counter is a person's call/);
   assert.equal(d.counterAmount, 425000);
   assert.match(notes[0], /Needs you because: a counter is a person's call\nThe model notes: the agent named a higher number/);
+});
+
+// Walkthroughs, calls and times can never auto-send, so the draft was always
+// a text nobody would send: 42 of them in the two weeks to 2026-09-12, one
+// sent. What Matt needs is the fact, not a reply he has to read and bin.
+test("a walkthrough, a call or a time gets a heads-up instead of a draft nobody would send", async () => {
+  _resetJobs();
+  const { client, notes } = ghlStub();
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "can you come see it thursday?",
+    deps: { draft: async () => ({ ...DRAFT, intent: "scheduling", reply: "Thursday works, what time suits you?",
+      summary: "The agent wants to set a time to walk 12 Elm.", propertyAddress: "12 Elm St" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "handled");
+  assert.equal(d.reply, "", "no half-written text sitting there to be sent by accident");
+  assert.equal(d.autoSendable, false);
+  assert.match(d.flags.join(" · "), /a scheduling is yours to answer/);
+  assert.equal(d.summary, "The agent wants to set a time to walk 12 Elm.");
+  assert.match(notes.join("\n"), /wants to set a time to walk 12 Elm/);
+  assert.match(notes.join("\n"), /No reply was drafted/);
+});
+
+// The stand-down used to block only the SEND, so the model call was spent
+// and the draft then went stale while Matt worked the thread himself. Now it
+// bails before drafting — that is the whole point of the setting.
+test("when a person is already in the thread, the bot stands down before spending a model call", async () => {
+  _resetJobs();
+  const notes = [];
+  const ago = (ms) => new Date(Date.now() - ms).toISOString();
+  const client = {
+    call: async (path, opts = {}) => {
+      if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Dana", lastName: "Reyes", tags: ["agent"] } };
+      if (path.endsWith("/notes")) { notes.push(opts.body.body); return {}; }
+      if (path.endsWith("/tags")) return {};
+      if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+      if (/^\/conversations\/cv1\/messages/.test(path)) {
+        return { messages: [
+          { id: "m1", dateAdded: ago(9 * 60000), direction: "inbound", messageType: "TYPE_SMS", body: "any update?" },
+          { id: "m2", dateAdded: ago(5 * 60000), direction: "outbound", messageType: "TYPE_SMS", body: "Yes, calling you in ten." },
+        ] };
+      }
+      throw new Error(`unexpected ${path}`);
+    },
+  };
+  let drafted = 0;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store: fakeStore(), contactId: "c1", message: "sounds good",
+    deps: { draft: async () => { drafted++; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(job.status, "held", job.error);
+  assert.match(job.heldReason, /you have the thread/);
+  assert.equal(drafted, 0, "no model call at all — the point of the setting");
+  assert.equal(notes.length, 0, "he is in the thread; a note about it is noise");
+});
+
+test("an intent that is not notify-only still gets a real draft", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "still interested?",
+    deps: { draft: async () => DRAFT },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft");
+  assert.equal(d.reply, DRAFT.reply);
 });
 
 test("a made-up number is caught before anyone sees the draft", async () => {

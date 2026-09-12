@@ -178,7 +178,7 @@ export async function countToday({ store, locationId, now = Date.now() }) {
  */
 export async function draftReply({
   message, transcript = "", offers = { text: "", amounts: [], count: 0 }, contact = {},
-  underwriting = [], instructions = "", signer = "", aiApiKey,
+  underwriting = [], instructions = "", signer = "", aiApiKey, companyContact = {},
   party = "agent", config = null, context = null, channel = "sms", outbound = null, booking = false, inboundKind = "text", call = null,
 }) {
   const client = new Anthropic({ apiKey: aiApiKey, timeout: 120_000 });
@@ -189,7 +189,7 @@ export async function draftReply({
       : "",
   };
   const system = buildSystemPrompt({ config: cfg, party, channel });
-  const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound, inboundKind, call });
+  const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound, inboundKind, call, companyContact });
   const intents = outbound ? [outbound.kind] : (INTENTS[party] || INTENTS.agent);
 
   let response;
@@ -355,16 +355,42 @@ export function moneyIn(text) {
  * adds the page's own switches. But `ok` is recorded beside every draft, so
  * "could this have gone out by itself?" is a count, not a guess.
  */
+// An agent's text opens "Hi Matt," and the model, mirroring, answers "Thanks,
+// Matt." (Nate Wright, 1322 N Mamer Rd, 2026-09-03). Our own first name used
+// as a greeting or address, never as "I'm Matt" or the sign-off, is flagged,
+// unless they share it.
+const firstNameOf = (s) => String(s || "").trim().split(/\s+/)[0] || "";
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export function callsThemOurName(reply, { selfName = "", contactName = "", signOff = "" } = {}) {
+  const ours = firstNameOf(selfName);
+  if (ours.length < 2 || !reply) return false;
+  if (ours.toLowerCase() === firstNameOf(contactName).toLowerCase()) return false;
+  const n = escapeRe(ours);
+  let text = String(reply).trim();
+  const so = String(signOff || "").trim();
+  if (so && text.toLowerCase().endsWith(so.toLowerCase())) text = text.slice(0, -so.length).trim();
+  // Our name as the LAST thing in the message is us signing off, not us
+  // addressing them — the check-in drafts end "Thanks, Matt" and are fine.
+  text = text.replace(new RegExp(`(?:[\\n.!?,]|\\s[-–—])\\s*(?:thanks|thank you|talk soon|best|cheers)?[,]?\\s*${n}[.!]?$`, "i"), "");
+  // What went wrong with Nate: the greeting mirrored straight back at them.
+  const greeting = new RegExp(`^\\s*(hi|hey|hello|thanks|thank you|thx|ty|appreciate it|sounds good|ok|okay|got it|morning|afternoon)[,!]?\\s+${n}\\b`, "i");
+  const vocative = new RegExp(`(^|[,.!?]\\s+)${n}\\s*[,.!?]`, "i");
+  return greeting.test(text) || vocative.test(text);
+}
+
 // How sure is sure enough. "medium" lets a draft the model was fairly sure
 // of go on its own; "high" waits for a person unless it was certain.
 const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 
 export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], inboundMessage = "", channel = "sms", style = null,
-  minConfidence = "high", holdOnNeedsHuman = true,
+  minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "",
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
+  if (callsThemOurName(draft.reply, { selfName, contactName, signOff })) {
+    flags.push(`the draft calls them "${firstNameOf(selfName)}", which is our name, not theirs`);
+  }
   const never = NEVER_AUTO[party] || NEVER_AUTO.agent;
   const maxSms = Number(style?.maxSmsChars) > 0 ? Number(style.maxSmsChars) : RA_MAX_SMS_CHARS;
 
@@ -903,6 +929,9 @@ export async function assembleConversation({
   const playbook = config.parties?.[party] || null;
   const instructions = playbook ? playbook.instructions : config.routing.genericInstructions;
   const signer = config.persona.name || saved?.company?.signer || saved?.company?.name || "";
+  // Ours to hand out when asked — an agent who asks "what's your email?" got
+  // "I'll text it over shortly" until 2026-09-12, because we never sent it.
+  const companyContact = { email: saved?.company?.email || "", phone: saved?.company?.phone || "" };
 
   // The tag that would route them next time, when the words placed them.
   const stampTag = partySource === "classified" && config.routing.tagOnClassify
@@ -911,7 +940,7 @@ export async function assembleConversation({
 
   return {
     config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dealHold, humanActive,
-    playbook, contact, contactName: name, tags, custom, transcript, context, underwriting, instructions, signer,
+    playbook, contact, contactName: name, tags, custom, transcript, context, underwriting, instructions, signer, companyContact,
   };
 }
 
@@ -1302,7 +1331,7 @@ async function runProactive(job, ctx) {
   job.phase = "drafting";
   const draft = await deps.draft({
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
-    contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer,
+    contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
     aiApiKey, party, config, context, channel: "sms", outbound,
   });
   draft.intent = kind;
@@ -1316,7 +1345,7 @@ async function runProactive(job, ctx) {
   const forbiddenAmounts = extraForbidden.length
     ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]
     : context.forbiddenAmounts;
-  const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style });
+  const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff });
   const auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
 
   job.phase = "saving";
@@ -1433,6 +1462,19 @@ async function runReply(job, ctx) {
     return;
   }
 
+  // A person is already in this thread. Until 2026-09-12 that only blocked
+  // the send — the draft was written first, and then went stale: a third of
+  // the two-week window's drafts were superseded while Matt answered the
+  // conversation himself. Standing down BEFORE the model call is the point
+  // of the setting; the thread is his, and he does not need a note to say so.
+  if (a.humanActive) {
+    job.status = "held";
+    job.phase = "";
+    job.heldReason = `you replied to them ${a.humanActive.minutesAgo} minute${a.humanActive.minutesAgo === 1 ? "" : "s"} ago — you have the thread`;
+    job.finishedAt = new Date().toISOString();
+    return;
+  }
+
   if (party === "unknown" && config.routing.unknown === "hold") {
     job.status = "held";
     job.phase = "";
@@ -1466,7 +1508,7 @@ async function runReply(job, ctx) {
       contact: { name: a.contactName, tags: a.tags },
       underwriting: a.underwriting,
       instructions: a.instructions,
-      signer: a.signer,
+      signer: a.signer, companyContact: a.companyContact,
       aiApiKey,
       party, config, context: draftContext, channel: job.channel, booking: Boolean(bookingText),
       inboundKind: job.inboundKind || "text", call: job.call || null,
@@ -1482,9 +1524,20 @@ async function runReply(job, ctx) {
     return;
   }
 
+  // A walkthrough, a call, a time: yours by design, and therefore a draft
+  // that was never going to be sent. The heads-up is the useful output. The
+  // calendar is the exception — once it is wired it can answer a time for
+  // real, so the draft stands and the guard decides.
+  const bookingCouldAnswer = Boolean(booking) && (BOOKING_INTENTS[party] || []).includes(draft.intent);
+  if ((config.notifyOnly || []).includes(draft.intent) && !bookingCouldAnswer) {
+    await handleNotifyOnly(job, { ...ctx, config, party, partySource: a.partySource, matchedTags: a.matchedTags, draft });
+    return;
+  }
+
   const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts,
     inboundMessage: inboundText, channel: job.channel, style: config.style,
+    selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
   });
   let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive });
   // The text after a call is its own allowlist slot on top of the intent's:
@@ -1832,6 +1885,35 @@ async function handleOptOut(job, ctx) {
   job.finishedAt = new Date().toISOString();
 }
 
+// The heads-up that replaces a draft nobody would have sent. No reply text
+// at all: a half-written text is exactly the thing that gets skimmed and
+// sent by accident, and the one fact worth surfacing is what they asked for.
+async function handleNotifyOnly(job, ctx) {
+  const { client, locationId, store, party, partySource, matchedTags, draft } = ctx;
+  const warnings = job.warnings;
+  job.phase = "acting";
+  job.intent = draft.intent;
+  job.summary = draft.summary;
+  const what = String(draft.intent || "").replace(/_/g, " ");
+  const where = draft.propertyAddress ? ` on ${draft.propertyAddress}` : "";
+  const line = draft.summary || `${whoWord({ party })} wants a ${what}${where}.`;
+  const record = await store.createReplyDraft({
+    locationId, contactId: job.contactId, contactName: job.contactName, status: "handled", channel: job.channel,
+    jobId: job.id, inbound: job.message, inboundKind: job.inboundKind || "text", reply: "", intent: draft.intent,
+    confidence: draft.confidence, needsHuman: true, humanReason: `a ${what} is yours to answer`, summary: line,
+    propertyAddress: draft.propertyAddress || "", counterAmount: null, autoSendable: false,
+    flags: [`a ${what} is yours to answer — no reply was drafted`], party, partySource, matchedTags,
+    autoSend: { decided: false, reason: `a ${what} is yours to answer` }, actions: [],
+    warnings: warnings.slice(0, 6), promptVersion: 3, updatedAt: new Date().toISOString(),
+  });
+  job.draftId = record.id;
+  await note(client, job.contactId,
+    `Conversation AI: ${line}\nNo reply was drafted — a ${what} is yours to answer.`, warnings);
+  job.status = "done";
+  job.phase = "";
+  job.finishedAt = new Date().toISOString();
+}
+
 const whoWord = (d) => (d.party === "investor" ? "The investor" : d.party === "agent" ? "The agent" : "They");
 
 function draftNote(d) {
@@ -1910,11 +1992,12 @@ export async function previewConversation({
     : await drafter({
       message, transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
       contact: { name: a.contactName, tags: a.tags }, underwriting: a.underwriting,
-      instructions: a.instructions, signer: a.signer, aiApiKey, party, config, context, channel,
+      instructions: a.instructions, signer: a.signer, companyContact: a.companyContact, aiApiKey, party, config, context, channel,
     });
   if (SILENT_INTENTS.has(draft.intent)) return optOutView(draft.confidence, draft.summary || "the model read an opt-out");
   const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, inboundMessage: message, channel, style: config.style,
+    selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };

@@ -418,6 +418,13 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   callIntake: { enabled: true },
   optOut: { enabled: true, keywords: DEFAULT_OPT_OUT_KEYWORDS, tags: ["dnc"], removeTags: [], workflowId: "" },
   media: { reply: "Thanks for the images, taking a look!" },
+  // Intents that get a heads-up instead of a reply. These can never
+  // auto-send (see NEVER_AUTO), so a draft for one is a text nobody will
+  // ever send: in the two weeks to 2026-09-12 they produced 42 drafts and
+  // one sent message. "The agent wants to walk 1322 Mamer" is the useful
+  // output. Booking is the exception — with a calendar wired, a time can be
+  // answered for real, so the draft stands.
+  notifyOnly: ["wants_walkthrough", "wants_call", "scheduling"],
   parties: { agent: PLAYBOOK(), investor: PLAYBOOK() },
   autoSend: {
     delayMinSec: 120,
@@ -439,9 +446,11 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
     // Wait this long after a text before drafting, so three texts in a row
     // get one reply to all three. 0 = draft at once.
     debounceSec: 0,
-    // Don't auto-send when a person replied to them this recently — they
-    // have the thread.
-    humanActiveMin: 0,
+    // Don't draft at all when a person replied to them this recently — they
+    // have the thread. Until 2026-09-12 this only held the SEND, and the
+    // default was 0, so it never fired: the bot kept writing replies into
+    // conversations Matt was answering himself and they went stale unread.
+    humanActiveMin: 45,
     // Liberal by default: a draft the model was fairly sure of goes, and its
     // own "needs a human" note is shown on the row rather than holding the
     // send — the action it refers to is ask-only regardless.
@@ -729,6 +738,9 @@ export function normalizeConversationAi(doc, seed = {}) {
       workflowId: str(optOut.workflowId, 80),
     },
     media: { reply: str(media.reply, 300) || D.media.reply },
+    notifyOnly: "notifyOnly" in d
+      ? list(d.notifyOnly, { max: 20, each: 40, lower: true })
+      : [...D.notifyOnly],
     parties: {
       agent: normalizePlaybook(parties.agent, "agent", { instructions: seedFor.instructions }),
       investor: normalizePlaybook(parties.investor, "investor"),
@@ -1090,7 +1102,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
         },
       },
     },
-    autoSend: { debounceSec: 45, humanActiveMin: 0 },
+    autoSend: { debounceSec: 45, humanActiveMin: 45 },
     profile: { enabled: true, callTranscripts: 2, writeSummary: true },
     notes: { onDraft: true, onAutoSend: true },
   });
