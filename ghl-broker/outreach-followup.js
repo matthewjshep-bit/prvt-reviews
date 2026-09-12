@@ -21,11 +21,12 @@
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
 import { addContactToWorkflow, getLastMessageDate } from "./ghl.js";
-import { normalizeOutreachAutopilot, isWorkday } from "./outreach-sweep.js";
+import { normalizeOutreachAutopilot, isWorkday, workHour } from "./outreach-sweep.js";
 
 export const CURSOR_NAME = "outreachFollowUp";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
-export const OUTREACH_FOLLOWUP_UTC_HOUR = Number(process.env.OUTREACH_FOLLOWUP_UTC_HOUR || 17); // ≈ 9–10am Pacific
+// Pacific time, the hour after the outreach sweep.
+export const OUTREACH_FOLLOWUP_HOUR = Number(process.env.OUTREACH_FOLLOWUP_HOUR || 11); // 11am–noon Pacific
 // Longer than the longest followUpDays (90), so the enrollment is still in view.
 export const WINDOW_DAYS = 120;
 export const MAX_PER_RUN = 100;
@@ -138,14 +139,14 @@ async function run(job, { locationId, client, saved, store, now, paceMs }) {
 }
 
 /**
- * maybeStartOutreachFollowUp({ locationId, client, saved, store, utcHour, now }) → boolean
+ * maybeStartOutreachFollowUp({ locationId, client, saved, store, hour, now }) → boolean
  *
  * The tick's decision. Gates: the hour, the outreach autopilot AND its
  * follow-up switch (the autonomy dial's Off stops this too), a workflow, no
  * run in progress, and the durable cursor at least MIN_GAP_MS old.
  */
-export async function maybeStartOutreachFollowUp({ locationId, client, saved = {}, store = defaultStore, utcHour = OUTREACH_FOLLOWUP_UTC_HOUR, now = Date.now(), paceMs }) {
-  if (new Date(now).getUTCHours() !== utcHour) return false;
+export async function maybeStartOutreachFollowUp({ locationId, client, saved = {}, store = defaultStore, hour = OUTREACH_FOLLOWUP_HOUR, now = Date.now(), paceMs }) {
+  if (workHour(now) !== hour) return false;
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
   if (!oa.enabled || !oa.followUpEnabled || !oa.followUpWorkflowId) return false;
   if (oa.weekdaysOnly && !isWorkday(now)) return false;

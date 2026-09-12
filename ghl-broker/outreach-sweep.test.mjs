@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  pickAgentsToImport, normalizeOutreachAutopilot, isWorkday, runsLeftInMonth, pullQuery, startOutreachSweep, maybeStartOutreachSweep, getOutreachJob, _resetJobs, CURSOR_NAME, PAGES_CURSOR,
+  pickAgentsToImport, normalizeOutreachAutopilot, isWorkday, workHour, runsLeftInMonth, pullQuery, startOutreachSweep, maybeStartOutreachSweep, getOutreachJob, _resetJobs, CURSOR_NAME, PAGES_CURSOR,
 } from "./outreach-sweep.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
@@ -175,8 +175,8 @@ test("the tick fires once a day, in its hour, only when switched on with a key",
   _resetJobs();
   const deps = { runPull: async () => ({ batchId: "b1", warnings: [] }), importAgents: async () => ({}) };
   const store = fakeStore([]);
-  const inHour = Date.parse("2026-09-10T15:10:00Z");
-  const base = { locationId: "loc", client: {}, store, deps, utcHour: 15 };
+  const inHour = Date.parse("2026-09-10T17:10:00Z"); // 10:10am Pacific (PDT)
+  const base = { locationId: "loc", client: {}, store, deps, hour: 10 };
   assert.equal(await maybeStartOutreachSweep({ ...base, saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true } }, now: inHour - 3600000 }), false, "wrong hour");
   assert.equal(await maybeStartOutreachSweep({ ...base, saved: { rentcastApiKey: "k" }, now: inHour }), false, "switched off");
   assert.equal(await maybeStartOutreachSweep({ ...base, saved: { outreachAutopilot: { enabled: true } }, now: inHour }), false, "no key");
@@ -187,14 +187,19 @@ test("the tick fires once a day, in its hour, only when switched on with a key",
   assert.equal(await maybeStartOutreachSweep({ ...base, saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true } }, now: inHour + 600000 }), false, "already ran this day");
 });
 
+test("the hour is Pacific, so daylight saving doesn't move it", () => {
+  assert.equal(workHour(Date.parse("2026-09-10T17:10:00Z")), 10, "PDT: 10am is 17:00 UTC");
+  assert.equal(workHour(Date.parse("2026-12-10T18:10:00Z")), 10, "PST: 10am is 18:00 UTC");
+});
+
 test("weekdays only: no run on Saturday or Sunday unless switched to every day", async () => {
   _resetJobs();
   assert.equal(isWorkday(Date.parse("2026-09-11T15:10:00Z")), true, "Friday");
   assert.equal(isWorkday(Date.parse("2026-09-12T15:10:00Z")), false, "Saturday");
   assert.equal(isWorkday(Date.parse("2026-09-15T02:00:00Z")), true, "Monday 7pm Pacific is still Monday there, Tuesday in UTC");
   const deps = { runPull: async () => ({ batchId: "b1", warnings: [] }), importAgents: async () => ({}) };
-  const sat = Date.parse("2026-09-12T15:10:00Z");
-  const base = { locationId: "loc-wk", client: {}, deps, utcHour: 15, now: sat };
+  const sat = Date.parse("2026-09-12T17:10:00Z");
+  const base = { locationId: "loc-wk", client: {}, deps, hour: 10, now: sat };
   assert.equal(await maybeStartOutreachSweep({ ...base, store: fakeStore([]), saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true } } }), false);
   assert.equal(await maybeStartOutreachSweep({ ...base, store: fakeStore([]), saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true, weekdaysOnly: false } } }), true);
   await settle();

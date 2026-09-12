@@ -1113,13 +1113,21 @@ switch between, rename, and delete from the batch picker (auto-named
 
 ### The daily sweep (outreach autopilot)
 
-Settings → Agent Outreach → "Run outreach every day on its own". Once a day
-(the `OUTREACH_SWEEP_UTC_HOUR` hour, default 15 ≈ 7–8am Pacific, on the
-broker's 15-minute tick, `job_cursors` row `outreach`) the broker runs the
-same pull the button runs on the saved defaults, picks the most distressed
+Settings → Agent Outreach → "Run outreach every day on its own". Once a
+weekday (the `OUTREACH_SWEEP_HOUR` hour in Pacific time, default 10 = 10–11am,
+on the broker's 15-minute tick, `job_cursors` row `outreach`; untick "Weekdays
+only" for every day) the broker pulls — with a county list, the next pages of
+one county at a time (`job_cursors` row `outreachPages`), filtered at RentCast
+to listings at least 45 days old of the chosen property types, with requests
+spread over the month to a hard stop of 48 — picks the most distressed
 agents nobody has talked to (status new, no GHL match, a phone, at least one
 distressed listing unless you untick that), imports up to the daily cap
-(default 12), and asks the Conversation AI for the first text.
+(default 12, max 500), and says hello the configured way.
+
+The follow-up (`outreach-followup.js`, `OUTREACH_FOLLOWUP_HOUR`, default 11am
+Pacific, row `outreachFollowUp`) puts agents enrolled by the "GHL workflow"
+first touch who haven't answered in N days (default 14) into the follow-up
+workflow. It needs `conversations.readonly` to see who wrote back.
 
 **Who says hello** is a setting. `app`: the bot drafts the first text from
 the hook listing (`outreach_open` on the agent playbook — turn on "First text

@@ -103,7 +103,7 @@ test("without the conversations scope nobody is enrolled", async () => {
 test("the tick: its hour, both switches, a workflow, once a day", async () => {
   _resetJobs();
   const LOC = "loc-fu-3";
-  const base = { locationId: LOC, client: fakeGhl().client, store, utcHour: 17, now: NOW, paceMs: 0 };
+  const base = { locationId: LOC, client: fakeGhl().client, store, hour: 10, now: NOW, paceMs: 0 }; // NOW is 10:05am Pacific
   assert.equal(await maybeStartOutreachFollowUp({ ...base, saved, now: NOW - 3600000 }), false, "wrong hour");
   assert.equal(await maybeStartOutreachFollowUp({ ...base, saved: { outreachAutopilot: { ...saved.outreachAutopilot, enabled: false } } }), false, "autopilot off");
   assert.equal(await maybeStartOutreachFollowUp({ ...base, saved: { outreachAutopilot: { ...saved.outreachAutopilot, followUpWorkflowId: "" } } }), false, "no workflow");

@@ -23,7 +23,7 @@ import { checkObjectStore } from "./r2.js";
 import { sendDueDrafts } from "./conversation-scheduler.js";
 import { maybeStartFollowUpSweep, FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.js";
 import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agent.js";
-import { maybeStartOutreachSweep, OUTREACH_SWEEP_UTC_HOUR } from "./outreach-sweep.js";
+import { maybeStartOutreachSweep } from "./outreach-sweep.js";
 import { maybeStartOutreachFollowUp } from "./outreach-followup.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { maybeMirror } from "./ghl-mirror.js";
@@ -213,7 +213,7 @@ setInterval(async () => {
       if (nudged) console.log(`follow-up sweep started for ${locationId}`);
       // The top of the funnel, same tick: pull, pick, import, say hello.
       const pulled = await maybeStartOutreachSweep({
-        client: makeClient(token), locationId, saved, store, utcHour: OUTREACH_SWEEP_UTC_HOUR,
+        client: makeClient(token), locationId, saved, store,
         deps: { runPull: outreachRouter.runPull, importAgents: outreachRouter.importAgents },
       });
       if (pulled) console.log(`outreach sweep started for ${locationId}`);

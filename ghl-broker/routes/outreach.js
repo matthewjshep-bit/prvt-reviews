@@ -33,10 +33,10 @@ import { OUTREACH_FIELDS } from "../field-registry.js";
 import { SUBJECT_PROPERTY_FIELD, seedSubjectProperty } from "../enrich.js";
 import {
   startOutreachSweep, getOutreachJob, publicOutreachJob, normalizeOutreachAutopilot, workflowIdFrom, MAX_DAILY_CAP, PROPERTY_TYPES,
-  CURSOR_NAME as OUTREACH_CURSOR, OUTREACH_SWEEP_UTC_HOUR,
+  CURSOR_NAME as OUTREACH_CURSOR, OUTREACH_SWEEP_HOUR, WORK_TZ,
 } from "../outreach-sweep.js";
 import {
-  startOutreachFollowUp, getOutreachFollowUpJob, CURSOR_NAME as FOLLOWUP_CURSOR, OUTREACH_FOLLOWUP_UTC_HOUR,
+  startOutreachFollowUp, getOutreachFollowUpJob, CURSOR_NAME as FOLLOWUP_CURSOR, OUTREACH_FOLLOWUP_HOUR,
 } from "../outreach-followup.js";
 
 // Subject Property is created and seeded here but OWNED by the conversation
@@ -909,7 +909,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const followCursor = await store.getJobCursor?.(locationId, FOLLOWUP_CURSOR).catch(() => null);
       res.json({
         followUp: {
-          utcHour: OUTREACH_FOLLOWUP_UTC_HOUR,
+          hour: OUTREACH_FOLLOWUP_HOUR, tz: WORK_TZ,
           lastRunAt: followCursor?.at || null,
           job: getOutreachFollowUpJob(locationId),
         },
@@ -918,7 +918,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         importsEnabled: OUTREACH_IMPORTS_ENABLED,
         hasKey: Boolean(String(saved.rentcastApiKey || "").trim()),
         firstTouchOn: Boolean(saved.conversationAi?.parties?.agent?.outreach?.enabled),
-        utcHour: OUTREACH_SWEEP_UTC_HOUR,
+        hour: OUTREACH_SWEEP_HOUR, tz: WORK_TZ,
         lastRunAt: cursor?.at || null,
         job: publicOutreachJob(getOutreachJob(locationId)),
       });

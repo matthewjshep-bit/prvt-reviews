@@ -17,7 +17,8 @@ import { store as defaultStore } from "./store.js";
 
 export const CURSOR_NAME = "outreach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
-export const OUTREACH_SWEEP_UTC_HOUR = Number(process.env.OUTREACH_SWEEP_UTC_HOUR || 15); // ≈ 7–8am Pacific
+// The hour it runs, in Pacific time (so daylight saving doesn't move it).
+export const OUTREACH_SWEEP_HOUR = Number(process.env.OUTREACH_SWEEP_HOUR || 10); // 10–11am Pacific
 export const DEFAULT_DAILY_CAP = 12;
 // A sanity ceiling, not a business rule: one RentCast page is 500 listings,
 // and the import paces GHL at two contacts at a time.
@@ -58,6 +59,11 @@ export function countiesFrom(v) {
 // Mon–Fri in Pacific time, where the business is. The sweeps fire at 7–10am
 // Pacific, so the Pacific weekday is the one that matters.
 export const WORK_TZ = process.env.OUTREACH_TZ || "America/Los_Angeles";
+// The hour of day (0–23) in the work time zone.
+export function workHour(now = Date.now(), tz = WORK_TZ) {
+  return Number(new Intl.DateTimeFormat("en-US", { hour: "numeric", hourCycle: "h23", timeZone: tz }).format(new Date(now)));
+}
+
 export function isWorkday(now = Date.now(), tz = WORK_TZ) {
   const wd = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: tz }).format(new Date(now));
   return wd !== "Sat" && wd !== "Sun";
@@ -311,13 +317,13 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
 }
 
 /**
- * maybeStartOutreachSweep({ locationId, client, saved, store, deps, utcHour, now }) → boolean
+ * maybeStartOutreachSweep({ locationId, client, saved, store, deps, hour, now }) → boolean
  *
  * The tick's decision. Gates: the hour, the toggle, a RentCast key, no run
  * in progress, and the durable cursor at least MIN_GAP_MS old.
  */
-export async function maybeStartOutreachSweep({ locationId, client, saved = {}, store = defaultStore, deps = {}, utcHour = OUTREACH_SWEEP_UTC_HOUR, now = Date.now() }) {
-  if (new Date(now).getUTCHours() !== utcHour) return false;
+export async function maybeStartOutreachSweep({ locationId, client, saved = {}, store = defaultStore, deps = {}, hour = OUTREACH_SWEEP_HOUR, now = Date.now() }) {
+  if (workHour(now) !== hour) return false;
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
   if (!oa.enabled) return false;
   if (oa.weekdaysOnly && !isWorkday(now)) return false;
