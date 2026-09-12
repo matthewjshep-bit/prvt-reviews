@@ -538,6 +538,8 @@ export const importOutreachAgents = ({ agentKeys, applyTag = true, dryRun = true
 // The daily outreach sweep: its settings, its last run, and a way to run it now.
 export const getOutreachAutopilot = () => fetch(`${API_BASE}/api/outreach/autopilot?${locq()}`).then(j);
 export const runOutreachAutopilot = (dryRun = true) => post(`/api/outreach/autopilot/run`, { dryRun });
+// Enrolled agents who never answered → the follow-up workflow.
+export const runOutreachFollowUp = (dryRun = true) => post(`/api/outreach/autopilot/followup/run`, { dryRun });
 export const setOutreachStatus = (agentKey, status, batchId) =>
   post(`/api/outreach/agents/${encodeURIComponent(agentKey)}/status`, { status, ...(batchId ? { batchId } : {}) });
 export const clearOutreach = (batchId) => post(`/api/outreach/clear`, batchId ? { batchId } : {});

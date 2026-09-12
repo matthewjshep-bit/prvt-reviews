@@ -109,6 +109,8 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
     const m = machineDid(e);
     switch (e.type) {
       case "import": bump("found", m, feedRow(e, names)); break;
+      case "outreach_enrolled": if (e.data?.kind === "followup") break; // a second text, not a first
+      // falls through — a workflow enrollment is the first text, sent by GHL
       case "outreach_sent": bump("first_text", m, feedRow(e, names)); if (!outreachOpen.has(e.contactId)) outreachOpen.set(e.contactId, t); break;
       case "text_summary":
       case "call_summary": {

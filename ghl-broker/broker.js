@@ -24,6 +24,7 @@ import { sendDueDrafts } from "./conversation-scheduler.js";
 import { maybeStartFollowUpSweep, FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.js";
 import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agent.js";
 import { maybeStartOutreachSweep, OUTREACH_SWEEP_UTC_HOUR } from "./outreach-sweep.js";
+import { maybeStartOutreachFollowUp } from "./outreach-followup.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
@@ -216,6 +217,9 @@ setInterval(async () => {
         deps: { runPull: outreachRouter.runPull, importAgents: outreachRouter.importAgents },
       });
       if (pulled) console.log(`outreach sweep started for ${locationId}`);
+      // The agents GHL texted and never heard back from, into the second workflow.
+      const followed = await maybeStartOutreachFollowUp({ client: makeClient(token), locationId, saved, store });
+      if (followed) console.log(`outreach follow-up started for ${locationId}`);
       // The second wave: deals blasted once, nobody committed, the delay past.
       const waved = await maybeStartDispoSweep({
         client: makeClient(token), locationId, saved, store, utcHour: DISPO_SWEEP_UTC_HOUR,

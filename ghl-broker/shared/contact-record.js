@@ -50,6 +50,10 @@ export const EVENT_TYPES = [
   // The first cold text to a listing agent went out — from the app, so the
   // outreach ladder has something to count from.
   "outreach_sent",
+  // A new agent was put into a GHL outreach workflow by id — GHL sends the
+  // texts, so this is the only record the app has that we reached out.
+  // data.kind "first" (the import) or "followup" (outreach-followup.js).
+  "outreach_enrolled",
   // The bot (or a person) put a call or a visit on the calendar.
   "call_booked",
   "call_summary", "text_summary", "note",
@@ -73,6 +77,7 @@ export const EVENT_LABEL = {
   import: "imported", agent_estimate: "agent's own take", property_details: "property details",
   follow_up_sent: "we followed up",
   outreach_sent: "we reached out about their listing",
+  outreach_enrolled: "added to an outreach workflow",
   call_booked: "call booked",
   post_mortem_built: "post-mortem written",
 };
@@ -90,6 +95,7 @@ export const EVENT_ICON = {
   subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator", property_details: "ClipboardList",
   follow_up_sent: "BellRing",
   outreach_sent: "Send",
+  outreach_enrolled: "Workflow",
   call_booked: "CalendarCheck",
   post_mortem_built: "ClipboardCheck",
 };

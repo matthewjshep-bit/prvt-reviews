@@ -10,7 +10,7 @@ import {
   Pencil, Plus, RefreshCw, RotateCcw, Search, Trash2,
 } from "lucide-react";
 import {
-  getOutreachAgents, getAgentListings, pullOutreach, importOutreachAgents, getOutreachAutopilot, runOutreachAutopilot,
+  getOutreachAgents, getAgentListings, pullOutreach, importOutreachAgents, getOutreachAutopilot, runOutreachAutopilot, runOutreachFollowUp,
   setOutreachStatus, clearOutreach, getOutreachBatches, createOutreachBatch,
   renameOutreachBatch, deleteOutreachBatch,
   ghlContactUrl, getLocationId, getLocationKey, zillowUrl,
@@ -187,7 +187,7 @@ export default function AgentOutreach({ settings }) {
   }).catch(() => {});
   useEffect(() => { refreshAutopilot(); }, []);
   useEffect(() => {
-    if (!autopilot?.job || autopilot.job.status !== "running") return;
+    if (autopilot?.job?.status !== "running" && autopilot?.followUp?.job?.status !== "running") return;
     const t = setTimeout(refreshAutopilot, 3000);
     return () => clearTimeout(t);
   }, [autopilot]);
@@ -449,7 +449,7 @@ export default function AgentOutreach({ settings }) {
           <span className="font-semibold">{autopilot.settings?.enabled ? "Runs itself every morning" : "Runs by hand"}</span>
           <span className="text-xs text-slate-500">
             {autopilot.settings?.enabled
-              ? `up to ${autopilot.settings.dailyCap} new agents a day · ${autopilot.settings.firstTouch === "app" ? "the bot says hello" : "GHL workflow says hello"}${autopilot.importsEnabled ? "" : " · imports are dry runs until OUTREACH_IMPORTS_ENABLED is set"}`
+              ? `${autopilot.settings.weekdaysOnly ? "Mon–Fri" : "every day"} · up to ${autopilot.settings.dailyCap} new agents a run ·${autopilot.settings.firstTouch === "app" ? "the bot says hello" : autopilot.settings.firstTouch === "workflow" ? (autopilot.settings.workflowId ? "enrolled in your GHL workflow" : "no GHL workflow picked!") : "GHL trigger tag says hello"}${autopilot.settings.counties?.length ? ` · one county a day (${autopilot.settings.counties.map((c) => c.county).join(" → ")})` : ""}${autopilot.settings.followUpEnabled ? ` · follow-up after ${autopilot.settings.followUpDays} days` : ""}${autopilot.importsEnabled ? "" : " · imports are dry runs until OUTREACH_IMPORTS_ENABLED is set"}`
               : "turn on the daily sweep in Settings → Agent Outreach"}
             {autopilot.lastRunAt ? ` · last ran ${new Date(autopilot.lastRunAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}
           </span>
@@ -457,7 +457,14 @@ export default function AgentOutreach({ settings }) {
             <span className={`text-xs ${autopilot.job.status === "error" ? "text-red-700" : "text-slate-600"}`}>
               {autopilot.job.status === "running" ? `running: ${autopilot.job.phase}…`
                 : autopilot.job.status === "error" ? `failed: ${autopilot.job.error}`
-                : `${autopilot.job.dryRun ? "would import" : "imported"} ${autopilot.job.dryRun ? autopilot.job.picked : autopilot.job.imported} of ${autopilot.job.candidates} new${autopilot.job.opened ? `, ${autopilot.job.opened} first texts drafted` : ""}`}
+                : `${autopilot.job.county ? `${autopilot.job.county}${autopilot.job.pull?.totalCount != null ? ` (listings ${Math.min(autopilot.job.pull.offset + 1, autopilot.job.pull.totalCount)}–${autopilot.job.pull.nextOffset || autopilot.job.pull.totalCount} of ${autopilot.job.pull.totalCount}, ${autopilot.job.pull.requestsUsed ?? 0} requests)` : ""}: ` : ""}${autopilot.job.dryRun ? "would import" : "imported"} ${autopilot.job.dryRun ? autopilot.job.picked : autopilot.job.imported} of ${autopilot.job.candidates} new${autopilot.job.opened ? `, ${autopilot.job.opened} first texts drafted` : ""}${autopilot.job.enrolled ? `, ${autopilot.job.enrolled} enrolled` : ""}${autopilot.job.warnings?.length ? ` · ${autopilot.job.warnings[0]}` : ""}`}
+            </span>
+          )}
+          {autopilot.followUp?.job && (
+            <span className={`text-xs ${autopilot.followUp.job.status === "error" ? "text-red-700" : "text-slate-600"}`}>
+              {autopilot.followUp.job.status === "running" ? "follow-up running…"
+                : autopilot.followUp.job.status === "error" ? `follow-up failed: ${autopilot.followUp.job.error}`
+                : `follow-up: ${autopilot.followUp.job.dryRun ? `${autopilot.followUp.job.results.filter((r) => r.action === "would enroll").length} would be enrolled` : `${autopilot.followUp.job.enrolled} enrolled`} of ${autopilot.followUp.job.candidates} due${autopilot.followUp.job.skipped ? `, ${autopilot.followUp.job.skipped} skipped` : ""}${autopilot.followUp.job.warnings?.length ? ` · ${autopilot.followUp.job.warnings[0]}` : ""}`}
             </span>
           )}
           <div className="ml-auto flex gap-2">
@@ -470,11 +477,29 @@ export default function AgentOutreach({ settings }) {
             <button type="button" disabled={autoBusy || autopilot.job?.status === "running" || !autopilot.hasKey}
               className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
               onClick={async () => {
-                if (!window.confirm(`Run the outreach sweep now? It pulls, imports up to ${autopilot.settings?.dailyCap ?? 12} new agents${autopilot.importsEnabled ? "" : " (dry run — imports are off on the broker)"}, and drafts their first texts.`)) return;
+                if (!window.confirm(`Run the outreach sweep now? It pulls, imports up to ${autopilot.settings?.dailyCap ?? 12} new agents${autopilot.importsEnabled ? "" : " (dry run — imports are off on the broker)"}, and ${autopilot.settings?.firstTouch === "workflow" ? "enrolls them in your GHL workflow" : "drafts their first texts"}.`)) return;
                 setAutoBusy(true); try { await runOutreachAutopilot(false); await refreshAutopilot(); } catch (e) { setError(e.message); } setAutoBusy(false);
               }}>
               Run it now
             </button>
+            {autopilot.settings?.followUpWorkflowId && (
+              <>
+                <button type="button" disabled={autoBusy || autopilot.followUp?.job?.status === "running"}
+                  title="List who is due for the follow-up workflow today and who wrote back. Writes nothing to GHL."
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                  onClick={async () => { setAutoBusy(true); try { await runOutreachFollowUp(true); await refreshAutopilot(); } catch (e) { setError(e.message); } setAutoBusy(false); }}>
+                  Preview follow-ups
+                </button>
+                <button type="button" disabled={autoBusy || autopilot.followUp?.job?.status === "running"}
+                  className="rounded-lg border border-blue-600 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-40"
+                  onClick={async () => {
+                    if (!window.confirm(`Enroll every agent who hasn't answered in ${autopilot.settings.followUpDays} days into the follow-up workflow now?`)) return;
+                    setAutoBusy(true); try { await runOutreachFollowUp(false); await refreshAutopilot(); } catch (e) { setError(e.message); } setAutoBusy(false);
+                  }}>
+                  Send follow-ups now
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

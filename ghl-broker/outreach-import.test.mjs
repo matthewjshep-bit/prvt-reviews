@@ -68,7 +68,7 @@ const FIELD_NAMES = {
   hook_address: "Hook Address",
 };
 
-async function runImport(ghl) {
+async function runImport(ghl, extra = {}) {
   const app = express();
   app.use(express.json());
   app.use("/api/outreach", createOutreachRouter({
@@ -92,7 +92,7 @@ async function runImport(ghl) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         location_id: LOC, batchId: batch.id,
-        agentKeys: ["e:agent@example.com"], dryRun: false, applyTag: false,
+        agentKeys: ["e:agent@example.com"], dryRun: false, applyTag: false, ...extra,
       }),
     });
     return await r.json();
@@ -134,6 +134,27 @@ test("an existing contact with no Subject Property gets seeded too", async () =>
   const res = await runImport(ghl);
   assert.equal(res.results[0].action, "updated");
   assert.equal(writtenFields(ghl)["Subject Property"], HOOK);
+});
+
+const enrollCalls = (ghl) => ghl.calls.filter((c) => c.method === "POST" && /\/workflow\//.test(c.path));
+
+test("a NEW contact is enrolled in the workflow by id and the enrollment is recorded", async () => {
+  const ghl = fakeGhl({ duplicate: null });
+  const res = await runImport(ghl, { enrollWorkflowId: "https://app.gohighlevel.com/v2/location/x/automation/workflow/wf-first-1" });
+  assert.equal(res.results[0].action, "created");
+  assert.deepEqual(res.results[0].enrolled, { workflowId: "wf-first-1" });
+  assert.equal(res.enrolled, 1);
+  assert.deepEqual(enrollCalls(ghl).map((c) => c.path), ["/contacts/c-new/workflow/wf-first-1"]);
+  const events = await store.listContactEventsSince(LOC, "2000-01-01T00:00:00Z", { types: ["outreach_enrolled"] });
+  assert.ok(events.some((e) => e.contactId === "c-new" && e.data?.kind === "first" && e.data?.workflowId === "wf-first-1"));
+});
+
+test("a contact already in GHL is never enrolled — it may be mid-workflow", async () => {
+  const ghl = fakeGhl({ duplicate: { id: "c-existing" } });
+  const res = await runImport(ghl, { enrollWorkflowId: "wf-first-1" });
+  assert.equal(res.results[0].action, "updated");
+  assert.deepEqual(res.results[0].enrolled, { skipped: "already in GHL" });
+  assert.equal(enrollCalls(ghl).length, 0);
 });
 
 test("a re-import never overwrites a Subject Property the conversation moved on", async () => {

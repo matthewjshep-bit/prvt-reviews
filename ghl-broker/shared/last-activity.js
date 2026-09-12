@@ -35,7 +35,7 @@ export const INBOUND_EVENT_TYPES = ["text_summary", "call_summary"];
 // Ours. A booked call is included: it is a thing they agreed to and can see
 // on their calendar, which is a conversation by any useful definition.
 export const OUTBOUND_EVENT_TYPES = [
-  "outreach_sent", "follow_up_sent", "offer_sent", "offer_revised", "blast_sent", "dataroom_sent", "call_booked",
+  "outreach_sent", "outreach_enrolled", "follow_up_sent", "offer_sent", "offer_revised", "blast_sent", "dataroom_sent", "call_booked",
 ];
 
 export const LAST_ACTIVITY_TYPES = [...INBOUND_EVENT_TYPES, ...OUTBOUND_EVENT_TYPES];

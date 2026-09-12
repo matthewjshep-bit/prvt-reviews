@@ -8,7 +8,7 @@ import {
   CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
-import { getCompBookmarklet, getUnderwrites, listPipelines, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
+import { getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
@@ -23,6 +23,32 @@ const fmtTyped = (v) => {
   const d = String(v).replace(/[^\d]/g, "");
   return d ? Number(d).toLocaleString("en-US") : "";
 };
+
+// RentCast's property types (mirrors PROPERTY_TYPES in ghl-broker/outreach-sweep.js).
+const OUTREACH_PROPERTY_TYPES = ["Single Family", "Multi-Family", "Manufactured", "Townhouse", "Condo", "Apartment", "Land"];
+const OUTREACH_DEFAULT_TYPES = ["Single Family", "Multi-Family", "Manufactured", "Townhouse"];
+
+// A GHL workflow by name, or a pasted id/builder URL when the list can't load
+// (the token lacks workflows.readonly).
+function WorkflowPick({ label, value, onChange, workflows, hint, className = "" }) {
+  const list = workflows?.list || [];
+  const known = !value || list.some((w) => w.id === value);
+  return (
+    <label className={`block ${className}`}>
+      <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+      {list.length ? (
+        <select className={INPUT_CLS} value={value} onChange={(e) => onChange(e.target.value)}>
+          <option value="">— pick a workflow —</option>
+          {!known && <option value={value}>{value}</option>}
+          {list.map((w) => <option key={w.id} value={w.id}>{w.name}{w.status && w.status !== "published" ? ` (${w.status})` : ""}</option>)}
+        </select>
+      ) : (
+        <input className={INPUT_CLS} value={value} onChange={(e) => onChange(e.target.value)} placeholder="paste the workflow's URL or id" />
+      )}
+      {(hint || workflows?.error) && <span className="mt-1 block text-xs text-slate-500">{workflows?.error || hint}</span>}
+    </label>
+  );
+}
 
 function Num({ label, value, onChange, suffix, money }) {
   return (
@@ -292,6 +318,14 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const setMirrorStage = (side, key, stageId) => setMirrorSide(side, { stages: { ...(((form.ghlMirror || {})[side] || {}).stages || {}), [key]: stageId } });
   const setDispoAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), [k]: v } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
+  // GHL workflows for the outreach pickers — only once the sweep is on.
+  const [outreachWorkflows, setOutreachWorkflows] = useState(null);
+  const outreachAutoOn = Boolean(form.outreachAutopilot?.enabled);
+  useEffect(() => {
+    if (!outreachAutoOn || outreachWorkflows) return;
+    listWorkflows().then((r) => setOutreachWorkflows({ list: r.workflows || [], error: r.error || "" }))
+      .catch((e) => setOutreachWorkflows({ list: [], error: e.message }));
+  }, [outreachAutoOn, outreachWorkflows]);
 
   // Contract clause templates (Purchase & Sale + Assignment). null/empty → the
   // built-in default language; the first edit materializes a copy into the form
@@ -318,7 +352,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       // walk above never reaches them, and a string "10" would come back from
       // the server as a string forever.
       clean.psa = coerce(form.psa || {}, DEFAULT_OFFER_SETTINGS.psa);
-      if (form.outreachAutopilot) clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12 };
+      if (form.outreachAutopilot) clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12, followUpDays: Number(form.outreachAutopilot.followUpDays) || 14 };
       if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
       const r = await saveSettings(clean);
       onSaved?.(r.settings);
@@ -668,13 +702,71 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                   value={form.outreachAutopilot?.firstTouch || "app"} onChange={(e) => setOutreachAuto("firstTouch")(e.target.value)}>
                   <option value="app">The Conversation AI drafts it (no GHL trigger tag)</option>
                   <option value="ghl">The GHL workflow template (trigger tag, as before)</option>
+                  <option value="workflow">Enroll them in a GHL workflow I pick</option>
                 </select>
+              </label>
+              {form.outreachAutopilot?.firstTouch === "workflow" && (
+                <WorkflowPick className="col-span-2" label="First-text workflow" workflows={outreachWorkflows}
+                  value={form.outreachAutopilot?.workflowId || ""} onChange={setOutreachAuto("workflowId")}
+                  hint="Only contacts the import creates are enrolled — anyone already in GHL is left alone." />
+              )}
+              <label className="col-span-2 block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Counties, one a day in turn</span>
+                <textarea className={INPUT_CLS} rows={3} placeholder={"King, WA\nPierce, WA\nSnohomish, WA"}
+                  value={Array.isArray(form.outreachAutopilot?.counties) ? form.outreachAutopilot.counties.map((c) => `${c.county}, ${c.state}`).join("\n") : form.outreachAutopilot?.counties || ""}
+                  onChange={(e) => setOutreachAuto("counties")(e.target.value)} />
+                <span className="mt-1 block text-xs text-slate-500">
+                  One "County, ST" per line. Each run reads the next pages of one county, then moves to the next county once it's read to the end.
+                  Requests are spread over the month to stop at 48 (RentCast bills $0.20 a request past 50). Blank = the zips/city defaults above.
+                </span>
+              </label>
+              <Num label="Listed at least" suffix="days ago" value={form.outreachAutopilot?.minDaysOnMarket ?? 45} onChange={setOutreachAuto("minDaysOnMarket")} />
+              <Num label="Built in or before (0 = any)" value={form.outreachAutopilot?.maxYearBuilt ?? 0} onChange={setOutreachAuto("maxYearBuilt")} />
+              <Num label="Requests kept for the Pull button" value={form.outreachAutopilot?.reserveRequests ?? 2} onChange={setOutreachAuto("reserveRequests")} />
+              <div className="col-span-2">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Property types</span>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  {OUTREACH_PROPERTY_TYPES.map((t) => {
+                    const on = (form.outreachAutopilot?.propertyTypes ?? OUTREACH_DEFAULT_TYPES).includes(t);
+                    return (
+                      <label key={t} className="flex items-center gap-1.5 text-sm text-slate-700">
+                        <input type="checkbox" checked={on} onChange={(e) => {
+                          const cur = form.outreachAutopilot?.propertyTypes ?? OUTREACH_DEFAULT_TYPES;
+                          setOutreachAuto("propertyTypes")(e.target.checked ? [...cur, t] : cur.filter((x) => x !== t));
+                        }} />
+                        {t}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <label className="col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={form.outreachAutopilot?.weekdaysOnly !== false}
+                  onChange={(e) => setOutreachAuto("weekdaysOnly")(e.target.checked)} />
+                Weekdays only (Mon–Fri, Pacific) — the pull, the import, and the follow-ups
               </label>
               <label className="col-span-2 flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" checked={form.outreachAutopilot?.requireDistress !== false}
                   onChange={(e) => setOutreachAuto("requireDistress")(e.target.checked)} />
                 Only agents with at least one distressed listing
               </label>
+              <label className="col-span-2 flex items-start gap-2 text-sm text-slate-700">
+                <input type="checkbox" className="mt-1" checked={Boolean(form.outreachAutopilot?.followUpEnabled)}
+                  onChange={(e) => setOutreachAuto("followUpEnabled")(e.target.checked)} />
+                <span>
+                  Follow up with agents who never answered
+                  <span className="block text-xs text-slate-500">
+                    Agents enrolled by this sweep with no reply (no text or call back, nothing inbound in GHL) go into a second workflow.
+                  </span>
+                </span>
+              </label>
+              {form.outreachAutopilot?.followUpEnabled && (
+                <>
+                  <Num label="Follow up after" suffix="days" value={form.outreachAutopilot?.followUpDays ?? 14} onChange={setOutreachAuto("followUpDays")} />
+                  <WorkflowPick label="Follow-up workflow" workflows={outreachWorkflows}
+                    value={form.outreachAutopilot?.followUpWorkflowId || ""} onChange={setOutreachAuto("followUpWorkflowId")} />
+                </>
+              )}
             </div>
           )}
         </div>

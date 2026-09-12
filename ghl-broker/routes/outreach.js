@@ -23,7 +23,7 @@
 // recorded to power the month-to-date meter in the UI.
 
 import express from "express";
-import { ensureProfile, learnFacts, recordEvents } from "../contact-record.js";
+import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
 import { scoreListing, medianPricePerSqft, distressSignals } from "../outreach-score.js";
@@ -32,9 +32,12 @@ import { findCounty, listingInCounty } from "../shared/us-counties.js";
 import { OUTREACH_FIELDS } from "../field-registry.js";
 import { SUBJECT_PROPERTY_FIELD, seedSubjectProperty } from "../enrich.js";
 import {
-  startOutreachSweep, getOutreachJob, publicOutreachJob, normalizeOutreachAutopilot,
+  startOutreachSweep, getOutreachJob, publicOutreachJob, normalizeOutreachAutopilot, workflowIdFrom, MAX_DAILY_CAP, PROPERTY_TYPES,
   CURSOR_NAME as OUTREACH_CURSOR, OUTREACH_SWEEP_UTC_HOUR,
 } from "../outreach-sweep.js";
+import {
+  startOutreachFollowUp, getOutreachFollowUpJob, CURSOR_NAME as FOLLOWUP_CURSOR, OUTREACH_FOLLOWUP_UTC_HOUR,
+} from "../outreach-followup.js";
 
 // Subject Property is created and seeded here but OWNED by the conversation
 // (see its definition in enrich.js) — hence its own list rather than a new
@@ -42,7 +45,7 @@ import {
 const IMPORT_FIELDS = [...OUTREACH_FIELDS, SUBJECT_PROPERTY_FIELD];
 import {
   findDuplicateContact, createContact, getContact, updateContact,
-  addContactTags, findOrCreateCustomFieldByKey, getLastMessageDate,
+  addContactTags, findOrCreateCustomFieldByKey, getLastMessageDate, addContactToWorkflow,
 } from "../ghl.js";
 
 const OUTREACH_TAG = process.env.OUTREACH_TAG || "agent-outreach";
@@ -120,7 +123,11 @@ async function rentcastPage(apiKey, params) {
     throw Object.assign(new Error(`RentCast ${r.status}`), { http: 502, detail });
   }
   const data = await r.json();
-  return Array.isArray(data) ? data : data.listings || [];
+  // X-Total-Count arrives when includeTotalCount=true: how many listings
+  // match in all, so the sweep knows how many pages a county has.
+  const header = r.headers.get("x-total-count");
+  const total = header != null && header !== "" && Number.isFinite(Number(header)) ? Number(header) : null;
+  return { listings: Array.isArray(data) ? data : data.listings || [], total };
 }
 
 // `firstTouch({ locationId, client, contactId, hook, name })` is injected by
@@ -187,8 +194,22 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     const county = String(body.county ?? settings.outreachCounty ?? "").trim();
     const city = String(body.city ?? settings.outreachCity ?? "").trim();
     const state = String(body.state ?? settings.outreachState ?? "").trim().toUpperCase();
-    const daysOld = Math.min(365, Math.max(1, parseInt(body.daysOld, 10) || parseInt(settings.outreachDaysOld, 10) || 180));
-    const propertyType = String(body.propertyType || "").trim();
+    // RentCast ranges are "min:max" with * for open (daysOld "45:*" = listed
+    // at least 45 days ago). A bare number is a MAXIMUM — it keeps fresh
+    // listings and drops the stalest, the opposite of what distress wants.
+    const daysOldRaw = String(body.daysOld ?? "").trim();
+    const daysOld = /^(\d{1,3}|\*):(\d{1,3}|\*)$/.test(daysOldRaw)
+      ? daysOldRaw
+      : Math.min(365, Math.max(1, parseInt(body.daysOld, 10) || parseInt(settings.outreachDaysOld, 10) || 180));
+    // One type, or several joined with "|" — each matched to RentCast's spelling.
+    const propertyType = String(body.propertyType || "").split("|")
+      .map((t) => PROPERTY_TYPES.find((p) => p.toLowerCase() === t.trim().toLowerCase()))
+      .filter(Boolean).join("|");
+    const yearBuiltRaw = String(body.yearBuilt ?? "").trim();
+    const yearBuilt = /^(\d{4}|\*):(\d{4}|\*)$/.test(yearBuiltRaw) ? yearBuiltRaw : "";
+    // Where to start in the result list — the sweep walks a county page by
+    // page across days instead of re-reading page one.
+    const offset = Math.max(0, parseInt(body.offset, 10) || 0);
     // County pulls cover a whole market in 500-listing pages, so they get a
     // higher request ceiling and a bigger default than zip/city pulls.
     const maxRequests = Math.min(10, Math.max(1, parseInt(body.maxRequests, 10) || (county && !zips.length ? 5 : 3)));
@@ -208,7 +229,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     // warning so the omission is visible.
     const rawMaxYear = parseInt(body.maxYearBuilt ?? settings.outreachMaxYearBuilt, 10);
     const maxYearBuilt = rawMaxYear >= 1800 && rawMaxYear <= 2100 ? rawMaxYear : 0;
-    return { zips, county, city, state, daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt };
+    return { zips, county, city, state, daysOld, propertyType, yearBuilt, offset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt };
   }
 
   async function runPull(locationId, client, body) {
@@ -216,7 +237,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     const apiKey = String(settings.rentcastApiKey || "").trim();
     if (!apiKey) throw Object.assign(new Error("RentCast API key not configured — add it in Settings"), { http: 400 });
 
-    const { zips, county, city, state, daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt } =
+    const { zips, county, city, state, daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt } =
       pullParams(body, settings);
     // Precedence: zips (one query each) → county (one circular query around
     // the county centroid, post-filtered to the county line) → city/state.
@@ -254,33 +275,46 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     }
 
     const warnings = [];
-    const common = { daysOld: String(daysOld), ...(propertyType ? { propertyType } : {}) };
-    const cacheKey = `${locationId}|${JSON.stringify({ targets, common })}`;
+    const common = {
+      daysOld: String(daysOld), ...(propertyType ? { propertyType } : {}), ...(yearBuilt ? { yearBuilt } : {}),
+      includeTotalCount: "true",
+    };
+    const paging = startOffset > 0 || body.offset != null;
+    const cacheKey = `${locationId}|${JSON.stringify({ targets, common, startOffset, maxRequests: paging ? maxRequests : null })}`;
 
     let listings;
     let requestsUsed = 0;
     let cached = false;
+    // Where the NEXT page starts (0 = this market is read to the end) and how
+    // many listings match in all. Reported for the last target pulled.
+    let nextOffset = 0;
+    let totalCount = null;
     const hit = pullCache.get(cacheKey);
     if (hit && Date.now() - hit.ts < PULL_TTL) {
       listings = hit.listings;
+      nextOffset = hit.nextOffset || 0;
+      totalCount = hit.totalCount ?? null;
       cached = true;
     } else {
       listings = [];
       let budgetLeft = maxRequests;
-      for (const target of targets) {
-        let offset = 0;
+      for (const [i, target] of targets.entries()) {
+        let offset = i === 0 ? startOffset : 0;
         let moreAvailable = false;
         while (budgetLeft > 0) {
           budgetLeft--;
           requestsUsed++;
-          const page = await rentcastPage(apiKey, { ...common, ...target, ...(offset ? { offset: String(offset) } : {}) });
+          const { listings: page, total } = await rentcastPage(apiKey, { ...common, ...target, ...(offset ? { offset: String(offset) } : {}) });
           listings.push(...page);
-          moreAvailable = page.length >= 500;
+          if (total != null) totalCount = total;
+          moreAvailable = total != null ? offset + page.length < total && page.length > 0 : page.length >= 500;
+          offset += page.length;
           if (!moreAvailable) break; // last page for this target
-          offset += 500;
         }
+        nextOffset = moreAvailable ? offset : 0;
         if (moreAvailable && budgetLeft <= 0) {
-          warnings.push(`request budget (${maxRequests}) ran out mid-market — results are truncated; raise max requests to get the rest`);
+          // Paging (the sweep) expects to stop mid-market and resume tomorrow.
+          if (!paging) warnings.push(`request budget (${maxRequests}) ran out mid-market — results are truncated; raise max requests to get the rest`);
           break;
         }
         if (budgetLeft <= 0 && targets.indexOf(target) < targets.length - 1) {
@@ -289,7 +323,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         }
       }
       if (listings.length) {
-        pullCache.set(cacheKey, { ts: Date.now(), listings });
+        pullCache.set(cacheKey, { ts: Date.now(), listings, nextOffset, totalCount });
         if (pullCache.size > 20) pullCache.delete(pullCache.keys().next().value);
       }
     }
@@ -455,7 +489,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     await store.upsertOutreachAgents(locationId, batch.id, agentRows.map(({ agentKey, doc }) => ({ agentKey, doc })));
     await store.recordOutreachPull(locationId, {
       batchId: batch.id,
-      params: { targets, ...(countyMeta ? { county: countyMeta.name } : {}), daysOld, propertyType, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt },
+      params: { targets, ...(countyMeta ? { county: countyMeta.name } : {}), daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt },
       requestsUsed, cached, listingsFetched: listings.length, listingsKept: pool.length,
       agentsTotal: agentRows.length, agentsNew, medianPpsf: Math.round(medianPpsf),
       medianPrice: Math.round(medianPrice),
@@ -463,6 +497,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
 
     return {
       ok: true, cached, requestsUsed,
+      offset: startOffset, nextOffset, totalCount,
       batchId: batch.id, batchName: batch.name,
       listingsFetched: listings.length, listingsKept: pool.length,
       medianPrice: Math.round(medianPrice),
@@ -623,9 +658,13 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * The import, callable without a request so the daily sweep can run it.
    * `openWith: "app"` asks the Conversation AI for the first text after a
    * live import (instead of, or as well as, the GHL trigger tag).
+   * `enrollWorkflowId` puts each contact the import CREATED into that GHL
+   * workflow and records `outreach_enrolled` (the follow-up sweep's clock).
+   * A contact that already existed is never enrolled: it has a history, and
+   * it may already be mid-workflow — GHL gives no way to ask.
    */
-  async function importAgents({ locationId, client, agentKeys = [], applyTag = true, batchId = null, sessionSuffix = "", dryRun = true, openWith = null }) {
-      agentKeys = Array.isArray(agentKeys) ? agentKeys.slice(0, 200) : [];
+  async function importAgents({ locationId, client, agentKeys = [], applyTag = true, batchId = null, sessionSuffix = "", dryRun = true, openWith = null, enrollWorkflowId = null }) {
+      agentKeys = Array.isArray(agentKeys) ? agentKeys.slice(0, MAX_DAILY_CAP) : [];
       if (!agentKeys.length) throw Object.assign(new Error("agentKeys required"), { http: 400 });
       const batch = await resolveBatch(locationId, batchId);
       if (!batch) throw Object.assign(new Error("no batch — pull listings first"), { http: 400 });
@@ -676,6 +715,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
               name: a.name,
               ...(match ? { wouldUpdate: true, contactId: match.id, matchedBy: match.matchedBy } : { wouldCreate: true }),
               tagWouldApply: applyTag,
+              wouldEnroll: Boolean(enrollWorkflowId) && !match,
             };
           }
 
@@ -778,7 +818,24 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
               opened = r?.skipped ? { skipped: r.skipped } : { jobId: r?.job?.id || null };
             } catch (e) { opened = { skipped: e.message }; warnings.push(`${agentKey}: first text: ${e.message}`); }
           }
-          return { agentKey, ok: true, name: a.name, action, contactId, tagged, ...(opened ? { opened } : {}) };
+          let enrolled = null;
+          if (enrollWorkflowId && action !== "created") {
+            enrolled = { skipped: "already in GHL" };
+          } else if (enrollWorkflowId) {
+            try {
+              await withRetry(() => addContactToWorkflow(client, contactId, enrollWorkflowId));
+              enrolled = { workflowId: enrollWorkflowId };
+              await recordEvent({
+                store, locationId, contactId, party: "agent", type: "outreach_enrolled", source: "import",
+                address: hook.address || "", ref: batch.id, dedupeKey: `outreach_enrolled:first:${contactId}`,
+                data: { kind: "first", workflowId: enrollWorkflowId, batchId: batch.id },
+              });
+            } catch (e) {
+              enrolled = { error: e.message };
+              warnings.push(`${agentKey}: workflow: ${e.message}`);
+            }
+          }
+          return { agentKey, ok: true, name: a.name, action, contactId, tagged, ...(opened ? { opened } : {}), ...(enrolled ? { enrolled } : {}) };
         } catch (e) {
           warnings.push(`${agentKey}: ${e.message}`);
           return { agentKey, ok: false, error: e.message };
@@ -791,6 +848,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         results,
         imported: results.filter((r) => r.ok && r.action).length,
         opened: results.filter((r) => r.opened?.jobId).length,
+        enrolled: results.filter((r) => r.enrolled?.workflowId).length,
         warnings,
       };
   }
@@ -802,6 +860,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       res.json(await importAgents({
         locationId, client, agentKeys: b.agentKeys, applyTag: b.applyTag !== false, batchId: b.batchId || null,
         sessionSuffix: b.sessionTag, dryRun: b.dryRun, openWith: b.openWith === "app" ? "app" : null,
+        enrollWorkflowId: workflowIdFrom(b.enrollWorkflowId) || null,
       }));
     } catch (err) { fail(res, err); }
   });
@@ -847,7 +906,13 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const { locationId } = resolveLocation(req);
       const saved = await getSettings(locationId);
       const cursor = await store.getJobCursor?.(locationId, OUTREACH_CURSOR).catch(() => null);
+      const followCursor = await store.getJobCursor?.(locationId, FOLLOWUP_CURSOR).catch(() => null);
       res.json({
+        followUp: {
+          utcHour: OUTREACH_FOLLOWUP_UTC_HOUR,
+          lastRunAt: followCursor?.at || null,
+          job: getOutreachFollowUpJob(locationId),
+        },
         ok: true,
         settings: normalizeOutreachAutopilot(saved.outreachAutopilot),
         importsEnabled: OUTREACH_IMPORTS_ENABLED,
@@ -873,6 +938,17 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         deps: { runPull: router.runPull, importAgents: importAgents },
       });
       res.status(202).json({ ok: true, job: publicOutreachJob(job) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Body: { dryRun }. The follow-up by hand: who is due, who wrote back, and
+  // (live) into the follow-up workflow. Dry by default.
+  router.post("/autopilot/followup/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const job = startOutreachFollowUp({ locationId, client, saved, store, dryRun: req.body?.dryRun !== false, trigger: "manual" });
+      res.status(202).json({ ok: true, job });
     } catch (err) { fail(res, err); }
   });
 
