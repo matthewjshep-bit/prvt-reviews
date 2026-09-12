@@ -91,6 +91,91 @@ test("a week of the machine at work counts each stage once and splits machine fr
   assert.deepEqual(r.totals.messages, { autoSent: 1, personSent: 1 });
 });
 
+/* ---------- the drill-down ---------- */
+
+// One fixture, twelve stages, one question: does the popout list exactly what
+// the tile counted? If these two ever disagree the feature is worse than
+// useless — it teaches you to distrust the number.
+const DRILL = (() => {
+  const events = [
+    { id: "e1", contactId: "a1", type: "import", at: at(100), source: "import", data: { trigger: "daily" } },
+    { id: "e2", contactId: "a2", type: "import", at: at(99), source: "import", data: {} },
+    { id: "e3", contactId: "a1", type: "outreach_sent", at: at(90), source: "conversation", data: { auto: true, contactName: "Priya" } },
+    { id: "e5", contactId: "a1", type: "text_summary", at: at(80), source: "conversation", data: { summary: "has a fixer" } },
+    { id: "e6", contactId: "a1", type: "call_summary", at: at(70), source: "call", data: { summary: "seller would take 425" } },
+    { id: "e7", contactId: "a1", type: "offer_sent", at: at(60), source: "conversation", data: { by: "underwrite" }, offerId: "o1" },
+    { id: "e9", contactId: "a1", type: "deal_promoted", at: at(40), source: "deal", offerId: "o1" },
+    { id: "e10", contactId: "i1", type: "blast_sent", at: at(30), source: "blast", offerId: "o1", data: { auto: true } },
+    { id: "e11", contactId: "i2", type: "blast_sent", at: at(29), source: "blast", offerId: "o1", data: { auto: true } },
+    { id: "e12", contactId: "i1", type: "dataroom_viewed", at: at(20), source: "dataroom", offerId: "o1", data: { viewCount: 1 } },
+    { id: "e14", contactId: "i1", type: "investor_committed", at: at(10), source: "deal", offerId: "o1" },
+    { id: "e15", contactId: "a1", type: "deal_stage", at: at(5), source: "deal", offerId: "o1", data: { stage: "assigned" } },
+  ];
+  const offers = [
+    { id: "o1", contactId: "a1", contactName: "Priya", address: "4410 S Holly St", status: "accepted", createdAt: at(65),
+      autoUnderwrite: { finishedAt: at(64), dryRun: false }, cashAmount: 412000, proactive: { takeCheckAt: at(63) },
+      statusHistory: [{ status: "countered", ts: at(50) }], counter: { amount: 425000, at: at(50) }, deal: { stage: "assigned" } },
+  ];
+  return { events, offers };
+})();
+
+test("every stage's drill-down lists exactly what the tile counted", () => {
+  for (const s of FLOW_STAGES) {
+    const r = buildFlow({ ...win, ...DRILL, itemsFor: s.key });
+    const tile = r.stages.find((x) => x.key === s.key);
+    assert.equal(r.items.length, tile.count, `${s.key}: ${r.items.length} rows behind a count of ${tile.count}`);
+    assert.equal(r.items.filter((i) => i.machine).length, tile.machine, `${s.key}: machine split disagrees`);
+    assert.equal(r.items.filter((i) => !i.machine).length, tile.person, `${s.key}: person split disagrees`);
+  }
+});
+
+test("asking for one stage collects nothing from the other eleven", () => {
+  const r = buildFlow({ ...win, ...DRILL, itemsFor: "replied" });
+  assert.equal(r.items.length, 1);
+  assert.equal(r.items[0].type, "text_summary");
+  // and the polled shape is untouched when nobody asked
+  const plain = buildFlow({ ...win, ...DRILL });
+  assert.deepEqual(plain.items, []);
+  assert.equal(plain.itemsTotal, 0);
+  assert.equal(plain.itemsTruncated, false);
+});
+
+test("an offer item carries the timestamp that qualified it, not when it was written", () => {
+  const item = (key) => buildFlow({ ...win, ...DRILL, itemsFor: key }).items[0];
+  assert.equal(item("underwritten").at, at(64), "the underwrite finished");
+  assert.equal(item("underwritten").kind, "offer");
+  assert.equal(item("underwritten").address, "4410 S Holly St");
+  assert.equal(item("underwritten").cashAmount, 412000);
+  assert.equal(item("floated").at, at(63), "the float went out");
+  assert.equal(item("countered").at, at(50), "they came back");
+});
+
+test("blasted lists one row per deal, and the split is per deal too", () => {
+  const r = buildFlow({ ...win, ...DRILL, itemsFor: "blasted" });
+  assert.equal(r.items.length, 1, "two buyers, one house, one row");
+  const tile = r.stages.find((s) => s.key === "blasted");
+  assert.deepEqual([tile.count, tile.machine], [1, 1]);
+  assert.equal(tile.sub, "2 buyers");
+  // a hand-sent blast on a second house must NOT be coloured by the first
+  const mixed = buildFlow({ ...win, offers: DRILL.offers, itemsFor: "blasted",
+    events: [
+      { id: "b1", contactId: "i1", type: "blast_sent", at: at(30), source: "blast", offerId: "o1", data: { auto: true } },
+      { id: "b2", contactId: "i3", type: "blast_sent", at: at(28), source: "dispo", offerId: "o2", data: { auto: false } },
+    ] });
+  const mt = mixed.stages.find((s) => s.key === "blasted");
+  assert.deepEqual([mt.count, mt.machine, mt.person], [2, 1, 1], "one auto blast must not mark the hand-sent one");
+});
+
+test("the drill-down caps at the newest rows and says it was capped", () => {
+  const events = [0, 1, 2, 3, 4].map((i) => ({ id: `i${i}`, contactId: `c${i}`, type: "import", at: at(50 - i), source: "import", data: {} }));
+  const r = buildFlow({ ...win, events, itemsFor: "found", itemsLimit: 2 });
+  assert.equal(r.items.length, 2);
+  assert.equal(r.itemsTotal, 5);
+  assert.equal(r.itemsTruncated, true);
+  assert.equal(r.items[0].at, at(46), "newest first, not the oldest two");
+  assert.equal(r.stages.find((s) => s.key === "found").count, 5, "the tile still counts them all");
+});
+
 test("with no offer_sent events the send ledger on the offer counts as a person's send", () => {
   const offers = [{ id: "o1", contactId: "a1", address: "1 A St", status: "sent", createdAt: at(30), sends: [{ ts: at(20), channels: ["sms"] }] }];
   const s = Object.fromEntries(buildFlow({ ...win, offers }).stages.map((x) => [x.key, x]));

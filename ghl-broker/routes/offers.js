@@ -64,6 +64,7 @@ import {
   INVESTOR_STATUSES, investorStatus,
 } from "../shared/offer-status.js";
 import { planRequote } from "../shared/requote.js";
+import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity } from "../shared/last-activity.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
 import { startFeedbackScan, getScanJob, publicScanJob } from "../feedback-scan.js";
 import {
@@ -2381,7 +2382,25 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // only its newest 100 offers, and nothing should hit it by accident again.
       const lean = req.query.lean === "1" || req.query.lean === "true";
       const limit = Math.min(lean ? 2000 : 200, parseInt(req.query.limit, 10) || 50);
-      res.json({ offers: await store.listOffers(locationId, { contactId, limit, lean }) });
+      const offers = await store.listOffers(locationId, { contactId, limit, lean });
+      // How warm each agent is, opt-in because only the history table wants
+      // it. Two indexed reads for the whole location, folded into one Map by
+      // contact — never a lookup per row. Attached HERE rather than in the
+      // lean projection because it is derived per request, not a field on the
+      // stored document (toListOffer would strip it anyway). Both reads fall
+      // back to empty: a column that can't load must not take the table down.
+      if (req.query.activity === "1" || req.query.activity === "true") {
+        const [rows, drafts] = await Promise.all([
+          store.lastContactActivity(locationId, { types: LAST_ACTIVITY_TYPES }).catch(() => []),
+          store.listReplyDrafts(locationId, { limit: 2000 }).catch(() => []),
+        ]);
+        const seen = mergeDraftActivity(lastActivityFromEvents(rows), drafts);
+        for (const o of offers) if (o?.contactId) o.lastActivity = seen.get(o.contactId) || null;
+        // The flag is what lets the column tell "we didn't ask" (—) apart
+        // from "we asked and they've never spoken" (never).
+        return res.json({ offers, activity: true });
+      }
+      res.json({ offers });
     } catch (err) { fail(res, err); }
   });
 

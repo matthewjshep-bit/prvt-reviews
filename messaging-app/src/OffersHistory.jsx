@@ -34,10 +34,16 @@ import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
 import UnderwriteStrip from "./UnderwriteStrip.jsx";
 import {
-  AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
+  ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
   SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, StatusPill, TableCard,
   compareBy, rowActivation, useSort,
 } from "./ui.jsx";
+
+// The agent's last communication, across all their offers. Per-agent is the
+// honest grain — a text or a call is with a person, not about a house — so
+// every offer of theirs carries the same stamp and the group header shows it.
+const groupActivity = (offers) =>
+  offers.reduce((best, o) => (o.lastActivity?.at && (!best || o.lastActivity.at > best.at) ? o.lastActivity : best), null);
 
 // Compact "what went out" label for a sends entry: "text+email · 07-29".
 const sendLabel = (s) =>
@@ -103,6 +109,11 @@ const SORTS = {
   property: { natural: "asc", of: (o) => o.address || "" },
   cash: { natural: "desc", of: (o) => (o.cashAmount != null ? Number(o.cashAmount) : null) },
   status: { natural: "asc", of: (o) => OFFER_STATUS_KEYS.indexOf(effectiveStatus(o)) },
+  // Sorting runs before grouping, so this orders the AGENTS by how recently
+  // anyone spoke to them — the most useful reading of the column. compareBy
+  // sinks nulls in both directions, so agents you've never contacted stay at
+  // the bottom whichever way you click.
+  activity: { natural: "desc", of: (o) => o.lastActivity?.at || null },
 };
 
 // One agent, one group. Offers with no contact record still collapse together
@@ -149,7 +160,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
   // the KPI strip alike. The row is ~1KB, so the whole book fits; a fat field
   // is fetched on demand by hydrate().
   useEffect(() => {
-    listOffers({ limit: 2000, lean: true })
+    listOffers({ limit: 2000, lean: true, activity: true })
       .then(setOffers)
       .catch((e) => setError(e.message));
   }, []);
@@ -446,7 +457,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
         {/* min-w scrolls the card rather than crushing columns on narrow
             screens; the document links wrap (below) rather than run under the
             opaque sticky action cell when the table is merely tight. */}
-        <table className="w-full min-w-[64rem] text-sm">
+        <table className="w-full min-w-[70rem] text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
               <th scope="col" className="px-3 py-2.5">
@@ -458,6 +469,10 @@ export default function OffersHistory({ onEdit, onDeal }) {
               <SortHeader label="Property" sortKey="property" sort={sort} onSort={toggleSort} naturalDir={SORTS.property.natural} />
               <SortHeader label="Cash offer" sortKey="cash" sort={sort} onSort={toggleSort} naturalDir={SORTS.cash.natural} align="right" />
               <SortHeader label="Status" sortKey="status" sort={sort} onSort={toggleSort} naturalDir={SORTS.status.natural} />
+              {/* After Status, not beside Date: next to the offer's own date it
+                  would read as another property of the offer rather than of
+                  the agent. */}
+              <SortHeader label="Last activity" sortKey="activity" sort={sort} onSort={toggleSort} naturalDir={SORTS.activity.natural} />
               <th scope="col" className="w-44 px-4 py-2.5">Document</th>
               <th scope="col" className="sticky right-0 bg-white px-4 py-2.5"><span className="sr-only">Actions</span></th>
             </tr>
@@ -515,6 +530,9 @@ export default function OffersHistory({ onEdit, onDeal }) {
                     <td className="whitespace-nowrap px-4 py-2.5">
                       <StatusDots offers={g.offers} />
                     </td>
+                    <td className="whitespace-nowrap px-4 py-2.5">
+                      <ActivityStamp activity={groupActivity(g.offers)} enriched={g.offers.some((o) => o.lastActivity !== undefined)} />
+                    </td>
                     <td className="px-4 py-2.5" />
                     <td className="sticky right-0 whitespace-nowrap bg-slate-50/60 px-4 py-2.5 text-right group-hover:bg-slate-100"
                       onClick={(e) => e.stopPropagation()}>
@@ -570,6 +588,11 @@ export default function OffersHistory({ onEdit, onDeal }) {
                   )}
                   <AttachWarning offer={o} />
                   <SentBadge offer={o} />
+                </td>
+                {/* Muted on the child rows: it is a fact about the agent,
+                    inherited by every offer of theirs, not about this house. */}
+                <td className="whitespace-nowrap px-4 py-2.5">
+                  <ActivityStamp activity={o.lastActivity} enriched={o.lastActivity !== undefined} muted />
                 </td>
                 <td className="w-44 px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                   {/* shrink-0 on the links: flex items shrink before they wrap,

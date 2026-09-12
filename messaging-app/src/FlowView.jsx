@@ -14,6 +14,7 @@ import { groupByDay } from "@shared/contact-record.js";
 import { BTN, ErrorBar, FilterChips, SkeletonRows } from "./ui.jsx";
 import AutopilotCard from "./AutopilotCard.jsx";
 import { EventDayGroups } from "./EventFeed.jsx";
+import FlowStagePopout from "./FlowStagePopout.jsx";
 
 const POLL_MS = 30000;
 const RANGES = [{ days: 1, label: "Today" }, { days: 7, label: "Last 7 days" }, { days: 30, label: "Last 30 days" }];
@@ -29,11 +30,15 @@ function pipelineHref() {
 
 /* ---------- the river ---------- */
 
-function Stage({ s, max }) {
+// Every tile is clickable, zeros included: a dead tile reads as broken, and
+// "nothing reached this stage" is an answer worth being able to ask for.
+function Stage({ s, max, onPick }) {
   const h = max > 0 ? Math.max(s.count > 0 ? 6 : 0, Math.round((s.count / max) * 56)) : 0;
   const mh = s.count > 0 ? Math.round((s.machine / s.count) * h) : 0;
   return (
-    <div className="flex min-w-0 flex-1 flex-col items-center px-1" title={s.hint}>
+    <button type="button" onClick={() => onPick(s)} aria-haspopup="dialog"
+      className="flex min-w-0 flex-1 flex-col items-center rounded-lg px-1 py-1 text-inherit transition-colors hover:bg-slate-50 hover:ring-1 hover:ring-slate-200"
+      title={`${s.hint} — click to see which`}>
       <div className="text-2xl font-bold tabular-nums text-slate-900">{s.count}</div>
       <div className="flex h-14 w-full items-end justify-center">
         <div className="w-8 overflow-hidden rounded-t bg-slate-200" style={{ height: `${h}px` }}>
@@ -45,7 +50,7 @@ function Stage({ s, max }) {
         {s.count > 0 ? <><span className="text-violet-600">{s.machine} machine</span> · {s.person} you</> : "—"}
       </div>
       {s.sub && <div className="text-center text-[11px] text-slate-500">{s.sub}</div>}
-    </div>
+    </button>
   );
 }
 
@@ -58,7 +63,7 @@ function Arrow({ pct }) {
   );
 }
 
-function River({ stages }) {
+function River({ stages, onPick }) {
   const rows = [["agent", "Acquisition"], ["dispo", "Disposition"]].map(([side, title]) => ({ side, title, stages: stages.filter((s) => s.side === side) }));
   return (
     <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
@@ -71,7 +76,7 @@ function River({ stages }) {
               {r.stages.map((s, i) => (
                 <React.Fragment key={s.key}>
                   {i > 0 && <Arrow pct={s.conversion} />}
-                  <Stage s={s} max={max} />
+                  <Stage s={s} max={max} onPick={onPick} />
                 </React.Fragment>
               ))}
             </div>
@@ -97,8 +102,23 @@ export default function FlowView() {
   const [loading, setLoading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [filter, setFilter] = useState("all");
+  // The open drill-down, mirrored into ?stage= so a tile can be linked to and
+  // survives a reload. Held here rather than at the app root because a stage
+  // popout means nothing outside this view.
+  const [stage, setStage] = useState(() => {
+    try { const s = new URL(window.location.href).searchParams.get("stage"); return s ? { key: s, label: "" } : null; } catch { return null; }
+  });
   const gen = useRef(0);
   const viewDays = endDate ? 1 : days;
+
+  function pickStage(s) {
+    setStage(s ? { key: s.key, label: s.label } : null);
+    try {
+      const u = new URL(window.location.href);
+      if (s) u.searchParams.set("stage", s.key); else u.searchParams.delete("stage");
+      window.history.replaceState({}, "", u.pathname + u.search);
+    } catch { /* the popout still works without the URL */ }
+  }
 
   useEffect(() => {
     let live = true; let timer = null; const g = ++gen.current;
@@ -146,7 +166,12 @@ export default function FlowView() {
         </button>
       </div>
 
-      <River stages={data?.stages || []} />
+      <River stages={data?.stages || []} onPick={pickStage} />
+      {stage && (
+        <FlowStagePopout stageKey={stage.key} days={viewDays} end={endDate}
+          label={stage.label || (data?.stages || []).find((s) => s.key === stage.key)?.label || "Stage"}
+          onClose={() => pickStage(null)} />
+      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2"><AutopilotCard autopilot={data?.autopilot} onDone={() => setRefreshKey((k) => k + 1)} /></div>

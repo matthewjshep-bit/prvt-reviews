@@ -29,7 +29,7 @@ import {
 import { offerFunnel, counterSpread, passReasons, followUpPerformance } from "../shared/funnel.js";
 import { buildPipeline } from "../shared/pipeline.js";
 import { autopilotSummary, graduationReport, GRADUATION } from "../shared/graduation.js";
-import { buildFlow } from "../shared/flow.js";
+import { buildFlow, FLOW_STAGES } from "../shared/flow.js";
 import { lessons, dealScorecard } from "../shared/post-mortem.js";
 import { effectiveSettings } from "../shared/offer-calc.js";
 import { listPipelines } from "../ghl.js";
@@ -314,6 +314,47 @@ export default function createDashboardRouter({ resolveLocation }) {
         autopilot: autopilotFor({ saved, config, recentDrafts }),
         queue: pipeline.counts.actions,
         conversationEnabled: config.enabled,
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // One stage, explained: the records behind a tile's number.
+  //
+  // A separate route rather than items on /flow, because /flow is polled every
+  // thirty seconds — collecting all twelve stages' rows on every poll would
+  // multiply the payload to say nothing new, since most of those rows are
+  // already in the feed. This is one request per click, and it skips
+  // buildPipeline (the expensive pass over the book) because a drill-down has
+  // no use for queue counts.
+  router.get("/flow/stage", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const key = String(req.query.stage || "");
+      const stage = FLOW_STAGES.find((s) => s.key === key);
+      if (!stage) return res.status(400).json({ error: `unknown stage "${key}"` });
+      const { days, tzOffset, end } = readWindow(req);
+      const { startMs, endMs, startIso } = windowFor(days, tzOffset, end);
+      const now = Date.now();
+      const limit = Math.min(500, parseInt(req.query.limit, 10) || 300);
+      const [offers, events, drafts, investors] = await Promise.all([
+        store.listOffers(locationId, { limit: 2000, lean: true }),
+        store.listContactEventsSince(locationId, startIso, { types: FLOW_EVENT_TYPES, limit: 5000 }).catch(() => []),
+        store.listReplyDrafts(locationId, { since: startIso, limit: 1000 }).catch(() => []),
+        // Buyer names are only ever needed on the disposition row.
+        stage.side === "dispo" ? store.listInvestors(locationId, { limit: 2000 }).catch(() => []) : Promise.resolve([]),
+      ]);
+      const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
+      const flow = buildFlow({
+        offers, events, drafts, jobs, now, windowStartMs: startMs, windowEndMs: endMs,
+        itemsFor: key, itemsLimit: limit,
+      });
+      const names = {};
+      for (const i of investors) if (i?.contactId && i.name) names[i.contactId] = i.name;
+      for (const it of flow.items) if (!it.contactName && names[it.contactId]) it.contactName = names[it.contactId];
+      res.json({
+        ok: true, now: new Date(now).toISOString(), window: { days, startIso, end },
+        stage: { key: stage.key, label: stage.label, hint: stage.hint, side: stage.side },
+        total: flow.itemsTotal, truncated: flow.itemsTruncated, items: flow.items,
       });
     } catch (err) { fail(res, err); }
   });

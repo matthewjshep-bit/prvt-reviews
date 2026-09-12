@@ -48,12 +48,12 @@ const PHASE = {
 export const intentLabel = (party, intent) =>
   INTENT_LABEL[party]?.[intent] || INTENT_LABEL.agent[intent] || String(intent || "").replace(/_/g, " ");
 
-export const ago = (iso) => {
-  const t = Date.parse(iso || "");
-  if (!Number.isFinite(t)) return "";
-  const m = Math.max(0, Math.round((Date.now() - t) / 60000));
-  return m < 1 ? "just now" : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m / 60)}h ago` : `${Math.floor(m / 1440)}d ago`;
-};
+// Moved to ui.jsx with the other table primitives. Imported (not just
+// re-exported) because this file uses it too — a bare `export … from` would
+// forward the binding without putting it in scope here. Re-exported so the
+// views that already import it from this page keep working.
+import { ago } from "./ui.jsx";
+export { ago };
 
 const countdown = (ms) => {
   const s = Math.max(0, Math.round(ms / 1000));

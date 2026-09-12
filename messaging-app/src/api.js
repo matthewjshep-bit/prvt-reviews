@@ -309,10 +309,14 @@ export const regenerateCompToken = () =>
 // documents — ~1KB each rather than ~9KB, and the only way to load a location's
 // full history in one call. Rows are flagged `listOnly`; use getOffer(id) for
 // anything that reads a fat field (calc, snapshot, scope, draft).
-export const listOffers = ({ contactId = "", limit = 50, lean = false } = {}) => {
+// `activity` asks the broker to stamp each row with the agent's last
+// communication ({ at, dir, type, machine }). Opt-in: it costs two extra
+// indexed reads, and only the history table shows the column.
+export const listOffers = ({ contactId = "", limit = 50, lean = false, activity = false } = {}) => {
   const p = new URLSearchParams(locq());
   p.set("limit", limit);
   if (lean) p.set("lean", "1");
+  if (activity) p.set("activity", "1");
   if (contactId) p.set("contact_id", contactId);
   return fetch(`${API_BASE}/api/offers?${p}`).then(j).then((r) => r.offers);
 };
@@ -483,6 +487,9 @@ export const floatOffer = (id, kind) =>
   post(`/api/offers/${encodeURIComponent(id)}/float`, { kind });
 export const getDashboardFlow = (days = 7, end = "") =>
   fetch(`${API_BASE}/api/dashboard/flow?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
+// The records behind one Flow tile. Fetched on click, never polled.
+export const getDashboardFlowStage = (stage, days = 7, end = "") =>
+  fetch(`${API_BASE}/api/dashboard/flow/stage?${locq()}&stage=${encodeURIComponent(stage)}&days=${days}${tzq()}${endq(end)}`).then(j);
 export const getDashboardFunnel = (days = 30, end = "") =>
   fetch(`${API_BASE}/api/dashboard/funnel?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
 export const getDashboardTagCounts = (tags) =>

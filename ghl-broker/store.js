@@ -51,6 +51,29 @@ export function offerListQuery({ locationId, contactId = null, limit = 50, lean 
   };
 }
 
+// The last thing anyone said to each contact, one row per contact.
+//
+// Deliberately NOT windowed. The offers table's whole question is how cold an
+// agent has gone, and a bounded scan answers "nothing in 90 days" with the
+// same blank as "we have never spoken" — the ambiguity routes/dispo.js warns
+// about. Unbounded, `never` is the truth. It is also the cheaper read: the
+// (location_id, contact_id, at desc) index makes `distinct on` walk one row
+// per contact instead of every event in the window.
+export function lastActivityQuery({ locationId, types = null, limit = 5000 }) {
+  const params = [locationId];
+  const ph = (v) => `$${params.push(v)}`; // bind v, return its placeholder
+  const where = Array.isArray(types) && types.length ? ` and type = any(${ph(types)}::text[])` : "";
+  return {
+    text: `select distinct on (contact_id)
+                  contact_id as "contactId", type, at, source, data
+             from contact_events
+            where location_id = $1 and contact_id is not null${where}
+            order by contact_id, at desc
+            limit ${ph(limit)}`,
+    params,
+  };
+}
+
 // Candidates for a time-based nudge: the location's open offers whose status
 // has not moved since `before`, oldest first — the most neglected offer is the
 // one to look at first. Built as { text, params } here for the same reason
@@ -835,6 +858,13 @@ const pgStore = {
          order by at asc limit $${params.length}`,
       params
     );
+    return rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at }));
+  },
+  // The newest communication per contact — see lastActivityQuery for why it
+  // has no window.
+  async lastContactActivity(locationId, { types = null, limit = 5000 } = {}) {
+    const { text, params } = lastActivityQuery({ locationId, types, limit });
+    const { rows } = await query(text, params);
     return rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at }));
   },
   // The outcome projection the funnel report reads: enough of each offer to
@@ -1805,6 +1835,21 @@ const fileStore = (() => {
         .flatMap(([, list]) => list)
         .filter((e) => e.at >= sinceIso && (!types?.length || types.includes(e.type)))
         .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+        .slice(0, limit);
+    },
+    async lastContactActivity(locationId, { types = null, limit = 5000 } = {}) {
+      ensure();
+      const newest = new Map();
+      for (const [k, list] of Object.entries(data.contactEvents)) {
+        if (!k.startsWith(`${locationId}|`)) continue;
+        for (const e of list) {
+          if (!e?.contactId || (types?.length && !types.includes(e.type))) continue;
+          const prev = newest.get(e.contactId);
+          if (!prev || String(e.at || "").localeCompare(String(prev.at || "")) > 0) newest.set(e.contactId, e);
+        }
+      }
+      return [...newest.values()]
+        .map((e) => ({ contactId: e.contactId, type: e.type, at: e.at, source: e.source || "", data: e.data || {} }))
         .slice(0, limit);
     },
     async listOfferOutcomesSince(locationId, sinceIso, { limit = 5000 } = {}) {

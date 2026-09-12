@@ -17,6 +17,7 @@ import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, Loader2, Search, X
 import {
   OFFER_STATUS, OFFER_STATUS_KEYS, SETTABLE_STATUSES, effectiveStatus, isExpired,
 } from "@shared/offer-status.js";
+import { EVENT_LABEL } from "@shared/contact-record.js";
 
 /* ---------- button class strings ---------- */
 // Hoisted rather than repeated inline, the same way SendModal.jsx does it.
@@ -177,6 +178,45 @@ export function StatusDots({ offers }) {
           {counts.get(k) > 1 && <span className="text-[10px] font-semibold text-slate-400">{counts.get(k)}</span>}
         </span>
       ))}
+    </span>
+  );
+}
+
+/* ---------- time ---------- */
+
+// "3h ago". Lived in ConversationOutbox.jsx, which meant other views imported
+// a helper out of a sibling page to get it; it belongs here with the rest of
+// the table primitives.
+export const ago = (iso) => {
+  const t = Date.parse(iso || "");
+  if (!Number.isFinite(t)) return "";
+  const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+  return m < 1 ? "just now" : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m / 60)}h ago` : `${Math.floor(m / 1440)}d ago`;
+};
+
+const absTime = (iso) => {
+  try { return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
+  catch { return String(iso || ""); }
+};
+
+// How warm someone is, in a few characters.
+//
+// Three labels, not two. Most of our outbound is the bot, so calling an
+// auto-sent follow-up "you" would hide the one thing worth knowing about a
+// cold agent: whether a person has ever actually spoken to them. Their own
+// message reads strongest, because that is the one owed an answer.
+//
+// `enriched` separates "we didn't ask for activity" (—) from "we asked and
+// there has never been any" (never). Blank would say both at once.
+export function ActivityStamp({ activity, enriched = true, muted = false }) {
+  if (!enriched) return <span className="text-slate-300">—</span>;
+  if (!activity?.at) return <span className="text-slate-400" title="No text, call or send on record for this agent">never</span>;
+  const theirs = activity.dir === "in";
+  const who = theirs ? "them" : activity.machine ? "auto" : "you";
+  return (
+    <span className={`whitespace-nowrap ${muted ? "text-slate-400" : theirs ? "text-slate-700" : "text-slate-500"}`}
+      title={`${EVENT_LABEL[activity.type] || activity.type} · ${absTime(activity.at)}`}>
+      {ago(activity.at)} <span className={theirs ? "font-semibold" : ""}>· {who}</span>
     </span>
   );
 }
