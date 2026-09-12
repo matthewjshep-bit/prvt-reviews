@@ -3696,8 +3696,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             return;
           }
           console.log(`clean-underwrite send skipped for ${offer.id}: ${r.reason || (r.dryRun ? "sends off" : "already sent")}`);
+          if (r.dryRun) await markSendPending(offer.id, "sends were off");
         } else {
           console.log(`clean-underwrite send skipped for ${offer.id}: ${why}`);
+          await markSendPending(offer.id, why);
         }
       }
 
@@ -3710,6 +3712,56 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       else await markProactive(offer.id, kind);
     },
   });
+
+  // A clean offer that couldn't send itself yet (after hours, sends paused,
+  // no reply on record) — remembered so the tick can try again.
+  async function markSendPending(offerId, reason) {
+    try {
+      const full = await store.getOffer(offerId);
+      if (!full) return;
+      full.autoSendPending = { reason: dealStr(reason, 160), at: new Date().toISOString() };
+      await store.updateOffer(full.id, full);
+    } catch (e) { console.error(`send-pending mark ${offerId}: ${e.message}`); }
+  }
+
+  // The retry, on the broker's 15-minute tick. Same conditions as the first
+  // try (the switch, the bot, the broker's send gate, a reply on record, the
+  // auto-send hours) and still only a "new" offer; a week-old pending send,
+  // an expired or moved-on offer, or an ambiguous pick is dropped instead.
+  const SEND_RETRY_DAYS = 7;
+  router.retryPendingOfferSends = async ({ client, locationId, now = Date.now(), limit = 10 }) => {
+    const fresh = (await store.getOfferSettings(locationId)) || {};
+    const cfg = conversationConfig(fresh);
+    if (!cfg.enabled || !CARD_SENDS_ENABLED || !cfg.parties.agent.sendOffer.onClearUnderwrite) return { sent: 0, checked: 0 };
+    const dueAt = nextSendTime({ now, delayMs: 0, quietHours: cfg.autoSend.quietHours });
+    if (Date.parse(dueAt) - now > 60000) return { sent: 0, checked: 0 };
+    const pending = (await store.listOffers(locationId, { limit: 300 })).filter((o) => o?.autoSendPending?.at && !o.deal).slice(0, limit);
+    let sent = 0;
+    for (const offer of pending) {
+      const clear = async (patch = {}) => {
+        const full = await store.getOffer(offer.id);
+        if (!full) return;
+        delete full.autoSendPending;
+        await store.updateOffer(full.id, { ...full, ...patch });
+      };
+      if (effectiveStatus(offer) !== "new" || isExpired(offer, now) || now - Date.parse(offer.autoSendPending.at) > SEND_RETRY_DAYS * 86400000) { await clear(); continue; }
+      const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
+      if (!drafts.some((d) => d.inbound)) continue;
+      const r = await conversationDeps({ client, locationId, saved: fresh }).sendOfferDocs({ contactId: offer.contactId, addressHint: offer.address });
+      if (r.ok && r.dryRun) continue;
+      if (r.ok) {
+        await clear();
+        if (!r.unchanged) {
+          sent++;
+          console.log(`offer ${offer.id} sent itself on retry (${(r.channels || []).join("+")})`);
+          await createContactNote(client, offer.contactId, { body: `Sent our offer on ${offer.address} (${fmtMoney(offer.cashAmount)}) automatically — it was held earlier (${offer.autoSendPending.reason}).` }).catch(() => {});
+        }
+      } else {
+        await clear({ autoSendGaveUp: { reason: dealStr(r.reason, 160), at: new Date(now).toISOString() } });
+      }
+    }
+    return { sent, checked: pending.length };
+  };
 
   // Which floats have gone on an offer: { takeCheckAt, realmCheckAt }.
   async function markProactive(offerId, kind) {
@@ -3852,9 +3904,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
                 settings: full.calc?.settings },
       });
       const revised = out?.offer || (await store.getOffer(full.id));
-      revised.counterBand = { ...(revised.counterBand || {}), acceptedAt: new Date().toISOString(), amount: price, draftId };
+      const acceptedAt = new Date().toISOString();
+      // `at` is what the band's once-per-offer check reads.
+      revised.counterBand = { ...(revised.counterBand || {}), at: revised.counterBand?.at || acceptedAt, acceptedAt, amount: price, draftId };
       await store.updateOffer(revised.id, revised);
       return { ok: true, address: revised.address, amount: price };
+    },
+    // The first no on a live offer. Stamped so the reply agent lets the second
+    // one close it; nothing else about the offer changes.
+    noteFirstDecline: async ({ offerId, draftId = null, note = "" }) => {
+      const full = offerId ? await store.getOffer(offerId) : null;
+      if (!full || full.locationId !== locationId) return { ok: false, reason: "no offer to note" };
+      if (full.declinedOnce?.at) return { ok: true, unchanged: true, address: full.address };
+      full.declinedOnce = { at: new Date().toISOString(), draftId, note: dealStr(note, 200) };
+      await store.updateOffer(full.id, full);
+      return { ok: true, address: full.address };
     },
     // "In the realm": remembered on the offer, so the book says so next time
     // and History can show which offers are cleared to send.
@@ -3954,7 +4018,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // the only one — and refuses an ambiguous match: the wrong house's
     // documents are worse than none. An offer that already went out is
     // reported, not re-sent.
-    sendOfferDocs: async ({ contactId, addressHint = "", channels = null, docs = null, draftId = null }) => {
+    // `afterCounter`: the counter band just re-issued this offer at their
+    // number — only a send AFTER that counts as already sent, and an offer
+    // that was not re-issued is refused rather than sent at the old price.
+    sendOfferDocs: async ({ contactId, addressHint = "", channels = null, docs = null, draftId = null, afterCounter = false }) => {
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
       const so = conversationConfig(fresh).parties.agent.sendOffer;
       const open = (await store.listOffers(locationId, { contactId, limit: 50 }))
@@ -3965,7 +4032,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const lean = picked || open[0];
       const offer = await store.getOffer(lean.id);
       if (!offer) return { ok: false, reason: "offer vanished" };
-      const already = (offer.sends || []).find((x) => Object.values(x.results || {}).some((r) => r?.ok));
+      const since = afterCounter ? offer.counterBand?.acceptedAt : null;
+      if (afterCounter && !since) return { ok: false, reason: "the offer was not re-issued at their number" };
+      const already = (offer.sends || []).find((x) => (!since || String(x.ts) > String(since)) && Object.values(x.results || {}).some((r) => r?.ok));
       if (already) return { ok: true, unchanged: true, address: offer.address, sentAt: already.ts };
       const ch = (Array.isArray(channels) && channels.length ? channels : so.channels).filter((c) => c === "sms" || c === "email");
       const dk = Array.isArray(docs) && docs.length ? docs : so.docs;

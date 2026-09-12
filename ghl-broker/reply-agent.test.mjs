@@ -2158,3 +2158,101 @@ test("a call transcript runs the pipeline: intent and numbers from what they sai
   assert.equal(j3.status, "done", j3.error);
   assert.equal((await store3.getReplyDraft(j3.draftId)).intent, "wants_call");
 });
+
+/* ---------- the self-driving negotiation: counters under the ceiling, the first no ---------- */
+
+import { autoAcceptCeiling } from "./shared/auto-accept.js";
+
+const NEGOTIATION_OFFER = {
+  id: "o1", locationId: "LOC", contactId: "c1", address: "12 Elm St, Seattle, WA 98101", status: "sent",
+  arv: 600000, repairs: 50000, cashAmount: 300000, createdAt: new Date().toISOString(),
+};
+const bandSaved = () => ({
+  ...STARTER_SAVED,
+  conversationAi: { ...STARTER_SAVED.conversationAi, parties: { ...STARTER_SAVED.conversationAi.parties,
+    agent: { ...STARTER_SAVED.conversationAi.parties.agent, counterBand: { enabled: true, dailyCap: 2, acceptance: false, maxAmount: 0 } } } },
+});
+const negotiationStore = (offer) => {
+  const store = fakeStore();
+  store.listOffers = async () => [offer];
+  store.getOffer = async () => offer;
+  return store;
+};
+
+test("a counter under the ceiling re-issues the offer at their number, sends it, and says so", async () => {
+  _resetJobs();
+  const ceiling = autoAcceptCeiling({ offer: NEGOTIATION_OFFER, settings: bandSaved() }).ceiling;
+  assert.ok(ceiling > NEGOTIATION_OFFER.cashAmount, `the fixture needs room under the ceiling (got ${ceiling})`);
+  const amount = Math.min(ceiling, NEGOTIATION_OFFER.cashAmount + 10000);
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const order = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: `seller would do ${amount / 1000}k on 12 Elm`,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: amount,
+        reply: "Let me run that by my partner and get back to you this afternoon.", propertyAddress: "12 Elm St" }),
+      reviseOfferToCounter: async ({ amount: a }) => { order.push(["revise", a]); return { ok: true, address: "12 Elm St", amount: a }; },
+      sendOfferDocs: async ({ afterCounter }) => { order.push(["send", afterCounter]); return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(order, [["revise", amount], ["send", true]], "re-issued first, then the revised paper goes out");
+  assert.equal(d.reply, `${amount / 1000}k works for us on 12 Elm St. Sending the updated offer over now.`);
+  assert.equal(d.status, "scheduled", d.autoSend?.reason);
+  assert.equal(d.exception?.passed, true);
+});
+
+test("if the revised offer doesn't go out, the 'sending it over' reply is held for a person", async () => {
+  _resetJobs();
+  const ceiling = autoAcceptCeiling({ offer: NEGOTIATION_OFFER, settings: bandSaved() }).ceiling;
+  const amount = Math.min(ceiling, NEGOTIATION_OFFER.cashAmount + 10000);
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: `seller would do ${amount / 1000}k on 12 Elm`,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: amount,
+        reply: "Let me run that by my partner.", propertyAddress: "12 Elm St" }),
+      reviseOfferToCounter: async ({ amount: a }) => ({ ok: true, address: "12 Elm St", amount: a }),
+      sendOfferDocs: async () => ({ ok: false, reason: "send failed — carrier error" }),
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /counter-band offer did not go out/);
+});
+
+test("the first no on a live offer asks for their number without filing it dead; the second no closes it", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...NEGOTIATION_OFFER };
+  const store = negotiationStore(offer);
+  const noted = [];
+  const deps = {
+    draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", reply: "Understood. Any chance they'd counter?", propertyAddress: "12 Elm St" }),
+    noteFirstDecline: async ({ offerId }) => { noted.push(offerId); offer.declinedOnce = { at: new Date().toISOString() }; return { ok: true, address: offer.address }; },
+    setOfferStatus: async () => ({ ok: true, address: offer.address, status: "passed" }),
+  };
+  const { job } = await startReply({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "too aggressive, they're not interested", deps });
+  await settle();
+  const d1 = await store.getReplyDraft(job.draftId);
+  const types1 = d1.actions.map((a) => a.type);
+  assert.ok(!types1.includes("mark_offer_passed"), `not filed dead on the first no: ${types1}`);
+  assert.ok(!d1.actions.some((a) => (a.tags || []).includes("tier-3")), "not tagged Tier 3 on the first no");
+  assert.equal(d1.actions.find((a) => a.type === "note_first_decline")?.status, "done");
+  assert.deepEqual(noted, ["o1"]);
+
+  _resetJobs();
+  const { job: j2 } = await startReply({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "no, there's no number", deps });
+  await settle();
+  const d2 = await store.getReplyDraft(j2.draftId);
+  const types2 = d2.actions.map((a) => a.type);
+  assert.ok(types2.includes("mark_offer_passed"), `the second no closes it: ${types2}`);
+  assert.ok(!types2.includes("note_first_decline"));
+});

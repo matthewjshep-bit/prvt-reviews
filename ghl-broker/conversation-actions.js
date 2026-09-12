@@ -129,6 +129,14 @@ const EXECUTORS = {
     if (!r?.ok) return r?.reason || "no open offer to note";
     return `${r.address}: in the realm — send the formal offer`;
   },
+  // The first no on a live offer: remembered on the offer, so the second
+  // one closes it. Injected by the reply agent, never wired on a rule.
+  async note_first_decline({ deps, draft, action }) {
+    if (typeof deps?.noteFirstDecline !== "function") throw new Error("first-decline notes are not wired on this broker");
+    const r = await deps.noteFirstDecline({ offerId: action?.offerId, draftId: draft?.id || null, note: String(draft?.summary || "").slice(0, 200) });
+    if (!r?.ok) return r?.reason || "no offer to note";
+    return `first no on ${r.address} — asked for their number; a second no closes it`;
+  },
   // A pass is only half the value; the reason is the other half. It goes on
   // the deal (so the next blast is priced or aimed differently) and on the
   // buyer (so we stop sending them the same thing).
@@ -183,11 +191,10 @@ const EXECUTORS = {
     return `re-ran ${r.address} on their numbers: ${fmtMoney(r.from)} → ${fmtMoney(r.to)}` +
       `${r.clamped ? ` (${r.basis})` : ""}${r.floated ? " — floating it now" : ""}`;
   },
-  // The band said yes in words; this is the paper. Ask-only, always: the text
-  // is a social commitment at a number we had already decided we would pay,
-  // and the ceiling is where that decision lives. A re-issued offer is a
-  // document going to a counterparty, and no structural check makes that safe
-  // to do unattended.
+  // The band said yes; this is the paper. Ask-only on any rule. It runs
+  // unattended only when the reply agent injects it after the counter band
+  // passed on this very message (their typed number, at or under the ceiling,
+  // once per offer, capped per day).
   async revise_offer_to_counter({ deps, contactId, draft, action }) {
     if (typeof deps?.reviseOfferToCounter !== "function") throw new Error("re-issuing an offer is not wired on this broker");
     const amount = Math.round(Number(action?.amount ?? draft?.counterAmount) || 0);
@@ -213,6 +220,7 @@ const EXECUTORS = {
     if (typeof deps?.sendOfferDocs !== "function") throw new Error("sending offers is not wired on this broker");
     const r = await deps.sendOfferDocs({
       contactId, addressHint: draft?.propertyAddress || "", channels: action?.channels, docs: action?.docs, draftId: draft?.id || null,
+      ...(action?.afterCounter === true ? { afterCounter: true } : {}),
     });
     if (!r?.ok) return r?.reason || "no open offer to send";
     if (r.unchanged) return `offer on ${r.address} already went out ${r.sentAt ? `on ${String(r.sentAt).slice(0, 10)}` : ""}`.trim();

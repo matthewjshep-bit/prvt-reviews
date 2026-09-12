@@ -280,7 +280,7 @@ export default function createDashboardRouter({ resolveLocation }) {
   // share of each hop, the switchboard, the queue counts, and the feed.
   // Same uncached local tier as /funnel and /pipeline.
   const FLOW_EVENT_TYPES = [
-    "import", "outreach_sent", "text_summary", "call_summary", "offer_sent", "offer_revised", "offer_countered", "offer_passed", "offer_we_passed",
+    "import", "outreach_sent", "outreach_enrolled", "text_summary", "call_summary", "offer_sent", "offer_revised", "offer_countered", "offer_passed", "offer_we_passed",
     "offer_no_response", "realm_yes", "realm_no", "deal_promoted", "deal_stage", "blast_sent", "dataroom_sent", "dataroom_viewed",
     "investor_evaluating", "investor_committed", "investor_passed", "feedback", "follow_up_sent", "call_booked", "agent_estimate",
   ];

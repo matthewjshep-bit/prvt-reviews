@@ -220,6 +220,10 @@ setInterval(async () => {
       // The agents GHL texted and never heard back from, into the second workflow.
       const followed = await maybeStartOutreachFollowUp({ client: makeClient(token), locationId, saved, store });
       if (followed) console.log(`outreach follow-up started for ${locationId}`);
+      // Clean offers that couldn't send themselves (after hours, sends
+      // paused) go the moment they can.
+      const resent = await offersRouter.retryPendingOfferSends?.({ client: makeClient(token), locationId });
+      if (resent?.sent) console.log(`${resent.sent} held offer${resent.sent === 1 ? "" : "s"} sent for ${locationId}`);
       // The second wave: deals blasted once, nobody committed, the delay past.
       const waved = await maybeStartDispoSweep({
         client: makeClient(token), locationId, saved, store, utcHour: DISPO_SWEEP_UTC_HOUR,

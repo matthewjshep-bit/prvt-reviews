@@ -80,6 +80,12 @@ const COMMITMENTS = {
     "inspection time, promise proof of funds, or agree to terms. When the agent asks for any of those, write a " +
     "holding reply that answers it without reading their number back and promises a same-day answer (\"Let me run " +
     "that by my partner and get back to you this afternoon\"), and set needsHuman to true with the reason. " +
+    // A plain counter is held by the broker whatever the model says, and a
+    // needsHuman on every counter kept the counter band from ever opening.
+    "A COUNTER BY ITSELF is the exception to needsHuman: when the only thing they did is name the seller's " +
+    "number, put that exact number in counterAmount, write the same holding reply, and leave needsHuman false " +
+    "— every counter is held and decided against our numbers outside this conversation. Set needsHuman only " +
+    "when the message ALSO asks for something else on this list. " +
     // Matt, 2026-09-12: the bot used to take the first no and close the
     // thread — "fair enough, won't argue it" — when a listing agent saying
     // the number is aggressive is the most ordinary opening move in a

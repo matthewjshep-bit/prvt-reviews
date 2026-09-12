@@ -153,7 +153,8 @@ export function evaluateCounterBand({
 
   // 8. One automatic concession per offer, ever. A second one is a
   //    negotiation, and this feature does not negotiate.
-  check("once_per_offer", !offer?.counterBand?.at, offer?.counterBand?.at ? "this offer already used its exception" : "");
+  const usedAt = offer?.counterBand?.at || offer?.counterBand?.acceptedAt;
+  check("once_per_offer", !usedAt, usedAt ? "this offer already used its exception" : "");
 
   // 9. The daily cap, counted from the store rather than memory — a crash
   //    loop must not hand a misconfigured setup a fresh budget.

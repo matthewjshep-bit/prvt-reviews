@@ -54,6 +54,8 @@ export const EVENT_TYPES = [
   // texts, so this is the only record the app has that we reached out.
   // data.kind "first" (the import) or "followup" (outreach-followup.js).
   "outreach_enrolled",
+  // They replied, so the app took them out of that outreach workflow.
+  "outreach_left",
   // The bot (or a person) put a call or a visit on the calendar.
   "call_booked",
   "call_summary", "text_summary", "note",
@@ -78,6 +80,7 @@ export const EVENT_LABEL = {
   follow_up_sent: "we followed up",
   outreach_sent: "we reached out about their listing",
   outreach_enrolled: "added to an outreach workflow",
+  outreach_left: "taken out of the outreach workflow (they replied)",
   call_booked: "call booked",
   post_mortem_built: "post-mortem written",
 };
@@ -96,6 +99,7 @@ export const EVENT_ICON = {
   follow_up_sent: "BellRing",
   outreach_sent: "Send",
   outreach_enrolled: "Workflow",
+  outreach_left: "LogOut",
   call_booked: "CalendarCheck",
   post_mortem_built: "ClipboardCheck",
 };

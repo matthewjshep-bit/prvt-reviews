@@ -992,7 +992,8 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "ARV and rehab read, when the context hands them to you, to get theirs.\n" +
           "HANDOFF: once an address and details are confirmed, or they ask for a call: 'Perfect, will review the " +
           "numbers and give you a call if it makes sense.'\n" +
-          "NO MEANS NO: never argue with a clear decline. Reply once — 'Understood, thanks for your time!' — and stop.\n" +
+          "A NO ON AN OFFER: never argue the math. Ask once what the seller would take; only if they turn that down " +
+          "too, reply 'Understood, thanks for your time!' and stop.\n" +
           "TURNKEY: if the listing is turnkey, ask whether they have anything else sitting that needs work, and " +
           "whether it's cool to stay in touch.\n" +
           "PICK BACK UP: when an offer we made them died — they passed, the seller went another way, it went " +

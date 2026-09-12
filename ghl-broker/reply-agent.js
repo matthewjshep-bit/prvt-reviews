@@ -38,6 +38,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { buildTranscript, enrichFieldDefs, mergeHistory, mergeFacts, SUBJECT_PROPERTY_FIELD } from "./enrich.js";
+import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
 import { getFreeSlots } from "./ghl.js";
@@ -963,6 +964,12 @@ export async function startReply({
   const nAttachments = Math.max(0, Number(attachments) || 0);
   if (!String(message || "").trim() && !nAttachments) throw Object.assign(new Error("message required"), { http: 400 });
 
+  // They wrote back: out of the outreach drip, whatever happens to the reply
+  // (bot off, capped, held). Best effort, in the background.
+  leaveOutreachWorkflows({ client, store, locationId, contactId })
+    .then((r) => { if (r.left.length) console.log(`${contactId} replied — left outreach workflow(s) ${r.left.join(", ")}`); })
+    .catch(() => {});
+
   const config = conversationConfig(saved);
   if (!config.enabled) return { skipped: "Conversation AI is switched off on the Conversation AI page", job: null };
 
@@ -1578,12 +1585,24 @@ async function runReply(job, ctx) {
     if (draft.confidence === "high") plan.auto.push({ ...action, mode: "auto" });
     else plan.suggested.push({ ...action, mode: "ask" });
   }
-  // A released counter is answered in words and handed over: re-issuing the
-  // paper at their number is one click, by a person. ASK_ONLY_ACTIONS makes
-  // that permanent — an operator cannot promote it to auto by editing a rule.
+  // A counter the band released is a yes: re-issue the paper at their number
+  // and send it, then say so. Only the band injects these — ASK_ONLY_ACTIONS
+  // still keeps revise_offer_to_counter off any rule, so nothing but this
+  // structural check (their own number, under the $10k-fee ceiling, once per
+  // offer, capped per day) ever re-prices an offer unattended. If either step
+  // fails, the reply is held below: it must not say "sent" when nothing went.
   if (auto.exception?.passed && draft.intent === "counter") {
-    plan.suggested.push({ id: `a-band-${job.id}`, type: "revise_offer_to_counter", mode: "ask", status: "pending", party,
-      amount: guard.theirAmount, why: `they countered at ${fmtMoney(guard.theirAmount)}, inside the ${fmtMoney(guard.ceiling)} ceiling` });
+    const amount = guard.theirAmount;
+    plan.auto.push(
+      { id: `a-band-${job.id}`, type: "revise_offer_to_counter", mode: "auto", status: "pending", party, amount, via: "counter band",
+        why: `they countered at ${fmtMoney(amount)}, inside the ${fmtMoney(guard.ceiling)} ceiling` },
+      { id: `a-band-send-${job.id}`, type: "send_offer", mode: "auto", status: "pending", party, afterCounter: true, via: "counter band",
+        why: `the revised offer at ${fmtMoney(amount)}` },
+    );
+    const street = String(draft.propertyAddress || "").split(",")[0].trim();
+    // No dollar sign: carriers filter it, and the gate flags it.
+    const k = amount % 1000 === 0 ? `${amount / 1000}k` : amount.toLocaleString("en-US");
+    draft.reply = `${k} works for us${street ? ` on ${street}` : ""}. Sending the updated offer over now.`;
   }
   if (auto.exception?.passed && draft.intent === "acceptance") {
     plan.suggested.push({ id: `a-acc-${job.id}`, type: "promote_to_deal", mode: "ask", status: "pending", party,
@@ -1627,6 +1646,27 @@ async function runReply(job, ctx) {
       !matchTagPatterns(a.tags, playbook.fallback.unlessTags || []).length) {
     const fb = playbook.fallback.actions.map((x, i) => ({ ...x, id: `a-fb-${job.id}-${i}`, mode: playbook.fallback.mode, status: "pending", party, why: "no rule matched" }));
     if (playbook.fallback.mode === "auto") plan.auto.push(...fb); else plan.suggested.push(...fb);
+  }
+
+  // The first no on a live offer opens a negotiation; it doesn't end one.
+  // The reply asks what the seller would take (COMMITMENTS), so the record
+  // must not file the offer dead and tag them Tier 3 in the same breath.
+  // The closing actions are held back once — the offer is stamped — and a
+  // second no (or the offer ladder running out) closes it the usual way.
+  if (party === "agent" && draft.intent === "rejection") {
+    const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    const open = rows.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
+    const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
+    const full = picked && typeof store.getOffer === "function" ? (await store.getOffer(picked.id).catch(() => null)) || picked : picked;
+    if (full && !full.declinedOnce?.at) {
+      const closes = (x) => x.type === "mark_offer_passed"
+        || (x.type === "add_tags" && (x.tags || []).some((t) => /^tier-3$/i.test(String(t))))
+        || (x.type === "add_to_workflow" && /tier\s*3/i.test(String(x.workflowName || "")));
+      plan.auto = plan.auto.filter((x) => !closes(x));
+      plan.suggested = plan.suggested.filter((x) => !closes(x));
+      plan.auto.push({ id: `a-no1-${job.id}`, type: "note_first_decline", mode: "auto", status: "pending", party, offerId: full.id,
+        why: "first no on a live offer — asking for their number before it's filed dead" });
+    }
   }
 
   /* --- 3. nothing to say --- */
@@ -1804,6 +1844,13 @@ async function runReply(job, ctx) {
     const failedBooking = done.find((x) => x.type === "book_call" && x.status === "failed");
     if (failedBooking) {
       holdForBooking = `the booking failed: ${failedBooking.error || "calendar error"}`;
+      record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
+    }
+    // "Sending the updated offer over now" leaves only if the paper did.
+    const bandChain = done.filter((x) => x.via === "counter band");
+    const bandFailed = bandChain.find((x) => x.status !== "done" || !/^(re-issued|sent the offer)/.test(String(x.detail || "")));
+    if (bandFailed && !holdForBooking) {
+      holdForBooking = `the counter-band offer did not go out: ${bandFailed.error || bandFailed.detail || bandFailed.type}`;
       record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
     }
     await store.updateReplyDraft(record.id, record).catch(() => {});

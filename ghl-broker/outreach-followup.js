@@ -20,7 +20,7 @@
 
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
-import { addContactToWorkflow, getLastMessageDate } from "./ghl.js";
+import { addContactToWorkflow, getLastMessageDate, removeContactFromWorkflow } from "./ghl.js";
 import { normalizeOutreachAutopilot, isWorkday, workHour } from "./outreach-sweep.js";
 
 export const CURSOR_NAME = "outreachFollowUp";
@@ -34,7 +34,7 @@ const PACE_MS = 150;
 const DAY_MS = 86400000;
 
 // Anything after the first enrollment that means this is no longer a cold agent.
-const ENDED_BY = new Set(["text_summary", "call_summary", "offer_sent", "realm_yes", "deal_promoted"]);
+const ENDED_BY = new Set(["text_summary", "call_summary", "offer_sent", "realm_yes", "deal_promoted", "outreach_left"]);
 export const EVENT_TYPES = ["outreach_enrolled", ...ENDED_BY];
 
 const iso = (ms) => new Date(ms).toISOString();
@@ -65,6 +65,35 @@ export function followUpCandidates(events = [], { days, now = Date.now() } = {})
     out.push({ contactId, enrolledAt: first.at, address: first.address || "" });
   }
   return out.sort((a, b) => String(a.enrolledAt).localeCompare(String(b.enrolledAt)));
+}
+
+/**
+ * leaveOutreachWorkflows({ client, store, locationId, contactId }) → { left }
+ *
+ * They wrote back: take them out of every outreach workflow the app put them
+ * in (the first text and the follow-up), so a drip doesn't keep texting a
+ * live conversation even if the workflow's own stop-on-reply isn't set. Once
+ * per workflow (an `outreach_left` event), and a contact who already finished
+ * the workflow (GHL 4xx) counts as out.
+ */
+export async function leaveOutreachWorkflows({ client, store, locationId, contactId }) {
+  if (!contactId || typeof store?.listContactEvents !== "function") return { left: [] };
+  const events = await store.listContactEvents(locationId, contactId, { types: ["outreach_enrolled", "outreach_left"], limit: 50 });
+  const gone = new Set(events.filter((e) => e.type === "outreach_left").map((e) => e.data?.workflowId));
+  const ids = [...new Set(events.filter((e) => e.type === "outreach_enrolled").map((e) => e.data?.workflowId).filter(Boolean))]
+    .filter((id) => !gone.has(id));
+  const left = [];
+  for (const workflowId of ids) {
+    try {
+      await removeContactFromWorkflow(client, contactId, workflowId);
+    } catch (e) {
+      if (!(e?.status >= 400 && e.status < 500)) continue; // try again on their next message
+    }
+    await recordEvent({ store, locationId, contactId, party: "agent", type: "outreach_left", source: "conversation",
+      ref: workflowId, dedupeKey: `outreach_left:${contactId}:${workflowId}`, data: { workflowId } });
+    left.push(workflowId);
+  }
+  return { left };
 }
 
 /* ---------- job registry (in memory, like the other sweeps) ---------- */

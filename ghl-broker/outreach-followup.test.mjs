@@ -113,3 +113,23 @@ test("the tick: its hour, both switches, a workflow, once a day", async () => {
   assert.ok((await store.getJobCursor(LOC, CURSOR_NAME)).at);
   assert.equal(await maybeStartOutreachFollowUp({ ...base, saved, now: NOW + 600000 }), false, "already ran today");
 });
+
+test("a reply takes them out of the outreach workflows once, and the follow-up leaves them alone", async () => {
+  const { leaveOutreachWorkflows } = await import("./outreach-followup.js");
+  const LOC = "loc-fu-4";
+  await recordEvent({ store, locationId: LOC, contactId: "r1", party: "agent", type: "outreach_enrolled", at: ago(20),
+    source: "import", dedupeKey: "outreach_enrolled:first:r1", data: { kind: "first", workflowId: "wf-first" } });
+  const ghl = fakeGhl({ r1: "outbound" });
+  const deletes = () => ghl.calls.filter((c) => c.method === "DELETE").map((c) => c.path);
+
+  const r = await leaveOutreachWorkflows({ client: ghl.client, store, locationId: LOC, contactId: "r1" });
+  assert.deepEqual(r.left, ["wf-first"]);
+  assert.deepEqual(deletes(), ["/contacts/r1/workflow/wf-first"]);
+  assert.deepEqual((await leaveOutreachWorkflows({ client: ghl.client, store, locationId: LOC, contactId: "r1" })).left, [], "once");
+  assert.equal(deletes().length, 1);
+
+  _resetJobs();
+  const job = startOutreachFollowUp({ locationId: LOC, client: ghl.client, saved, store, now: NOW, paceMs: 0 });
+  await settle();
+  assert.equal(job.candidates, 0, "someone who replied is never followed up, even if GHL's last message is ours");
+});
