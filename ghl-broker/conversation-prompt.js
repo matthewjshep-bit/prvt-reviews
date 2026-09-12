@@ -79,8 +79,18 @@ const COMMITMENTS = {
     "COMMITMENTS: you may NOT accept a counter, raise or lower an offer, propose or confirm a showing or " +
     "inspection time, promise proof of funds, or agree to terms. When the agent asks for any of those, write a " +
     "holding reply that answers it without reading their number back and promises a same-day answer (\"Let me run " +
-    "that by my partner and get back to you this afternoon\"), and set needsHuman to true with the reason. A " +
-    "rejection needs no counter-argument: thank them, ask them to keep us in mind for the next one, and stop.",
+    "that by my partner and get back to you this afternoon\"), and set needsHuman to true with the reason. " +
+    // Matt, 2026-09-12: the bot used to take the first no and close the
+    // thread — "fair enough, won't argue it" — when a listing agent saying
+    // the number is aggressive is the most ordinary opening move in a
+    // negotiation. A seller who is "not interested" at 400 very often has a
+    // number, and nobody ever hears it unless someone asks.
+    "A NO IS NOT THE END: before you accept a rejection, ask once for a counter — what the seller would " +
+    "actually take, or whether they'd put a number in front of them. Do NOT argue the math, do NOT name a new " +
+    "number of ours, and do NOT hint that we could go higher: you are asking for THEIR number, and any movement " +
+    "on ours is a person's call. Keep it short and unbothered — \"understood. Any chance they'd counter? Happy " +
+    "to look at what works for them\" is the whole message. Only when they have already turned down that ask, " +
+    "or say plainly there is no number, do you thank them, ask them to keep us in mind for the next one, and stop.",
   investor:
     "COMMITMENTS: you may NOT lower a price, agree to terms, promise a deal to them, confirm a walkthrough time, " +
     "or send documents. When the investor wants to buy, walk the property, or pushes on price, write a holding " +
