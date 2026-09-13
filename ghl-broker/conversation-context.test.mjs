@@ -91,7 +91,8 @@ test("the agent's book carries the asking price from the lean row, and the field
   });
   assert.match(ctx.text, /our cash offer \$410,000 \(asking \$525,000\)/);
   assert.match(ctx.text, /the property they're currently discussing with us: 12 Elm St, Renton, WA/);
-  assert.deepEqual([...ctx.amounts].sort((a, b) => a - b), [410000, 525000]);
+  // 400000 is the rough figure at or under 410,000 the bot may give when asked.
+  assert.deepEqual([...ctx.amounts].sort((a, b) => a - b), [400000, 410000, 525000]);
   assert.deepEqual(ctx.forbiddenAmounts, []);
   assert.equal(summarizeOffers([]).count, 0);
   assert.deepEqual(fieldLines({ personal_details: " " }, ["personal_details"]), []);

@@ -939,7 +939,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
       ifAskedIfBot: `I'm an assistant on ${first}'s team keeping up with texts! Happy to help either way.`,
     },
     rules: [
-      "Never quote, estimate or lock in a number over text, unless we've already sent the offer: an offer that has gone out can be restated, with its terms, if they ask. Otherwise say you'll run it by your underwriting team today.",
+      "Never make up or estimate a number over text. Once our underwriting has an offer number (it's in the context), give it as a rough figure when they ask what we can do — 'based on our analysis we can likely do around 450ish' — and ask whether that works for the seller; a sent offer can be restated with its terms. Until then, say you'll run it by your underwriting team today.",
       "Never mention off-market deals. We look for distressed homes, or homes that need some work and repairs.",
       "Defer on terms with 'my partner': 'My partner will review the numbers on our call.' Never commit to legal terms in a text.",
       "If they send only a photo, reply exactly: Thanks for the images, taking a look! Never describe or analyse an image.",
@@ -990,10 +990,11 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "ADDRESS: if you already have the property from our outreach (the Subject Property in context), do NOT ask " +
           "for it again — ask about price expectations and the seller's timeline. If they bring up a new or separate " +
           "deal, ask right away: 'Awesome, what's the address?'\n" +
-          "PRICING: never quote an offer number in text. 'Let me run this address by my underwriting team today " +
-          "and see if we can get back to you with an offer.' The exceptions are THEIR TAKE below — floating our " +
-          "ARV and rehab read, when the context hands them to you, to get theirs — and an offer the context shows " +
-          "as SENT, which is on paper: restate its number and terms if they ask.\n" +
+          "PRICING: no number until our underwriting has one. Before that: 'Let me run this address by my " +
+          "underwriting team today and see if we can get back to you with an offer.' Once our offer number is in " +
+          "the context and they ask what we can do: 'Based on our analysis we can likely do around 450ish' — " +
+          "rounded to the nearest thousand or down, never up, no dollar sign — and ask if that works for the " +
+          "seller. Never explain the math. A SENT offer is on paper: restate its number and terms if asked.\n" +
           "HANDOFF: once an address and details are confirmed, or they ask for a call: 'Perfect, will review the " +
           "numbers and give you a call if it makes sense.'\n" +
           "A NO ON AN OFFER: never argue the math. Ask once what the seller would take; only if they turn that down " +
@@ -1025,7 +1026,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "today. Ask for an address, price expectations and seller timeline. Ask what they think it's worth fixed " +
           "up and what they'd budget for the work. Ask if it's cool to stay in touch.",
         mayNotCommit:
-          "Quote or estimate any number we haven't already sent them in a written offer. Agree to terms or a price. Book a showing, inspection or call time on your own. " +
+          "Quote or estimate any number other than our underwritten offer in the context. Agree to terms or a price. Book a showing, inspection or call time on your own. " +
           "Mention off-market deals. Promise proof of funds. Send a link.",
         autoSend: { enabled: true, intents: autoEligible("agent") },
         intentRules: {

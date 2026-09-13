@@ -96,7 +96,16 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
   for (const o of rows) {
     const status = effectiveStatus(o);
     const amount = Number(o.cashAmount) || 0;
-    if (amount) amounts.add(amount);
+    if (amount) {
+      amounts.add(amount);
+      // "around 450ish" on a 447,300 offer: the rough figure is ours too. The
+      // nearest thousand, and round numbers at or BELOW the offer — never a
+      // rounding that lands above what we underwrote.
+      amounts.add(Math.round(amount / 1000) * 1000);
+      for (const step of [5000, 10000, 25000]) amounts.add(Math.floor(amount / step) * step);
+      const near5 = Math.round(amount / 5000) * 5000;
+      if (near5 <= amount + 1000) amounts.add(near5);
+    }
     const asking = Number(o.askingPrice ?? o.inputs?.askingPrice ?? o.calc?.inputs?.askingPrice) || 0;
     if (asking) amounts.add(asking);
     const lastSend = (o.sends || []).filter((s) => s && s.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0];
@@ -238,8 +247,16 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
       ? `OUR OFFERS TO THIS AGENT (newest first — the only numbers you may quote):\n${book.text}\n` +
         // The operator's "never quote a number" rules are about numbers we
         // haven't committed to. A sent offer is in their inbox already.
+        // The underwrite's number is the number we're going to stand behind.
+        // Asked "what can you do?", the bot gives it — roughly, without the
+        // math — and the agent's answer (yes / tight / no) drives the rest.
+        "An offer WITH a number that hasn't been sent yet is our underwritten number: when they ask what we can do, " +
+        "give it as a rough figure — \"based on our analysis we can likely do around 450ish\" — rounded to the " +
+        "nearest thousand or down to a round number (never up), with no dollar sign, and ask whether that works " +
+        "for the seller. A yes means the written offer goes over. Don't explain how we got there (ARV, repairs, " +
+        "fees), and don't volunteer it before you have their own read unless they ask. " +
         "An offer marked SENT is on paper: if they ask for the number, the terms or when it expires, restate it " +
-        "from this list — rules against quoting numbers are about numbers we haven't committed to. Never promise " +
+        "from this list. Rules against quoting numbers are about numbers we don't have; these we do. Never promise " +
         "an offer on an address that already has one sent; refer to the one they have. An offer with no number " +
         "yet is still being worked: never make up timing or a figure for it."
       : "OUR OFFERS TO THIS AGENT: none on record.",

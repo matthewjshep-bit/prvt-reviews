@@ -120,7 +120,8 @@ test("the summary is newest first and every number in it is one the reply may sa
   assert.match(lines[0], /^- 40 Oak Ave.*still being underwritten \(no number yet\)/);
   assert.match(lines[1], /12 Elm St.*our cash offer \$410,000 \(asking \$525,000\) — status: sent, waiting on the agent sent 13 days ago by sms valid through Sep 5/);
   assert.match(lines[2], /7 Pine Ct.*\$300,000.*agent passed.*note: went with a retail buyer/);
-  assert.deepEqual([...s.amounts].sort((a, b) => a - b), [300000, 410000, 525000]);
+  // 400000: the rough figure at or under 410,000 (down to the nearest 25k) — see "a rough version of our number".
+  assert.deepEqual([...s.amounts].sort((a, b) => a - b), [300000, 400000, 410000, 525000]);
 });
 
 test("the summary is capped so a prolific agent doesn't blow the context", () => {
@@ -2343,4 +2344,25 @@ test("a named address with no offer behind it starts the underwrite even when th
   await settle();
   assert.equal(job.status, "done", job.error);
   assert.equal(started, 1);
+});
+
+/* ---------- the underwritten number, given roughly when they ask ---------- */
+
+test("a rough version of our number is ours too — rounded to the thousand or down, never up", () => {
+  const book = summarizeOffers([{ address: "12 Elm St", status: "new", cashAmount: 447300, createdAt: new Date().toISOString() }]);
+  for (const n of [447300, 447000, 445000, 440000, 425000]) assert.ok(book.amounts.includes(n), `${n} should be allowed`);
+  assert.ok(!book.amounts.includes(450000), "450 is a rounding UP past 447,300 — that's a raise, not a rough figure");
+  const up = summarizeOffers([{ address: "12 Elm St", status: "new", cashAmount: 450800, createdAt: new Date().toISOString() }]);
+  assert.ok(up.amounts.includes(450000));
+
+  const r = evaluateReplyGates({
+    draft: { ...DRAFT, intent: "question", reply: "Based on our analysis we can likely do around 445k. Would that work for the seller?" },
+    allowedAmounts: book.amounts, inboundMessage: "what can you guys do on it?",
+  });
+  assert.ok(!r.flags.some((f) => /not in the offer book/.test(f)), JSON.stringify(r.flags));
+  const bad = evaluateReplyGates({
+    draft: { ...DRAFT, intent: "question", reply: "We can likely do around 460k." },
+    allowedAmounts: book.amounts, inboundMessage: "what can you guys do on it?",
+  });
+  assert.ok(bad.flags.some((f) => /not in the offer book/.test(f)), "a number above ours is still caught");
 });
