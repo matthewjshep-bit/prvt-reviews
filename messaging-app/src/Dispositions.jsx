@@ -22,6 +22,23 @@ import {
 } from "./api.js";
 import { EmptyState, ErrorBar, Spinner, TableCard } from "./ui.jsx";
 import { REGIONS, REGION_KEYS, STRATEGIES, cityLabel, regionFor } from "@shared/dispo-regions.js";
+import { TIERS } from "@shared/buyer-score.js";
+import { getDispoInsights, listDeals, rankBuyersForDeal } from "./api.js";
+import BuyerMap from "./BuyerMap.jsx";
+import DispoCharts from "./DispoCharts.jsx";
+
+const TIER_CLS = { vip: "bg-violet-100 text-violet-800", active: "bg-emerald-100 text-emerald-800", cold: "bg-slate-100 text-slate-500" };
+const LIVE_DEAL = new Set(["under_contract", "buyer_found", "assigned"]);
+
+function TierBadge({ inv }) {
+  if (!inv?.tier) return null;
+  const why = [`Score ${inv.score}/100`, inv.scoreParts ? `activity ${inv.scoreParts.activity} · engagement ${inv.scoreParts.engagement} · reach ${inv.scoreParts.reach}` : "", ...(inv.scoreReasons || [])].filter(Boolean).join("\n");
+  return (
+    <span className={`ml-2 rounded px-1.5 py-0.5 text-[11px] font-semibold ${TIER_CLS[inv.tier]}`} title={why}>
+      {TIERS[inv.tier]} {inv.score}
+    </span>
+  );
+}
 
 const fmtMoneyShort = (n) => {
   const v = Number(n) || 0;
@@ -38,6 +55,8 @@ const SORTS = {
   largest: (i) => i.flips?.largest || 0,
   reply: (i) => i.lastRepliedAt || i.lastMessageAt || "",
   blasted: (i) => i.lastBlastAt || "",
+  score: (i) => i.score ?? 0,
+  match: (i) => i.rank ?? 0,
 };
 const readSort = () => {
   try {
@@ -396,6 +415,14 @@ export default function Dispositions() {
   const [region, setRegion] = useState("");
   const [city, setCity] = useState("");
   const [type, setType] = useState("");
+  const [tier, setTier] = useState("");
+  // Matching the book against one live deal: ranked buyers replace the table.
+  const [deals, setDeals] = useState([]);
+  const [dealId, setDealId] = useState("");
+  const [ranking, setRanking] = useState(null); // null | {busy} | {error} | rank response
+  // Map + charts, fetched when opened and whenever the market filters move.
+  const [showInsights, setShowInsights] = useState(false);
+  const [insights, setInsights] = useState(null);
   const [sort, setSort] = useState(readSort);
   const onSort = (key) => {
     const next = sort?.key === key ? { key, dir: sort.dir === "desc" ? "asc" : "desc" } : { key, dir: key === "name" || key === "region" ? "asc" : "desc" };
@@ -420,6 +447,33 @@ export default function Dispositions() {
     }
   };
   useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    listDeals().then((r) => {
+      const list = Array.isArray(r) ? r : r?.deals || r?.offers || [];
+      setDeals(list.filter((o) => LIVE_DEAL.has(o.deal?.stage)));
+    }).catch(() => {});
+  }, []);
+
+  const pickDeal = async (id) => {
+    setDealId(id);
+    setSelected(new Set());
+    if (!id) { setRanking(null); return; }
+    setRanking({ busy: true });
+    try {
+      const r = await rankBuyersForDeal(id);
+      setRanking(r);
+      if (!blastLabel) setBlastLabel((r.deal?.address || "").split(",")[0]);
+    } catch (e) { setRanking({ error: e.message }); }
+  };
+
+  useEffect(() => {
+    if (!showInsights) return undefined;
+    let live = true;
+    getDispoInsights({ region, city, type, tier })
+      .then((r) => { if (live) setInsights(r); })
+      .catch((e) => { if (live) setInsights({ error: e.message }); });
+    return () => { live = false; };
+  }, [showInsights, region, city, type, tier]);
 
   const doSync = async () => {
     setSyncing(true);
@@ -477,6 +531,7 @@ export default function Dispositions() {
     if (over.region !== undefined) setRegion(over.region);
     if (over.city !== undefined) setCity(over.city);
     if (over.type !== undefined) setType(over.type);
+    if (over.tier !== undefined) setTier(over.tier);
     setSelected(new Set());
     if (query) runSearch({ parsed: query, over });
   };
@@ -521,7 +576,14 @@ export default function Dispositions() {
   // when browsing, so the two views agree about who's in scope.
   const rows = useMemo(() => {
     let base;
-    if (search?.results) {
+    if (ranking?.results) {
+      // Ranked for a deal: the rank order is the point, filters still narrow it.
+      base = ranking.results.map((r) => ({ ...byId.get(r.contactId), ...r })).filter((i) => i.name !== undefined && i.status !== "archived");
+      if (excludeOnDeal) base = base.filter((i) => !i.onLiveDeal);
+      if (region) base = base.filter((i) => i.markets?.regions?.includes(region));
+      if (city) base = base.filter((i) => i.markets?.cities?.includes(city));
+      if (type) base = base.filter((i) => i.markets?.types?.includes(type));
+    } else if (search?.results) {
       base = search.results.map((r) => ({ ...byId.get(r.contactId), ...r }));
     } else {
       base = investors.filter((i) => i.status !== "archived");
@@ -533,6 +595,7 @@ export default function Dispositions() {
       if (city) base = base.filter((i) => i.markets?.cities?.includes(city));
       if (type) base = base.filter((i) => i.markets?.types?.includes(type));
     }
+    if (tier) base = base.filter((i) => i.tier === tier);
     const needle = nameFilter.trim().toLowerCase();
     if (needle) {
       base = base.filter((i) =>
@@ -548,7 +611,7 @@ export default function Dispositions() {
       if (ea !== eb) return ea ? 1 : -1; // empties last either way
       return (va < vb ? -1 : va > vb ? 1 : 0) * dir;
     });
-  }, [search, investors, byId, nameFilter, excludeOnDeal, buyboxStatus, replyStatus, region, city, type, sort]);
+  }, [search, ranking, investors, byId, nameFilter, excludeOnDeal, buyboxStatus, replyStatus, region, city, type, tier, sort]);
 
   // Cities under the chosen region, with how many investors bought there.
   const regionCities = useMemo(() => {
@@ -575,6 +638,7 @@ export default function Dispositions() {
     try {
       setPreview(await blastInvestors({
         contactIds: [...selected], label: blastLabel.trim(), applyTag, dryRun: true,
+        offerId: ranking?.deal?.offerId || "",
       }));
     } catch (e) {
       setPreview({ error: e.message });
@@ -592,6 +656,7 @@ export default function Dispositions() {
     try {
       const r = await blastInvestors({
         contactIds: [...selected], label: blastLabel.trim(), applyTag, dryRun: false,
+        offerId: ranking?.deal?.offerId || "",
       });
       setBlastResult(r);
       setPreview(null);
@@ -819,7 +884,82 @@ export default function Dispositions() {
         )}
       </div>
 
+      {/* ---- match a deal: every buyer ranked against one live deal ---- */}
+      <div className="rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={LABEL_CLS + " mb-0 mr-1"}>Rank buyers for a deal</span>
+          <select value={dealId} onChange={(e) => pickDeal(e.target.value)}
+            className="min-w-[16rem] rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm">
+            <option value="">— pick a live deal —</option>
+            {deals.map((o) => (
+              <option key={o.id} value={o.id}>{(o.address || "").split(",").slice(0, 2).join(",")} · {String(o.deal?.stage || "").replace(/_/g, " ")}</option>
+            ))}
+          </select>
+          {ranking?.busy && <Loader2 size={14} className="animate-spin text-slate-400" />}
+          {ranking?.results && (
+            <>
+              <span className="text-xs text-slate-500">
+                {ranking.deal.city ? cityLabel(ranking.deal.city) : "no city"}{ranking.deal.region ? ` · ${REGIONS[ranking.deal.region]?.label}` : ""}
+                {ranking.deal.price ? ` · buyer price ~$${Math.round(ranking.deal.price / 1000)}k` : ""} · {ranking.considered} buyers ranked
+              </span>
+              <div className="ml-auto flex gap-1.5">
+                <button type="button" className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  onClick={() => setSelected(new Set(rows.filter((r) => r.tier === "vip" && r.rank >= 50 && !r.alreadyBlasted).map((r) => r.contactId)))}
+                  title="VIP buyers with a match score of 50+ who haven't been sent this deal — the first wave">
+                  Select VIP wave
+                </button>
+                <button type="button" className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  onClick={() => setSelected(new Set(rows.filter((r) => !r.alreadyBlasted).slice(0, 25).map((r) => r.contactId)))}>
+                  Select top 25
+                </button>
+                <button type="button" className="text-xs font-semibold text-slate-500 hover:text-slate-700" onClick={() => pickDeal("")}>Clear</button>
+              </div>
+            </>
+          )}
+        </div>
+        {ranking?.error && <div className="mt-2 text-sm text-red-700">{ranking.error}</div>}
+        {!deals.length && <p className="mt-1 text-xs text-slate-500">No live deals right now — promote an offer to a deal to rank buyers for it.</p>}
+      </div>
+
       {/* ---- market: where they buy and how ---- */}
+      {Object.keys(data.counts.regions || {}).length > 0 && (
+        <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={LABEL_CLS + " mb-0 mr-1"}>Tier</span>
+            {["", "vip", "active", "cold"].map((k) => (
+              <button key={k || "all"} type="button" onClick={() => setBookFilter({ tier: k })}
+                title={k === "vip" ? "Committed on a deal before, or scores 65+" : k === "active" ? "Scores 40+, or replied in the last 3 months" : k === "cold" ? "Everyone else — including buyers who ignored 3+ blasts" : ""}
+                className={`${PILL_CLS} ${tier === k ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                {k ? TIERS[k] : "All tiers"}{k && data.counts.tiers?.[k] != null ? <span className="opacity-70"> {data.counts.tiers[k]}</span> : null}
+              </button>
+            ))}
+            <button type="button" onClick={() => setShowInsights((v) => !v)} aria-expanded={showInsights}
+              className="ml-auto rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+              {showInsights ? "Hide map & charts" : "Map & charts"}
+            </button>
+          </div>
+          {showInsights && (
+            <div className="space-y-3 border-t border-slate-100 pt-3">
+              {insights?.error && <div className="text-sm text-red-700">{insights.error}</div>}
+              {!insights && <Loader2 size={14} className="animate-spin text-slate-400" />}
+              {insights && !insights.error && (
+                <>
+                  <p className="text-xs text-slate-500">
+                    {insights.investors} investors · {insights.purchases} properties financed
+                    {insights.purchases === 0 ? " — run the retag script with --record to load purchase history" : ""}
+                  </p>
+                  <div className="grid gap-3 xl:grid-cols-[3fr_2fr]">
+                    <BuyerMap points={insights.cityPoints} deal={ranking?.deal} selectedCity={city}
+                      onPickCity={(c) => setBookFilter({ city: c, region: c ? regionFor(c.replace(/-/g, " ")) || region : region })} />
+                    <DispoCharts insights={insights} region={region} onPickRegion={(r) => setBookFilter({ region: r, city: "" })} />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {Object.keys(data.counts.regions || {}).length > 0 && (
         <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-4">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -959,6 +1099,8 @@ export default function Dispositions() {
                   <input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all shown" />
                 </th>
                 <SortTh label="Investor" sortKey="name" sort={sort} onSort={onSort} />
+                {ranking?.results && <SortTh label="Match" sortKey="match" sort={sort} onSort={onSort} />}
+                <SortTh label="Score" sortKey="score" sort={sort} onSort={onSort} />
                 <SortTh label="Market" sortKey="region" sort={sort} onSort={onSort} />
                 <th className="px-4 py-2.5">Does</th>
                 <SortTh label="Last flip" sortKey="lastFlip" sort={sort} onSort={onSort} />
@@ -999,6 +1141,20 @@ export default function Dispositions() {
                         )}
                         {inv.reason && <div className="mt-0.5 text-xs text-slate-600">{inv.reason}</div>}
                       </td>
+                      {ranking?.results && (
+                        <td className="max-w-[14rem] px-4 py-2.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-8 tabular-nums font-semibold text-slate-900">{inv.rank}</span>
+                            <span className="h-1.5 w-16 overflow-hidden rounded bg-slate-100"><span className="block h-full rounded bg-blue-600" style={{ width: `${inv.rank}%` }} /></span>
+                            {inv.alreadyBlasted && <span className="rounded bg-slate-100 px-1 text-[10px] font-semibold text-slate-600">sent</span>}
+                          </div>
+                          <div className="truncate text-[11px] text-slate-500"
+                            title={inv.rankParts ? `location ${inv.rankParts.location} · price ${inv.rankParts.price} · recency ${inv.rankParts.recency} · tier ${inv.rankParts.tier} · strategy ${inv.rankParts.strategy}` : ""}>
+                            {(inv.rankReasons || []).join(" · ") || "—"}
+                          </div>
+                        </td>
+                      )}
+                      <td className="px-4 py-2.5"><TierBadge inv={inv} /></td>
                       <td className="max-w-[16rem] px-4 py-2.5 text-slate-700">
                         {(() => {
                           const m = inv.markets || {};
@@ -1044,7 +1200,7 @@ export default function Dispositions() {
                     </tr>
                     {open && (
                       <tr className="border-b border-slate-100 bg-slate-50 last:border-0">
-                        <td colSpan={search?.results ? 11 : 10} className="px-4 py-4">
+                        <td colSpan={11 + (search?.results ? 1 : 0) + (ranking?.results ? 1 : 0)} className="px-4 py-4">
                           <InvestorDetail investor={inv} onSaved={onBuyboxSaved} />
                           <button type="button" onClick={() => archive(inv)}
                             className="mt-3 text-xs font-semibold text-slate-500 hover:text-slate-700">

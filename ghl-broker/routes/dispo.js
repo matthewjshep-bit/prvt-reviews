@@ -19,7 +19,9 @@
 
 import express from "express";
 import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
-import { marketsFromTags } from "../shared/dispo-regions.js";
+import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES } from "../shared/buyer-score.js";
+import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
 import { purchaseEvents } from "../buyer-import.js";
 import { DISPO_IMPORTS_ENABLED, previewCsv, startImport, getImportJob, publicImportJob, cancelImport } from "../dispo-import.js";
 import { FACT_KEYS, factsAsCustom, factsEmpty } from "../shared/contact-record.js";
@@ -33,7 +35,7 @@ import {
 } from "../ghl.js";
 import { anthropicErrorToHttp } from "../rehab-scan.js";
 import {
-  BUYBOX_FIELDS, INVESTOR_FIELD_DEFS, RANK_LIMIT, buildBuyboxProfile, dealToQuery,
+  BUYBOX_FIELDS, INVESTOR_FIELD_DEFS, RANK_LIMIT, buildBuyboxProfile, dealToQuery, addressAreas,
   parseBuyboxQuery, rankInvestors,
 } from "../dispo.js";
 import {
@@ -199,7 +201,33 @@ export default function createDispoRouter({ resolveLocation }) {
     // Where they buy and how — read off the dispo-city/region/type tags.
     markets: i.markets || marketsFromTags(i.tags),
     flips: i.flips || null,
+    score: i.score ?? null,
+    tier: i.tier || null,
+    scoreParts: i.scoreParts || null,
+    scoreReasons: i.scoreReasons || [],
+    engagement: i.engagement || null,
   });
+
+  // The whole book with what the page ranks on: markets, flips, engagement off
+  // the timeline, and the buyer score + tier. One read per event family.
+  async function scoredBook(locationId, { status = null } = {}) {
+    const [rows, onDeal, flips, engEvents] = await Promise.all([
+      store.listInvestors(locationId, { status }),
+      liveDealContactIds(locationId),
+      flipsByContact(locationId),
+      store.listContactEventsSince(locationId, new Date(Date.now() - 2 * 365 * 86400000).toISOString(), { types: ENGAGEMENT_TYPES, limit: 20000 }).catch(() => []),
+    ]);
+    const eng = engagementFromEvents(engEvents);
+    return rows.map((r) => {
+      const i = hydrate(r);
+      const base = {
+        ...i, onLiveDeal: onDeal.has(i.contactId), markets: marketsFromTags(i.tags),
+        flips: flips.get(i.contactId) || null, engagement: eng.get(i.contactId) || null,
+      };
+      const s = scoreBuyer(base);
+      return { ...base, score: s.score, tier: s.tier, scoreParts: s.parts, scoreReasons: s.reasons };
+    });
+  }
 
   // Every property_financed event in the location, folded per contact into
   // what the table shows. Built at read time: the investors doc is replaced
@@ -281,18 +309,10 @@ export default function createDispoRouter({ resolveLocation }) {
   router.get("/investors", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
-      const rows = await store.listInvestors(locationId, {
-        status: req.query.status || null,
-      });
       // Stamped per investor rather than left to the client: only the server
-      // can see the deals, and the browse table filters on it without a
-      // second round trip.
-      const onDeal = await liveDealContactIds(locationId);
-      const flips = await flipsByContact(locationId);
-      const investors = rows.map((r) => {
-        const i = hydrate(r);
-        return { ...i, onLiveDeal: onDeal.has(i.contactId), markets: marketsFromTags(i.tags), flips: flips.get(i.contactId) || null };
-      });
+      // can see the deals and the timeline, and the browse table filters and
+      // sorts on them without a second round trip.
+      const investors = await scoredBook(locationId, { status: req.query.status || null });
       const tally = (pick) => investors.filter((i) => i.status !== "archived")
         .reduce((a, i) => { for (const k of pick(i)) a[k] = (a[k] || 0) + 1; return a; }, {});
       res.json({
@@ -311,6 +331,7 @@ export default function createDispoRouter({ resolveLocation }) {
           cities: tally((i) => i.markets.cities),
           types: tally((i) => i.markets.types),
           withFlips: investors.filter((i) => i.flips).length,
+          tiers: tally((i) => [i.tier]),
         },
         syncedAt: investors.reduce(
           (max, i) => (String(i.syncedAt || "") > String(max || "") ? i.syncedAt : max),
@@ -619,6 +640,87 @@ export default function createDispoRouter({ resolveLocation }) {
       const ok = await store.setInvestorStatus(locationId, req.params.contactId, { status });
       if (!ok) return res.status(404).json({ error: "investor not found" });
       res.json({ ok: true, status });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- ranked buyers for a deal ---------- */
+
+  // POST /rank { offerId, limit } — every active buyer scored against one deal
+  // (where it is, its buyer price, the work), weighted by tier. No AI: this is
+  // arithmetic on the book, instant and free, with the parts shown.
+  router.post("/rank", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const offer = await store.getOffer(String(req.body?.offerId || ""));
+      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "deal not found" });
+      const q = dealToQuery(offer).query;
+      const city = addressAreas(offer.address).find((a) => !/^\d{5}$/.test(a)) || "";
+      const target = dealTarget({ city, priceMin: q.priceMin, priceMax: q.priceMax, rehabAppetite: q.rehabAppetite });
+      const linked = new Set((offer.deal?.investors || []).map((i) => i.contactId));
+      const blasted = new Set((await store.listContactEventsSince(locationId, new Date(Date.now() - 365 * 86400000).toISOString(), { types: ["blast_sent"], limit: 20000 }).catch(() => []))
+        .filter((e) => e.offerId === offer.id).map((e) => e.contactId));
+      const book = (await scoredBook(locationId, { status: "active" })).filter((i) => !linked.has(i.contactId));
+      const limit = Math.min(1000, Math.max(10, Number(req.body?.limit) || 300));
+      const results = book
+        .map((i) => { const r = rankForDeal(i, target); return { contactId: i.contactId, rank: r.score, rankParts: r.parts, rankReasons: r.reasons, alreadyBlasted: blasted.has(i.contactId) }; })
+        .sort((a, b) => b.rank - a.rank)
+        .slice(0, limit);
+      const coords = WA_CITY_COORDS[target.city] || null;
+      res.json({
+        ok: true,
+        deal: { offerId: offer.id, address: offer.address, stage: offer.deal?.stage || null, ...target, lat: coords?.[0] ?? null, lng: coords?.[1] ?? null },
+        linked: [...linked], results, considered: book.length,
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- map + charts ---------- */
+
+  // GET /insights?region=&city=&type=&tier= — where the (filtered) book has
+  // bought, and when, at what price. Read off property_financed events.
+  router.get("/insights", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const f = { region: sanitizeTag(req.query.region || ""), city: sanitizeTag(req.query.city || ""), type: sanitizeTag(req.query.type || ""), tier: sanitizeTag(req.query.tier || "") };
+      const book = (await scoredBook(locationId, { status: "active" }))
+        .filter((i) => matchesMarket(i, f) && (!f.tier || i.tier === f.tier));
+      const ids = new Set(book.map((i) => i.contactId));
+      const events = (await store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: ["property_financed"], limit: 50000 }).catch(() => []))
+        .filter((e) => ids.has(e.contactId));
+
+      const months = [];
+      const now = new Date();
+      for (let k = 23; k >= 0; k--) { const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - k, 1)); months.push(d.toISOString().slice(0, 7)); }
+      const byMonth = Object.fromEntries(months.map((m) => [m, 0]));
+      const BANDS = [[0, 300e3, "Under $300k"], [300e3, 500e3, "$300–500k"], [500e3, 750e3, "$500–750k"], [750e3, 1e6, "$750k–1M"], [1e6, 2e6, "$1–2M"], [2e6, Infinity, "$2M+"]];
+      const byPrice = BANDS.map(([, , label]) => ({ label, count: 0 }));
+      const byRegion = {}, byType = {};
+      const cities = new Map();
+      for (const e of events) {
+        const m = String(e.at || "").slice(0, 7);
+        if (m in byMonth) byMonth[m]++;
+        const amt = Number(e.data?.amount) || 0;
+        if (amt > 0) { const idx = BANDS.findIndex(([lo, hi]) => amt >= lo && amt < hi); if (idx >= 0) byPrice[idx].count++; }
+        const st = String(e.data?.strategy || ""); if (st) byType[st] = (byType[st] || 0) + 1;
+        const cityName = e.data?.city || "";
+        if (cityName && String(e.data?.state || "WA").toUpperCase() === "WA") {
+          const slug = citySlug(cityName);
+          const reg = regionFor(cityName);
+          if (reg) byRegion[reg] = (byRegion[reg] || 0) + 1;
+          const c = cities.get(slug) || { city: slug, region: reg, purchases: 0, investors: new Set() };
+          c.purchases++; c.investors.add(e.contactId);
+          cities.set(slug, c);
+        }
+      }
+      const cityPoints = [...cities.values()]
+        .filter((c) => WA_CITY_COORDS[c.city])
+        .map((c) => ({ city: c.city, region: c.region, lat: WA_CITY_COORDS[c.city][0], lng: WA_CITY_COORDS[c.city][1], purchases: c.purchases, investors: c.investors.size }))
+        .sort((a, b) => b.investors - a.investors);
+      res.json({
+        ok: true, filters: f, investors: book.length, purchases: events.length,
+        byMonth: months.map((m) => ({ month: m, count: byMonth[m] })), byPrice, byRegion, byType, cityPoints,
+        tiers: book.reduce((a, i) => ((a[i.tier] = (a[i.tier] || 0) + 1), a), {}),
+      });
     } catch (err) { fail(res, err); }
   });
 

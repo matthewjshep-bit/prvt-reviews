@@ -568,6 +568,11 @@ export const setInvestorStatus = (contactId, status) =>
 // criteria in `parsed` (whether their buy box fits).
 export const searchInvestors = ({ query, parsed, strict = false, filters = {} }) =>
   post(`/api/dispo/search`, { ...(parsed ? { parsed } : { query }), strict, ...filters });
+// Every active buyer scored against one deal (location, price, recency, tier, strategy).
+export const rankBuyersForDeal = (offerId, limit = 300) => post(`/api/dispo/rank`, { offerId, limit });
+// Map + chart data for the (filtered) book.
+export const getDispoInsights = ({ region = "", city = "", type = "", tier = "" } = {}) =>
+  fetch(`${API_BASE}/api/dispo/insights?${locq()}&region=${encodeURIComponent(region)}&city=${encodeURIComponent(city)}&type=${encodeURIComponent(type)}&tier=${encodeURIComponent(tier)}`).then(j);
 // Buyer import: preview a borrower-list CSV (no GHL calls), then run it as a job.
 export const previewBuyerImport = (csv, fileName) => post(`/api/dispo/import/preview`, { csv, fileName });
 export const startBuyerImport = ({ previewId, keys = [], batch = "", dryRun = true }) =>
