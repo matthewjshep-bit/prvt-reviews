@@ -118,13 +118,17 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     const realm = o.realm?.answer === "yes" ? "agent said the number is in the realm" : "";
     const parts = [
       `${o.address}:`,
-      amount ? `our cash offer ${fmtMoney(amount)}` : status === "draft" ? "still being underwritten (no number yet)" : "no amount recorded",
+      amount ? `our cash offer ${fmtMoney(amount)}`
+        // A held run is finished, not in progress: someone on the team is
+        // checking the numbers, and "coming shortly" would be a promise.
+        : status === "draft" ? (o.autoUnderwrite?.held?.length ? "numbers held for our team's review (no number yet)" : "still being underwritten (no number yet)")
+        : "no amount recorded",
       asking ? `(asking ${fmtMoney(asking)})` : "",
       terms ? `terms: ${terms}` : "",
       showMath && (arv || repairs) ? `[our math: ARV ${arv ? fmtMoney(arv) : "n/a"}, repairs ${repairs ? fmtMoney(repairs) : "n/a"}]` : "",
       `— status: ${statusWord(status)}`,
       lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" ? "" : "not sent yet",
-      o.validLabel ? `valid ${o.validLabel}` : "",
+      o.validLabel ? `valid ${o.validLabel}` : o.expiresAt && amount ? `expires ${dateWord(o.expiresAt)}` : "",
       counters.length ? `history: ${counters.join("; ")}` : "",
       realm,
       o.statusNote ? `note: ${String(o.statusNote).slice(0, 120)}` : "",
@@ -231,7 +235,13 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
 
   const text = [
     book.count
-      ? `OUR OFFERS TO THIS AGENT (newest first — the only numbers you may quote):\n${book.text}`
+      ? `OUR OFFERS TO THIS AGENT (newest first — the only numbers you may quote):\n${book.text}\n` +
+        // The operator's "never quote a number" rules are about numbers we
+        // haven't committed to. A sent offer is in their inbox already.
+        "An offer marked SENT is on paper: if they ask for the number, the terms or when it expires, restate it " +
+        "from this list — rules against quoting numbers are about numbers we haven't committed to. Never promise " +
+        "an offer on an address that already has one sent; refer to the one they have. An offer with no number " +
+        "yet is still being worked: never make up timing or a figure for it."
       : "OUR OFFERS TO THIS AGENT: none on record.",
     dossierText,
     takeLines.length ? `THE AGENT'S OWN TAKE (their numbers, not ours — don't ask again, don't adopt them):\n${takeLines.join("\n")}` : "",

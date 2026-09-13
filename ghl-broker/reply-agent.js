@@ -600,6 +600,23 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
   return draft.intent === "acceptance" ? evaluateAcceptance(args) : evaluateCounterBand(args);
 }
 
+// Do we already have this house in the agent's book? A live or recent offer
+// (60 days) or a held draft someone is still reviewing (7 days) counts; an old
+// one doesn't — a house that comes back months later deserves fresh numbers.
+const KNOWN_OFFER_DAYS = 60;
+const KNOWN_DRAFT_DAYS = 7;
+export function knownOfferFor(rows = [], address = "", now = Date.now()) {
+  const key = addressKey(address);
+  if (!key) return null;
+  return rows.find((o) => {
+    if (!o?.address || addressKey(o.address) !== key) return false;
+    const ts = Date.parse(o.updatedAt || o.createdAt || "");
+    if (!Number.isFinite(ts)) return true;
+    const days = (now - ts) / 86400000;
+    return o.status === "draft" ? days <= KNOWN_DRAFT_DAYS : days <= KNOWN_OFFER_DAYS;
+  }) || null;
+}
+
 // The offer the message is about. Exact address key first, then a loose
 // containment match on the street line — the same two-step the routes use.
 function pickOfferByAddress(offers, hint) {
@@ -916,8 +933,8 @@ export async function assembleConversation({
     // person saved a digest; the machine never writes one for itself.
     const digestText = config.parties.agent?.lessons?.enabled ? lessonsContextText(saved?.postMortem?.digest) : "";
     if (digestText) context = { ...context, text: [context.text, digestText].filter(Boolean).join("\n\n") };
-    underwriting = listUnderwriteJobs(locationId)
-      .filter((j) => j.contactId === contactId && (j.status === "running" || j.status === "queued"))
+    underwriting = listUnderwriteJobs(locationId, { contactId })
+      .filter((j) => j.status === "running" || j.status === "queued")
       .map((j) => j.address || "a property")
       .slice(0, 3);
   } else if (party === "investor") {
@@ -1811,11 +1828,23 @@ async function runReply(job, ctx) {
   // …and a third: the agent has to have SAID the address in this message.
   // A model can return a property off the context for a reply that named
   // none; only an address in their own words is them bringing a house.
-  let subjectMoved = party === "agent" && Array.isArray(filedLearned) && filedLearned.some((l) => l.startsWith("subject property:"))
-    && lastMention(job.message, draft.propertyAddress) >= 0;
-  if (subjectMoved && draft.propertyAddress) {
-    const known = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
-    if (known.some((o) => o?.address && addressKey(o.address) === addressKey(draft.propertyAddress))) subjectMoved = false;
+  // The RECORD decides "new", not the field. An address they named with no
+  // offer (or recent held draft) behind it is new even when Subject Property
+  // already held it — a first mention read at medium confidence files the
+  // field and only suggests the underwrite, and "moved" never fires again.
+  const bookRows = party === "agent" && draft.propertyAddress
+    ? await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => [])
+    : [];
+  const namedKnown = draft.propertyAddress ? knownOfferFor(bookRows, draft.propertyAddress, now) : null;
+  let subjectMoved = party === "agent" && Boolean(draft.propertyAddress)
+    && lastMention(job.message, draft.propertyAddress) >= 0 && !namedKnown;
+  // Nothing to re-run: we already have numbers (or a draft a person is
+  // reviewing) on this house. The rule's own underwrite stands down.
+  if (namedKnown && plan.auto.some((x) => x.type === "start_underwrite")) {
+    const why = `already have ${namedKnown.status === "draft" ? "a held draft" : "an offer"} on ${namedKnown.address}`;
+    plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite");
+    record = { ...record, actions: record.actions.map((x) => x.type === "start_underwrite" && x.status === "pending" ? { ...x, status: "skipped", detail: why } : x), updatedAt: new Date().toISOString() };
+    await store.updateReplyDraft(record.id, record).catch(() => {});
   }
   if (subjectMoved && playbook && !LIFECYCLE.has(draft.intent)) {
     const already = new Set([...plan.auto, ...plan.suggested].map((a) => `${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`));
@@ -1844,6 +1873,19 @@ async function runReply(job, ctx) {
     const failedBooking = done.find((x) => x.type === "book_call" && x.status === "failed");
     if (failedBooking) {
       holdForBooking = `the booking failed: ${failedBooking.error || "calendar error"}`;
+      record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
+    }
+    // "Running it by underwriting" leaves only if the underwrite started
+    // (or was already running); "sending it over" only if the offer went.
+    const uwFailed = done.find((x) => x.type === "start_underwrite" && x.status === "failed");
+    if (uwFailed && !holdForBooking) {
+      holdForBooking = `the underwrite didn't start: ${uwFailed.error || "unknown error"}`;
+      record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
+    }
+    const sendFailed = done.find((x) => x.type === "send_offer" && x.via !== "counter band"
+      && (x.status !== "done" || !/^(sent the offer|offer on .* already went out)/.test(String(x.detail || ""))));
+    if (sendFailed && !holdForBooking) {
+      holdForBooking = `the offer didn't go out: ${sendFailed.error || sendFailed.detail || "unknown"}`;
       record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
     }
     // "Sending the updated offer over now" leaves only if the paper did.

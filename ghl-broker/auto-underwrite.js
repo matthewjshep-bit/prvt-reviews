@@ -112,9 +112,11 @@ export function getJob(id) {
   return jobs.get(id) || null;
 }
 
-export function listJobs(locationId, { limit = 25 } = {}) {
+// `contactId` filters BEFORE the cap — on a busy location the reply agent's
+// "is one running for this person?" must not lose theirs to the slice.
+export function listJobs(locationId, { limit = 25, contactId = null } = {}) {
   return [...jobs.values()]
-    .filter((j) => j.locationId === locationId)
+    .filter((j) => j.locationId === locationId && (!contactId || j.contactId === contactId))
     .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))
     .slice(0, limit);
 }
@@ -559,6 +561,18 @@ export async function startUnderwrite({
   }
   const apifyToken = String(saved?.apifyToken || "").trim();
   if (!apifyToken) throw Object.assign(new Error("Apify token required (Settings) for comps and listing photos"), { http: 400 });
+
+  // One run at a time per contact per house. The stored-offer dedupe
+  // (findRecent) only sees a run once it has FINISHED, and a run takes
+  // minutes — an agent who texts the address twice meanwhile would otherwise
+  // pay for two. A job with no address yet may be this house, so it counts.
+  if (!fill && contactId) {
+    const want = addressKey(String(address || ""));
+    const inFlight = [...jobs.values()].find((j) => j.locationId === locationId && j.contactId === contactId && !j.fill
+      && (j.status === "queued" || j.status === "running")
+      && (!want || !(j.address || j.suppliedAddress) || addressKey(j.address || j.suppliedAddress) === want));
+    if (inFlight) return { deduped: true, job: inFlight };
+  }
 
   const cap = Number(saved?.autoUnderwriteDailyCap) > 0
     ? Number(saved.autoUnderwriteDailyCap)

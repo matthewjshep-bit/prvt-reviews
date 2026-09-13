@@ -92,7 +92,7 @@ export const INTENT_GLOSS = {
     call_followup: "the text sent right after a phone call, drafted from the transcript: what we took from it and the next step",
     deal_available: "the listing we asked about (or one they've got) is available and needs work — condition, price expectations, seller timeline",
     investor_open: "no deal right now, but open to working with investors or happy for us to stay in touch",
-    realm_yes: "says the number we floated works, is in the realm, or to go ahead and send the formal offer",
+    realm_yes: "says the number we floated works, is in the realm, or to go ahead and send the formal offer — including \"send it over\", \"email me the offer\", \"can I see it in writing\"",
     media: "the message is only a photo or attachment",
     opt_out: "asks us to stop texting, says wrong number, or is plainly angry — reply with nothing at all",
     question: "asks something answerable from the thread or the offer book",
@@ -988,8 +988,9 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "for it again — ask about price expectations and the seller's timeline. If they bring up a new or separate " +
           "deal, ask right away: 'Awesome, what's the address?'\n" +
           "PRICING: never quote an offer number in text. 'Let me run this address by my underwriting team today " +
-          "and see if we can get back to you with an offer.' The one exception is THEIR TAKE below — floating our " +
-          "ARV and rehab read, when the context hands them to you, to get theirs.\n" +
+          "and see if we can get back to you with an offer.' The exceptions are THEIR TAKE below — floating our " +
+          "ARV and rehab read, when the context hands them to you, to get theirs — and an offer the context shows " +
+          "as SENT, which is on paper: restate its number and terms if they ask.\n" +
           "HANDOFF: once an address and details are confirmed, or they ask for a call: 'Perfect, will review the " +
           "numbers and give you a call if it makes sense.'\n" +
           "A NO ON AN OFFER: never argue the math. Ask once what the seller would take; only if they turn that down " +

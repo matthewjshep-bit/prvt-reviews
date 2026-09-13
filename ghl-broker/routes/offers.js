@@ -2307,6 +2307,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const d = await store.getOffer(draftId).catch(() => null);
       if (d && d.locationId === locationId && d.status === "draft") {
         await store.deleteOffer(draftId).catch(() => {});
+        // A held auto-underwrite a person just reviewed and published: the
+        // conversation picks up exactly where a clean run would have — send
+        // on a clean underwrite, or float our read / our number. The stamp
+        // travels so the 24h address dedupe still recognises the house.
+        if (d.autoUnderwrite && !revising && offer.contactId) {
+          offer.autoUnderwrite = { ...d.autoUnderwrite, publishedAt: new Date().toISOString() };
+          await store.updateOffer(offer.id, offer).catch(() => {});
+          const fresh = (await store.getOfferSettings(locationId)) || {};
+          Promise.resolve(underwriteDeps({ client, locationId, saved: fresh }).onOfferCreated({ offer }))
+            .catch((e) => console.error(`published draft ${offer.id} → conversation: ${e.message}`));
+        }
       }
     }
 
@@ -4049,7 +4060,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await recordEvent({
         store, locationId, contactId, party: "agent", type: "offer_sent", at: new Date().toISOString(),
         address: offer.address, offerId: offer.id, source: "conversation", ref: draftId,
-        data: { channels: ch, docs: dk, by: draftId ? "conversation" : "underwrite" },
+        data: { channels: ch, docs: dk, by: draftId ? "conversation" : "underwrite", amount: offer.cashAmount || null },
       }).catch(() => {});
       return { ok: true, address: offer.address, channels: ch, results: r.results };
     },
@@ -5260,7 +5271,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!channels.length) return res.status(400).json({ error: "no channel selected" });
       const live = dryRun === false && CARD_SENDS_ENABLED;
       try {
-        res.json(await sendOfferDocs({ locationId, client, offer, message, emailSubject, channels, docKeys, live }));
+        const r = await sendOfferDocs({ locationId, client, offer, message, emailSubject, channels, docKeys, live });
+        // A hand-sent offer is on the contact's timeline too, so the
+        // conversation knows the paper went out and doesn't promise it again.
+        if (r?.sent && offer.contactId) {
+          await recordEvent({
+            store, locationId, contactId: offer.contactId, party: "agent", type: "offer_sent", at: new Date().toISOString(),
+            address: offer.address, offerId: offer.id, source: "offer", ref: null,
+            data: { channels, docs: docKeys, by: "operator", amount: offer.cashAmount || null },
+          }).catch(() => {});
+        }
+        res.json(r);
       } catch (e) {
         if (e.http === 502) return res.status(502).json({ error: "send failed", detail: e.detail, results: e.results, sends: e.sends });
         throw e;

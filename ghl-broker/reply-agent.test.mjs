@@ -2256,3 +2256,91 @@ test("the first no on a live offer asks for their number without filing it dead;
   assert.ok(types2.includes("mark_offer_passed"), `the second no closes it: ${types2}`);
   assert.ok(!types2.includes("note_first_decline"));
 });
+
+/* ---------- address → underwrite → offer → back into the conversation ---------- */
+
+import { knownOfferFor } from "./reply-agent.js";
+
+test("a house counts as known while its offer is recent or its held draft is fresh", () => {
+  const now = Date.parse("2026-09-12T18:00:00Z");
+  const day = 86400000;
+  const rows = [
+    { address: "12 Elm St, Seattle, WA", status: "sent", createdAt: new Date(now - 10 * day).toISOString() },
+    { address: "7 Pine Ave, Tacoma, WA", status: "draft", updatedAt: new Date(now - 9 * day).toISOString() },
+    { address: "3 Oak Rd, Kent, WA", status: "passed", createdAt: new Date(now - 90 * day).toISOString() },
+  ];
+  assert.equal(knownOfferFor(rows, "12 Elm St, Seattle, WA", now)?.status, "sent");
+  assert.equal(knownOfferFor(rows, "7 Pine Ave, Tacoma, WA", now), null, "a held draft nobody touched for 9 days gets fresh numbers");
+  assert.equal(knownOfferFor(rows, "3 Oak Rd, Kent, WA", now), null, "a months-old dead offer gets fresh numbers");
+  assert.equal(knownOfferFor(rows, "", now), null);
+});
+
+test("the offer book says a held draft is with the team, and a sent offer shows its expiry", () => {
+  const now = Date.now();
+  const book = summarizeOffers([
+    { address: "7 Pine Ave", status: "draft", createdAt: new Date(now).toISOString(), autoUnderwrite: { held: ["fewer than 3 comps"] } },
+    { address: "12 Elm St", status: "sent", cashAmount: 410000, createdAt: new Date(now - 1000).toISOString(),
+      sends: [{ ts: new Date(now - 1000).toISOString(), channels: ["sms"], results: { sms: { ok: true } } }], expiresAt: new Date(now + 5 * 86400000).toISOString() },
+  ], { now });
+  assert.match(book.text, /7 Pine Ave: numbers held for our team's review/);
+  assert.match(book.text, /12 Elm St: our cash offer \$410,000.*expires/);
+  assert.ok(book.amounts.includes(410000));
+});
+
+test("'let me run it by underwriting' is held when the underwrite didn't start", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "yeah 12 Elm St needs a full reno",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", reply: "Got it, let me run this by my underwriting team today.", propertyAddress: "12 Elm St" }),
+      startUnderwrite: async () => ({ skipped: "daily cap reached (25/25)" }),
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /underwrite didn't start: daily cap reached/);
+});
+
+test("an address we already have an offer on doesn't start a second underwrite", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => [{ id: "o9", address: "12 Elm St", status: "sent", cashAmount: 410000, createdAt: new Date().toISOString() }];
+  let started = 0;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "12 Elm St is still available",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", reply: "Good to hear. You have our offer on it.", propertyAddress: "12 Elm St" }),
+      startUnderwrite: async () => { started++; return { job: { id: "uw1" } }; },
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(started, 0);
+  const uw = d.actions.find((a) => a.type === "start_underwrite");
+  assert.equal(uw?.status, "skipped");
+  assert.match(uw.detail, /already have an offer on 12 Elm St/);
+});
+
+test("a named address with no offer behind it starts the underwrite even when the field already held it", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  let started = 0;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "any update on 12 Elm St?",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "status_check", reply: "Still working on it.", propertyAddress: "12 Elm St" }),
+      startUnderwrite: async () => { started++; return { job: { id: "uw1" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(started, 1);
+});

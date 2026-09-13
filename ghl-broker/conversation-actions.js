@@ -175,6 +175,7 @@ const EXECUTORS = {
     if (typeof deps?.startUnderwrite !== "function") throw new Error("auto-underwrite is not wired on this broker");
     const r = await deps.startUnderwrite({ contactId, message: draft?.inbound || "", address: draft?.propertyAddress || "" });
     if (r?.skipped) throw new Error(r.skipped);
+    if (r?.deduped) return "underwrite already running on it";
     return `underwrite started${r?.job?.dryRun ? " (dry run)" : ""}`;
   },
   // "That's way too low." Rather than conceding, re-run our own arithmetic on
@@ -218,8 +219,12 @@ const EXECUTORS = {
   // that already went out is reported, not re-sent.
   async send_offer({ deps, contactId, draft, action }) {
     if (typeof deps?.sendOfferDocs !== "function") throw new Error("sending offers is not wired on this broker");
+    // "Email me the offer": the PDFs only travel by email, so a message that
+    // asks for email gets email as well as the text.
+    const wantsEmail = /\be-?mail\b/i.test(String(draft?.inbound || ""));
     const r = await deps.sendOfferDocs({
-      contactId, addressHint: draft?.propertyAddress || "", channels: action?.channels, docs: action?.docs, draftId: draft?.id || null,
+      contactId, addressHint: draft?.propertyAddress || "", channels: action?.channels || (wantsEmail ? ["email", "sms"] : undefined),
+      docs: action?.docs, draftId: draft?.id || null,
       ...(action?.afterCounter === true ? { afterCounter: true } : {}),
     });
     if (!r?.ok) return r?.reason || "no open offer to send";
