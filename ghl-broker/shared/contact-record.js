@@ -61,6 +61,9 @@ export const EVENT_TYPES = [
   "call_summary", "text_summary", "note",
   // A deal post-mortem was written to the record (by the machine or by hand).
   "post_mortem_built",
+  // A loan recorded on a property they bought — from a borrower list. What the
+  // Dispositions page reads for where an investor buys and how.
+  "property_financed",
   "enrich_run", "tag_added", "tag_removed",
   "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate", "property_details",
 ];
@@ -83,6 +86,7 @@ export const EVENT_LABEL = {
   outreach_left: "taken out of the outreach workflow (they replied)",
   call_booked: "call booked",
   post_mortem_built: "post-mortem written",
+  property_financed: "financed a property",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -97,6 +101,7 @@ export const EVENT_ICON = {
   enrich_run: "Sparkles", tag_added: "Tag", tag_removed: "Tag",
   subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator", property_details: "ClipboardList",
   follow_up_sent: "BellRing",
+  property_financed: "Landmark",
   outreach_sent: "Send",
   outreach_enrolled: "Workflow",
   outreach_left: "LogOut",

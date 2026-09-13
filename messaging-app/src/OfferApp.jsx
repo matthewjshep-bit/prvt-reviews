@@ -21,6 +21,7 @@ import OffersHistory from "./OffersHistory.jsx";
 import DealsView from "./DealsView.jsx";
 import AgentOutreach from "./AgentOutreach.jsx";
 import Dispositions from "./Dispositions.jsx";
+import DispoImport from "./DispoImport.jsx";
 import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
 import ConversationAi from "./ConversationAi.jsx";
@@ -67,6 +68,7 @@ const NAV =
     : APP_MODE === "dispo"
     ? [
         { view: "dispo", label: "Investors" },
+        { view: "import", label: "Import buyers" },
         { view: "settings", label: "Settings" },
       ]
     // The old four-tab Overview (2026-09-13) split by job: Today is the work,
@@ -342,6 +344,7 @@ export default function OfferApp() {
         {view === "flow" && <FlowView />}
         {view === "outreach" && <AgentOutreach settings={settings} />}
         {view === "dispo" && <Dispositions />}
+        {view === "import" && <DispoImport />}
         {view === "activity" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
         {view === "settings" && (
           <SettingsView settings={settings} onSaved={(s) => setSettings(s)} mode={APP_MODE} />

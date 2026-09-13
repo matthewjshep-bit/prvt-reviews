@@ -568,7 +568,13 @@ export const setInvestorStatus = (contactId, status) =>
 // criteria in `parsed` (whether their buy box fits).
 export const searchInvestors = ({ query, parsed, strict = false, filters = {} }) =>
   post(`/api/dispo/search`, { ...(parsed ? { parsed } : { query }), strict, ...filters });
-export const matchInvestorsToDeal = (offerId, { strict = false, filters = {} } = {}) =>
+// Buyer import: preview a borrower-list CSV (no GHL calls), then run it as a job.
+export const previewBuyerImport = (csv, fileName) => post(`/api/dispo/import/preview`, { csv, fileName });
+export const startBuyerImport = ({ previewId, keys = [], batch = "", dryRun = true }) =>
+  post(`/api/dispo/import`, { previewId, keys, batch, dryRun });
+export const getBuyerImportStatus = () => fetch(`${API_BASE}/api/dispo/import/status?${locq()}`).then(j);
+export const cancelBuyerImport = () => post(`/api/dispo/import/cancel`, {});
+export const matchInvestorsToDeal =(offerId, { strict = false, filters = {} } = {}) =>
   post(`/api/dispo/match`, { offerId, strict, ...filters });
 export const blastInvestors = ({ contactIds, label, applyTag = true, dryRun = true, offerId = "", sendWith = null }) =>
   post(`/api/dispo/blast`, { contactIds, applyTag, dryRun, ...(label ? { label } : {}), ...(offerId ? { offerId } : {}), ...(sendWith ? { sendWith } : {}) });

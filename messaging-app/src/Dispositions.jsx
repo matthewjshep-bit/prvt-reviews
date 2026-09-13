@@ -21,6 +21,43 @@ import {
   searchInvestors, setInvestorStatus, syncInvestors,
 } from "./api.js";
 import { EmptyState, ErrorBar, Spinner, TableCard } from "./ui.jsx";
+import { REGIONS, REGION_KEYS, STRATEGIES, cityLabel, regionFor } from "@shared/dispo-regions.js";
+
+const fmtMoneyShort = (n) => {
+  const v = Number(n) || 0;
+  if (!v) return "—";
+  return v >= 1e6 ? `$${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M` : `$${Math.round(v / 1000)}k`;
+};
+const fmtMonth = (iso) => (iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", year: "numeric" }) : "");
+
+// Sortable columns. Each reads a comparable value off a row; empty sorts last.
+const SORTS = {
+  name: (i) => String(i.name || "").toLowerCase(),
+  region: (i) => (i.markets?.regions?.[0] ? REGIONS[i.markets.regions[0]]?.label || "" : ""),
+  lastFlip: (i) => i.flips?.lastAt || "",
+  largest: (i) => i.flips?.largest || 0,
+  reply: (i) => i.lastRepliedAt || i.lastMessageAt || "",
+  blasted: (i) => i.lastBlastAt || "",
+};
+const readSort = () => {
+  try {
+    const [key, dir] = String(new URLSearchParams(window.location.search).get("sort") || "").split(":");
+    return SORTS[key] ? { key, dir: dir === "asc" ? "asc" : "desc" } : null;
+  } catch { return null; }
+};
+
+function SortTh({ label, sortKey, sort, onSort, className = "" }) {
+  const on = sort?.key === sortKey;
+  return (
+    <th className={`px-4 py-2.5 ${className}`}>
+      <button type="button" onClick={() => onSort(sortKey)}
+        className={`inline-flex items-center gap-1 uppercase tracking-wide ${on ? "text-slate-900" : "hover:text-slate-700"}`}
+        title="Sort">
+        {label}{on ? (sort.dir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />) : null}
+      </button>
+    </th>
+  );
+}
 import ContactLink from "./ContactLink.jsx";
 
 const INPUT_CLS =
@@ -224,6 +261,7 @@ function InvestorDetail({ investor, onSaved }) {
 
   const full = { ...investor, ...(detail?.investor || {}) };
   const deals = detail?.deals || null;
+  const purchases = detail?.purchases || [];
   const b = full.buybox || investor.buybox || {};
   const history = String(full.dealHistory || "").split(/\r?\n/).filter(Boolean).slice(-8).reverse();
 
@@ -294,6 +332,22 @@ function InvestorDetail({ investor, onSaved }) {
           </div>
         )}
 
+        {purchases.length > 0 && (
+          <div className="mb-3">
+            <span className={LABEL_CLS}>Properties they financed</span>
+            <ul className="space-y-1 text-sm">
+              {purchases.map((p, idx) => (
+                <li key={idx} className="flex items-baseline justify-between gap-2">
+                  <span className="truncate text-slate-700" title={p.address}>{p.address || p.city}</span>
+                  <span className="shrink-0 text-xs text-slate-500">
+                    {fmtMonth(p.at)} · {fmtMoneyShort(p.amount)} · {p.lender}{p.strategy ? ` · ${STRATEGIES[p.strategy] || p.strategy}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <span className={LABEL_CLS}>Property history</span>
         {history.length === 0 ? (
           <p className="text-sm text-slate-400">Nothing recorded yet.</p>
@@ -338,6 +392,16 @@ export default function Dispositions() {
   const [replyStatus, setReplyStatus] = useState("all");   // all | replied | awaiting | never
   const [areaText, setAreaText] = useState("");
   const [priceText, setPriceText] = useState("");
+  // Where they buy and how — from the dispo-region/city/type tags.
+  const [region, setRegion] = useState("");
+  const [city, setCity] = useState("");
+  const [type, setType] = useState("");
+  const [sort, setSort] = useState(readSort);
+  const onSort = (key) => {
+    const next = sort?.key === key ? { key, dir: sort.dir === "desc" ? "asc" : "desc" } : { key, dir: key === "name" || key === "region" ? "asc" : "desc" };
+    setSort(next);
+    try { const u = new URL(window.location.href); u.searchParams.set("sort", `${next.key}:${next.dir}`); window.history.replaceState(window.history.state, "", u.pathname + u.search); } catch { /* sort still works */ }
+  };
 
   const [selected, setSelected] = useState(() => new Set());
   const [expanded, setExpanded] = useState("");
@@ -383,7 +447,7 @@ export default function Dispositions() {
     setSearch({ busy: true });
     setSelected(new Set());
     const filters = {
-      excludeOnDeal, buyboxStatus, replyStatus,
+      excludeOnDeal, buyboxStatus, replyStatus, region, city, type,
       ...over, // a control that just changed hasn't re-rendered its state yet
     };
     try {
@@ -410,6 +474,10 @@ export default function Dispositions() {
     if (over.excludeOnDeal !== undefined) setExcludeOnDeal(over.excludeOnDeal);
     if (over.buyboxStatus !== undefined) setBuyboxStatus(over.buyboxStatus);
     if (over.replyStatus !== undefined) setReplyStatus(over.replyStatus);
+    if (over.region !== undefined) setRegion(over.region);
+    if (over.city !== undefined) setCity(over.city);
+    if (over.type !== undefined) setType(over.type);
+    setSelected(new Set());
     if (query) runSearch({ parsed: query, over });
   };
 
@@ -461,13 +529,34 @@ export default function Dispositions() {
       if (buyboxStatus === "documented") base = base.filter((i) => !buyboxIsEmpty(i.buybox));
       if (buyboxStatus === "missing") base = base.filter((i) => buyboxIsEmpty(i.buybox));
       if (replyStatus !== "all") base = base.filter((i) => replyState(i) === replyStatus);
+      if (region) base = base.filter((i) => i.markets?.regions?.includes(region));
+      if (city) base = base.filter((i) => i.markets?.cities?.includes(city));
+      if (type) base = base.filter((i) => i.markets?.types?.includes(type));
     }
     const needle = nameFilter.trim().toLowerCase();
-    if (!needle) return base;
-    return base.filter((i) =>
-      `${i.name || ""} ${i.buybox?.areasRaw || ""}`.toLowerCase().includes(needle)
-    );
-  }, [search, investors, byId, nameFilter, excludeOnDeal, buyboxStatus, replyStatus]);
+    if (needle) {
+      base = base.filter((i) =>
+        `${i.name || ""} ${i.buybox?.areasRaw || ""} ${(i.markets?.cities || []).join(" ")}`.toLowerCase().includes(needle)
+      );
+    }
+    if (!sort) return base;
+    const val = SORTS[sort.key];
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return [...base].sort((a, b) => {
+      const va = val(a), vb = val(b);
+      const ea = va === "" || va === 0, eb = vb === "" || vb === 0;
+      if (ea !== eb) return ea ? 1 : -1; // empties last either way
+      return (va < vb ? -1 : va > vb ? 1 : 0) * dir;
+    });
+  }, [search, investors, byId, nameFilter, excludeOnDeal, buyboxStatus, replyStatus, region, city, type, sort]);
+
+  // Cities under the chosen region, with how many investors bought there.
+  const regionCities = useMemo(() => {
+    if (!region) return [];
+    return Object.entries(data?.counts?.cities || {})
+      .filter(([c]) => regionFor(c.replace(/-/g, " ")) === region)
+      .sort((a, b) => b[1] - a[1]);
+  }, [region, data]);
 
   const chips = query ? queryChips(query) : [];
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.contactId));
@@ -730,6 +819,50 @@ export default function Dispositions() {
         )}
       </div>
 
+      {/* ---- market: where they buy and how ---- */}
+      {Object.keys(data.counts.regions || {}).length > 0 && (
+        <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={LABEL_CLS + " mb-0 mr-1"}>Where they buy</span>
+            <button type="button" onClick={() => setBookFilter({ region: "", city: "" })}
+              className={`${PILL_CLS} ${!region ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+              Everywhere
+            </button>
+            {REGION_KEYS.filter((k) => data.counts.regions[k]).map((k) => (
+              <button key={k} type="button" onClick={() => setBookFilter({ region: region === k ? "" : k, city: "" })}
+                className={`${PILL_CLS} ${region === k ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                {REGIONS[k].label} <span className="opacity-70">{data.counts.regions[k]}</span>
+              </button>
+            ))}
+          </div>
+          {regionCities.length > 1 && (
+            <div className="flex flex-wrap items-center gap-1.5 pl-2">
+              <span className="text-xs text-slate-500">City:</span>
+              {regionCities.map(([c, n]) => (
+                <button key={c} type="button" onClick={() => setBookFilter({ city: city === c ? "" : c })}
+                  className={`${PILL_CLS} ${city === c ? "bg-blue-600 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"}`}>
+                  {cityLabel(c)} <span className="opacity-70">{n}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={LABEL_CLS + " mb-0 mr-1"}>What they do</span>
+            {Object.entries(STRATEGIES).map(([k, label]) => (
+              <button key={k} type="button" onClick={() => setBookFilter({ type: type === k ? "" : k })}
+                className={`${PILL_CLS} ${type === k ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                {label} <span className="opacity-70">{data.counts.types?.[k] || 0}</span>
+              </button>
+            ))}
+            {(region || city || type) && (
+              <span className="ml-auto text-xs text-slate-500">
+                {rows.length} investor{rows.length === 1 ? "" : "s"} — select all shown to blast them
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ---- blast bar ---- */}
       {selected.size > 0 && (
         <div className="sticky top-14 z-20 rounded-xl border border-slate-300 bg-white p-3 shadow-sm">
@@ -825,12 +958,14 @@ export default function Dispositions() {
                 <th className="px-3 py-2.5">
                   <input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all shown" />
                 </th>
-                <th className="px-4 py-2.5">Investor</th>
-                <th className="px-4 py-2.5">Areas</th>
+                <SortTh label="Investor" sortKey="name" sort={sort} onSort={onSort} />
+                <SortTh label="Market" sortKey="region" sort={sort} onSort={onSort} />
+                <th className="px-4 py-2.5">Does</th>
+                <SortTh label="Last flip" sortKey="lastFlip" sort={sort} onSort={onSort} />
+                <SortTh label="Largest loan" sortKey="largest" sort={sort} onSort={onSort} />
                 <th className="px-4 py-2.5">Price band</th>
-                <th className="px-4 py-2.5">Types</th>
-                <th className="px-4 py-2.5">Rehab</th>
-                <th className="px-4 py-2.5">Response</th>
+                <SortTh label="Response" sortKey="reply" sort={sort} onSort={onSort} />
+                <SortTh label="Blasted" sortKey="blasted" sort={sort} onSort={onSort} />
                 {search?.results && <th className="px-4 py-2.5">Fit</th>}
                 <th className="sticky right-0 bg-white px-4 py-2.5" />
               </tr>
@@ -864,17 +999,34 @@ export default function Dispositions() {
                         )}
                         {inv.reason && <div className="mt-0.5 text-xs text-slate-600">{inv.reason}</div>}
                       </td>
-                      <td className="max-w-[16rem] truncate px-4 py-2.5 text-slate-700" title={b.areasRaw || ""}>
-                        {b.areasRaw || "—"}
+                      <td className="max-w-[16rem] px-4 py-2.5 text-slate-700">
+                        {(() => {
+                          const m = inv.markets || {};
+                          const cities = (m.cities || []).map(cityLabel);
+                          const regionText = (m.regions || []).map((r) => REGIONS[r]?.label || r).join(", ");
+                          if (!regionText && !cities.length && !m.states?.length) {
+                            return <span className="truncate" title={b.areasRaw || ""}>{b.areasRaw || "—"}</span>;
+                          }
+                          return (
+                            <div className="truncate" title={[cities.join(", "), (m.states || []).join(", "), b.areasRaw].filter(Boolean).join(" · ")}>
+                              <span className="font-medium text-slate-900">{regionText || (m.states || []).join(", ")}</span>
+                              {cities.length > 0 && <span className="text-xs text-slate-500"> · {cities.slice(0, 3).join(", ")}{cities.length > 3 ? ` +${cities.length - 3}` : ""}</span>}
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-slate-700">
+                        {(inv.markets?.types || []).map((t) => STRATEGIES[t]).join(", ") || "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-slate-700" title={inv.flips?.lastAddress || ""}>
+                        {inv.flips ? <>{fmtMonth(inv.flips.lastAt)}{inv.flips.count > 1 && <span className="text-slate-500"> · {inv.flips.count} loans</span>}</> : "—"}
+                      </td>
+                      <td className="px-4 py-2.5 tabular-nums text-slate-700" title={(inv.flips?.lenders || []).join(", ")}>
+                        {fmtMoneyShort(inv.flips?.largest)}
                       </td>
                       <td className="px-4 py-2.5 font-semibold tabular-nums text-slate-900">{priceBandText(b) || "—"}</td>
-                      <td className="px-4 py-2.5 text-slate-700">
-                        {b.propertyTypes?.length ? b.propertyTypes.map((t) => PROPERTY_TYPE_LABELS[t]).join(", ") : "—"}
-                      </td>
-                      <td className="px-4 py-2.5 text-slate-700">
-                        {b.rehabAppetite ? REHAB_APPETITE_LABELS[b.rehabAppetite] : "—"}
-                      </td>
                       <td className="px-4 py-2.5"><ReplyBadge investor={inv} /></td>
+                      <td className="px-4 py-2.5 text-xs text-slate-500">{inv.lastBlastAt ? fmtAgo(inv.lastBlastAt) : "—"}</td>
                       {search?.results && (
                         <td className="px-4 py-2.5"><FitBadge fit={inv.fit} score={inv.score} /></td>
                       )}
@@ -892,7 +1044,7 @@ export default function Dispositions() {
                     </tr>
                     {open && (
                       <tr className="border-b border-slate-100 bg-slate-50 last:border-0">
-                        <td colSpan={search?.results ? 9 : 8} className="px-4 py-4">
+                        <td colSpan={search?.results ? 11 : 10} className="px-4 py-4">
                           <InvestorDetail investor={inv} onSaved={onBuyboxSaved} />
                           <button type="button" onClick={() => archive(inv)}
                             className="mt-3 text-xs font-semibold text-slate-500 hover:text-slate-700">

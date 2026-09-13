@@ -250,8 +250,10 @@ const bandsOverlap = (aLo, aHi, bLo, bHi) =>
 //
 // `score` is a deterministic 0-100 used to order results when the model isn't
 // involved (no API key, a ranking failure, or plain browsing with filters).
-export function matchBuybox(buybox = {}, query = {}, { strict = false } = {}) {
-  const b = buybox || {};
+export function matchBuybox(buybox = {}, query = {}, { strict = false, fallbackAreas = [] } = {}) {
+  // No areas on file, but we know where they have actually bought (a borrower
+  // list): answer the areas question from that rather than abstaining.
+  const b = (buybox?.areas?.length || !fallbackAreas?.length) ? (buybox || {}) : { ...buybox, areas: fallbackAreas };
   const q = query || {};
   const matched = [];
   const missed = [];
@@ -306,7 +308,7 @@ export function applyBuyboxFilters(investors = [], query = {}, { strict = false 
   const q = normalizeQuery(query);
   const out = [];
   for (const inv of investors) {
-    const match = matchBuybox(inv.buybox, q, { strict });
+    const match = matchBuybox(inv.buybox, q, { strict, fallbackAreas: inv.fallbackAreas || [] });
     if (match.pass) out.push({ ...inv, match });
   }
   // Score first, then more matched criteria (a 100 from one criterion is a

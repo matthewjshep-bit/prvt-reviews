@@ -1205,6 +1205,35 @@ them by **buy box**, and hands a shortlist to a GHL workflow.
    `DISPO_BLASTS_ENABLED=true` on the broker; otherwise every blast is a
    dry-run preview.
 
+### Market tags and buyer import (2026-09-13)
+
+Buyers are tagged by where they have actually financed a property and how,
+from borrower lists (the "enhanced borrower list builder" CSV export):
+
+- `dispo-city-<city>` for every city they bought in, `dispo-region-<region>`
+  (seattle, north-king, eastside, south-king, snohomish, pierce, kitsap-mason,
+  thurston, other-wa — map in `shared/dispo-regions.js`), `dispo-oos-<st>` for
+  out-of-state properties, and `dispo-type-<flip|new-construction|rental>`.
+  Type: 10+ year maturity = rental; construction lender or ≥ $2.5M = new
+  construction; everything else = flip.
+- `city-`/`region-` sit inside the tag on purpose: a bare `dispo-<city>` is read
+  as a *blast* tag by the buyer-feedback package (`blastTagsFor`).
+- Each financed property is a `property_financed` event on the contact record;
+  the Investors table reads Market / Does / Last flip / Largest loan from those
+  and the tags, with region → city and type filters and sortable columns.
+
+**Retag an existing list** (tags only, never creates):
+`node --env-file=.env scripts/retag-dispo-markets.mjs <csv>... [--tag disposition-seatac,dispositions-vashon] [--live] [--limit N] [--record https://offers.shepflips.com]`
+— dry run by default, report CSV in `ghl-broker/tmp/`. `--record` posts the
+purchases to `POST /api/dispo/purchases` (the script has no database).
+
+**Import a new list**: Dispositions → **Import buyers**. Upload the CSV,
+preview (no GHL calls), tick who to bring in, Dry run, then Import. Matches get
+tags added and blanks filled; new people are created with `investor`, the
+market/type tags and a `dispo-import-<batch>` tag. Live writes need
+`DISPO_IMPORTS_ENABLED=true` on the broker. Run **Sync** afterwards (the page
+does it when a live import finishes).
+
 ### Dispositions autopilot
 
 Settings → Dispositions → "Dispositions autopilot".

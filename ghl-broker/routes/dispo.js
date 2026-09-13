@@ -18,7 +18,10 @@
 // ones, and blast carries the same double gate as the agent-outreach import.
 
 import express from "express";
-import { recordEvent, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
+import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
+import { marketsFromTags } from "../shared/dispo-regions.js";
+import { purchaseEvents } from "../buyer-import.js";
+import { DISPO_IMPORTS_ENABLED, previewCsv, startImport, getImportJob, publicImportJob, cancelImport } from "../dispo-import.js";
 import { FACT_KEYS, factsAsCustom, factsEmpty } from "../shared/contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
@@ -193,7 +196,39 @@ export default function createDispoRouter({ resolveLocation }) {
     lastMessageAt: i.lastMessageAt || "",
     lastMessageDirection: i.lastMessageDirection || "",
     lastRepliedAt: i.lastRepliedAt || "",
+    // Where they buy and how — read off the dispo-city/region/type tags.
+    markets: i.markets || marketsFromTags(i.tags),
+    flips: i.flips || null,
   });
+
+  // Every property_financed event in the location, folded per contact into
+  // what the table shows. Built at read time: the investors doc is replaced
+  // wholesale on every sync, the timeline is not.
+  async function flipsByContact(locationId) {
+    const events = await store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: ["property_financed"], limit: 50000 }).catch(() => []);
+    const out = new Map();
+    for (const e of events) {
+      if (!e?.contactId) continue;
+      const f = out.get(e.contactId) || { count: 0, lastAt: "", largest: 0, lastAddress: "", lenders: [] };
+      f.count++;
+      const amount = Number(e.data?.amount) || 0;
+      if (amount > f.largest) f.largest = amount;
+      if (String(e.at) > f.lastAt) { f.lastAt = e.at; f.lastAddress = e.address || ""; }
+      const lender = e.data?.lender;
+      if (lender && !f.lenders.includes(lender) && f.lenders.length < 5) f.lenders.push(lender);
+      out.set(e.contactId, f);
+    }
+    return out;
+  }
+
+  // Market filters, shared by browse (client) and search (here).
+  const matchesMarket = (i, { region, city, type }) => {
+    const m = i.markets || marketsFromTags(i.tags);
+    if (region && !m.regions.includes(region)) return false;
+    if (city && !m.cities.includes(city)) return false;
+    if (type && !m.types.includes(type)) return false;
+    return true;
+  };
 
   // Every deal this contact is linked to, newest first — the join the UI
   // shows under an expanded investor row.
@@ -236,6 +271,9 @@ export default function createDispoRouter({ resolveLocation }) {
     buyboxStatus: ["documented", "missing"].includes(body.buyboxStatus) ? body.buyboxStatus : "all",
     replyStatus: ["replied", "awaiting", "never"].includes(body.replyStatus) ? body.replyStatus : "all",
     notBlastedDays: Number(body.notBlastedDays) > 0 ? Number(body.notBlastedDays) : 0,
+    region: sanitizeTag(body.region || ""),
+    city: sanitizeTag(body.city || ""),
+    type: sanitizeTag(body.type || ""),
   });
 
   /* ---------- read ---------- */
@@ -250,10 +288,13 @@ export default function createDispoRouter({ resolveLocation }) {
       // can see the deals, and the browse table filters on it without a
       // second round trip.
       const onDeal = await liveDealContactIds(locationId);
+      const flips = await flipsByContact(locationId);
       const investors = rows.map((r) => {
         const i = hydrate(r);
-        return { ...i, onLiveDeal: onDeal.has(i.contactId) };
+        return { ...i, onLiveDeal: onDeal.has(i.contactId), markets: marketsFromTags(i.tags), flips: flips.get(i.contactId) || null };
       });
+      const tally = (pick) => investors.filter((i) => i.status !== "archived")
+        .reduce((a, i) => { for (const k of pick(i)) a[k] = (a[k] || 0) + 1; return a; }, {});
       res.json({
         ok: true,
         investors: investors.map(slim),
@@ -266,6 +307,10 @@ export default function createDispoRouter({ resolveLocation }) {
           replied: investors.filter((i) => replyState(i) === "replied").length,
           awaiting: investors.filter((i) => replyState(i) === "awaiting").length,
           neverContacted: investors.filter((i) => replyState(i) === "never").length,
+          regions: tally((i) => i.markets.regions),
+          cities: tally((i) => i.markets.cities),
+          types: tally((i) => i.markets.types),
+          withFlips: investors.filter((i) => i.flips).length,
         },
         syncedAt: investors.reduce(
           (max, i) => (String(i.syncedAt || "") > String(max || "") ? i.syncedAt : max),
@@ -281,10 +326,12 @@ export default function createDispoRouter({ resolveLocation }) {
       const { locationId } = resolveLocation(req);
       const row = await store.getInvestor(locationId, req.params.contactId);
       if (!row) return res.status(404).json({ error: "investor not found — run a sync first" });
+      const purchases = await store.listContactEvents(locationId, req.params.contactId, { types: ["property_financed"], limit: 100 }).catch(() => []);
       res.json({
         ok: true,
         investor: hydrate(row),
         deals: await dealsFor(locationId, req.params.contactId),
+        purchases: purchases.map((e) => ({ at: e.at, address: e.address, ...(e.data || {}) })),
       });
     } catch (err) { fail(res, err); }
   });
@@ -575,6 +622,65 @@ export default function createDispoRouter({ resolveLocation }) {
     } catch (err) { fail(res, err); }
   });
 
+  /* ---------- buyer import (borrower list CSV) ---------- */
+
+  router.post("/import/preview", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ ok: true, importsEnabled: DISPO_IMPORTS_ENABLED, ...previewCsv({ locationId, csv: req.body?.csv, fileName: String(req.body?.fileName || "").slice(0, 120) }) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/import", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const job = startImport({
+        client, store, locationId,
+        previewId: String(req.body?.previewId || ""),
+        keys: Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [],
+        batch: String(req.body?.batch || "").slice(0, 60),
+        dryRun: req.body?.dryRun !== false,
+      });
+      res.json({ ok: true, job: publicImportJob(job) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.get("/import/status", (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ ok: true, importsEnabled: DISPO_IMPORTS_ENABLED, job: publicImportJob(getImportJob(locationId)) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/import/cancel", (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ ok: true, stopping: cancelImport(locationId) });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- purchase history ---------- */
+
+  // POST /purchases { buyers: [{ contactId, purchases: [...] }] }
+  // Records each financed property on the contact's timeline. Dedupe-keyed
+  // per property + recording date, so re-posting a list adds nothing. The
+  // retag script posts here because only the broker can reach the database.
+  router.post("/purchases", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const buyers = (Array.isArray(req.body?.buyers) ? req.body.buyers : []).slice(0, 500);
+      let inserted = 0, skipped = 0;
+      for (const b of buyers) {
+        const contactId = String(b?.contactId || "").slice(0, 64);
+        const events = purchaseEvents(Array.isArray(b?.purchases) ? b.purchases.slice(0, 100) : []);
+        if (!contactId || !events.length) continue;
+        const r = await recordEvents({ store, locationId, contactId, party: "investor", events });
+        inserted += r.inserted || 0; skipped += r.skipped || 0;
+      }
+      res.json({ ok: true, buyers: buyers.length, inserted, skipped });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---------- search + match ---------- */
 
   // Shared tail of both search paths: filter locally, rank what survives.
@@ -602,6 +708,10 @@ export default function createDispoRouter({ resolveLocation }) {
       const cutoff = Date.now() - filters.notBlastedDays * 86400000;
       pool = pool.filter((i) => !i.lastBlastAt || new Date(i.lastBlastAt).getTime() < cutoff);
     }
+    if (filters.region || filters.city || filters.type) pool = pool.filter((i) => matchesMarket(i, filters));
+    // The cities they've financed in stand in for a missing buy-box area list,
+    // so a Kirkland deal finds Kirkland flippers who never filled one in.
+    pool = pool.map((i) => ({ ...i, fallbackAreas: marketsFromTags(i.tags).cities.map((c) => c.replace(/-/g, " ")) }));
 
     const survivors = applyBuyboxFilters(pool, parsed, { strict });
 
