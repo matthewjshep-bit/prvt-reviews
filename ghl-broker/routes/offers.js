@@ -94,7 +94,7 @@ import {
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT,
 } from "../auto-underwrite.js";
 import {
-  startReply, startProactive, chooseProactiveKind, listJobs as listReplyJobs, publicJob as publicReplyJob,
+  startReply, startProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig,
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
@@ -3680,18 +3680,29 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // us what they think it's worth and costs, float our ARV/rehab read to
     // draw it out; if they have, float the cash number. The choice and its
     // outcome are remembered on the offer so the follow-up can find it.
-    onOfferCreated: async ({ offer }) => {
+    onOfferCreated: async ({ offer: created, job = null }) => {
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
       let events = [];
-      try { events = await store.listContactEvents(locationId, offer.contactId, { limit: 200 }); } catch { events = []; }
+      try { events = await store.listContactEvents(locationId, created.contactId, { limit: 200 }); } catch { events = []; }
+      // The run's own verdict rides on the offer from here, so the realm
+      // check's readiness sees the same confidence this decision did.
+      const offer = job && !created.autoUnderwrite
+        ? { ...created, autoUnderwrite: { passed: !job.held?.length, compsUsedCount: job.compsUsed?.length || 0 } }
+        : created;
+
+      const cfg = conversationConfig(fresh);
+      const so = cfg.parties.agent.sendOffer;
+      // A confident underwrite leads with the NUMBER in conversation — "based
+      // on our analysis we can likely do around 450ish" — and the paper waits
+      // for their answer (a yes sends it). Not confident: the old order.
+      const leadWithNumber = leadsWithNumber({ offer, job, config: cfg });
 
       // The offer itself, unattended — only for a CLEAN underwrite (status
       // "new", not a gate-held draft), only to an agent who has already
-      // talked to us, only inside the auto-send hours. Anything else falls
-      // through to the float below, which is a draft.
-      const cfg = conversationConfig(fresh);
-      const so = cfg.parties.agent.sendOffer;
-      if (so.onClearUnderwrite && cfg.enabled && CARD_SENDS_ENABLED && effectiveStatus(offer) === "new" && !offer.deal) {
+      // talked to us, only inside the auto-send hours, and only when the
+      // number isn't being floated first. Anything else falls through to the
+      // float below.
+      if (so.onClearUnderwrite && !leadWithNumber && cfg.enabled && CARD_SENDS_ENABLED && effectiveStatus(offer) === "new" && !offer.deal) {
         const why = await (async () => {
           const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
           if (!drafts.some((d) => d.inbound)) return "they have never replied to us";
@@ -3714,7 +3725,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         }
       }
 
-      const kind = chooseProactiveKind({ events, address: offer.address });
+      const kind = chooseProactiveKind({ events, address: offer.address, leadWithNumber });
       const r = await startProactive({
         client, locationId, saved: fresh, store, contactId: offer.contactId, kind,
         offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),

@@ -64,7 +64,7 @@ import {
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { resolveParty } from "./conversation-party.js";
 import {
-  loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText } from "./conversation-context.js";
+  loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts } from "./conversation-context.js";
 import {
   buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext,
 } from "./conversation-prompt.js";
@@ -1153,10 +1153,12 @@ export const OUTBOUND_KINDS = {
       // goes first and this waits for their answer.
       const takeOn = config?.parties?.agent?.takeCheck?.enabled;
       const haveTheirs = Boolean(dossier?.have?.arv || dossier?.have?.rehab);
-      if (takeOn && !haveTheirs) return "no read from the agent yet — the take check goes first";
+      // …unless the underwrite is confident: then our number leads.
+      if (takeOn && !haveTheirs && !leadsWithNumber({ offer, config })) return "no read from the agent yet — the take check goes first";
       return true;
     },
-    floats: ({ offer }) => [Math.round(Number(offer.cashAmount) || 0)],
+    // The exact number and its rough forms ("around 445ish"), never rounded up.
+    floats: ({ offer }) => roughAmounts(offer.cashAmount),
     forbids: () => [],
   },
   offer_nudge: {
@@ -1259,9 +1261,44 @@ const kText = (n) => `${Math.round(n / 1000)}K`;
  * think the property is worth and costs, there is nothing to draw out and
  * the cash number can go; otherwise float the ARV/rehab read first.
  */
-export function chooseProactiveKind({ events = [], address = "" } = {}) {
+export function chooseProactiveKind({ events = [], address = "", leadWithNumber = false } = {}) {
+  if (leadWithNumber) return "realm_check";
   const d = address ? propertyDossier(events, address) : null;
   return d && (d.have.arv || d.have.rehab) ? "realm_check" : "take_check";
+}
+
+/**
+ * numberConfidence({ offer, job }) → "high" | "medium" | "low" | null
+ *
+ * How much the auto-underwrite's own record says we can stand behind its
+ * number. A run that cleared every gate (street-level address read with high
+ * confidence, known square footage, ≥3 renovated comps within half a mile,
+ * graded ARV, enough photos, repairs inside the band, no structural flag) is
+ * at least medium; with 4+ comps it's high. A held run is low — until a
+ * person reviews and publishes it, which makes it theirs. null: not an
+ * auto-underwrite at all (a hand-built offer keeps "their read first").
+ */
+export const CONFIDENT_COMPS = 4;
+export function numberConfidence({ offer = null, job = null } = {}) {
+  if (job) {
+    if (job.held?.length) return "low";
+    const n = job.compsUsed?.length || 0;
+    return n >= CONFIDENT_COMPS ? "high" : "medium";
+  }
+  const uw = offer?.autoUnderwrite;
+  if (!uw) return null;
+  if (uw.publishedAt) return "high";
+  if (!uw.passed) return "low";
+  return (Number(uw.compsUsedCount) || 0) >= CONFIDENT_COMPS ? "high" : "medium";
+}
+
+// Lead with our number (skip "what do you think it's worth?") when the
+// underwrite is confident and the operator hasn't turned it off.
+export function leadsWithNumber({ offer = null, job = null, config = null } = {}) {
+  const rc = config?.parties?.agent?.realmCheck;
+  if (!rc?.enabled || rc.leadWhenConfident === false) return false;
+  if (!(Number(offer?.cashAmount) > 0)) return false;
+  return ["high", "medium"].includes(numberConfidence({ offer, job }));
 }
 
 // The descriptor the prompt reads for one outbound kind: everything the model
@@ -1293,6 +1330,9 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       askingText: asking ? fmtMoney(asking) : "", terms,
       theirArv, theirRehab,
       theirArvK: theirArv ? kText(theirArv) : "", theirRehabK: theirRehab ? kText(theirRehab) : "",
+      // A confident auto-underwrite leads with the number, plainly.
+      confident: ["high", "medium"].includes(numberConfidence({ offer })),
+      street: String(offer.address || "").split(",")[0].trim(),
       requote: Boolean(subject?.requote) };
   }
   if (kind === "outreach_open") {

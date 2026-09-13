@@ -2366,3 +2366,45 @@ test("a rough version of our number is ours too — rounded to the thousand or d
   });
   assert.ok(bad.flags.some((f) => /not in the offer book/.test(f)), "a number above ours is still caught");
 });
+
+/* ---------- a confident underwrite leads with the number ---------- */
+
+import { numberConfidence, leadsWithNumber, chooseProactiveKind } from "./reply-agent.js";
+
+test("confidence comes from the underwrite's own record", () => {
+  assert.equal(numberConfidence({ job: { held: [], compsUsed: [1, 2, 3, 4] } }), "high");
+  assert.equal(numberConfidence({ job: { held: [], compsUsed: [1, 2, 3] } }), "medium");
+  assert.equal(numberConfidence({ job: { held: ["fewer than 3 comps"], compsUsed: [1] } }), "low");
+  assert.equal(numberConfidence({ offer: { autoUnderwrite: { passed: true, compsUsedCount: 5 } } }), "high");
+  assert.equal(numberConfidence({ offer: { autoUnderwrite: { passed: false } } }), "low");
+  assert.equal(numberConfidence({ offer: { autoUnderwrite: { passed: false, publishedAt: "2026-09-12" } } }), "high", "a person published the held draft");
+  assert.equal(numberConfidence({ offer: { cashAmount: 1 } }), null, "a hand-built offer isn't scored");
+
+  const config = conversationConfig(STARTER_SAVED);
+  const confident = { cashAmount: 410000, autoUnderwrite: { passed: true, compsUsedCount: 4 } };
+  assert.equal(leadsWithNumber({ offer: confident, config }), true);
+  assert.equal(leadsWithNumber({ offer: { ...confident, autoUnderwrite: { passed: false } }, config }), false);
+  assert.equal(leadsWithNumber({ offer: { ...confident, cashAmount: 0 }, config }), false);
+  const off = { ...config, parties: { ...config.parties, agent: { ...config.parties.agent, realmCheck: { enabled: true, leadWhenConfident: false } } } };
+  assert.equal(leadsWithNumber({ offer: confident, config: off }), false, "the operator can keep 'their read first'");
+  assert.equal(chooseProactiveKind({ events: [], address: "12 Elm St", leadWithNumber: true }), "realm_check");
+});
+
+test("a confident underwrite floats our number without waiting for their read, in plain words", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const offer = { ...LANDED, cashAmount: 447300, autoUnderwrite: { passed: true, compsUsedCount: 5 } };
+  store.listOffers = async () => [offer];
+  let seen;
+  const { job, skipped } = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer, sendsEnabled: true,
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "realm_check", reply: "Based on our analysis we can likely do around 445ish on 12 Elm St. Would that work for the seller?", summary: "Floats 445k." }; } },
+  });
+  assert.ok(job, `started (skipped: ${skipped})`);
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(seen.outbound.confident, true);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.autoSendable, true, d.flags.join(" · "));
+});

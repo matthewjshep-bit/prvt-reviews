@@ -78,6 +78,19 @@ export function fieldLines(custom = {}, keys = []) {
 
 /* ---------- the agent's book ---------- */
 
+// "around 450ish" on a 447,300 offer: the rough figure is ours too. The exact
+// number, the nearest thousand, and round numbers at or BELOW the offer —
+// never a rounding that lands above what we underwrote.
+export function roughAmounts(amount) {
+  const a = Math.round(Number(amount) || 0);
+  if (!(a > 0)) return [];
+  const out = new Set([a, Math.round(a / 1000) * 1000]);
+  for (const step of [5000, 10000, 25000]) out.add(Math.floor(a / step) * step);
+  const near5 = Math.round(a / 5000) * 5000;
+  if (near5 <= a + 1000) out.add(near5);
+  return [...out].filter((n) => n > 0);
+}
+
 const statusWord = (s) => ({
   draft: "draft (not sent)", new: "not sent yet", sent: "sent, waiting on the agent",
   countered: "agent countered", no_response: "no response", passed: "agent passed", we_passed: "we passed on it (withdrawn)", accepted: "accepted",
@@ -96,16 +109,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
   for (const o of rows) {
     const status = effectiveStatus(o);
     const amount = Number(o.cashAmount) || 0;
-    if (amount) {
-      amounts.add(amount);
-      // "around 450ish" on a 447,300 offer: the rough figure is ours too. The
-      // nearest thousand, and round numbers at or BELOW the offer — never a
-      // rounding that lands above what we underwrote.
-      amounts.add(Math.round(amount / 1000) * 1000);
-      for (const step of [5000, 10000, 25000]) amounts.add(Math.floor(amount / step) * step);
-      const near5 = Math.round(amount / 5000) * 5000;
-      if (near5 <= amount + 1000) amounts.add(near5);
-    }
+    if (amount) for (const n of roughAmounts(amount)) amounts.add(n);
     const asking = Number(o.askingPrice ?? o.inputs?.askingPrice ?? o.calc?.inputs?.askingPrice) || 0;
     if (asking) amounts.add(asking);
     const lastSend = (o.sends || []).filter((s) => s && s.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0];

@@ -350,6 +350,15 @@ export function outboundOpening(outbound) {
           `Ask whether that works for the seller. ${CONTINUE} Set intent to realm_check.`;
       }
       const theirs = [o.theirArvK ? `an ARV around ${o.theirArvK}` : "", o.theirRehabK ? `about ${o.theirRehabK} of work` : ""].filter(Boolean).join(" and ");
+      // A confident underwrite leads with our number, plainly — it's where our
+      // analysis lands and the written offer follows a yes.
+      if (o.confident && !theirs) {
+        return `${START} Our analysis on ${o.address} is done and we're confident in it: it lands at ${o.amountK}. ` +
+          `Tell them in one short text — e.g. "based on our analysis we can likely do around ${o.amountK}ish on ${o.street || o.address}" — ` +
+          `rounded to the nearest thousand or down (never up), as-is and a quick close if the terms are listed. ` +
+          `Ask whether that works for the seller; if it does, the written offer comes next. Don't explain the math ` +
+          `(ARV, repairs, fees) and don't call it final. Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
+      }
       return `${START} ${theirs ? `They came back on ${o.address} with ${theirs}.` : `We have numbers on ${o.address}.`} ` +
         `Give them a ROUGH, OFF-THE-TOP-OF-YOUR-HEAD number — ${o.amountK} — and be explicit that is exactly what it is: ` +
         `a first pass, not an underwritten offer. ` +
