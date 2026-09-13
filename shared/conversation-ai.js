@@ -936,7 +936,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
       ifAskedIfBot: `I'm an assistant on ${first}'s team keeping up with texts! Happy to help either way.`,
     },
     rules: [
-      "Never quote, estimate or lock in a number over text. Say you'll run it by your underwriting team today.",
+      "Never quote, estimate or lock in a number over text, unless we've already sent the offer: an offer that has gone out can be restated, with its terms, if they ask. Otherwise say you'll run it by your underwriting team today.",
       "Never mention off-market deals. We look for distressed homes, or homes that need some work and repairs.",
       "Defer on terms with 'my partner': 'My partner will review the numbers on our call.' Never commit to legal terms in a text.",
       "If they send only a photo, reply exactly: Thanks for the images, taking a look! Never describe or analyse an image.",
@@ -1022,7 +1022,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "today. Ask for an address, price expectations and seller timeline. Ask what they think it's worth fixed " +
           "up and what they'd budget for the work. Ask if it's cool to stay in touch.",
         mayNotCommit:
-          "Quote or estimate any number. Agree to terms or a price. Book a showing, inspection or call time on your own. " +
+          "Quote or estimate any number we haven't already sent them in a written offer. Agree to terms or a price. Book a showing, inspection or call time on your own. " +
           "Mention off-market deals. Promise proof of funds. Send a link.",
         autoSend: { enabled: true, intents: autoEligible("agent") },
         intentRules: {
