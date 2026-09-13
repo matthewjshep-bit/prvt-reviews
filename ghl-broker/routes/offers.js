@@ -88,7 +88,7 @@ import { geocodeAddress } from "../geocode.js";
 import { pullZillowComps } from "../comps-zillow.js";
 import { gradeComps, needsScrape } from "../comps-grade.js";
 import {
-  startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs,
+  startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs, drainUnderwriteQueue,
   cancelJob as cancelUnderwriteJob, publicJob as publicUnderwriteJob,
   AUTO_UNDERWRITE_ENABLED,
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT,
@@ -3774,6 +3774,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     return { sent, checked: pending.length };
   };
 
+  // Underwrites that arrived past the daily cap, started on the tick once
+  // there's room. Same call the conversation makes, without re-queuing.
+  router.drainUnderwriteQueue = async ({ client, locationId, now = Date.now() }) => {
+    const saved = (await store.getOfferSettings(locationId)) || {};
+    return drainUnderwriteQueue({
+      store, locationId, saved, now,
+      start: (item) => startUnderwrite({
+        client, locationId, saved, store, contactId: item.contactId, message: item.message, address: item.address,
+        askingPrice: 0, dryRun: !AUTO_UNDERWRITE_ENABLED, deps: underwriteDeps({ client, locationId, saved }),
+      }),
+    });
+  };
+
   // Which floats have gone on an offer: { takeCheckAt, realmCheckAt }.
   async function markProactive(offerId, kind) {
     try {
@@ -3805,6 +3818,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       startUnderwrite({
         client, locationId, saved, store, contactId, message, address, askingPrice: 0,
         dryRun: !AUTO_UNDERWRITE_ENABLED, deps: underwriteDeps({ client, locationId, saved }),
+        queueIfCapped: true,
       }),
     // The agent says our number is way off. Re-run OUR arithmetic on the ARV
     // and rehab THEY gave us, revise the offer in place, and float the new

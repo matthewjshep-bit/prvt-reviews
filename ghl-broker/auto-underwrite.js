@@ -189,6 +189,59 @@ export async function findRecent({ store, locationId, contactId, address, now = 
   return null;
 }
 
+/* ---------- the waiting line (past the daily cap) ---------- */
+
+// Durable, in job_cursors, so a redeploy doesn't forget who is waiting. One
+// entry per contact per house; three days old and it's dropped — by then the
+// conversation has moved on and a person should look.
+export const QUEUE_CURSOR = "uwQueue";
+export const QUEUE_MAX_DAYS = 3;
+
+const queueKey = (i) => `${i.contactId}|${addressKey(i.address || "") || String(i.message || "").slice(0, 80)}`;
+
+export async function enqueueUnderwrite({ store, locationId, contactId, message = "", address = "", now = Date.now() }) {
+  const cur = await store.getJobCursor?.(locationId, QUEUE_CURSOR).catch(() => null);
+  const items = Array.isArray(cur?.doc?.items) ? cur.doc.items : [];
+  const item = { contactId, message: String(message || "").slice(0, 500), address: String(address || "").slice(0, 200), at: new Date(now).toISOString() };
+  const at = items.findIndex((i) => queueKey(i) === queueKey(item));
+  if (at < 0) items.push(item);
+  await store.setJobCursor?.(locationId, QUEUE_CURSOR, { at: new Date(now).toISOString(), doc: { items } });
+  return { position: (at < 0 ? items.length : at + 1), items: items.length };
+}
+
+/**
+ * drainUnderwriteQueue({ store, locationId, saved, start, now }) → { started, left, dropped }
+ *
+ * Starts queued underwrites while the day's cap has room, oldest first.
+ * `start(item)` is startUnderwrite with the route's deps, injected. A start
+ * that hits the cap again stays in line; any other refusal or error drops it
+ * (a missing key is not something waiting fixes).
+ */
+export async function drainUnderwriteQueue({ store, locationId, saved = {}, start, now = Date.now() }) {
+  const cur = await store.getJobCursor?.(locationId, QUEUE_CURSOR).catch(() => null);
+  const all = Array.isArray(cur?.doc?.items) ? cur.doc.items : [];
+  if (!all.length || typeof start !== "function") return { started: 0, left: all.length, dropped: 0 };
+  const fresh = all.filter((i) => now - Date.parse(i.at) <= QUEUE_MAX_DAYS * 86400000);
+  let dropped = all.length - fresh.length;
+  const cap = Number(saved?.autoUnderwriteDailyCap) > 0 ? Number(saved.autoUnderwriteDailyCap) : UW_DEFAULT_DAILY_CAP;
+  let room = cap - (await countToday({ store, locationId, now }));
+  const left = [];
+  let started = 0;
+  for (const item of fresh) {
+    if (room <= 0) { left.push(item); continue; }
+    try {
+      const r = await start(item);
+      if (r?.skipped && /daily cap/.test(r.skipped)) { left.push(item); room = 0; continue; }
+      if (r?.skipped) { dropped++; continue; }
+      started++; room--;
+    } catch { dropped++; }
+  }
+  if (started || dropped || left.length !== all.length) {
+    await store.setJobCursor?.(locationId, QUEUE_CURSOR, { at: new Date(now).toISOString(), doc: { items: left } });
+  }
+  return { started, left: left.length, dropped };
+}
+
 /* ---------- stage 1: what did the agent actually say? ---------- */
 
 const EXTRACT_SYSTEM =
@@ -550,6 +603,7 @@ async function note(client, contactId, body, warnings) {
  */
 export async function startUnderwrite({
   client, locationId, saved, store, contactId, message, address, askingPrice, dryRun, deps, origin = "workflow", fill = false,
+  queueIfCapped = false,
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
@@ -579,6 +633,13 @@ export async function startUnderwrite({
     : UW_DEFAULT_DAILY_CAP;
   const usedToday = await countToday({ store, locationId });
   if (usedToday >= cap) {
+    // From the conversation, an address past the cap waits in line instead
+    // of being dropped: the agent was told we're running it, and the broker
+    // tick starts it the moment the cap resets.
+    if (queueIfCapped && contactId) {
+      const q = await enqueueUnderwrite({ store, locationId, contactId, message, address });
+      return { queued: true, position: q.position, reason: `daily cap reached (${usedToday}/${cap})`, job: null };
+    }
     return { skipped: `daily cap reached (${usedToday}/${cap})`, job: null };
   }
 

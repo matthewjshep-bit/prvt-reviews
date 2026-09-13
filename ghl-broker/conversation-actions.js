@@ -176,6 +176,7 @@ const EXECUTORS = {
     const r = await deps.startUnderwrite({ contactId, message: draft?.inbound || "", address: draft?.propertyAddress || "" });
     if (r?.skipped) throw new Error(r.skipped);
     if (r?.deduped) return "underwrite already running on it";
+    if (r?.queued) return `underwrite queued (#${r.position}) — ${r.reason}; it starts when the cap resets`;
     return `underwrite started${r?.job?.dryRun ? " (dry run)" : ""}`;
   },
   // "That's way too low." Rather than conceding, re-run our own arithmetic on

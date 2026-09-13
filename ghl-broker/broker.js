@@ -224,6 +224,9 @@ setInterval(async () => {
       // paused) go the moment they can.
       const resent = await offersRouter.retryPendingOfferSends?.({ client: makeClient(token), locationId });
       if (resent?.sent) console.log(`${resent.sent} held offer${resent.sent === 1 ? "" : "s"} sent for ${locationId}`);
+      // Addresses that came in past the daily underwrite cap, once it resets.
+      const drained = await offersRouter.drainUnderwriteQueue?.({ client: makeClient(token), locationId });
+      if (drained?.started || drained?.dropped) console.log(`underwrite queue for ${locationId}: started ${drained.started}, dropped ${drained.dropped}, waiting ${drained.left}`);
       // The second wave: deals blasted once, nobody committed, the delay past.
       const waved = await maybeStartDispoSweep({
         client: makeClient(token), locationId, saved, store, utcHour: DISPO_SWEEP_UTC_HOUR,
