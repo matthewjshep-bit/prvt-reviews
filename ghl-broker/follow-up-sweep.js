@@ -102,6 +102,47 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
 }
 
 /**
+ * passedCandidates({ store, locationId, config, now }) → [candidate]
+ *
+ * Offers the agent passed on, counted from when they passed. Every ten days
+ * by default: has anything changed, would the seller come closer to our
+ * number? Expired offers still count — the number is the conversation, and
+ * it's ours to restate. A deal, a withdrawal on our side, or a status that
+ * moved on (they countered after all) ends it.
+ */
+export async function passedCandidates({ store, locationId, config, now = Date.now() }) {
+  const pb = config?.parties?.agent;
+  const ladder = pb?.followUp?.ladders?.passed_checkin;
+  if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
+  const earliest = Math.min(...ladder.steps);
+  const rows = await store.listOffersForFollowUp(locationId, {
+    statuses: ["passed"], before: iso(now - earliest * DAY_MS), limit: 200,
+  }).catch(() => []);
+  const out = [];
+  for (const o of rows) {
+    if (!o?.contactId || !o.address || o.deal) continue;
+    if (effectiveStatus(o) !== "passed") continue;
+    const passedAt = (o.statusHistory || []).filter((h) => h?.status === "passed").map((h) => h.ts).filter(Boolean).sort().at(-1)
+      || o.statusAt || o.createdAt;
+    if (!passedAt) continue;
+    out.push({
+      kind: "passed_checkin", party: "agent", contactId: o.contactId, subjectId: o.id,
+      offerId: o.id, address: o.address, startedAt: passedAt,
+      sentSteps: (o.followUps || []).filter((f) => f?.kind === "passed_checkin").map((f) => f.step),
+      ladder,
+    });
+  }
+  return out;
+}
+
+// Kinds that are about one of our offers: the offer rides into the draft
+// and the offer remembers its own rungs.
+const OFFER_KINDS = new Set(["offer_nudge", "passed_checkin"]);
+// A passed offer's check-in isn't ended by them texting us about something
+// else — only paused while a conversation is actually live.
+const CHECKIN_QUIET_HOURS = 72;
+
+/**
  * outreachCandidates({ store, locationId, config, now }) → [candidate]
  *
  * Cold agents: the app sent a first text (outreach_sent) and nothing has
@@ -255,6 +296,7 @@ async function runSweep(job, ctx) {
 
   const candidates = [
     ...(await agentCandidates({ store, locationId, config, now })),
+    ...(await passedCandidates({ store, locationId, config, now })),
     ...(await outreachCandidates({ store, locationId, config, now })),
     ...(await investorCandidates({ store, locationId, config, now })),
   ];
@@ -297,10 +339,15 @@ async function runSweep(job, ctx) {
       } catch { /* no drafts to read is not a reason to skip a nudge */ }
     }
 
+    if (c.kind === "passed_checkin" && lastInboundAt && now - Date.parse(lastInboundAt) < CHECKIN_QUIET_HOURS * 3600000) {
+      job.skipped++;
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: "we're talking to them right now" });
+      continue;
+    }
     const d = dueStep({
       steps: c.ladder.steps, startedAt: c.startedAt, sentSteps: c.sentSteps,
       lastInboundAt, lastTouchAt, now,
-      stopOnAnyInbound: fu.stopOnAnyInbound, minHoursBetween: fu.minHoursBetween,
+      stopOnAnyInbound: c.kind === "passed_checkin" ? false : fu.stopOnAnyInbound, minHoursBetween: fu.minHoursBetween,
     });
 
     if (!d.due) {
@@ -359,7 +406,7 @@ async function runSweep(job, ctx) {
       const offer = c.offerId ? await store.getOffer(c.offerId).catch(() => null) : null;
       const r = await start({
         client, locationId, saved, store, contactId: c.contactId, kind: c.kind,
-        offer: c.kind === "offer_nudge" ? offer : null,
+        offer: OFFER_KINDS.has(c.kind) ? offer : null,
         subject: { address: c.address, step: d.step, steps: c.ladder.steps,
                    viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, lastTouchAt },
         sendsEnabled, deps,
@@ -372,7 +419,7 @@ async function runSweep(job, ctx) {
         weekCount.set(c.contactId, already + 1);
         // The offer remembers its own rungs so History can show them without
         // reading the timeline. The event is still the authority.
-        if (c.kind === "offer_nudge" && c.offerId) {
+        if (OFFER_KINDS.has(c.kind) && c.offerId) {
           const full = await store.getOffer(c.offerId).catch(() => null);
           if (full) {
             full.followUps = [...(full.followUps || []), { kind: c.kind, step: d.step, at: iso(now), jobId: r?.job?.id || null }];

@@ -64,7 +64,7 @@ import {
   INVESTOR_STATUSES, investorStatus,
 } from "../shared/offer-status.js";
 import { planRequote } from "../shared/requote.js";
-import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity } from "../shared/last-activity.js";
+import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
 import { startFeedbackScan, getScanJob, publicScanJob } from "../feedback-scan.js";
 import {
@@ -2385,7 +2385,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
   router.get("/", async (req, res) => {
     try {
-      const { locationId } = resolveLocation(req);
+      const { locationId, client } = resolveLocation(req);
       const contactId = String(req.query.contact_id || "") || null;
       // A lean row is ~1KB against ~9KB for the whole document, so the history
       // page can ask for the location's entire book in one call. Full docs keep
@@ -2406,6 +2406,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           store.listReplyDrafts(locationId, { limit: 2000 }).catch(() => []),
         ]);
         const seen = mergeDraftActivity(lastActivityFromEvents(rows), drafts);
+        // Threads the app never recorded (GHL inbox, workflows, before the
+        // contact record) come from GHL's own last-message date.
+        const ghl = await ghlLastMessages(client, locationId).catch(() => new Map());
+        mergeGhlActivity(seen, ghl, [...new Set(offers.map((o) => o?.contactId).filter(Boolean))]);
         for (const o of offers) if (o?.contactId) o.lastActivity = seen.get(o.contactId) || null;
         // The flag is what lets the column tell "we didn't ask" (—) apart
         // from "we asked and they've never spoken" (never).
@@ -3734,6 +3738,38 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       else await markProactive(offer.id, kind);
     },
   });
+
+  // Every conversation's last message, newest first, straight from GHL — one
+  // paged read for the whole location (100 a page, up to 1,000), cached ten
+  // minutes so the offers table doesn't re-read it on every load. Without the
+  // conversations scope it answers empty and the column falls back to the
+  // app's own record.
+  const ghlActivityCache = new Map();   // locationId -> { ts, byContact }
+  const GHL_ACTIVITY_TTL_MS = 10 * 60000;
+  async function ghlLastMessages(client, locationId, { pages = 10 } = {}) {
+    const hit = ghlActivityCache.get(locationId);
+    if (hit && Date.now() - hit.ts < GHL_ACTIVITY_TTL_MS) return hit.byContact;
+    const { searchConversations } = await import("../ghl.js");
+    const byContact = new Map();
+    let after = null;
+    for (let i = 0; i < pages; i++) {
+      const { conversations } = await searchConversations(client, locationId, { limit: 100, ...(after ? { startAfterDate: after } : {}) });
+      for (const c of conversations) {
+        const raw = Number(c?.lastMessageDate);
+        const at = Number.isFinite(raw) && raw > 0 ? new Date(raw) : new Date(c?.lastMessageDate || "");
+        if (!c?.contactId || Number.isNaN(at.getTime())) continue;
+        const prev = byContact.get(c.contactId);
+        if (prev && prev.at >= at.toISOString()) continue;
+        byContact.set(c.contactId, { at: at.toISOString(), dir: String(c.lastMessageDirection || "").toLowerCase() === "inbound" ? "in" : "out" });
+      }
+      if (conversations.length < 100) break;
+      const last = conversations[conversations.length - 1];
+      after = Number(last?.lastMessageDate) || Date.parse(last?.lastMessageDate || "") || null;
+      if (!after) break;
+    }
+    ghlActivityCache.set(locationId, { ts: Date.now(), byContact });
+    return byContact;
+  }
 
   // A clean offer that couldn't send itself yet (after hours, sends paused,
   // no reply on record) — remembered so the tick can try again.

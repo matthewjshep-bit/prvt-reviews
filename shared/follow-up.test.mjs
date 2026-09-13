@@ -110,8 +110,9 @@ test("a ladder typed as a comma-separated string is read the same as a list", ()
   assert.deepEqual(normalizeSteps("3, 7,14"), [3, 7, 14]);
 });
 
-test("a ladder longer than six rungs is capped", () => {
-  assert.equal(normalizeSteps([1, 2, 3, 4, 5, 6, 7, 8]).length, 6);
+// Twelve, so the passed-offer check-in can run every ten days for four months.
+test("a ladder longer than twelve rungs is capped", () => {
+  assert.equal(normalizeSteps([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]).length, 12);
 });
 
 /* ---------- identity ---------- */
@@ -140,7 +141,7 @@ test("a rung keeps its identity when the operator inserts one before it", () => 
 /* ---------- the vocabulary ---------- */
 
 test("each party owns only its own ladders", () => {
-  assert.deepEqual(kindsFor("agent"), ["outreach_nudge", "offer_nudge"]);
+  assert.deepEqual(kindsFor("agent"), ["outreach_nudge", "offer_nudge", "passed_checkin"]);
   assert.deepEqual(kindsFor("investor"), ["blast_nudge", "dataroom_nudge"]);
 });
 

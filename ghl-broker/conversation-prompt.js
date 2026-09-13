@@ -395,6 +395,16 @@ export function outboundOpening(outbound) {
         `name a number, sweeten it, or imply we'd go higher — that is a person's call. Asking whether they got it, ` +
         `whether the seller has seen it, or where it stands are all good. ${CONTINUE} Set intent to offer_nudge.`;
 
+    // A pass is not the end of a listing. Check back in on it: is it still
+    // sitting, has the seller softened, would they come closer to our number?
+    case "passed_checkin":
+      return `${START} This agent passed on our offer on ${o.address}. It's been a while — check back in, in one or ` +
+        `two lines: is it still available, has anything changed with the seller, would they come closer to our number? ` +
+        `You may mention the number we offered (it's in the offer book), but do NOT raise it, hint that we'd go higher, ` +
+        `or name any new number — movement on ours is a person's call. Never re-argue why the number is what it is. ` +
+        `Keep it light and easy to ignore; ${o.stepIndex > 1 ? "don't repeat the wording of the last check-in. " : ""}` +
+        `${CONTINUE} Set intent to passed_checkin.`;
+
     case "blast_nudge":
       return `${START} We sent this buyer the deal on ${o.address} and they never replied. ` +
         `${nudgePressure(o)} One short line asking whether it's of interest. Do NOT name a price, a spread, or ` +

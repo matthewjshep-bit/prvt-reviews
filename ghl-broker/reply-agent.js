@@ -73,7 +73,7 @@ import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend } from "./convers
 
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
-const STARTED_KINDS = new Set(["offer_nudge", "blast_nudge", "dataroom_nudge", "outreach_nudge", "outreach_open"]);
+const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "outreach_nudge", "outreach_open"]);
 function scheduleFor({ config, now, kind = null, intent = "", replyLength = 0, random = Math.random }) {
   const a = config.autoSend || {};
   if (kind && STARTED_KINDS.has(kind)) {
@@ -1168,6 +1168,18 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  passed_checkin: {
+    party: "agent",
+    enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.passed_checkin?.enabled,
+    ready: ({ offer }) => {
+      if (!offer?.address) return "nothing to check in on";
+      if (offer.deal) return "it became a deal";
+      if (offerStatus(offer) !== "passed") return `the offer is ${offerStatus(offer)} now, not passed`;
+      return true;
+    },
+    floats: () => [],
+    forbids: () => [],
+  },
   blast_nudge: {
     party: "investor",
     enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.blast_nudge?.enabled,
@@ -1363,6 +1375,7 @@ function outboundSummary({ kind, offer, outbound }) {
         ? `Comes back on ${where} with ${fmtMoney(offer.cashAmount)} after re-running their numbers.`
         : `Floats ${fmtMoney(offer.cashAmount)} on ${where} as a rough first pass and asks if it's in the realm.`;
     case "offer_nudge":   return `Follows up on our offer on ${where}${rung}.`;
+    case "passed_checkin": return `Checks back in on ${where} — they passed; asks if the seller would come closer to our number${rung}.`;
     case "outreach_open": return `First text: saw their listing at ${where}, asks if they have anything distressed.`;
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;

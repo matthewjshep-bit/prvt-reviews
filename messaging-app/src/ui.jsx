@@ -212,10 +212,13 @@ export function ActivityStamp({ activity, enriched = true, muted = false }) {
   if (!enriched) return <span className="text-slate-300">—</span>;
   if (!activity?.at) return <span className="text-slate-400" title="No text, call or send on record for this agent">never</span>;
   const theirs = activity.dir === "in";
-  const who = theirs ? "them" : activity.machine ? "auto" : "you";
+  // machine === null: a message only GHL saw (its inbox, a workflow), which
+  // can't say whether a person or the bot sent it.
+  const who = theirs ? "them" : activity.machine ? "auto" : activity.machine === null ? "us" : "you";
+  const label = activity.type === "ghl_message" ? "message in GHL" : EVENT_LABEL[activity.type] || activity.type;
   return (
     <span className={`whitespace-nowrap ${muted ? "text-slate-400" : theirs ? "text-slate-700" : "text-slate-500"}`}
-      title={`${EVENT_LABEL[activity.type] || activity.type} · ${absTime(activity.at)}`}>
+      title={`${label} · ${absTime(activity.at)}`}>
       {ago(activity.at)} <span className={theirs ? "font-semibold" : ""}>· {who}</span>
     </span>
   );

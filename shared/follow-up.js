@@ -21,6 +21,9 @@ export const FOLLOW_UP_KINDS = {
   // cold agent was not a thing the queue could say.
   outreach_nudge: { party: "agent",    trigger: "outreach_sent",   label: "Reached out, no reply" },
   offer_nudge:    { party: "agent",    trigger: "offer_open",      label: "Offer with no reply" },
+  // A pass is rarely final: listings sit, sellers soften. Check back in on
+  // the offer they turned down — would the seller come closer to our number?
+  passed_checkin: { party: "agent",    trigger: "offer_passed",    label: "Passed offer, check back in" },
   blast_nudge:    { party: "investor", trigger: "blast_sent",      label: "Blasted, no reply" },
   dataroom_nudge: { party: "investor", trigger: "dataroom_viewed", label: "Opened the package, went quiet" },
 };
@@ -40,11 +43,13 @@ export const DEFAULT_LADDERS = {
   // while the listing is still fresh in their mind, then it spaces out.
   outreach_nudge: { enabled: false, steps: [2, 5, 9, 14, 21, 30], onExhausted: "stop" },
   offer_nudge:    { enabled: false, steps: [3, 7, 14], onExhausted: "mark_no_response" },
+  // Every ten days, for four months.
+  passed_checkin: { enabled: false, steps: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], onExhausted: "stop" },
   blast_nudge:    { enabled: false, steps: [2, 6],     onExhausted: "stop" },
   dataroom_nudge: { enabled: false, steps: [1, 4],     onExhausted: "stop" },
 };
 
-export const MAX_LADDER_STEPS = 6;
+export const MAX_LADDER_STEPS = 12;
 export const MAX_STEP_DAY = 120;
 
 const DAY_MS = 86400000;

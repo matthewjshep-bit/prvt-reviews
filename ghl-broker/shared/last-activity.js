@@ -69,6 +69,29 @@ export function lastActivityFromEvents(rows = []) {
 }
 
 /**
+ * mergeGhlActivity(map, ghl, contactIds, { slackMs }) → the same map, mutated.
+ *
+ * GHL's own "last message" per contact, for the conversations the app never
+ * recorded: texts sent from the GHL inbox by hand, workflow texts, and every
+ * agent we talked to before the contact record existed. Without it those
+ * agents read "never" in a table where they plainly have a thread.
+ *
+ * The app's record wins unless GHL's is newer by more than `slackMs` — a text
+ * the bot sent is in both, and the app knows whether it was the bot. A GHL
+ * outbound can't say who sent it, so `machine` is null ("us").
+ */
+export function mergeGhlActivity(map, ghl = new Map(), contactIds = [], { slackMs = 5 * 60000 } = {}) {
+  for (const id of contactIds) {
+    const g = ghl.get(id);
+    if (!g?.at) continue;
+    const mine = map.get(id);
+    if (mine && !(Date.parse(g.at) - Date.parse(mine.at) > slackMs)) continue;
+    map.set(id, { at: g.at, dir: g.dir === "in" ? "in" : "out", type: "ghl_message", machine: g.dir === "in" ? false : null, source: "ghl" });
+  }
+  return map;
+}
+
+/**
  * mergeDraftActivity(map, drafts) → the same map, mutated.
  *
  * Why this exists: an agent's inbound text is summarised onto the timeline
