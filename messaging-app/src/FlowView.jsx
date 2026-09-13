@@ -3,8 +3,8 @@
 //
 // Two rows of stages (acquisition, then disposition), each a column with
 // its count, a bar, and the machine/person split; arrows carry the share
-// of the previous stage that reached this one. Under it: the switchboard,
-// the queue, and the feed of everything that moved. One endpoint, polled
+// of the previous stage that reached this one. Under it: the feed of
+// everything that moved. The Flow tab of /reports. One endpoint, polled
 // every thirty seconds while the tab is visible.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -12,7 +12,6 @@ import { RefreshCw, ArrowRight } from "lucide-react";
 import { getDashboardFlow } from "./api.js";
 import { groupByDay } from "@shared/contact-record.js";
 import { BTN, ErrorBar, FilterChips, SkeletonRows } from "./ui.jsx";
-import AutopilotCard from "./AutopilotCard.jsx";
 import { EventDayGroups } from "./EventFeed.jsx";
 import FlowStagePopout from "./FlowStagePopout.jsx";
 
@@ -23,10 +22,6 @@ const FEED_FILTERS = [
   { key: "agent", label: "Acquisition" }, { key: "dispo", label: "Disposition" },
 ];
 const localDayKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-
-function pipelineHref() {
-  try { const u = new URL(window.location.href); u.searchParams.set("view", "pipeline"); return u.pathname + u.search; } catch { return "?view=pipeline"; }
-}
 
 /* ---------- the river ---------- */
 
@@ -143,7 +138,6 @@ export default function FlowView() {
 
   if (!data && !error) return <SkeletonRows rows={5} />;
   const t = data?.totals || {};
-  const q = data?.queue || {};
 
   return (
     <div className="space-y-4">
@@ -172,19 +166,6 @@ export default function FlowView() {
           label={stage.label || (data?.stages || []).find((s) => s.key === stage.key)?.label || "Stage"}
           onClose={() => pickStage(null)} />
       )}
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2"><AutopilotCard autopilot={data?.autopilot} onDone={() => setRefreshKey((k) => k + 1)} /></div>
-        <a href={pipelineHref()} className="block rounded-xl border border-slate-200 bg-white p-4 hover:border-blue-300">
-          <div className="text-sm font-bold">Waiting on you</div>
-          <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-            {[["now", "Now", "text-rose-700"], ["soon", "Soon", "text-amber-700"], ["fyi", "FYI", "text-slate-600"]].map(([k, label, cls]) => (
-              <div key={k}><div className={`text-2xl font-bold tabular-nums ${cls}`}>{q[k] ?? 0}</div><div className="text-[11px] uppercase tracking-wide text-slate-400">{label}</div></div>
-            ))}
-          </div>
-          <div className="mt-2 text-xs text-blue-700">Open the queue →</div>
-        </a>
-      </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="mb-2 flex flex-wrap items-center gap-2">

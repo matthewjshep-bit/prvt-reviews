@@ -1,23 +1,40 @@
-// PipelineView.jsx — the Pipeline tab: where everything stands, and the
-// queue of what needs a person.
+// PipelineView.jsx — the Today app (/dashboard): where everything stands,
+// and the queue of what needs a person. Two tabs share it: section="queue"
+// (Needs you) and section="board" (The board).
 //
 // One endpoint, polled every fifteen seconds (paused while the tab is
 // hidden). Anything a button does bumps the refresh, so the board and the
 // queue move together. On a fetch error the last good data stays up with a
-// bar above it rather than the page going blank.
+// bar above it rather than the page going blank. The autopilot switches live
+// on /autopilot; here it is one status line that links there.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { getDashboardPipeline } from "./api.js";
+import { appHref } from "./links.js";
 import { BTN, ErrorBar, FilterChips, KpiRow, SearchInput, SkeletonRows } from "./ui.jsx";
 import ActionQueue from "./ActionQueue.jsx";
 import PipelineBoard from "./PipelineBoard.jsx";
-import AutopilotCard from "./AutopilotCard.jsx";
 
 const POLL_MS = 15000;
 const SIDES = [{ key: "all", label: "Everything" }, { key: "agent", label: "Acquisition" }, { key: "dispo", label: "Disposition" }];
 
-export default function PipelineView() {
+function AutopilotStatus({ autopilot }) {
+  if (!autopilot) return null;
+  const c = autopilot.counts || {};
+  return (
+    <a href={appHref("/autopilot", "controls")}
+      className="flex flex-wrap items-center gap-x-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs text-slate-500 hover:border-blue-300">
+      <span className="font-semibold text-slate-700">Autopilot:</span>
+      <b className="text-slate-900">{autopilot.modeLabel || autopilot.mode || "Custom"}</b>
+      <span>· <b className="text-emerald-700">{c.on || 0}</b> sending itself · <b className="text-amber-700">{c.drafting || 0}</b> drafting · <b>{c.off || 0}</b> off</span>
+      {autopilot.readyToGraduate > 0 && <span className="text-blue-700">· {autopilot.readyToGraduate} ready to promote</span>}
+      <span className="ml-auto text-blue-700">Controls →</span>
+    </a>
+  );
+}
+
+export default function PipelineView({ section = "queue" }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -75,6 +92,12 @@ export default function PipelineView() {
   const liveDeals = cards.filter((c) => c.side === "dispo" && !["closed", "dead"].includes(c.lane)).length;
   const hiddenCount = (counts.hidden?.dead || 0) + (counts.hidden?.closed || 0);
 
+  const refreshBtn = (
+    <button type="button" className={BTN} onClick={refresh} title="Refresh now">
+      <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+    </button>
+  );
+
   return (
     <div className="space-y-4">
       {error && <ErrorBar>{error}{data ? " — showing what loaded last." : ""}</ErrorBar>}
@@ -83,46 +106,51 @@ export default function PipelineView() {
           The Conversation AI is switched off, so nothing here is moving on its own.
         </div>
       )}
-      {data?.counts?.eventsTruncated && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
-          More than the board reads in one go happened in the last 90 days — the newest buyer activity may be missing.
-        </div>
+
+      {section === "queue" && (
+        <>
+          <AutopilotStatus autopilot={data?.autopilot} />
+          <KpiRow cols="sm:grid-cols-5" items={[
+            { label: "Now", value: counts.actions?.now ?? 0, hint: "waiting on you, urgently" },
+            { label: "Soon", value: counts.actions?.soon ?? 0 },
+            { label: "FYI", value: counts.actions?.fyi ?? 0 },
+            { label: "Working offers", value: working, hint: "priced, floated, sent or countered" },
+            { label: "Live deals", value: liveDeals },
+          ]} />
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-bold">Needs you</h2>
+              {refreshBtn}
+            </div>
+            <ActionQueue actions={actions} draftsById={draftsById} sendsEnabled={data?.sendsEnabled}
+              serverOffsetMs={offsetRef.current} onDone={refresh} highlightDraftId={highlightDraftId} onShowDraft={showDraft} />
+          </div>
+        </>
       )}
 
-      <AutopilotCard autopilot={data?.autopilot} onDone={refresh} />
-
-      <KpiRow cols="sm:grid-cols-5" items={[
-        { label: "Now", value: counts.actions?.now ?? 0, hint: "waiting on you, urgently" },
-        { label: "Soon", value: counts.actions?.soon ?? 0 },
-        { label: "FYI", value: counts.actions?.fyi ?? 0 },
-        { label: "Working offers", value: working, hint: "priced, floated, sent or countered" },
-        { label: "Live deals", value: liveDeals },
-      ]} />
-
-      <div>
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-bold">Needs you</h2>
-          <button type="button" className={BTN} onClick={refresh} title="Refresh now">
-            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-          </button>
+      {section === "board" && (
+        <div>
+          {data?.counts?.eventsTruncated && (
+            <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+              More than the board reads in one go happened in the last 90 days — the newest buyer activity may be missing.
+            </div>
+          )}
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h2 className="mr-2 text-sm font-bold">The board</h2>
+            <FilterChips value={side} onChange={setSide} options={SIDES} label="Side" />
+            <button type="button" className={BTN} onClick={() => setShowHidden((v) => !v)} aria-pressed={showHidden}>
+              {showHidden ? "Hide" : "Show"} closed &amp; dead{hiddenCount ? ` (${hiddenCount})` : ""}
+            </button>
+            <div className="ml-auto flex items-center gap-2">
+              <div className="w-64"><SearchInput value={search} onChange={setSearch} placeholder="Address or name…" label="Search the board" /></div>
+              {refreshBtn}
+            </div>
+          </div>
+          <PipelineBoard cards={visible} actions={actions} drafts={drafts} showHidden={showHidden}
+            sendsEnabled={data?.sendsEnabled} serverOffsetMs={offsetRef.current} onDone={refresh}
+            expandedId={expandedId} setExpandedId={setExpandedId} />
         </div>
-        <ActionQueue actions={actions} draftsById={draftsById} sendsEnabled={data?.sendsEnabled}
-          serverOffsetMs={offsetRef.current} onDone={refresh} highlightDraftId={highlightDraftId} onShowDraft={showDraft} />
-      </div>
-
-      <div>
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <h2 className="mr-2 text-sm font-bold">The board</h2>
-          <FilterChips value={side} onChange={setSide} options={SIDES} label="Side" />
-          <button type="button" className={BTN} onClick={() => setShowHidden((v) => !v)} aria-pressed={showHidden}>
-            {showHidden ? "Hide" : "Show"} closed &amp; dead{hiddenCount ? ` (${hiddenCount})` : ""}
-          </button>
-          <div className="ml-auto w-64"><SearchInput value={search} onChange={setSearch} placeholder="Address or name…" label="Search the board" /></div>
-        </div>
-        <PipelineBoard cards={visible} actions={actions} drafts={drafts} showHidden={showHidden}
-          sendsEnabled={data?.sendsEnabled} serverOffsetMs={offsetRef.current} onDone={refresh}
-          expandedId={expandedId} setExpandedId={setExpandedId} />
-      </div>
+      )}
     </div>
   );
 }

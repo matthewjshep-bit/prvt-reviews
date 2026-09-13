@@ -10,17 +10,37 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Power } from "lucide-react";
 import { INTENT_LABEL, PARTY_LABEL, normalizeConversationAi, starterConfig } from "@shared/conversation-ai.js";
 import { VERDICT_LABEL } from "@shared/graduation.js";
-import { getConversationAi, getConversationHistory, getSettings, listCalendars, listOffers, listWorkflows, saveConversationAi, setConversationEnabled } from "./api.js";
+import { getConversationAi, getConversationHistory, getReplyDrafts, getSettings, listCalendars, listOffers, listWorkflows, saveConversationAi, setConversationEnabled } from "./api.js";
 import { autoAcceptCeiling } from "@shared/auto-accept.js";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, Pill, SkeletonRows, TableCard } from "./ui.jsx";
-import ReplyStrip from "./ReplyStrip.jsx";
+import { appHref } from "./links.js";
 import ConversationTryIt from "./ConversationTryIt.jsx";
 import {
   AutoSendCard, BookingCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, MediaCard, OptOutCard, PartyPlaybooks,
   PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
 } from "./ConversationPlaybooks.jsx";
 import { IntentPill, PartyPill, ago } from "./ConversationOutbox.jsx";
+
+// The outbox itself lives in Today's Needs-you queue; this page only says how
+// much is there, so the drafts have one home.
+function DraftsWaiting({ refreshKey }) {
+  const [n, setN] = useState(null);
+  useEffect(() => {
+    let live = true;
+    getReplyDrafts().then((r) => { if (live) setN((r.drafts || []).length); }).catch(() => {});
+    return () => { live = false; };
+  }, [refreshKey]);
+  if (n == null) return null;
+  return (
+    <a href={appHref("/dashboard", "pipeline")}
+      className="flex items-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm hover:border-blue-300">
+      {n ? <span><b>{n}</b> repl{n === 1 ? "y" : "ies"} waiting on you</span>
+        : <span className="text-slate-500">Nothing waiting — every inbound text has been answered or is being drafted.</span>}
+      <span className="ml-auto text-xs text-blue-700">Open Today →</span>
+    </a>
+  );
+}
 
 export default function ConversationAi({ settings }) {
   const [config, setConfig] = useState(null);
@@ -213,7 +233,7 @@ export default function ConversationAi({ settings }) {
 
       <KpiRow cols="sm:grid-cols-5" items={kpis} />
 
-      <ReplyStrip title="Waiting on you" emptyText="Nothing waiting — every inbound text has been answered or is being drafted." refreshKey={refreshKey} />
+      <DraftsWaiting refreshKey={refreshKey} />
 
       <ConversationTryIt sendsEnabled={sendsEnabled} />
 

@@ -1,4 +1,5 @@
-// Dashboard.jsx — the standalone analytics page (/dashboard). Three data
+// Dashboard.jsx — the Activity tab of /reports (activity charts; outcomes and
+// lessons are the Lessons tab, the reply outbox is on Today). Three data
 // sources loaded independently so one failure never blanks the page:
 //   • /api/dashboard/summary      local: offers, app sends, outreach funnel
 //   • /api/dashboard/ghl/tags     live GHL contact counts per tag
@@ -12,15 +13,12 @@
 // green #008300 / violet #4a3aa7. Text never wears series color; identity
 // comes from legend swatches and tooltip line-keys.
 
-import FunnelView from "./FunnelView.jsx";
-import LessonsView from "./LessonsView.jsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Pencil, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
   getDashboardSummary, getDashboardTagCounts, getDashboardMessages, getDashboardContacts, saveSettings,
 } from "./api.js";
-import ReplyStrip from "./ReplyStrip.jsx";
 
 /* ---------- palette (validated, light surface) ---------- */
 const C_TEXTS = "#2a78d6";  // blue
@@ -460,11 +458,6 @@ export default function Dashboard({ settings, onSettingsSaved }) {
 
   return (
     <div className="space-y-4">
-      {/* Replies the Conversation AI drafted, waiting on a person. Above the
-          date filter deliberately: it is today's work, not a statistic, and
-          the range picker below has nothing to do with it. Renders nothing
-          when the outbox is empty. */}
-      <ReplyStrip />
       {/* filter row — date range scopes everything below */}
       <div className="flex flex-wrap items-center gap-2">
         {RANGES.map((r) => (
@@ -729,20 +722,6 @@ export default function Dashboard({ settings, onSettingsSaved }) {
           </div>
         )}
       </Card>
-
-      {/* Outcomes, not activity. Everything above counts what we did; this
-          counts what came back. Read-only — it changes no setting. */}
-      <div>
-        <h2 className="mb-2 text-sm font-bold">Outcomes</h2>
-        <FunnelView days={viewDays} end={endDate} />
-      </div>
-
-      {/* What the deals that died have to teach. Read-only until a person
-          presses Apply on a recommendation. */}
-      <div>
-        <h2 className="mb-2 text-sm font-bold">Lessons from deals that fell through</h2>
-        <LessonsView onSettingsSaved={onSettingsSaved} />
-      </div>
     </div>
   );
 }

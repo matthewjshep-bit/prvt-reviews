@@ -546,7 +546,8 @@ price on 54th?". A GHL workflow hands each text to the broker, which works out
 **who is texting** from their tags, reads **the right record book** — the
 offer book for a listing agent, the deal book and buy box for an investor —
 and drafts what we would say in the voice set on the **Conversation AI** tab
-of the Overview app (`/dashboard`, `VITE_APP_MODE=dashboard`) — deliberately
+of the Autopilot app (`/autopilot?view=conversation`, `VITE_APP_MODE=autopilot`;
+its outbox is Today's Needs-you queue at `/dashboard`) — deliberately
 not in the offers console, where the outbox banner buried the offer table. A draft waits in the outbox for a person, or, for the
 intents that tab has cleared, counts down a few human minutes and sends
 itself. It can also **trigger things in GHL** on what it hears.
@@ -1003,15 +1004,29 @@ Private Integration. Pure plan: `shared/ghl-mirror.js`; writer:
 `ghl-broker/ghl-mirror.js`; `GET /api/dashboard/ghl/pipelines`,
 `POST /api/dashboard/ghl/mirror/run`.
 
-## Flow (the dashboard's landing tab)
+## Today / Autopilot / Reports (the old Overview, split 2026-09-13)
 
-`/dashboard?view=flow` — the river. Twelve stages in two rows (acquisition:
+The Overview menu link used to hold four crowded tabs. It is now three GHL
+Custom Menu Links, each one job, each component in exactly one place:
+
+| Menu link | URL | Tabs |
+|---|---|---|
+| Today (the old Overview link — rename it) | `https://<site>/dashboard?location_id={{location.id}}` | Needs you (autopilot status line, counts, action queue with reply drafts) · Board |
+| Autopilot | `https://<site>/autopilot?location_id={{location.id}}` | Controls (the dial + every switch) · Conversation AI |
+| Reports | `https://<site>/reports?location_id={{location.id}}` | Flow · Activity (charts) · Lessons (outcomes + fell-through lessons) |
+
+Old links redirect: `/dashboard?view=flow|dashboard|conversation` →
+`/reports?view=flow`, `/reports?view=activity`, `/autopilot?view=conversation`
+(other params kept). Cross-app links go through `messaging-app/src/links.js`.
+
+## Flow (the Reports landing tab)
+
+`/reports?view=flow` — the river. Twelve stages in two rows (acquisition:
 found → first text → replied → underwritten → offered → floated → countered
 → under contract; disposition: blasted → opened → buyer → assigned/closed),
 each with its count in the window, a bar split violet (the machine on its
 own) / grey (a person), and arrows carrying the share of the previous stage
-that reached this one. Under it the Autopilot switchboard, the queue counts,
-and "What moved": every movement in the window, newest first, filterable to
+that reached this one. Under it "What moved": every movement in the window, newest first, filterable to
 the machine / people / acquisition / disposition, with contact and offer
 links. Windows: today / 7 / 30 days, or a single past day. Polls every 30s
 while visible. Pure builder `shared/flow.js` (`buildFlow`, `machineDid`);

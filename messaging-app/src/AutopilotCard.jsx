@@ -3,7 +3,7 @@
 // Every automation ships off and graduates to "drafting" (it writes, you
 // send) before "on" (it sends). Until this card the only way to know which
 // state each one was in was to read Settings and the Conversation AI tab
-// side by side. Now it is the first thing on the Pipeline tab, and a line at
+// side by side. Now it is the Controls tab of /autopilot, and a line at
 // the bottom says how many intents have earned promotion.
 //
 // The dial at the top (2026-09-10) sets every switch at once: Off, Cautious,
@@ -15,6 +15,7 @@ import { PARTY_LABEL } from "@shared/conversation-ai.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES } from "@shared/autonomy.js";
 import { Pill } from "./ui.jsx";
 import { setAutonomy } from "./api.js";
+import { appHref } from "./links.js";
 
 const STATE = {
   on:       { label: "on",       cls: "bg-emerald-100 text-emerald-800" },
@@ -29,14 +30,6 @@ const MODE_CLS = {
   normal: "bg-blue-600 text-white border-blue-600",
   full: "bg-emerald-600 text-white border-emerald-600",
 };
-
-function conversationHref() {
-  try {
-    const u = new URL(window.location.href);
-    u.searchParams.set("view", "conversation");
-    return u.pathname + u.search;
-  } catch { return "?view=conversation"; }
-}
 
 // The dial. Four buttons; the current one is filled. Picking one asks once,
 // with the list of what it does, then saves at once — like the kill switch,
@@ -98,7 +91,7 @@ export default function AutopilotCard({ autopilot, onDone }) {
           <b>{counts.off || 0}</b> off
         </span>
         {readyToGraduate > 0 && (
-          <a href={conversationHref()} className="ml-auto text-xs font-semibold text-blue-700 hover:underline">
+          <a href={appHref("/autopilot", "conversation")}className="ml-auto text-xs font-semibold text-blue-700 hover:underline">
             {readyToGraduate} intent{readyToGraduate === 1 ? " is" : "s are"} ready to send on their own →
           </a>
         )}

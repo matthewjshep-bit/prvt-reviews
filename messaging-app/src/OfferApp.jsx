@@ -9,7 +9,8 @@
 //   Conversation AI — the bot that answers inbound agent and investor texts:
 //               its voice, playbooks, routing, auto-send switches and outbox.
 //   Settings  — calculation defaults + company info printed on the document.
-// Plus three sibling apps on their own paths: /agents, /dashboard, /dispo.
+// Plus sibling apps on their own paths: /agents, /dispo, /deals, and the
+// split-up Overview — /dashboard (Today), /autopilot, /reports.
 
 import { offerEditorUrl } from "./api.js";
 import React, { useEffect, useState } from "react";
@@ -25,6 +26,8 @@ import SettingsView from "./SettingsView.jsx";
 import ConversationAi from "./ConversationAi.jsx";
 import PipelineView from "./PipelineView.jsx";
 import FlowView from "./FlowView.jsx";
+import AutopilotView from "./AutopilotView.jsx";
+import LessonsTab from "./LessonsTab.jsx";
 import ContactDrawer from "./ContactDrawer.jsx";
 import { ContactDrawerContext } from "./ContactLink.jsx";
 import { getLocationId, getLocationKey, getOffer, getSettings } from "./api.js";
@@ -42,7 +45,11 @@ const APP_MODE = (() => {
     if (import.meta.env.VITE_APP_MODE === "outreach") return "outreach";
     if (import.meta.env.VITE_APP_MODE === "dashboard") return "dashboard";
     if (import.meta.env.VITE_APP_MODE === "dispo") return "dispo";
+    if (import.meta.env.VITE_APP_MODE === "autopilot") return "autopilot";
+    if (import.meta.env.VITE_APP_MODE === "reports") return "reports";
     if (/^\/dashboard(\/|$)/.test(window.location.pathname)) return "dashboard";
+    if (/^\/autopilot(\/|$)/.test(window.location.pathname)) return "autopilot";
+    if (/^\/reports(\/|$)/.test(window.location.pathname)) return "reports";
     if (/^\/deals(\/|$)/.test(window.location.pathname)) return "deals";
     if (/^\/dispo(\/|$)/.test(window.location.pathname)) return "dispo";
     return /^\/agents(\/|$)/.test(window.location.pathname) ? "outreach" : "offers";
@@ -62,15 +69,24 @@ const NAV =
         { view: "dispo", label: "Investors" },
         { view: "settings", label: "Settings" },
       ]
+    // The old four-tab Overview (2026-09-13) split by job: Today is the work,
+    // Autopilot is the controls, Reports is the numbers. Each component shows
+    // in exactly one place.
     : APP_MODE === "dashboard"
-    // Conversation AI lives here rather than in the offers console: its outbox
-    // is a standing to-do list, and two banners sitting above the offer table
-    // pushed the day's actual work below the fold.
+    ? [
+        { view: "pipeline", label: "Needs you" },
+        { view: "board", label: "Board" },
+      ]
+    : APP_MODE === "autopilot"
+    ? [
+        { view: "controls", label: "Controls" },
+        { view: "conversation", label: "Conversation AI" },
+      ]
+    : APP_MODE === "reports"
     ? [
         { view: "flow", label: "Flow" },
-        { view: "dashboard", label: "Overview" },
-        { view: "pipeline", label: "Pipeline" },
-        { view: "conversation", label: "Conversation AI" },
+        { view: "activity", label: "Activity" },
+        { view: "lessons", label: "Lessons" },
       ]
     : APP_MODE === "deals"
     ? [{ view: "deals", label: "Deals" }]
@@ -82,10 +98,26 @@ const NAV =
 
 const APP_TITLE =
   APP_MODE === "outreach" ? "Agent Outreach"
-  : APP_MODE === "dashboard" ? "Overview"
+  : APP_MODE === "dashboard" ? "Today"
+  : APP_MODE === "autopilot" ? "Autopilot"
+  : APP_MODE === "reports" ? "Reports"
   : APP_MODE === "deals" ? "Deals"
   : APP_MODE === "dispo" ? "Dispositions"
   : "Offer Generator";
+
+// Links saved before the split (/dashboard?view=flow, a bookmark, the GHL
+// note) land on the page that tab moved to. Other params ride along.
+(() => {
+  if (APP_MODE !== "dashboard") return;
+  try {
+    const moved = { flow: ["/reports", "flow"], dashboard: ["/reports", "activity"], conversation: ["/autopilot", "conversation"] };
+    const p = new URLSearchParams(window.location.search);
+    const to = moved[p.get("view")];
+    if (!to) return;
+    p.set("view", to[1]);
+    window.location.replace(`${to[0]}?${p}`);
+  } catch { /* stay on Today */ }
+})();
 
 // "new" is reachable but not a tab — it's the primary button in the header and
 // the target of the ?offer_id= deep link, so it still has to be a valid view.
@@ -234,7 +266,9 @@ export default function OfferApp() {
         <div className={`flex items-center gap-3 px-4 py-2.5 sm:px-6 lg:px-8 ${containerWidth}`}>
           <div className="mr-2 flex items-center gap-2.5">
             <BrandLockup settings={settings} fallback={APP_TITLE} />
-            <span className="hidden text-sm font-semibold text-slate-400 sm:inline">{APP_TITLE}</span>
+            {/* Without a wordmark the lockup already is the title — don't say it twice. */}
+            {(settings?.company?.wordmark || settings?.company?.name || "").trim() &&
+              <span className="hidden text-sm font-semibold text-slate-400 sm:inline">{APP_TITLE}</span>}
           </div>
           {NAV.length > 1 && NAV.map((n) => (
             <button
@@ -301,11 +335,14 @@ export default function OfferApp() {
               : (o) => { setEditing(o); setView("new"); }} />
         )}
         {view === "conversation" && <ConversationAi settings={settings} />}
-          {view === "pipeline" && <PipelineView />}
+        {view === "pipeline" && <PipelineView section="queue" />}
+        {view === "board" && <PipelineView section="board" />}
+        {view === "controls" && <AutopilotView />}
+        {view === "lessons" && <LessonsTab onSettingsSaved={(s) => setSettings(s)} />}
         {view === "flow" && <FlowView />}
         {view === "outreach" && <AgentOutreach settings={settings} />}
         {view === "dispo" && <Dispositions />}
-        {view === "dashboard" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
+        {view === "activity" && <Dashboard settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
         {view === "settings" && (
           <SettingsView settings={settings} onSaved={(s) => setSettings(s)} mode={APP_MODE} />
         )}
