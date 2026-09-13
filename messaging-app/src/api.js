@@ -103,6 +103,8 @@ export const cancelEnrichSweep = () => post(`/api/offers/enrich/sweep/cancel`, {
 // reads GHL; these read the app's record.
 export const getContactProfile = (id, { pull = false, party = "" } = {}) =>
   fetch(`${API_BASE}/api/contacts/${encodeURIComponent(id)}/record?${locq()}${pull ? "&pull=1" : ""}${party ? `&party=${party}` : ""}`).then(j);
+export const getContactThread = (id, limit = 30) =>
+  fetch(`${API_BASE}/api/contacts/${encodeURIComponent(id)}/thread?${locq()}&limit=${limit}`).then(j);
 export const saveContactFacts = (id, { party, add = [], remove = [] }) =>
   post(`/api/contacts/${encodeURIComponent(id)}/facts`, { party, add, remove });
 export const addContactEvent = (id, body) =>

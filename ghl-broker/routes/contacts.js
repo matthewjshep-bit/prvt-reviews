@@ -1,6 +1,7 @@
 // routes/contacts.js — the contact record's own door.
 //
 //   GET  /api/contacts/:id/record         everything the app knows about one person
+//   GET  /api/contacts/:id/thread         the latest texts/calls/emails with them, from GHL
 //   POST /api/contacts/:id/facts          an operator adds or removes facts; GHL is re-projected
 //   POST /api/contacts/:id/events         an operator adds a note or a call summary
 //   POST /api/contacts/backfill           fill the record from existing offers, deals, drafts, invites and GHL fields
@@ -14,8 +15,22 @@ import { store } from "../store.js";
 import { getContactRecord, learnFacts, forgetFact, recordEvent, projectToGhl, reconcileFromGhl } from "../contact-record.js";
 import { startContactBackfill, getBackfillJob, publicBackfillJob, cancelBackfill } from "../contact-backfill.js";
 import { FACT_KEYS } from "../shared/contact-record.js";
+import { searchConversations, listConversationMessages } from "../ghl.js";
 
 const str = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
+
+const stripHtml = (s) =>
+  String(s).replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/\s+/g, " ").trim();
+const channelOf = (m) => {
+  const t = String(m.messageType || m.type || "").toUpperCase();
+  if (t.includes("CALL")) return "call";
+  if (t.includes("SMS")) return "sms";
+  if (t.includes("EMAIL")) return "email";
+  if (t.includes("VOICEMAIL")) return "voicemail";
+  if (t.includes("ACTIVITY") || t.includes("OPPORTUNITY") || t.includes("REVIEW")) return null;
+  return "msg";
+};
 
 export default function createContactsRouter({ resolveLocation }) {
   const router = express.Router();
@@ -39,6 +54,35 @@ export default function createContactsRouter({ resolveLocation }) {
       }
       const record = await getContactRecord({ store, locationId, contactId, party });
       res.json({ ok: true, ...record, pulled });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The last messages with this person, straight from GHL, so a draft can be
+  // read against what was actually said before it's edited or sent.
+  router.get("/:id/thread", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = str(req.params.id, 64);
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 30));
+      const { conversations = [] } = await searchConversations(client, locationId, { contactId, limit: 5 });
+      const messages = [];
+      for (const convo of conversations.slice(0, 3)) {
+        const r = await listConversationMessages(client, convo.id, { limit: 100 });
+        for (const m of r.messages || []) {
+          const channel = channelOf(m);
+          if (!channel) continue;
+          let body = String(m.body || "").trim();
+          if (channel === "email") body = stripHtml(body);
+          if (!body && channel !== "call" && channel !== "voicemail") continue;
+          messages.push({
+            id: m.id || m.messageId || null, at: m.dateAdded || null, channel,
+            dir: String(m.direction || "").toLowerCase() === "inbound" ? "in" : "out",
+            body: body.slice(0, 2000),
+          });
+        }
+      }
+      messages.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+      res.json({ ok: true, messages: messages.slice(-limit), more: messages.length > limit });
     } catch (err) { fail(res, err); }
   });
 

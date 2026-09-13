@@ -7,10 +7,10 @@
 // draft looks and behaves the same wherever you meet it.
 
 import React, { useEffect, useState } from "react";
-import { AlertTriangle, Check, Clock, Loader2, Pause, Play, Send } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Clock, Loader2, MessageSquare, Pause, Play, Send } from "lucide-react";
 import { ACTION_LABEL, INTENT_LABEL, PARTY_LABEL, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
-import { applyDraftAction, dismissReplyDraft, holdReplyDraft, resumeConversationBot, sendReplyDraft } from "./api.js";
+import { applyDraftAction, dismissReplyDraft, getContactThread, holdReplyDraft, resumeConversationBot, sendReplyDraft } from "./api.js";
 import ContactLink from "./ContactLink.jsx";
 import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
 
@@ -112,7 +112,49 @@ export function OutboxList({ jobs = [], drafts = [], sendsEnabled, serverOffsetM
   );
 }
 
+// The recent thread with this person, read from GHL on demand — so a draft
+// can be judged against what was actually said before it's edited or sent.
+function ThreadPeek({ contactId }) {
+  const [state, setState] = useState({ loading: true, messages: [], error: "", more: false });
+  const bottom = React.useRef(null);
+  useEffect(() => {
+    let live = true;
+    getContactThread(contactId, 30)
+      .then((r) => { if (live) setState({ loading: false, messages: r.messages || [], more: Boolean(r.more), error: "" }); })
+      .catch((e) => { if (live) setState({ loading: false, messages: [], more: false, error: e.message || "couldn't load the conversation" }); });
+    return () => { live = false; };
+  }, [contactId]);
+  useEffect(() => { bottom.current?.scrollIntoView({ block: "nearest" }); }, [state.messages.length]);
+
+  if (state.loading) return <div className="mt-2 flex items-center gap-2 text-xs text-slate-500"><Loader2 size={12} className="animate-spin" /> Loading the conversation…</div>;
+  if (state.error) return <div className="mt-2 text-xs text-red-700">{state.error}</div>;
+  if (!state.messages.length) return <div className="mt-2 text-xs text-slate-500">No messages with them in GHL yet.</div>;
+  return (
+    <div className="mt-2 max-h-80 space-y-1.5 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+      {state.more && <div className="text-center text-[11px] text-slate-500">Showing the latest {state.messages.length} — open the contact for the rest.</div>}
+      {state.messages.map((m, i) => {
+        const ours = m.dir === "out";
+        const call = m.channel === "call" || m.channel === "voicemail";
+        return (
+          <div key={m.id || i} className={`flex ${ours ? "justify-end" : "justify-start"}`}>
+            <div className={`max-w-[80%] rounded-lg px-2.5 py-1.5 text-sm ${ours ? "bg-blue-600 text-white" : "border border-slate-200 bg-white text-slate-900"}`}>
+              {call
+                ? <span className="italic">{ours ? "We called" : "They called"}{m.channel === "voicemail" ? " · voicemail" : ""}{m.body ? ` — ${m.body}` : ""}</span>
+                : <span className="whitespace-pre-wrap">{m.body}</span>}
+              <div className={`mt-0.5 text-[10px] ${ours ? "text-blue-100" : "text-slate-500"}`}>
+                {m.channel !== "sms" ? `${m.channel} · ` : ""}{m.at ? new Date(m.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      <div ref={bottom} />
+    </div>
+  );
+}
+
 export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone }) {
+  const [showThread, setShowThread] = useState(false);
   const [text, setText] = useState(d.reply || "");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -308,6 +350,15 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
           ))}
         </div>
       )}
+
+      {d.contactId && (
+        <button type="button" onClick={() => setShowThread((v) => !v)} aria-expanded={showThread}
+          className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:underline">
+          {showThread ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <MessageSquare size={12} /> {showThread ? "Hide conversation" : "Show conversation"}
+        </button>
+      )}
+      {showThread && d.contactId && <ThreadPeek contactId={d.contactId} />}
 
       <textarea
         className="mt-2 w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
