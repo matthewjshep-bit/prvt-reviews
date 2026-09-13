@@ -129,6 +129,28 @@ test("an offer promoted to a deal is never nudged", async () => {
   assert.equal(started.length, 0);
 });
 
+test("an investor blasted on a deal that fell through is never nudged, matched by street", async () => {
+  _resetJobs();
+  // A GHL-workflow blast: address only, no offer id — the Edmonds case.
+  const events = [{ type: "blast_sent", contactId: "i1", at: at(0), address: "22018 76th Avenue West" }];
+  const deal = (stage) => [{ id: "d9", address: "22018 76th Ave W, Edmonds, WA 98026", deal: { stage, investors: [] } }];
+
+  const dead = fakeStore({ events });
+  dead.listDeals = async () => deal("fell_through");
+  const a = spySweep(dead);
+  await settle();
+  assert.equal(a.started.length, 0);
+  assert.ok(a.job.results.some((r) => r.reason === "the deal is fell through"), JSON.stringify(a.job.results));
+
+  _resetJobs();
+  const live = fakeStore({ events: [...events] });
+  live.listDeals = async () => deal("under_contract");
+  const b = spySweep(live);
+  await settle();
+  assert.equal(b.started.length, 1);
+  assert.equal(b.started[0].kind, "blast_nudge");
+});
+
 test("a passed offer is never nudged", async () => {
   _resetJobs();
   const store = fakeStore({ offers: [anOffer({ status: "passed" })] });

@@ -47,7 +47,8 @@ import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance } from "./shared/auto-accept.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver } from "./shared/offer-status.js";
+import { sameStreet } from "./shared/us-address.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
@@ -2192,6 +2193,28 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
 
   if (!live) {
     return { ok: true, dryRun: true, preview: { channel: d.channel, to: d.contactId, message: body } };
+  }
+
+  // A deal can end while a text about it counts down (drafted Monday, marked
+  // fell through Tuesday). An investor text about a deal that's over is
+  // dismissed rather than sent. Only the auto path — a person pressing Send
+  // is a person deciding.
+  if (auto && d.party === "investor") {
+    const address = d.outbound?.address || d.propertyAddress || "";
+    let offer = d.outbound?.offerId && store.getOffer ? await store.getOffer(d.outbound.offerId).catch(() => null) : null;
+    if (!offer && address && store.listDeals) {
+      offer = (await store.listDeals(locationId, { limit: 200 }).catch(() => [])).find((o) => sameStreet(o?.address, address)) || null;
+    }
+    if (dealIsOver(offer?.deal)) {
+      const ts = new Date(now).toISOString();
+      const why = `the deal is ${offer.deal.stage.replace("_", " ")}`;
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `${why} — not sent`],
+      });
+      await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      return { ok: true, skipped: why };
+    }
   }
 
   // Pick back up, don't pile on. If a person answered this thread after the

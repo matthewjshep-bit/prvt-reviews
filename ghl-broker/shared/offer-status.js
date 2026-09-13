@@ -202,6 +202,11 @@ export const WORKING_INVESTOR_STATUSES = new Set(["committed"]);
 // A deal with a buyer: the stage says so, or somebody on it is committed.
 // From here on it is not pitched to anyone else — not its address, not its
 // numbers — by the bot or a nudge. Only the committed buyer still hears about it.
+// A deal that's finished — closed, fell through, or assigned. Nobody gets a
+// follow-up about it; there is nothing left to pitch.
+export const OVER_DEAL_STAGES = new Set(["assigned", "closed", "fell_through"]);
+export const dealIsOver = (deal) => Boolean(deal) && OVER_DEAL_STAGES.has(deal.stage);
+
 export const dealSpokenFor = (deal) =>
   Boolean(deal) && (deal.stage === "buyer_found" || (deal.investors || []).some((i) => i?.status === "committed"));
 

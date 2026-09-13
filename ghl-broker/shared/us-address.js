@@ -171,6 +171,18 @@ export function addressKey(raw) {
   return normalizeUsAddress(raw).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+// Same street line, ignoring city/state/zip — "22018 76th Avenue West" (a
+// blast event) is the deal at "22018 76th Ave W, Edmonds, WA 98026". Both
+// sides need a house number, so a bare street name never matches a property.
+export function sameStreet(a, b) {
+  const key = (raw) => {
+    const p = parseUsAddress(raw);
+    return p.houseNo ? addressKey(`${p.houseNo} ${p.street}`) : "";
+  };
+  const ka = key(a);
+  return Boolean(ka) && ka === key(b);
+}
+
 // Ordered, de-duplicated ladder of address formats to try against picky
 // address matchers. Callers query each until one returns data.
 export function addressQueryVariants(raw) {

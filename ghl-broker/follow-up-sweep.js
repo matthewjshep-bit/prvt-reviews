@@ -21,7 +21,8 @@
 //   The dedupe key is still the real defence — the cursor just stops us
 //   spending model calls on drafts that would be superseded anyway.
 
-import { OPEN_STATUSES, effectiveStatus, isExpired, dealSpokenFor } from "./shared/offer-status.js";
+import { OPEN_STATUSES, effectiveStatus, isExpired, dealSpokenFor, dealIsOver } from "./shared/offer-status.js";
+import { sameStreet } from "./shared/us-address.js";
 import { dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor } from "./shared/follow-up.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
@@ -306,15 +307,29 @@ async function runSweep(job, ctx) {
   // How many nudges this contact has already had this week, so one person
   // working several of our properties doesn't get a text a day.
   const weekCount = new Map();
+  // Blasts sent by a GHL workflow carry only an address, so an investor
+  // candidate is matched to its deal by street when there's no offer id.
+  let dealList = null;
 
   for (const c of candidates) {
     if (job.cancelRequested) break;
     const pb = config.parties[c.party];
     const fu = pb.followUp;
 
-    // A deal that found its buyer is not nudged to anyone else.
-    if (c.party === "investor" && c.offerId && typeof store.getOffer === "function") {
-      const offer = await store.getOffer(c.offerId).catch(() => null);
+    if (c.party === "investor") {
+      let offer = c.offerId && typeof store.getOffer === "function" ? await store.getOffer(c.offerId).catch(() => null) : null;
+      if (!offer && c.address) {
+        dealList ??= await (store.listDeals ? store.listDeals(locationId, { limit: 200 }) : Promise.resolve([])).catch(() => []);
+        offer = dealList.find((o) => sameStreet(o?.address, c.address)) || null;
+      }
+      // A deal that closed, fell through or was assigned is over: no follow-up to anyone.
+      if (dealIsOver(offer?.deal)) {
+        job.skipped++;
+        push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: `the deal is ${offer.deal.stage.replace("_", " ")}` });
+        continue;
+      }
+      // A deal that found its buyer is not nudged to anyone else.
+
       const mine = (offer?.deal?.investors || []).find((i) => i.contactId === c.contactId);
       if (dealSpokenFor(offer?.deal) && mine?.status !== "committed") {
         job.skipped++;
