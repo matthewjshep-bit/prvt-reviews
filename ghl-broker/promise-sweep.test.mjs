@@ -147,3 +147,54 @@ test("an owed promise is a 'now' row on Today until it's kept", () => {
   const p2 = buildPipeline({ events: [owed, { contactId: "c1", type: "promise_kept", at: at(0) }], now: NOW });
   assert.ok(!p2.actions.some((a) => a.kind === "promise_owed"), "cleared once kept");
 });
+
+/* ---------- check-ins they asked for ---------- */
+
+import { checkInRequested, offersToSendDeals } from "./shared/follow-up.js";
+import { runCheckInSweep } from "./promise-sweep.js";
+
+test("a check-in with a day named reads as a request, due the morning after", () => {
+  const monday = Date.parse("2026-09-14T21:18:00Z");   // a Monday afternoon
+  const tyler = checkInRequested("Hey Matt, Nothing interesting but i just got back into town. I'll check back in when I get into the office this Wednesday 👍", monday);
+  assert.ok(tyler);
+  assert.equal(tyler.dueAt, "2026-09-17T17:00:00.000Z", "Thursday morning, after their Wednesday");
+  assert.match(tyler.phrase, /wednesday/i);
+  assert.ok(checkInRequested("Not yet, I'll let you know in a few weeks", monday));
+  assert.equal(checkInRequested("It will be closing on the 17th", monday), null, "no check-in cue");
+  assert.equal(checkInRequested("I'll let you know", monday), null, "no day named");
+  assert.equal(checkInRequested("closed last month, no longer available", monday), null, "'month' is not Monday");
+});
+
+test("an agent offering to send us deals reads as a source", () => {
+  assert.equal(offersToSendDeals("Of course. You got an email I can send properties to? We also have a new \"first look\" feature on the mls"), true);
+  assert.equal(offersToSendDeals("That house is actually better than brand new! I'll keep you in mind for any fixers"), true);
+  assert.equal(offersToSendDeals("Copy that I'll keep an eye on some more properties"), true);
+  assert.equal(offersToSendDeals("Sold and gone."), false);
+});
+
+const request = (hoursAgo, data) => ({ contactId: "c9", type: "checkin_requested", at: at(hoursAgo), address: "", dedupeKey: `req:${hoursAgo}`, data });
+
+test("a due check-in they didn't beat us to goes once; a source's next week is written", async () => {
+  const store = fakeStore({ events: [request(48, { kind: "source", phrase: "", dueAt: at(1), left: 5 })] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 1);
+  assert.equal(s.calls[0].kind, "checkin_due");
+  assert.equal(s.calls[0].subject.sourceKind, "source");
+  const next = store.events.filter((e) => e.type === "checkin_requested").at(-1);
+  assert.equal(next.data.left, 4);
+  assert.ok(Date.parse(next.data.dueAt) > NOW);
+  const again = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW + HOUR, deps: s });
+  assert.equal(again.sent, 0, "the next week isn't due yet, and this one was claimed");
+});
+
+test("a check-in they got to first — they texted since asking — sends nothing", async () => {
+  const store = fakeStore({ events: [
+    request(72, { kind: "date", phrase: "this Wednesday", dueAt: at(2) }),
+    { contactId: "c9", type: "text_summary", at: at(10), data: {} },
+  ] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.answered, 1);
+  assert.equal(s.calls.length, 0);
+});

@@ -453,6 +453,16 @@ export function outboundOpening(outbound) {
         `do NOT raise ours, hint that we'd go higher, or name any other number. Write it like a text: no dollar signs. ` +
         `${CONTINUE} Set intent to price_drop.`;
 
+    // The check-in they asked for. It is theirs — they said when — so it reads
+    // as keeping an appointment, not chasing.
+    case "checkin_due":
+      return `${START} ` +
+        (o.sourceKind === "source"
+          ? `This agent offered to send us properties that need work. A light weekly check-in: anything new cross their desk? `
+          : `This agent told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Mention it naturally ` +
+            `("you'd mentioned ${o.phrase || "circling back"}"). Ask whether anything landed that needs work. `) +
+        `One or two lines, warm and easy to ignore. Do NOT name any number or price. ${CONTINUE} Set intent to checkin_due.`;
+
     default:
       return "";
   }

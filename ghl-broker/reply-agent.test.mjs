@@ -2530,6 +2530,26 @@ test("a confident 'other' that asks nothing of us is acknowledged instead of sit
   assert.equal((await run({ confidence: "medium" })).intent, "other");
 });
 
+test("'I'll check back this Wednesday' and 'an email I can send properties to' are both remembered as check-ins", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const rows = [];
+  const orig = store.appendContactEvents?.bind(store);
+  store.getContactProfile ??= async () => null;
+  store.upsertContactProfile ??= async () => ({});
+  store.appendContactEvents = async (loc, id, add) => { rows.push(...add); return orig ? orig(loc, id, add) : { inserted: add.length, skipped: 0 }; };
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "Nothing right now. You got an email I can send properties to? I'll check back in this Wednesday.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "investor_open", confidence: "high", reply: "Sounds good, matt@shepflips.com." }) },
+  });
+  for (let i = 0; i < 40 && job.status === "running"; i++) await settle();
+  assert.equal(job.status, "done", job.error);
+  const kinds = rows.filter((e) => e.type === "checkin_requested").map((e) => e.data.kind).sort();
+  assert.deepEqual(kinds, ["date", "source"]);
+});
+
 test("a contact with an offer in our book is an agent even with no agent tag", async () => {
   _resetJobs();
   const { client } = ghlStubFor([]);

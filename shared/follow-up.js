@@ -82,6 +82,56 @@ export function detectPromise(text = "") {
   return null;
 }
 
+/* ---------- when they said to check back ---------- */
+
+// "I'll check back in when I get into the office this Wednesday" (Tyler
+// Anderson, 2026-09-14). They named the day; nothing remembered it. A check-in
+// they asked for is the warmest follow-up there is.
+const CHECKIN_CUE = /\b(?:check(?:ing)?\s+(?:back|in)|circle\s+back|touch\s+base|reach\s+(?:back\s+)?out|follow\s+up|get\s+back\s+to\s+you|let\s+you\s+know|back\s+in\s+(?:town|the\s+office)|in(?:to)?\s+the\s+office|hit\s+you\s+up|text\s+you|talk\s+(?:then|soon))\b/i;
+const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+// 17:00 UTC ≈ 10am Pacific, the morning after the day they named.
+const morningOf = (ms) => { const d = new Date(ms); d.setUTCHours(17, 0, 0, 0); return d.toISOString(); };
+
+/**
+ * checkInRequested(text, now) → { dueAt, phrase } | null
+ *
+ * Only when the message says they'll come back to us (a check-in cue) AND
+ * names when: a weekday, tomorrow, next week, a few weeks, a month. Due the
+ * morning after the day they named, so it lands after they had their chance.
+ */
+export function checkInRequested(text = "", now = Date.now()) {
+  const t = String(text || "");
+  if (!CHECKIN_CUE.test(t)) return null;
+  const day = /\b(?:this\s+|next\s+|on\s+)?(sun|mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?)(?:day)?\b/i.exec(t);
+  if (day) {
+    const want = WEEKDAYS.indexOf(day[1].toLowerCase().slice(0, 3));
+    let add = (want - new Date(now).getUTCDay() + 7) % 7;
+    if (add === 0) add = 7;
+    return { dueAt: morningOf(now + (add + 1) * DAY_MS), phrase: day[0].trim() };
+  }
+  if (/\btomorrow\b/i.test(t)) return { dueAt: morningOf(now + 2 * DAY_MS), phrase: "tomorrow" };
+  if (/\bnext\s+week\b/i.test(t)) return { dueAt: morningOf(now + 8 * DAY_MS), phrase: "next week" };
+  const weeks = /\b(?:a\s+)?(?:few|couple(?:\s+of)?|2|two|3|three)\s+weeks?\b/i.exec(t);
+  if (weeks) return { dueAt: morningOf(now + 15 * DAY_MS), phrase: weeks[0].trim() };
+  if (/\b(?:a|next)\s+month\b/i.test(t)) return { dueAt: morningOf(now + 31 * DAY_MS), phrase: "a month" };
+  return null;
+}
+
+/**
+ * offersToSendDeals(text) → boolean
+ *
+ * The agent offered to be a source: "You got an email I can send properties
+ * to?" (Karamveer Tiwana), "I'll keep you in mind for any fixers" (Greg
+ * Devey), "I'll keep an eye on some more properties" (Christian Simonson).
+ */
+export function offersToSendDeals(text = "") {
+  const t = String(text || "");
+  return /\b(?:email|number|address)\s+(?:i\s+can|to)\s+send\b/i.test(t)
+    || /\b(?:send|forward|pass)\s+(?:you\s+|them\s+|along\s+)?(?:some\s+|any\s+|more\s+)?(?:properties|deals|listings|fixers|leads)\b/i.test(t)
+    || /\bkeep\s+(?:you|an\s+eye(?:\s+out)?)\b[^.?!]{0,40}\b(?:fixers?|deals?|properties|listings|in\s+mind)\b/i.test(t)
+    || /\bfirst\s+look\b|\boff[\s-]?market\b/i.test(t);
+}
+
 export const MAX_LADDER_STEPS = 12;
 export const MAX_STEP_DAY = 120;
 export const MAX_REPEAT_DAYS = 60;

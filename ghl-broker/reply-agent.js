@@ -64,7 +64,7 @@ import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
 } from "./ghl.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
-import { detectPromise, PROMISE_DUE_HOURS } from "./shared/follow-up.js";
+import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals } from "./shared/follow-up.js";
 import { resolveParty } from "./conversation-party.js";
 import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts } from "./conversation-context.js";
@@ -1324,6 +1324,15 @@ export const OUTBOUND_KINDS = {
     floats: ({ subject }) => [subject?.to, subject?.from].map((n) => Math.round(Number(n) || 0)).filter(Boolean),
     forbids: () => [],
   },
+  // They told us when to check back ("this Wednesday"), or offered to send us
+  // deals — the check-in they asked for (promise-sweep.js runCheckInSweep).
+  checkin_due: {
+    party: "agent",
+    enabled: (pb) => pb?.followUp?.enabled,
+    ready: () => true,
+    floats: () => [],
+    forbids: () => [],
+  },
   blast_nudge: {
     party: "investor",
     enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.blast_nudge?.enabled,
@@ -1506,7 +1515,8 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     ...(kind === "promise_due" ? { what: subject?.what || "answer", heldReason: subject?.heldReason || "", promisedText: subject?.promisedText || "", running: Boolean(subject?.running) } : {}),
     ...(kind === "price_drop" ? { from: Math.round(Number(subject?.from) || 0), to: Math.round(Number(subject?.to) || 0),
       fromK: Number(subject?.from) > 0 ? kText(Number(subject.from)) : "", toK: Number(subject?.to) > 0 ? kText(Number(subject.to)) : "",
-      offerStatus: subject?.status || "", ourK: Number(offer?.cashAmount) > 0 ? kText(Number(offer.cashAmount)) : "" } : {}) };
+      offerStatus: subject?.status || "", ourK: Number(offer?.cashAmount) > 0 ? kText(Number(offer.cashAmount)) : "" } : {}),
+    ...(kind === "checkin_due" ? { phrase: subject?.phrase || "", sourceKind: subject?.sourceKind || "date" } : {}) };
 }
 
 // The one-liner the outbox row shows when the model didn't write its own.
@@ -1528,6 +1538,9 @@ function outboundSummary({ kind, offer, outbound }) {
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
     case "dataroom_nudge": return `Follows up on ${where} — they opened the package and went quiet${rung}.`;
+    case "checkin_due": return outbound.sourceKind === "source"
+      ? "Weekly check-in with an agent who offered to send us deals: anything new that needs work?"
+      : `The check-in they asked for${outbound.phrase ? ` ("${outbound.phrase}")` : ""}: anything land that needs work?`;
     case "price_drop": return `The list price on ${where} came down${outbound.fromK ? ` from ${outbound.fromK}` : ""} to ${outbound.toK}; asks if the seller would look at cash closer to ours now.`;
     case "promise_due": return `Keeps our word on ${where}: we said we'd come back with ${outbound.what === "number" ? "a number" : "an answer"} and nothing went out${outbound.heldReason ? " (the underwrite held)" : ""}.`;
     default: return `Starts a message about ${where}${rung}.`;
@@ -2188,6 +2201,30 @@ async function runReply(job, ctx) {
     if (typeof deps.afterAgentTake === "function") {
       try { await deps.afterAgentTake({ contactId: job.contactId, address: draft.propertyAddress }); }
       catch (e) { warnings.push(`realm follow-up: ${String(e?.message || e).slice(0, 120)}`); }
+    }
+  }
+
+  /* --- 4c′. when they said to check back, and who sends us deals --- */
+  // Remembered as `checkin_requested`; promise-sweep.js runCheckInSweep sends
+  // the check-in when it's due and they haven't come back first.
+  if (party === "agent" && !isCall && !["opt_out", "counter", "acceptance", "realm_yes"].includes(draft.intent)) {
+    const ask = checkInRequested(job.message, now);
+    if (ask) {
+      await recordEvent({
+        store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
+        address: draft.propertyAddress || "", source: "conversation", ref: record.id,
+        dedupeKey: `checkin_requested:${job.contactId}:${ask.dueAt.slice(0, 10)}`,
+        data: { kind: "date", phrase: ask.phrase, dueAt: ask.dueAt },
+      }).catch(() => {});
+    }
+    if (offersToSendDeals(job.message)) {
+      await addContactTags(client, job.contactId, ["deal-source"]).catch((e) => warnings.push(`tag: ${e.message}`));
+      await recordEvent({
+        store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
+        address: "", source: "conversation", ref: record.id,
+        dedupeKey: `checkin_requested:source:${job.contactId}`,
+        data: { kind: "source", phrase: "", dueAt: new Date(now + 7 * 86400000).toISOString(), left: 5 },
+      }).catch(() => {});
     }
   }
 

@@ -136,6 +136,78 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
   return out;
 }
 
+/* ---------- check-ins they asked for ---------- */
+
+// A request stands this long; "in a month" is the longest one we read.
+export const CHECKIN_WINDOW_DAYS = 45;
+// A deal source hears from us weekly, this many times, until they reply.
+export const SOURCE_REPEAT_DAYS = 7;
+export const SOURCE_TOUCHES = 6;
+
+/**
+ * runCheckInSweep({ client, locationId, saved, store, sendsEnabled, deps, now })
+ *   → { considered, sent, answered, results }
+ *
+ * `checkin_requested` events come from the reply agent: a day they named
+ * ("this Wednesday"), or an agent who offered to send us deals (weekly). When
+ * one is due and they haven't texted since it was made, one `checkin_due` text
+ * goes, claimed by `checkin_sent`. A source's next week is written as it goes.
+ */
+export async function runCheckInSweep({ client, locationId, saved = {}, store, sendsEnabled = false, deps = {}, now = Date.now() }) {
+  const out = { considered: 0, sent: 0, answered: 0, results: [] };
+  const config = conversationConfig(saved || {});
+  if (!config.enabled || !config.parties?.agent?.followUp?.enabled) return out;
+  const start = typeof deps.startProactive === "function" ? deps.startProactive : startProactive;
+
+  const events = await store.listContactEventsSince(locationId, iso(now - CHECKIN_WINDOW_DAYS * 86400000), {
+    types: ["checkin_requested", "checkin_sent", "text_summary", "call_summary"], limit: 5000,
+  }).catch(() => []);
+  const byContact = new Map();
+  for (const e of events) {
+    if (!e?.contactId) continue;
+    if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
+    byContact.get(e.contactId).push(e);
+  }
+
+  for (const [contactId, list] of byContact) {
+    list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const req = list.filter((e) => e.type === "checkin_requested").at(-1);
+    if (!req) continue;
+    if (list.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)) continue;
+    if (Date.parse(req.data?.dueAt || "") > now) continue;
+    out.considered++;
+    // They came back on their own after asking: nothing to chase.
+    if (list.some((e) => (e.type === "text_summary" || e.type === "call_summary") && String(e.at) > String(req.at))) {
+      out.answered++;
+      out.results.push({ contactId, status: "answered" });
+      continue;
+    }
+    const claim = await recordEvent({
+      store, locationId, contactId, party: "agent", type: "checkin_sent", at: iso(now), address: req.address || "",
+      source: "conversation", dedupeKey: `checkin_sent:${contactId}:${req.at}`,
+      data: { requestAt: req.at, kind: req.data?.kind || "date", phrase: req.data?.phrase || "" },
+    });
+    if (!claim.inserted) continue;
+    const r = await start({
+      client, locationId, saved, store, contactId, kind: "checkin_due", offer: null,
+      subject: { address: req.address || "", phrase: req.data?.phrase || "", sourceKind: req.data?.kind || "date" },
+      sendsEnabled, deps,
+    }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
+    if (r?.skipped) out.results.push({ contactId, status: "skipped", reason: r.skipped });
+    else { out.sent++; out.results.push({ contactId, status: "sent", jobId: r?.job?.id || null }); }
+    // A deal source's next week.
+    const left = Number(req.data?.left) || 0;
+    if (req.data?.kind === "source" && left > 0) {
+      await recordEvent({
+        store, locationId, contactId, party: "agent", type: "checkin_requested", at: iso(now), address: req.address || "",
+        source: "conversation", dedupeKey: `checkin_requested:source:${contactId}:${iso(now).slice(0, 10)}`,
+        data: { kind: "source", phrase: "", dueAt: iso(now + SOURCE_REPEAT_DAYS * 86400000), left: left - 1 },
+      });
+    }
+  }
+  return out;
+}
+
 const inFlight = new Set();
 
 /**
@@ -149,7 +221,9 @@ export async function maybeRunPromiseSweep({ client, locationId, saved = {}, sto
   if (inFlight.has(locationId)) return null;
   inFlight.add(locationId);
   try {
-    return await runPromiseSweep({ client, locationId, saved, store, sendsEnabled, deps, now });
+    const promises = await runPromiseSweep({ client, locationId, saved, store, sendsEnabled, deps, now });
+    const checkins = await runCheckInSweep({ client, locationId, saved, store, sendsEnabled, deps, now });
+    return { ...promises, checkins: checkins.sent };
   } finally {
     inFlight.delete(locationId);
   }
