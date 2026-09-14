@@ -2018,9 +2018,29 @@ async function runReply(job, ctx) {
   const namedKnown = draft.propertyAddress ? knownOfferFor(bookRows, draft.propertyAddress, now) : null;
   let subjectMoved = party === "agent" && Boolean(draft.propertyAddress)
     && lastMention(job.message, draft.propertyAddress) >= 0 && !namedKnown;
+  // A HELD underwrite is not "numbers we have". If the agent has told us more
+  // about the house since it held — the work, their value — run it again and
+  // replace the held draft. Kelby Schweitzer's 5016 7th Ave NE (2026-09-14)
+  // held on thin comps at 11:04, then got the scope and a 1.6–1.8M value, and
+  // every later run stood down on "already have a held draft" — so the bot
+  // promised a number all afternoon with nothing running.
+  let rerunHeld = null;
+  if (namedKnown && namedKnown.status === "draft" && plan.auto.some((x) => x.type === "start_underwrite")) {
+    const heldAt = Date.parse(namedKnown.updatedAt || namedKnown.createdAt || "") || 0;
+    const evs = (await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => [])) || [];
+    const told = evs.some((e) => ["agent_estimate", "property_details"].includes(e?.type)
+      && e.address && propertyKey(e.address) === propertyKey(namedKnown.address || "")
+      && (Date.parse(e.at || "") || 0) > heldAt);
+    if (told) {
+      rerunHeld = namedKnown;
+      plan.auto = plan.auto.map((x) => (x.type === "start_underwrite" ? { ...x, replaceOfferId: namedKnown.id, why: "they told us more since it held — run it again" } : x));
+      record = { ...record, actions: (record.actions || []).map((x) => (x.type === "start_underwrite" && x.status === "pending" ? { ...x, replaceOfferId: namedKnown.id } : x)), updatedAt: new Date().toISOString() };
+      await store.updateReplyDraft(record.id, record).catch(() => {});
+    }
+  }
   // Nothing to re-run: we already have numbers (or a draft a person is
   // reviewing) on this house. The rule's own underwrite stands down.
-  if (namedKnown && plan.auto.some((x) => x.type === "start_underwrite")) {
+  if (namedKnown && !rerunHeld && plan.auto.some((x) => x.type === "start_underwrite")) {
     const why = `already have ${namedKnown.status === "draft" ? "a held draft" : "an offer"} on ${namedKnown.address}`;
     plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite");
     record = { ...record, actions: record.actions.map((x) => x.type === "start_underwrite" && x.status === "pending" ? { ...x, status: "skipped", detail: why } : x), updatedAt: new Date().toISOString() };

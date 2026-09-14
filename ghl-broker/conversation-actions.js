@@ -171,13 +171,16 @@ const EXECUTORS = {
     if (!r?.linked) throw new Error(r?.reason || "no deal to link");
     return r.unchanged ? `already ${r.status} on ${r.address}` : `evaluating ${r.address}`;
   },
-  async start_underwrite({ deps, contactId, draft }) {
+  async start_underwrite({ deps, contactId, draft, action }) {
     if (typeof deps?.startUnderwrite !== "function") throw new Error("auto-underwrite is not wired on this broker");
     // A number the agent named ("not less than 450k") rides along as the
     // asking price, so the offer is priced against the seller's floor.
     const r = await deps.startUnderwrite({
       contactId, message: draft?.inbound || "", address: draft?.propertyAddress || "",
       askingPrice: Math.max(0, Number(draft?.counterAmount) || 0),
+      // Set when a held underwrite is being re-run on new information: the new
+      // run replaces that draft instead of standing down behind it.
+      ...(action?.replaceOfferId ? { replaceOfferId: action.replaceOfferId } : {}),
     });
     if (r?.skipped) throw new Error(r.skipped);
     if (r?.deduped) return "underwrite already running on it";

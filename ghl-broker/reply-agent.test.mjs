@@ -2433,6 +2433,62 @@ test("an agent already on Tier 1 who brings a different house leaves Tier 1 firs
   assert.ok(addAt > removeAt, `then goes back on: ${types}`);
 });
 
+/* ---------- a held underwrite re-runs when they tell us more ---------- */
+
+// Kelby Schweitzer, 2026-09-14: 5016 7th Ave NE held on thin comps; he then
+// gave the scope and a 1.6–1.8M value, and every later run stood down on
+// "already have a held draft". New information re-runs it, replacing the draft.
+const heldDraftStore = ({ heldMinutesAgo = 120, eventsAfterHold = true } = {}) => {
+  const store = fakeStore();
+  const heldAt = new Date(Date.now() - heldMinutesAgo * 60000).toISOString();
+  store.listOffers = async () => [{ id: "held-1", address: "5016 7th Ave NE, Seattle, WA 98105", status: "draft", createdAt: heldAt,
+    autoUnderwrite: { held: ["only 5 priced comps"] } }];
+  if (!eventsAfterHold) {
+    const prior = store.listContactEvents.bind(store);
+    store.listContactEvents = async (...args) => (await prior(...args)).filter((e) => (Date.parse(e.at) || 0) <= Date.parse(heldAt));
+  }
+  return store;
+};
+
+test("new details after a held underwrite run it again, replacing the held draft", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent", "tier-1"]);
+  const store = heldDraftStore();
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "Closer to 1.6-1.8. Depends if you tore the garage down",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", confidence: "high", propertyAddress: "5016 7th Ave NE, Seattle, WA 98105",
+        reply: "Let me run this by underwriting today.", agentArv: 1700000, agentTakeNote: "1.6-1.8" }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-9" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(uw.length, 1, "the held underwrite runs again");
+  assert.equal(uw[0].replaceOfferId, "held-1", "and replaces the held draft");
+});
+
+test("with nothing new since it held, the underwrite still stands down behind the held draft", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent", "tier-1"]);
+  const store = heldDraftStore({ eventsAfterHold: false });
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "any update on 5016 7th Ave NE?",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", confidence: "high", propertyAddress: "5016 7th Ave NE, Seattle, WA 98105", reply: "Working on it." }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-10" } }; },
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(uw.length, 0);
+  assert.match(String(d.actions.find((a) => a.type === "start_underwrite")?.detail || ""), /already have a held draft/);
+});
+
 test("an agent not yet on Tier 1 is simply added — nothing to leave", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
