@@ -32,7 +32,7 @@ import { geocodeAddress, atLeast, precisionRank, PRECISION } from "./geocode.js"
 import { pullZillowComps } from "./comps-zillow.js";
 import { gradeComps } from "./comps-grade.js";
 import { fetchZillowPhotos, fetchListingPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
-import { deriveArv } from "./shared/arv.js";
+import { deriveArv, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
 import { rehabBand } from "./shared/rehab-catalog.js";
@@ -403,7 +403,7 @@ export function nearbyComps({ compsData, subjectFacts, subjectAddress = "", radi
  * size, era and distance, so the tightening is done by the scorecard rather
  * than by another set of hand-tuned bands.
  */
-export function gradeByPriceProxy(nearby = []) {
+export function gradeByPriceProxy(nearby = [], { subjectSqft = 0 } = {}) {
   const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(nearby.length * 0.35));
   let proxy = markRenovatedByPrice(nearby, { take: tier });
   // The gut check. Too few priced sales for a real top tier (under
@@ -419,7 +419,22 @@ export function gradeByPriceProxy(nearby = []) {
     proxy = { ...rough, gutCheck: true, reason: `gut check: only ${priced} priced comps, top ${take} by $/sqft taken as renovated` };
   }
   const markedRenovated = proxy.comps.filter((c) => ARV_CONDITIONS.has(c.condition));
-  const rehabbed = [...markedRenovated].sort(compareByMatch).slice(0, UW_MAX_ARV_COMPS);
+  // Size-fit first. The pool admits comps ±30% off the subject so the $/sqft
+  // tier has breadth, but the ARV gate refuses more than one comp over ±25%
+  // (deriveArv's SIZE_TOLERANCE_PCT). Picking purely by match score let two
+  // 0.7× houses carry the ARV on 10412 SE 219th St and the run held, when two
+  // close-sized renovated comps were right there. So: comps within tolerance
+  // carry it whenever there are enough of them; off-size ones only top the set
+  // up to the minimum the gate asks for — which keeps them to one or fewer
+  // whenever the tier has the evidence to allow it.
+  const sqft = Number(subjectSqft) || 0;
+  const fits = (c) => !(sqft > 0) || !(Number(c.sqft) > 0) || Math.abs(Number(c.sqft) - sqft) / sqft <= SIZE_TOLERANCE_PCT / 100;
+  const ranked = [...markedRenovated].sort(compareByMatch);
+  const inSize = ranked.filter(fits);
+  const offSize = ranked.filter((c) => !fits(c));
+  const need = proxy.gutCheck ? UW_GUT_CHECK_MIN_COMPS : UW_MIN_REHABBED_COMPS;
+  const rehabbed = (inSize.length >= need ? inSize : [...inSize, ...offSize.slice(0, need - inSize.length)])
+    .slice(0, UW_MAX_ARV_COMPS);
   // Record the grade for EVERY comp the proxy judged, not just the handful
   // that went on to carry the ARV. The tier is usually wider than
   // UW_MAX_ARV_COMPS, so saving only the survivors threw away the verdict on
@@ -1176,7 +1191,7 @@ async function runUnderwrite(job, ctx) {
       });
       // A full proxy stops the ladder; a gut check doesn't — it's what the
       // last ring settles for, not a reason to skip looking wider.
-      const graded = compsCondition === "price" ? gradeByPriceProxy(ring) : null;
+      const graded = compsCondition === "price" ? gradeByPriceProxy(ring, { subjectSqft: subject.sqft }) : null;
       const usable = graded ? (graded.proxy.gutCheck ? 0 : graded.rehabbed.length) : ring.length;
       if (usable >= UW_MIN_REHABBED_COMPS || radius === lastRing) break;
       const found = graded ? graded.proxy.pool : ring.length;
@@ -1227,7 +1242,7 @@ async function runUnderwrite(job, ctx) {
     // best-MATCHING comps from inside that tier — compareByMatch already
     // scores beds, baths, size, era and distance, so the tightening is done by
     // the scorecard rather than by another set of hand-tuned bands.
-    ({ grades, rehabbed, proxy } = gradeByPriceProxy(nearby));
+    ({ grades, rehabbed, proxy } = gradeByPriceProxy(nearby, { subjectSqft: subject.sqft }));
   } else {
     const candidates = nearby.slice(0, UW_GRADE_CANDIDATES);
     if (candidates.length) {

@@ -771,3 +771,35 @@ test("a gut check clears the comp gate on two comps; a full proxy still needs th
   assert.equal(gate({ rehabbedComps: comps(2), proxy: { applied: true, gutCheck: true, reason: "gut check" } }).ok, true);
   assert.equal(gate({ rehabbedComps: comps(2), proxy: { applied: true, reason: "top 4 of 9" } }).ok, false);
 });
+
+/* ---------- ARV comps: size-fit first ---------- */
+
+// A tier of priced comps around a 2,380 sqft subject. `sq` sets each comp's
+// size; prices keep $/sqft high enough that every one lands in the renovated
+// tier of an 8-comp pool (the proxy, not the gut check).
+const sized = (sizes) => sizes.map((sq, i) => ({
+  id: `s${i}`, address: `${i} Size St`, price: Math.round(sq * (380 - i)), sqft: sq, distance: 0.2 + i * 0.01,
+}));
+
+test("off-size comps only top up the ARV set — two 0.7x houses can't both carry it (10412 SE 219th St)", () => {
+  // Renovated tier: two close in size, two at ~0.72x. Pool padding below.
+  const pool = sized([2300, 2450, 1700, 1760, 1500, 1450, 1400, 1350]);
+  const g = gradeByPriceProxy(pool, { subjectSqft: 2380 });
+  assert.equal(g.proxy.gutCheck, undefined, "a real proxy, not a gut check");
+  const off = g.rehabbed.filter((c) => Math.abs(c.sqft - 2380) / 2380 > 0.25);
+  assert.ok(off.length <= 1, `at most one off-size comp carries the ARV: ${g.rehabbed.map((c) => c.sqft).join(", ")}`);
+  assert.ok(g.rehabbed.length >= UW_MIN_REHABBED_COMPS, "still enough comps for the gate");
+});
+
+test("with enough close-sized renovated comps, no off-size comp is used at all", () => {
+  const pool = sized([2300, 2450, 2350, 2400, 1700, 1500, 1400, 1300, 1200, 1100, 1000, 900]);
+  const g = gradeByPriceProxy(pool, { subjectSqft: 2380 });
+  assert.ok(g.rehabbed.every((c) => Math.abs(c.sqft - 2380) / 2380 <= 0.25), g.rehabbed.map((c) => c.sqft).join(", "));
+});
+
+test("an unknown subject size leaves the pick to match score, as before", () => {
+  const pool = sized([2300, 2450, 1700, 1760, 1500, 1450, 1400, 1350]);
+  const withSize = gradeByPriceProxy(pool, { subjectSqft: 0 });
+  const legacy = gradeByPriceProxy(pool);
+  assert.deepEqual(withSize.rehabbed.map((c) => c.id), legacy.rehabbed.map((c) => c.id));
+});
