@@ -71,6 +71,7 @@ function AiProvenance({ offer }) {
         value={uw.addressSource === "workflow" ? "the GHL workflow"
           : uw.addressSource === "operator" ? "the offer form"
           : uw.addressSource === "subject_property" ? "the Subject Property field"
+          : uw.addressSource === "listing_link" ? "a listing link the agent texted"
           : `the conversation (${uw.confidence || "?"} confidence)`}
       />
       <Row label="Comps used" value={uw.compsUsedCount != null ? `${uw.compsUsedCount} renovated` : "—"} />

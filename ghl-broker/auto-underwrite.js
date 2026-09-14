@@ -38,6 +38,7 @@ import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-
 import { rehabBand } from "./shared/rehab-catalog.js";
 import { fmtMoney } from "./shared/offer-calc.js";
 import { addressKey } from "./shared/us-address.js";
+import { expandListingLinks } from "./listing-links.js";
 import { buildTranscript } from "./enrich.js";
 import {
   getContact, createContactNote, addContactTags, removeContactTags,
@@ -842,6 +843,15 @@ async function runUnderwrite(job, ctx) {
   // candidate was mentioned LAST win. Candidates are the standing answer and
   // every address the record has seen this agent raise. Nothing mentioned in
   // the thread at all → the standing answer holds, as before.
+  // A listing link in the message names the house outright — it is the
+  // newest thing the agent sent, so it outranks a standing field. The last
+  // link wins when there are several. See listing-links.js.
+  let linked = null;
+  if (job.origin !== "operator" && job.message) {
+    const x = await expandListingLinks(job.message).catch(() => ({ links: [] }));
+    linked = x.links?.length ? x.links[x.links.length - 1] : null;
+  }
+
   let standing = job.suppliedAddress || fieldAddress || "";
   let refereed = null;
   // An address a person just typed into the form is the answer, full stop.
@@ -865,7 +875,18 @@ async function runUnderwrite(job, ctx) {
   }
 
   let extraction;
-  if (refereed?.moved) {
+  if (linked && addressKey(linked.address) !== addressKey(job.suppliedAddress || "")) {
+    extraction = {
+      address: linked.address,
+      askingPrice: job.suppliedAskingPrice,
+      confidence: "high",
+      note: `Address read from the ${linked.source} link in the message.`,
+      source: "listing_link",
+    };
+    if (standing && addressKey(standing) !== addressKey(linked.address)) {
+      warnings.push(`the message's ${linked.source} link is for ${linked.address}, not ${standing} — went with the link`);
+    }
+  } else if (refereed?.moved) {
     extraction = {
       address: refereed.address,
       askingPrice: 0,

@@ -53,6 +53,7 @@ import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
+import { expandListingLinks } from "./listing-links.js";
 import { fmtMoney } from "./shared/offer-calc.js";
 import { parseUsAddress, addressKey, lastMention } from "./shared/us-address.js";
 import {
@@ -1010,7 +1011,7 @@ export async function startReply({
   // one message.
   const text = String(message || "").trim();
   for (const j of jobs.values()) {
-    if (j.locationId === locationId && j.contactId === contactId && j.message === text.slice(0, 1000) &&
+    if (j.locationId === locationId && j.contactId === contactId && (j.originalMessage ?? j.message) === text.slice(0, 1000) &&
         j.status !== "superseded" && Date.now() - Date.parse(j.startedAt) < DEDUPE_MS) {
       return { skipped: `duplicate of ${j.id}`, job: null };
     }
@@ -1498,6 +1499,20 @@ async function runReply(job, ctx) {
   const now = typeof deps.now === "function" ? deps.now() : Date.now();
   const warnings = job.warnings;
   job.status = "running";
+
+  // A listing link is an address the model can't see. Resolve it into the
+  // message first ("[listing link → 10625 SE 304th Way, Auburn, WA 98092]"),
+  // so propertyAddress, the subject property, the underwrite and the
+  // follow-up all key off a house exactly as if the agent had typed it. The
+  // original text is kept for the duplicate check.
+  if (job.inboundKind !== "call" && !job.originalMessage) {
+    const expanded = await (deps.expandLinks || expandListingLinks)(job.message).catch(() => ({ links: [] }));
+    if (expanded?.links?.length) {
+      job.originalMessage = job.message;
+      job.message = String(expanded.text).slice(0, 1400);
+      job.listingLinks = expanded.links.map(({ url, address, source }) => ({ url, address, source }));
+    }
+  }
 
   /* --- 0. an opt-out gets silence, before anything is spent --- */
   const cfg = conversationConfig(saved);
