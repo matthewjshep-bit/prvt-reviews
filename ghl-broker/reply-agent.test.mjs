@@ -281,6 +281,7 @@ test("a counter is saved flagged, and the note says why", async () => {
   _resetJobs();
   const { client, notes } = ghlStub();
   const store = fakeStore();
+  store.listOffers = async () => [{ id: "o1", ...OFFERS[0] }];   // a counter on a house we offered on
   const { job } = await startReply({
     client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "would you do 425k?",
     deps: { draft: async () => ({ ...DRAFT, intent: "counter", needsHuman: true, humanReason: "the agent named a higher number", counterAmount: 425000,
@@ -1203,6 +1204,7 @@ test("counter and pass update the offer, passing updates the investor, through t
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
+  store.listOffers = async () => [{ id: "o1", ...OFFERS[0] }];   // a counter on a house we offered on
   const seen = [];
   const { job } = await startReply({
     client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "would you do 425k?",
@@ -1993,6 +1995,7 @@ test("switching re-quoting on is enough — it does not also need a rule wired b
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
+  store.listOffers = async () => [{ id: "o1", ...OFFERS[0] }];   // a counter on a house we offered on
   const saved = { ...SAVED, conversationAi: normalizeConversationAi({
     enabled: true, parties: { agent: { requote: { enabled: true } } },
   }) };
@@ -2015,6 +2018,7 @@ test("a re-quote the model was unsure about waits for a person", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
+  store.listOffers = async () => [{ id: "o1", ...OFFERS[0] }];   // a counter on a house we offered on
   const saved = { ...SAVED, conversationAi: normalizeConversationAi({
     enabled: true, parties: { agent: { requote: { enabled: true } } },
   }) };
@@ -2030,6 +2034,51 @@ test("a re-quote the model was unsure about waits for a person", async () => {
   assert.equal(ran, false, "re-pricing the wrong house on a misread is the expensive failure");
   const d = await store.getReplyDraft(job.draftId);
   assert.ok(d.actions.some((a) => a.type === "requote_from_agent_numbers" && a.mode === "ask"));
+});
+
+/* ---------- a price on a house we never priced is their ask ---------- */
+
+test("a seller's floor on a house with no offer is a new property: underwrite at their number, no counter hold", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();                       // nothing on file for this agent
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "My seller is not looking to sell less than 450k",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", counterAmount: 450000,
+        propertyAddress: "11040 14th Ave SW, Seattle, WA 98146",
+        reply: "Understood. Is it much of a project, or in decent shape? I'll run it by underwriting today and come back to you." }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-1", dryRun: false } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "new_property");
+  assert.ok(!(d.flags || []).some((f) => /a counter is a person's call/.test(f)), (d.flags || []).join(" · "));
+  assert.equal(uw.length, 1, "the underwrite starts");
+  assert.equal(uw[0].address, "11040 14th Ave SW, Seattle, WA 98146");
+  assert.equal(uw[0].askingPrice, 450000, "their floor is the asking price");
+});
+
+test("the same words on a house we already offered on stay a counter", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => [{ id: "o1", ...OFFERS[0] }];
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "My seller is not looking to sell less than 450k",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", counterAmount: 450000, reply: "Let me run 450k by my partner today." }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-1" } }; },
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "counter");
+  assert.equal(uw.length, 0);
 });
 
 test("re-quoting stays off unless the operator switched it on", async () => {

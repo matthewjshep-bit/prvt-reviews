@@ -85,7 +85,7 @@ test("internal actions go through the injected deps, and a failure records rathe
   assert.deepEqual(seen[0][1], { contactId: "c1", addressHint: "12 Elm St" });
   assert.equal(out[1].status, "done");
   assert.match(out[1].detail, /dry run/);
-  assert.deepEqual(seen[1][1], { contactId: "c1", message: "send me 12 Elm", address: "12 Elm St" });
+  assert.deepEqual(seen[1][1], { contactId: "c1", message: "send me 12 Elm", address: "12 Elm St", askingPrice: 0 });
   assert.equal(out[2].status, "failed");
   assert.match(out[2].error, /GHL down/);
   assert.equal(out[3].status, "failed");

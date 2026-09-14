@@ -1610,6 +1610,28 @@ async function runReply(job, ctx) {
   job.intent = draft.intent;
   job.summary = draft.summary;
 
+  // A price named on a house we have never priced is the seller's ask, not a
+  // counter. "My seller won't take less than 450k" in answer to a cold
+  // outreach text read as `counter`, which never sends itself and has no
+  // offer for the band to check — so the reply sat in the outbox and no
+  // underwrite started. With no live or recent offer (or held draft) on that
+  // address, it is a new property: the underwrite starts with their number as
+  // the asking price, the holding reply can go, and our number follows as a
+  // realm check once the numbers land. A counter on a house we DID offer on
+  // is untouched and still goes to the band.
+  // Conservative on purpose: any open offer for this agent at all, or anything
+  // on file that even loosely names this house, leaves it a counter — the
+  // band matches loosely and falls back to a lone open offer, so this must
+  // not call something new that the band would have recognised.
+  if (party === "agent" && draft.intent === "counter" && draft.propertyAddress) {
+    const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => null);
+    const anyOpen = (book || []).some((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
+    if (book && !anyOpen && !knownOfferFor(book, draft.propertyAddress, now) && !pickOfferByAddress(book, draft.propertyAddress)) {
+      draft = { ...draft, intent: "new_property", reclassifiedFrom: "counter" };
+      job.intent = draft.intent;
+    }
+  }
+
   // The model read an opt-out the keywords didn't catch ("lose my number",
   // plain anger). Same outcome as the keyword: silence and the tag.
   if (SILENT_INTENTS.has(draft.intent)) {

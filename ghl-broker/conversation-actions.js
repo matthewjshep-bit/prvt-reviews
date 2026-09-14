@@ -173,7 +173,12 @@ const EXECUTORS = {
   },
   async start_underwrite({ deps, contactId, draft }) {
     if (typeof deps?.startUnderwrite !== "function") throw new Error("auto-underwrite is not wired on this broker");
-    const r = await deps.startUnderwrite({ contactId, message: draft?.inbound || "", address: draft?.propertyAddress || "" });
+    // A number the agent named ("not less than 450k") rides along as the
+    // asking price, so the offer is priced against the seller's floor.
+    const r = await deps.startUnderwrite({
+      contactId, message: draft?.inbound || "", address: draft?.propertyAddress || "",
+      askingPrice: Math.max(0, Number(draft?.counterAmount) || 0),
+    });
     if (r?.skipped) throw new Error(r.skipped);
     if (r?.deduped) return "underwrite already running on it";
     if (r?.queued) return `underwrite queued (#${r.position}) — ${r.reason}; it starts when the cap resets`;

@@ -3910,9 +3910,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await markProactive(offer.id, "realm_check");
       return { started: true, offerId: offer.id };
     },
-    startUnderwrite: ({ contactId, message, address }) =>
+    startUnderwrite: ({ contactId, message, address, askingPrice = 0 }) =>
       startUnderwrite({
-        client, locationId, saved, store, contactId, message, address, askingPrice: 0,
+        client, locationId, saved, store, contactId, message, address, askingPrice,
         dryRun: !AUTO_UNDERWRITE_ENABLED, deps: underwriteDeps({ client, locationId, saved }),
         queueIfCapped: true,
       }),
