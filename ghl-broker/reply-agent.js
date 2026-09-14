@@ -255,6 +255,20 @@ export async function draftReply({
 // The agent's own read on a property — ARV and rehab as they see it. Kept
 // apart from every number of ours so it can be laid beside them, never
 // mistaken for them.
+/**
+ * isTurnkeyReply(message) → boolean
+ *
+ * The agent told us the house needs nothing: turnkey, renovated, remodeled,
+ * move-in ready. Deliberately NOT true when the same message says it needs
+ * work ("renovated kitchen but it's a project", "could use some fix ups").
+ */
+export function isTurnkeyReply(message = "") {
+  const t = String(message || "");
+  const done = /\b(turn[\s-]?key|move[\s-]?in[\s-]?ready|(?:fully|completely|recently|totally|newly|just)\s+(?:renovated|remodell?ed|updated|redone|flipped)|(?:was|been|is|it's|its)\s+(?:renovated|remodell?ed|flipped)|no\s+work\s+(?:needed|to\s+do|required)|doesn'?t\s+need\s+(?:any(?:thing)?\s+)?work|nothing\s+to\s+(?:do|fix))\b/i;
+  const needsWork = /\b(needs?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+)?(?:work|tlc|love|repairs?|updating)|fix[\s-]?ups?|fixer|project|tlc|dated|as[\s-]?is|handyman|rough|distressed)\b/i;
+  return done.test(t) && !needsWork.test(t);
+}
+
 export function normalizeAgentTake(p) {
   const arv = Math.max(0, Math.round(Number(p?.agentArv) || 0));
   const rehab = Math.max(0, Math.round(Number(p?.agentRehab) || 0));
@@ -1687,6 +1701,17 @@ async function runReply(job, ctx) {
     }
   }
 
+  // Turnkey is not a deal. "This one is pretty turnkey with tenants in place"
+  // answers our "project or turnkey?" and read as deal_available — the listing
+  // IS available — so Karamveer Tiwana and Angie Bomar (2026-09-14) were moved
+  // to Tier 1 and a renovated house was sent to underwriting. A deal is a
+  // house that needs work; a turnkey one is "nothing right now, stay in
+  // touch", which is Tier 2.
+  if (party === "agent" && ["deal_available", "new_property"].includes(draft.intent) && isTurnkeyReply(job.message)) {
+    draft = { ...draft, intent: "investor_open", reclassifiedFrom: draft.intent };
+    job.intent = draft.intent;
+  }
+
   // The model read an opt-out the keywords didn't catch ("lose my number",
   // plain anger). Same outcome as the keyword: silence and the tag.
   if (SILENT_INTENTS.has(draft.intent)) {
@@ -2009,6 +2034,32 @@ async function runReply(job, ctx) {
     if (fresh.length) {
       for (const a of fresh) (a.mode === "auto" ? plan.auto : plan.suggested).push(a);
       record = { ...record, actions: [...record.actions, ...fresh], updatedAt: new Date().toISOString() };
+      await store.updateReplyDraft(record.id, record).catch(() => {});
+    }
+  }
+
+  /* --- 4f. a new house runs Tier 1 again --- */
+  // An agent already on Tier 1 who brings a DIFFERENT house got the tier-1 tag
+  // and the TIER 1 workflow "added" again — which GHL treats as nothing: the
+  // tag was already there, so no tag trigger, and they were already enrolled.
+  // Angie Bomar's 3611 I St NE (2026-09-14) never got its own Tier 1 run. When
+  // the subject property moved on this message, they leave Tier 1 first and
+  // come back in, so the workflow runs for the new address. (The TIER 1
+  // workflow must allow re-entry in GHL for the re-enroll to take.)
+  {
+    const subjectChanged = (filedLearned || []).some((l) => /^subject property:/i.test(String(l)));
+    const wasTier1 = (a.tags || []).some((t) => /^tier-1$/i.test(String(t)));
+    const t1Tag = plan.auto.find((x) => x.type === "add_tags" && (x.tags || []).some((t) => /^tier-1$/i.test(String(t))));
+    const t1Flow = plan.auto.find((x) => x.type === "add_to_workflow" && /tier\s*1\b/i.test(String(x.workflowName || "")));
+    if (party === "agent" && subjectChanged && wasTier1 && (t1Tag || t1Flow)) {
+      const why = "a new house runs Tier 1 again";
+      const inject = [
+        ...(t1Tag ? [{ id: `a-t1tag-${job.id}`, type: "remove_tags", tags: ["tier-1"], mode: "auto", status: "pending", party, why }] : []),
+        ...(t1Flow ? [{ id: `a-t1wf-${job.id}`, type: "remove_from_workflow", workflowId: t1Flow.workflowId, workflowName: t1Flow.workflowName, mode: "auto", status: "pending", party, why }] : []),
+      ];
+      const at = Math.min(...[t1Tag, t1Flow].filter(Boolean).map((x) => plan.auto.indexOf(x)));
+      plan.auto.splice(at, 0, ...inject);
+      record = { ...record, actions: [...inject, ...(record.actions || [])], updatedAt: new Date().toISOString() };
       await store.updateReplyDraft(record.id, record).catch(() => {});
     }
   }

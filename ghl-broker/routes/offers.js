@@ -3960,7 +3960,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const out = await createOfferFromRequest({
         locationId, client, existing: full,
         body: { contactId, scope: full.scope,
-                inputs: { ...(full.calc?.inputs || {}), arv: plan.arv, repairs: plan.repairs },
+                // A capped re-quote is priced AT the cap. Recomputing from the
+                // clamped ARV/repairs alone re-issued Thomas Rinow's offer at
+                // $497,625 — $375 over the $497,250 the re-quote was held to.
+                inputs: { ...(full.calc?.inputs || {}), arv: plan.arv, repairs: plan.repairs, ...(plan.capped ? { priceOverride: plan.to } : {}) },
                 settings: full.calc?.settings },
       });
       const revised = out?.offer || (await store.getOffer(full.id));

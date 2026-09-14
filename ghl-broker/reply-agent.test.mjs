@@ -2386,6 +2386,70 @@ test("a no with nothing to re-quote on still closes the offer", async () => {
   assert.equal(d.actions.find((a) => a.type === "mark_offer_passed")?.status, "done");
 });
 
+/* ---------- tiers: turnkey is not Tier 1, and a new house runs Tier 1 again ---------- */
+
+test("a turnkey answer to 'project or turnkey?' is Tier 2, not a deal — no Tier 1, no underwrite", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "This one is pretty turnkey with tenants in place.",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", confidence: "high", propertyAddress: "13348 32nd Ave S, Tukwila, WA 98168",
+        reply: "Makes sense, that one's not for us then. Anything else sitting that needs work?" }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-1" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "investor_open");
+  assert.ok(!d.actions.some((a) => (a.tags || []).includes("tier-1")), `no Tier 1: ${d.actions.map((a) => a.type)}`);
+  assert.equal(uw.length, 0, "a renovated house is never sent to underwriting");
+});
+
+test("an agent already on Tier 1 who brings a different house leaves Tier 1 first, so it runs again", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent", "tier-1"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "3611 I St NE #235, Auburn, WA 98002",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "new_property", confidence: "high", propertyAddress: "3611 I St NE #235, Auburn, WA 98002",
+        reply: "I'll run it by underwriting today. What kind of shape is it in?" }),
+      startUnderwrite: async () => ({ job: { id: "uw-2" } }),
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const types = d.actions.map((a) => `${a.type}:${(a.tags || []).join(",")}`);
+  const removeAt = types.indexOf("remove_tags:tier-1");
+  const addAt = types.indexOf("add_tags:tier-1");
+  assert.ok(removeAt >= 0, `tier-1 comes off first: ${types}`);
+  assert.ok(addAt > removeAt, `then goes back on: ${types}`);
+});
+
+test("an agent not yet on Tier 1 is simply added — nothing to leave", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "3611 I St NE #235, Auburn, WA 98002",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "new_property", confidence: "high", propertyAddress: "3611 I St NE #235, Auburn, WA 98002", reply: "Running it today." }),
+      startUnderwrite: async () => ({ job: { id: "uw-3" } }),
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.ok(!d.actions.some((a) => a.type === "remove_tags" && (a.tags || []).includes("tier-1")));
+});
+
 /* ---------- address → underwrite → offer → back into the conversation ---------- */
 
 import { knownOfferFor } from "./reply-agent.js";

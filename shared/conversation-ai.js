@@ -91,7 +91,7 @@ export const INTENT_GLOSS = {
     outreach_nudge: "a follow-up on that first text when nothing came back",
     passed_checkin: "every ten days after they pass on an offer: still sitting? would the seller come closer to our number?",
     call_followup: "the text sent right after a phone call, drafted from the transcript: what we took from it and the next step",
-    deal_available: "the listing we asked about (or one they've got) is available and needs work — condition, price expectations, seller timeline",
+    deal_available: "the listing we asked about (or one they've got) is available and needs work — condition, price expectations, seller timeline. NOT when they say it's turnkey, renovated or move-in ready: that is investor_open",
     investor_open: "no deal right now, but open to working with investors or happy for us to stay in touch",
     realm_yes: "says the number we floated works, is in the realm, or to go ahead and send the formal offer — including \"send it over\", \"email me the offer\", \"can I see it in writing\"",
     media: "the message is only a photo or attachment",
