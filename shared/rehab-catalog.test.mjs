@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  ALL_REHAB_ITEMS, REHAB_BASELINE_SQFT, bandMidpoint, lineCost, rehabBand, sizeFactor,
+  ALL_REHAB_ITEMS, REHAB_BASELINE_SQFT, bandMidpoint, lineCost, rehabBand, sizeFactor, heavyCeiling,
 } from "./rehab-catalog.js";
 
 const byId = Object.fromEntries(ALL_REHAB_ITEMS.map((i) => [i.id, i]));
@@ -123,4 +123,20 @@ test("every band rises with size and level", () => {
     assert.ok(bandMidpoint(sqft, "light") < bandMidpoint(sqft, "medium"));
     assert.ok(bandMidpoint(sqft, "medium") < bandMidpoint(sqft, "heavy"));
   }
+});
+
+
+/* ---------------- heavy ceiling scales past 2,500 sqft ---------------- */
+
+test("up to 2,500 sqft the heavy ceiling is the cheat sheet's, unchanged", () => {
+  assert.equal(heavyCeiling(770), 70000);
+  assert.equal(heavyCeiling(1800), 110000);
+  assert.equal(heavyCeiling(2400), 120000);
+  assert.equal(heavyCeiling(2500), 120000, "2,500 is still the 2,000–2,500 row");
+  assert.equal(heavyCeiling(0), 0, "unknown size, no ceiling");
+});
+
+test("past 2,500 sqft the heavy ceiling grows at the top row's $52/sqft (8025 W Mercer Way)", () => {
+  assert.equal(heavyCeiling(2600), 135200);
+  assert.equal(heavyCeiling(5100), 265200);
 });

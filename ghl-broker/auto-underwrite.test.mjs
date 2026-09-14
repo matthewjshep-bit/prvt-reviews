@@ -829,3 +829,13 @@ test("an offer already under the cap is left alone, and no list price means no c
   assert.equal(capToList({ cash: 1061750, listPrice: 0 }).capped, false);
   assert.equal(capToList({ cash: 1061750, listPrice: 925000, pct: 80 }).amount, 740000, "the setting overrides 90%");
 });
+
+
+/* ---------- a big house is not held to a small house's repair ceiling ---------- */
+
+test("a 5,100 sqft house carries a $300k scope; $546,500 still holds", () => {
+  const big = { ...SUBJECT, sqft: 5100 };
+  assert.equal(gate({ subject: big, repairs: 300000 }).held.some((h) => /heavy band/.test(h)), false, "scaled to size, $300k is inside");
+  const g = gate({ subject: big, repairs: 546500 });
+  assert.ok(g.held.some((h) => /past the heavy band for over 2,500 sqft scaled to 5,100 sqft \(\$265,200\)/.test(h)), g.held.join(" | "));
+});

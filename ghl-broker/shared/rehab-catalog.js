@@ -114,6 +114,21 @@ export function rehabBand(sqft) {
   return REHAB_BANDS.find((b) => s <= b.max) || REHAB_BANDS[REHAB_BANDS.length - 1];
 }
 
+// The top of the heavy band, scaled for a big house. The cheat sheet's last
+// bucket is "over 2,500 sqft" with one flat $110–130K heavy range, so a 5,100
+// sqft house was held to the same ceiling as a 2,600 sqft one (8025 W Mercer
+// Way, 2026-09-14). Past that bucket's floor the ceiling grows at its own
+// per-sqft rate — $130K / 2,500 sqft = $52/sqft — so size alone never trips it.
+export const REHAB_SCALE_FROM_SQFT = 2500;
+export function heavyCeiling(sqft) {
+  const s = Number(sqft) || 0;
+  const band = rehabBand(s);
+  if (!band) return 0;
+  const top = band.heavy[1];
+  if (band.max !== Infinity || s <= REHAB_SCALE_FROM_SQFT) return top;
+  return Math.round((s * top) / REHAB_SCALE_FROM_SQFT);
+}
+
 // Midpoint of a band level — what a bucket button seeds, rounded to $500 the
 // same way the itemized total is.
 export function bandMidpoint(sqft, level) {

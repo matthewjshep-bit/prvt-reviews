@@ -35,7 +35,7 @@ import { fetchZillowPhotos, fetchListingPhotos, scanRehabFromPhotos, anthropicEr
 import { deriveArv, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
-import { rehabBand } from "./shared/rehab-catalog.js";
+import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
 import { addressKey } from "./shared/us-address.js";
 import { expandListingLinks } from "./listing-links.js";
@@ -569,9 +569,13 @@ export function evaluateGates({
     held.push(`only ${photosAnalyzed || 0} listing photo${photosAnalyzed === 1 ? "" : "s"} to scan — ${UW_MIN_SUBJECT_PHOTOS} required for a scope of work`);
   }
 
+  // Scaled for size past 2,500 sqft (heavyCeiling), so a big house isn't held
+  // to a small one's ceiling. The slack still applies on top.
   const band = rehabBand(subject?.sqft || 0);
-  if (band && repairs > band.heavy[1] * UW_REPAIRS_BAND_SLACK) {
-    held.push(`the scope totals ${fmtMoney(repairs)}, past the heavy band for ${band.label} (${fmtMoney(band.heavy[1])})`);
+  const heavyTop = heavyCeiling(subject?.sqft || 0);
+  if (band && repairs > heavyTop * UW_REPAIRS_BAND_SLACK) {
+    const sized = heavyTop !== band.heavy[1] ? ` scaled to ${Number(subject.sqft).toLocaleString("en-US")} sqft` : "";
+    held.push(`the scope totals ${fmtMoney(repairs)}, past the heavy band for ${band.label}${sized} (${fmtMoney(heavyTop)})`);
   }
 
   const foundation = (scan?.areas || []).find((a) => a.area === "foundation_structure");
