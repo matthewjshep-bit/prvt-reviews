@@ -2388,6 +2388,48 @@ test("a no with nothing to re-quote on still closes the offer", async () => {
 
 /* ---------- tiers: turnkey is not Tier 1, and a new house runs Tier 1 again ---------- */
 
+/* ---------- a counter far past what we'd pay is their pass ---------- */
+
+// Jesse Roach, 2026-09-14: "Their lowest at this time is $700k" on a $550k
+// offer. NEGOTIATION_OFFER: cash $300k, ARV $600k, repairs $50k → ceiling
+// 70% × 600k − 50k − 10k = $360k, so the pass line is $396k (10% over).
+const counterAt = async (amount) => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent", "tier-1"]);
+  const offer = { ...NEGOTIATION_OFFER };
+  const store = negotiationStore(offer);
+  const statuses = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: `They can't take that offer. Their lowest at this time is $${amount.toLocaleString("en-US")}.`,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", counterAmount: amount, propertyAddress: "12 Elm St",
+        reply: "Understood. Let me run that by my partner and get back to you this afternoon." }),
+      setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status }; },
+    },
+  });
+  await settle();
+  return { job, d: await store.getReplyDraft(job.draftId), statuses };
+};
+
+test("a counter more than 10% over the most we'd pay is filed as their pass, with a reply that names no number", async () => {
+  const { job, d, statuses } = await counterAt(450000);
+  assert.equal(job.status, "done", job.error);
+  assert.equal(d.intent, "rejection");
+  assert.ok(statuses.includes("passed"), `offer marked passed: ${statuses}`);
+  assert.ok(!statuses.includes("countered"));
+  assert.ok(d.actions.some((a) => a.status === "done" && (a.tags || []).includes("tier-3")), "moved to Tier 3");
+  assert.doesNotMatch(d.reply, /partner|get back/, "no promise to come back with a number");
+  assert.doesNotMatch(d.reply, /\$|\d{3}/, "names no number of ours");
+  assert.ok(!(d.flags || []).some((f) => /a counter is a person's call/.test(f)), (d.flags || []).join(" · "));
+});
+
+test("a counter within 10% of what we'd pay stays a counter for the band or a person", async () => {
+  const { d, statuses } = await counterAt(380000);
+  assert.equal(d.intent, "counter");
+  assert.ok(!statuses.includes("passed"));
+});
+
 test("a turnkey answer to 'project or turnkey?' is Tier 2, not a deal — no Tier 1, no underwrite", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);

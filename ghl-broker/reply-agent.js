@@ -45,7 +45,7 @@ import { getFreeSlots } from "./ghl.js";
 import { GUARD_FOR_INTENT } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
-import { evaluateCounterBand, evaluateAcceptance } from "./shared/auto-accept.js";
+import { evaluateCounterBand, evaluateAcceptance, autoAcceptCeiling } from "./shared/auto-accept.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
 import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver } from "./shared/offer-status.js";
 import { sameStreet } from "./shared/us-address.js";
@@ -674,6 +674,9 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
 // Do we already have this house in the agent's book? A live or recent offer
 // (60 days) or a held draft someone is still reviewing (7 days) counts; an old
 // one doesn't — a house that comes back months later deserves fresh numbers.
+// A counter more than this far above the higher of our offer and the ceiling
+// is their pass, not a negotiation (see the counter reclassify in runReply).
+export const COUNTER_PASS_MARGIN = 0.10;
 const KNOWN_OFFER_DAYS = 60;
 const KNOWN_DRAFT_DAYS = 7;
 export function knownOfferFor(rows = [], address = "", now = Date.now()) {
@@ -1701,6 +1704,34 @@ async function runReply(job, ctx) {
     }
   }
 
+  // A counter far past what we'd pay is a pass, not a negotiation. Jesse Roach
+  // (2026-09-14): "They can't take that offer. Their lowest at this time is
+  // $700k" against our $550k — the band had no room (our number was already
+  // over the buyer line), so the draft sat for a person, the offer stayed
+  // "countered" and he stayed Tier 1. Over COUNTER_PASS_MARGIN above the higher
+  // of our offer and the ceiling, it's filed as their pass: offer passed, Tier
+  // 3, and a short reply that names no number of ours.
+  if (party === "agent" && draft.intent === "counter" && Number(draft.counterAmount) > 0) {
+    const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    const open = book.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
+    const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
+    const full = picked && typeof store.getOffer === "function" ? (await store.getOffer(picked.id).catch(() => null)) || picked : picked;
+    if (full) {
+      const ceiling = autoAcceptCeiling({ offer: full, settings: saved || {} });
+      const reference = Math.max(Math.round(Number(full.cashAmount) || 0), ceiling.computable ? ceiling.ceiling : 0);
+      const theirs = Math.round(Number(draft.counterAmount));
+      if (reference > 0 && theirs > reference * (1 + COUNTER_PASS_MARGIN)) {
+        draft = {
+          ...draft, intent: "rejection", reclassifiedFrom: "counter",
+          summary: `Their number (${fmtMoney(theirs)}) is more than ${Math.round(COUNTER_PASS_MARGIN * 100)}% over the most we'd pay (${fmtMoney(reference)}) — filed as a pass.`,
+          reply: "Understood, that's well past where we can be on this one. If anything changes with the seller let me know, and send anything else my way that needs work.",
+          needsHuman: false,
+        };
+        job.intent = draft.intent;
+      }
+    }
+  }
+
   // Turnkey is not a deal. "This one is pretty turnkey with tenants in place"
   // answers our "project or turnkey?" and read as deal_available — the listing
   // IS available — so Karamveer Tiwana and Angie Bomar (2026-09-14) were moved
@@ -1853,7 +1884,9 @@ async function runReply(job, ctx) {
     const weMoved = Boolean(full && (
       full.declinedOnce?.at || (full.requotes || []).length || full.counterBand?.acceptedAt || (full.revisions || []).length
     ));
-    if (full && !weMoved) {
+    // A counter too far over to negotiate already told us their number — there
+    // is nothing left to ask for, so it closes on the first message.
+    if (full && !weMoved && draft.reclassifiedFrom !== "counter") {
       const closes = (x) => x.type === "mark_offer_passed"
         || (x.type === "add_tags" && (x.tags || []).some((t) => /^tier-3$/i.test(String(t))))
         || (x.type === "add_to_workflow" && /tier\s*3/i.test(String(x.workflowName || "")));
