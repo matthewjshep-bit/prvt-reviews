@@ -1821,7 +1821,14 @@ async function runReply(job, ctx) {
     const open = rows.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
     const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
     const full = picked && typeof store.getOffer === "function" ? (await store.getOffer(picked.id).catch(() => null)) || picked : picked;
-    if (full && !full.declinedOnce?.at) {
+    // A no after we've already come back to them is an answer, not an
+    // opening. Matt, 2026-09-14: "if we counter and they say no, mark it they
+    // passed." We've moved when the offer was re-quoted on their numbers,
+    // re-issued under the counter band, revised, or already heard one no.
+    const weMoved = Boolean(full && (
+      full.declinedOnce?.at || (full.requotes || []).length || full.counterBand?.acceptedAt || (full.revisions || []).length
+    ));
+    if (full && !weMoved) {
       const closes = (x) => x.type === "mark_offer_passed"
         || (x.type === "add_tags" && (x.tags || []).some((t) => /^tier-3$/i.test(String(t))))
         || (x.type === "add_to_workflow" && /tier\s*3/i.test(String(x.workflowName || "")));
@@ -2004,6 +2011,37 @@ async function runReply(job, ctx) {
       record = { ...record, actions: [...record.actions, ...fresh], updatedAt: new Date().toISOString() };
       await store.updateReplyDraft(record.id, record).catch(() => {});
     }
+  }
+
+  /* --- 4e. re-quote before anything that files the offer dead --- */
+  // Actions run in plan order, and the re-quote is appended last — so on a no
+  // "mark passed" ran first, the offer closed, and the re-quote found "no open
+  // offer to re-quote". Thomas Rinow's "Even at 60 in repairs we're well over
+  // your price" (2026-09-14) was filed dead and tagged Tier 3 while the reply
+  // still asked for a counter, and the higher number never went. So: the
+  // re-quote runs first, and when it floats a new number the closers stand
+  // down for this message — their answer to the new number decides.
+  const isCloser = (x) => x.type === "mark_offer_passed"
+    || (x.type === "add_tags" && (x.tags || []).some((t) => /^tier-3$/i.test(String(t))))
+    || (x.type === "add_to_workflow" && /tier\s*3/i.test(String(x.workflowName || "")));
+  const requoteFirst = plan.auto.find((x) => x.type === "requote_from_agent_numbers");
+  if (party === "agent" && requoteFirst && plan.auto.some(isCloser)) {
+    const [ran] = await runActions({
+      client, locationId, contactId: job.contactId, actions: [requoteFirst],
+      draft: { ...record, now }, deps, store,
+    });
+    const floated = ran?.status === "done" && /^re-ran /.test(String(ran.detail || ""));
+    plan.auto = plan.auto.filter((x) => x !== requoteFirst && !(floated && isCloser(x)));
+    const touched = new Map(ran ? [[ran.id, ran]] : []);
+    if (floated) {
+      for (const a of record.actions || []) {
+        if (isCloser(a) && a.status === "pending") {
+          touched.set(a.id, { ...a, status: "skipped", detail: "we came back with a new number — their answer to it decides" });
+        }
+      }
+    }
+    record = { ...record, actions: (record.actions || []).map((x) => touched.get(x.id) || x), updatedAt: new Date().toISOString() };
+    await store.updateReplyDraft(record.id, record).catch(() => {});
   }
 
   /* --- 5. the automatic actions --- */

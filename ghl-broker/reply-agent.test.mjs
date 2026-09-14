@@ -2309,6 +2309,83 @@ test("the first no on a live offer asks for their number without filing it dead;
   assert.ok(!types2.includes("note_first_decline"));
 });
 
+// Matt, 2026-09-14: "if we counter and they say no, mark as 'they passed'."
+// Once we've come back with a new number, their no is the answer to it.
+for (const [what, moved] of [
+  ["re-quoted them on their numbers", { requotes: [{ at: "2026-09-14T19:00:00Z", from: 477250, to: 497250 }] }],
+  ["re-issued the offer under the counter band", { counterBand: { acceptedAt: "2026-09-14T19:00:00Z", amount: 497250 } }],
+]) {
+  test(`a no after we ${what} files the offer as they passed, with no second ask`, async () => {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const offer = { ...NEGOTIATION_OFFER, ...moved };
+    const store = negotiationStore(offer);
+    const noted = [];
+    const deps = {
+      draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", reply: "Understood, thanks for the look.", propertyAddress: "12 Elm St" }),
+      noteFirstDecline: async ({ offerId }) => { noted.push(offerId); return { ok: true, address: offer.address }; },
+      setOfferStatus: async () => ({ ok: true, address: offer.address, status: "passed" }),
+    };
+    const { job } = await startReply({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "still no, that doesn't work", deps });
+    await settle();
+    const d = await store.getReplyDraft(job.draftId);
+    const types = d.actions.map((a) => a.type);
+    assert.ok(types.includes("mark_offer_passed"), `their no closes it: ${types}`);
+    assert.ok(!types.includes("note_first_decline"), "no second 'any chance they'd counter?'");
+    assert.deepEqual(noted, []);
+  });
+}
+
+/* ---------- a no with their numbers in it: re-quote before filing it dead ---------- */
+
+// Thomas Rinow, 2026-09-14: "Even at 60 in repairs we're well over your
+// price." "Mark passed" ran before the re-quote, the offer closed, and the
+// re-quote found "no open offer to re-quote". The re-quote goes first now.
+const requoteSaved = () => ({
+  ...STARTER_SAVED,
+  conversationAi: { ...STARTER_SAVED.conversationAi, parties: { ...STARTER_SAVED.conversationAi.parties,
+    agent: { ...STARTER_SAVED.conversationAi.parties.agent, requote: { enabled: true, maxPerOffer: 1, maxArvLiftPct: 10, maxRepairCutPct: 25 } } } },
+});
+
+test("a no that brings a new number of ours holds the offer open: re-quote first, no passed, no Tier 3", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...NEGOTIATION_OFFER, declinedOnce: { at: "2026-09-14T19:00:00Z" } };   // a second no, on its own
+  const store = negotiationStore(offer);
+  const order = [];
+  const deps = {
+    draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", propertyAddress: "12 Elm St",
+      reply: "Understood. Let me re-run it on your numbers.", agentRehab: 30000 }),
+    requoteFromAgentNumbers: async () => { order.push("requote"); return { ok: true, address: offer.address, from: 300000, to: 320000, floated: true }; },
+    setOfferStatus: async ({ status }) => { order.push(`status:${status}`); return { ok: true, address: offer.address, status }; },
+  };
+  const { job } = await startReply({ client, locationId: "LOC", saved: requoteSaved(), store, contactId: "c1", message: "even at 30 in repairs you're well under", deps });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(order[0], "requote", `the re-quote runs before anything that closes the offer: ${order}`);
+  assert.ok(!order.includes("status:passed"), `not filed dead while our new number is out: ${order}`);
+  assert.equal(d.actions.find((a) => a.type === "mark_offer_passed")?.status, "skipped");
+  assert.ok(!d.actions.some((a) => a.status === "done" && (a.tags || []).includes("tier-3")), "not tagged Tier 3");
+});
+
+test("a no with nothing to re-quote on still closes the offer", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...NEGOTIATION_OFFER, declinedOnce: { at: "2026-09-14T19:00:00Z" } };
+  const store = negotiationStore(offer);
+  const order = [];
+  const deps = {
+    draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", propertyAddress: "12 Elm St", reply: "Understood, thanks." }),
+    requoteFromAgentNumbers: async () => { order.push("requote"); return { ok: false, reason: "nothing new from them to re-quote on" }; },
+    setOfferStatus: async ({ status }) => { order.push(`status:${status}`); return { ok: true, address: offer.address, status }; },
+  };
+  const { job } = await startReply({ client, locationId: "LOC", saved: requoteSaved(), store, contactId: "c1", message: "no, doesn't work", deps });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(order, ["requote", "status:passed"]);
+  assert.equal(d.actions.find((a) => a.type === "mark_offer_passed")?.status, "done");
+});
+
 /* ---------- address → underwrite → offer → back into the conversation ---------- */
 
 import { knownOfferFor } from "./reply-agent.js";

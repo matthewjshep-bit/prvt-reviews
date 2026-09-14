@@ -4044,9 +4044,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // "In the realm": remembered on the offer, so the book says so next time
     // and History can show which offers are cleared to send.
     setOfferRealm: async ({ contactId, addressHint, answer, note = "" }) => {
-      const open = (await store.listOffers(locationId, { contactId, limit: 50 })).filter((o) => o.status !== "draft" && !o.deal);
-      if (!open.length) return { ok: false, reason: "no open offer to note" };
-      const offer = pickDealByAddress(open, addressHint) || open[0];
+      const offer = pickOfferForStatus(await store.listOffers(locationId, { contactId, limit: 50 }), addressHint, "realm");
+      if (!offer?.id) return { ok: false, reason: offer?.reason || "no open offer to note" };
       const full = await store.getOffer(offer.id);
       if (!full) return { ok: false, reason: "offer vanished" };
       const ts = new Date().toISOString();
@@ -4182,9 +4181,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // "we_passed" is deliberately absent: walking away from a property is
       // an operator's decision, never something a reply can trigger.
       if (!["countered", "passed", "no_response"].includes(status)) return { ok: false, reason: `not a status this can set: ${status}` };
-      const open = (await store.listOffers(locationId, { contactId, limit: 50 })).filter((o) => o.status !== "draft" && !o.deal);
-      if (!open.length) return { ok: false, reason: "no open offer to mark" };
-      const offer = pickDealByAddress(open, addressHint) || open[0];
+      const offer = pickOfferForStatus(await store.listOffers(locationId, { contactId, limit: 50 }), addressHint, status);
+      if (!offer?.id) return { ok: false, reason: offer?.reason || "no open offer to mark" };
       if (effectiveStatus(offer) === status) return { ok: true, unchanged: true, address: offer.address, status };
       const ts = new Date().toISOString();
       const counter = Math.max(0, Math.round(Number(amount) || 0));
@@ -4323,6 +4321,29 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
   // The deal a message is about, by the street line. addressKey normalises
   // both sides; a bare street ("54th") falls back to a contains check.
+  // Which of an agent's offers a status from the conversation lands on.
+  // It used to be "the address match, else the first non-draft offer" — and
+  // the first one could be a house they passed on months ago, so a no about
+  // today's offer filed the wrong record. Now: an open offer (new, sent,
+  // countered) that matches the address, else the agent's ONLY open offer;
+  // several open and no address named is refused rather than guessed. A
+  // counter may also reopen a closed offer, but only by address — an agent
+  // coming back with a number on a house they passed on is real, a guess isn't.
+  function pickOfferForStatus(offers = [], hint = "", status = "") {
+    const live = offers.filter((o) => o && o.status !== "draft" && !o.deal);
+    const open = live.filter((o) => OPEN_STATUSES.has(effectiveStatus(o)));
+    const byAddress = pickDealByAddress(open, hint) || (open.length === 1 && !String(hint || "").trim() ? open[0] : null);
+    if (byAddress) return byAddress;
+    if (String(hint || "").trim()) {
+      const closed = pickDealByAddress(live, hint);
+      if (closed && (status === "countered" || effectiveStatus(closed) === status)) return closed;
+      if (!open.length) return { reason: "no open offer on that address" };
+      return open.length === 1 ? open[0] : { reason: "the message named a house with no open offer, and the agent has several" };
+    }
+    if (!open.length) return { reason: "no open offer to mark" };
+    return { reason: "more than one open offer and the message named no address" };
+  }
+
   function pickDealByAddress(deals, hint) {
     const h = String(hint || "").trim();
     if (!h) return deals.length === 1 ? deals[0] : null;
