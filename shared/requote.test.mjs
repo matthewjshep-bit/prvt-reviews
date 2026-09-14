@@ -80,11 +80,18 @@ test("re-quoting is refused outright when the switch is off", () => {
 test("a re-quote that would land above the auto-accept ceiling is refused", () => {
   // The shared bound: the bot must never talk ITSELF up past the number it
   // would have been allowed to say yes to THEM at.
-  const ceiling = autoAcceptCeiling({ offer: OFFER }).ceiling;
+  // The real ceiling is the buyer line, and a default-priced offer already
+  // sits above it (the blend prices past 70% − repairs), so any re-quote UP
+  // is refused against it — which is the point.
+  const buyerLine = autoAcceptCeiling({ offer: { ...OFFER, cashAmount: 0 } }).ceiling;
+  assert.ok(buyerLine > 0);
+  const up = planRequote({ offer: OFFER, take: { arv: 520000, rehab: 85000, at: later() }, band: BAND, ceiling: buyerLine });
+  assert.equal(up.ok, false, "a re-quote above the buyer line is refused");
   const r = planRequote({ offer: OFFER, take: { arv: 550000, rehab: 20000, at: later() }, band: BAND, ceiling: 1 });
   assert.equal(r.ok, false);
   assert.match(r.reason, /above what we'd pay/);
-  // and the same plan passes when the real ceiling leaves room
+  // and the same plan passes when a ceiling leaves room
+  const ceiling = 300000;
   const ok = planRequote({ offer: OFFER, take: { arv: 520000, rehab: 85000, at: later() }, band: BAND, ceiling });
   assert.equal(ok.ok, true, ok.reason);
   assert.ok(ok.to <= ceiling);

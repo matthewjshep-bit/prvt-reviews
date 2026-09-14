@@ -7,21 +7,36 @@ import assert from "node:assert/strict";
 import { autoAcceptCeiling, AUTO_ACCEPT_FEE } from "./auto-accept.js";
 import { calculateOffers, DEFAULT_OFFER_SETTINGS } from "./offer-calc.js";
 
-const OFFER = { id: "o1", address: "12 Elm St, Renton, WA", cashAmount: 265000, arv: 500000, repairs: 85000 };
+// Priced under the buyer line (70% × 500k − 85k − 10k = 255k), as a real
+// offer has to be for the band to be able to open at all.
+const OFFER = { id: "o1", address: "12 Elm St, Renton, WA", cashAmount: 240000, arv: 500000, repairs: 85000 };
 
-test("the ceiling is the highest of the three models recomputed at a ten thousand dollar fee", () => {
+test("the ceiling is the buyer's line — the maximum-offer model — recomputed at a ten thousand dollar fee", () => {
   const r = autoAcceptCeiling({ offer: OFFER });
   assert.equal(r.computable, true);
-  assert.equal(r.modes.length, 3);
-  assert.equal(r.ceiling, Math.max(...r.modes.map((m) => m.amount)));
+  assert.equal(r.modes.length, 3, "all three models stay on the verdict for the audit trail");
+  assert.equal(r.mode, "mao");
+  assert.equal(r.ceiling, r.modes.find((m) => m.key === "mao").amount);
   assert.equal(r.fee, AUTO_ACCEPT_FEE);
   // and it really is the generous fee, not our usual one
   const atUsualFee = calculateOffers(
     { address: OFFER.address, arv: OFFER.arv, repairs: OFFER.repairs, askingPrice: 0, priceOverride: 0 },
     { underwriteMode: "blended" },
   ).offers.cash.components;
-  assert.ok(r.ceiling > Math.max(...atUsualFee.map((m) => m.amount)),
+  assert.ok(r.ceiling > atUsualFee.find((m) => m.key === "mao").amount,
     "dropping the fee to $10k must raise the ceiling");
+});
+
+test("on a big-ARV, light-rehab house the generous models can't lift the ceiling past what a buyer pays", () => {
+  // 39811 226th Ave SE, 2026-09-14: "90% ARV − 2× rehab" came out $584k at a
+  // $10k fee, the buyer line about $500k, and a $550k counter went through.
+  const house = { id: "o2", address: "39811 226th Ave SE, Enumclaw, WA", cashAmount: 0, arv: 850000, repairs: 54000 };
+  const r = autoAcceptCeiling({ offer: house });
+  const generous = Math.max(...r.modes.map((m) => m.amount));
+  assert.ok(generous > r.ceiling, `a model above the buyer line exists (${generous} vs ${r.ceiling})`);
+  assert.equal(r.ceiling, r.modes.find((m) => m.key === "mao").amount);
+  const between = Math.round((r.ceiling + generous) / 2);
+  assert.ok(between > r.ceiling, "a counter between the buyer line and the generous model is over the ceiling");
 });
 
 test("the ceiling names which model produced it", () => {
@@ -54,7 +69,9 @@ test("an asking price is never used in place of a missing ARV", () => {
 });
 
 test("the ceiling uses the settings snapshotted on the offer, not today's settings", () => {
-  const snapshot = { ...DEFAULT_OFFER_SETTINGS, maoPctOfArv: 55, underwriteMode: "mao" };
+  // 72% keeps the snapshot's buyer line (≈265k) above the fixture's offer, so a
+  // ceiling exists to compare; 55% put it under the offer and there was none.
+  const snapshot = { ...DEFAULT_OFFER_SETTINGS, maoPctOfArv: 72, underwriteMode: "mao" };
   const withSnap = autoAcceptCeiling({ offer: { ...OFFER, calc: { inputs: {}, settings: snapshot } } });
   const withToday = autoAcceptCeiling({ offer: OFFER, settings: { maoPctOfArv: 85 } });
   assert.equal(withSnap.source, "offer_snapshot");
@@ -195,7 +212,7 @@ test("an absolute cap lowers the ceiling but never raises it", () => {
 });
 
 test("an offer with no ARV can never open the band", () => {
-  const bare = { id: "o1", address: "12 Elm St", cashAmount: 265000 };
+  const bare = { id: "o1", address: "12 Elm St", cashAmount: 240000 };
   const v = band({ offer: bare, openOffers: [bare] });
   assert.equal(v.passed, false);
   assert.equal(failed(v), "ceiling_computable");

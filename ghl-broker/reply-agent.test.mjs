@@ -1906,7 +1906,8 @@ import { evaluateBandFor, bandReleasesToday } from "./reply-agent.js";
 
 const BAND_OFFER = {
   id: "bo1", locationId: "LOC", contactId: "c1", address: "12 Elm St, Renton, WA",
-  cashAmount: 265000, arv: 500000, repairs: 85000, status: "sent", createdAt: iso(2000),
+  // Under the buyer line (70% × 500k − 85k − 10k = 255k), so the band can open.
+  cashAmount: 240000, arv: 500000, repairs: 85000, status: "sent", createdAt: iso(2000),
 };
 const bandStore = (offers = [BAND_OFFER], drafts = []) => {
   const s = fakeStore(drafts);
@@ -1922,11 +1923,11 @@ const bandCfg = normalizeConversationAi({
 test("the band reads the offer book and opens on a counter inside the ceiling", async () => {
   const v = await evaluateBandFor({
     store: bandStore(), locationId: "LOC", party: "agent", config: bandCfg, saved: {},
-    draft: { intent: "counter", counterAmount: 280000, confidence: "high", propertyAddress: BAND_OFFER.address },
-    job: { contactId: "c1", message: "seller would do $280,000" }, now: Date.now(),
+    draft: { intent: "counter", counterAmount: 250000, confidence: "high", propertyAddress: BAND_OFFER.address },
+    job: { contactId: "c1", message: "seller would do $250,000" }, now: Date.now(),
   });
   assert.equal(v.passed, true, v.reason);
-  assert.ok(v.ceiling > 265000);
+  assert.ok(v.ceiling > BAND_OFFER.cashAmount);
 });
 
 test("the band is not even computed when it is switched off", async () => {
@@ -1971,8 +1972,8 @@ test("the daily cap is counted from the store, not from memory", async () => {
   assert.equal(await bandReleasesToday({ store, locationId: "LOC" }), 2, "failed verdicts don't spend the budget");
   const v = await evaluateBandFor({
     store, locationId: "LOC", party: "agent", config: bandCfg, saved: {},
-    draft: { intent: "counter", counterAmount: 280000, confidence: "high", propertyAddress: BAND_OFFER.address },
-    job: { contactId: "c1", message: "$280,000" },
+    draft: { intent: "counter", counterAmount: 250000, confidence: "high", propertyAddress: BAND_OFFER.address },
+    job: { contactId: "c1", message: "$250,000" },
   });
   assert.equal(v.passed, false);
   assert.equal(v.checks.find((c) => !c.ok).name, "under_daily_cap");

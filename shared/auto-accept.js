@@ -1,10 +1,17 @@
 // auto-accept.js — the most we would say yes to without a person in the room.
 //
-// It is what our own calculator would have produced on this property at its
-// most generous: the highest of the three underwriting models, recomputed as
-// if we were willing to work for a $10,000 assignment fee instead of our
-// usual one. Above that number a counter is a decision; at or below it, it is
-// a number we could always have justified.
+// It is the most a BUYER would pay us for the contract, less the smallest fee
+// we'd work for: the maximum-offer model (N% of ARV − repairs, the classic
+// flipper's rule, N from settings) recomputed at a $10,000 assignment fee.
+// Above that number a counter is a decision; at or below it, a buyer still
+// takes the deal.
+//
+// It used to be the HIGHEST of the three underwriting models, which on a
+// big-ARV, light-rehab house is "90% ARV − 2× rehab" — well above what any
+// flipper pays. On 2026-09-14 that let an agent's $550k counter on 39811 226th
+// Ave SE through a $584k ceiling when the buyer line was about $500k, and the
+// bot re-issued and sent the offer at $550k. The post-mortem finding
+// (buyers pay ≤ ~70% of ARV − repairs, all-in) is the ceiling now.
 //
 // Derived, not configured. There is deliberately no percentage knob and no
 // per-offer override — every input here already comes from settings the
@@ -75,9 +82,12 @@ export function autoAcceptCeiling({ offer, settings = {} } = {}) {
   }
   if (!modes.length) return no("the calculator returned no models");
 
-  const top = modes.reduce((a, b) => (b.amount > a.amount ? b : a), modes[0]);
+  // The buyer's line, not our most generous model. All three stay on the
+  // verdict for the audit trail; only "mao" may set the ceiling.
+  const top = modes.find((m) => m.key === "mao");
+  if (!top) return no("the maximum-offer model is missing, so there's no buyer line to hold the band to");
   const ceiling = top.amount;
-  if (!(ceiling > 0)) return no("every model comes out underwater on this property");
+  if (!(ceiling > 0)) return no("a buyer's maximum comes out underwater on this property");
   // An offer whose printed price was hand-raised above every model has no band
   // at all. The honest answer is "never auto-accepts", not "auto-accepts
   // anything above the number we inflated".
