@@ -30,6 +30,7 @@ import { offerFunnel, counterSpread, passReasons, followUpPerformance } from "..
 import { buildPipeline } from "../shared/pipeline.js";
 import { autopilotSummary, graduationReport, GRADUATION } from "../shared/graduation.js";
 import { buildFlow, FLOW_STAGES } from "../shared/flow.js";
+import { buildDigest } from "../shared/digest.js";
 import { lessons, dealScorecard } from "../shared/post-mortem.js";
 import { effectiveSettings } from "../shared/offer-calc.js";
 import { listPipelines } from "../ghl.js";
@@ -395,6 +396,24 @@ export default function createDashboardRouter({ resolveLocation }) {
         drafts,
         ...out,
       });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Tonight's digest: the day's loose ends in one read — a seller who said
+  // yes, counters close to our number, promises still owed, texts nobody
+  // answered, holds, floats. Local reads only; the console polls it slowly.
+  router.get("/digest", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const now = Date.now();
+      const hours = Math.min(72, Math.max(6, Number(req.query.hours) || 24));
+      const since = new Date(now - hours * 3600000).toISOString();
+      const [drafts, events, offers] = await Promise.all([
+        store.listReplyDrafts(locationId, { since, limit: 1000 }).catch(() => []),
+        store.listContactEventsSince(locationId, since, { types: ["promise_owed", "promise_kept"], limit: 2000 }).catch(() => []),
+        store.listOffers(locationId, { limit: 1000, lean: true }).catch(() => []),
+      ]);
+      res.json({ ok: true, ...buildDigest({ drafts, events, offers, now, hours }) });
     } catch (err) { fail(res, err); }
   });
 

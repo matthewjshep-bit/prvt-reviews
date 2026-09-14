@@ -488,6 +488,9 @@ export const getDashboardLessons = () =>
   fetch(`${API_BASE}/api/dashboard/lessons?${locq()}`).then(j);
 export const getDashboardPipeline = () =>
   fetch(`${API_BASE}/api/dashboard/pipeline?${locq()}`).then(j);
+// The day's loose ends: acceptances, close counters, owed promises, unanswered texts.
+export const getDashboardDigest = (hours = 24) =>
+  fetch(`${API_BASE}/api/dashboard/digest?${locq()}&hours=${hours}`).then(j);
 export const floatOffer = (id, kind) =>
   post(`/api/offers/${encodeURIComponent(id)}/float`, { kind });
 export const getDashboardFlow = (days = 7, end = "") =>

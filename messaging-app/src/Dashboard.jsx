@@ -15,6 +15,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Pencil, X } from "lucide-react";
+import { getDashboardDigest } from "./api.js";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
   getDashboardSummary, getDashboardTagCounts, getDashboardMessages, getDashboardContacts, saveSettings,
@@ -280,6 +281,44 @@ const localDayKey = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
+// Tonight's digest: the handful of things that decide whether a deal happens,
+// out of everything the day did on its own.
+function DigestCard({ digest, loading, error, onRetry }) {
+  if (error) return <Card title="Tonight's digest"><ErrorNote message={error} onRetry={onRetry} /></Card>;
+  if (!digest) return null;
+  const live = (digest.sections || []).filter((s) => s.items.length);
+  return (
+    <Card
+      title="Tonight's digest"
+      right={<span className="text-[11px] text-slate-400">last {digest.windowHours}h{loading ? " · refreshing…" : ""}</span>}
+    >
+      {!live.length ? (
+        <div className="text-sm text-slate-400">No loose ends today.</div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          {live.map((s) => (
+            <div key={s.key}>
+              <div className="text-xs font-semibold text-slate-600">
+                {s.label} <span className="font-normal text-slate-400">· {s.items.length}</span>
+              </div>
+              <ul className="mt-1 space-y-0.5">
+                {s.items.slice(0, 8).map((it, i) => (
+                  <li key={`${s.key}-${it.contactId || i}-${i}`} className="text-sm text-slate-700">
+                    <span className="font-medium">{it.contactName || "An agent"}</span>
+                    {it.address ? <span className="text-slate-500"> · {String(it.address).split(",")[0]}</span> : null}
+                    {it.detail ? <span className="text-slate-400"> — {it.detail}</span> : null}
+                  </li>
+                ))}
+                {s.items.length > 8 && <li className="text-xs text-slate-400">+{s.items.length - 8} more</li>}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function Dashboard({ settings, onSettingsSaved }) {
   const [days, setDays] = useState(30);
   // A picked past date shows that single day (same layout as Today).
@@ -302,6 +341,24 @@ export default function Dashboard({ settings, onSettingsSaved }) {
       .finally(() => setSummaryLoading(false));
   };
   useEffect(loadSummary, [days, endDate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Tonight's digest (local, refreshed every five minutes).
+  const [digest, setDigest] = useState(null);
+  const [digestLoading, setDigestLoading] = useState(false);
+  const [digestError, setDigestError] = useState("");
+  const loadDigest = () => {
+    setDigestLoading(true);
+    setDigestError("");
+    getDashboardDigest()
+      .then(setDigest)
+      .catch((e) => setDigestError(e.message))
+      .finally(() => setDigestLoading(false));
+  };
+  useEffect(() => {
+    loadDigest();
+    const t = setInterval(loadDigest, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // GHL tag counts (waits for settings; point-in-time, not range-scoped).
   const tags = settings?.dashboardTags || [];
@@ -482,6 +539,8 @@ export default function Dashboard({ settings, onSettingsSaved }) {
       </div>
 
       {summaryError && <ErrorNote message={summaryError} onRetry={loadSummary} />}
+
+      {!endDate && <DigestCard digest={digest} loading={digestLoading} error={digestError} onRetry={loadDigest} />}
 
       {/* KPI row */}
       {summary && (
