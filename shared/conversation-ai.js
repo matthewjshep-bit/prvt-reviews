@@ -57,7 +57,7 @@ export const SILENT_INTENTS = new Set(["opt_out"]);
 // NEVER_AUTO, so autoEligible() offers them as checkboxes and an operator
 // opts a nudge into sending itself exactly the way they opt in a question.
 export const OUTBOUND_INTENTS = {
-  agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "passed_checkin", "outreach_nudge", "call_followup"],
+  agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "passed_checkin", "outreach_nudge", "call_followup", "promise_due"],
   investor: ["blast_open", "blast_nudge", "dataroom_nudge", "call_followup"],
 };
 
@@ -67,7 +67,7 @@ export const INTENT_LABEL = {
     realm_yes: "number is in the realm", realm_check: "floated our number", take_check: "floated our read",
     offer_nudge: "followed up on our offer", passed_checkin: "checked back in on a passed offer",
     outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text",
-    call_followup: "text after a call",
+    call_followup: "text after a call", promise_due: "kept our word on a number we owed",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
     wants_call: "wants a call", scheduling: "scheduling", proof_of_funds: "proof of funds",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
@@ -91,6 +91,7 @@ export const INTENT_GLOSS = {
     outreach_nudge: "a follow-up on that first text when nothing came back",
     passed_checkin: "every ten days after they pass on an offer: still sitting? would the seller come closer to our number?",
     call_followup: "the text sent right after a phone call, drafted from the transcript: what we took from it and the next step",
+    promise_due: "when we told them we'd come back with a number or an answer and nothing went out in time: an honest update, and their value and repairs if our numbers are stuck",
     deal_available: "the listing we asked about (or one they've got) is available and needs work — condition, price expectations, seller timeline. NOT when they say it's turnkey, renovated or move-in ready: that is investor_open",
     investor_open: "no deal right now, but open to working with investors or happy for us to stay in touch",
     realm_yes: "says the number we floated works, is in the realm, or to go ahead and send the formal offer — including \"send it over\", \"email me the offer\", \"can I see it in writing\"",

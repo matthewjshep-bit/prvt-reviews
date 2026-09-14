@@ -426,6 +426,21 @@ export function outboundOpening(outbound) {
         `it twice" is not. ${nudgePressure(o)} Do NOT name a price or any number. ${CONTINUE} ` +
         `Set intent to dataroom_nudge.`;
 
+    // We said we'd come back and didn't. The failure mode is a second empty
+    // promise; the useful message either moves the deal or asks for the one
+    // thing that would.
+    case "promise_due":
+      return `${START} Earlier we told this agent we'd come back to them with ${o.what === "number" ? "a number" : "an answer"} ` +
+        `on ${o.address}${o.promisedText ? ` ("${o.promisedText}")` : ""}, and nothing has gone out yet. Keep our word in one or two ` +
+        `lines, owning the delay plainly without making excuses. ` +
+        (o.heldReason
+          ? `Our numbers are stuck (${o.heldReason}), so say the comps are thin and you want to get it right, and ask what they ` +
+            `figure it's worth once it's done and what the work would run — their read lets us finish it. `
+          : o.running
+            ? `The numbers are still running; say you'll have them shortly. `
+            : `Say you're still on it and ask the one question that would help most. `) +
+        `Do NOT name any number, range or percentage, and do NOT promise a new time. ${CONTINUE} Set intent to promise_due.`;
+
     default:
       return "";
   }

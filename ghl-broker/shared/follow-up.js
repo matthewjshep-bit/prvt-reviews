@@ -55,6 +55,36 @@ export const DEFAULT_LADDERS = {
   dataroom_nudge: { enabled: false, steps: [1, 4], repeatEvery: 0, onExhausted: "stop" },
 };
 
+/* ---------- what the bot promised ---------- */
+
+// "Let me run this by my underwriting team today and get back to you with a
+// number." Said to eleven agents on 2026-09-14, and for several of them —
+// Emily Cressey, Foster, Shawn Filer — nothing ran and nothing came back. A
+// promise is a clock like any other: when it is due and nothing went out,
+// somebody has to keep it.
+export const PROMISE_DUE_HOURS = 4;
+
+/**
+ * detectPromise(text) → "number" | "answer" | null
+ *
+ * Whether a reply WE sent commits us to coming back. "number" when it's our
+ * numbers ("get back to you with a number", "run it by underwriting", "have a
+ * number back to you today"); "answer" when it's anything else ("let me run
+ * that by my partner and get back to you this afternoon").
+ */
+export function detectPromise(text = "") {
+  const t = String(text || "");
+  const number = [
+    /\b(?:number|numbers|figure|offer)\b[^.?!]{0,40}\bback\s+to\s+you\b/i,
+    /\b(?:get|come|circle)\s+back\s+(?:to\s+you\s+)?with\s+(?:a|an|the|our)\s+(?:\w+\s+)?(?:number|figure|offer|price)\b/i,
+    /\b(?:run|re-?run|running)\s+(?:it|this|that|the\s+(?:numbers|address)|[\w-]+)\s+(?:by|past|through)\s+(?:my\s+|our\s+|the\s+)?underwriting\b/i,
+    /\bnumbers?\s+re-?run\b/i,
+  ];
+  if (number.some((re) => re.test(t))) return "number";
+  if (/\b(?:get|come|circle)\s+back\s+to\s+you\b|\bback\s+to\s+you\s+(?:today|this\s+afternoon|tonight|tomorrow|later)\b/i.test(t)) return "answer";
+  return null;
+}
+
 export const MAX_LADDER_STEPS = 12;
 export const MAX_STEP_DAY = 120;
 export const MAX_REPEAT_DAYS = 60;

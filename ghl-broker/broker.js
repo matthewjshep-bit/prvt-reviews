@@ -25,6 +25,7 @@ import { maybeStartFollowUpSweep, FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.j
 import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agent.js";
 import { maybeStartOutreachSweep } from "./outreach-sweep.js";
 import { maybeStartOutreachFollowUp } from "./outreach-followup.js";
+import { maybeRunPromiseSweep } from "./promise-sweep.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
@@ -224,6 +225,12 @@ setInterval(async () => {
       // paused) go the moment they can.
       const resent = await offersRouter.retryPendingOfferSends?.({ client: makeClient(token), locationId });
       if (resent?.sent) console.log(`${resent.sent} held offer${resent.sent === 1 ? "" : "s"} sent for ${locationId}`);
+      // "I'll get back to you with a number" — kept, or said so, every tick.
+      const promised = await maybeRunPromiseSweep({
+        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
+      });
+      if (promised?.owed) console.log(`promise sweep for ${locationId}: ${promised.owed} owed, ${promised.kept} kept`);
       // Addresses that came in past the daily underwrite cap, once it resets.
       const drained = await offersRouter.drainUnderwriteQueue?.({ client: makeClient(token), locationId });
       if (drained?.started || drained?.dropped) console.log(`underwrite queue for ${locationId}: started ${drained.started}, dropped ${drained.dropped}, waiting ${drained.left}`);

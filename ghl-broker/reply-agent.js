@@ -64,6 +64,7 @@ import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
 } from "./ghl.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
+import { detectPromise, PROMISE_DUE_HOURS } from "./shared/follow-up.js";
 import { resolveParty } from "./conversation-party.js";
 import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts } from "./conversation-context.js";
@@ -1299,6 +1300,16 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // We said we'd come back with a number (or an answer) and the clock ran out
+  // with nothing sent. Keep the promise honestly: no number of ours, and when
+  // the underwrite held, ask for theirs so there's something to run.
+  promise_due: {
+    party: "agent",
+    enabled: (pb) => pb?.followUp?.enabled,
+    ready: ({ subject }) => (subject?.address || subject?.what ? true : "nothing was promised"),
+    floats: () => [],
+    forbids: () => [],
+  },
   blast_nudge: {
     party: "investor",
     enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.blast_nudge?.enabled,
@@ -1477,7 +1488,8 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
   // The nudges. They carry what the message is ABOUT and no numbers at all.
   return { ...base,
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
-    lastTouchAt: subject?.lastTouchAt || null };
+    lastTouchAt: subject?.lastTouchAt || null,
+    ...(kind === "promise_due" ? { what: subject?.what || "answer", heldReason: subject?.heldReason || "", promisedText: subject?.promisedText || "", running: Boolean(subject?.running) } : {}) };
 }
 
 // The one-liner the outbox row shows when the model didn't write its own.
@@ -1499,6 +1511,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
     case "dataroom_nudge": return `Follows up on ${where} — they opened the package and went quiet${rung}.`;
+    case "promise_due": return `Keeps our word on ${where}: we said we'd come back with ${outbound.what === "number" ? "a number" : "an answer"} and nothing went out${outbound.heldReason ? " (the underwrite held)" : ""}.`;
     default: return `Starts a message about ${where}${rung}.`;
   }
 }
@@ -2638,6 +2651,19 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       dedupeKey: `outreach:${d.contactId}:${d.id}`,
       data: { draftId: d.id, auto: Boolean(auto), contactName: d.contactName || "" },
     }).catch(() => {});
+  }
+  // A reply that promised to come back starts a clock (promise-sweep.js). The
+  // numbers themselves, and the promise_due text, promise nothing new.
+  if (d.party === "agent" && !["realm_check", "take_check", "promise_due"].includes(d.outbound?.kind || d.intent)) {
+    const what = detectPromise(body);
+    if (what) {
+      await recordEvent({
+        store, locationId, contactId: d.contactId, party: "agent", type: "promise_made", at: ts,
+        address: d.propertyAddress || d.outbound?.address || "", source: "conversation", ref: d.id,
+        dedupeKey: `promise_made:${d.id}`,
+        data: { what, draftId: d.id, dueAt: new Date(Date.parse(ts) + PROMISE_DUE_HOURS * 3600000).toISOString(), text: body.slice(0, 200) },
+      }).catch(() => {});
+    }
   }
   if (auto && d.noteOnAutoSend !== false) {
     await createContactNote(client, d.contactId, {

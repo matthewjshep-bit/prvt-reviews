@@ -52,6 +52,7 @@ export const SEVERITY_RANK = { now: 0, soon: 1, fyi: 2 };
 
 // The order the queue shows its groups in, and what each is called.
 export const ACTION_KINDS = [
+  { key: "promise_owed",      label: "Owed a number" },
   { key: "draft_waiting",     label: "Drafts waiting on you" },
   { key: "handoff",           label: "One click from you" },
   { key: "closing_soon",      label: "Closing" },
@@ -373,6 +374,20 @@ export function buildPipeline({
         detail: `first text ${ageDays}d ago${opened.address ? ` about ${opened.address}` : ""}`,
         ops: [] });
     }
+  }
+
+  /* --- promises we made and haven't kept (promise-sweep.js) --- */
+  // Owed until a promise_kept for that contact lands after it; three days on,
+  // the thread has moved and the row would only be noise.
+  for (const e of events) {
+    if (e?.type !== "promise_owed" || !e.contactId || now - (ms(e.at) ?? now) > 3 * DAY_MS) continue;
+    if (events.some((k) => k?.type === "promise_kept" && k.contactId === e.contactId && String(k.at) >= String(e.at))) continue;
+    const who = contactNames[e.contactId] || e.data?.contactName || "An agent";
+    push({ id: `promise_owed:${e.contactId}:${e.at}`, kind: "promise_owed", severity: "now", contactId: e.contactId, contactName: contactNames[e.contactId] || "",
+      address: e.address || "", offerId: e.offerId || null,
+      title: `${who}: we owe them ${e.data?.what === "number" ? "a number" : "an answer"}${e.address ? ` on ${String(e.address).split(",")[0]}` : ""}`,
+      detail: [e.data?.heldReason ? `underwrite held: ${e.data.heldReason}` : "", e.data?.text ? `we said "${String(e.data.text).slice(0, 90)}"` : ""].filter(Boolean).join(" · "),
+      ops: [] });
   }
 
   actions.sort((a, b) => (SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]) || String(a.title).localeCompare(String(b.title)));

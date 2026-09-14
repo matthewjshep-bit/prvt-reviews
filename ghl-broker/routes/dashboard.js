@@ -52,6 +52,7 @@ const PIPELINE_EVENT_TYPES = [
   "investor_evaluating", "investor_committed", "investor_passed",
   "follow_up_sent", "text_summary", "call_summary",
   "outreach_sent",
+  "promise_owed", "promise_kept",
 ];
 
 const DAY_MS = 86400000;
