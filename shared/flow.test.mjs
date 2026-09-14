@@ -58,7 +58,7 @@ test("a week of the machine at work counts each stage once and splits machine fr
   assert.deepEqual([s.found.count, s.found.machine, s.found.person], [2, 1, 1]);
   assert.deepEqual([s.first_text.count, s.first_text.machine, s.first_text.person], [2, 1, 1], "the 20-day-old one is outside the window");
   assert.equal(s.replied.count, 1, "one contact replied twice, counted once");
-  assert.equal(s.replied.person, 1);
+  assert.equal(s.replied.machine, 1, "the bot answered that reply on its own");
   assert.equal(s.underwritten.count, 2);
   assert.equal(s.underwritten.machine, 2);
   assert.match(s.underwritten.sub, /1 clear · 1 held · 1 running now/);
@@ -89,6 +89,30 @@ test("a week of the machine at work counts each stage once and splits machine fr
   assert.ok(!r.feed.some((f) => f.id === "old"));
   // totals carry the drafts' machine share
   assert.deepEqual(r.totals.messages, { autoSent: 1, personSent: 1 });
+});
+
+test("the outreach autopilot's finds and first texts are the machine's; so are replies and counters it answered", () => {
+  const events = [
+    { id: "i1", contactId: "v1", type: "import", at: at(10), source: "import", data: { action: "created", batchId: "b-auto", batchName: "Autopilot · King, WA" } },
+    { id: "w1", contactId: "v1", type: "outreach_enrolled", at: at(10), source: "import", data: { kind: "first", workflowId: "wf", batchId: "b-auto" } },
+    { id: "i2", contactId: "h1", type: "import", at: at(9), source: "import", data: { action: "created", batchId: "b-hand", batchName: "Tacoma pull" } },
+    { id: "w2", contactId: "h1", type: "outreach_enrolled", at: at(9), source: "import", data: { kind: "first", workflowId: "wf", batchId: "b-hand" } },
+    { id: "r1", contactId: "v1", type: "text_summary", at: at(8), source: "conversation", data: {} },
+    { id: "r2", contactId: "h1", type: "text_summary", at: at(8), source: "conversation", data: {} },
+  ];
+  const drafts = [
+    { id: "d1", contactId: "v1", status: "sent", autoSent: true, sentAt: at(7) },
+    { id: "d2", contactId: "h1", status: "sent", autoSent: false, sentAt: at(7) },
+  ];
+  const offers = [
+    { id: "o1", contactId: "v1", address: "1 A St", status: "countered", createdAt: at(20), statusHistory: [{ status: "countered", ts: at(6) }], counterBand: { acceptedAt: at(6) } },
+    { id: "o2", contactId: "h1", address: "2 B St", status: "countered", createdAt: at(20), statusHistory: [{ status: "countered", ts: at(6) }] },
+  ];
+  const s = Object.fromEntries(buildFlow({ ...win, events, drafts, offers }).stages.map((x) => [x.key, x]));
+  assert.deepEqual([s.found.machine, s.found.person], [1, 1]);
+  assert.deepEqual([s.first_text.machine, s.first_text.person], [1, 1]);
+  assert.deepEqual([s.replied.machine, s.replied.person], [1, 1]);
+  assert.deepEqual([s.countered.machine, s.countered.person], [1, 1]);
 });
 
 /* ---------- the drill-down ---------- */

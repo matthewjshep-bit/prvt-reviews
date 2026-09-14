@@ -23,11 +23,11 @@ const inWin = (t, a, b) => t != null && t >= a && t < b;
 export const FLOW_STAGES = [
   { key: "found",      side: "agent", label: "Found",          hint: "listing agents imported from a pull" },
   { key: "first_text", side: "agent", label: "First text",     hint: "the cold open went out" },
-  { key: "replied",    side: "agent", label: "Replied",        hint: "an agent answered, by text or call" },
+  { key: "replied",    side: "agent", label: "Replied",        hint: "an agent answered, by text or call — the machine's when the bot answered on its own" },
   { key: "underwritten", side: "agent", label: "Underwritten", hint: "an auto-underwrite finished" },
   { key: "offered",    side: "agent", label: "Offered",        hint: "the documents went to the agent" },
   { key: "floated",    side: "agent", label: "Floated",        hint: "our read or a soft number went out" },
-  { key: "countered",  side: "agent", label: "Countered",      hint: "they came back with a number" },
+  { key: "countered",  side: "agent", label: "Countered",      hint: "they came back with a number — the machine's when the counter band answered it" },
   { key: "contract",   side: "agent", label: "Under contract", hint: "promoted to a deal" },
   { key: "blasted",    side: "dispo", label: "Blasted",        hint: "deals put in front of buyers" },
   { key: "opened",     side: "dispo", label: "Opened",         hint: "a buyer opened the package" },
@@ -45,7 +45,10 @@ export function machineDid(ev) {
   if (d.auto === true) return true;
   if (d.auto === false) return false;
   if (ev.type === "offer_sent") return d.by === "conversation" || d.by === "underwrite";
-  if (ev.type === "import") return d.trigger === "daily" || d.auto === true;
+  // The daily outreach autopilot imports into its own batch, "Autopilot ·
+  // King, WA", and stamps nothing else — so every agent it found read as
+  // found by hand (Matt, 2026-09-14: "why does it say 0 by machine").
+  if (ev.type === "import") return d.trigger === "daily" || d.auto === true || /^autopilot\b/i.test(String(d.batchName || ""));
   return AI_SOURCES.has(ev?.source);
 }
 
@@ -103,6 +106,12 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   const blastedDeals = new Map(); const keylessBlasts = []; let blastedBuyers = 0;
   const openedBuyers = new Set();
   const outreachOpen = new Map(); // contactId → first outreach_sent ms
+  // The first text of an autopilot import is a workflow enrollment written by
+  // the same import, carrying its batch — the machine's, like the import.
+  const autopilotBatches = new Set(events.filter((e) => e?.type === "import" && e.data?.batchId && machineDid(e)).map((e) => e.data.batchId));
+  // A reply is the agent's act; the machine's share of the stage is whether
+  // the bot answered it on its own.
+  const botAnswered = new Set(drafts.filter((d) => d?.status === "sent" && d.autoSent && d.contactId && inWin(ms(d.sentAt || d.updatedAt), a, b)).map((d) => d.contactId));
   for (const e of events) {
     const t = ms(e.at);
     if (!inWin(t, a, b)) continue;
@@ -111,11 +120,11 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
       case "import": bump("found", m, feedRow(e, names)); break;
       case "outreach_enrolled": if (e.data?.kind === "followup") break; // a second text, not a first
       // falls through — a workflow enrollment is the first text, sent by GHL
-      case "outreach_sent": bump("first_text", m, feedRow(e, names)); if (!outreachOpen.has(e.contactId)) outreachOpen.set(e.contactId, t); break;
+      case "outreach_sent": bump("first_text", m || (e.type === "outreach_enrolled" && autopilotBatches.has(e.data?.batchId)), feedRow(e, names)); if (!outreachOpen.has(e.contactId)) outreachOpen.set(e.contactId, t); break;
       case "text_summary":
       case "call_summary": {
-        // A reply is a person's act, always. Counted once per contact.
-        if (e.contactId && !replied.has(e.contactId)) { replied.add(e.contactId); bump("replied", false, feedRow(e, names)); }
+        // Counted once per contact; the machine's when the bot answered it.
+        if (e.contactId && !replied.has(e.contactId)) { replied.add(e.contactId); bump("replied", botAnswered.has(e.contactId), feedRow(e, names)); }
         break;
       }
       case "offer_sent": bump("offered", m, feedRow(e, names)); break;
@@ -176,7 +185,10 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
     if (o.realm?.answer === "yes" && inWin(ms(o.realm?.at), a, b)) realmYes++;
     if (counteredInWin(o)) {
       const cAt = (o.statusHistory || []).filter((h) => h.status === "countered" && inWin(ms(h.ts), a, b)).map((h) => h.ts).sort().at(-1) || o.counter?.at;
-      bump("countered", false, offerItem(o, cAt, false));
+      // Their number is their act; the machine's share is the counter band
+      // answering it (taking it, or countering back at our max) on its own.
+      const band = inWin(ms(o.counterBand?.acceptedAt), a, b);
+      bump("countered", band, offerItem(o, cAt, band));
     }
     void created;
   }
