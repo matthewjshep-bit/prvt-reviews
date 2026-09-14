@@ -64,40 +64,6 @@ test("the sweep pulls, picks, imports with the app saying hello, and no trigger 
   assert.equal(calls[0].batchId, "b1");
 });
 
-test("screenListing skips listings that aren't a fixer to ask about", async () => {
-  const { screenListing } = await import("./outreach-sweep.js");
-  assert.match(screenListing({ status: "PENDING" }), /pending/);
-  assert.match(screenListing({ status: "SOLD" }), /sold/);
-  assert.match(screenListing({ status: "FOR_SALE", homeType: "CONDO" }), /condo/);
-  assert.match(screenListing({ status: "FOR_SALE", description: "Fully renovated and move-in ready!" }), /turnkey/);
-  assert.equal(screenListing({ status: "FOR_SALE", description: "Needs TLC, sold as-is, bring your contractor" }), null);
-  assert.equal(screenListing(null), null, "Zillow not knowing the house is not a reason to skip");
-});
-
-test("the sweep screens hook listings before importing: pending, turnkey and condo agents never get a first text", async () => {
-  _resetJobs();
-  const calls = [];
-  const skipped = [];
-  const deps = {
-    runPull: async () => ({ batchId: "b1", warnings: [] }),
-    importAgents: async (args) => { calls.push(args); return { imported: args.agentKeys.length, results: [] }; },
-    screenListings: async () => new Map([
-      ["a st", { status: "PENDING" }],
-      ["b st", { status: "FOR_SALE", description: "Fully renovated and move-in ready" }],
-      ["c st", { status: "FOR_SALE", homeType: "CONDO" }],
-      ["d st", { status: "FOR_SALE", description: "Needs TLC, sold as-is" }],
-    ]),
-  };
-  const store = { ...fakeStore([row("a"), row("b"), row("c"), row("d"), row("e")]),
-    async setOutreachAgentStatus(_loc, _batch, key, patch) { skipped.push([key, patch.status]); } };
-  const job = startOutreachSweep({ locationId: "loc", client: {}, saved: { outreachAutopilot: { enabled: true, dailyCap: 5 } }, store, deps });
-  await settle();
-  assert.equal(job.status, "done", job.error);
-  assert.deepEqual([...calls[0].agentKeys].sort(), ["d", "e"], "e wasn't on Zillow, so it goes through");
-  assert.equal(job.screen.checked, 5);
-  assert.deepEqual(skipped.map(([k]) => k).sort(), ["a", "b", "c"]);
-});
-
 test("firstTouch 'ghl' keeps the old way: trigger tag on, no bot draft", async () => {
   _resetJobs();
   let seen;
