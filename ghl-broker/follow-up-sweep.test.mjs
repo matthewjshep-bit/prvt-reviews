@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   startFollowUpSweep, maybeStartFollowUpSweep, agentCandidates, investorCandidates,
-  publicFollowUpJob, cancelFollowUpSweep, _resetJobs, CURSOR_NAME, FOLLOW_UP_UTC_HOUR,
+  publicFollowUpJob, cancelFollowUpSweep, _resetJobs, CURSOR_NAME, FOLLOW_UP_UTC_HOUR, isTheOfferToAskAbout,
 } from "./follow-up-sweep.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { effectiveStatus, OPEN_STATUSES } from "./shared/offer-status.js";
@@ -33,6 +33,7 @@ const fakeStore = ({ offers = [], events = [], drafts = [] } = {}) => {
         .filter((o) => want.has(effectiveStatus(o)))
         .filter((o) => !before || (o.statusAt || o.createdAt) <= before);
     },
+    async listOffers() { return [...store.offers.values()]; },
     async getOffer(id) { return store.offers.get(id) || null; },
     async updateOffer(id, doc) { store.offers.set(id, doc); return true; },
     async listContactEventsSince(_loc, since, { types = null } = {}) {
@@ -408,4 +409,52 @@ test("the daily sweep needs the bot on, a key, and at least one live ladder", as
   assert.equal(await maybeStartFollowUpSweep({ ...base, saved: { aiApiKey: "k", conversationAi: normalizeConversationAi({ enabled: false }) } }), false, "bot off");
   _resetJobs();
   assert.equal(await maybeStartFollowUpSweep({ ...base, saved: { aiApiKey: "k", conversationAi: normalizeConversationAi({ enabled: true }) } }), false, "every ladder off");
+});
+
+
+/* ---------- one nudge per property ---------- */
+
+const sentOffer = (id, over = {}) => ({
+  id, locationId: "LOC", contactId: "c1", contactName: "Agent", address: "123 Main St, Kent, WA 98031",
+  status: "sent", statusAt: at(0), createdAt: at(0), cashAmount: 300000, sends: [{ ts: at(0), channels: ["sms"] }], ...over,
+});
+const candidatesFor = (offers, now = T0 + 20 * DAY) =>
+  agentCandidates({ store: fakeStore({ offers }), locationId: "LOC", config: configWith(), now });
+
+test("two offers on the same house for one agent get one nudge — the newer one", async () => {
+  const c = await candidatesFor([
+    sentOffer("old", { sends: [{ ts: at(0) }], statusAt: at(0) }),
+    sentOffer("new", { address: "123 Main Street, Kent, WA 98031", sends: [{ ts: at(4) }], statusAt: at(4) }),
+  ]);
+  assert.deepEqual(c.map((x) => x.offerId), ["new"]);
+});
+
+test("an older offer is not nudged when a newer one on that house went out too recently to be due", async () => {
+  const c = await candidatesFor([
+    sentOffer("old", { sends: [{ ts: at(0) }], statusAt: at(0) }),
+    sentOffer("fresh", { contactId: "c2", sends: [{ ts: at(19) }], statusAt: at(19) }),
+  ]);
+  assert.deepEqual(c.map((x) => x.offerId), []);
+});
+
+test("a house that became a deal on any offer is never followed up", async () => {
+  const c = await candidatesFor([
+    sentOffer("ours"),
+    sentOffer("deal", { contactId: "c2", status: "accepted", deal: { stage: "under_contract" } }),
+  ]);
+  assert.deepEqual(c, []);
+});
+
+test("a newer draft still being underwritten counts as in flight", () => {
+  assert.equal(isTheOfferToAskAbout(sentOffer("old"), [sentOffer("old"), sentOffer("d", { status: "draft", sends: [], statusAt: at(5), createdAt: at(5) })]), false);
+});
+
+test("a dead or passed copy of the same house does not block the live offer", () => {
+  const live = sentOffer("live", { sends: [{ ts: at(1) }] });
+  assert.equal(isTheOfferToAskAbout(live, [live, sentOffer("gone", { status: "passed", sends: [{ ts: at(6) }], statusAt: at(6) })]), true);
+});
+
+test("a different house for the same agent is its own follow-up", async () => {
+  const c = await candidatesFor([sentOffer("a"), sentOffer("b", { address: "9 Oak Ave, Kent, WA 98031" })]);
+  assert.deepEqual(c.map((x) => x.offerId).sort(), ["a", "b"]);
 });

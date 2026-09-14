@@ -22,6 +22,7 @@
 //   spending model calls on drafts that would be superseded anyway.
 
 import { OPEN_STATUSES, effectiveStatus, dealSpokenFor, dealIsOver } from "./shared/offer-status.js";
+import { addressKey } from "./shared/us-address.js";
 import { sameStreet } from "./shared/us-address.js";
 import { dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor } from "./shared/follow-up.js";
 import { recordEvent } from "./contact-record.js";
@@ -81,11 +82,28 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     statuses: [...OPEN_STATUSES], before: iso(now - earliest * DAY_MS), limit: 200,
   }).catch(() => []);
 
+  // One nudge per PROPERTY. The book holds duplicates — the same house
+  // underwritten twice for one agent, or offered to a co-listing agent — and
+  // each copy used to earn its own text. Every offer on the location is read
+  // (not just the ones due), because the sibling that matters is usually the
+  // newer one, sent too recently to be due itself.
+  const everyOffer = typeof store.listOffers === "function"
+    ? await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => null)
+    : null;
+  const byProperty = new Map();
+  for (const o of everyOffer || rows) {
+    const k = propertyKeyOf(o);
+    if (!k) continue;
+    if (!byProperty.has(k)) byProperty.set(k, []);
+    byProperty.get(k).push(o);
+  }
+
   const out = [];
   for (const o of rows) {
     if (!o?.contactId || !o.address) continue;
     if (o.deal) continue;                                  // it became a deal; not our business
     if (!OPEN_STATUSES.has(effectiveStatus(o))) continue;  // the mirror was stale
+    if (!isTheOfferToAskAbout(o, byProperty.get(propertyKeyOf(o)) || [])) continue;
     // Its expiry date is not checked: the offer stands until they answer, and
     // asking about it is the follow-up, not a re-offer.
     // Count from the last time we actually put it in front of them.
@@ -100,6 +118,33 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     });
   }
   return out;
+}
+
+const propertyKeyOf = (o) => (o?.address ? addressKey(o.address) : "");
+
+// When we last put this offer in front of anyone — the thing "newer" means.
+const lastActivityOf = (o) => {
+  const sent = (o?.sends || []).map((s) => s?.ts).filter(Boolean).sort().at(-1);
+  return Date.parse(sent || o?.statusAt || o?.createdAt || "") || 0;
+};
+
+// In flight: priced, sent or countered, or a draft still being worked.
+const IN_FLIGHT = new Set([...OPEN_STATUSES, "draft"]);
+
+/**
+ * isTheOfferToAskAbout(offer, siblings) → boolean
+ *
+ * `siblings` is every offer on the same property, this one included. A
+ * property that became a deal on any offer is not followed up at all; past
+ * that, only the most recently active in-flight offer is — an older copy
+ * would ask about a number the newer offer already replaced.
+ */
+export function isTheOfferToAskAbout(offer, siblings = []) {
+  const others = siblings.filter((s) => s && s.id !== offer.id);
+  if (others.some((s) => s.deal)) return false;
+  const mine = lastActivityOf(offer);
+  return !others.some((s) => IN_FLIGHT.has(effectiveStatus(s)) &&
+    (lastActivityOf(s) > mine || (lastActivityOf(s) === mine && String(s.id) > String(offer.id))));
 }
 
 /**
