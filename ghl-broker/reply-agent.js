@@ -1874,6 +1874,18 @@ async function runReply(job, ctx) {
     }
   }
 
+  // "Other" with real information in it — Diane Tien's developer terms, Angie
+  // Bomar's park manager and "best time to call is morning" (2026-09-14) — sat
+  // silent as "a person's call". A confident read that asks nothing of us gets
+  // its acknowledgement out, and a note puts the substance in front of a person.
+  if (party === "agent" && draft.intent === "other" && draft.confidence === "high" && !draft.needsHuman && String(draft.reply || "").trim()) {
+    draft = { ...draft, intent: "question", reclassifiedFrom: "other" };
+    job.intent = draft.intent;
+    await createContactNote(client, job.contactId, {
+      body: `Needs you — the bot acknowledged it, the substance is yours: ${String(draft.summary || job.message || "").slice(0, 400)}`,
+    }).catch(() => {});
+  }
+
   // The model read an opt-out the keywords didn't catch ("lose my number",
   // plain anger). Same outcome as the keyword: silence and the tag.
   if (SILENT_INTENTS.has(draft.intent)) {

@@ -183,7 +183,11 @@ export async function fetchZillowListings(addresses = [], apifyToken) {
     const key = streetKey(a?.streetAddress || item.streetAddress || item.addressOrUrlFromInput || "");
     if (!key) continue;
     const price = Number(item.listingPrice?.amount ?? item.price) || 0;
-    out.set(key, { listPrice: price > 0 ? Math.round(price) : 0, status: item.listingStatus || item.homeStatus || null });
+    out.set(key, {
+      listPrice: price > 0 ? Math.round(price) : 0, status: item.listingStatus || item.homeStatus || null,
+      // For the outreach screen: is this listing a house that needs work?
+      homeType: item.homeType || null, description: String(item.description || "").slice(0, 1500),
+    });
   }
   return out;
 }

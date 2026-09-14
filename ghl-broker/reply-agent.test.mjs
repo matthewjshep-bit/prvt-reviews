@@ -2510,6 +2510,26 @@ test("a soft floor far over ours keeps the negotiation open: their number filed,
   assert.ok(!statuses.includes("passed"));
 });
 
+test("a confident 'other' that asks nothing of us is acknowledged instead of sitting; an unsure one still waits", async () => {
+  _resetJobs();
+  const run = async (over) => {
+    _resetJobs();   // the same text three times would read as a duplicate
+    const { client } = ghlStubFor(["agent"]);
+    const store = fakeStore();
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+      message: "253-833-4661 Park Manager  Best time to call is morning",
+      deps: { draft: async () => ({ ...DRAFT, intent: "other", confidence: "high", needsHuman: false,
+        reply: "Got it, thanks. I'll reach out to her.", summary: "Gave the park manager's number; call in the morning.", ...over }) },
+    });
+    for (let i = 0; i < 40 && job.status === "running"; i++) await settle();
+    return store.getReplyDraft(job.draftId);
+  };
+  assert.equal((await run({})).intent, "question");
+  assert.equal((await run({ needsHuman: true })).intent, "other");
+  assert.equal((await run({ confidence: "medium" })).intent, "other");
+});
+
 test("a contact with an offer in our book is an agent even with no agent tag", async () => {
   _resetJobs();
   const { client } = ghlStubFor([]);

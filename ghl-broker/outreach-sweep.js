@@ -41,6 +41,34 @@ export function workflowIdFrom(v) {
 }
 
 import { findCounty } from "./shared/us-counties.js";
+import { fetchZillowListings } from "./rehab-scan.js";
+import { isTurnkeyReply } from "./reply-agent.js";
+import { stillForSale } from "./price-watch.js";
+import { streetKey } from "./comps-zillow.js";
+
+// The listing screen: how many hook listings are looked up per Zillow run, and
+// the most in one sweep (≈ a dollar a day at the detail actor's rate).
+export const SCREEN_BATCH = 40;
+export const SCREEN_MAX = 240;
+export const NOT_A_FIXER_TYPES = new Set(["CONDO", "APARTMENT", "LOT"]);
+
+/**
+ * screenListing(hit) → reason to skip | null
+ *
+ * The first text asks about ONE listing, so that listing has to be a house
+ * that might need work. On 2026-09-14 about eight of the day's replies were
+ * "it's turnkey / remodeled", six were "sold / contingent / closing on the
+ * 17th", and a condo listing's agent opted out. RentCast can't tell us any of
+ * that; the listing itself can. No hit (Zillow didn't know the address) is not
+ * a reason to skip.
+ */
+export function screenListing(hit) {
+  if (!hit) return null;
+  if (!stillForSale(hit.status)) return `listing is ${String(hit.status).toLowerCase().replace(/_/g, " ")}`;
+  if (hit.homeType && NOT_A_FIXER_TYPES.has(String(hit.homeType).toUpperCase())) return `listing is a ${String(hit.homeType).toLowerCase()}`;
+  if (hit.description && isTurnkeyReply(hit.description)) return "listing reads turnkey";
+  return null;
+}
 
 // [{ county, state }] from an array, or from the settings textarea's
 // "King, WA" lines (or ";"-separated). A line with no state takes
@@ -298,7 +326,48 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
   // one agent at a time, skips anyone already in GHL, and stops once
   // `dailyCap` brand-new contacts exist. Handing it exactly `dailyCap` let a
   // pull whose GHL check was rate-limited pass 10 existing contacts in 12.
-  const picked = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress });
+  let picked = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress });
+
+  // 2b. The screen: each hook listing, read from Zillow in batches, until
+  // enough have passed for the day. Pending, sold, turnkey and condo listings
+  // are skipped (and marked so tomorrow doesn't pick them again). A batch the
+  // lookup fails on goes through unscreened, as does anything past the stretch
+  // we read — the import stops at the day's number either way.
+  const token = String(saved.apifyToken || "").trim();
+  const lookup = typeof deps.screenListings === "function"
+    ? deps.screenListings
+    : (token ? (addresses) => fetchZillowListings(addresses, token) : null);
+  if (lookup && picked.length) {
+    job.phase = "screening";
+    const want = Math.ceil(oa.dailyCap * 1.2);
+    const kept = [];
+    const dropped = {};
+    let processed = 0;
+    let checked = 0;
+    while (processed < picked.length && kept.length < want && checked < SCREEN_MAX) {
+      const chunk = picked.slice(processed, processed + SCREEN_BATCH);
+      processed += chunk.length;
+      let found;
+      try {
+        found = await lookup(chunk.map((r) => r.doc?.hook?.address).filter(Boolean));
+      } catch (e) {
+        job.warnings.push(`listing screen: ${String(e?.message || e).slice(0, 120)}`);
+        kept.push(...chunk);
+        continue;
+      }
+      checked += chunk.length;
+      for (const r of chunk) {
+        const why = screenListing(found?.get(streetKey(r.doc?.hook?.address || "")));
+        if (!why) { kept.push(r); continue; }
+        dropped[why] = (dropped[why] || 0) + 1;
+        if (!job.dryRun) {
+          await store.setOutreachAgentStatus?.(locationId, pull.batchId, r.agentKey, { status: "skipped", skippedReason: why }).catch(() => {});
+        }
+      }
+    }
+    picked = [...kept, ...picked.slice(processed)];
+    job.screen = { checked, kept: kept.length, dropped };
+  }
   job.picked = picked.length;
   job.results = picked.map((r) => ({ agentKey: r.agentKey, name: r.doc?.name || "", hook: r.doc?.hook?.address || "", distressed: r.doc?.distressedCount || 0 }));
   if (!picked.length) {
