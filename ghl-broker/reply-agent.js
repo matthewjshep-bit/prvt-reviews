@@ -284,6 +284,22 @@ export function isShowingOffer(message = "") {
     || /\b(?:come\s+(?:by|see|take\s+a\s+look)|show\s+(?:it|you|the\s+(?:house|home|property|place|units?))|see\s+it\s+in\s+person)\b/i.test(t);
 }
 
+/**
+ * floorFirmness(message) → "firm" | "soft" | "plain"
+ *
+ * How hard a named number is. "If you were more around $460k we would consider
+ * it most likely" (Jahine Wallace) and "if your number starts with an eight, I
+ * can probably make something work" (Kevin Flynn) are openings, not goodbyes;
+ * "he won't entertain anything under 450k" is a wall. Matt, 2026-09-14: for
+ * the soft ones, ask for their numbers and re-quote instead of closing.
+ */
+export function floorFirmness(message = "") {
+  const t = String(message || "");
+  if (/\b(?:won'?t|will\s+not|not\s+going\s+to)\s+(?:entertain|consider|accept|take|go\s+(?:below|under|lower))|\bno\s+need\s+to\s+(?:submit|send|write)|\bfirm\b|non[\s-]?negotiable|bottom\s+line|not\s+a\s+(?:penny|dollar)\s+(?:less|under|below)/i.test(t)) return "firm";
+  if (/\bwould\s+(?:\w+\s+){0,2}consider|\bmost\s+likely|\bprobably\s+(?:work|consider|take|do|make)|\bstarts?\s+with\s+an?\b|\bmake\s+(?:something|it)\s+work|\bopen\s+to\b|\bif\s+you\s+(?:were|can|could|came|come|got|get)\b|\bin\s+the\s+(?:ballpark|neighborhood|range)\b|\bmight\s+(?:work|take|consider|do)\b/i.test(t)) return "soft";
+  return "plain";
+}
+
 export function normalizeAgentTake(p) {
   const arv = Math.max(0, Math.round(Number(p?.agentArv) || 0));
   const rehab = Math.max(0, Math.round(Number(p?.agentRehab) || 0));
@@ -1013,6 +1029,17 @@ export async function assembleConversation({
     }
   }
 
+  // A contact we've written an offer to is an agent, whatever their tags say.
+  // Mike Renard (9314 Canyon Rd #54) had a live counter in our book and every
+  // text he sent sat as "an unknown contact never auto-sends".
+  if (party === "unknown" && contactId && !fakeParty && typeof store?.listOffers === "function") {
+    const theirs = await store.listOffers(locationId, { contactId, limit: 1, lean: true }).catch(() => []);
+    if ((theirs || []).some((o) => o && o.contactId === contactId)) {
+      party = "agent";
+      partySource = "offer_book";
+    }
+  }
+
   const custom = contact && !light ? await loadContactContext({ client, locationId, contact }) : {};
 
   let context = { text: "", amounts: [], forbiddenAmounts: [], summary: {} };
@@ -1729,6 +1756,7 @@ async function runReply(job, ctx) {
   // "countered" and he stayed Tier 1. Over COUNTER_PASS_MARGIN above the higher
   // of our offer and the ceiling, it's filed as their pass: offer passed, Tier
   // 3, and a short reply that names no number of ours.
+  let softFloor = false;
   if (party === "agent" && draft.intent === "counter" && Number(draft.counterAmount) > 0) {
     const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
     const open = book.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
@@ -1743,7 +1771,21 @@ async function runReply(job, ctx) {
       // their answer to it — no margin, no second round.
       const weMovedOnPrice = Boolean(full.counterBand?.acceptedAt || (full.requotes || []).length);
       const passLine = weMovedOnPrice ? reference : reference * (1 + COUNTER_PASS_MARGIN);
-      if (reference > 0 && theirs > passLine) {
+      const firmness = floorFirmness(job.message);
+      if (reference > 0 && theirs > passLine && firmness === "soft" && !(full.requotes || []).length) {
+        // A soft floor is an opening. Keep it a live negotiation: file their
+        // number on the offer, and ask for the value and the work so the
+        // re-quote has something to run on. No number of ours, no goodbye.
+        softFloor = true;
+        const street = String(draft.propertyAddress || full.address || "").split(",")[0].trim();
+        draft = {
+          ...draft, intent: "question", reclassifiedFrom: "counter",
+          summary: `Their number (${fmtMoney(theirs)}) is well over ours (${fmtMoney(reference)}), but they sound open — asked for their value and repairs to re-quote.`,
+          reply: `Appreciate you giving me a number to work with${street ? ` on ${street}` : ""}. Help me close the gap: what do you figure it's worth once it's done, and what would you budget for the work? I'll re-run it on your numbers.`,
+          needsHuman: false,
+        };
+        job.intent = draft.intent;
+      } else if (reference > 0 && theirs > passLine) {
         draft = {
           ...draft, intent: "rejection", reclassifiedFrom: "counter",
           summary: weMovedOnPrice
@@ -1849,6 +1891,17 @@ async function runReply(job, ctx) {
   // Number first: the reply promises numbers, so the underwrite runs whatever
   // the tier's rule carries (Tier 2 carries none) — replacing a held draft
   // rather than standing down behind it.
+  // A soft floor still files their number on the offer.
+  if (softFloor && !plan.auto.some((x) => x.type === "mark_offer_countered")) {
+    plan.auto.push({ id: `a-soft-${job.id}`, type: "mark_offer_countered", mode: "auto", status: "pending", party,
+      why: "they named a number but sound open — asked for their value and repairs" });
+  }
+  // A seller saying yes is the most important text of the week. Whatever the
+  // guard decides about replying, the contact is tagged so it can't sit.
+  if (party === "agent" && draft.intent === "acceptance" && !plan.auto.some((x) => x.type === "add_tags" && (x.tags || []).includes("seller-accepted"))) {
+    plan.auto.push({ id: `a-acc-${job.id}`, type: "add_tags", mode: "auto", status: "pending", party, tags: ["seller-accepted"],
+      why: "the seller accepted — send the contract" });
+  }
   if (numberFirst) {
     const extra = numberFirst.replaceOfferId ? { replaceOfferId: numberFirst.replaceOfferId } : {};
     if (plan.auto.some((x) => x.type === "start_underwrite")) {

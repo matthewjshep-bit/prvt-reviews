@@ -2475,6 +2475,56 @@ test("a counter more than 10% over the most we'd pay is filed as their pass, wit
   assert.ok(!(d.flags || []).some((f) => /a counter is a person's call/.test(f)), (d.flags || []).join(" · "));
 });
 
+import { floorFirmness } from "./reply-agent.js";
+
+test("floorFirmness tells a wall from an opening", () => {
+  assert.equal(floorFirmness("Nope. He won't entertain anything under 450k"), "firm");
+  assert.equal(floorFirmness("That won't work. No need to submit an offer below $529k but thanks."), "firm");
+  assert.equal(floorFirmness("If you were more around $460k we would consider it most likely."), "soft");
+  assert.equal(floorFirmness("If your number starts with an eight, I can probably make something work."), "soft");
+  assert.equal(floorFirmness("Their lowest at this time is $700k."), "plain");
+});
+
+test("a soft floor far over ours keeps the negotiation open: their number filed, their value and repairs asked for", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent", "tier-1"]);
+  const offer = { ...NEGOTIATION_OFFER };
+  const store = negotiationStore(offer);
+  const statuses = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "Yes, that offer is still way below what we would be willing to accept. If you were more around $460k we would consider it most likely.",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", counterAmount: 460000, propertyAddress: "12 Elm St",
+        reply: "Understood. Let me run that by my partner and get back to you this afternoon." }),
+      setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "question");
+  assert.match(d.reply, /what do you figure it's worth once it's done/);
+  assert.doesNotMatch(d.reply, /\$|\d{3}/, "names no number of ours");
+  assert.ok(statuses.includes("countered"), `their number filed: ${statuses}`);
+  assert.ok(!statuses.includes("passed"));
+});
+
+test("a contact with an offer in our book is an agent even with no agent tag", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor([]);
+  const store = negotiationStore({ ...NEGOTIATION_OFFER });
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "Hey Matt, just wanted to see if this one might come together. Thanks!",
+    deps: { draft: async () => ({ ...DRAFT, intent: "status_check", confidence: "high", propertyAddress: "12 Elm St", reply: "Still on it." }) },
+  });
+  for (let i = 0; i < 40 && job.status === "running"; i++) await settle();
+  assert.equal(job.status, "done", `${job.error || ""} ${JSON.stringify({ phase: job.phase, party: job.party, partySource: job.partySource })}`);
+  assert.equal(job.party, "agent");
+  assert.equal(job.partySource, "offer_book");
+});
+
 test("a counter within 10% of what we'd pay stays a counter for the band or a person", async () => {
   const { d, statuses } = await counterAt(380000);
   assert.equal(d.intent, "counter");

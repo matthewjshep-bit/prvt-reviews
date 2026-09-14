@@ -276,6 +276,14 @@ test("an acceptance repeating our own number back is still an acceptance", () =>
   assert.equal(v.passed, true, v.reason);
 });
 
+test("an acceptance that rounds our number is still an acceptance (825,000 on our 825,240)", () => {
+  const ours = { ...OFFER, cashAmount: 825240.29 };
+  const v = acc({ offer: ours, openOffers: [ours], inboundMessage: "They agreed to accept 825,000 offer" });
+  assert.equal(v.passed, true, v.reason);
+  const far = acc({ offer: ours, openOffers: [ours], inboundMessage: "They agreed to accept 800,000" });
+  assert.equal(far.passed, false, "25k off is a counter");
+});
+
 test("an acceptance is only ever signalled once", () => {
   const done = { ...OFFER, acceptanceSignal: { at: "2026-09-01T00:00:00Z" } };
   assert.equal(acc({ offer: done, openOffers: [done] }).passed, false);

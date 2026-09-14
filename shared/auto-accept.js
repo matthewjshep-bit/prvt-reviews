@@ -265,7 +265,11 @@ export function evaluateAcceptance({
   const check = (name, ok, detail) => { checks.push({ name, ok: Boolean(ok), detail }); return Boolean(ok); };
   const ours = round(offer?.cashAmount);
   const said = moneyIn(inboundMessage).map(round);
-  const strangers = said.filter((n) => n !== ours);
+  // "They agreed to accept 825,000" on our $825,240.29 is our number, rounded
+  // the way people say it — Heather Vandyken's seller accepted (2026-09-14) and
+  // it held as "a counter". Within $1k or 0.5% of ours, it's ours.
+  const slack = Math.max(1000, Math.round(ours * 0.005));
+  const strangers = said.filter((n) => !(ours > 0 && Math.abs(n - ours) <= slack));
 
   check("acceptance_enabled", band.acceptance === true, band.acceptance ? "" : "acceptance is off");
   check("no_new_number", !round(draft.counterAmount) && strangers.length === 0,
