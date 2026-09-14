@@ -269,6 +269,21 @@ export function isTurnkeyReply(message = "") {
   return done.test(t) && !needsWork.test(t);
 }
 
+/**
+ * isShowingOffer(message) → boolean
+ *
+ * The agent is offering to show us the house — a tour, a showing, a
+ * walkthrough, "would you like to see it?". Matt (2026-09-14, Velia Sierra's
+ * triplex on 4207 S Bateman St): before anybody books a time, get them a
+ * number and see whether it makes sense at all.
+ */
+export function isShowingOffer(message = "") {
+  const t = String(message || "");
+  return /\b(?:private\s+)?(?:tours?|showings?|walk[\s-]?throughs?|viewings?|open\s+house)\b/i.test(t)
+    || /\b(?:like|want|love|happy|able|welcome)\s+to\s+(?:see|tour|view|walk)\b/i.test(t)
+    || /\b(?:come\s+(?:by|see|take\s+a\s+look)|show\s+(?:it|you|the\s+(?:house|home|property|place|units?))|see\s+it\s+in\s+person)\b/i.test(t);
+}
+
 export function normalizeAgentTake(p) {
   const arv = Math.max(0, Math.round(Number(p?.agentArv) || 0));
   const rehab = Math.max(0, Math.round(Number(p?.agentRehab) || 0));
@@ -1753,6 +1768,39 @@ async function runReply(job, ctx) {
     job.intent = draft.intent;
   }
 
+  // Number first. An agent offering a showing, a tour or a time on a house we
+  // have no number on gets a number before anybody books anything — Matt,
+  // 2026-09-14: "even if he asks for a time to schedule, lets push back and
+  // get him a number first to see if it makes sense." Velia Sierra offered a
+  // private tour of a remodeled triplex; it read as turnkey (Tier 2, no
+  // underwrite) and a showing (notify-only), so nothing ran and nobody replied.
+  // Turnkey still files as Tier 2 — this only adds the underwrite and the
+  // reply that says so. A house we already priced is left alone: the offer is
+  // the conversation there.
+  let numberFirst = null;
+  if (party === "agent" && !SILENT_INTENTS.has(draft.intent)
+      && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)
+      // A showing, not a call: "give me a call tomorrow" stays with the calendar.
+      && (draft.intent === "wants_walkthrough" || isShowingOffer(job.message))
+      && underwritableAddress(draft.propertyAddress)) {
+    const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    const known = knownOfferFor(rows, draft.propertyAddress, now);
+    if (!known || known.status === "draft") {
+      numberFirst = { replaceOfferId: known?.id || null };
+      const street = String(draft.propertyAddress || "").split(",")[0].trim();
+      const turnkey = draft.intent === "investor_open" || isTurnkeyReply(job.message);
+      draft = {
+        ...draft,
+        intent: turnkey ? "investor_open" : "deal_available",
+        reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
+        needsHuman: false,
+        numberFirst: true,
+        reply: `Appreciate that. Before we set up a time, let me run the numbers on ${street || "it"} with my team so nobody's time gets wasted. I'll come back to you today with where we'd be.`,
+      };
+      job.intent = draft.intent;
+    }
+  }
+
   // The model read an opt-out the keywords didn't catch ("lose my number",
   // plain anger). Same outcome as the keyword: silence and the tag.
   if (SILENT_INTENTS.has(draft.intent)) {
@@ -1798,6 +1846,19 @@ async function runReply(job, ctx) {
   const bookingVerdict = guard?.kind === "booking" ? guard : null;
   const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
+  // Number first: the reply promises numbers, so the underwrite runs whatever
+  // the tier's rule carries (Tier 2 carries none) — replacing a held draft
+  // rather than standing down behind it.
+  if (numberFirst) {
+    const extra = numberFirst.replaceOfferId ? { replaceOfferId: numberFirst.replaceOfferId } : {};
+    if (plan.auto.some((x) => x.type === "start_underwrite")) {
+      plan.auto = plan.auto.map((x) => (x.type === "start_underwrite" ? { ...x, ...extra } : x));
+    } else {
+      plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite");
+      plan.auto.push({ id: `a-nf-${job.id}`, type: "start_underwrite", mode: "auto", status: "pending", party, ...extra,
+        why: "they offered a showing — get them a number first" });
+    }
+  }
   // The re-quote toggle has to mean something on its own. Without this it is
   // inert unless the operator also wires the action onto a rule by hand, and a
   // switch that does nothing until you find a second switch is a trap.
@@ -2090,8 +2151,9 @@ async function runReply(job, ctx) {
   // reviewing) on this house. The rule's own underwrite stands down.
   if (namedKnown && !rerunHeld && plan.auto.some((x) => x.type === "start_underwrite")) {
     const why = `already have ${namedKnown.status === "draft" ? "a held draft" : "an offer"} on ${namedKnown.address}`;
-    plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite");
-    record = { ...record, actions: record.actions.map((x) => x.type === "start_underwrite" && x.status === "pending" ? { ...x, status: "skipped", detail: why } : x), updatedAt: new Date().toISOString() };
+    // A run already aimed at replacing that held draft (number first) goes ahead.
+    plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite" || x.replaceOfferId);
+    record = { ...record, actions: record.actions.map((x) => x.type === "start_underwrite" && x.status === "pending" && !x.replaceOfferId ? { ...x, status: "skipped", detail: why } : x), updatedAt: new Date().toISOString() };
     await store.updateReplyDraft(record.id, record).catch(() => {});
   }
   if (subjectMoved && playbook && !LIFECYCLE.has(draft.intent)) {

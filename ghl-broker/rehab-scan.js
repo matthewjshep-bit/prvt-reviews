@@ -4,6 +4,7 @@
 //    guarantee a JSON suggestion keyed to the exact catalog item ids the
 //    RehabPane UI renders.
 
+import { unitsFromDetail, streetKey } from "./comps-zillow.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { ALL_REHAB_ITEMS, BATH_TIERS, BED_TIERS, lineCost, rehabBand } from "./shared/rehab-catalog.js";
 import { addressQueryVariants } from "./shared/us-address.js";
@@ -70,6 +71,9 @@ export async function fetchListingPhotos(address, compsApiKey) {
 // One synchronous actor run: address in, dataset items (facts + photos) out.
 // Caveat, acknowledged when this was chosen: unofficial scraper, Zillow ToS.
 const APIFY_ACTOR = "maxcopell~zillow-detail-scraper";
+// Comps looked up per run for their unit count. The detail actor is billed per
+// address; the nearest ones are the ones the ARV will use.
+export const MAX_UNIT_LOOKUPS = 25;
 
 // Pick a jpeg rendition near 1536px from Zillow's mixedSources photo shape.
 function bestPhotoUrl(photo) {
@@ -142,8 +146,41 @@ export async function fetchZillowPhotos(address, apifyToken) {
       // TOWNHOUSE, MULTI_FAMILY… Comps are matched against this rather than
       // against an assumption that every subject is a house.
       homeType: item.homeType || null,
+      // Duplex, triplex, fourplex — only asked of a multifamily.
+      ...(item.homeType === "MULTI_FAMILY" ? { units: unitsFromDetail(item) } : {}),
     },
   };
+}
+
+/**
+ * fetchZillowUnits(addresses, apifyToken) → Map(streetKey → units)
+ *
+ * One detail-actor run over a batch of comp addresses, for the one fact the
+ * search rows don't carry. Addresses it can't read are simply absent.
+ */
+export async function fetchZillowUnits(addresses = [], apifyToken) {
+  const list = [...new Set(addresses.filter(Boolean))].slice(0, MAX_UNIT_LOOKUPS);
+  const out = new Map();
+  if (!list.length) return out;
+  const r = await fetch(
+    `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}&timeout=180`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addresses: list }),
+      signal: AbortSignal.timeout(200000),
+    }
+  );
+  if (!r.ok) throw new Error(`Zillow unit lookup failed (Apify ${r.status})`);
+  const items = await r.json();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || item.isValid === false) continue;
+    const a = item.address && typeof item.address === "object" ? item.address : null;
+    const key = streetKey(a?.streetAddress || item.streetAddress || item.addressOrUrlFromInput || "");
+    const units = unitsFromDetail(item);
+    if (key && units) out.set(key, units);
+  }
+  return out;
 }
 
 /* ---------- getting the pictures into the request ---------- */

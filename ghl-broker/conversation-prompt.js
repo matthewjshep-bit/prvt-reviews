@@ -80,6 +80,10 @@ const COMMITMENTS = {
     "inspection time, promise proof of funds, or agree to terms. When the agent asks for any of those, write a " +
     "holding reply that answers it without reading their number back and promises a same-day answer (\"Let me run " +
     "that by my partner and get back to you this afternoon\"), and set needsHuman to true with the reason. " +
+    // Matt, 2026-09-14: a number before a showing, always.
+    "A SHOWING, TOUR OR WALKTHROUGH OFFER on a house we have no offer on yet: do not take or offer a time. Say " +
+    "you'd like to run the numbers first so nobody's time gets wasted, and that you'll come back today with where " +
+    "we'd be. " +
     // A plain counter is held by the broker whatever the model says, and a
     // needsHuman on every counter kept the counter band from ever opening.
     "A COUNTER BY ITSELF is the exception to needsHuman: when the only thing they did is name the seller's " +

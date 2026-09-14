@@ -29,9 +29,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { pullComps } from "./comps-pull.js";
 import { geocodeAddress, atLeast, precisionRank, PRECISION } from "./geocode.js";
-import { pullZillowComps } from "./comps-zillow.js";
+import { pullZillowComps, filterByUnits, streetKey } from "./comps-zillow.js";
 import { gradeComps } from "./comps-grade.js";
-import { fetchZillowPhotos, fetchListingPhotos, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
+import { fetchZillowPhotos, fetchListingPhotos, fetchZillowUnits, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
 import { deriveArv, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
@@ -1189,10 +1189,30 @@ async function runUnderwrite(job, ctx) {
       beds: facts?.beds ?? null, baths: facts?.baths ?? null,
       sqft: facts?.sqft ?? null, yearBuilt: facts?.yearBuilt ?? null,
       homeType: facts?.homeType ?? null,
+      units: facts?.units ?? null,
       stories: null, subdivision: null, material: null,
     };
     got.subject = subject;
-    const pullAt = (radiusMiles) => pullZillowComps({
+    // A triplex is comped against triplexes. Zillow's type filter already
+    // keeps it to multifamily; the unit count comes from a batched detail
+    // lookup, cached across rings so a widened search only pays for new rows.
+    const unitCache = new Map();
+    const matchUnits = async (data) => {
+      if (!(subject.homeType === "MULTI_FAMILY" && subject.units > 0)) return data;
+      const need = (data.comps || []).filter((c) => !unitCache.has(streetKey(c.address)));
+      if (need.length) {
+        try {
+          const found = await fetchZillowUnits(need.map((c) => c.address), apifyToken);
+          for (const c of need.slice(0, 25)) unitCache.set(streetKey(c.address), found.get(streetKey(c.address)) ?? null);
+        } catch (e) {
+          if (!warnings.some((w) => w.startsWith("unit counts"))) warnings.push(`unit counts for the multifamily comps: ${e.message}`);
+        }
+      }
+      const withUnits = (data.comps || []).map((c) => ({ ...c, units: c.units ?? unitCache.get(streetKey(c.address)) ?? null }));
+      const f = filterByUnits(withUnits, subject.units);
+      return { ...data, comps: f.comps, units: { subject: subject.units, matched: f.matched, dropped: f.dropped, unknown: f.unknown, keptUnknown: f.keptUnknown } };
+    };
+    const pullAt = async (radiusMiles) => matchUnits(await pullZillowComps({
       apifyToken,
       lat: geo.lat, lng: geo.lng,
       beds: subject.beds || 0, baths: subject.baths || 0, sqft: subject.sqft || 0,
@@ -1209,7 +1229,7 @@ async function runUnderwrite(job, ctx) {
       // wrong for a house.
       homeType: subject.homeType,
       subject,
-    });
+    }));
     // Half a mile first; wider only when that ring can't carry an ARV. "Usable"
     // is what the condition step will actually have to work with: comps the
     // price proxy calls renovated, or — for AI grading, which is priced per
@@ -1230,6 +1250,12 @@ async function runUnderwrite(job, ctx) {
       if (usable >= UW_MIN_REHABBED_COMPS || radius === lastRing) break;
       const found = graded ? graded.proxy.pool : ring.length;
       warnings.push(`only ${found} priced comp${found === 1 ? "" : "s"} within ${radius} mi — widened the search`);
+    }
+    if (compsData?.units) {
+      const u = compsData.units;
+      warnings.push(`comped as a ${u.subject}-unit: ${u.matched} confirmed match${u.matched === 1 ? "" : "es"}` +
+        (u.dropped ? `, ${u.dropped} with a different unit count dropped` : "") +
+        (u.keptUnknown && u.unknown ? `, ${u.unknown} unconfirmed kept (too few confirmed)` : ""));
     }
   } else {
     // widen:false is the point. The ladder in comps-pull.js is right for a

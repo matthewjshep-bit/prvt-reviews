@@ -304,7 +304,7 @@ test("a walkthrough, a call or a time gets a heads-up instead of a draft nobody 
   const { client, notes } = ghlStub();
   const store = fakeStore();
   const { job } = await startReply({
-    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "can you come see it thursday?",
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "can we talk thursday?",
     deps: { draft: async () => ({ ...DRAFT, intent: "scheduling", reply: "Thursday works, what time suits you?",
       summary: "The agent wants to set a time to walk 12 Elm.", propertyAddress: "12 Elm St" }) },
   });
@@ -2501,6 +2501,62 @@ test("a turnkey answer to 'project or turnkey?' is Tier 2, not a deal — no Tie
   assert.equal(d.intent, "investor_open");
   assert.ok(!d.actions.some((a) => (a.tags || []).includes("tier-1")), `no Tier 1: ${d.actions.map((a) => a.type)}`);
   assert.equal(uw.length, 0, "a renovated house is never sent to underwriting");
+});
+
+/* ---------- number first: a showing offer gets a number before a time ---------- */
+
+import { isShowingOffer } from "./reply-agent.js";
+
+const VELIA = "Hi Matt, the triplex is in excellent condition. The kitchens and bathrooms have been remodeled, and the units feature stainless-steel appliances. It is currently offered with good tenants in place, making it an attractive opportunity for a long-term rental investment. If you are interested in occupying one of the units, we can review the existing leases and available options. I'd be happy to arrange a private tour. Would you like to see it?";
+
+test("isShowingOffer hears a tour, a showing, or 'would you like to see it'", () => {
+  assert.equal(isShowingOffer(VELIA), true);
+  assert.equal(isShowingOffer("happy to show you the house tomorrow"), true);
+  assert.equal(isShowingOffer("can do a walk-through Thursday"), true);
+  assert.equal(isShowingOffer("It's a project, needs a new roof"), false);
+  assert.equal(isShowingOffer("I see it as a flip"), false);
+});
+
+test("a showing offer on a house we haven't priced gets 'numbers first' and an underwrite, not a hold", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: VELIA,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "scheduling", confidence: "high", needsHuman: true, propertyAddress: "4207 S Bateman St, Seattle, WA 98118",
+        reply: "Thanks Velia, let me check my calendar and get back to you." }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-9" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "investor_open", "remodeled with tenants is still Tier 2");
+  assert.match(d.reply, /Before we set up a time, let me run the numbers on 4207 S Bateman St/);
+  assert.equal(uw.length, 1, `the underwrite runs: ${JSON.stringify(d.actions.map((a) => [a.type, a.status, a.detail]))}`);
+  assert.equal(uw[0].address, "4207 S Bateman St, Seattle, WA 98118");
+});
+
+test("a showing offer on a house we already sent an offer on is left alone", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => [{ id: "o9", contactId: "c1", address: "4207 S Bateman St, Seattle, WA 98118", status: "sent", createdAt: new Date().toISOString() }];
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "Would you like to see it tomorrow?",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "scheduling", confidence: "high", needsHuman: true, propertyAddress: "4207 S Bateman St, Seattle, WA 98118",
+        reply: "Let me check and get back to you." }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-9" } }; },
+    },
+  });
+  await settle();
+  assert.equal(uw.length, 0);
 });
 
 test("an agent already on Tier 1 who brings a different house leaves Tier 1 first, so it runs again", async () => {

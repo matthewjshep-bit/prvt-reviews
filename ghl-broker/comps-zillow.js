@@ -155,6 +155,65 @@ const EXCLUDED_HOME_TYPES = new Set([
   "CONDO", "TOWNHOUSE", "MULTI_FAMILY", "APARTMENT", "LOT", "MANUFACTURED",
 ]);
 
+// Units in a small multifamily. Zillow's search rows only say MULTI_FAMILY —
+// a duplex, a triplex and a fourplex all at once — and a triplex priced off
+// duplexes is a different building with a different buyer (Matt, 2026-09-14:
+// "can we filter for triplexes on our arv comps"). The count lives on the
+// detail page (resoFacts) or, failing that, in the words of the listing.
+const UNIT_WORDS = [
+  [/\b(?:duplex|two[\s-]?unit|2[\s-]?unit)s?\b/i, 2],
+  [/\b(?:tri[\s-]?plex|three[\s-]?unit|3[\s-]?unit)s?\b/i, 3],
+  [/\b(?:four[\s-]?plex|quad(?:ru)?plex|4[\s-]?plex|four[\s-]?unit|4[\s-]?unit)s?\b/i, 4],
+];
+
+// The earliest unit word in the text wins: "triplex … each unit has a 2-unit
+// parking pad" is a triplex.
+export function unitsFromText(text = "") {
+  const t = String(text || "");
+  let best = null;
+  for (const [re, n] of UNIT_WORDS) {
+    const m = re.exec(t);
+    if (m && (best == null || m.index < best.at)) best = { at: m.index, n };
+  }
+  return best ? best.n : null;
+}
+
+// A detail-scraper item → unit count, or null when it doesn't say.
+export function unitsFromDetail(item) {
+  const r = item?.resoFacts || {};
+  for (const v of [r.numberOfUnitsTotal, r.unitCount, r.numberOfUnits, item?.numberOfUnitsTotal, item?.unitCount]) {
+    const n = Number(v);
+    if (Number.isInteger(n) && n >= 2 && n <= 50) return n;
+  }
+  const words = [r.structureType, r.architecturalStyle, ...(Array.isArray(r.propertySubType) ? r.propertySubType : [r.propertySubType]), item?.description]
+    .filter((x) => typeof x === "string").join(" ");
+  return unitsFromText(words);
+}
+
+// Street line, loosely — enough to match a comp's search row to its detail
+// row inside a mile and a half.
+export const streetKey = (address = "") =>
+  String(address || "").split(",")[0].toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+
+/**
+ * filterByUnits(comps, units) → { comps, matched, dropped, unknown, keptUnknown, applied }
+ *
+ * Same unit count only. A comp with a DIFFERENT count is always dropped; one
+ * whose count we couldn't confirm is dropped too, unless fewer than
+ * `minConfirmed` confirmed matches are left — then they stay, and the note
+ * says so, because an ARV off two unconfirmed multifamilies beats no ARV.
+ */
+export function filterByUnits(comps = [], units = 0, { minConfirmed = 2 } = {}) {
+  if (!(Number(units) > 0)) return { comps, matched: 0, dropped: 0, unknown: 0, keptUnknown: false, applied: false };
+  const matched = comps.filter((c) => c.units === units).length;
+  const unknown = comps.filter((c) => c.units == null).length;
+  const keptUnknown = matched < minConfirmed;
+  return {
+    comps: comps.filter((c) => c.units === units || (keptUnknown && c.units == null)),
+    matched, unknown, dropped: comps.length - matched - unknown, keptUnknown, applied: true,
+  };
+}
+
 // filterState flags, by Zillow's own type names. Used to narrow the search URL
 // so fewer rows come back; the JS filter below is what actually guarantees it.
 const HOME_TYPE_FLAGS = {

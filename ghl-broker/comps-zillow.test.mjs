@@ -481,3 +481,38 @@ test("a boxful of 0.0.91 rows comes back as comps — the second time this was z
     assert.equal(out.comps[0].price, 600000);
   } finally { globalThis.fetch = real; }
 });
+
+
+/* ---------- unit counts: a triplex is comped against triplexes ---------- */
+
+import { unitsFromText, unitsFromDetail, filterByUnits, streetKey } from "./comps-zillow.js";
+
+test("unit words in a listing read as a unit count", () => {
+  assert.equal(unitsFromText("Hi Matt, the triplex is in excellent condition."), 3);
+  assert.equal(unitsFromText("Great duplex with separate meters"), 2);
+  assert.equal(unitsFromText("Rare 4-plex on a corner lot"), 4);
+  assert.equal(unitsFromText("Tri-plex, each unit has a 2 unit carport"), 3, "the first unit word wins");
+  assert.equal(unitsFromText("Charming bungalow"), null);
+});
+
+test("a detail row's resoFacts count beats its description", () => {
+  assert.equal(unitsFromDetail({ resoFacts: { numberOfUnitsTotal: 3 }, description: "duplex" }), 3);
+  assert.equal(unitsFromDetail({ resoFacts: { structureType: "Triplex" } }), 3);
+  assert.equal(unitsFromDetail({ description: "fourplex near light rail" }), 4);
+  assert.equal(unitsFromDetail({ resoFacts: {} }), null);
+});
+
+test("filterByUnits keeps the same count, drops other counts, and keeps unconfirmed only when confirmed are thin", () => {
+  const rows = [{ id: "a", units: 3 }, { id: "b", units: 2 }, { id: "c", units: null }, { id: "d", units: 3 }];
+  const f = filterByUnits(rows, 3);
+  assert.deepEqual(f.comps.map((c) => c.id), ["a", "d"]);
+  assert.equal(f.dropped, 1);
+  const thin = filterByUnits([{ id: "a", units: 3 }, { id: "b", units: 4 }, { id: "c", units: null }], 3);
+  assert.deepEqual(thin.comps.map((c) => c.id), ["a", "c"], "one confirmed isn't enough, so the unconfirmed stays");
+  assert.equal(thin.keptUnknown, true);
+  assert.equal(filterByUnits(rows, 0).applied, false, "no subject count, no filter");
+});
+
+test("streetKey matches a search row to its detail row", () => {
+  assert.equal(streetKey("4207 S Bateman St, Seattle, WA 98118"), streetKey("4207 S. Bateman St"));
+});
