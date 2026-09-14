@@ -547,6 +547,34 @@ export async function listConversationMessages(client, conversationId, { lastMes
   };
 }
 
+// The newest inbound message with words in it, across the contact's most
+// recently active conversations. Returns { body, at, id, type, attachments }
+// or null. For re-running a reply the webhook never delivered — the text is
+// read back from GHL, never retyped. Needs conversations.readonly.
+export async function getLatestInboundMessage(client, locationId, contactId, { conversations: maxConvos = 3, perConversation = 25 } = {}) {
+  const { conversations } = await searchConversations(client, locationId, { contactId, limit: 10 });
+  let best = null;
+  for (const c of conversations.slice(0, maxConvos)) {
+    const { messages } = await listConversationMessages(client, c.id, { limit: perConversation });
+    for (const m of messages) {
+      if (String(m.direction || "").toLowerCase() !== "inbound") continue;
+      const body = String(m.body || "").trim();
+      if (!body) continue;
+      const ts = Date.parse(m.dateAdded || "");
+      if (!Number.isFinite(ts)) continue;
+      if (!best || ts > best.ts) {
+        best = {
+          ts, body, at: new Date(ts).toISOString(), id: m.id || m.messageId || null,
+          type: String(m.messageType || m.type || ""), attachments: Array.isArray(m.attachments) ? m.attachments.length : 0,
+        };
+      }
+    }
+  }
+  if (!best) return null;
+  const { ts, ...rest } = best;
+  return rest;
+}
+
 // Sentence-level transcription of a recorded call message. Returns an array
 // of { mediaChannel, sentenceIndex, startTime, endTime, transcript,
 // confidence } (order not guaranteed — sort by sentenceIndex). Throws on GHL

@@ -127,6 +127,7 @@ import {
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
   customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField, getContactNotes,
   searchContactsByTag, listWorkflows, listLocationTags, searchAllContactsByTags, listCalendars, createAppointment,
+  getLatestInboundMessage,
 } from "../ghl.js";
 import {
   enrichFieldDefs, enrichTagVocab, ENRICH_TAG_GROUPS, inferContactType,
@@ -4556,12 +4557,61 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // A cap hit (or the bot being switched off) answers 200, not 4xx — a
       // GHL workflow that gets an error retries, and retrying is exactly
       // what the cap exists to stop.
-      if (skipped) return res.json({ ok: true, started: false, skipped });
+      if (skipped) {
+        // A cap skip used to leave nothing anywhere: no draft, no note, no row.
+        // On 2026-09-14 the 60-a-day cap filled at 11:56 AM and a dozen agents'
+        // replies — two counters among them — went unanswered with no trace
+        // until someone asked why a thread had gone quiet. Say it on the
+        // contact, where the person answering by hand will look.
+        if (/daily cap/.test(skipped)) {
+          console.log(`conversation webhook skipped ${contactId}: ${skipped}`);
+          createContactNote(client, contactId, {
+            body: `Conversation AI did not answer this text — ${skipped}. The message is in the thread above; answer it by hand, or raise the cap on the Conversation AI page and redraft it.`,
+          }).catch(() => {});
+        }
+        return res.json({ ok: true, started: false, skipped });
+      }
       res.status(202).json({ ok: true, started: true, jobId: job.id, party: job.party || null });
     } catch (err) { fail(res, err); }
   }
   router.post("/automations/reply", conversationWebhook);
   router.post("/automations/conversation", conversationWebhook);
+
+  // Re-run a reply the webhook never delivered — a cap skip, a broker restart
+  // mid-job, a GHL workflow that didn't fire. The text is read back from GHL
+  // (the contact's newest inbound message), never typed in, and goes through
+  // exactly the pipeline the webhook would have run: caps, stand-down, gates,
+  // auto-send. Location-gated like every other operator route, because this
+  // is a person pressing a button, not a workflow firing.
+  //
+  //   POST { contactId } → 202 { ok, jobId, message, at }
+  router.post("/automations/conversation/redraft", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = dealStr(req.body?.contactId, 64);
+      if (!contactId) return res.status(400).json({ error: "contactId required" });
+      let latest;
+      try {
+        latest = await getLatestInboundMessage(client, locationId, contactId);
+      } catch (e) {
+        if (e?.status === 401 || e?.status === 403) {
+          return res.status(400).json({ error: "the GHL token lacks conversations.readonly, so the text can't be read back" });
+        }
+        throw e;
+      }
+      if (!latest) return res.status(404).json({ error: "this contact has no inbound text to answer" });
+      const saved = await store.getOfferSettings(locationId);
+      const { skipped, job } = await startReply({
+        client, locationId, saved, store, contactId,
+        message: latest.body.slice(0, 4000),
+        channel: /email/i.test(latest.type) ? "email" : "sms",
+        attachments: latest.attachments,
+        sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved }),
+      });
+      if (skipped) return res.status(409).json({ error: skipped, message: latest.body.slice(0, 200), at: latest.at });
+      res.status(202).json({ ok: true, jobId: job.id, message: latest.body.slice(0, 200), at: latest.at });
+    } catch (err) { fail(res, err); }
+  });
 
   // A phone call, as an inbound. Target of a GHL workflow "Call Status →
   // completed → Webhook", same credential as the text webhook:
