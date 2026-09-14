@@ -551,7 +551,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           A GoHighLevel workflow can webhook an inbound agent text straight into a finished offer:
           it reads the address, pulls comps within half a mile, has the AI grade each comp's
           renovation condition from its sold photos, derives the ARV from the renovated ones only,
-          scans the subject's listing photos into a scope of work, and creates a <strong>blended</strong> offer.
+          scans the subject's listing photos into a scope of work, and creates an offer at the <strong>maximum-offer rule</strong> (the % of ARV below, minus repairs, minus the fee).
           Nothing is ever sent to the agent — the offer lands in History for you to review.
           A run that can't find three renovated comps nearby, or enough photos to scan, stops and
           saves a draft instead. Each run costs roughly $1–3 in Apify and Anthropic usage.

@@ -9,7 +9,7 @@
 //   grading    → have Claude grade each comp's condition from its sold photos
 //   arv        → derive the ARV from the RENOVATED ones only
 //   rehab      → scan the subject's listing photos into a priced scope of work
-//   creating   → blended underwrite, offer + documents + GHL writeback
+//   creating   → maximum-offer underwrite (N% ARV − repairs − fee), offer + documents + GHL writeback
 //
 // Two things this deliberately does NOT do:
 //
@@ -1593,7 +1593,7 @@ function doneNote(job, arv, repairs) {
   return [
     `Auto-underwrite complete for ${job.address}.`,
     ``,
-    `Blended cash offer: ${fmtMoney(job.cashAmount || 0)}`,
+    `Cash offer: ${fmtMoney(job.cashAmount || 0)} (maximum-offer rule: % of ARV − repairs − fee)`,
     `ARV ${fmtMoney(arv?.arv || 0)} — ${job.arvBasis}`,
     `Repairs ${fmtMoney(repairs)} from ${job.photosAnalyzed} listing photos`,
     ``,
