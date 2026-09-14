@@ -32,6 +32,10 @@ export const AUTO_ACCEPT_FEE = 10000;
 // The share of list price the bot may never go above, unless the location's
 // settings say otherwise (maxOfferPctOfList). Matches the auto-underwrite's.
 export const MAX_PCT_OF_LIST = 90;
+// How far over the ceiling a counter may be and still get an automatic answer.
+// Within it, the band counters back AT the ceiling (the most we'd pay); past
+// it — or on a second counter after we already moved — it is their pass.
+export const COUNTER_MARGIN = 0.10;
 
 const round = (v) => Math.round(Number(v) || 0);
 
@@ -186,10 +190,28 @@ export function evaluateCounterBand({
   const dailyCap = Math.max(1, round(band.dailyCap) || 1);
   check("under_daily_cap", releasedToday < dailyCap, `${releasedToday}/${dailyCap} today`);
 
+  // Counter back. When the ONLY thing wrong is that their number is a little
+  // over the ceiling — within COUNTER_MARGIN — and the ceiling is still above
+  // our own offer, the band answers at the ceiling instead of parking it for a
+  // person (Matt, 2026-09-14: "just have the counter go automatically"). Every
+  // other check — their words, one offer, sure, once per offer, daily cap —
+  // still has to pass; this relaxes the arithmetic and nothing else.
+  const onlyOver = checks.filter((c) => !c.ok).map((c) => c.name);
+  const counterBack = onlyOver.length === 1 && onlyOver[0] === "under_ceiling"
+    // Not when the operator's hard cap is what binds — that dial means "a
+    // person decides above this", and countering back would walk around it.
+    && ceiling.computable && !(cap > 0 && cap < ceiling.ceiling) && limit > round(offer?.cashAmount)
+    && theirAmount <= Math.round(limit * (1 + COUNTER_MARGIN));
+  if (counterBack) {
+    const c = checks.find((x) => x.name === "under_ceiling");
+    c.ok = true;
+    c.detail = `${theirAmount} is over ${limit} by ${theirAmount - limit} — countering back at ${limit}`;
+  }
   const passed = checks.every((c) => c.ok);
   const failed = checks.find((c) => !c.ok);
   return {
-    kind: "counter_band", passed, checks,
+    kind: "counter_band", passed, checks, counterBack,
+    releaseAmount: passed ? (counterBack ? limit : theirAmount) : 0,
     theirAmount, ceiling: limit, rawCeiling: ceiling.ceiling,
     basis: ceiling.basis || "", mode: ceiling.mode || "", modes: ceiling.modes || [],
     source: ceiling.source || "", offerId: offer?.id || null,

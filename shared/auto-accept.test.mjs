@@ -137,11 +137,29 @@ test("a counter exactly at the ceiling is allowed", () => {
   assert.equal(v.passed, true, v.reason);
 });
 
-test("a counter one dollar over the ceiling is refused", () => {
-  const v = band({ draft: { counterAmount: CEILING + 1, confidence: "high", propertyAddress: OFFER.address }, inboundMessage: `$${(CEILING + 1).toLocaleString("en-US")}` });
+test("a counter more than 10% over the ceiling is refused", () => {
+  const over = Math.round(CEILING * 1.2);
+  const v = band({ draft: { counterAmount: over, confidence: "high", propertyAddress: OFFER.address }, inboundMessage: `$${over.toLocaleString("en-US")}` });
   assert.equal(v.passed, false);
   assert.equal(failed(v), "under_ceiling");
   assert.match(v.reason, /over the/);
+  assert.equal(v.counterBack, false);
+});
+
+test("a counter a little over the ceiling is answered by countering back AT the ceiling", () => {
+  // Matt, 2026-09-14: counters go automatically instead of waiting for review.
+  const over = CEILING + 1;
+  const v = band({ draft: { counterAmount: over, confidence: "high", propertyAddress: OFFER.address }, inboundMessage: `$${over.toLocaleString("en-US")}` });
+  assert.equal(v.passed, true, v.reason);
+  assert.equal(v.counterBack, true);
+  assert.equal(v.releaseAmount, CEILING, "we answer with the most we'd pay, not their number");
+});
+
+test("counter back still needs every other check — a medium-confidence read parks", () => {
+  const over = CEILING + 1;
+  const v = band({ draft: { counterAmount: over, confidence: "medium", propertyAddress: OFFER.address }, inboundMessage: `$${over.toLocaleString("en-US")}` });
+  assert.equal(v.passed, false);
+  assert.equal(v.counterBack, false);
 });
 
 test("a number the model read but the agent never typed fails", () => {

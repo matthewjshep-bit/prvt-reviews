@@ -45,7 +45,7 @@ import { getFreeSlots } from "./ghl.js";
 import { GUARD_FOR_INTENT } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
-import { evaluateCounterBand, evaluateAcceptance, autoAcceptCeiling } from "./shared/auto-accept.js";
+import { evaluateCounterBand, evaluateAcceptance, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
 import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver } from "./shared/offer-status.js";
 import { sameStreet } from "./shared/us-address.js";
@@ -575,7 +575,9 @@ export function releaseUnderGuard({ base, party = "agent", intent = "other", con
     send: true, code: "released",
     reason: family === "booking"
       ? `released under the calendar — ${guard.reason}`
-      : `released under the counter band — ${fmtMoney(guard.theirAmount)} is at or under the ${fmtMoney(guard.ceiling)} ceiling`,
+      : guard.counterBack
+        ? `released under the counter band — ${fmtMoney(guard.theirAmount)} is just over the ${fmtMoney(guard.ceiling)} ceiling, countering back at it`
+        : `released under the counter band — ${fmtMoney(guard.theirAmount)} is at or under the ${fmtMoney(guard.ceiling)} ceiling`,
     exception: guard,
   };
 }
@@ -676,7 +678,8 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
 // one doesn't — a house that comes back months later deserves fresh numbers.
 // A counter more than this far above the higher of our offer and the ceiling
 // is their pass, not a negotiation (see the counter reclassify in runReply).
-export const COUNTER_PASS_MARGIN = 0.10;
+// The same margin the band counters back inside — one number, one place.
+export const COUNTER_PASS_MARGIN = COUNTER_MARGIN;
 const KNOWN_OFFER_DAYS = 60;
 const KNOWN_DRAFT_DAYS = 7;
 export function knownOfferFor(rows = [], address = "", now = Date.now()) {
@@ -1720,10 +1723,17 @@ async function runReply(job, ctx) {
       const ceiling = autoAcceptCeiling({ offer: full, settings: saved || {} });
       const reference = Math.max(Math.round(Number(full.cashAmount) || 0), ceiling.computable ? ceiling.ceiling : 0);
       const theirs = Math.round(Number(draft.counterAmount));
-      if (reference > 0 && theirs > reference * (1 + COUNTER_PASS_MARGIN)) {
+      // Once we've already come back with a number (the band countered or
+      // accepted, or a re-quote went out), any counter above what we'd pay is
+      // their answer to it — no margin, no second round.
+      const weMovedOnPrice = Boolean(full.counterBand?.acceptedAt || (full.requotes || []).length);
+      const passLine = weMovedOnPrice ? reference : reference * (1 + COUNTER_PASS_MARGIN);
+      if (reference > 0 && theirs > passLine) {
         draft = {
           ...draft, intent: "rejection", reclassifiedFrom: "counter",
-          summary: `Their number (${fmtMoney(theirs)}) is more than ${Math.round(COUNTER_PASS_MARGIN * 100)}% over the most we'd pay (${fmtMoney(reference)}) — filed as a pass.`,
+          summary: weMovedOnPrice
+            ? `Their number (${fmtMoney(theirs)}) is over the most we'd pay (${fmtMoney(reference)}) after we already came back — filed as a pass.`
+            : `Their number (${fmtMoney(theirs)}) is more than ${Math.round(COUNTER_PASS_MARGIN * 100)}% over the most we'd pay (${fmtMoney(reference)}) — filed as a pass.`,
           reply: "Understood, that's well past where we can be on this one. If anything changes with the seller let me know, and send anything else my way that needs work.",
           needsHuman: false,
         };
@@ -1811,17 +1821,22 @@ async function runReply(job, ctx) {
   // offer, capped per day) ever re-prices an offer unattended. If either step
   // fails, the reply is held below: it must not say "sent" when nothing went.
   if (auto.exception?.passed && draft.intent === "counter") {
-    const amount = guard.theirAmount;
+    // Inside the ceiling: their number. A little over it: ours — the ceiling.
+    const amount = guard.counterBack ? guard.ceiling : guard.theirAmount;
     plan.auto.push(
       { id: `a-band-${job.id}`, type: "revise_offer_to_counter", mode: "auto", status: "pending", party, amount, via: "counter band",
-        why: `they countered at ${fmtMoney(amount)}, inside the ${fmtMoney(guard.ceiling)} ceiling` },
+        why: guard.counterBack
+          ? `they countered at ${fmtMoney(guard.theirAmount)}, just over the ${fmtMoney(guard.ceiling)} ceiling — countering back at it`
+          : `they countered at ${fmtMoney(amount)}, inside the ${fmtMoney(guard.ceiling)} ceiling` },
       { id: `a-band-send-${job.id}`, type: "send_offer", mode: "auto", status: "pending", party, afterCounter: true, via: "counter band",
         why: `the revised offer at ${fmtMoney(amount)}` },
     );
     const street = String(draft.propertyAddress || "").split(",")[0].trim();
     // No dollar sign: carriers filter it, and the gate flags it.
     const k = amount % 1000 === 0 ? `${amount / 1000}k` : amount.toLocaleString("en-US");
-    draft.reply = `${k} works for us${street ? ` on ${street}` : ""}. Sending the updated offer over now.`;
+    draft.reply = guard.counterBack
+      ? `Best we can do${street ? ` on ${street}` : ""} is ${k} as-is, cash. Sending the updated offer over now.`
+      : `${k} works for us${street ? ` on ${street}` : ""}. Sending the updated offer over now.`;
   }
   if (auto.exception?.passed && draft.intent === "acceptance") {
     plan.suggested.push({ id: `a-acc-${job.id}`, type: "promote_to_deal", mode: "ask", status: "pending", party,

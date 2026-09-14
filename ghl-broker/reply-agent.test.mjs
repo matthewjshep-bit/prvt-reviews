@@ -2280,6 +2280,57 @@ test("if the revised offer doesn't go out, the 'sending it over' reply is held f
   assert.match(d.autoSend.reason, /counter-band offer did not go out/);
 });
 
+test("a counter just over the ceiling goes out on its own: re-issued at our max, sent, and said plainly", async () => {
+  // Matt, 2026-09-14: "just have the counter go automatically instead of wait for my review."
+  _resetJobs();
+  const ceiling = autoAcceptCeiling({ offer: NEGOTIATION_OFFER, settings: bandSaved() }).ceiling;
+  const theirs = ceiling + 15000;   // over, but inside the 10% margin
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const order = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: `seller would do ${theirs / 1000}k on 12 Elm`,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: theirs,
+        reply: "Let me run that by my partner and get back to you this afternoon.", propertyAddress: "12 Elm St" }),
+      reviseOfferToCounter: async ({ amount: a }) => { order.push(["revise", a]); return { ok: true, address: "12 Elm St", amount: a }; },
+      sendOfferDocs: async ({ afterCounter }) => { order.push(["send", afterCounter]); return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(order, [["revise", ceiling], ["send", true]], "re-issued at OUR max, not their number");
+  const k = ceiling % 1000 === 0 ? `${ceiling / 1000}k` : ceiling.toLocaleString("en-US");
+  assert.equal(d.reply, `Best we can do on 12 Elm St is ${k} as-is, cash. Sending the updated offer over now.`);
+  assert.equal(d.status, "scheduled", d.autoSend?.reason);
+  assert.equal(d.exception?.counterBack, true);
+});
+
+test("after we came back at our max, another counter over it is their pass — no second round", async () => {
+  _resetJobs();
+  const ceiling = autoAcceptCeiling({ offer: NEGOTIATION_OFFER, settings: bandSaved() }).ceiling;
+  const offer = { ...NEGOTIATION_OFFER, cashAmount: ceiling - 1000, counterBand: { at: new Date().toISOString(), acceptedAt: new Date().toISOString(), amount: ceiling } };
+  const theirs = ceiling + 5000;
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(offer);
+  const statuses = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: `they still need ${theirs / 1000}k`,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: theirs,
+        reply: "Let me check.", propertyAddress: "12 Elm St" }),
+      setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status }; },
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "rejection", d.summary);
+  assert.ok(d.actions.some((a) => a.type === "mark_offer_passed"), `filed as their pass: ${d.actions.map((a) => a.type)}`);
+});
+
 test("the first no on a live offer asks for their number without filing it dead; the second no closes it", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
