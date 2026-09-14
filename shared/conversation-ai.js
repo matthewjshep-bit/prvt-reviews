@@ -10,7 +10,7 @@
 // own" set; what they share is the persona, the house rules, the examples and
 // the machinery underneath.
 
-import { DEFAULT_LADDERS, ON_EXHAUSTED, kindsFor, normalizeSteps } from "./follow-up.js";
+import { DEFAULT_LADDERS, ON_EXHAUSTED, MAX_REPEAT_DAYS, kindsFor, normalizeSteps } from "./follow-up.js";
 import { BOOKING_DEFAULTS } from "./booking.js";
 
 // The re-quote guard's defaults. They live here rather than in requote.js
@@ -611,6 +611,8 @@ function normalizeFollowUp(src = {}, party = "agent") {
       // deleted falls back to the default rather than silently switching the
       // feature off while the toggle still reads "on".
       steps: steps.length ? steps : [...d.steps],
+      // Days between asks once the configured days run out; 0 stops there.
+      repeatEvery: int(one.repeatEvery, d.repeatEvery || 0, 0, MAX_REPEAT_DAYS),
       onExhausted: oneOf(one.onExhausted, ON_EXHAUSTED, d.onExhausted),
     };
   }

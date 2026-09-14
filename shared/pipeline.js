@@ -59,12 +59,10 @@ export const ACTION_KINDS = [
   { key: "offer_ready",       label: "Priced, not floated" },
   { key: "ladder_exhausted",  label: "Followed up, no reply" },
   { key: "outreach_no_reply", label: "Cold agents who never answered" },
-  { key: "offer_expired",     label: "Expired" },
   { key: "deal_no_buyers",    label: "Deals with nobody on them" },
   { key: "blast_no_opens",    label: "Blasted, nobody opened it" },
   { key: "draft_scheduled",   label: "Sending itself" },
   { key: "stage_lag",         label: "Stage is behind" },
-  { key: "offer_expiring",    label: "Expiring this week" },
   { key: "gone_quiet",        label: "Gone quiet" },
   { key: "underwrite_failed", label: "Underwrites that failed" },
 ];
@@ -174,7 +172,7 @@ export function buildPipeline({
     const ladderOn = Boolean(ladders.agent?.enabled && ladder?.enabled && steps.length);
     const replied = ms(lastInboundAt) != null && ms(lastInboundAt) > sinceMs;
     const ladderDone = ladderOn && (lane === "sent" || lane === "countered") &&
-      exhausted({ steps, sentSteps, startedAt: stageSince, now });
+      exhausted({ steps, sentSteps, startedAt: stageSince, now, repeatEvery: ladder?.repeatEvery });
 
     if (aiHeld) card.chips.push({ key: "ai-held", label: "ai-held", tone: "warn" });
     else if (card.ai.made) card.chips.push({ key: "ai", label: "ai", tone: "neutral" });
@@ -196,15 +194,10 @@ export function buildPipeline({
         : { key: "band", label: x.ceiling && x.theirAmount ? `over by ${money(x.theirAmount - x.ceiling)}` : "outside band", tone: "bad" });
     }
     if ((o.requotes || []).length) card.chips.push({ key: "requoted", label: `requoted ×${o.requotes.length}`, tone: "neutral" });
-    // Expiry is a chip, never a lane. The offers tab counts an expired offer
-    // as still awaiting a reply, and the board has to agree with it, or the
-    // two screens report different numbers of offers out (they did). An agent
-    // answers a lapsed lowball all the time; only a recorded outcome ends it.
-    if (expired && side === "agent") {
-      card.chips.push({ key: "expired", label: "expired", tone: "bad" });
-    } else if (expiresInDays != null && expiresInDays >= 0 && expiresInDays <= 7 && side === "agent" && !deadReason) {
-      card.chips.push({ key: "expiring", label: expiresInDays === 0 ? "expires today" : `expires in ${expiresInDays}d`, tone: "warn" });
-    }
+    // No expiry chip and no expiry queue item. An offer stands until the agent
+    // answers — agents answer lapsed lowballs all the time — so the date on
+    // the paper never moves a card, nags, or stops a follow-up. Only a
+    // recorded outcome ends it.
     if (replied) card.chips.push({ key: "replied", label: "they replied", tone: "good" });
 
     /* the deal, with its buyers */
@@ -233,26 +226,15 @@ export function buildPipeline({
         title: `${card.address} is priced and nothing has gone out`, detail: `cash ${money(o.cashAmount)}`,
         ops: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "float_realm", label: "Float the number", intent: "secondary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
     }
-    // An expired offer gets one queue item, the expiry itself (below); it
-    // already offers "mark no response", so the silence nags stand down.
-    if (ladderDone && !replied && !expired) {
+    if (ladderDone && !replied) {
       card.actionIds.push(push({ ...base, kind: "ladder_exhausted", severity: "soon",
         title: `${card.address}: ${sentSteps.length} follow-up${sentSteps.length === 1 ? "" : "s"}, no reply`,
         detail: `sent ${ageDays}d ago`,
         ops: [{ key: "mark_no_response", label: "Mark no response", intent: "primary" }, { key: "float_realm", label: "Float the number again", intent: "secondary" }, { key: "mark_passed", label: "They passed", intent: "danger" }, { key: "mark_we_passed", label: "We passed", intent: "secondary" }] }));
-    } else if (!ladderOn && !expired && (lane === "sent" || lane === "countered") && card.silentDays >= 14) {
+    } else if (!ladderOn && (lane === "sent" || lane === "countered") && card.silentDays >= 14) {
       card.actionIds.push(push({ ...base, kind: "gone_quiet", severity: "fyi",
         title: `${card.address}: nothing for ${card.silentDays} days`, detail: "the follow-up ladder is off for agents",
         ops: [{ key: "mark_no_response", label: "Mark no response", intent: "secondary" }, { key: "float_realm", label: "Float the number again", intent: "secondary" }] }));
-    }
-    if (expired && side === "agent") {
-      card.actionIds.push(push({ ...base, kind: "offer_expired", severity: "soon",
-        title: `${card.address} expired`, detail: expiresAt ? `on ${expiresAt.toISOString().slice(0, 10)}` : "",
-        ops: [{ key: "open_editor", label: "Re-issue", intent: "primary" }, { key: "mark_no_response", label: "Mark no response", intent: "secondary" }, { key: "mark_passed", label: "They passed", intent: "danger" }, { key: "mark_we_passed", label: "We passed", intent: "secondary" }] }));
-    } else if (side === "agent" && !deadReason && expiresInDays != null && expiresInDays >= 0 && expiresInDays <= 7 && (lane === "sent" || lane === "countered")) {
-      card.actionIds.push(push({ ...base, kind: "offer_expiring", severity: "fyi",
-        title: `${card.address} expires ${expiresInDays === 0 ? "today" : `in ${expiresInDays}d`}`, detail: "",
-        ops: [{ key: "open_editor", label: "Open", intent: "secondary" }] }));
     }
     if (card.deal && LIVE_DEAL_STAGES.has(card.deal.stage)) {
       const dd = card.deal;

@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPipeline, draftOfferId, daysUntilYmd } from "./pipeline.js";
+import { buildPipeline, draftOfferId, daysUntilYmd, ACTION_KINDS } from "./pipeline.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
 const NOW = Date.parse("2026-09-08T18:00:00.000Z");
@@ -73,8 +73,9 @@ test("a sent offer with two rungs fired shows step 2 of 3", () => {
   assert.ok(r.cards[0].chips.some((c) => c.label === "step 2 of 3"), JSON.stringify(r.cards[0].chips));
 });
 
-test("a sent offer whose ladder ran out with no reply is a ladder_exhausted action", () => {
-  const r = build({ offers: [offer({ sends: [{ ts: D(20) }], statusAt: D(20),
+test("a sent offer whose non-repeating ladder ran out with no reply is a ladder_exhausted action", () => {
+  const plain = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, ladders: { offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 0 } } } } } });
+  const r = buildPipeline({ config: plain, now: NOW, offers: [offer({ sends: [{ ts: D(20) }], statusAt: D(20),
     followUps: [3, 7, 14].map((s) => ({ kind: "offer_nudge", step: s, at: D(20 - s) })) })] });
   assert.ok(r.cards[0].chips.some((c) => c.label === "ladder done"));
   const a = r.actions.find((x) => x.kind === "ladder_exhausted");
@@ -100,22 +101,29 @@ test("with the ladder off, a sent offer silent for two weeks is only an fyi", ()
   assert.equal(a.severity, "fyi");
 });
 
-test("an expired open offer stays in its lane, wears the chip, and is an offer_expired action", () => {
+test("an offer past its expiry date stays in its lane with no expiry chip or queue item", () => {
   const r = build({ offers: [offer({ expiresAt: D(2) })] });
   assert.equal(laneOf(r, "o1"), "sent");
-  assert.equal(r.cards[0].expired, true);
   assert.equal(r.cards[0].deadReason, null);
   assert.equal(r.counts.hidden.dead, 0);
   assert.equal(r.counts.lanes.sent, 1);
-  assert.ok(r.cards[0].chips.some((c) => c.key === "expired"));
-  assert.ok(r.actions.some((a) => a.kind === "offer_expired" && a.ops.some((o) => o.key === "open_editor")));
+  assert.ok(!r.cards[0].chips.some((c) => c.key === "expired" || c.key === "expiring"));
+  assert.ok(!r.actions.some((a) => /expir/.test(a.kind)));
+  assert.ok(!ACTION_KINDS.some((k) => /expir/.test(k.key)), "the queue has no expiry groups");
 });
 
-test("an expired offer that ran out its ladder is one queue item, not two", () => {
-  const r = build({ offers: [offer({ expiresAt: D(2), sends: [{ ts: D(20) }], statusAt: D(20),
-    followUps: [{ kind: "offer_nudge", step: 1 }, { kind: "offer_nudge", step: 2 }, { kind: "offer_nudge", step: 3 }] })] });
-  assert.equal(laneOf(r, "o1"), "sent");
-  assert.deepEqual(kinds(r), ["offer_expired"]);
+test("the date on an offer never stops a finished, non-repeating ladder from asking for a human", () => {
+  const cfg = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, ladders: { offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 0 } } } } } });
+  const r = buildPipeline({ config: cfg, now: NOW, offers: [offer({ expiresAt: D(2), sends: [{ ts: D(20) }], statusAt: D(20),
+    followUps: [{ kind: "offer_nudge", step: 3 }, { kind: "offer_nudge", step: 7 }, { kind: "offer_nudge", step: 14 }] })] });
+  assert.deepEqual(kinds(r), ["ladder_exhausted"]);
+});
+
+test("a repeating offer ladder never runs out, so it never asks for a human", () => {
+  const cfg = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, ladders: { offer_nudge: { enabled: true, steps: [3, 7, 14] } } } } } });
+  const r = buildPipeline({ config: cfg, now: NOW, offers: [offer({ sends: [{ ts: D(40) }], statusAt: D(40),
+    followUps: [{ kind: "offer_nudge", step: 3 }, { kind: "offer_nudge", step: 7 }, { kind: "offer_nudge", step: 14 }] })] });
+  assert.ok(!kinds(r).includes("ladder_exhausted"));
 });
 
 test("an expired unsent offer stays in Not sent, like the offers tab", () => {
@@ -124,11 +132,11 @@ test("an expired unsent offer stays in Not sent, like the offers tab", () => {
   assert.equal(r.counts.hidden.dead, 0);
 });
 
-test("an offer expiring in five days wears the chip and an fyi", () => {
+test("an offer expiring in five days is just an offer out", () => {
   const r = build({ offers: [offer({ expiresAt: new Date(NOW + 5.5 * 86400000).toISOString() })] });
   assert.equal(laneOf(r, "o1"), "sent");
-  assert.ok(r.cards[0].chips.some((c) => c.label === "expires in 5d"));
-  assert.equal(r.actions.find((a) => a.kind === "offer_expiring")?.severity, "fyi");
+  assert.ok(!r.cards[0].chips.some((c) => /expire/.test(c.label)));
+  assert.ok(!r.actions.some((a) => /expir/.test(a.kind)));
 });
 
 test("an offer in no_response is hidden from lanes but counted", () => {

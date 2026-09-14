@@ -21,7 +21,7 @@
 //   The dedupe key is still the real defence — the cursor just stops us
 //   spending model calls on drafts that would be superseded anyway.
 
-import { OPEN_STATUSES, effectiveStatus, isExpired, dealSpokenFor, dealIsOver } from "./shared/offer-status.js";
+import { OPEN_STATUSES, effectiveStatus, dealSpokenFor, dealIsOver } from "./shared/offer-status.js";
 import { sameStreet } from "./shared/us-address.js";
 import { dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor } from "./shared/follow-up.js";
 import { recordEvent } from "./contact-record.js";
@@ -86,8 +86,8 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     if (!o?.contactId || !o.address) continue;
     if (o.deal) continue;                                  // it became a deal; not our business
     if (!OPEN_STATUSES.has(effectiveStatus(o))) continue;  // the mirror was stale
-    // An expired offer's follow-up is a re-offer, and that is a person's call.
-    if (isExpired(o, new Date(now))) continue;   // isExpired wants a Date, not ms
+    // Its expiry date is not checked: the offer stands until they answer, and
+    // asking about it is the follow-up, not a re-offer.
     // Count from the last time we actually put it in front of them.
     const lastSend = (o.sends || []).filter((s) => s?.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0];
     const startedAt = lastSend?.ts || o.statusAt || o.createdAt;
@@ -363,6 +363,7 @@ async function runSweep(job, ctx) {
       steps: c.ladder.steps, startedAt: c.startedAt, sentSteps: c.sentSteps,
       lastInboundAt, lastTouchAt, now,
       stopOnAnyInbound: c.kind === "passed_checkin" ? false : fu.stopOnAnyInbound, minHoursBetween: fu.minHoursBetween,
+      repeatEvery: c.ladder.repeatEvery,
     });
 
     if (!d.due) {
@@ -370,7 +371,7 @@ async function runSweep(job, ctx) {
       // we actually said something into it. A ladder that only ever produced
       // drafts nobody sent proves nothing about the agent.
       if (c.kind === "offer_nudge" && c.ladder.onExhausted === "mark_no_response" && c.sentSteps.length
-          && exhausted({ steps: c.ladder.steps, sentSteps: c.sentSteps, startedAt: c.startedAt, now })) {
+          && exhausted({ steps: c.ladder.steps, sentSteps: c.sentSteps, startedAt: c.startedAt, now, repeatEvery: c.ladder.repeatEvery })) {
         if (!job.dryRun && typeof deps.setOfferStatus === "function") {
           const r = await deps.setOfferStatus({
             contactId: c.contactId, addressHint: c.address, status: "no_response",

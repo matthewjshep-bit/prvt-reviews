@@ -3834,7 +3834,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // The retry, on the broker's 15-minute tick. Same conditions as the first
   // try (the switch, the bot, the broker's send gate, a reply on record, the
   // auto-send hours) and still only a "new" offer; a week-old pending send,
-  // an expired or moved-on offer, or an ambiguous pick is dropped instead.
+  // a moved-on offer, or an ambiguous pick is dropped instead.
   const SEND_RETRY_DAYS = 7;
   router.retryPendingOfferSends = async ({ client, locationId, now = Date.now(), limit = 10 }) => {
     const fresh = (await store.getOfferSettings(locationId)) || {};
@@ -3851,7 +3851,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         delete full.autoSendPending;
         await store.updateOffer(full.id, { ...full, ...patch });
       };
-      if (effectiveStatus(offer) !== "new" || isExpired(offer, now) || now - Date.parse(offer.autoSendPending.at) > SEND_RETRY_DAYS * 86400000) { await clear(); continue; }
+      if (effectiveStatus(offer) !== "new" || now - Date.parse(offer.autoSendPending.at) > SEND_RETRY_DAYS * 86400000) { await clear(); continue; }
       const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
       if (!drafts.some((d) => d.inbound)) continue;
       const r = await conversationDeps({ client, locationId, saved: fresh }).sendOfferDocs({ contactId: offer.contactId, addressHint: offer.address });
@@ -3939,7 +3939,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // worse than not re-pricing at all.
       if (!picked && mine.length > 1) return { ok: false, reason: "more than one open offer and the message named no address" };
       const offer = picked || mine[0];
-      if (isExpired(offer, Date.now())) return { ok: false, reason: "that offer has expired — re-offering is a person's call" };
       const full = await store.getOffer(offer.id);
       if (!full) return { ok: false, reason: "offer vanished" };
 

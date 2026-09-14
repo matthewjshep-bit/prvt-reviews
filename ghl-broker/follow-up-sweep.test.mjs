@@ -62,7 +62,9 @@ const fakeStore = ({ offers = [], events = [], drafts = [] } = {}) => {
 const configWith = (patch = {}) => normalizeConversationAi({
   enabled: true,
   parties: {
-    agent: { followUp: { enabled: true, ladders: { offer_nudge: { enabled: true, steps: [3, 7, 14] } } }, ...(patch.agent || {}) },
+    // repeatEvery 0: these tests pin a ladder that runs out. The repeating
+    // default is covered in shared/follow-up.test.mjs.
+    agent: { followUp: { enabled: true, ladders: { offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 0 } } }, ...(patch.agent || {}) },
     investor: { followUp: { enabled: true, ladders: {
       blast_nudge: { enabled: true, steps: [2, 6] },
       dataroom_nudge: { enabled: true, steps: [1, 4] },
@@ -159,16 +161,14 @@ test("a passed offer is never nudged", async () => {
   assert.equal(started.length, 0);
 });
 
-test("an expired offer is left for a person", async () => {
+test("an offer past its expiry date is still followed up — it stands until they answer", async () => {
   _resetJobs();
-  // Following up on an expired offer means re-offering, which is a decision.
   const store = fakeStore({ offers: [anOffer({ calc: { settings: { offerExpires: true, validityDays: 2 } } })] });
   const { job, started } = spySweep(store);
   await settle();
-  // The sweep must FINISH with nothing sent — not crash. This assertion used to
-  // be satisfied by a TypeError inside the candidate scan.
   assert.equal(job.status, "done", job.error);
-  assert.equal(started.length, 0);
+  assert.equal(started.length, 1);
+  assert.equal(started[0].kind, "offer_nudge");
 });
 
 test("a nudge is claimed in the contact record before the draft is started", async () => {

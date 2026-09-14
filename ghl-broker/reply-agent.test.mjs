@@ -118,7 +118,8 @@ test("the summary is newest first and every number in it is one the reply may sa
   assert.equal(s.count, 3);
   const lines = s.text.split("\n");
   assert.match(lines[0], /^- 40 Oak Ave.*still being underwritten \(no number yet\)/);
-  assert.match(lines[1], /12 Elm St.*our cash offer \$410,000 \(asking \$525,000\) — status: sent, waiting on the agent sent 13 days ago by sms valid through Sep 5/);
+  assert.match(lines[1], /12 Elm St.*our cash offer \$410,000 \(asking \$525,000\) — status: sent, waiting on the agent sent 13 days ago by sms$/);
+  assert.doesNotMatch(s.text, /valid through|expires/, "an offer stands until they answer — no date for the bot to call a deadline");
   assert.match(lines[2], /7 Pine Ct.*\$300,000.*agent passed.*note: went with a retail buyer/);
   // 400000: the rough figure at or under 410,000 (down to the nearest 25k) — see "a rough version of our number".
   assert.deepEqual([...s.amounts].sort((a, b) => a - b), [300000, 400000, 410000, 525000]);
@@ -2276,7 +2277,7 @@ test("a house counts as known while its offer is recent or its held draft is fre
   assert.equal(knownOfferFor(rows, "", now), null);
 });
 
-test("the offer book says a held draft is with the team, and a sent offer shows its expiry", () => {
+test("the offer book says a held draft is with the team, and a sent offer shows no expiry", () => {
   const now = Date.now();
   const book = summarizeOffers([
     { address: "7 Pine Ave", status: "draft", createdAt: new Date(now).toISOString(), autoUnderwrite: { held: ["fewer than 3 comps"] } },
@@ -2284,7 +2285,8 @@ test("the offer book says a held draft is with the team, and a sent offer shows 
       sends: [{ ts: new Date(now - 1000).toISOString(), channels: ["sms"], results: { sms: { ok: true } } }], expiresAt: new Date(now + 5 * 86400000).toISOString() },
   ], { now });
   assert.match(book.text, /7 Pine Ave: numbers held for our team's review/);
-  assert.match(book.text, /12 Elm St: our cash offer \$410,000.*expires/);
+  assert.match(book.text, /12 Elm St: our cash offer \$410,000/);
+  assert.doesNotMatch(book.text, /expires/);
   assert.ok(book.amounts.includes(410000));
 });
 

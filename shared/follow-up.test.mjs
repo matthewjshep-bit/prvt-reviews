@@ -127,7 +127,8 @@ test("the dedupe key is stable for the same offer and step and differs across st
 
 test("the step reads as a position so a person approving it knows how far in we are", () => {
   assert.equal(stepLabel(7, LADDER), "step 2 of 3");
-  assert.equal(stepLabel(99, LADDER), "");
+  assert.equal(stepLabel(1, LADDER), "");
+  assert.equal(stepLabel(99, LADDER), "still asking (day 99)");
 });
 
 test("a rung keeps its identity when the operator inserts one before it", () => {
@@ -151,4 +152,45 @@ test("every ladder ships switched off", () => {
     assert.ok(d.steps.length, `${kind} needs a default ladder`);
     assert.ok(FOLLOW_UP_KINDS[kind], `${kind} needs a party`);
   }
+});
+
+/* ---------- a ladder that keeps asking ---------- */
+
+import { dueStep as dueR, exhausted as exhaustedR, stepLabel as labelR, DEFAULT_LADDERS as LADDERS_R } from "./follow-up.js";
+
+const T0 = Date.parse("2026-08-01T18:00:00.000Z");
+const dayR = (n) => T0 + n * 86400000;
+
+test("the offer ladder repeats weekly by default — it asks until they answer", () => {
+  assert.equal(LADDERS_R.offer_nudge.repeatEvery, 7);
+  assert.equal(LADDERS_R.passed_checkin.repeatEvery, 0, "other ladders stop where they always did");
+});
+
+test("past the last configured day, a repeat rung comes due every N days", () => {
+  const base = { steps: [3, 7, 14], repeatEvery: 7, startedAt: new Date(T0).toISOString(), sentSteps: [3, 7, 14] };
+  assert.deepEqual(dueR({ ...base, now: dayR(21) }), { due: true, step: 21, dayOffset: 21 });
+  assert.equal(dueR({ ...base, sentSteps: [3, 7, 14, 21], now: dayR(24) }).reason, "day 28 hasn't come round yet");
+  assert.equal(dueR({ ...base, sentSteps: [3, 7, 14, 21], now: dayR(28) }).step, 28);
+});
+
+test("a repeat never works through a backlog — one text, the latest rung", () => {
+  const r = dueR({ steps: [3, 7, 14], repeatEvery: 7, startedAt: new Date(T0).toISOString(), sentSteps: [3, 7, 14], now: dayR(60) });
+  assert.equal(r.step, 56);
+});
+
+test("a reply still ends a repeating ladder", () => {
+  const r = dueR({ steps: [3, 7, 14], repeatEvery: 7, startedAt: new Date(T0).toISOString(), sentSteps: [3, 7, 14],
+    lastInboundAt: new Date(dayR(16)).toISOString(), now: dayR(21) });
+  assert.deepEqual(r, { due: false, reason: "they replied" });
+});
+
+test("a repeating ladder is never exhausted; a plain one still is", () => {
+  const base = { steps: [3, 7, 14], sentSteps: [3, 7, 14], startedAt: new Date(T0).toISOString(), now: dayR(90) };
+  assert.equal(exhaustedR({ ...base, repeatEvery: 7 }), false);
+  assert.equal(exhaustedR({ ...base, repeatEvery: 0 }), true);
+});
+
+test("a repeat rung is labelled as still asking, not as a step past the end", () => {
+  assert.equal(labelR(7, [3, 7, 14]), "step 2 of 3");
+  assert.equal(labelR(28, [3, 7, 14]), "still asking (day 28)");
 });

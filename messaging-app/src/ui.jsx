@@ -15,7 +15,7 @@ import React, { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, Loader2, Search, X } from "lucide-react";
 import {
-  OFFER_STATUS, OFFER_STATUS_KEYS, SETTABLE_STATUSES, effectiveStatus, isExpired,
+  OFFER_STATUS, OFFER_STATUS_KEYS, SETTABLE_STATUSES, effectiveStatus,
 } from "@shared/offer-status.js";
 import { EVENT_LABEL } from "@shared/contact-record.js";
 
@@ -104,13 +104,8 @@ export function StatusPill({ offer, small }) {
   if (offer.deal) return <StagePill stage={offer.deal.stage} small={small} />;
   const key = effectiveStatus(offer);
   const s = OFFER_STATUS[key] || { label: key, cls: "bg-slate-100 text-slate-600" };
-  const expired = isExpired(offer);
-  return (
-    <Pill label={s.label} cls={s.cls} small={small}
-      title={expired ? "Past its expiry date — still waiting on a reply" : undefined}>
-      {expired && <span className="text-[10px] font-bold opacity-60">⏱</span>}
-    </Pill>
-  );
+  // No expiry marker: an offer stands until the agent answers.
+  return <Pill label={s.label} cls={s.cls} small={small} />;
 }
 
 // The CRM write can partially fail (fields saved, tag didn't). That's rare and

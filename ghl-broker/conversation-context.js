@@ -141,7 +141,8 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       showMath && (arv || repairs) ? `[our math: ARV ${arv ? fmtMoney(arv) : "n/a"}, repairs ${repairs ? fmtMoney(repairs) : "n/a"}]` : "",
       `— status: ${statusWord(status)}`,
       lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" ? "" : "not sent yet",
-      o.validLabel ? `valid ${o.validLabel}` : o.expiresAt && amount ? `expires ${dateWord(o.expiresAt)}` : "",
+      // No expiry date: the offer stands until they answer, and a date here
+      // is what had the bot telling agents an offer had lapsed.
       counters.length ? `history: ${counters.join("; ")}` : "",
       realm,
       o.statusNote ? `note: ${String(o.statusNote).slice(0, 120)}` : "",
@@ -259,8 +260,9 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
         "nearest thousand or down to a round number (never up), with no dollar sign, and ask whether that works " +
         "for the seller. A yes means the written offer goes over. Don't explain how we got there (ARV, repairs, " +
         "fees), and don't volunteer it before you have their own read unless they ask. " +
-        "An offer marked SENT is on paper: if they ask for the number, the terms or when it expires, restate it " +
-        "from this list. Rules against quoting numbers are about numbers we don't have; these we do. Never promise " +
+        "An offer marked SENT is on paper: if they ask for the number or the terms, restate it " +
+        "from this list. It stands until they answer: never say it expired or lapsed, and if they ask whether it's " +
+        "still good, it is. Rules against quoting numbers are about numbers we don't have; these we do. Never promise " +
         "an offer on an address that already has one sent; refer to the one they have. An offer with no number " +
         "yet is still being worked: never make up timing or a figure for it."
       : "OUR OFFERS TO THIS AGENT: none on record.",

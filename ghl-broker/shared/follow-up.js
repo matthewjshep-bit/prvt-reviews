@@ -44,16 +44,33 @@ export const ON_EXHAUSTED = ["stop", "mark_no_response"];
 export const DEFAULT_LADDERS = {
   // Six touches over a month for a cold agent: the first two close together
   // while the listing is still fresh in their mind, then it spaces out.
-  outreach_nudge: { enabled: false, steps: [2, 5, 9, 14, 21, 30], onExhausted: "stop" },
-  offer_nudge:    { enabled: false, steps: [3, 7, 14], onExhausted: "mark_no_response" },
+  outreach_nudge: { enabled: false, steps: [2, 5, 9, 14, 21, 30], repeatEvery: 0, onExhausted: "stop" },
+  // An offer is asked about until the agent answers — yes, no, or a number.
+  // The date printed on it is not a deadline: agents answer lapsed offers all
+  // the time, so after day 14 the ladder keeps going, once a week.
+  offer_nudge:    { enabled: false, steps: [3, 7, 14], repeatEvery: 7, onExhausted: "mark_no_response" },
   // Every ten days, for four months.
-  passed_checkin: { enabled: false, steps: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], onExhausted: "stop" },
-  blast_nudge:    { enabled: false, steps: [2, 6],     onExhausted: "stop" },
-  dataroom_nudge: { enabled: false, steps: [1, 4],     onExhausted: "stop" },
+  passed_checkin: { enabled: false, steps: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], repeatEvery: 0, onExhausted: "stop" },
+  blast_nudge:    { enabled: false, steps: [2, 6], repeatEvery: 0, onExhausted: "stop" },
+  dataroom_nudge: { enabled: false, steps: [1, 4], repeatEvery: 0, onExhausted: "stop" },
 };
 
 export const MAX_LADDER_STEPS = 12;
 export const MAX_STEP_DAY = 120;
+export const MAX_REPEAT_DAYS = 60;
+
+// Every rung the ladder has reached by `now`, plus the next one: the
+// configured days, then — for a repeating ladder — one more every
+// `repeatEvery` days after the last. A repeat rung's step is its day offset
+// like any other, so its dedupe key is as stable as a configured one.
+function rungsThrough(ladder, repeatEvery, started, now) {
+  const every = Math.round(Number(repeatEvery) || 0);
+  if (!(every > 0) || !ladder.length) return ladder;
+  const out = [...ladder];
+  const daysIn = Math.floor((now - started) / DAY_MS);
+  for (let d = ladder[ladder.length - 1] + every; d <= daysIn + every; d += every) out.push(d);
+  return out;
+}
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -89,12 +106,13 @@ export function normalizeSteps(v) {
  */
 export function dueStep({
   steps = [], startedAt, sentSteps = [], lastInboundAt = null, lastTouchAt = null,
-  now = Date.now(), stopOnAnyInbound = true, minHoursBetween = 0,
+  now = Date.now(), stopOnAnyInbound = true, minHoursBetween = 0, repeatEvery = 0,
 } = {}) {
-  const ladder = normalizeSteps(steps);
-  if (!ladder.length) return { due: false, reason: "no ladder" };
+  const configured = normalizeSteps(steps);
+  if (!configured.length) return { due: false, reason: "no ladder" };
   const started = ms(startedAt);
   if (started == null) return { due: false, reason: "nothing to count from" };
+  const ladder = rungsThrough(configured, repeatEvery, started, now);
 
   // They answered. That is the whole point of the ladder and it ends here —
   // whatever they said, a person or the reply agent is now in a conversation,
@@ -138,7 +156,9 @@ export function dueStep({
  * rung to have been sent: a ladder whose middle step was skipped (they were
  * on a live deal that week) is still over when its last day goes by.
  */
-export function exhausted({ steps = [], sentSteps = [], startedAt, now = Date.now() } = {}) {
+export function exhausted({ steps = [], sentSteps = [], startedAt, now = Date.now(), repeatEvery = 0 } = {}) {
+  // A repeating ladder never runs out: it asks until they answer.
+  if (Math.round(Number(repeatEvery) || 0) > 0) return false;
   const ladder = normalizeSteps(steps);
   if (!ladder.length) return false;
   const started = ms(startedAt);
@@ -166,6 +186,9 @@ export function followUpDedupeKey({ kind, subjectId, step }) {
  */
 export function stepLabel(step, steps = []) {
   const ladder = normalizeSteps(steps);
-  const i = ladder.indexOf(Math.round(Number(step)));
-  return i < 0 ? "" : `step ${i + 1} of ${ladder.length}`;
+  const n = Math.round(Number(step));
+  const i = ladder.indexOf(n);
+  if (i >= 0) return `step ${i + 1} of ${ladder.length}`;
+  // A repeat rung, past the configured days.
+  return ladder.length && n > ladder[ladder.length - 1] ? `still asking (day ${n})` : "";
 }

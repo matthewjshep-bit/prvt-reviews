@@ -165,6 +165,12 @@ export function FollowUpCard({ config, patch }) {
                       </p>
                     )}
                     {kind === "offer_nudge" && (
+                      <Field label="After the last day, keep asking every (days)"
+                        hint="Keeps following up until they answer — the offer's expiry date doesn't stop it. 0 stops at the last day.">
+                        <Text type="number" value={l.repeatEvery ?? 0} onChange={(v) => setLadder(kind, { repeatEvery: Number(v) })} />
+                      </Field>
+                    )}
+                    {kind === "offer_nudge" && !(Number(l.repeatEvery) > 0) && (
                       <Field label="When the ladder runs out">
                         <Select value={l.onExhausted} onChange={(v) => setLadder(kind, { onExhausted: v })}
                           options={[["mark_no_response", "Mark the offer no response"], ["stop", "Just stop"]]} />
