@@ -108,7 +108,7 @@ import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
-import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType } from "../shared/contact-record.js";
+import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType, propertyDossier } from "../shared/contact-record.js";
 import { issueDataroomInvite } from "../dataroom.js";
 import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
 import { fetchRemoteImage, sniffImageType, sniffPdf } from "../fetch-image.js";

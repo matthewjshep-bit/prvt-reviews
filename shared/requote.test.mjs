@@ -124,3 +124,19 @@ test("their counter price is never an input to our math", () => {
   assert.equal(r.ok, false);
   assert.match(r.reason, /nothing new/);
 });
+
+test("a status change after their take does not make the take look stale", () => {
+  // Thomas Rinow, 2026-09-14: the take landed at 19:53; the offer was marked
+  // passed and then reopened after it. A status is not a price — the take is
+  // still newer than the number we made, so it re-quotes.
+  const offer = { ...OFFER, calc: { inputs: { arv: 500000, repairs: 85000 } }, createdAt: "2026-09-01T00:00:00.000Z", statusAt: "2026-09-10T00:00:00.000Z" };
+  const r = planRequote({ offer, take: { arv: 540000, rehab: 85000, at: "2026-09-05T00:00:00.000Z" }, band: BAND });
+  assert.equal(r.ok, true, r.reason);
+});
+
+test("a take older than our last re-quote is not new information", () => {
+  const offer = { ...OFFER, calc: { inputs: { arv: 500000, repairs: 85000 } }, requotes: [{ ts: "2026-09-10T00:00:00.000Z" }] };
+  const r = planRequote({ offer, take: { arv: 540000, at: "2026-09-05T00:00:00.000Z" }, band: { ...BAND, maxPerOffer: 5 } });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /predates our underwrite/);
+});

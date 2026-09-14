@@ -87,7 +87,12 @@ export function planRequote({ offer, take = {}, band = REQUOTE_DEFAULTS, setting
   // same arithmetic on the same inputs produces the same number, and sending
   // it again is the bot arguing with itself.
   const takenAt = ms(take.at);
-  const pricedAt = ms(offer.calc?.at || offer.statusAt || offer.createdAt);
+  // "When we priced it" is when the number was made: the last re-quote, else
+  // the calc stamp, else creation. NOT statusAt — a status is not a price, and
+  // using it meant any "countered", "passed" or reopen made a real take look
+  // stale (calc.at is never set, so statusAt was what this always read).
+  const lastRequote = (offer.requotes || []).map((r) => r?.ts).filter(Boolean).sort().at(-1);
+  const pricedAt = ms(lastRequote || offer.calc?.at || offer.createdAt);
   if (takenAt != null && pricedAt != null && takenAt <= pricedAt) {
     return { ok: false, reason: "their read predates our underwrite — nothing new" };
   }
