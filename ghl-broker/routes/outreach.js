@@ -652,6 +652,9 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
 
   /* ---------- import ---------- */
 
+  const firstEmail = (raw) =>
+    String(raw || "").split(/[;,\s]+/).map((s) => s.trim()).find((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)) || "";
+
   /**
    * importAgents({ locationId, client, agentKeys, applyTag, batchId, sessionSuffix, dryRun, openWith })
    *
@@ -701,7 +704,10 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           if (!row) return { agentKey, ok: false, error: "unknown agent" };
           if (row.status === "imported")
             return { agentKey, ok: true, alreadyImported: true, contactId: row.contactId };
-          const a = row.doc;
+          // Listing feeds sometimes carry two addresses in one field
+          // ("sold@x.com;alicia@x.com"), which GHL rejects with a 422 and the
+          // agent is lost. Use the first one that looks like an email.
+          const a = { ...row.doc, email: firstEmail(row.doc?.email) };
 
           // Authoritative dedupe re-check at import time.
           await sleep(150);

@@ -104,3 +104,13 @@ test("the daily sweep imports new-only, capped at the day's number, from a longe
   assert.equal(job.skippedExisting, 2);
   assert.deepEqual(job.results.map((x) => x.agentKey), ["k0", "k2", "k4"], "only the agents it reached and didn't skip");
 });
+
+test("a listing email field holding two addresses imports with the first valid one", async () => {
+  const batch = await store.createOutreachBatch(LOC, { name: "two-emails", autoNamed: false });
+  await store.upsertOutreachAgents(LOC, batch.id, [{ agentKey: "e2", doc: { name: "Alicia", phone: "2065550199", email: "sold@aliciareid.com;alicia@aliciareid.com", ghl: {} } }]);
+  const asked = [];
+  const client = { async call(p) { asked.push(decodeURIComponent(p)); return { contact: null }; } };
+  const r = await router.importAgents({ locationId: LOC, client, agentKeys: ["e2"], batchId: batch.id, dryRun: true, newOnly: true, createLimit: 1 });
+  assert.equal(r.results[0].wouldCreate, true);
+  assert.ok(asked.some((p) => p.includes("email=sold@aliciareid.com") && !p.includes(";")), "looked up by the first address only");
+});
