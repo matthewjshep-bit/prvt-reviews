@@ -2999,20 +2999,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   let dispoDeps = null;
   router.setDispoDeps = (d) => { dispoDeps = d; };
 
-  // Blast on promote. Fire-and-forget after the deal is minted: the strong
-  // buy-box fits, up to the cap, as staggered drafts. Any failure is a
-  // warning on the deal, never a failed promote.
+  // Blast on promote. Fire-and-forget after the deal is minted: the top-ranked
+  // VIP/Active buyers for this deal (where they buy, price, recency, tier),
+  // VIPs first, up to the cap, as staggered drafts. Any failure is a warning
+  // on the deal, never a failed promote.
   async function autoBlastOnPromote({ locationId, client, offer }) {
     try {
       const saved = (await store.getOfferSettings(locationId)) || {};
       const da = normalizeDispoAutopilot(saved.dispoAutopilot);
       if (!da.autoBlastOnPromote || !dispoDeps) return;
-      const m = await dispoDeps.matchForDeal(locationId, offer, { fits: ["strong"], exclude: "blasted" });
+      const m = await dispoDeps.matchForDeal(locationId, offer, { wave: 1, exclude: "blasted" });
       const picked = (m.results || []).slice(0, da.autoBlastCount).map((r) => ({ contactId: r.contactId, name: r.name }));
-      if (!picked.length) { console.log(`auto-blast: no strong fits for ${offer.address}`); return; }
+      if (!picked.length) { console.log(`auto-blast: no VIP/Active buyers score ${da.minMatchScore}+ for ${offer.address}`); return; }
+      const vips = (m.results || []).slice(0, da.autoBlastCount).filter((r) => r.tier === "vip").length;
       const r = await dispoDeps.blastFromApp({ locationId, client, offer, investors: picked, saved, wave: 1 });
-      console.log(`auto-blast on promote: ${offer.address} → ${picked.length} buyers (${r.scheduled ? "scheduled" : `drafts: ${r.reason}`})`);
-      await createContactNote(client, offer.contactId, { body: `Blasted ${offer.address} to ${picked.length} buyer${picked.length === 1 ? "" : "s"} whose buy box fits${r.scheduled ? "" : " (queued as drafts)"}.` }).catch(() => {});
+      console.log(`auto-blast on promote: ${offer.address} → ${picked.length} buyers, ${vips} VIP (${r.scheduled ? "scheduled" : `drafts: ${r.reason}`})`);
+      await createContactNote(client, offer.contactId, { body: `Blasted ${offer.address} to the ${picked.length} top-ranked buyer${picked.length === 1 ? "" : "s"} for it (${vips} VIP)${r.scheduled ? "" : " (queued as drafts)"}.` }).catch(() => {});
     } catch (e) { console.error(`auto-blast on promote failed for ${offer.id}: ${e?.message}`); }
   }
 
@@ -4050,10 +4052,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!rooms.some((r) => r.status === "active" && r.kind !== "portfolio" && r.kind !== "offer")) return { ok: false, reason: `no dataroom built for ${offer.address}`, address: offer.address };
       const row = await store.getInvestor(locationId, contactId).catch(() => null);
       const buybox = normalizeBuybox(row?.doc?.custom || {});
-      if (buyboxIsEmpty(buybox)) return { ok: false, reason: "no buy box on file", address: offer.address };
-      const m = matchBuybox(buybox, dealToQuery(offer).query);
-      if (!m.pass || m.score < 70) return { ok: false, reason: `buy box is a ${m.score}% fit`, address: offer.address };
-      return { ok: true, address: offer.address, score: m.score };
+      const m = buyboxIsEmpty(buybox) ? null : matchBuybox(buybox, dealToQuery(offer).query);
+      if (m?.pass && m.score >= 70) return { ok: true, address: offer.address, score: m.score };
+      // No stated buy box that fits — but where and what they actually buy can
+      // vouch for them: a ranked, non-cold buyer for this deal gets the link too.
+      const ranked = dispoDeps?.rankBuyerForDeal ? await dispoDeps.rankBuyerForDeal(locationId, offer, contactId).catch(() => null) : null;
+      if (ranked && ranked.rank >= 60 && ranked.tier !== "cold") return { ok: true, address: offer.address, score: ranked.rank };
+      const why = m ? `buy box is a ${m.score}% fit` : "no buy box on file";
+      return { ok: false, reason: ranked ? `${why}; match score ${ranked.rank} (${ranked.tier})` : why, address: offer.address };
     },
     // The calendar. Books the appointment, records it, leaves a note. The
     // guard already checked the time was ours to offer and still free; this

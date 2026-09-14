@@ -27,7 +27,7 @@ import { DISPO_IMPORTS_ENABLED, previewCsv, startImport, getImportJob, publicImp
 import { FACT_KEYS, factsAsCustom, factsEmpty } from "../shared/contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { queueBlastDrafts } from "../dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import {
   searchAllContactsByTags, getContact, updateContact, listLocationTags,
   findOrCreateCustomFieldByKey, customFieldIdKeyMapForDefs, contactCustomRecord,
@@ -653,23 +653,16 @@ export default function createDispoRouter({ resolveLocation }) {
       const { locationId } = resolveLocation(req);
       const offer = await store.getOffer(String(req.body?.offerId || ""));
       if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "deal not found" });
-      const q = dealToQuery(offer).query;
-      const city = addressAreas(offer.address).find((a) => !/^\d{5}$/.test(a)) || "";
-      const target = dealTarget({ city, priceMin: q.priceMin, priceMax: q.priceMax, rehabAppetite: q.rehabAppetite });
-      const linked = new Set((offer.deal?.investors || []).map((i) => i.contactId));
-      const blasted = new Set((await store.listContactEventsSince(locationId, new Date(Date.now() - 365 * 86400000).toISOString(), { types: ["blast_sent"], limit: 20000 }).catch(() => []))
-        .filter((e) => e.offerId === offer.id).map((e) => e.contactId));
-      const book = (await scoredBook(locationId, { status: "active" })).filter((i) => !linked.has(i.contactId));
       const limit = Math.min(1000, Math.max(10, Number(req.body?.limit) || 300));
-      const results = book
-        .map((i) => { const r = rankForDeal(i, target); return { contactId: i.contactId, rank: r.score, rankParts: r.parts, rankReasons: r.reasons, alreadyBlasted: blasted.has(i.contactId) }; })
-        .sort((a, b) => b.rank - a.rank)
-        .slice(0, limit);
+      const { target, linked, ranked, considered } = await rankedForDeal(locationId, offer);
+      const results = ranked.slice(0, limit).map((i) => ({
+        contactId: i.contactId, rank: i.rank, rankParts: i.rankParts, rankReasons: i.rankReasons, alreadyBlasted: i.alreadyBlasted,
+      }));
       const coords = WA_CITY_COORDS[target.city] || null;
       res.json({
         ok: true,
         deal: { offerId: offer.id, address: offer.address, stage: offer.deal?.stage || null, ...target, lat: coords?.[0] ?? null, lng: coords?.[1] ?? null },
-        linked: [...linked], results, considered: book.length,
+        linked: [...linked], results, considered,
       });
     } catch (err) { fail(res, err); }
   });
@@ -1081,29 +1074,59 @@ export default function createDispoRouter({ resolveLocation }) {
   }
 
   /**
-   * matchForDeal(locationId, offer, { fits, exclude }) → shortlist result
+   * rankedForDeal(locationId, offer) → { target, linked, ranked, considered }
    *
-   * The deal's own shortlist, for the autopilot: `fits` keeps only those
-   * bands; `exclude: "blasted"` drops anyone already pitched this deal.
+   * Every active buyer scored against this deal (buyer-score.js), highest
+   * first, with their tier and whether they've already been sent it. The one
+   * ranking the page, the autopilot waves and the dataroom guard all read.
    */
-  async function matchForDeal(locationId, offer, { fits = ["strong"], exclude = "blasted" } = {}) {
+  async function rankedForDeal(locationId, offer) {
+    const q = dealToQuery(offer).query;
+    const city = addressAreas(offer.address).find((a) => !/^\d{5}$/.test(a)) || "";
+    const target = dealTarget({ city, priceMin: q.priceMin, priceMax: q.priceMax, rehabAppetite: q.rehabAppetite });
+    const linked = new Set((offer.deal?.investors || []).map((i) => i.contactId));
+    const blasted = new Set((await store.listContactEventsSince(locationId, new Date(Date.now() - 365 * 86400000).toISOString(), { types: ["blast_sent"], limit: 20000 }).catch(() => []))
+      .filter((e) => e.offerId === offer.id).map((e) => e.contactId));
+    const book = (await scoredBook(locationId, { status: "active" })).filter((i) => !linked.has(i.contactId));
+    const ranked = book
+      .map((i) => { const r = rankForDeal(i, target); return { ...i, rank: r.score, rankParts: r.parts, rankReasons: r.reasons, alreadyBlasted: blasted.has(i.contactId) }; })
+      .sort((a, b) => b.rank - a.rank);
+    return { target, linked, ranked, considered: book.length };
+  }
+
+  /**
+   * matchForDeal(locationId, offer, { wave, exclude }) → { results, target }
+   *
+   * Who the autopilot sends a deal to. Wave 1 (on promote): VIP and Active
+   * buyers at or above the first-wave match score, VIPs first. Wave 2 (no
+   * commitment after the delay): anyone at or above the second-wave score who
+   * hasn't been sent it yet. Always: a phone to text, not already on a live
+   * deal, not already blasted this deal.
+   */
+  async function matchForDeal(locationId, offer, { wave = 1, exclude = "blasted" } = {}) {
     const saved = await getSettings(locationId);
-    const target = dealToQuery(offer);
-    const skip = new Set((offer.deal?.investors || []).map((i) => i.contactId));
-    if (exclude === "blasted") {
-      const since = new Date(Date.now() - 90 * 86400000).toISOString();
-      const ev = await store.listContactEventsSince(locationId, since, { types: ["blast_sent"], limit: 5000 }).catch(() => []);
-      for (const e of ev) if (e.offerId === offer.id && e.contactId) skip.add(e.contactId);
-    }
-    const out = await shortlist({
-      locationId, parsed: target.query, target, aiApiKey: String(saved?.aiApiKey || "").trim(),
-      extraInstructions: String(saved?.enrichExtraInstructions || "").trim(), strict: false, excludeIds: skip,
-      filters: { excludeOnDeal: true, buyboxStatus: "documented", replyStatus: "all", notBlastedDays: 0 },
-    });
-    return { ...out, results: out.results.filter((r) => fits.includes(r.fit)) };
+    const da = normalizeDispoAutopilot(saved.dispoAutopilot);
+    const { target, ranked } = await rankedForDeal(locationId, offer);
+    const floor = wave === 1 ? da.minMatchScore : da.secondWaveMinScore;
+    const tierOrder = { vip: 0, active: 1, cold: 2 };
+    const results = ranked
+      .filter((i) => i.phone && !i.onLiveDeal && i.rank >= floor)
+      .filter((i) => exclude !== "blasted" || !i.alreadyBlasted)
+      .filter((i) => wave !== 1 || i.tier === "vip" || i.tier === "active")
+      .sort((a, b) => wave === 1 ? (tierOrder[a.tier] - tierOrder[b.tier]) || (b.rank - a.rank) : b.rank - a.rank)
+      .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons }));
+    return { results, target };
+  }
+
+  /** rankBuyerForDeal(locationId, offer, contactId) → { rank, tier } | null — for the dataroom guard. */
+  async function rankBuyerForDeal(locationId, offer, contactId) {
+    const { ranked } = await rankedForDeal(locationId, offer);
+    const i = ranked.find((x) => x.contactId === contactId);
+    return i ? { rank: i.rank, tier: i.tier, reasons: i.rankReasons } : null;
   }
 
   router.matchForDeal = matchForDeal;
+  router.rankBuyerForDeal = rankBuyerForDeal;
   router.blastFromApp = blastFromApp;
 
   return router;

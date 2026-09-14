@@ -11,8 +11,11 @@
 //   and sent by the same 30-second scheduler that sends replies. Hold works,
 //   quiet hours work, and every send is a blast_sent event.
 //
-//   Blast on promote: a deal is minted → the strong buy-box fits are blasted.
-//   Second wave: no committed buyer after N hours → the possible fits.
+//   Blast on promote: a deal is minted → the top-ranked VIP/Active buyers for
+//   it (buyer-score.js rankForDeal: where they buy, price, recency, tier,
+//   strategy) are blasted, VIPs first.
+//   Second wave: no committed buyer after N hours → the next-ranked buyers
+//   who haven't been sent it.
 //   The guarded dataroom invite and the assignment on commit live in the
 //   offers router's deps; this file holds the settings and the queue.
 
@@ -38,6 +41,9 @@ export function normalizeDispoAutopilot(v = {}) {
     autoBlastCount: n(o.autoBlastCount, 25, 1, 200),
     secondWaveHours: n(o.secondWaveHours, 48, 6, 720),
     secondWaveCount: n(o.secondWaveCount, 25, 1, 200),
+    // Match score (rankForDeal, 0–100) a buyer needs to make each wave.
+    minMatchScore: n(o.minMatchScore, 50, 0, 100),
+    secondWaveMinScore: n(o.secondWaveMinScore, 35, 0, 100),
     autoInvite: o.autoInvite === true,
     paperworkOnCommit: o.paperworkOnCommit === true,
   };
@@ -152,9 +158,9 @@ export function startDispoSweep({ locationId, client, saved = {}, store = defaul
     job.deals = cands.length;
     for (const { offer } of cands) {
       try {
-        const m = await deps.matchForDeal(locationId, offer, { fits: ["possible"], exclude: "blasted" });
+        const m = await deps.matchForDeal(locationId, offer, { wave: 2, exclude: "blasted" });
         const picked = (m.results || []).slice(0, da.secondWaveCount);
-        if (!picked.length) { job.results.push({ offerId: offer.id, address: offer.address, blasted: 0, reason: "no possible fits left" }); continue; }
+        if (!picked.length) { job.results.push({ offerId: offer.id, address: offer.address, blasted: 0, reason: "no ranked buyers left to send it to" }); continue; }
         const r = await deps.blastFromApp({ locationId, client, offer, investors: picked, saved, now, wave: 2 });
         job.blasted += r.queued + r.drafted;
         job.results.push({ offerId: offer.id, address: offer.address, blasted: r.queued + r.drafted, scheduled: r.scheduled, reason: r.reason });

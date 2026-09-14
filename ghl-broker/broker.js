@@ -158,7 +158,7 @@ app.use("/api/outreach", outreachRouter);
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
 const dispoRouter = createDispoRouter({ resolveLocation });
 app.use("/api/dispo", dispoRouter);
-offersRouter.setDispoDeps({ matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp });
+offersRouter.setDispoDeps({ matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp, rankBuyerForDeal: dispoRouter.rankBuyerForDeal });
 // The contact record: the app's own memory of every agent and investor, and
 // the drawer's door to it. GHL's custom fields are a digest of this.
 app.use("/api/contacts", createContactsRouter({ resolveLocation }));

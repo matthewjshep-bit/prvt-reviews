@@ -66,6 +66,13 @@ test("a second click on the same deal supersedes the buyer's open blast draft", 
   assert.deepEqual(all.map((d) => d.status), ["superseded", "draft"]);
 });
 
+test("match score floors default to 50 (first wave) and 35 (second) and clamp to 0–100", () => {
+  const d = normalizeDispoAutopilot({});
+  assert.equal(d.minMatchScore, 50);
+  assert.equal(d.secondWaveMinScore, 35);
+  assert.equal(normalizeDispoAutopilot({ minMatchScore: 140 }).minMatchScore, 100);
+});
+
 test("the second wave finds a deal blasted once with nobody committed, after the delay, and blasts the possible fits", async () => {
   _resetJobs();
   const stale = { ...offer, id: "o2", deal: { ...offer.deal, blasts: [{ at: new Date(NOW - 50 * 3600000).toISOString(), count: 10, via: "app" }] } };
@@ -82,7 +89,7 @@ test("the second wave finds a deal blasted once with nobody committed, after the
   } });
   await settle();
   assert.equal(job.status, "done", job.error);
-  assert.deepEqual(seen[0], ["match", "o2", { fits: ["possible"], exclude: "blasted" }]);
+  assert.deepEqual(seen[0], ["match", "o2", { wave: 2, exclude: "blasted" }]);
   assert.deepEqual(seen[1], ["blast", "o2", 2, 2]);
   assert.equal(job.blasted, 2);
 });

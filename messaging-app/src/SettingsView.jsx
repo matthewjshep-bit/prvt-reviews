@@ -353,7 +353,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       // the server as a string forever.
       clean.psa = coerce(form.psa || {}, DEFAULT_OFFER_SETTINGS.psa);
       if (form.outreachAutopilot) clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12, followUpDays: Number(form.outreachAutopilot.followUpDays) || 14 };
-      if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
+      if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount", "minMatchScore", "secondWaveMinScore"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
       const r = await saveSettings(clean);
       onSaved?.(r.settings);
       setForm(effectiveSettings(r.settings));
@@ -908,14 +908,16 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             <Num label="Buyers on the first wave" value={form.dispoAutopilot?.autoBlastCount ?? 25} onChange={setDispoAuto("autoBlastCount")} />
             <Num label="Second wave after" suffix="hours" value={form.dispoAutopilot?.secondWaveHours ?? 48} onChange={setDispoAuto("secondWaveHours")} />
             <Num label="Buyers on the second wave" value={form.dispoAutopilot?.secondWaveCount ?? 25} onChange={setDispoAuto("secondWaveCount")} />
+            <Num label="First wave: minimum match score" suffix="/100" value={form.dispoAutopilot?.minMatchScore ?? 50} onChange={setDispoAuto("minMatchScore")} />
+            <Num label="Second wave: minimum match score" suffix="/100" value={form.dispoAutopilot?.secondWaveMinScore ?? 35} onChange={setDispoAuto("secondWaveMinScore")} />
           </div>
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.autoBlastOnPromote)} onChange={(e) => setDispoAuto("autoBlastOnPromote")(e.target.checked)} />
-            <span><span className="font-semibold">Blast on promote</span><span className="block text-xs text-slate-500">When an offer becomes a deal, blast the strong buy-box fits; with nobody committed after the delay, the possible fits.</span></span>
+            <span><span className="font-semibold">Blast on promote</span><span className="block text-xs text-slate-500">When an offer becomes a deal, blast the top-ranked VIP and Active buyers for it (where they buy, price, recency, engagement), VIPs first. With nobody committed after the delay, the next-ranked buyers who haven't been sent it. Only buyers with a phone who aren't on another live deal.</span></span>
           </label>
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.autoInvite)} onChange={(e) => setDispoAuto("autoInvite")(e.target.checked)} />
-            <span><span className="font-semibold">Dataroom link on its own</span><span className="block text-xs text-slate-500">When a buyer already evaluating a deal asks for details and their buy box fits it, the tracked link is texted without a click. A cold "send me details" still asks you.</span></span>
+            <span><span className="font-semibold">Dataroom link on its own</span><span className="block text-xs text-slate-500">When a buyer already evaluating a deal asks for details and their buy box fits it — or they rank 60+ for the deal and aren't Cold — the tracked link is texted without a click. A cold "send me details" still asks you.</span></span>
           </label>
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.paperworkOnCommit)} onChange={(e) => setDispoAuto("paperworkOnCommit")(e.target.checked)} />
