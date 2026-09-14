@@ -116,9 +116,16 @@ export function planRequote({ offer, take = {}, band = REQUOTE_DEFAULTS, setting
   if (!(to > 0)) return { ok: false, reason: "their numbers put the deal underwater" };
   if (to === from) return { ok: false, reason: "their numbers land on the same price we already sent" };
   // The shared bound. See the docblock: the re-quote may not talk us above the
-  // point where we would have accepted their counter outright.
+  // point where we would have accepted their counter outright. Over it, we go
+  // TO it rather than refusing — Thomas Rinow's $60k rehab put us at $497,625
+  // against a $497,250 ceiling, and $375 over stopped a $20k move up entirely.
+  // Only when the ceiling leaves no room above our own number is it refused.
   if (ceiling > 0 && to > ceiling) {
-    return { ok: false, reason: "their numbers would put us above what we'd pay — a person should look at this" };
+    if (ceiling <= from) {
+      return { ok: false, reason: "their numbers would put us above what we'd pay — a person should look at this" };
+    }
+    const note = `held to the ${Math.round(ceiling).toLocaleString("en-US")} we'd pay`;
+    return { ok: true, arv, repairs, from, to: Math.round(ceiling), clamped: true, capped: true, basis: basis ? `${basis} and ${note}` : note };
   }
   return { ok: true, arv, repairs, from, to, clamped, basis };
 }

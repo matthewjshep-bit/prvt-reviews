@@ -51,6 +51,9 @@ test("the re-quote reads the agent's saved take — it never answers 'nothing ne
   const r = await deps.requoteFromAgentNumbers({ contactId, addressHint: ADDRESS }).catch((e) => ({ ok: false, reason: `threw: ${e.message}` }));
   assert.doesNotMatch(String(r.reason || ""), /nothing new from them/, `the take was not read: ${r.reason}`);
   assert.doesNotMatch(String(r.reason || ""), /predates our underwrite/, `a later status change made the take look stale: ${r.reason}`);
-  assert.ok(r.ok || /above what we'd pay|wouldn't compute|offer vanished/.test(String(r.reason)), `unexpected: ${JSON.stringify(r)}`);
+  // Reaching the re-issue is the proof the take was read and the plan passed
+  // (capped at the ceiling here). The test broker has no card service, so the
+  // re-issue itself stops at the document render — that's past what's tested.
+  assert.ok(r.ok || /above what we'd pay|CARD_SERVICE_URL|card service/.test(String(r.reason)), `unexpected: ${JSON.stringify(r)}`);
   if (r.ok) assert.equal(offer.id && typeof r.to, "number");
 });

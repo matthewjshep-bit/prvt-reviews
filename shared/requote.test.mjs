@@ -140,3 +140,23 @@ test("a take older than our last re-quote is not new information", () => {
   assert.equal(r.ok, false);
   assert.match(r.reason, /predates our underwrite/);
 });
+
+test("a re-quote just over the ceiling goes to the ceiling instead of refusing", () => {
+  // Thomas Rinow, 2026-09-14: $497,625 on his numbers against a $497,250
+  // ceiling. Refusing over $375 stopped a real move up; it lands at the ceiling.
+  const uncapped = planRequote({ offer: OFFER, take: { arv: 520000, rehab: 85000, at: later() }, band: BAND, ceiling: 0 });
+  assert.equal(uncapped.ok, true, uncapped.reason);
+  const ceiling = Math.round((OURS + uncapped.to) / 2);
+  const r = planRequote({ offer: OFFER, take: { arv: 520000, rehab: 85000, at: later() }, band: BAND, ceiling });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.to, ceiling);
+  assert.equal(r.capped, true);
+  assert.ok(r.to > r.from, "still a move up");
+  assert.match(r.basis, /we'd pay/);
+});
+
+test("a ceiling at or below our own number still refuses the re-quote", () => {
+  const r = planRequote({ offer: OFFER, take: { arv: 520000, rehab: 85000, at: later() }, band: BAND, ceiling: OURS });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /above what we'd pay/);
+});
