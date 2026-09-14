@@ -3756,7 +3756,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // talked to us, only inside the auto-send hours, and only when the
       // number isn't being floated first. Anything else falls through to the
       // float below.
-      if (so.onClearUnderwrite && !leadWithNumber && cfg.enabled && CARD_SENDS_ENABLED && effectiveStatus(offer) === "new" && !offer.deal) {
+      // An offer priced on the agent's own numbers (our comps were thin) is a
+      // rough number to float, never paper that sends itself.
+      const agentNumbers = offer.autoUnderwrite?.basis === "agent_numbers";
+      if (so.onClearUnderwrite && !leadWithNumber && !agentNumbers && cfg.enabled && CARD_SENDS_ENABLED && effectiveStatus(offer) === "new" && !offer.deal) {
         const why = await (async () => {
           const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
           if (!drafts.some((d) => d.inbound)) return "they have never replied to us";

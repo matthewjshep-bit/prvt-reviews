@@ -47,6 +47,7 @@ import {
 import { SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { learnFacts, recordEvent } from "./contact-record.js";
 import { currentFacts } from "./shared/contact-record.js";
+import { propertyDossier } from "./shared/contact-record.js";
 import { mostRecentlyMentioned } from "./shared/us-address.js";
 
 /* ---------- the dials ---------- */
@@ -101,6 +102,12 @@ export const UW_POOL_BEDS_TOLERANCE = 1;
 export const UW_POOL_BATHS_TOLERANCE = 1;
 export const UW_POOL_SQFT_PCT = 0.30;
 export const UW_MIN_SUBJECT_PHOTOS = 8;    // a 3-photo listing is not a scope of work
+export const UW_MIN_PHOTOS_DESCRIBED = 4;  // …unless the agent already told us the work
+// Pricing on the agent's own numbers when ours are stuck (agentNumbersRescue).
+export const UW_AGENT_ARV_MAX_OF_LIST = 1.25;  // their value, never past 125% of list
+export const UW_AGENT_REPAIR_CUT = 0.25;       // their repairs cut our scope by at most a quarter
+export const UW_LAST_RING_MONTHS = 24;         // the widest ring looks back two years
+export const UW_NON_CORE_LIST = 2000000;       // luxury: priced, but not what we're built for
 export const UW_REPAIRS_BAND_SLACK = 1.25; // how far past the heavy band is still plausible
 export const UW_DEFAULT_DAILY_CAP = 25;
 export const MAX_CONCURRENT_PER_LOCATION = 2;
@@ -492,7 +499,7 @@ export function gradeByPriceProxy(nearby = [], { subjectSqft = 0 } = {}) {
  */
 export function evaluateGates({
   extraction, subject, rehabbedComps = [], arv, photosAnalyzed = 0, scan, repairs = 0, proxy = null,
-  geocode = null, compsPool = null, compsRadiusMiles = UW_RADIUS_MILES,
+  geocode = null, compsPool = null, compsRadiusMiles = UW_RADIUS_MILES, describedWork = false,
 }) {
   const held = [];
 
@@ -565,8 +572,11 @@ export function evaluateGates({
     }
   }
 
-  if (!(photosAnalyzed >= UW_MIN_SUBJECT_PHOTOS)) {
-    held.push(`only ${photosAnalyzed || 0} listing photo${photosAnalyzed === 1 ? "" : "s"} to scan — ${UW_MIN_SUBJECT_PHOTOS} required for a scope of work`);
+  // The agent describing the work ("new roof, kitchen and baths, flooring")
+  // is half a scope already, so a thinner photo set still carries it.
+  const minPhotos = describedWork ? UW_MIN_PHOTOS_DESCRIBED : UW_MIN_SUBJECT_PHOTOS;
+  if (!(photosAnalyzed >= minPhotos)) {
+    held.push(`only ${photosAnalyzed || 0} listing photo${photosAnalyzed === 1 ? "" : "s"} to scan — ${minPhotos} required for a scope of work`);
   }
 
   // Scaled for size past 2,500 sqft (heavyCeiling), so a big house isn't held
@@ -584,6 +594,61 @@ export function evaluateGates({
   }
 
   return { ok: held.length === 0, held };
+}
+
+/**
+ * agentNumbersRescue({ held, theirArv, theirRehab, ourArv, repairs, listPrice, sqft })
+ *   → { value, fix, capped, basis } | null
+ *
+ * On 2026-09-14 twelve of nineteen underwrites held, most on numbers we
+ * couldn't make — zero priced comps in Shoreline, a $3M-reno HOA house, a scope
+ * past the band — while the agent had already told us what it's worth and what
+ * it needs. Those agents were promised a number and got nothing.
+ *
+ * When EVERY hold is one the agent's numbers answer, price on theirs, bounded:
+ *   comps / ARV / size holds  → their value, capped at 125% of the list price
+ *                               (no list price, no rescue — nothing to cap to)
+ *   repair band / photo holds → their repairs, but never cutting our own
+ *                               scope by more than a quarter, and still inside
+ *                               the band
+ * Anything else — an unsure address, a ZIP centroid, a structural flag — still
+ * holds. The offer this makes is marked `agent_numbers`: it floats as a rough
+ * number off their figures, and the paper never sends itself. Pure.
+ */
+export function agentNumbersRescue({ held = [], theirArv = 0, theirRehab = 0, ourArv = 0, repairs = 0, listPrice = 0, sqft = 0 } = {}) {
+  if (!held.length || !(theirArv > 0 || theirRehab > 0)) return null;
+  const VALUE = /renovated|priced comps?|price proxy|no ARV|ungraded comps|off the subject's size|sold homes? in the search box|square footage is unknown/i;
+  const WORK = /past the heavy band|listing photos? to scan/i;
+  let needValue = false;
+  let needRepairs = false;
+  for (const h of held) {
+    if (VALUE.test(h)) needValue = true;
+    else if (WORK.test(h)) needRepairs = true;
+    else return null;
+  }
+  let value = Math.round(Number(ourArv) || 0);
+  let capped = false;
+  if (needValue) {
+    if (!(theirArv > 0) || !(listPrice > 0)) return null;
+    const cap = Math.round(listPrice * UW_AGENT_ARV_MAX_OF_LIST);
+    capped = theirArv > cap;
+    value = Math.min(Math.round(theirArv), cap);
+  }
+  if (!(value > 0)) return null;
+  let fix = Math.round(Number(repairs) || 0);
+  if (needRepairs) {
+    if (!(theirRehab > 0)) return null;
+    fix = Math.max(Math.round(theirRehab), Math.round(fix * (1 - UW_AGENT_REPAIR_CUT)));
+    if (sqft > 0 && fix > heavyCeiling(sqft) * UW_REPAIRS_BAND_SLACK) return null;
+  } else if (theirRehab > 0 && !(fix > 0)) {
+    fix = Math.round(theirRehab);
+  }
+  const k = (n) => `${Math.round(n / 1000)}k`;
+  const used = [
+    needValue ? `their ${k(value)} value${capped ? " (held near the list price)" : ""}` : "",
+    needRepairs ? `their ${k(theirRehab)} repairs` : "",
+  ].filter(Boolean).join(" and ");
+  return { value, fix, capped, basis: `priced on the agent's numbers — ${used} — because ${String(held[0]).split(" — ")[0]}` };
 }
 
 /**
@@ -1217,7 +1282,9 @@ async function runUnderwrite(job, ctx) {
       lat: geo.lat, lng: geo.lng,
       beds: subject.beds || 0, baths: subject.baths || 0, sqft: subject.sqft || 0,
       radiusMiles,
-      monthsBack: 12,
+      // The widest ring is where thin markets (luxury, rural, manufactured)
+      // end up; two years of sales there beats a hold.
+      monthsBack: radiusMiles >= UW_RADIUS_LADDER[UW_RADIUS_LADDER.length - 1] ? UW_LAST_RING_MONTHS : 12,
       // Pool bands, not ARV bands. Everything that survives is still ranked by
       // the match scorecard, so the closest matches float to the top on their
       // own — this only decides what gets to be ranked at all.
@@ -1388,8 +1455,17 @@ async function runUnderwrite(job, ctx) {
   }
 
   /* --- the gates --- */
+  // What the agent told us about this house: their value and repairs (for the
+  // rescue below), and whether they described the work (for the photo gate).
+  const contactEvents = job.contactId && typeof store?.listContactEvents === "function"
+    ? await store.listContactEvents(locationId, job.contactId, { limit: 200 }).catch(() => [])
+    : [];
+  const dossier = propertyDossier(contactEvents || [], extraction.address);
+  const theirArv = Math.round(Number(dossier?.have?.arv?.value) || 0);
+  const theirRehab = Math.round(Number(dossier?.have?.rehab?.value) || 0);
+  const describedWork = (contactEvents || []).some((e) => e?.type === "property_details" && e.address && addressKey(e.address) === addressKey(extraction.address));
   const gate = evaluateGates({
-    extraction, subject, rehabbedComps: rehabbed, arv,
+    extraction, subject, rehabbedComps: rehabbed, arv, describedWork,
     photosAnalyzed: photos.length, scan, repairs, proxy, geocode, compsRadiusMiles,
     compsPool: { rows: compsData?.rows ?? null, pulled: compsData?.pulled ?? null, kept: nearby.length, radiusMiles: compsRadiusMiles },
   });
@@ -1418,11 +1494,30 @@ async function runUnderwrite(job, ctx) {
     return;
   }
 
-  if (!gate.ok || job.dryRun || !AUTO_UNDERWRITE_ENABLED) {
-    const held = gate.ok
+  // Our numbers are stuck, but the agent gave us theirs: price on them,
+  // bounded, and say so everywhere the number shows (agentNumbersRescue).
+  let arvForOffer = arv?.arv || 0;
+  const rescued = gate.ok ? null : agentNumbersRescue({
+    held: gate.held, theirArv, theirRehab, ourArv: arvForOffer, repairs, listPrice: job.listPrice || 0, sqft,
+  });
+  if (rescued) {
+    arvForOffer = rescued.value;
+    repairs = rescued.fix;
+    job.arvBasis = rescued.basis;
+    // A held reason on the job is what makes the conversation float this as a
+    // rough number off their figures rather than lead with it confidently.
+    job.agentNumbers = true;
+    warnings.push(rescued.basis);
+  }
+  // Manufactured homes and luxury listings are priced, but aren't the core.
+  const nonCore = String(subject?.homeType || "").toUpperCase() === "MANUFACTURED" || (job.listPrice || 0) >= UW_NON_CORE_LIST;
+  const cleared = gate.ok || Boolean(rescued);
+
+  if (!cleared || job.dryRun || !AUTO_UNDERWRITE_ENABLED) {
+    const held = cleared
       ? [AUTO_UNDERWRITE_ENABLED ? "dry run — nothing was published" : "AUTO_UNDERWRITE_ENABLED is not set on the broker"]
       : gate.held;
-    return finishHeld(job, ctx, { extraction, held, partial, cleared: gate.ok });
+    return finishHeld(job, ctx, { extraction, held, partial, cleared });
   }
 
   /* --- 6. create --- */
@@ -1441,7 +1536,7 @@ async function runUnderwrite(job, ctx) {
   if (listForCap > 0) {
     try {
       const expected = calculateOffers(
-        { address: extraction.address, arv: arv.arv, repairs, askingPrice: listForCap, priceOverride: 0 },
+        { address: extraction.address, arv: arvForOffer, repairs, askingPrice: listForCap, priceOverride: 0 },
         { ...(saved || {}), underwriteMode: UW_MODE },
       ).offers.cash.amount;
       listCap = capToList({ cash: expected, listPrice: listForCap, pct: pctOfList });
@@ -1461,7 +1556,7 @@ async function runUnderwrite(job, ctx) {
       contactId: job.contactId,
       inputs: {
         address: extraction.address,
-        arv: arv.arv,
+        arv: arvForOffer,
         repairs,
         askingPrice: listForCap || extraction.askingPrice || 0,
         ...(listCap.capped ? { priceOverride: listCap.cap } : {}),
@@ -1477,8 +1572,13 @@ async function runUnderwrite(job, ctx) {
   });
 
   const offer = result.offer;
-  offer.autoUnderwrite = auditTrail(job, extraction, gate);
+  offer.autoUnderwrite = {
+    ...auditTrail(job, extraction, rescued ? { ok: false } : gate),
+    ...(rescued ? { basis: "agent_numbers", rescuedFrom: gate.held.slice(0, 4) } : {}),
+    ...(nonCore ? { nonCore: true } : {}),
+  };
   await store.updateOffer(offer.id, offer).catch(() => {});
+  if (rescued) job.held = [rescued.basis];
 
   job.status = "done";
   job.phase = "";
@@ -1500,7 +1600,7 @@ async function runUnderwrite(job, ctx) {
   }
 
   await setTag(client, job.contactId, UW_TAGS.done, warnings);
-  await note(client, job.contactId, doneNote(job, arv, repairs), warnings);
+  await note(client, job.contactId, doneNote(job, rescued ? { ...(arv || {}), arv: arvForOffer } : arv, repairs), warnings);
 
   // Numbers are back: the Conversation AI may float them to the agent as a
   // soft number before the formal offer goes. Wired by the route; a failure
