@@ -663,7 +663,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * A contact that already existed is never enrolled: it has a history, and
    * it may already be mid-workflow — GHL gives no way to ask.
    */
-  async function importAgents({ locationId, client, agentKeys = [], applyTag = true, batchId = null, sessionSuffix = "", dryRun = true, openWith = null, enrollWorkflowId = null }) {
+  async function importAgents({ locationId, client, agentKeys = [], applyTag = true, batchId = null, sessionSuffix = "", dryRun = true, openWith = null, enrollWorkflowId = null, newOnly = false, createLimit = 0 }) {
       agentKeys = Array.isArray(agentKeys) ? agentKeys.slice(0, MAX_DAILY_CAP) : [];
       if (!agentKeys.length) throw Object.assign(new Error("agentKeys required"), { http: 400 });
       const batch = await resolveBatch(locationId, batchId);
@@ -695,7 +695,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         }
       }
 
-      const results = await mapPool(agentKeys, 2, async (agentKey) => {
+      const importOne = async (agentKey) => {
         try {
           const row = await store.getOutreachAgent(locationId, batch.id, agentKey);
           if (!row) return { agentKey, ok: false, error: "unknown agent" };
@@ -708,6 +708,18 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           const match = await withRetry(() =>
             findDuplicateContact(client, locationId, { email: a.email, phone: a.phone })
           );
+
+          // New-only (the daily sweep): an agent already in GHL is skipped, not
+          // updated. They may be in the first-text workflow now, or have been
+          // through it, and GHL gives no way to ask — so being in GHL at all
+          // rules them out. The match is saved on the row so the next pick
+          // doesn't spend a lookup on them again.
+          if (newOnly && match) {
+            const ghl = { ...(a.ghl || {}), contactId: match.id, matchedBy: match.matchedBy, checkedAt: new Date().toISOString() };
+            await store.upsertOutreachAgents(locationId, batch.id, [{ agentKey, doc: { ...a, ghl } }])
+              .catch((e) => warnings.push(`${agentKey}: saving GHL match: ${e.message}`));
+            return { agentKey, ok: true, name: a.name, skipped: "already in GHL", contactId: match.id, matchedBy: match.matchedBy };
+          }
 
           if (dryRun) {
             return {
@@ -840,10 +852,28 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           warnings.push(`${agentKey}: ${e.message}`);
           return { agentKey, ok: false, error: e.message };
         }
-      });
+      };
+
+      let results;
+      if (newOnly) {
+        // One at a time, so the day's number is exact: stop the moment
+        // `createLimit` brand-new contacts exist (or would, on a dry run).
+        results = [];
+        const limit = createLimit > 0 ? createLimit : agentKeys.length;
+        let made = 0;
+        for (const agentKey of agentKeys) {
+          if (made >= limit) break;
+          const r = await importOne(agentKey);
+          results.push(r);
+          if (r.action === "created" || r.wouldCreate) made++;
+        }
+      } else {
+        results = await mapPool(agentKeys, 2, importOne);
+      }
 
       return {
         ok: true, dryRun, importsEnabled: OUTREACH_IMPORTS_ENABLED, tag: OUTREACH_TAG,
+        skippedExisting: results.filter((r) => r.skipped === "already in GHL").length,
         batchTag, sessionTag, batchId: batch.id,
         results,
         imported: results.filter((r) => r.ok && r.action).length,

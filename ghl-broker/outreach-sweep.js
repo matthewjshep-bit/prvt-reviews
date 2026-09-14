@@ -294,7 +294,11 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
   job.phase = "picking";
   const rows = await store.listOutreachAgents(locationId, { batchId: pull.batchId, status: "new", limit: 1000 });
   job.candidates = rows.length;
-  const picked = pickAgentsToImport(rows, { cap: oa.dailyCap, requireDistress: oa.requireDistress });
+  // Ranked, and deliberately longer than the day's number: the import walks it
+  // one agent at a time, skips anyone already in GHL, and stops once
+  // `dailyCap` brand-new contacts exist. Handing it exactly `dailyCap` let a
+  // pull whose GHL check was rate-limited pass 10 existing contacts in 12.
+  const picked = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress });
   job.picked = picked.length;
   job.results = picked.map((r) => ({ agentKey: r.agentKey, name: r.doc?.name || "", hook: r.doc?.hook?.address || "", distressed: r.doc?.distressedCount || 0 }));
   if (!picked.length) {
@@ -314,14 +318,20 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
     applyTag: oa.firstTouch === "ghl", openWith: oa.firstTouch === "app" ? "app" : null,
     enrollWorkflowId: oa.firstTouch === "workflow" ? oa.workflowId : null,
     sessionSuffix: `auto-${iso(now).slice(0, 10)}`, dryRun: job.dryRun ? true : false,
+    newOnly: true, createLimit: oa.dailyCap,
   });
   job.imported = r.imported || 0;
   job.opened = r.opened || 0;
   job.enrolled = r.enrolled || 0;
+  job.skippedExisting = r.skippedExisting || 0;
   job.dryRun = Boolean(r.dryRun);
   job.warnings.push(...(r.warnings || []).slice(0, 10));
   const byKey = new Map((r.results || []).map((x) => [x.agentKey, x]));
-  job.results = job.results.map((x) => {
+  // Only the agents the import actually reached and didn't skip as existing.
+  const reached = byKey.size
+    ? job.results.filter((x) => byKey.has(x.agentKey) && !byKey.get(x.agentKey).skipped)
+    : job.results.slice(0, oa.dailyCap);
+  job.results = reached.map((x) => {
     const y = byKey.get(x.agentKey) || {};
     return { ...x, ok: y.ok !== false, action: y.action || (y.dryRun ? (y.wouldCreate ? "would create" : y.wouldUpdate ? "would update" : "dry run") : ""),
       contactId: y.contactId || null, opened: y.opened || null, enrolled: y.enrolled || (y.wouldEnroll ? { would: true } : null), error: y.error || null };

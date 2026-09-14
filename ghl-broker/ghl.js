@@ -165,16 +165,24 @@ export async function findOrCreateContactByPhone(client, locationId, phone, firs
 
 // Look up an existing contact by email and/or phone via the duplicate-search
 // endpoint, one identifier at a time so the match source is unambiguous.
-// Returns { id, matchedBy: "email" | "phone" } or null. A failed lookup on one
-// identifier falls through to the next (matches findOrCreateContactByPhone's
-// tolerance) — callers treat null as "assume new".
+// Returns { id, matchedBy: "email" | "phone" } or null. Callers treat null as
+// "assume new", so null must MEAN no match: GHL's own "nothing here" answers
+// (400/404/422 — a malformed identifier, no such contact) fall through to the
+// next identifier, and anything else — a 429, a 5xx, a scope error — throws,
+// so withRetry can back off. Swallowing those used to report a rate-limited
+// lookup as "not in GHL": on 2026-09-14 the outreach pull cleared agents who
+// were already contacts, and 10 of the sweep's 12 picks were existing ones.
+const isNoMatchError = (e) => [400, 404, 422].includes(Number(e?.status));
+
 export async function findDuplicateContact(client, locationId, { email, phone }) {
   const loc = encodeURIComponent(locationId);
   if (email) {
     try {
       const found = await client.call(`/contacts/search/duplicate?locationId=${loc}&email=${encodeURIComponent(email)}`);
       if (found?.contact?.id) return { id: found.contact.id, matchedBy: "email" };
-    } catch { /* fall through */ }
+    } catch (e) {
+      if (!isNoMatchError(e)) throw e;
+    }
   }
   if (phone) {
     // GHL stores phones as E.164; a bare 10-digit US number silently fails to
@@ -184,7 +192,9 @@ export async function findDuplicateContact(client, locationId, { email, phone })
     try {
       const found = await client.call(`/contacts/search/duplicate?locationId=${loc}&number=${encodeURIComponent(e164)}`);
       if (found?.contact?.id) return { id: found.contact.id, matchedBy: "phone" };
-    } catch { /* fall through */ }
+    } catch (e) {
+      if (!isNoMatchError(e)) throw e;
+    }
   }
   return null;
 }
