@@ -89,7 +89,7 @@ import { pullZillowComps } from "../comps-zillow.js";
 import { gradeComps, needsScrape } from "../comps-grade.js";
 import {
   startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs, drainUnderwriteQueue,
-  cancelJob as cancelUnderwriteJob, publicJob as publicUnderwriteJob,
+  cancelJob as cancelUnderwriteJob, publicJob as publicUnderwriteJob, retryArgs as retryUnderwriteArgs,
   AUTO_UNDERWRITE_ENABLED,
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT,
 } from "../auto-underwrite.js";
@@ -3666,6 +3666,53 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const job = getUnderwriteJob(req.params.id);
       if (!job || job.locationId !== locationId) return res.status(404).json({ error: "no such job" });
       res.json({ ok: true, canceled: cancelUnderwriteJob(job.id) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Run a held or failed underwrite again — the strip's Retry button.
+  //
+  //   POST { jobId }                                   → 202 { ok, jobId }
+  //   POST { contactId, address, askingPrice, replaceOfferId }  (no job in memory)
+  //
+  // Jobs live in memory, so after a redeploy the strip's rows are gone but the
+  // contact and address aren't; the second shape restarts from those. Gated by
+  // the location like the form's /run — a person pressing a button, not a
+  // workflow firing — and it still counts against the daily cap.
+  router.post("/automations/underwrite/retry", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      let args;
+      if (b.jobId) {
+        const prior = getUnderwriteJob(String(b.jobId));
+        if (!prior || prior.locationId !== locationId) {
+          return res.status(404).json({ error: "that run is no longer in memory (the broker restarted) — start it again from the contact" });
+        }
+        if (prior.status === "queued" || prior.status === "running") return res.status(409).json({ error: "that run is still going" });
+        args = retryUnderwriteArgs(prior);
+      } else {
+        args = {
+          contactId: String(b.contactId || "").trim().slice(0, 64),
+          message: (pickInboundText(b) || "").slice(0, 4000),
+          address: String(b.address || "").trim().slice(0, 200),
+          askingPrice: Number(String(b.askingPrice ?? "").replace(/[^\d.]/g, "")) || 0,
+          dryRun: wantsDryRun(b.dryRun),
+          origin: "workflow",
+          replaceOfferId: b.replaceOfferId ? String(b.replaceOfferId) : null,
+        };
+        if (!args.contactId) return res.status(400).json({ error: "contactId or jobId required" });
+      }
+      const saved = await store.getOfferSettings(locationId);
+      const { skipped, job } = await startUnderwrite({
+        client, locationId, saved, store, ...args,
+        deps: underwriteDeps({ client, locationId, saved }),
+      });
+      if (skipped) return res.status(409).json({ error: skipped });
+      if (b.jobId && job) {
+        const prior = getUnderwriteJob(String(b.jobId));
+        if (prior && prior !== job) prior.retriedAs = job.id;
+      }
+      res.status(202).json({ ok: true, started: true, jobId: job.id });
     } catch (err) { fail(res, err); }
   });
 

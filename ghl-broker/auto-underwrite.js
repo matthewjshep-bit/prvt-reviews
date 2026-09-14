@@ -133,9 +133,26 @@ export function cancelJob(id) {
 // than pretend the job already stopped.
 export function publicJob(job) {
   if (!job) return null;
-  const { cancelRequested, ...rest } = job;
+  const { cancelRequested, _got, ...rest } = job;
   rest.stopping = Boolean(cancelRequested && (job.status === "running" || job.status === "queued"));
   return rest;
+}
+
+// The same run again: same contact, same house, same asking price. The address
+// is the RESOLVED one when the first run got that far, so a retry doesn't pay
+// to read the conversation twice. Whatever draft the first run left is handed
+// over to be replaced, so History ends up with one record per attempt chain.
+export function retryArgs(job) {
+  return {
+    contactId: job.contactId,
+    message: job.message || "",
+    address: job.address || job.suppliedAddress || "",
+    askingPrice: job.askingPrice || job.suppliedAskingPrice || 0,
+    dryRun: Boolean(job.dryRun),
+    origin: job.origin,
+    replaceOfferId: job.offerId || job.replaceOfferId || null,
+    retryOf: job.id,
+  };
 }
 
 // For tests: the registry is process-wide, so a suite that starts jobs needs a
@@ -176,12 +193,15 @@ export async function countToday({ store, locationId, now = Date.now() }) {
 // Has this contact already had this address underwritten recently? A chatty
 // agent following up on the same listing three times in an afternoon should
 // cost one Apify run, not three.
-export async function findRecent({ store, locationId, contactId, address, now = Date.now(), windowMs = 24 * 3600 * 1000 }) {
+// `ignoreId` is the draft a retry is about to replace — without it, a retry
+// finds its own predecessor's draft and "reuses" the run it was asked to redo.
+export async function findRecent({ store, locationId, contactId, address, ignoreId = null, now = Date.now(), windowMs = 24 * 3600 * 1000 }) {
   const key = addressKey(address);
   if (!key) return null;
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   for (const o of rows) {
     if (!o?.autoUnderwrite) continue;
+    if (ignoreId && o.id === ignoreId) continue;
     if (addressKey(o.address || "") !== key) continue;
     const ts = Date.parse(o.createdAt || o.autoUnderwrite.startedAt || "");
     if (Number.isFinite(ts) && now - ts <= windowMs) return o;
@@ -603,7 +623,7 @@ async function note(client, contactId, body, warnings) {
  */
 export async function startUnderwrite({
   client, locationId, saved, store, contactId, message, address, askingPrice, dryRun, deps, origin = "workflow", fill = false,
-  queueIfCapped = false,
+  queueIfCapped = false, replaceOfferId = null, retryOf = null,
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
@@ -690,6 +710,14 @@ export async function startUnderwrite({
     // knows whether it owes the contact a terminal tag.
     announced: false,
     cancelRequested: false,
+    retryOf: retryOf ? String(retryOf) : null,
+    // The draft an earlier attempt left. This run overwrites it (held or
+    // failed again) or deletes it (an offer landed) instead of adding another.
+    replaceOfferId: replaceOfferId ? String(replaceOfferId) : null,
+    // What each stage has loaded so far, so a run that dies at comps still
+    // leaves the address, listing facts and anything else it paid for. Kept
+    // off the polled view — see publicJob.
+    _got: {},
   };
   jobs.set(job.id, job);
 
@@ -711,6 +739,15 @@ export async function startUnderwrite({
         job.status = "error";
         job.error = String(e?.message || e).slice(0, 300);
         job.finishedAt = new Date().toISOString();
+        // A timeout or a provider refusal still leaves work behind — the
+        // resolved address, the listing's facts, maybe the comps. Save it as a
+        // draft so "Review" opens the form on what loaded rather than nothing.
+        let draftSaved = false;
+        try {
+          draftSaved = await saveLoadedDraft(job, { client, locationId, store });
+        } catch (err) {
+          job.warnings.push(`couldn't save what loaded: ${String(err?.message || err).slice(0, 120)}`);
+        }
         // A run that dies mid-flight must not leave the contact wearing
         // uw-running forever — that tag is what GHL filters are built on, and
         // a stuck one quietly poisons every one of them. Say what broke, too:
@@ -720,8 +757,10 @@ export async function startUnderwrite({
           await setTag(client, contactId, UW_TAGS.failed, job.warnings);
           await note(client, contactId,
             `Auto-underwrite failed for ${job.address || "an unidentified property"} — ${job.error}\n\n` +
-            `Nothing was created. The agent's message is still in the thread above; underwrite it by hand, ` +
-            `or fix the cause and re-trigger the workflow.`,
+            (draftSaved
+              ? `What loaded before it stopped is saved as a draft — open it from History, or press Retry there.`
+              : `Nothing was created. The agent's message is still in the thread above; underwrite it by hand, ` +
+                `or fix the cause and retry it from History.`),
             job.warnings);
         }
       })
@@ -764,6 +803,7 @@ async function runUnderwrite(job, ctx) {
   const compsSource = saved?.compsSource === "realestateapi" ? "realestateapi" : "zillow";
   const compsCondition = saved?.compsCondition === "ai" ? "ai" : "price";
   const warnings = job.warnings;
+  const got = job._got || (job._got = {});
   job.status = "running";
 
   let contact = null;
@@ -876,6 +916,7 @@ async function runUnderwrite(job, ctx) {
   job.askingPrice = extraction.askingPrice || null;
   job.extractionNote = extraction.note;
   job.addressSource = extraction.source;
+  got.extraction = extraction;
 
   if (!extraction.address) {
     return finishHeld(job, ctx, { extraction, held: ["no property address in the message"], partial: {} });
@@ -924,7 +965,9 @@ async function runUnderwrite(job, ctx) {
 
   // A fill run is a person asking for numbers on the form in front of them;
   // pointing them at yesterday's offer is not an answer to that.
-  const dupe = job.fill ? null : await findRecent({ store, locationId, contactId: job.contactId, address: extraction.address });
+  const dupe = job.fill ? null : await findRecent({
+    store, locationId, contactId: job.contactId, address: extraction.address, ignoreId: job.replaceOfferId,
+  });
   if (dupe) {
     job.status = "done";
     job.phase = "";
@@ -967,6 +1010,8 @@ async function runUnderwrite(job, ctx) {
     }
   }
   job.photosAnalyzed = photos.length;
+  got.listing = listing;
+  got.photosCount = photosCount;
   if (!photos.length) {
     warnings.push(`no listing photos for ${extraction.address} — the scope of work can't be scanned`);
   }
@@ -1004,6 +1049,7 @@ async function runUnderwrite(job, ctx) {
       homeType: facts?.homeType ?? null,
       stories: null, subdivision: null, material: null,
     };
+    got.subject = subject;
     compsData = await pullZillowComps({
       apifyToken,
       lat: geo.lat, lng: geo.lng,
@@ -1040,6 +1086,7 @@ async function runUnderwrite(job, ctx) {
   }
   const subjectFacts = { ...subject, distance: undefined, saleDate: undefined };
   const nearby = nearbyComps({ compsData, subjectFacts, subjectAddress: extraction.address });
+  Object.assign(got, { subject, compsData, nearby });
 
   /* --- 4. condition --- */
   job.phase = "grading";
@@ -1114,6 +1161,7 @@ async function runUnderwrite(job, ctx) {
     address: c.address, price: c.price, sqft: c.sqft, distance: c.distance,
     saleDate: c.saleDate, condition: grades[c.id]?.condition || null,
   }));
+  Object.assign(got, { grades, rehabbed });
 
   /* --- 5. ARV --- */
   job.phase = "arv";
@@ -1129,6 +1177,7 @@ async function runUnderwrite(job, ctx) {
     : null;
   job.arv = arv?.arv ?? null;
   job.arvBasis = arv?.basis || "";
+  got.arv = arv;
 
   /* --- 6. rehab --- */
   job.phase = "rehab";
@@ -1143,6 +1192,7 @@ async function runUnderwrite(job, ctx) {
   let rehabState = seedRoomCounts(undefined, { beds, baths });
   let repairs = 0;
   let scope = [];
+  got.rehabState = rehabState;
   if (photos.length) {
     try {
       scan = await scanRehabFromPhotos({
@@ -1154,6 +1204,7 @@ async function runUnderwrite(job, ctx) {
       const priced = priceScope(rehabState, sqft);
       scope = priced.lines;
       repairs = priced.total;
+      Object.assign(got, { rehabState, scope, repairs });
     } catch (e) {
       throw anthropicErrorToHttp(e);
     }
@@ -1237,6 +1288,16 @@ async function runUnderwrite(job, ctx) {
   job.repairs = repairs;
   job.finishedAt = new Date().toISOString();
   warnings.push(...(result.warnings || []));
+  // The retry landed a real offer; the draft the failed attempt left is now
+  // a stale copy of the same house sitting beside it in History.
+  if (job.replaceOfferId && job.replaceOfferId !== offer.id) {
+    try {
+      const prior = await store.getOffer?.(job.replaceOfferId);
+      if (prior?.status === "draft" && prior.locationId === locationId) await store.deleteOffer(prior.id || job.replaceOfferId);
+    } catch (e) {
+      warnings.push(`old draft not removed: ${String(e?.message || e).slice(0, 120)}`);
+    }
+  }
 
   await setTag(client, job.contactId, UW_TAGS.done, warnings);
   await note(client, job.contactId, doneNote(job, arv, repairs), warnings);
@@ -1258,9 +1319,62 @@ async function runUnderwrite(job, ctx) {
 // operator mid-form with the work done; the review is "tick two more comps",
 // not "start over".
 async function finishHeld(job, ctx, { extraction, held, partial, cleared = false }) {
-  const { client, locationId, store } = ctx;
+  const { client } = ctx;
   const warnings = job.warnings;
+  const saved = await saveDraft(job, ctx, { extraction, held, partial, cleared });
 
+  job.status = "held";
+  job.phase = "";
+  job.held = held;
+  job.offerId = saved.id;
+  job.arv = partial.arv?.arv ?? null;
+  job.repairs = partial.repairs ?? null;
+  job.finishedAt = new Date().toISOString();
+
+  if (job.contactId) {
+    await setTag(client, job.contactId, UW_TAGS.review, warnings);
+    await note(client, job.contactId, heldNote(job, held), warnings);
+  }
+}
+
+// A run that THREW — a timeout, a provider refusal — keeps whatever the stages
+// before it loaded. Same draft shape as a hold, so the form restores it the
+// same way; the job itself stays "error" so the strip still reads as a failure.
+// Returns whether a draft was written: with no address there is nothing to
+// open, and a fill run's record is the form on the operator's screen.
+export async function saveLoadedDraft(job, ctx) {
+  const got = job._got || {};
+  if (job.fill || !got.extraction?.address) return false;
+  const subject = got.subject || null;
+  const partial = {
+    compsData: got.compsData || null,
+    subject,
+    subjectSqft: Number(subject?.sqft) || 0,
+    nearby: got.nearby || [],
+    grades: got.grades || {},
+    rehabbed: got.rehabbed || [],
+    arv: got.arv || null,
+    rehabState: got.rehabState || null,
+    scope: got.scope || [],
+    repairs: got.repairs ?? 0,
+    listing: got.listing || null,
+    photosCount: got.photosCount || 0,
+  };
+  const saved = await saveDraft(job, ctx, {
+    extraction: got.extraction, held: [`stopped early — ${job.error || "the run failed"}`], partial,
+  });
+  job.offerId = saved.id;
+  job.arv = partial.arv?.arv ?? null;
+  job.repairs = partial.repairs || null;
+  return true;
+}
+
+// Writes the review draft. A retry OVERWRITES the draft its predecessor left
+// (keeping that record's id and createdAt) rather than stacking a second copy
+// of the same house in History — but only while it is still a draft: once a
+// person has turned it into an offer, it is theirs, and this writes a new one.
+async function saveDraft(job, ctx, { extraction, held, partial, cleared = false }) {
+  const { locationId, store } = ctx;
   const draft = {
     ...buildSnapshot({
       extraction, partial,
@@ -1279,20 +1393,15 @@ async function finishHeld(job, ctx, { extraction, held, partial, cleared = false
     autoUnderwrite: { ...auditTrail(job, extraction, { ok: cleared, held }), held },
     updatedAt: new Date().toISOString(),
   };
-  const saved = await store.createOffer(record);
-
-  job.status = "held";
-  job.phase = "";
-  job.held = held;
-  job.offerId = saved.id;
-  job.arv = partial.arv?.arv ?? null;
-  job.repairs = partial.repairs ?? null;
-  job.finishedAt = new Date().toISOString();
-
-  if (job.contactId) {
-    await setTag(client, job.contactId, UW_TAGS.review, warnings);
-    await note(client, job.contactId, heldNote(job, held), warnings);
+  if (job.replaceOfferId) {
+    const prior = await store.getOffer?.(job.replaceOfferId).catch(() => null);
+    if (prior && prior.status === "draft" && prior.locationId === locationId) {
+      const doc = { ...prior, ...record, id: prior.id || job.replaceOfferId, createdAt: prior.createdAt };
+      await store.updateOffer(doc.id, doc);
+      return doc;
+    }
   }
+  return store.createOffer(record);
 }
 
 /* ---------- shapes ---------- */

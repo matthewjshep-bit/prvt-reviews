@@ -239,6 +239,9 @@ export const getUnderwrite = (jobId) =>
   fetch(`${API_BASE}/api/offers/automations/underwrite?${locq()}&jobId=${encodeURIComponent(jobId)}`).then(j).then((r) => r.job);
 export const cancelUnderwrite = (jobId) =>
   post(`/api/offers/automations/underwrite/${encodeURIComponent(jobId)}/cancel`, {});
+// Same contact, same house, again — replacing whatever draft the last try left.
+export const retryUnderwrite = (jobId) =>
+  post(`/api/offers/automations/underwrite/retry`, { jobId });
 
 /* ---------- Conversation AI (inbound text -> drafted or auto-sent reply) ---------- */
 // Drafts are started by a GHL workflow webhook, not from here. The outbox

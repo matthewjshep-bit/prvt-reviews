@@ -14,7 +14,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, Loader2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { cancelUnderwrite, getUnderwrites } from "./api.js";
+import { cancelUnderwrite, getUnderwrites, retryUnderwrite } from "./api.js";
 import { BTN, Pill } from "./ui.jsx";
 
 const POLL_MS = 5000;
@@ -47,6 +47,8 @@ const elapsed = (job) => {
 // made is in the table underneath.
 const worthShowing = (job) => {
   if (LIVE.has(job.status)) return true;
+  // Retried: the new attempt has its own row, and this one would only repeat it.
+  if (job.retriedAs) return false;
   if (job.status !== "held" && job.status !== "error") return false;
   const done = Date.parse(job.finishedAt || "");
   return !Number.isFinite(done) || Date.now() - done < RECENT_MS;
@@ -55,10 +57,28 @@ const worthShowing = (job) => {
 export default function UnderwriteStrip({ onReview }) {
   const [jobs, setJobs] = useState([]);
   const [dismissed, setDismissed] = useState(() => new Set());
+  const [retrying, setRetrying] = useState(() => new Set());
+  const [retryError, setRetryError] = useState({});
   const timer = useRef(null);
+  const refresh = useRef(() => {});
+
+  const retry = async (job) => {
+    setRetrying((s) => new Set([...s, job.id]));
+    setRetryError((e) => ({ ...e, [job.id]: "" }));
+    try {
+      await retryUnderwrite(job.id);
+      refresh.current();
+    } catch (err) {
+      setRetryError((e) => ({ ...e, [job.id]: err?.message || "retry failed" }));
+    } finally {
+      setRetrying((s) => { const n = new Set(s); n.delete(job.id); return n; });
+    }
+  };
 
   useEffect(() => {
     let alive = true;
+    // A retry should show its new row now, not on the next minute-long idle poll.
+    refresh.current = () => { clearTimeout(timer.current); tick(); };
     async function tick() {
       try {
         const r = await getUnderwrites();
@@ -107,9 +127,22 @@ export default function UnderwriteStrip({ onReview }) {
                   {job.stopping ? "Stopping…" : "Stop"}
                 </button>
               )}
+              {retryError[job.id] && <span className="text-xs text-red-700">{retryError[job.id]}</span>}
               {job.status === "held" && job.offerId && (
                 <button type="button" className={BTN} onClick={() => onReview?.(job.offerId)}>
                   Review draft
+                </button>
+              )}
+              {/* A run that timed out or was refused still saved what it had
+                  loaded — the address, listing facts, any comps — as a draft. */}
+              {job.status === "error" && job.offerId && (
+                <button type="button" className={BTN} onClick={() => onReview?.(job.offerId)}>
+                  Review what loaded
+                </button>
+              )}
+              {(job.status === "held" || job.status === "error") && (
+                <button type="button" className={BTN} disabled={retrying.has(job.id)} onClick={() => retry(job)}>
+                  {retrying.has(job.id) ? "Retrying…" : "Retry"}
                 </button>
               )}
               {!LIVE.has(job.status) && (

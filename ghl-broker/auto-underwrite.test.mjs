@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import {
   evaluateGates, nearbyComps, countToday, findRecent, startUnderwrite, addressToWorkFrom,
   compsPoolReason, _resetJobs, wantsDryRun,
-  listJobs, publicJob, cancelJob,
+  listJobs, publicJob, cancelJob, retryArgs, saveLoadedDraft,
   UW_RADIUS_MILES, UW_MIN_REHABBED_COMPS, UW_MIN_SUBJECT_PHOTOS, UW_DEFAULT_DAILY_CAP,
   UW_MAX_ARV_COMPS,
 } from "./auto-underwrite.js";
@@ -632,4 +632,87 @@ test("the conversation referees the address: a stale field loses to the house th
   // Nothing we know of appears in the thread: no verdict, the field holds.
   assert.equal(refereeAddress({ standing: "1 Elm St, Kent, WA", recent: [], transcript: "THEM: hey, how's it going" }), null);
   assert.equal(refereeAddress({ standing: "", recent: [], transcript: thread }), null);
+});
+
+
+/* ---------- retry, and what a failed run leaves behind ---------- */
+
+test("findRecent skips the draft a retry is replacing", async () => {
+  const store = fakeStore([{
+    id: "draft1", contactId: "c1", address: "1234 NE 8th St, Renton, WA 98056",
+    createdAt: iso(60_000), autoUnderwrite: { jobId: "uw-x" },
+  }]);
+  const args = { store, locationId: "LOC", contactId: "c1", address: "1234 NE 8th St, Renton, WA 98056" };
+  assert.equal((await findRecent(args))?.id, "draft1");
+  assert.equal(await findRecent({ ...args, ignoreId: "draft1" }), null);
+});
+
+test("a retry reruns the resolved address and hands over the old draft", () => {
+  const args = retryArgs({
+    id: "uw-1", contactId: "c1", message: "hi", suppliedAddress: "1234 NE 8th",
+    address: "1234 NE 8th St, Renton, WA 98056", askingPrice: 500000, dryRun: false,
+    origin: "workflow", offerId: "draft1",
+  });
+  assert.equal(args.address, "1234 NE 8th St, Renton, WA 98056");
+  assert.equal(args.askingPrice, 500000);
+  assert.equal(args.replaceOfferId, "draft1");
+  assert.equal(args.retryOf, "uw-1");
+});
+
+test("publicJob keeps the loaded-so-far scratch off the polled view", () => {
+  assert.equal(publicJob({ id: "uw-1", status: "error", _got: { compsData: {} } })._got, undefined);
+});
+
+const draftStore = (existing = []) => {
+  const rows = new Map(existing.map((o) => [o.id, o]));
+  return {
+    rows,
+    createOffer: async (doc) => { const o = { ...doc, id: `new${rows.size}`, createdAt: new Date().toISOString() }; rows.set(o.id, o); return o; },
+    getOffer: async (id) => rows.get(id) || null,
+    updateOffer: async (id, doc) => { rows.set(id, doc); return true; },
+  };
+};
+const failedJob = (over = {}) => ({
+  id: "uw-f", locationId: "LOC", contactId: "c1", contactName: "Erin", status: "error",
+  error: "Zillow comps lookup failed (Apify 403)", warnings: [], compsUsed: [], photosAnalyzed: 0,
+  startedAt: new Date().toISOString(), fill: false,
+  _got: { extraction: { ...EXTRACTION }, subject: { ...SUBJECT } },
+  ...over,
+});
+
+test("a run that failed at comps saves the address and subject it had as a draft", async () => {
+  const store = draftStore();
+  const job = failedJob();
+  assert.equal(await saveLoadedDraft(job, { locationId: "LOC", store }), true);
+  const draft = store.rows.get(job.offerId);
+  assert.equal(draft.status, "draft");
+  assert.equal(draft.address, EXTRACTION.address);
+  assert.equal(draft.draft.subjectInfo.sqft, 1400);
+  assert.equal(draft.draft.comps.result, null, "no comps loaded, none invented");
+  assert.match(draft.autoUnderwrite.held[0], /stopped early — Zillow comps lookup failed/);
+  assert.equal(job.status, "error", "still reads as a failure");
+});
+
+test("a failure before the address is known saves nothing", async () => {
+  const store = draftStore();
+  assert.equal(await saveLoadedDraft(failedJob({ _got: {} }), { locationId: "LOC", store }), false);
+  assert.equal(await saveLoadedDraft(failedJob({ fill: true }), { locationId: "LOC", store }), false);
+  assert.equal(store.rows.size, 0);
+});
+
+test("a retry overwrites its predecessor's draft instead of stacking another", async () => {
+  const store = draftStore([{ id: "draft1", locationId: "LOC", status: "draft", createdAt: "2026-09-14T00:00:00.000Z" }]);
+  const job = failedJob({ replaceOfferId: "draft1" });
+  await saveLoadedDraft(job, { locationId: "LOC", store });
+  assert.equal(job.offerId, "draft1");
+  assert.equal(store.rows.size, 1);
+  assert.equal(store.rows.get("draft1").createdAt, "2026-09-14T00:00:00.000Z");
+});
+
+test("a draft someone already turned into an offer is never overwritten by a retry", async () => {
+  const store = draftStore([{ id: "off1", locationId: "LOC", status: "sent" }]);
+  const job = failedJob({ replaceOfferId: "off1" });
+  await saveLoadedDraft(job, { locationId: "LOC", store });
+  assert.notEqual(job.offerId, "off1");
+  assert.equal(store.rows.get("off1").status, "sent");
 });
