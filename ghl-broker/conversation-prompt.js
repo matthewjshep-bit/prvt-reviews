@@ -272,7 +272,11 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     parts.push(
       "THEIR TAKE: when the agent states what THEY think the property is worth fixed up, or what the work would " +
       "cost, put the dollar figures in `agentArv` and `agentRehab` (whole dollars; 0 when not stated) and their " +
-      "words in `agentTakeNote` (under 25 words). A range becomes its midpoint. These are the agent's numbers, " +
+      "words in `agentTakeNote` (under 25 words). A range becomes its midpoint. Agents write money in shorthand, " +
+      "and shorthand counts: \"60 in repairs\" or \"even at 60 of work\" is agentRehab 60000; \"worth 850\" is " +
+      "agentArv 850000; \"closer to 1.6-1.8\" about value is agentArv 1700000. A bare number beside repairs, " +
+      "rehab, work, worth, value or ARV is thousands (millions when it has a decimal under 10). Only leave 0 " +
+      "when they gave no number at all — \"worth much more\" is a note, not a number. These are the agent's numbers, " +
       "never ours: do not echo them as an offer, an ARV of ours, or a promise."
     );
   }

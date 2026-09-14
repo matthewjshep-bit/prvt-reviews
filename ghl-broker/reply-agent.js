@@ -262,6 +262,61 @@ export function normalizeAgentTake(p) {
   return arv || rehab ? { arv, rehab, note } : null;
 }
 
+// Shorthand money → whole dollars. "60" beside repairs is $60,000; "1.6" beside
+// value is $1,600,000. An explicit k/m wins; a number already in dollars stands.
+const shorthandDollars = (raw, unit = "", { millionsUnder = 10 } = {}) => {
+  const n = Number(String(raw).replace(/,/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  const u = String(unit || "").toLowerCase();
+  if (u === "m" || u === "mm" || u === "mil") return Math.round(n * 1_000_000);
+  if (u === "k") return Math.round(n * 1000);
+  if (n >= 10000) return Math.round(n);
+  if (n < millionsUnder && /\./.test(String(raw))) return Math.round(n * 1_000_000);
+  return Math.round(n * 1000);
+};
+
+/**
+ * agentTakeFromText(message) → { arv, rehab, note } | null
+ *
+ * The backstop for THEIR TAKE when the model returns 0 on shorthand. On
+ * 2026-09-14 Thomas Rinow wrote "Even at 60 in repairs we're well over your
+ * price" and the take came back empty, so the re-quote found "nothing new"
+ * and the bot asked for a counter instead of re-running our math on $60k.
+ * Deliberately narrow: a number has to sit right beside a repairs/rehab/work
+ * word (rehab) or a worth/value/ARV word (arv). A price they want ("lowest is
+ * $700k", "need to be at 610") is a counter, not a take, and is never read here.
+ */
+export function agentTakeFromText(message = "") {
+  const text = String(message || "");
+  const range = (a, b) => (b ? (Number(a) + Number(b)) / 2 : Number(a));
+  const num = "\\$?(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\s*(?:-|to)?\\s*\\$?(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)?\\s*(k|m|mm|mil)?";
+  let rehab = 0;
+  let arv = 0;
+  // "60 in repairs", "60k of work", "$45,000 rehab"
+  const r1 = text.match(new RegExp(`${num}\\s*(?:in|of|for|worth of)?\\s*(?:repairs?|rehab|work|fix(?:es)?)\\b`, "i"));
+  // "repairs around 60", "rehab is 45k"
+  const r2 = text.match(new RegExp(`\\b(?:repairs?|rehab)\\s*(?:is|are|at|around|about|of|~)?\\s*${num}`, "i"));
+  const rm = r1 || r2;
+  if (rm) rehab = shorthandDollars(range(rm[1].replace(/,/g, ""), rm[2]?.replace(/,/g, "")), rm[3], { millionsUnder: 0 });
+  // "worth 850", "value closer to 1.6-1.8", "ARV 715k"
+  const a1 = text.match(new RegExp(`\\b(?:worth|value[ds]?|arv|after repair value)\\s*(?:is|at|of|around|about|closer to|more like|~)?\\s*${num}`, "i"));
+  // "715 done", "1.6-1.8 fixed up"
+  const a2 = text.match(new RegExp(`${num}\\s*(?:done|fixed up|finished|after repairs?)\\b`, "i"));
+  // "1.6-1.8 value", "850 ARV"
+  const a3 = text.match(new RegExp(`${num}\\s*(?:value|arv|after repair value)\\b`, "i"));
+  const am = a1 || a2 || a3;
+  if (am) {
+    const raw = am[2] ? String(range(am[1].replace(/,/g, ""), am[2].replace(/,/g, ""))) : am[1].replace(/,/g, "");
+    const decimal = /\./.test(am[1]) || /\./.test(am[2] || "");
+    arv = shorthandDollars(decimal && !/\./.test(raw) ? `${raw}.0` : raw, am[3]);
+  }
+  // Sanity: a rehab figure over $5M or an ARV under $50k is a misread, not a take.
+  if (rehab > 5_000_000) rehab = 0;
+  if (arv && arv < 50_000) arv = 0;
+  if (!arv && !rehab) return null;
+  return { arv, rehab, note: text.replace(/\s+/g, " ").trim().slice(0, 200) };
+}
+
 // What the model learned, trimmed to what the fields can hold.
 export function normalizeProfile(p) {
   if (!p || typeof p !== "object") return null;
@@ -1801,7 +1856,9 @@ async function runReply(job, ctx) {
   }
   const ts = new Date().toISOString();
   // The agent's own numbers and the property details, whichever shape the draft arrived in.
-  const agentTake = draft.agentTake ?? normalizeAgentTake(draft);
+  // The model's read first; the shorthand backstop only when it came back empty.
+  const agentTake = draft.agentTake ?? normalizeAgentTake(draft)
+    ?? (party === "agent" && !isCall ? agentTakeFromText(job.message) : null);
   const propertyDetails = draft.propertyDetails ?? null;
   let record = await store.createReplyDraft({
     locationId,
