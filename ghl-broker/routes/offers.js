@@ -4620,6 +4620,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           steps: c.ladder.steps, startedAt: c.startedAt, sentSteps: c.sentSteps,
           lastInboundAt: c.lastInboundAt || null, lastTouchAt: c.lastTouchAt || null, now,
           stopOnAnyInbound: fu.stopOnAnyInbound, minHoursBetween: fu.minHoursBetween,
+          repeatEvery: c.ladder.repeatEvery,
         });
         due.push({ contactId: c.contactId, party: c.party, kind: c.kind, address: c.address,
                    startedAt: c.startedAt, due: d.due, step: d.step ?? null, reason: d.reason || "" });
