@@ -1310,6 +1310,20 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // The list price came down on a house we priced (price-watch.js). Their new
+  // price and the old one may be said, and our number from the book; ours is
+  // never raised here.
+  price_drop: {
+    party: "agent",
+    enabled: (pb) => pb?.followUp?.enabled,
+    ready: ({ offer, subject }) => {
+      if (!offer?.address) return "no offer on the house";
+      if (offer.deal) return "it became a deal";
+      return subject?.to ? true : "no new price to mention";
+    },
+    floats: ({ subject }) => [subject?.to, subject?.from].map((n) => Math.round(Number(n) || 0)).filter(Boolean),
+    forbids: () => [],
+  },
   blast_nudge: {
     party: "investor",
     enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.blast_nudge?.enabled,
@@ -1489,7 +1503,10 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
   return { ...base,
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
     lastTouchAt: subject?.lastTouchAt || null,
-    ...(kind === "promise_due" ? { what: subject?.what || "answer", heldReason: subject?.heldReason || "", promisedText: subject?.promisedText || "", running: Boolean(subject?.running) } : {}) };
+    ...(kind === "promise_due" ? { what: subject?.what || "answer", heldReason: subject?.heldReason || "", promisedText: subject?.promisedText || "", running: Boolean(subject?.running) } : {}),
+    ...(kind === "price_drop" ? { from: Math.round(Number(subject?.from) || 0), to: Math.round(Number(subject?.to) || 0),
+      fromK: Number(subject?.from) > 0 ? kText(Number(subject.from)) : "", toK: Number(subject?.to) > 0 ? kText(Number(subject.to)) : "",
+      offerStatus: subject?.status || "", ourK: Number(offer?.cashAmount) > 0 ? kText(Number(offer.cashAmount)) : "" } : {}) };
 }
 
 // The one-liner the outbox row shows when the model didn't write its own.
@@ -1511,6 +1528,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
     case "dataroom_nudge": return `Follows up on ${where} — they opened the package and went quiet${rung}.`;
+    case "price_drop": return `The list price on ${where} came down${outbound.fromK ? ` from ${outbound.fromK}` : ""} to ${outbound.toK}; asks if the seller would look at cash closer to ours now.`;
     case "promise_due": return `Keeps our word on ${where}: we said we'd come back with ${outbound.what === "number" ? "a number" : "an answer"} and nothing went out${outbound.heldReason ? " (the underwrite held)" : ""}.`;
     default: return `Starts a message about ${where}${rung}.`;
   }

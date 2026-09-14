@@ -26,6 +26,7 @@ import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agen
 import { maybeStartOutreachSweep } from "./outreach-sweep.js";
 import { maybeStartOutreachFollowUp } from "./outreach-followup.js";
 import { maybeRunPromiseSweep } from "./promise-sweep.js";
+import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
@@ -231,6 +232,12 @@ setInterval(async () => {
         deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
       });
       if (promised?.owed) console.log(`promise sweep for ${locationId}: ${promised.owed} owed, ${promised.kept} kept`);
+      // Once a day: list prices that moved on houses we priced.
+      const watched = await maybeRunPriceWatch({
+        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
+      });
+      if (watched) console.log(`price watch for ${locationId}: ${JSON.stringify({ watched: watched.watched, checked: watched.checked, dropped: watched.dropped, offMarket: watched.offMarket, texted: watched.texted, error: watched.error || null })}`);
       // Addresses that came in past the daily underwrite cap, once it resets.
       const drained = await offersRouter.drainUnderwriteQueue?.({ client: makeClient(token), locationId });
       if (drained?.started || drained?.dropped) console.log(`underwrite queue for ${locationId}: started ${drained.started}, dropped ${drained.dropped}, waiting ${drained.left}`);

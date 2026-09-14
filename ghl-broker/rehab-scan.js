@@ -152,6 +152,42 @@ export async function fetchZillowPhotos(address, apifyToken) {
   };
 }
 
+// Listings re-read per price-watch run.
+export const MAX_LISTING_LOOKUPS = 40;
+
+/**
+ * fetchZillowListings(addresses, apifyToken) → Map(streetKey → { listPrice, status })
+ *
+ * One detail-actor run over the houses we have offers on, for the two facts
+ * that change after we price them: the list price, and whether it's still for
+ * sale. Addresses Zillow can't read are simply absent.
+ */
+export async function fetchZillowListings(addresses = [], apifyToken) {
+  const list = [...new Set(addresses.filter(Boolean))].slice(0, MAX_LISTING_LOOKUPS);
+  const out = new Map();
+  if (!list.length) return out;
+  const r = await fetch(
+    `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}&timeout=180`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addresses: list }),
+      signal: AbortSignal.timeout(200000),
+    }
+  );
+  if (!r.ok) throw new Error(`Zillow listing lookup failed (Apify ${r.status})`);
+  const items = await r.json();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || item.isValid === false) continue;
+    const a = item.address && typeof item.address === "object" ? item.address : null;
+    const key = streetKey(a?.streetAddress || item.streetAddress || item.addressOrUrlFromInput || "");
+    if (!key) continue;
+    const price = Number(item.listingPrice?.amount ?? item.price) || 0;
+    out.set(key, { listPrice: price > 0 ? Math.round(price) : 0, status: item.listingStatus || item.homeStatus || null });
+  }
+  return out;
+}
+
 /**
  * fetchZillowUnits(addresses, apifyToken) → Map(streetKey → units)
  *

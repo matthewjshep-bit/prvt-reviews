@@ -441,6 +441,18 @@ export function outboundOpening(outbound) {
             : `Say you're still on it and ask the one question that would help most. `) +
         `Do NOT name any number, range or percentage, and do NOT promise a new time. ${CONTINUE} Set intent to promise_due.`;
 
+    // The list price came down on a house we priced. The seller moving is the
+    // reason to write; the ask is whether they'd move toward us.
+    case "price_drop":
+      return `${START} The list price on ${o.address} just came down${o.fromK ? ` from ${o.fromK}` : ""} to ${o.toK}. ` +
+        (o.offerStatus === "passed"
+          ? `They passed on our offer${o.ourK ? ` of ${o.ourK}` : ""} earlier. `
+          : `Our offer${o.ourK ? ` of ${o.ourK}` : ""} is still out to them. `) +
+        `One or two lines: say you saw the price move, and ask whether the seller would look at a cash, as-is offer ` +
+        `closer to ours now. You may say their new list price and restate our number exactly as it is in the offer book; ` +
+        `do NOT raise ours, hint that we'd go higher, or name any other number. Write it like a text: no dollar signs. ` +
+        `${CONTINUE} Set intent to price_drop.`;
+
     default:
       return "";
   }
