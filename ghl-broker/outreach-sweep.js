@@ -40,9 +40,14 @@ export function workflowIdFrom(v) {
   return /^[A-Za-z0-9-]{6,64}$/.test(id) ? id : "";
 }
 
+import { findCounty } from "./shared/us-counties.js";
+
 // [{ county, state }] from an array, or from the settings textarea's
-// "King, WA" lines (or ";"-separated). No state, no county.
-export function countiesFrom(v) {
+// "King, WA" lines (or ";"-separated). A line with no state takes
+// `defaultState` — the business is in Washington, and "King / Pierce /
+// Snohomish" typed without one used to parse to no counties at all, so the
+// 10am sweep failed with "no market configured".
+export function countiesFrom(v, defaultState = "WA") {
   const raw = Array.isArray(v) ? v : String(v || "").split(/[\n;]+/);
   const out = [];
   for (const x of raw) {
@@ -50,7 +55,10 @@ export function countiesFrom(v) {
       ? [x.county, x.state]
       : String(x).split(",").map((p) => p.trim());
     const c = String(county || "").replace(/\s+county$/i, "").trim();
-    const st = String(state || "").trim().toUpperCase();
+    // A defaulted state is only trusted for a county that really is in it —
+    // "Nowhere" with no state is a typo, not Nowhere, WA.
+    if (c && !String(state || "").trim() && !findCounty(c, defaultState)) continue;
+    const st = String(state || defaultState || "").trim().toUpperCase();
     if (c && /^[A-Z]{2}$/.test(st)) out.push({ county: c, state: st });
   }
   return out.slice(0, 20);
@@ -258,6 +266,12 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
     pages = { ...pages, turn };
   }
   job.county = key;
+  // Its own batch per market. Without a batchId the pull lands in the most
+  // recent batch, whatever that is — on 2026-09-14 a King pull went into a
+  // hand-made "Spokane County · Sep 3" batch and picked Spokane agents from
+  // it. The pick below reads the whole batch, so the batch IS the market.
+  const batchId = await autopilotBatchId({ store, locationId, market: key || "saved market" }).catch(() => undefined);
+  if (batchId) query.batchId = batchId;
   const pull = await deps.runPull(locationId, client, query);
   job.pull = { batchId: pull.batchId, batchName: pull.batchName, requestsUsed: pull.requestsUsed, cached: pull.cached,
     listingsFetched: pull.listingsFetched, listingsKept: pull.listingsKept, agentsTotal: pull.agentsTotal, agentsNew: pull.agentsNew,
@@ -314,6 +328,18 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
   });
 
   job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
+}
+
+// "Autopilot · King, WA" — found by name, created once, never auto-renamed
+// (autoNamed false), so every run for a market adds to the same batch and the
+// agents a page didn't reach today are still there tomorrow.
+export async function autopilotBatchId({ store, locationId, market }) {
+  if (typeof store.listOutreachBatches !== "function" || typeof store.createOutreachBatch !== "function") return undefined;
+  const name = `Autopilot · ${market}`;
+  const hit = (await store.listOutreachBatches(locationId)).find((b) => b.name === name);
+  if (hit) return hit.id;
+  const created = await store.createOutreachBatch(locationId, { name, autoNamed: false });
+  return created?.id;
 }
 
 /**

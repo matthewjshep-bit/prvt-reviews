@@ -716,7 +716,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                   value={Array.isArray(form.outreachAutopilot?.counties) ? form.outreachAutopilot.counties.map((c) => `${c.county}, ${c.state}`).join("\n") : form.outreachAutopilot?.counties || ""}
                   onChange={(e) => setOutreachAuto("counties")(e.target.value)} />
                 <span className="mt-1 block text-xs text-slate-500">
-                  One "County, ST" per line. Each run reads the next pages of one county, then moves to the next county once it's read to the end.
+                  One "County, ST" per line (no state = WA). Each run reads the next pages of one county, then moves to the next county once it's read to the end.
                   Requests are spread over the month to stop at 48 (RentCast bills $0.20 a request past 50). Blank = the zips/city defaults above.
                 </span>
               </label>
