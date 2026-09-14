@@ -6,7 +6,7 @@ import {
   compsPoolReason, _resetJobs, wantsDryRun,
   listJobs, publicJob, cancelJob, retryArgs, saveLoadedDraft,
   UW_RADIUS_MILES, UW_MIN_REHABBED_COMPS, UW_MIN_SUBJECT_PHOTOS, UW_DEFAULT_DAILY_CAP,
-  UW_MAX_ARV_COMPS,
+  UW_MAX_ARV_COMPS, UW_RADIUS_LADDER, gradeByPriceProxy, UW_GUT_CHECK_MIN_COMPS,
 } from "./auto-underwrite.js";
 import { markRenovatedByPrice } from "./shared/comp-match.js";
 
@@ -715,4 +715,59 @@ test("a draft someone already turned into an offer is never overwritten by a ret
   await saveLoadedDraft(job, { locationId: "LOC", store });
   assert.notEqual(job.offerId, "off1");
   assert.equal(store.rows.get("off1").status, "sent");
+});
+
+
+/* ---------- widening only when thin ---------- */
+
+test("the radius ladder starts at half a mile and stops at a mile and a half", () => {
+  assert.equal(UW_RADIUS_LADDER[0], UW_RADIUS_MILES);
+  assert.deepEqual(UW_RADIUS_LADDER, [0.5, 1, 1.5]);
+});
+
+test("a hold says the radius it actually searched, not always half a mile", () => {
+  const g = gate({ rehabbedComps: comps(2), compsRadiusMiles: 1.5 });
+  assert.equal(g.ok, false);
+  assert.ok(g.held.some((h) => /within 1\.5 mi/.test(h)), g.held.join(" | "));
+  assert.ok(!g.held.some((h) => /within 0\.5 mi/.test(h)));
+});
+
+test("the search-box reason names the widened radius", () => {
+  assert.match(compsPoolReason({ rows: 12, pulled: 12, kept: 1, radiusMiles: 1 }), /1 mi/);
+});
+
+test("the price proxy step is the same whether the ladder or the run calls it", () => {
+  const few = gradeByPriceProxy([]);
+  assert.equal(few.rehabbed.length, 0);
+  assert.equal(few.proxy.applied, false, "an empty ring has no top tier");
+});
+
+
+/* ---------- the gut check: 2–5 priced comps ---------- */
+
+const priced = (n) => Array.from({ length: n }, (_, i) => ({ id: `p${i}`, address: `${i} Main St`, price: 500000 + i * 25000, sqft: 1400, distance: 0.3 }));
+
+test("three priced comps is a gut check, not a hold: the top three by $/sqft carry it", () => {
+  const g = gradeByPriceProxy(priced(3));
+  assert.equal(g.proxy.gutCheck, true);
+  assert.equal(g.proxy.applied, true);
+  assert.equal(g.rehabbed.length, 3);
+  assert.match(g.proxy.reason, /gut check: only 3 priced comps/);
+});
+
+test("two priced comps is the smallest gut check; one is still a hold", () => {
+  assert.equal(gradeByPriceProxy(priced(2)).rehabbed.length, 2);
+  const one = gradeByPriceProxy(priced(1));
+  assert.equal(one.proxy.applied, false);
+  assert.equal(one.proxy.gutCheck, undefined);
+});
+
+test("six or more priced comps is the real proxy, not a gut check", () => {
+  assert.equal(gradeByPriceProxy(priced(8)).proxy.gutCheck, undefined);
+});
+
+test("a gut check clears the comp gate on two comps; a full proxy still needs three", () => {
+  assert.equal(UW_GUT_CHECK_MIN_COMPS, 2);
+  assert.equal(gate({ rehabbedComps: comps(2), proxy: { applied: true, gutCheck: true, reason: "gut check" } }).ok, true);
+  assert.equal(gate({ rehabbedComps: comps(2), proxy: { applied: true, reason: "top 4 of 9" } }).ok, false);
 });

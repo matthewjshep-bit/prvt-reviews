@@ -52,7 +52,14 @@ import { mostRecentlyMentioned } from "./shared/us-address.js";
 /* ---------- the dials ---------- */
 
 export const UW_RADIUS_MILES = 0.5;        // "under half a mile", as asked
+// Thin areas only. When a ring holds fewer than UW_MIN_REHABBED_COMPS usable
+// comps the search widens to the next one, and the offer says how far it
+// reached. Matt chose this on 2026-09-14 over "never widen", after a Seattle
+// house held on a single sale inside half a mile. Each extra ring is another
+// Apify pull, so an area with enough comps never pays for one.
+export const UW_RADIUS_LADDER = [0.5, 1, 1.5];
 export const UW_MIN_REHABBED_COMPS = 3;    // below this the run holds for review
+export const UW_GUT_CHECK_MIN_COMPS = 2;   // …unless it's a gut check (see gradeByPriceProxy)
 export const UW_MAX_ARV_COMPS = 4;         // 3–4 comps carry the ARV
 export const UW_GRADE_CANDIDATES = 6;      // how many we pay Apify+Claude to grade
 // How wide the pool is that the PRICE PROXY ranks. Deliberately looser than the
@@ -368,6 +375,63 @@ export function nearbyComps({ compsData, subjectFacts, subjectAddress = "", radi
     .sort(compareByMatch);
 }
 
+/**
+ * gradeByPriceProxy(nearby) → { grades, rehabbed, proxy }
+ *
+ * The price stand-in for "renovated", as one step so the radius ladder can ask
+ * "would this ring carry an ARV?" with exactly the logic the run then uses.
+ *
+ * Two questions, two pools — this is the part worth understanding.
+ *
+ *   "Where is the top of the local $/sqft distribution?" needs BREADTH.
+ *   Ranking is scale-free once you divide by floor area, so a 4-bed two doors
+ *   down tells you plenty about what a renovated house fetches here.
+ *
+ *   "Which comps carry the ARV?" needs TIGHTNESS — the closest matches to this
+ *   specific house.
+ *
+ * Running both off one tight set was the bug: tight enough to defend an ARV is
+ * too tight to have a distribution, and the proxy just refused. So the wide
+ * pool establishes the renovated tier, and the ARV then takes the best-MATCHING
+ * comps from inside that tier — compareByMatch already scores beds, baths,
+ * size, era and distance, so the tightening is done by the scorecard rather
+ * than by another set of hand-tuned bands.
+ */
+export function gradeByPriceProxy(nearby = []) {
+  const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(nearby.length * 0.35));
+  let proxy = markRenovatedByPrice(nearby, { take: tier });
+  // The gut check. Too few priced sales for a real top tier (under
+  // PRICE_PROXY_MIN_POOL) but at least UW_GUT_CHECK_MIN_COMPS: take the best
+  // few by $/sqft as the renovated set and say so. Matt chose this on
+  // 2026-09-14 — a rough number he can respond with beats a hold on a house
+  // with three sales nearby. The gate asks for fewer comps when this fired,
+  // and the ARV basis leads with "gut check".
+  const priced = nearby.filter((c) => Number(c.price) > 0).length;
+  if (!proxy.applied && priced >= UW_GUT_CHECK_MIN_COMPS) {
+    const take = Math.min(UW_MIN_REHABBED_COMPS, priced);
+    const rough = markRenovatedByPrice(nearby, { take, minPool: UW_GUT_CHECK_MIN_COMPS });
+    proxy = { ...rough, gutCheck: true, reason: `gut check: only ${priced} priced comps, top ${take} by $/sqft taken as renovated` };
+  }
+  const markedRenovated = proxy.comps.filter((c) => ARV_CONDITIONS.has(c.condition));
+  const rehabbed = [...markedRenovated].sort(compareByMatch).slice(0, UW_MAX_ARV_COMPS);
+  // Record the grade for EVERY comp the proxy judged, not just the handful
+  // that went on to carry the ARV. The tier is usually wider than
+  // UW_MAX_ARV_COMPS, so saving only the survivors threw away the verdict on
+  // the rest: they came back to the board as "cond?", indistinguishable from
+  // comps nothing had ever looked at. Tick one and it would join the ARV
+  // ungraded, quietly changing which pool deriveArv values off.
+  //
+  // Comps OUTSIDE the tier still get nothing, deliberately — being in the
+  // bottom two thirds of a $/sqft spread is not evidence that a house is
+  // dated, and claiming it would be inventing a fact.
+  const grades = Object.fromEntries(
+    markedRenovated.map((c) => [c.id, {
+      condition: c.condition, confidence: "medium", source: "price", note: proxy.reason,
+    }])
+  );
+  return { grades, rehabbed, proxy };
+}
+
 /* ---------- the gates ---------- */
 
 /**
@@ -380,7 +444,7 @@ export function nearbyComps({ compsData, subjectFacts, subjectAddress = "", radi
  */
 export function evaluateGates({
   extraction, subject, rehabbedComps = [], arv, photosAnalyzed = 0, scan, repairs = 0, proxy = null,
-  geocode = null, compsPool = null,
+  geocode = null, compsPool = null, compsRadiusMiles = UW_RADIUS_MILES,
 }) {
   const held = [];
 
@@ -423,9 +487,10 @@ export function evaluateGates({
     held.push(`${proxy.reason} — not enough nearby sales to tell renovated from tired by price`);
   } else {
     const n = rehabbedComps.length;
-    if (n < UW_MIN_REHABBED_COMPS) {
+    const need = proxy?.gutCheck ? UW_GUT_CHECK_MIN_COMPS : UW_MIN_REHABBED_COMPS;
+    if (n < need) {
       held.push(
-        `only ${n} renovated/updated comp${n === 1 ? "" : "s"} within ${UW_RADIUS_MILES} mi — ${UW_MIN_REHABBED_COMPS} required`
+        `only ${n} renovated/updated comp${n === 1 ? "" : "s"} within ${compsRadiusMiles} mi — ${need} required`
       );
     }
   }
@@ -481,8 +546,8 @@ export function evaluateGates({
  * `rows` is null for the county-record source, which has no scrape to count,
  * so that path keeps the wording it always had.
  */
-export function compsPoolReason({ rows = null, pulled = 0, kept = 0 } = {}) {
-  const radius = `${UW_RADIUS_MILES} mi`;
+export function compsPoolReason({ rows = null, pulled = 0, kept = 0, radiusMiles = UW_RADIUS_MILES } = {}) {
+  const radius = `${radiusMiles} mi`;
   if (pulled > 0) {
     return `${pulled} sold home${pulled === 1 ? "" : "s"} in the search box, ` +
       `${kept ?? 0} of them inside ${radius} and within the bed/bath/size bands`;
@@ -1045,6 +1110,7 @@ async function runUnderwrite(job, ctx) {
   let compsData;
   let subject;
   let geocode = null;
+  let compsRadiusMiles = UW_RADIUS_MILES;
   if (compsSource === "zillow") {
     // Zillow search has no notion of a subject property, so we own that record:
     // coordinates from a free geocode, facts from the listing above.
@@ -1071,11 +1137,11 @@ async function runUnderwrite(job, ctx) {
       stories: null, subdivision: null, material: null,
     };
     got.subject = subject;
-    compsData = await pullZillowComps({
+    const pullAt = (radiusMiles) => pullZillowComps({
       apifyToken,
       lat: geo.lat, lng: geo.lng,
       beds: subject.beds || 0, baths: subject.baths || 0, sqft: subject.sqft || 0,
-      radiusMiles: UW_RADIUS_MILES,
+      radiusMiles,
       monthsBack: 12,
       // Pool bands, not ARV bands. Everything that survives is still ranked by
       // the match scorecard, so the closest matches float to the top on their
@@ -1089,6 +1155,27 @@ async function runUnderwrite(job, ctx) {
       homeType: subject.homeType,
       subject,
     });
+    // Half a mile first; wider only when that ring can't carry an ARV. "Usable"
+    // is what the condition step will actually have to work with: comps the
+    // price proxy calls renovated, or — for AI grading, which is priced per
+    // comp and so runs once, on the final ring — comps inside the ring at all.
+    const lastRing = UW_RADIUS_LADDER[UW_RADIUS_LADDER.length - 1];
+    for (const radius of UW_RADIUS_LADDER) {
+      if (canceled(job)) return;
+      compsRadiusMiles = radius;
+      compsData = await pullAt(radius);
+      const ring = nearbyComps({
+        compsData, subjectFacts: { ...subject, distance: undefined, saleDate: undefined },
+        subjectAddress: extraction.address, radiusMiles: radius,
+      });
+      // A full proxy stops the ladder; a gut check doesn't — it's what the
+      // last ring settles for, not a reason to skip looking wider.
+      const graded = compsCondition === "price" ? gradeByPriceProxy(ring) : null;
+      const usable = graded ? (graded.proxy.gutCheck ? 0 : graded.rehabbed.length) : ring.length;
+      if (usable >= UW_MIN_REHABBED_COMPS || radius === lastRing) break;
+      const found = graded ? graded.proxy.pool : ring.length;
+      warnings.push(`only ${found} priced comp${found === 1 ? "" : "s"} within ${radius} mi — widened the search`);
+    }
   } else {
     // widen:false is the point. The ladder in comps-pull.js is right for a
     // human who is told it fired; unattended, silently reaching five miles out
@@ -1106,7 +1193,8 @@ async function runUnderwrite(job, ctx) {
     }
   }
   const subjectFacts = { ...subject, distance: undefined, saleDate: undefined };
-  const nearby = nearbyComps({ compsData, subjectFacts, subjectAddress: extraction.address });
+  const nearby = nearbyComps({ compsData, subjectFacts, subjectAddress: extraction.address, radiusMiles: compsRadiusMiles });
+  job.compsRadiusMiles = compsRadiusMiles;
   Object.assign(got, { subject, compsData, nearby });
 
   /* --- 4. condition --- */
@@ -1133,25 +1221,7 @@ async function runUnderwrite(job, ctx) {
     // best-MATCHING comps from inside that tier — compareByMatch already
     // scores beds, baths, size, era and distance, so the tightening is done by
     // the scorecard rather than by another set of hand-tuned bands.
-    const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(nearby.length * 0.35));
-    proxy = markRenovatedByPrice(nearby, { take: tier });
-    const markedRenovated = proxy.comps.filter((c) => ARV_CONDITIONS.has(c.condition));
-    rehabbed = [...markedRenovated].sort(compareByMatch).slice(0, UW_MAX_ARV_COMPS);
-    // Record the grade for EVERY comp the proxy judged, not just the handful
-    // that went on to carry the ARV. The tier is usually wider than
-    // UW_MAX_ARV_COMPS, so saving only the survivors threw away the verdict on
-    // the rest: they came back to the board as "cond?", indistinguishable from
-    // comps nothing had ever looked at. Tick one and it would join the ARV
-    // ungraded, quietly changing which pool deriveArv values off.
-    //
-    // Comps OUTSIDE the tier still get nothing, deliberately — being in the
-    // bottom two thirds of a $/sqft spread is not evidence that a house is
-    // dated, and claiming it would be inventing a fact.
-    grades = Object.fromEntries(
-      markedRenovated.map((c) => [c.id, {
-        condition: c.condition, confidence: "medium", source: "price", note: proxy.reason,
-      }])
-    );
+    ({ grades, rehabbed, proxy } = gradeByPriceProxy(nearby));
   } else {
     const candidates = nearby.slice(0, UW_GRADE_CANDIDATES);
     if (candidates.length) {
@@ -1196,6 +1266,11 @@ async function runUnderwrite(job, ctx) {
         adjustments: [],
       })
     : null;
+  // A widened search is said out loud wherever the ARV's basis is shown —
+  // the note, the offer, the editor — so nobody reads a 1.5-mile ARV as a
+  // half-mile one.
+  if (arv && compsRadiusMiles > UW_RADIUS_MILES) arv.basis = `${arv.basis} — comps widened to ${compsRadiusMiles} mi`;
+  if (arv && proxy?.gutCheck) arv.basis = `gut check on ${rehabbed.length} comps — ${arv.basis}`;
   job.arv = arv?.arv ?? null;
   job.arvBasis = arv?.basis || "";
   got.arv = arv;
@@ -1234,8 +1309,8 @@ async function runUnderwrite(job, ctx) {
   /* --- the gates --- */
   const gate = evaluateGates({
     extraction, subject, rehabbedComps: rehabbed, arv,
-    photosAnalyzed: photos.length, scan, repairs, proxy, geocode,
-    compsPool: { rows: compsData?.rows ?? null, pulled: compsData?.pulled ?? null, kept: nearby.length },
+    photosAnalyzed: photos.length, scan, repairs, proxy, geocode, compsRadiusMiles,
+    compsPool: { rows: compsData?.rows ?? null, pulled: compsData?.pulled ?? null, kept: nearby.length, radiusMiles: compsRadiusMiles },
   });
 
   const partial = {
@@ -1494,6 +1569,7 @@ function auditTrail(job, extraction, gate) {
     extractionNote: extraction.note,
     mode: UW_MODE,
     compsSource: job.compsSource,
+    compsRadiusMiles: job.compsRadiusMiles ?? UW_RADIUS_MILES,
     conditionSource: job.conditionSource,
     compsUsedCount: job.compsUsed.length,
     photosAnalyzed: job.photosAnalyzed,
