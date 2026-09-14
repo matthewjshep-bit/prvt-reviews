@@ -36,7 +36,7 @@ import { deriveArv, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
 import { rehabBand } from "./shared/rehab-catalog.js";
-import { fmtMoney } from "./shared/offer-calc.js";
+import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
 import { addressKey } from "./shared/us-address.js";
 import { expandListingLinks } from "./listing-links.js";
 import { buildTranscript } from "./enrich.js";
@@ -60,6 +60,33 @@ export const UW_RADIUS_MILES = 0.5;        // "under half a mile", as asked
 export const UW_RADIUS_LADDER = [0.5, 1, 1.5];
 export const UW_MIN_REHABBED_COMPS = 3;    // below this the run holds for review
 export const UW_GUT_CHECK_MIN_COMPS = 2;   // …unless it's a gut check (see gradeByPriceProxy)
+// An unattended offer never goes above this share of the list price. Kelby
+// Schweitzer's 5016 7th Ave NE (2026-09-14) priced at $1,061,750 on a $925,000
+// listing — the underwrite never had the list price, so nothing stopped it.
+// Matt chose "cap below list"; 90% is the default, `maxOfferPctOfList` in
+// Settings overrides it.
+export const UW_MAX_PCT_OF_LIST = 90;
+
+// A listing price in whatever shape the actor hands back: a number, a money
+// object, or a label ("$925,000", "$1.23M", "925K").
+export function moneyFromListing(v) {
+  if (v && typeof v === "object") v = v.amount ?? v.value ?? null;
+  if (typeof v === "number") return v > 0 ? Math.round(v) : 0;
+  const m = String(v || "").replace(/[$,\s]/g, "").match(/^(\d+(?:\.\d+)?)([kKmM])?$/);
+  if (!m) return 0;
+  const n = Number(m[1]) * (m[2] ? (/m/i.test(m[2]) ? 1_000_000 : 1000) : 1);
+  return n > 0 ? Math.round(n) : 0;
+}
+
+// { capped, amount, cap } — `amount` is what the offer may be.
+export function capToList({ cash = 0, listPrice = 0, pct = UW_MAX_PCT_OF_LIST } = {}) {
+  const list = Math.round(Number(listPrice) || 0);
+  const share = Number(pct) > 0 ? Number(pct) : UW_MAX_PCT_OF_LIST;
+  const amount = Math.round(Number(cash) || 0);
+  if (!(list > 0) || !(amount > 0)) return { capped: false, amount, cap: 0 };
+  const cap = Math.round((list * share) / 100);
+  return amount > cap ? { capped: true, amount: cap, cap } : { capped: false, amount, cap };
+}
 export const UW_MAX_ARV_COMPS = 4;         // 3–4 comps carry the ARV
 export const UW_GRADE_CANDIDATES = 6;      // how many we pay Apify+Claude to grade
 // How wide the pool is that the PRICE PROXY ranks. Deliberately looser than the
@@ -1105,6 +1132,9 @@ async function runUnderwrite(job, ctx) {
   let facts = null;
   try {
     ({ photos, photosCount, listing, facts } = await fetchZillowPhotos(extraction.address, apifyToken));
+    // The list price rides along on the listing; the offer is capped against it.
+    const listed = moneyFromListing(listing?.listPrice);
+    if (listed) job.listPrice = listed;
   } catch (e) {
     warnings.push(`Zillow listing: ${e.message}`);
     if (compsApiKey) {
@@ -1372,6 +1402,28 @@ async function runUnderwrite(job, ctx) {
     throw new Error("auto-underwrite was wired without a createOffer dependency");
   }
 
+  // Never above a share of the list price. The list price is the Zillow
+  // listing's, else an asking price the agent's text named (a number the
+  // workflow or a counter supplied is the seller's floor, not a list price).
+  const listForCap = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
+  const pctOfList = Number(saved?.maxOfferPctOfList) > 0 ? Number(saved.maxOfferPctOfList) : UW_MAX_PCT_OF_LIST;
+  let listCap = { capped: false, amount: 0, cap: 0 };
+  if (listForCap > 0) {
+    try {
+      const expected = calculateOffers(
+        { address: extraction.address, arv: arv.arv, repairs, askingPrice: listForCap, priceOverride: 0 },
+        { ...(saved || {}), underwriteMode: UW_MODE },
+      ).offers.cash.amount;
+      listCap = capToList({ cash: expected, listPrice: listForCap, pct: pctOfList });
+      if (listCap.capped) {
+        warnings.push(`our number (${fmtMoney(expected)}) was over ${pctOfList}% of the ${fmtMoney(listForCap)} list price — capped at ${fmtMoney(listCap.cap)}`);
+        job.listCapped = { listPrice: listForCap, pct: pctOfList, cap: listCap.cap, uncapped: Math.round(expected) };
+      }
+    } catch (e) {
+      warnings.push(`list-price cap not checked: ${String(e?.message || e).slice(0, 120)}`);
+    }
+  }
+
   const result = await deps.createOffer({
     locationId,
     client,
@@ -1381,7 +1433,8 @@ async function runUnderwrite(job, ctx) {
         address: extraction.address,
         arv: arv.arv,
         repairs,
-        askingPrice: extraction.askingPrice || 0,
+        askingPrice: listForCap || extraction.askingPrice || 0,
+        ...(listCap.capped ? { priceOverride: listCap.cap } : {}),
       },
       settings: { ...(saved || {}), underwriteMode: UW_MODE },
       scope,

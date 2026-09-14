@@ -29,6 +29,9 @@ import { calculateOffers, effectiveSettings } from "./offer-calc.js";
 // most generous", and an operator who wants a different ceiling should change
 // their underwriting, not this.
 export const AUTO_ACCEPT_FEE = 10000;
+// The share of list price the bot may never go above, unless the location's
+// settings say otherwise (maxOfferPctOfList). Matches the auto-underwrite's.
+export const MAX_PCT_OF_LIST = 90;
 
 const round = (v) => Math.round(Number(v) || 0);
 
@@ -89,8 +92,18 @@ export function autoAcceptCeiling({ offer, settings = {} } = {}) {
   // verdict for the audit trail; only "mao" may set the ceiling.
   const top = modes.find((m) => m.key === "mao");
   if (!top) return no("the maximum-offer model is missing, so there's no buyer line to hold the band to");
-  const ceiling = top.amount;
+  let ceiling = top.amount;
   if (!(ceiling > 0)) return no("a buyer's maximum comes out underwater on this property");
+  // …and never above a share of the list price (default 90%). A counter or a
+  // re-quote must not talk an offer back over the cap the underwrite set —
+  // 5016 7th Ave NE priced $1,061,750 on a $925,000 listing (2026-09-14).
+  const listPrice = round(offer.askingPrice ?? offer.calc?.inputs?.askingPrice);
+  const pctOfList = Number(base.maxOfferPctOfList) > 0 ? Number(base.maxOfferPctOfList) : MAX_PCT_OF_LIST;
+  let listCapped = false;
+  if (listPrice > 0) {
+    const cap = Math.round((listPrice * pctOfList) / 100);
+    if (cap < ceiling) { ceiling = cap; listCapped = true; }
+  }
   // An offer whose printed price was hand-raised above every model has no band
   // at all. The honest answer is "never auto-accepts", not "auto-accepts
   // anything above the number we inflated".
@@ -99,8 +112,10 @@ export function autoAcceptCeiling({ offer, settings = {} } = {}) {
 
   return {
     ceiling, computable: true, reason: "",
-    mode: top.key, modes, arv, repairs, source, fee: AUTO_ACCEPT_FEE,
-    basis: `${top.label} at a ${fmtK(AUTO_ACCEPT_FEE)} assignment`,
+    mode: top.key, modes, arv, repairs, source, fee: AUTO_ACCEPT_FEE, listCapped,
+    basis: listCapped
+      ? `${pctOfList}% of the ${fmtK(listPrice)} list price (under ${top.label} at a ${fmtK(AUTO_ACCEPT_FEE)} assignment)`
+      : `${top.label} at a ${fmtK(AUTO_ACCEPT_FEE)} assignment`,
   };
 }
 

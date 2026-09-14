@@ -6,7 +6,7 @@ import {
   compsPoolReason, _resetJobs, wantsDryRun,
   listJobs, publicJob, cancelJob, retryArgs, saveLoadedDraft,
   UW_RADIUS_MILES, UW_MIN_REHABBED_COMPS, UW_MIN_SUBJECT_PHOTOS, UW_DEFAULT_DAILY_CAP,
-  UW_MAX_ARV_COMPS, UW_RADIUS_LADDER, gradeByPriceProxy, UW_GUT_CHECK_MIN_COMPS,
+  UW_MAX_ARV_COMPS, UW_RADIUS_LADDER, gradeByPriceProxy, UW_GUT_CHECK_MIN_COMPS, capToList, moneyFromListing, UW_MAX_PCT_OF_LIST,
 } from "./auto-underwrite.js";
 import { markRenovatedByPrice } from "./shared/comp-match.js";
 
@@ -802,4 +802,30 @@ test("an unknown subject size leaves the pick to match score, as before", () => 
   const withSize = gradeByPriceProxy(pool, { subjectSqft: 0 });
   const legacy = gradeByPriceProxy(pool);
   assert.deepEqual(withSize.rehabbed.map((c) => c.id), legacy.rehabbed.map((c) => c.id));
+});
+
+
+/* ---------- never above a share of the list price ---------- */
+
+test("list prices read from every shape the actor returns", () => {
+  assert.equal(moneyFromListing(925000), 925000);
+  assert.equal(moneyFromListing({ amount: 925000 }), 925000);
+  assert.equal(moneyFromListing("$925,000"), 925000);
+  assert.equal(moneyFromListing("$1.23M"), 1230000);
+  assert.equal(moneyFromListing("925K"), 925000);
+  assert.equal(moneyFromListing(null), 0);
+  assert.equal(moneyFromListing("call for price"), 0);
+});
+
+test("5016 7th Ave NE: $1,061,750 on a $925,000 listing is capped at 90% of list", () => {
+  assert.equal(UW_MAX_PCT_OF_LIST, 90);
+  const r = capToList({ cash: 1061750, listPrice: 925000 });
+  assert.equal(r.capped, true);
+  assert.equal(r.amount, 832500);
+});
+
+test("an offer already under the cap is left alone, and no list price means no cap", () => {
+  assert.deepEqual(capToList({ cash: 477250, listPrice: 925000 }), { capped: false, amount: 477250, cap: 832500 });
+  assert.equal(capToList({ cash: 1061750, listPrice: 0 }).capped, false);
+  assert.equal(capToList({ cash: 1061750, listPrice: 925000, pct: 80 }).amount, 740000, "the setting overrides 90%");
 });

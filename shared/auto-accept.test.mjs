@@ -270,3 +270,24 @@ test("a bare run of digits is not a number they said", () => {
   assert.equal(v.passed, false);
   assert.equal(failed(v), "their_own_words");
 });
+
+
+test("the ceiling never goes above 90% of the list price", () => {
+  // A generous buyer line on a cheap listing: the list price wins.
+  const listed = autoAcceptCeiling({ offer: { ...OFFER, cashAmount: 100000, askingPrice: 250000 } });
+  assert.equal(listed.computable, true, listed.reason);
+  assert.equal(listed.ceiling, 225000);
+  assert.equal(listed.listCapped, true);
+  assert.match(listed.basis, /90% of the \$250k list price/);
+});
+
+test("a list price above the buyer line leaves the buyer line as the ceiling", () => {
+  const r = autoAcceptCeiling({ offer: { ...OFFER, askingPrice: 900000 } });
+  assert.equal(r.listCapped, false);
+  assert.equal(r.ceiling, r.modes.find((m) => m.key === "mao").amount);
+});
+
+test("the share of list comes from the offer's snapshot settings when set", () => {
+  const r = autoAcceptCeiling({ offer: { ...OFFER, cashAmount: 100000, askingPrice: 250000, calc: { settings: { ...DEFAULT_OFFER_SETTINGS, maxOfferPctOfList: 80 } } } });
+  assert.equal(r.ceiling, 200000);
+});
