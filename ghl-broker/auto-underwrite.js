@@ -81,9 +81,15 @@ export const MAX_CONCURRENT_PER_LOCATION = 2;
 const ARV_CONDITIONS = new Set(["renovated", "updated"]);
 
 // The offer is only as good as the underwrite is honest, so the mode is fixed:
-// blended is the number to lead with when you aren't in the room to argue one
-// lens over another. See UNDERWRITE_MODES in shared/offer-calc.js.
-export const UW_MODE = "blended";
+// the maximum-offer model, maoPctOfArv% of ARV − repairs − the assignment fee
+// (75% and $30K on the live location). It was "blended", the mean of three
+// models, until 2026-09-14: the blend priced every unattended offer $20–52K
+// above what a buyer pays, because one of its models is 90% ARV − 2× rehab.
+// Matt: "the base offer is 75% of ARV − rehab − $30K, then find their floor
+// from there." The counter band's ceiling is the same line at a $10K fee, so
+// the bot has $20K of room to say yes in, and no more.
+// See UNDERWRITE_MODES in shared/offer-calc.js.
+export const UW_MODE = "mao";
 
 export const UW_TAGS = {
   running: process.env.UW_RUNNING_TAG || "uw-running",
