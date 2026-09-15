@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mirrorOffer, reconcileLocation, mirrorAgent, reconcileAgents, tierStageMove, followTierStage, _resetPipelineCache } from "./ghl-mirror.js";
+import { mirrorOffer, reconcileLocation, mirrorAgent, reconcileAgents, tierStageMove, followTierStage, _resetPipelineCache, tierTagsToDrop } from "./ghl-mirror.js";
 
 const cfg = { enabled: true,
   acquisitions: { mode: "lanes", pipelineId: "pA", stages: { ready: "s-ready", sent: "s-sent", dead: "s-dead", won: "s-won" } },
@@ -205,4 +205,15 @@ test("followTierStage writes the one update, reads pipelines once, and never thr
   assert.ok(none.skip);
   const boom = await followTierStage({ client: {}, locationId: "L2", contactId: "c4", tags: ["tier-1"], ghl: { ...api, listPipelines: async () => { throw new Error("401"); } } });
   assert.match(boom.error, /401/);
+});
+
+test("adding a tier tag takes the other tier tags off, except on a card past the tiers", () => {
+  // Jahine: "we are not interested" → tier-3, and the tier-1 she carried goes
+  assert.deepEqual(tierTagsToDrop({ tags: ["tier-3"], move: { skip: "already in Tier 3- Cold/Keep Warm" } }), ["tier-1", "tier-2"]);
+  assert.deepEqual(tierTagsToDrop({ tags: ["tier-1"], move: { stageId: "t1" } }), ["tier-2", "tier-3"]);
+  assert.deepEqual(tierTagsToDrop({ tags: ["tier-2"], move: { skip: "no Acquisitions opportunity on the contact" } }), ["tier-1", "tier-3"]);
+  // Brenda at Offer Out: a stray tier-3 doesn't strip her tier-1
+  assert.deepEqual(tierTagsToDrop({ tags: ["tier-3"], move: { skip: "left at Offer Out (past the tier stages)" } }), []);
+  assert.deepEqual(tierTagsToDrop({ tags: ["tier-1"], move: { error: "401" } }), []);
+  assert.deepEqual(tierTagsToDrop({ tags: ["seller-accepted"], move: {} }), []);
 });

@@ -304,3 +304,20 @@ export async function followTierStage({ client, locationId, contactId, tags = []
 }
 
 export function _resetPipelineCache() { pipelineCache.clear(); }
+
+/**
+ * tierTagsToDrop({ tags, move }) → ["tier-…"]
+ *
+ * A tier is one tag. When the bot adds tier-2 or tier-3, the tier-1 an agent
+ * still carries has to go, or they read Tier 1 everywhere the highest tag wins
+ * (Jahine: tier-1 and tier-3 after "we are not interested"). Two exceptions keep
+ * the tags as they are. A card past the tiers (Offer Out and later) is a deal in
+ * flight. And when the board couldn't be read, we don't know where the card is.
+ */
+export function tierTagsToDrop({ tags = [], move = {} } = {}) {
+  const added = new Set((tags || []).map((t) => String(t || "").trim().toLowerCase()));
+  const tier = TIER_RANK_ADD.find((t) => added.has(t));
+  if (!tier || move?.error) return [];
+  if (move?.skip && /past the tier stages|no pipeline/.test(move.skip)) return [];
+  return TIER_RANK_ADD.filter((t) => t !== tier);
+}

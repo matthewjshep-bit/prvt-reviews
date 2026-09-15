@@ -103,7 +103,7 @@ import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAut
 import { nextSendTime } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
-import { mirrorAgent, followTierStage } from "../ghl-mirror.js";
+import { mirrorAgent, followTierStage, tierTagsToDrop } from "../ghl-mirror.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
@@ -4082,6 +4082,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         if (change !== "added" || (party && party !== "agent")) return;
         const moved = await followTierStage({ client, locationId, contactId, tags });
         if (moved.error) console.error(`tier stage (tag change) ${contactId}: ${moved.error}`);
+        // One tier at a time: the other tier tags come off, on the record too,
+        // so the app's own tier read matches GHL's.
+        const drop = tierTagsToDrop({ tags, move: moved });
+        if (drop.length) {
+          try {
+            await removeContactTags(client, contactId, drop);
+            await Promise.all(drop.map((tag) => recordEvent({ store, locationId, contactId, party: party || "agent", type: "tag_removed", source: "conversation", data: { tag } })));
+          } catch (e) { console.error(`tier tags (tag change) ${contactId}: ${e.message}`); }
+        }
         return;
       }
       const since = new Date(Date.now() - 180 * 86400000).toISOString();
