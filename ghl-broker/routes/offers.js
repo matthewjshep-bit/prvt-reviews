@@ -103,7 +103,7 @@ import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAut
 import { nextSendTime } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
-import { mirrorAgent } from "../ghl-mirror.js";
+import { mirrorAgent, followTierStage } from "../ghl-mirror.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
@@ -4072,11 +4072,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // A tier tag moved on an agent: reflect it on GHL's pipeline now. The
     // 15-minute reconcile would catch it anyway; this is the "up to date"
     // part. Only the tier tags matter here.
-    onTagsChanged: async ({ contactId, tags = [] }) => {
+    onTagsChanged: async ({ contactId, tags = [], party = null, change = "added" }) => {
       if (!tags.some((t) => TIER_TAGS.includes(String(t).toLowerCase()))) return;
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
       const config = normalizeMirror(fresh.ghlMirror);
-      if (!config.enabled || config.acquisitions.mode !== "tiers") return;
+      if (!config.enabled || config.acquisitions.mode !== "tiers") {
+        // Mirror off: the agent's Acquisitions card still follows a tier tag
+        // the bot just added, so a re-tag moves a card the GHL workflow won't.
+        if (change !== "added" || (party && party !== "agent")) return;
+        const moved = await followTierStage({ client, locationId, contactId, tags });
+        if (moved.error) console.error(`tier stage (tag change) ${contactId}: ${moved.error}`);
+        return;
+      }
       const since = new Date(Date.now() - 180 * 86400000).toISOString();
       const [profile, events, offers] = await Promise.all([
         store.getContactProfile?.(locationId, contactId).catch(() => null) || null,

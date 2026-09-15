@@ -9,7 +9,7 @@
 
 import { store as defaultStore } from "./store.js";
 import { mirrorPlan, mirrorDiff, normalizeMirror, tierFrom, agentPlan } from "./shared/ghl-mirror.js";
-import { searchOpportunities, createOpportunity, updateOpportunity, getContact } from "./ghl.js";
+import { searchOpportunities, createOpportunity, updateOpportunity, getContact, listPipelines } from "./ghl.js";
 import { LIVE_DEAL_STAGES, OPEN_STATUSES, effectiveStatus } from "./shared/offer-status.js";
 
 export const CURSOR_NAME = "ghlMirror";
@@ -212,3 +212,95 @@ export async function maybeMirror({ client, locationId, saved = {}, store = defa
   await store.setJobCursor?.(locationId, CURSOR_NAME, { at: new Date(now).toISOString(), doc: { wrote: r.wrote + a.wrote, properties: r.wrote, agents: a.wrote, considered: r.considered + a.considered, refreshed: a.refreshed, errors: [...r.errors, ...a.errors].slice(0, 5) } }).catch(() => {});
   return { ...r, agents: a };
 }
+
+/* ---------- the tier stage follows the tag (mirror off) ---------- */
+
+// With the mirror off, GHL's own TIER workflows are what move the agent's
+// Acquisitions card — and they only move it when they fire. A contact the bot
+// dropped to Tier 3 and later tagged tier-1 again kept the tag they already had,
+// nothing fired, and the card sat in Tier 3 while the deal was live (2026-09-15:
+// twelve live agents, Lori and Heather among them). This moves that one card when
+// the bot adds a tier tag. It only moves a card that is in the tier part of the
+// board. A card at Offer Out, Negotiations or Contract is past the tiers and is left
+// alone. A Tier 1 tag also reopens a passed or lost card, because a new house
+// after a pass is a live deal again.
+const TIER_RANK_ADD = ["tier-1", "tier-2", "tier-3"];
+const TIER_STAGE_RX = { "tier-1": /^tier\s*1\b/i, "tier-2": /^tier\s*2\b/i, "tier-3": /^tier\s*3\b/i };
+const EARLY_STAGE_RX = /^(new lead|contacted|tier\s*[123]\b)/i;
+const CLOSED_STAGE_RX = /^(passed on offer|lost|not a good deal)/i;
+const PIPELINE_TTL_MS = 3600 * 1000;
+const pipelineCache = new Map();
+
+/**
+ * acquisitionsPipeline(pipelines) → { id, stages, tierStages: { "tier-1": stageId, ... } } | null
+ *
+ * The pipeline carrying all three tier stages that isn't the dispositions one,
+ * preferring a name that says acquisitions.
+ */
+export function acquisitionsPipeline(pipelines = []) {
+  const withTiers = (pipelines || [])
+    .filter((p) => !/dispo/i.test(p.name || ""))
+    .map((p) => {
+      const tierStages = {};
+      for (const [tier, rx] of Object.entries(TIER_STAGE_RX)) {
+        const s = (p.stages || []).find((x) => rx.test(String(x.name || "").trim()));
+        if (s) tierStages[tier] = s.id;
+      }
+      return { ...p, tierStages };
+    })
+    .filter((p) => Object.keys(p.tierStages).length === 3);
+  return withTiers.find((p) => /acqui/i.test(p.name || "")) || withTiers[0] || null;
+}
+
+/**
+ * tierStageMove({ tags, pipelines, opportunities }) → { opportunityId, stageId, status?, from, tier } | { skip }
+ *
+ * Pure. `tags` are the tags just added; the highest tier among them wins.
+ * `opportunities` are the contact's ({ id, pipelineId, stageId, status }).
+ */
+export function tierStageMove({ tags = [], pipelines = [], opportunities = [] } = {}) {
+  const added = new Set((tags || []).map((t) => String(t || "").trim().toLowerCase()));
+  const tier = TIER_RANK_ADD.find((t) => added.has(t));
+  if (!tier) return { skip: "no tier tag added" };
+  const acq = acquisitionsPipeline(pipelines);
+  if (!acq) return { skip: "no pipeline with Tier 1/2/3 stages" };
+  const mine = (opportunities || []).filter((o) => o.pipelineId === acq.id);
+  if (!mine.length) return { skip: "no Acquisitions opportunity on the contact" };
+  const opp = mine.find((o) => o.status === "open") || mine[0];
+  const target = acq.tierStages[tier];
+  const stageName = String((acq.stages || []).find((s) => s.id === opp.stageId)?.name || "").trim();
+  const closed = opp.status && opp.status !== "open";
+  if (opp.stageId === target && !closed) return { skip: `already in ${stageName}` };
+  const early = !closed && (EARLY_STAGE_RX.test(stageName) || !stageName);
+  const reopen = tier === "tier-1" && (closed || CLOSED_STAGE_RX.test(stageName));
+  if (!early && !reopen) return { skip: `left at ${stageName || opp.stageId} (past the tier stages)` };
+  return { opportunityId: opp.id, stageId: target, from: stageName || opp.stageId, tier, ...(closed ? { status: "open" } : {}) };
+}
+
+/**
+ * followTierStage({ client, locationId, contactId, tags, ghl, now }) → the move made, or { skip } / { error }
+ *
+ * Best effort; never throws. Pipelines are read once an hour per location.
+ */
+export async function followTierStage({ client, locationId, contactId, tags = [], ghl = null, now = Date.now() }) {
+  const api = ghl || { listPipelines, searchOpportunities, updateOpportunity };
+  try {
+    if (!tags.some((t) => TIER_RANK_ADD.includes(String(t || "").trim().toLowerCase()))) return { skip: "no tier tag added" };
+    let cached = pipelineCache.get(locationId);
+    if (!cached || now - cached.at > PIPELINE_TTL_MS) {
+      cached = { at: now, pipelines: await api.listPipelines(client, locationId) };
+      pipelineCache.set(locationId, cached);
+    }
+    const acq = acquisitionsPipeline(cached.pipelines);
+    if (!acq) return { skip: "no pipeline with Tier 1/2/3 stages" };
+    const opportunities = await api.searchOpportunities(client, locationId, { contactId, pipelineId: acq.id });
+    const move = tierStageMove({ tags, pipelines: cached.pipelines, opportunities });
+    if (move.skip) return move;
+    await api.updateOpportunity(client, move.opportunityId, { stageId: move.stageId, ...(move.status ? { status: move.status } : {}) });
+    return move;
+  } catch (e) {
+    return { error: String(e?.message || e).slice(0, 160) };
+  }
+}
+
+export function _resetPipelineCache() { pipelineCache.clear(); }

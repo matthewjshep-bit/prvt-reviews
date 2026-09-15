@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mirrorOffer, reconcileLocation, mirrorAgent, reconcileAgents } from "./ghl-mirror.js";
+import { mirrorOffer, reconcileLocation, mirrorAgent, reconcileAgents, tierStageMove, followTierStage, _resetPipelineCache } from "./ghl-mirror.js";
 
 const cfg = { enabled: true,
   acquisitions: { mode: "lanes", pipelineId: "pA", stages: { ready: "s-ready", sent: "s-sent", dead: "s-dead", won: "s-won" } },
@@ -151,4 +151,58 @@ test("the agent reconcile refreshes stale tag snapshots from GHL (bounded) and t
   // off, or lanes mode: no agent pass
   const off = await reconcileAgents({ client: {}, locationId: "L", saved: { ghlMirror: { ...tiersCfg, acquisitions: { ...tiersCfg.acquisitions, mode: "lanes" } } }, store, ghl: api });
   assert.equal(off.considered, 0);
+});
+
+/* ---------- the tier stage follows the tag (mirror off) ---------- */
+
+const ACQ_PIPES = [
+  { id: "pA", name: "Acquisitions", stages: [
+    { id: "new", name: "New Lead" }, { id: "t1", name: "Tier 1 - Hot/Actionable, Active Deal" },
+    { id: "t2", name: "Tier 2 - Warm, No Active Deal" }, { id: "t3", name: "Tier 3- Cold/Keep Warm" },
+    { id: "out", name: "Offer Out" }, { id: "neg", name: "Negotiations" }, { id: "passed", name: "Passed on Offer" },
+  ] },
+  { id: "pD", name: "Dispositions", stages: [{ id: "d1", name: "Tier 1 - Interested in this Property" }, { id: "d2", name: "Tier 2 - Interested in Working together" }, { id: "d3", name: "Tier 3 whatever" }] },
+];
+const opp = (over = {}) => ({ id: "op1", pipelineId: "pA", stageId: "t3", status: "open", ...over });
+
+test("a tier-1 tag moves a Tier 3 card up to Tier 1 (Lori: re-tagged, card stuck in Tier 3)", () => {
+  const m = tierStageMove({ tags: ["tier-1"], pipelines: ACQ_PIPES, opportunities: [opp()] });
+  assert.deepEqual(m, { opportunityId: "op1", stageId: "t1", from: "Tier 3- Cold/Keep Warm", tier: "tier-1" });
+  assert.equal(tierStageMove({ tags: ["tier-2"], pipelines: ACQ_PIPES, opportunities: [opp({ stageId: "new" })] }).stageId, "t2");
+  assert.equal(tierStageMove({ tags: ["tier-3"], pipelines: ACQ_PIPES, opportunities: [opp({ stageId: "t1" })] }).stageId, "t3");
+});
+
+test("a card past the tiers is left where it is, and one already there isn't touched", () => {
+  assert.match(tierStageMove({ tags: ["tier-1"], pipelines: ACQ_PIPES, opportunities: [opp({ stageId: "out" })] }).skip, /past the tier stages/);
+  assert.match(tierStageMove({ tags: ["tier-3"], pipelines: ACQ_PIPES, opportunities: [opp({ stageId: "neg" })] }).skip, /past the tier stages/);
+  assert.match(tierStageMove({ tags: ["tier-1"], pipelines: ACQ_PIPES, opportunities: [opp({ stageId: "t1" })] }).skip, /already/);
+  assert.match(tierStageMove({ tags: ["seller-accepted"], pipelines: ACQ_PIPES, opportunities: [opp()] }).skip, /no tier tag/);
+  assert.match(tierStageMove({ tags: ["tier-1"], pipelines: ACQ_PIPES, opportunities: [opp({ pipelineId: "pD", stageId: "d2" })] }).skip, /no Acquisitions opportunity/);
+});
+
+test("tier 1 reopens a passed or lost card; tier 2 and 3 don't", () => {
+  assert.equal(tierStageMove({ tags: ["tier-1"], pipelines: ACQ_PIPES, opportunities: [opp({ stageId: "passed" })] }).stageId, "t1");
+  assert.deepEqual(tierStageMove({ tags: ["tier-1"], pipelines: ACQ_PIPES, opportunities: [opp({ stageId: "t3", status: "lost" })] }).status, "open");
+  assert.ok(tierStageMove({ tags: ["tier-3"], pipelines: ACQ_PIPES, opportunities: [opp({ stageId: "passed" })] }).skip);
+  assert.ok(tierStageMove({ tags: ["tier-2"], pipelines: ACQ_PIPES, opportunities: [opp({ stageId: "t3", status: "lost" })] }).skip);
+});
+
+test("followTierStage writes the one update, reads pipelines once, and never throws", async () => {
+  _resetPipelineCache();
+  const calls = [];
+  const api = {
+    listPipelines: async () => { calls.push(["pipelines"]); return ACQ_PIPES; },
+    searchOpportunities: async (_c, _l, q) => { calls.push(["search", q]); return [opp()]; },
+    updateOpportunity: async (_c, id, body) => { calls.push(["update", id, body]); return {}; },
+  };
+  const r = await followTierStage({ client: {}, locationId: "L", contactId: "c1", tags: ["tier-1"], ghl: api });
+  assert.equal(r.stageId, "t1");
+  assert.deepEqual(calls.find(([k]) => k === "update"), ["update", "op1", { stageId: "t1" }]);
+  assert.deepEqual(calls.find(([k]) => k === "search")[1], { contactId: "c1", pipelineId: "pA" });
+  await followTierStage({ client: {}, locationId: "L", contactId: "c2", tags: ["tier-2"], ghl: api });
+  assert.equal(calls.filter(([k]) => k === "pipelines").length, 1, "pipelines cached per location");
+  const none = await followTierStage({ client: {}, locationId: "L", contactId: "c3", tags: ["hot"], ghl: api });
+  assert.ok(none.skip);
+  const boom = await followTierStage({ client: {}, locationId: "L2", contactId: "c4", tags: ["tier-1"], ghl: { ...api, listPipelines: async () => { throw new Error("401"); } } });
+  assert.match(boom.error, /401/);
 });
