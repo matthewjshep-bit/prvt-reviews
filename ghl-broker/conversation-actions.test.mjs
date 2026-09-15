@@ -317,3 +317,18 @@ test("book_call goes through the booking dep with the time from the action or th
   assert.equal(refused.status, "failed");
   assert.match(refused.error, /slot taken/);
 });
+
+test("a new property with no address waits for the address instead of underwriting the contact's old house", async () => {
+  const calls = [];
+  const deps = { startUnderwrite: async (args) => { calls.push(args); return { job: { dryRun: false } }; } };
+  const run = (draft) => runActions({ client: {}, locationId: "LOC", contactId: "c1", draft, deps, actions: [{ id: "u1", type: "start_underwrite" }] });
+  // Alexandria Goforth: "I will likely have one in Spanaway soon" — no address.
+  const [waiting] = await run({ intent: "new_property", propertyAddress: "", inbound: "I will likely have one in Spanaway soon" });
+  assert.equal(waiting.status, "done");
+  assert.match(waiting.detail, /waiting for the address/);
+  assert.equal(calls.length, 0);
+  // With the address, or on the listing we asked about, it runs.
+  await run({ intent: "new_property", propertyAddress: "1 Main St, Spanaway, WA 98387", inbound: "1 Main St Spanaway" });
+  await run({ intent: "deal_available", propertyAddress: "", inbound: "It's a project, needs a full remodel" });
+  assert.equal(calls.length, 2);
+});

@@ -173,6 +173,14 @@ const EXECUTORS = {
   },
   async start_underwrite({ deps, contactId, draft, action }) {
     if (typeof deps?.startUnderwrite !== "function") throw new Error("auto-underwrite is not wired on this broker");
+    // A new property with no address is a house we don't know yet. Without
+    // this the underwriter fell back to the contact's Subject Property. For
+    // Alexandria Goforth (2026-09-15) that was the turnkey listing she had just
+    // declined, and a 375k float on it replaced the reply asking for the
+    // Spanaway address. Wait for the address; the address chase asks for it.
+    if (draft?.intent === "new_property" && !String(draft?.propertyAddress || "").trim() && !action?.replaceOfferId) {
+      return "waiting for the address: a new property with no address isn't underwritten";
+    }
     // A number the agent named ("not less than 450k") rides along as the
     // asking price, so the offer is priced against the seller's floor.
     const r = await deps.startUnderwrite({
