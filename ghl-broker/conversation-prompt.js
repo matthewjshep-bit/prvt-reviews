@@ -463,6 +463,18 @@ export function outboundOpening(outbound) {
             `("you'd mentioned ${o.phrase || "circling back"}"). Ask whether anything landed that needs work. `) +
         `One or two lines, warm and easy to ignore. Do NOT name any number or price. ${CONTINUE} Set intent to checkin_due.`;
 
+    // A property they told us was coming, and we still don't have the
+    // address. It's their deal we're waiting on, so it reads as keen, not pushy.
+    case "address_chase":
+      return `${START} This agent told us a property was coming, but we don't have the address yet. What they said: "${o.hint}". ` +
+        (o.rung <= 1
+          ? `Check in on it: is it ready, and can they send the address so we can get started on comps? `
+          : o.rung >= o.rungs
+            ? `This is the last check-in on it for a while: ask once more for the address whenever it's ready, and leave the door open. `
+            : `Check in again, lightly and not in the same words as before: any movement on it, and the address when they have it? `) +
+        `Refer to it the way they did (the town, the situation), never as "the property". One or two lines. ` +
+        `Do NOT name any number or price. ${CONTINUE} Set intent to address_chase.`;
+
     default:
       return "";
   }

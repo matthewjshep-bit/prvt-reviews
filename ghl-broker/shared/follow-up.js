@@ -105,7 +105,18 @@ const morningOf = (ms) => { const d = new Date(ms); d.setUTCHours(17, 0, 0, 0); 
 export function checkInRequested(text = "", now = Date.now()) {
   const t = String(text || "");
   if (!CHECKIN_CUE.test(t)) return null;
-  const day = /\b(?:this\s+|next\s+|on\s+)?(sun|mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?)(?:day)?\b/i.exec(t);
+  return timeNamed(t, now);
+}
+
+/**
+ * timeNamed(text, now) → { dueAt, phrase } | null
+ *
+ * The when, on its own: a weekday, tomorrow, next week, a few weeks, a month.
+ * Due the morning after, so it lands after they had their chance.
+ */
+export function timeNamed(text = "", now = Date.now()) {
+  const t = String(text || "");
+  const day =/\b(?:this\s+|next\s+|on\s+)?(sun|mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?)(?:day)?\b/i.exec(t);
   if (day) {
     const want = WEEKDAYS.indexOf(day[1].toLowerCase().slice(0, 3));
     let add = (want - new Date(now).getUTCDay() + 7) % 7;
@@ -118,6 +129,23 @@ export function checkInRequested(text = "", now = Date.now()) {
   if (weeks) return { dueAt: morningOf(now + 15 * DAY_MS), phrase: weeks[0].trim() };
   if (/\b(?:a|next)\s+month\b/i.test(t)) return { dueAt: morningOf(now + 31 * DAY_MS), phrase: "a month" };
   return null;
+}
+
+/**
+ * addressPending({ intent, propertyAddress, message, now }) → { hint, firstDueAt, phrase } | null
+ *
+ * They told us a property is coming and the message carries no address:
+ * Alexandria Goforth's "I will likely have one in Spanaway soon" (2026-09-15).
+ * `hint` is their words, so the chase can refer to it the way they did; a time
+ * they named ("in a few weeks") is when the first check-in lands.
+ */
+export const ADDRESS_PENDING_INTENTS = new Set(["new_property", "deal_available"]);
+export function addressPending({ intent = "", propertyAddress = "", message = "", now = Date.now() } = {}) {
+  if (!ADDRESS_PENDING_INTENTS.has(intent) || String(propertyAddress || "").trim()) return null;
+  const hint = String(message || "").replace(/\s+/g, " ").trim().slice(0, 160);
+  if (!hint) return null;
+  const when = timeNamed(hint, now);
+  return { hint, firstDueAt: when?.dueAt || null, phrase: when?.phrase || "" };
 }
 
 /**

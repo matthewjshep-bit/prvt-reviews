@@ -208,6 +208,90 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
   return out;
 }
 
+/* ---------- the address they haven't sent yet ---------- */
+
+// Alexandria Goforth (2026-09-15): "I will likely have one in Spanaway soon ...
+// seller will want it sold asap once contract with property management company
+// ends." A property is coming and we don't have the address. `address_pending`
+// (reply-agent.js) starts this ladder; it ends when an address lands on the
+// contact (`subject_property_set`), they opt out, or the rungs run out.
+export const ADDRESS_CHASE_DAYS = [2, 5, 9, 14, 21, 30];
+export const ADDRESS_CHASE_WINDOW_DAYS = 60;
+// They're mid-conversation, so the bot is already talking to them.
+export const ADDRESS_CHASE_QUIET_HOURS = 36;
+const DAY_MS = 86400000;
+
+// When each rung falls: days from the message, or from the time they named.
+export function addressChaseRungs(pending) {
+  const made = Date.parse(pending?.at || "");
+  const first = Date.parse(pending?.data?.firstDueAt || "");
+  if (Number.isFinite(first)) return ADDRESS_CHASE_DAYS.map((d) => first + (d - ADDRESS_CHASE_DAYS[0]) * DAY_MS);
+  return ADDRESS_CHASE_DAYS.map((d) => made + d * DAY_MS);
+}
+
+/**
+ * runAddressChase({ client, locationId, saved, store, sendsEnabled, deps, now })
+ *   → { considered, sent, found, waiting, results }
+ *
+ * One `address_chase` text per rung, claimed by `address_chase_sent`. A sweep
+ * that starts late sends only the latest rung that's due, never a backlog.
+ */
+export async function runAddressChase({ client, locationId, saved = {}, store, sendsEnabled = false, deps = {}, now = Date.now() }) {
+  const out = { considered: 0, sent: 0, found: 0, waiting: 0, results: [] };
+  const config = conversationConfig(saved || {});
+  if (!config.enabled || !config.parties?.agent?.followUp?.enabled) return out;
+  const start = typeof deps.startProactive === "function" ? deps.startProactive : startProactive;
+
+  const events = await store.listContactEventsSince(locationId, iso(now - ADDRESS_CHASE_WINDOW_DAYS * DAY_MS), {
+    types: ["address_pending", "address_pending_closed", "address_chase_sent", "subject_property_set", "text_summary", "call_summary"], limit: 5000,
+  }).catch(() => []);
+  const byContact = new Map();
+  for (const e of events) {
+    if (!e?.contactId) continue;
+    if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
+    byContact.get(e.contactId).push(e);
+  }
+
+  for (const [contactId, list] of byContact) {
+    list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const pending = list.filter((e) => e.type === "address_pending").at(-1);
+    if (!pending) continue;
+    out.considered++;
+    const after = (e) => String(e.at) > String(pending.at);
+    if (list.some((e) => after(e) && (e.type === "subject_property_set" || e.type === "address_pending_closed"))) {
+      out.found++;
+      out.results.push({ contactId, status: "closed" });
+      continue;
+    }
+    const rungs = addressChaseRungs(pending);
+    let due = -1;
+    rungs.forEach((t, i) => { if (t <= now) due = i; });
+    if (due < 0) { out.waiting++; out.results.push({ contactId, status: "waiting", reason: "not due yet" }); continue; }
+    const sentSteps = new Set(list.filter((e) => e.type === "address_chase_sent" && e.data?.pendingAt === pending.at).map((e) => Number(e.data?.step)));
+    if (sentSteps.has(due)) continue;
+    const lastTalk = list.filter((e) => (e.type === "text_summary" || e.type === "call_summary") && after(e)).at(-1);
+    if (lastTalk && now - Date.parse(lastTalk.at) < ADDRESS_CHASE_QUIET_HOURS * HOUR_MS) {
+      out.waiting++;
+      out.results.push({ contactId, status: "waiting", reason: "they're mid-conversation" });
+      continue;
+    }
+    const claim = await recordEvent({
+      store, locationId, contactId, party: "agent", type: "address_chase_sent", at: iso(now), address: "",
+      source: "conversation", dedupeKey: `address_chase:${contactId}:${pending.at}:${due}`,
+      data: { pendingAt: pending.at, step: due, of: rungs.length },
+    });
+    if (!claim.inserted) continue;
+    const r = await start({
+      client, locationId, saved, store, contactId, kind: "address_chase", offer: null,
+      subject: { address: "", hint: pending.data?.hint || "", phrase: pending.data?.phrase || "", rung: due + 1, rungs: rungs.length },
+      sendsEnabled, deps,
+    }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
+    if (r?.skipped) out.results.push({ contactId, status: "skipped", reason: r.skipped });
+    else { out.sent++; out.results.push({ contactId, status: "sent", rung: due + 1, jobId: r?.job?.id || null }); }
+  }
+  return out;
+}
+
 const inFlight = new Set();
 
 /**
@@ -223,7 +307,8 @@ export async function maybeRunPromiseSweep({ client, locationId, saved = {}, sto
   try {
     const promises = await runPromiseSweep({ client, locationId, saved, store, sendsEnabled, deps, now });
     const checkins = await runCheckInSweep({ client, locationId, saved, store, sendsEnabled, deps, now });
-    return { ...promises, checkins: checkins.sent };
+    const chases = await runAddressChase({ client, locationId, saved, store, sendsEnabled, deps, now });
+    return { ...promises, checkins: checkins.sent, addressChases: chases.sent };
   } finally {
     inFlight.delete(locationId);
   }

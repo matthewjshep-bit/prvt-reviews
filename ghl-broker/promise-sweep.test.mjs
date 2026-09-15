@@ -198,3 +198,72 @@ test("a check-in they got to first — they texted since asking — sends nothin
   assert.equal(r.answered, 1);
   assert.equal(s.calls.length, 0);
 });
+
+/* ---------- the address they haven't sent yet ---------- */
+
+import { runAddressChase, ADDRESS_CHASE_DAYS } from "./promise-sweep.js";
+import { addressPending } from "./shared/follow-up.js";
+
+const DAY = 24 * HOUR;
+const pending = (hoursAgo, data = {}) => ({ contactId: "ag", type: "address_pending", at: at(hoursAgo), address: "", dedupeKey: `pend:${hoursAgo}`,
+  data: { hint: "I will likely have one in Spanaway soon, it's been a rental for years", firstDueAt: null, phrase: "", ...data } });
+
+test("a property coming with no address reads as pending; one with an address, or another intent, doesn't", () => {
+  const p = addressPending({ intent: "new_property", propertyAddress: "", message: "I will likely have one in Spanaway soon, it's been a rental for years", now: NOW });
+  assert.match(p.hint, /Spanaway/);
+  assert.equal(p.firstDueAt, null);
+  assert.equal(addressPending({ intent: "new_property", propertyAddress: "1 Main St, Spanaway, WA 98387", message: "got one", now: NOW }), null);
+  assert.equal(addressPending({ intent: "question", propertyAddress: "", message: "what do you buy?", now: NOW }), null);
+  assert.ok(addressPending({ intent: "deal_available", propertyAddress: "", message: "should have it listed in a few weeks", now: NOW }).firstDueAt);
+});
+
+test("the address chase asks on day 2, once per rung, and not before", async () => {
+  const early = fakeStore({ events: [pending(24)] });
+  assert.equal((await runAddressChase({ locationId: "LOC", saved: SAVED, store: early, now: NOW, deps: starter() })).sent, 0);
+  const store = fakeStore({ events: [pending(50)] });
+  const s = starter();
+  const r = await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 1);
+  assert.equal(s.calls[0].kind, "address_chase");
+  assert.match(s.calls[0].subject.hint, /Spanaway/);
+  assert.equal(s.calls[0].subject.rung, 1);
+  assert.equal((await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW + HOUR, deps: s })).sent, 0, "rung 1 is claimed");
+  const later = await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW + 3 * DAY + HOUR, deps: s });
+  assert.equal(later.sent, 1);
+  assert.equal(s.calls[1].subject.rung, 2);
+});
+
+test("a late start sends only the latest due rung, and the ladder ends", async () => {
+  const store = fakeStore({ events: [pending(10 * 24)] });
+  const s = starter();
+  await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 1);
+  assert.equal(s.calls[0].subject.rung, 3, "the day-9 rung, not days 2 and 5 as well");
+  const end = fakeStore({ events: [pending(40 * 24)] });
+  const s2 = starter();
+  await runAddressChase({ locationId: "LOC", saved: SAVED, store: end, now: NOW, deps: s2 });
+  assert.equal(s2.calls[0].subject.rung, ADDRESS_CHASE_DAYS.length);
+  assert.equal((await runAddressChase({ locationId: "LOC", saved: SAVED, store: end, now: NOW + 10 * DAY, deps: s2 })).sent, 0, "nothing past the last rung");
+});
+
+test("the chase stops when the address arrives or they opt out, and waits while they're talking", async () => {
+  const s = starter();
+  const got = fakeStore({ events: [pending(50), { contactId: "ag", type: "subject_property_set", at: at(20), address: "1 Main St, Spanaway, WA 98387", data: {} }] });
+  const r = await runAddressChase({ locationId: "LOC", saved: SAVED, store: got, now: NOW, deps: s });
+  assert.equal(r.found, 1);
+  const out = fakeStore({ events: [pending(50), { contactId: "ag", type: "address_pending_closed", at: at(30), data: { intent: "opt_out" } }] });
+  assert.equal((await runAddressChase({ locationId: "LOC", saved: SAVED, store: out, now: NOW, deps: s })).sent, 0);
+  const talking = fakeStore({ events: [pending(50), { contactId: "ag", type: "text_summary", at: at(5), data: {} }] });
+  const t = await runAddressChase({ locationId: "LOC", saved: SAVED, store: talking, now: NOW, deps: s });
+  assert.equal(t.sent, 0);
+  assert.equal(t.waiting, 1);
+  assert.equal(s.calls.length, 0);
+});
+
+test("a time they named ('in a few weeks') is the first check-in", async () => {
+  const store = fakeStore({ events: [pending(50, { firstDueAt: new Date(NOW + 5 * DAY).toISOString(), phrase: "a few weeks" })] });
+  const s = starter();
+  assert.equal((await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s })).sent, 0);
+  assert.equal((await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW + 5 * DAY + HOUR, deps: s })).sent, 1);
+  assert.equal(s.calls[0].subject.phrase, "a few weeks");
+});

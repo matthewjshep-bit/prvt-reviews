@@ -64,7 +64,7 @@ import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
 } from "./ghl.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
-import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals } from "./shared/follow-up.js";
+import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending } from "./shared/follow-up.js";
 import { resolveParty } from "./conversation-party.js";
 import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts } from "./conversation-context.js";
@@ -1336,6 +1336,15 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // A property they said was coming, and still no address
+  // (promise-sweep.js runAddressChase).
+  address_chase: {
+    party: "agent",
+    enabled: (pb) => pb?.followUp?.enabled,
+    ready: ({ subject }) => (subject?.hint ? true : "nothing to chase"),
+    floats: () => [],
+    forbids: () => [],
+  },
   blast_nudge: {
     party: "investor",
     enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.blast_nudge?.enabled,
@@ -1519,7 +1528,9 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     ...(kind === "price_drop" ? { from: Math.round(Number(subject?.from) || 0), to: Math.round(Number(subject?.to) || 0),
       fromK: Number(subject?.from) > 0 ? kText(Number(subject.from)) : "", toK: Number(subject?.to) > 0 ? kText(Number(subject.to)) : "",
       offerStatus: subject?.status || "", ourK: Number(offer?.cashAmount) > 0 ? kText(Number(offer.cashAmount)) : "" } : {}),
-    ...(kind === "checkin_due" ? { phrase: subject?.phrase || "", sourceKind: subject?.sourceKind || "date" } : {}) };
+    ...(kind === "checkin_due" ? { phrase: subject?.phrase || "", sourceKind: subject?.sourceKind || "date" } : {}),
+    ...(kind === "address_chase" ? { hint: String(subject?.hint || "").slice(0, 160), phrase: subject?.phrase || "",
+      rung: Number(subject?.rung) || 1, rungs: Number(subject?.rungs) || 1 } : {}) };
 }
 
 // The one-liner the outbox row shows when the model didn't write its own.
@@ -1544,6 +1555,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "checkin_due": return outbound.sourceKind === "source"
       ? "Weekly check-in with an agent who offered to send us deals: anything new that needs work?"
       : `The check-in they asked for${outbound.phrase ? ` ("${outbound.phrase}")` : ""}: anything land that needs work?`;
+    case "address_chase": return `Asks again for the address of the property they said was coming (check-in ${outbound.rung} of ${outbound.rungs}).`;
     case "price_drop": return `The list price on ${where} came down${outbound.fromK ? ` from ${outbound.fromK}` : ""} to ${outbound.toK}; asks if the seller would look at cash closer to ours now.`;
     case "promise_due": return `Keeps our word on ${where}: we said we'd come back with ${outbound.what === "number" ? "a number" : "an answer"} and nothing went out${outbound.heldReason ? " (the underwrite held)" : ""}.`;
     default: return `Starts a message about ${where}${rung}.`;
@@ -2207,11 +2219,37 @@ async function runReply(job, ctx) {
     }
   }
 
+  /* --- 4c″. a property is coming, and they didn't give the address --- */
+  // Alexandria Goforth (2026-09-15): "I will likely have one in Spanaway soon."
+  // The reply asks for the address; promise-sweep.js runAddressChase keeps
+  // asking on a ladder until an address lands, they opt out, or it runs out.
+  // A time they named ("in a few weeks") is its first rung, in place of a
+  // separate check-in, so they don't get two texts.
+  let chaseHasDate = false;
+  if (party === "agent") {
+    const pend = addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now });
+    if (pend) {
+      chaseHasDate = Boolean(pend.firstDueAt);
+      await recordEvent({
+        store, locationId, contactId: job.contactId, party: "agent", type: "address_pending", at: new Date(now).toISOString(),
+        address: "", source: "conversation", ref: record.id,
+        dedupeKey: `address_pending:${job.contactId}:${record.id}`,
+        data: { hint: pend.hint, firstDueAt: pend.firstDueAt, phrase: pend.phrase },
+      }).catch(() => {});
+    } else if (draft.intent === "opt_out") {
+      await recordEvent({
+        store, locationId, contactId: job.contactId, party: "agent", type: "address_pending_closed", at: new Date(now).toISOString(),
+        address: "", source: "conversation", ref: record.id,
+        dedupeKey: `address_pending_closed:${job.contactId}:${record.id}`, data: { intent: draft.intent },
+      }).catch(() => {});
+    }
+  }
+
   /* --- 4c′. when they said to check back, and who sends us deals --- */
   // Remembered as `checkin_requested`; promise-sweep.js runCheckInSweep sends
   // the check-in when it's due and they haven't come back first.
   if (party === "agent" && !isCall && !["opt_out", "counter", "acceptance", "realm_yes"].includes(draft.intent)) {
-    const ask = checkInRequested(job.message, now);
+    const ask = chaseHasDate ? null : checkInRequested(job.message, now);
     if (ask) {
       await recordEvent({
         store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
