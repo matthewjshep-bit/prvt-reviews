@@ -11,6 +11,8 @@ import { addressQueryVariants } from "./shared/us-address.js";
 import { mapPool } from "./map-pool.js";
 
 const MAX_PHOTOS = 40;
+// The model that reads listing photos: the rehab scope and comp grading.
+export const VISION_MODEL = "claude-sonnet-5";
 
 // Fetch listing photos (midRes ≈ 900px — plenty for condition assessment).
 // The provider's address matcher is picky and inconsistent about formats, so
@@ -515,9 +517,11 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }
     },
   ];
 
+  // Sonnet 5, not Opus: the scope is the biggest cost in an underwrite (up to 40
+  // photos a run), and Matt chose the cheaper model on 2026-09-15.
   const runScan = (schema) =>
     client.messages.create({
-      model: "claude-opus-4-8",
+      model: VISION_MODEL,
       max_tokens: 16000,
       thinking: { type: "adaptive" },
       system: SYSTEM_PROMPT,
@@ -656,7 +660,7 @@ export async function gradeCompConditions({ subjectAddress, comps, aiApiKey }) {
 
   const runGrade = (schema) =>
     client.messages.create({
-      model: "claude-opus-4-8",
+      model: VISION_MODEL,
       max_tokens: 8000,
       thinking: { type: "adaptive" },
       system: GRADE_SYSTEM_PROMPT,
