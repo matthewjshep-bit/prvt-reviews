@@ -2930,7 +2930,17 @@ test("'I'll run it by them and get back to you' is thanked on its own and a chec
   assert.ok(Date.parse(req.data.dueAt) > Date.now());
   assert.equal(sends.length, 1, "the written offer goes to them");
   assert.deepEqual(sends[0].channels, ["sms", "email"]);
-  assert.ok(!(d.flags || []).some((f) => /offer didn't go out/.test(f)));
+  assert.ok(!(d.flags || []).some((f) => /offer didn't go/.test(f)));
+  assert.match(d.reply, /Sent the written offer over by text and email/);
+});
+
+test("our own offer text in the thread is the app, not a person taking over", async () => {
+  const at = new Date(Date.now() - 2 * 60000).toISOString().slice(0, 16).replace("T", " ");
+  const transcript = `[${at}] THEM sms: I will run it by them\n[${at}] US sms: Hi Julie, here's our written cash offer on 1833 297th Way SE, Fall City, WA 98024 — $1,959,250, as-is (attached).`;
+  const store = { async listReplyDrafts() { return []; } };
+  assert.equal(await humanHasThread({ store, locationId: "LOC", contactId: "c1", transcript, minutes: 30 }), null);
+  const typed = transcript.replace(/Hi Julie, here's our written cash offer on/, "Hey Julie, I'll call you in a bit about");
+  assert.ok(await humanHasThread({ store, locationId: "LOC", contactId: "c1", transcript: typed, minutes: 30 }), "a hand-typed text still counts");
 });
 
 test("a failed offer send on 'taking it to the seller' doesn't hold the thanks", async () => {
@@ -2947,4 +2957,5 @@ test("a failed offer send on 'taking it to the seller' doesn't hold the thanks",
   for (let i = 0; i < 40 && job.status === "running"; i++) await settle();
   const d = await store.getReplyDraft(job.draftId);
   assert.ok(!(d.flags || []).some((f) => /offer didn't go out/.test(f)), JSON.stringify(d.flags));
+  assert.equal(d.reply, "Sounds good, let me know what they think.", "no claim the offer went when it didn't");
 });

@@ -927,6 +927,7 @@ export function handsOffReason(a) {
   return "";
 }
 
+export const OUR_OFFER_TEXT_RX = /\bhere's our written cash offer on\b/i;
 export async function humanHasThread({ store, locationId, contactId, transcript, minutes = 30, now = Date.now() }) {
   if (!minutes || !contactId) return null;
   const last = lastOutbound(transcript);
@@ -934,6 +935,10 @@ export async function humanHasThread({ store, locationId, contactId, transcript,
   const ours = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 10 }).catch(() => []);
   const norm = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
   if (ours.some((d) => norm(d.sentText || d.reply) === norm(last.text))) return null;
+  // The offer documents' own text (routes/offers.js sendOfferDocs) is the
+  // app, not a person: Julie Nutley's thanks was dismissed as "you answered it
+  // yourself" because the offer had just gone out ahead of it (2026-09-15).
+  if (OUR_OFFER_TEXT_RX.test(String(last.text || ""))) return null;
   return { at: new Date(last.ts).toISOString(), minutesAgo: Math.max(0, Math.round((now - last.ts) / 60000)) };
 }
 
@@ -2039,6 +2044,11 @@ async function runReply(job, ctx) {
     && !plan.auto.some((x) => x.type === "send_offer")) {
     plan.auto.push({ id: `a-seller-send-${job.id}`, type: "send_offer", mode: "auto", status: "pending", party,
       channels: ["sms", "email"], via: "to seller", why: "they're taking our number to the seller" });
+    // The reply says the paper is on its way; step 5 puts the model's own
+    // words back if the offer didn't actually go.
+    const first = firstNameOf(job.contactName || a.contactName || "");
+    draft = { ...draft, replyBeforeSend: draft.reply,
+      reply: `Sounds good${first ? ` ${first}` : ""}, no rush. Sent the written offer over by text and email so you have it to share with them.` };
   }
   if (auto.exception?.passed && draft.intent === "acceptance") {
     plan.suggested.push({ id: `a-acc-${job.id}`, type: "promote_to_deal", mode: "ask", status: "pending", party,
@@ -2163,6 +2173,9 @@ async function runReply(job, ctx) {
     // Why they turned it down. Rides on the draft so the feedback actions
     // have it, and so the row can show it whether or not they ran.
     passReason: draft.passReason || null,
+    // The model's own words, kept when the reply was rewritten to say the
+    // offer went out, so step 5 can put them back if it didn't.
+    ...(draft.replyBeforeSend ? { replyBeforeSend: draft.replyBeforeSend } : {}),
     agentTake,
     propertyDetails: propertyDetails || null,
     autoSendable: gate.ok,
@@ -2439,6 +2452,12 @@ async function runReply(job, ctx) {
     if (uwFailed && !holdForBooking) {
       holdForBooking = `the underwrite didn't start: ${uwFailed.error || "unknown error"}`;
       record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
+    }
+    // "Sent the written offer over" stands only if it went (or already had).
+    const sellerSend = done.find((x) => x.type === "send_offer" && x.via === "to seller");
+    if (sellerSend && record.replyBeforeSend
+      && (sellerSend.status !== "done" || !/^(sent the offer|offer on .* already went out)/.test(String(sellerSend.detail || "")))) {
+      record = { ...record, reply: record.replyBeforeSend, flags: [...(record.flags || []), `the offer didn't go with it: ${sellerSend.error || sellerSend.detail || "unknown"}`] };
     }
     const sendFailed = done.find((x) => x.type === "send_offer" && x.via !== "counter band" && x.via !== "to seller"
       && (x.status !== "done" || !/^(sent the offer|offer on .* already went out)/.test(String(x.detail || ""))));
