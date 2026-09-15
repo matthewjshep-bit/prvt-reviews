@@ -598,7 +598,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           placeholder="25" />
         <p className="mt-1 text-xs text-slate-400">
           The spend ceiling. A misconfigured workflow that fires on every inbound text stops here
-          rather than at your Apify balance. Blank uses the default of 25.
+          rather than at your Apify balance. Blank uses the default of 25; 0 means no cap.
         </p>
       </section>
 

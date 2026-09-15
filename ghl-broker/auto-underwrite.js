@@ -285,14 +285,28 @@ export async function enqueueUnderwrite({ store, locationId, contactId, message 
  * that hits the cap again stays in line; any other refusal or error drops it
  * (a missing key is not something waiting fixes).
  */
+/**
+ * underwriteDailyCap(saved) → number (Infinity = no cap)
+ *
+ * 0 means no cap (Matt, 2026-09-15: "increase the daily cap, dont put a cap"),
+ * the way 0 means "any" for the outreach price and year filters. Blank or
+ * missing keeps the default.
+ */
+export function underwriteDailyCap(saved = {}) {
+  const raw = saved?.autoUnderwriteDailyCap;
+  if (raw === 0 || raw === "0") return Infinity;
+  const n = Number(raw);
+  return n > 0 ? n : UW_DEFAULT_DAILY_CAP;
+}
+
 export async function drainUnderwriteQueue({ store, locationId, saved = {}, start, now = Date.now() }) {
   const cur = await store.getJobCursor?.(locationId, QUEUE_CURSOR).catch(() => null);
   const all = Array.isArray(cur?.doc?.items) ? cur.doc.items : [];
   if (!all.length || typeof start !== "function") return { started: 0, left: all.length, dropped: 0 };
   const fresh = all.filter((i) => now - Date.parse(i.at) <= QUEUE_MAX_DAYS * 86400000);
   let dropped = all.length - fresh.length;
-  const cap = Number(saved?.autoUnderwriteDailyCap) > 0 ? Number(saved.autoUnderwriteDailyCap) : UW_DEFAULT_DAILY_CAP;
-  let room = cap - (await countToday({ store, locationId, now }));
+  const cap = underwriteDailyCap(saved);
+  let room = cap === Infinity ? Infinity : cap - (await countToday({ store, locationId, now }));
   const left = [];
   let started = 0;
   for (const item of fresh) {
@@ -831,10 +845,8 @@ export async function startUnderwrite({
     if (inFlight) return { deduped: true, job: inFlight };
   }
 
-  const cap = Number(saved?.autoUnderwriteDailyCap) > 0
-    ? Number(saved.autoUnderwriteDailyCap)
-    : UW_DEFAULT_DAILY_CAP;
-  const usedToday = await countToday({ store, locationId });
+  const cap = underwriteDailyCap(saved);
+  const usedToday = cap === Infinity ? 0 : await countToday({ store, locationId });
   if (usedToday >= cap) {
     // From the conversation, an address past the cap waits in line instead
     // of being dropped: the agent was told we're running it, and the broker
