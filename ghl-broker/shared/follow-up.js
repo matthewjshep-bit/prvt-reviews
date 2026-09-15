@@ -132,6 +132,23 @@ export function timeNamed(text = "", now = Date.now()) {
 }
 
 /**
+ * takingItToSeller(text, now) → { dueAt, phrase } | null
+ *
+ * The agent is taking our number to the seller and will come back: Julie
+ * Nutley's "I will run it by them ... I will share with them and get back
+ * with you" (2026-09-15). Nothing for a person to decide, so the bot can say
+ * thanks. If they don't come back, a check-in goes two mornings later.
+ */
+const TO_SELLER_RX = /\b(?:run|take|bring|present|share|show|send|pass)\s+(?:it|this|that|the\s+(?:number|offer))?\s*(?:by|to|with|past|along\s+to)\s+(?:them|him|her|my\s+(?:sellers?|clients?)|the\s+(?:sellers?|owners?|clients?))\b/i;
+const COME_BACK_RX = /\b(?:get|circle|come)\s+back\s+(?:to|with)\s+you\b|\blet\s+you\s+know\s+what\s+(?:they|he|she)\b|\bsee\s+what\s+(?:they|he|she)\s+(?:say|think)/i;
+export function takingItToSeller(text = "", now = Date.now()) {
+  const t = String(text || "");
+  if (!TO_SELLER_RX.test(t) && !(COME_BACK_RX.test(t) && /\b(?:sellers?|owners?|them|clients?)\b/i.test(t))) return null;
+  const when = timeNamed(t, now);
+  return { dueAt: when?.dueAt || morningOf(now + 2 * DAY_MS), phrase: when?.phrase || "hearing back from the seller" };
+}
+
+/**
  * addressPending({ intent, propertyAddress, message, now }) → { hint, firstDueAt, phrase } | null
  *
  * They told us a property is coming and the message carries no address:

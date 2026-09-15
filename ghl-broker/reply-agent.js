@@ -64,7 +64,7 @@ import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
 } from "./ghl.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
-import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending } from "./shared/follow-up.js";
+import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller } from "./shared/follow-up.js";
 import { resolveParty } from "./conversation-party.js";
 import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts } from "./conversation-context.js";
@@ -1906,6 +1906,13 @@ async function runReply(job, ctx) {
   // Bomar's park manager and "best time to call is morning" (2026-09-14) — sat
   // silent as "a person's call". A confident read that asks nothing of us gets
   // its acknowledgement out, and a note puts the substance in front of a person.
+  // "I'll run it by them and get back to you" (Julie Nutley, 2026-09-15) read
+  // as a medium "other" and sat. They're taking our number to the seller:
+  // nothing to decide, so the thanks goes, and 4c′ books the check-in.
+  if (party === "agent" && draft.intent === "other" && !draft.needsHuman && String(draft.reply || "").trim() && takingItToSeller(job.message, now)) {
+    draft = { ...draft, intent: "status_check", reclassifiedFrom: "other" };
+    job.intent = draft.intent;
+  }
   if (party === "agent" && draft.intent === "other" && draft.confidence === "high" && !draft.needsHuman && String(draft.reply || "").trim()) {
     draft = { ...draft, intent: "question", reclassifiedFrom: "other" };
     job.intent = draft.intent;
@@ -2249,7 +2256,7 @@ async function runReply(job, ctx) {
   // Remembered as `checkin_requested`; promise-sweep.js runCheckInSweep sends
   // the check-in when it's due and they haven't come back first.
   if (party === "agent" && !isCall && !["opt_out", "counter", "acceptance", "realm_yes"].includes(draft.intent)) {
-    const ask = chaseHasDate ? null : checkInRequested(job.message, now);
+    const ask = chaseHasDate ? null : (checkInRequested(job.message, now) || takingItToSeller(job.message, now));
     if (ask) {
       await recordEvent({
         store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),

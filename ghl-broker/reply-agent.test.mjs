@@ -2898,3 +2898,32 @@ test("a confident underwrite floats our number without waiting for their read, i
   const d = await store.getReplyDraft(job.draftId);
   assert.equal(d.autoSendable, true, d.flags.join(" · "));
 });
+
+test("'I'll run it by them and get back to you' is thanked on its own and a check-in is booked; an unsure other still waits", async () => {
+  const { takingItToSeller } = await import("./shared/follow-up.js");
+  const JULIE = "I will run it by them however they are in no hurry. They own another home in Suncadia, he is a commercial builder and is very market savvy and based in the most current sales in that area not sure what they will say. I will share with them and get back with you. Thank you";
+  assert.ok(takingItToSeller(JULIE, Date.parse("2026-09-15T19:00:00Z")));
+  assert.ok(takingItToSeller("Let me present it to my sellers", Date.now()));
+  assert.equal(takingItToSeller("It's Matt, I buy homes that need work around Renton.", Date.now()), null);
+  assert.equal(takingItToSeller("The seller wants 950", Date.now()), null);
+
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const rows = [];
+  const orig = store.appendContactEvents?.bind(store);
+  store.getContactProfile ??= async () => null;
+  store.upsertContactProfile ??= async () => ({});
+  store.appendContactEvents = async (loc, id, add) => { rows.push(...add); return orig ? orig(loc, id, add) : { inserted: add.length, skipped: 0 }; };
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: JULIE,
+    deps: { draft: async () => ({ ...DRAFT, intent: "other", confidence: "medium", needsHuman: false,
+      reply: "Sounds good, no rush on our end. Let me know what they think.", summary: "Julie will present our number to the sellers." }) },
+  });
+  for (let i = 0; i < 40 && job.status === "running"; i++) await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "status_check");
+  const req = rows.find((r) => r.type === "checkin_requested");
+  assert.ok(req, "a check-in is booked in case they don't come back");
+  assert.ok(Date.parse(req.data.dueAt) > Date.now());
+});
