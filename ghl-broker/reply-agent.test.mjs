@@ -2483,6 +2483,8 @@ test("floorFirmness tells a wall from an opening", () => {
   assert.equal(floorFirmness("If you were more around $460k we would consider it most likely."), "soft");
   assert.equal(floorFirmness("If your number starts with an eight, I can probably make something work."), "soft");
   assert.equal(floorFirmness("Their lowest at this time is $700k."), "plain");
+  assert.equal(floorFirmness("I could get them to 950 but no way on that number"), "soft", "a number they can deliver is an opening");
+  assert.equal(floorFirmness("I can probably get the seller down to 610"), "soft");
 });
 
 test("a soft floor far over ours keeps the negotiation open: their number filed, their value and repairs asked for", async () => {

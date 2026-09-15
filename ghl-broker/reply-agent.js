@@ -297,7 +297,10 @@ export function isShowingOffer(message = "") {
 export function floorFirmness(message = "") {
   const t = String(message || "");
   if (/\b(?:won'?t|will\s+not|not\s+going\s+to)\s+(?:entertain|consider|accept|take|go\s+(?:below|under|lower))|\bno\s+need\s+to\s+(?:submit|send|write)|\bfirm\b|non[\s-]?negotiable|bottom\s+line|not\s+a\s+(?:penny|dollar)\s+(?:less|under|below)/i.test(t)) return "firm";
-  if (/\bwould\s+(?:\w+\s+){0,2}consider|\bmost\s+likely|\bprobably\s+(?:work|consider|take|do|make)|\bstarts?\s+with\s+an?\b|\bmake\s+(?:something|it)\s+work|\bopen\s+to\b|\bif\s+you\s+(?:were|can|could|came|come|got|get)\b|\bin\s+the\s+(?:ballpark|neighborhood|range)\b|\bmight\s+(?:work|take|consider|do)\b/i.test(t)) return "soft";
+  if (/\bwould\s+(?:\w+\s+){0,2}consider|\bmost\s+likely|\bprobably\s+(?:work|consider|take|do|make)|\bstarts?\s+with\s+an?\b|\bmake\s+(?:something|it)\s+work|\bopen\s+to\b|\bif\s+you\s+(?:were|can|could|came|come|got|get)\b|\bin\s+the\s+(?:ballpark|neighborhood|range)\b|\bmight\s+(?:work|take|consider|do)\b/i.test(t)
+    // "I could get them to 950 but no way on that number" (Lori Mcdonald,
+    // 2026-09-14): a number they can deliver is an opening, whatever follows.
+    || /\b(?:could|can|might|should|would)\s+(?:probably\s+|likely\s+|maybe\s+)?(?:get|bring|push)\s+(?:them|him|her|the\s+sellers?)\s+(?:down\s+)?to\b/i.test(t)) return "soft";
   return "plain";
 }
 
