@@ -111,24 +111,42 @@ async function withRetry(fn) {
 // free-tier requests.
 const RENTCAST_BASE = process.env.RENTCAST_BASE_URL || "https://api.rentcast.io/v1";
 
+// A 500-listing page of a whole county can take RentCast well past 15s
+// (2026-09-15: the 10am King pull timed out and no outreach went out).
+const RENTCAST_TIMEOUT_MS = Number(process.env.RENTCAST_TIMEOUT_MS || 60000);
+const RENTCAST_RETRY_MS = Number(process.env.RENTCAST_RETRY_MS || 3000);
+
 // One page of sale listings. Bare array in practice; tolerate a wrapper.
+// A timeout, a dropped connection, a 429 or a 5xx is tried once more; a
+// refusal (bad key, bad query) is not.
 async function rentcastPage(apiKey, params) {
   const qs = new URLSearchParams({ status: "Active", limit: "500", ...params });
-  const r = await fetch(`${RENTCAST_BASE}/listings/sale?${qs}`, {
-    headers: { "X-Api-Key": apiKey, Accept: "application/json" },
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!r.ok) {
-    const detail = (await r.text()).slice(0, 300);
-    throw Object.assign(new Error(`RentCast ${r.status}`), { http: 502, detail });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await fetch(`${RENTCAST_BASE}/listings/sale?${qs}`, {
+        headers: { "X-Api-Key": apiKey, Accept: "application/json" },
+        signal: AbortSignal.timeout(RENTCAST_TIMEOUT_MS),
+      });
+      if (!r.ok) {
+        const detail = (await r.text()).slice(0, 300);
+        throw Object.assign(new Error(`RentCast ${r.status}`), { http: 502, detail, retryable: r.status === 429 || r.status >= 500 });
+      }
+      const data = await r.json();
+      // X-Total-Count arrives when includeTotalCount=true: how many listings
+      // match in all, so the sweep knows how many pages a county has.
+      const header = r.headers.get("x-total-count");
+      const total = header != null && header !== "" && Number.isFinite(Number(header)) ? Number(header) : null;
+      return { listings: Array.isArray(data) ? data : data.listings || [], total };
+    } catch (e) {
+      const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
+      const retryable = e?.retryable || timedOut || e?.name === "TypeError";
+      if (retryable && attempt < 1) { await sleep(RENTCAST_RETRY_MS); continue; }
+      if (timedOut) throw Object.assign(new Error(`RentCast didn't answer in ${Math.round(RENTCAST_TIMEOUT_MS / 1000)}s (tried twice)`), { http: 504 });
+      throw e;
+    }
   }
-  const data = await r.json();
-  // X-Total-Count arrives when includeTotalCount=true: how many listings
-  // match in all, so the sweep knows how many pages a county has.
-  const header = r.headers.get("x-total-count");
-  const total = header != null && header !== "" && Number.isFinite(Number(header)) ? Number(header) : null;
-  return { listings: Array.isArray(data) ? data : data.listings || [], total };
 }
+export { rentcastPage as _rentcastPage };
 
 // `firstTouch({ locationId, client, contactId, hook, name })` is injected by
 // the broker: it starts the Conversation AI's cold open for one imported

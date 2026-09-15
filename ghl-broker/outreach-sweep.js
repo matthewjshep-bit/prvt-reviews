@@ -17,6 +17,13 @@ import { store as defaultStore } from "./store.js";
 
 export const CURSOR_NAME = "outreach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
+// A daily run that failed (RentCast slow, GHL down) is tried again that
+// morning rather than costing the whole day: up to three tries, 20+ minutes
+// apart, until 1pm Pacific. A run that finished — even with nothing to
+// import — is never repeated.
+export const RETRY_WINDOW_HOURS = 3;
+export const RETRY_GAP_MS = 20 * 60 * 1000;
+export const MAX_DAILY_TRIES = 3;
 // The hour it runs, in Pacific time (so daylight saving doesn't move it).
 export const OUTREACH_SWEEP_HOUR = Number(process.env.OUTREACH_SWEEP_HOUR || 10); // 10–11am Pacific
 export const DEFAULT_DAILY_CAP = 12;
@@ -203,10 +210,15 @@ export function startOutreachSweep({ locationId, client, saved = {}, store = def
     pull: null, county: null, candidates: 0, picked: 0, imported: 0, opened: 0, enrolled: 0, warnings: [], results: [], error: null,
   };
   jobs.set(locationId, job);
-  run(job, { locationId, client, saved, store, deps, now }).catch((e) => {
+  run(job, { locationId, client, saved, store, deps, now }).catch(async (e) => {
     job.status = "error";
     job.error = String(e?.message || e).slice(0, 300);
     job.finishedAt = new Date().toISOString();
+    // Remembered on the day's cursor, so the tick can try the day again.
+    if (trigger === "daily") {
+      const cur = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
+      await store.setJobCursor?.(locationId, CURSOR_NAME, { at: cur?.at || iso(now), doc: { ...(cur?.doc || {}), failed: true, error: job.error } }).catch(() => {});
+    }
   });
   return job;
 }
@@ -362,15 +374,26 @@ export async function autopilotBatchId({ store, locationId, market }) {
  * in progress, and the durable cursor at least MIN_GAP_MS old.
  */
 export async function maybeStartOutreachSweep({ locationId, client, saved = {}, store = defaultStore, deps = {}, hour = OUTREACH_SWEEP_HOUR, now = Date.now() }) {
-  if (workHour(now) !== hour) return false;
+  const h = workHour(now);
+  if (h < hour || h >= hour + RETRY_WINDOW_HOURS) return false;
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
   if (!oa.enabled) return false;
   if (oa.weekdaysOnly && !isWorkday(now)) return false;
   if (!String(saved.rentcastApiKey || "").trim()) return false;
   if (jobs.get(locationId)?.status === "running") return false;
   const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
-  if (cursor?.at && now - Date.parse(cursor.at) < MIN_GAP_MS) return false;
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: {} }).catch(() => {});
+  const doc = cursor?.doc || {};
+  const ranToday = cursor?.at && now - Date.parse(cursor.at) < MIN_GAP_MS;
+  let tries = 1;
+  if (ranToday) {
+    // Only a failed run comes back, spaced out and a few times at most.
+    const triedSoFar = Number(doc.tries) || 1;
+    if (!doc.failed || triedSoFar >= MAX_DAILY_TRIES || now - Date.parse(cursor.at) < RETRY_GAP_MS) return false;
+    tries = triedSoFar + 1;
+  } else if (h !== hour) {
+    return false;   // a fresh day starts in its own hour; the window is for retries
+  }
+  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: { tries } }).catch(() => {});
   startOutreachSweep({ locationId, client, saved, store, deps, trigger: "daily", now });
   return true;
 }
