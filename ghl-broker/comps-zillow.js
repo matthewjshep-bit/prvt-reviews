@@ -24,6 +24,34 @@ import { milesBetween } from "./shared/comp-match.js";
 
 const ACTOR = "maxcopell~zillow-scraper";
 
+/* ---------- the same search, bought once ---------- */
+
+// The search is billed per result, and the same one is asked for more often
+// than it looks: a retry after a failure, the queue draining a house the cap
+// held, an agent who texts the address twice, the Comps pane re-pulling. Sold
+// sales a day old are the same sold sales, so the rows are kept for a day and
+// the second ask is free. Keyed on the search URL, which already encodes the
+// box, the bands and the sale window — a different house, or different beds,
+// is a different key and a real pull. Only the RAW rows are cached; every
+// filter downstream still runs against this subject's own numbers.
+export const COMPS_CACHE_TTL_MS = 24 * 3600 * 1000;
+const COMPS_CACHE_MAX = 200;
+const compsCache = new Map();
+
+function cachedRows(url, limit, now = Date.now()) {
+  const hit = compsCache.get(`${url}|${limit}`);
+  if (!hit) return null;
+  if (now - hit.at > COMPS_CACHE_TTL_MS) { compsCache.delete(`${url}|${limit}`); return null; }
+  return hit.rows;
+}
+
+function rememberRows(url, limit, rows, now = Date.now()) {
+  if (compsCache.size >= COMPS_CACHE_MAX) compsCache.clear();
+  compsCache.set(`${url}|${limit}`, { at: now, rows });
+}
+
+export function _resetCompsCache() { compsCache.clear(); }
+
 // Miles per degree of latitude. Longitude shrinks with the cosine of latitude.
 const MILES_PER_DEG_LAT = 69.0;
 
@@ -319,7 +347,9 @@ function rowAddress(r) {
  */
 export async function pullZillowComps({
   apifyToken, lat, lng, beds = 0, baths = 0, sqft = 0,
-  radiusMiles = 0.5, monthsBack = 12, limit = 200, subject = null,
+  // 120, not 200: the scorecard only ever ranks a handful, and the search is
+  // billed per result ($1.30/1,000).
+  radiusMiles = 0.5, monthsBack = 12, limit = 120, subject = null,
   bedTolerance = 0, bathTolerance = 0.5, sqftPct = 0.2, homeType = null,
 }) {
   if (!(Number.isFinite(lat) && Number.isFinite(lng))) {
@@ -334,32 +364,36 @@ export async function pullZillowComps({
     sqft, sqftPct, homeType,
   });
 
-  const r = await fetch(
-    `https://api.apify.com/v2/acts/${ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}&timeout=180`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        searchUrls: [{ url }],
-        // MAP_MARKERS reads the map layer directly. It is the right mode for a
-        // box this small: pagination would walk a result list we've already
-        // constrained geographically, and zoom-in exists for boxes far bigger
-        // than half a mile.
-        extractionMethod: "MAP_MARKERS",
-        resultsLimit: limit,
-      }),
-      signal: AbortSignal.timeout(200000),
+  let rows = cachedRows(url, limit);
+  if (!rows) {
+    const r = await fetch(
+      `https://api.apify.com/v2/acts/${ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}&timeout=180`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          searchUrls: [{ url }],
+          // MAP_MARKERS reads the map layer directly. It is the right mode for a
+          // box this small: pagination would walk a result list we've already
+          // constrained geographically, and zoom-in exists for boxes far bigger
+          // than half a mile.
+          extractionMethod: "MAP_MARKERS",
+          resultsLimit: limit,
+        }),
+        signal: AbortSignal.timeout(200000),
+      }
+    );
+    if (!r.ok) {
+      const detail = (await r.text()).slice(0, 300);
+      throw Object.assign(new Error(`Zillow comps lookup failed (Apify ${r.status})`), {
+        http: r.status === 401 || r.status === 403 ? 400 : 502,
+        detail,
+      });
     }
-  );
-  if (!r.ok) {
-    const detail = (await r.text()).slice(0, 300);
-    throw Object.assign(new Error(`Zillow comps lookup failed (Apify ${r.status})`), {
-      http: r.status === 401 || r.status === 403 ? 400 : 502,
-      detail,
-    });
+    const items = await r.json();
+    rows = Array.isArray(items) ? items : [];
+    rememberRows(url, limit, rows);
   }
-  const items = await r.json();
-  const rows = Array.isArray(items) ? items : [];
 
   const origin = { lat, lng };
   const comps = rows

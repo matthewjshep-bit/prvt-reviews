@@ -58,7 +58,25 @@ export const UW_RADIUS_MILES = 0.5;        // "under half a mile", as asked
 // reached. Matt chose this on 2026-09-14 over "never widen", after a Seattle
 // house held on a single sale inside half a mile. Each extra ring is another
 // Apify pull, so an area with enough comps never pays for one.
-export const UW_RADIUS_LADDER = [0.5, 1, 1.5];
+// Half a mile, then straight to the last ring. Every ring is a fresh Apify
+// search of the WHOLE disc, so a middle rung re-buys the sales the next one
+// returns anyway — 2026-09-15, cutting it saves a pull on every widened run.
+export const UW_RADIUS_LADDER = [0.5, 1.5];
+
+/**
+ * shouldScanPhotos({ arv, theirArv, theirRehab, describedWork, fill }) → boolean
+ *
+ * Reading up to 40 listing photos is the most expensive thing an underwrite
+ * does. With no ARV from the comps AND nothing from the agent to rescue it
+ * with, the run is held whatever the photos say — so it is paid for and thrown
+ * away. Anything that could still produce a number (an ARV, their value, their
+ * repairs, or work they described) scans as before, and the offer form's
+ * "fill" always scans: a person is waiting for that scope.
+ */
+export function shouldScanPhotos({ arv = 0, theirArv = 0, theirRehab = 0, describedWork = false, fill = false } = {}) {
+  if (fill) return true;
+  return Number(arv) > 0 || Number(theirArv) > 0 || Number(theirRehab) > 0 || Boolean(describedWork);
+}
 export const UW_MIN_REHABBED_COMPS = 3;    // below this the run holds for review
 export const UW_GUT_CHECK_MIN_COMPS = 2;   // …unless it's a gut check (see gradeByPriceProxy)
 // An unattended offer never goes above this share of the list price. Kelby
@@ -1435,6 +1453,17 @@ async function runUnderwrite(job, ctx) {
   job.arvBasis = arv?.basis || "";
   got.arv = arv;
 
+  /* --- what the agent told us (read before the scope, so it can be skipped) --- */
+  // Their value and repairs (for the rescue below), and whether they described
+  // the work (for the photo gate).
+  const contactEvents = job.contactId && typeof store?.listContactEvents === "function"
+    ? await store.listContactEvents(locationId, job.contactId, { limit: 200 }).catch(() => [])
+    : [];
+  const dossier = propertyDossier(contactEvents || [], extraction.address);
+  const theirArv = Math.round(Number(dossier?.have?.arv?.value) || 0);
+  const theirRehab = Math.round(Number(dossier?.have?.rehab?.value) || 0);
+  const describedWork = (contactEvents || []).some((e) => e?.type === "property_details" && e.address && addressKey(e.address) === addressKey(extraction.address));
+
   /* --- 6. rehab --- */
   job.phase = "rehab";
   if (canceled(job)) return;
@@ -1449,7 +1478,7 @@ async function runUnderwrite(job, ctx) {
   let repairs = 0;
   let scope = [];
   got.rehabState = rehabState;
-  if (photos.length) {
+  if (photos.length && shouldScanPhotos({ arv: arv?.arv || 0, theirArv, theirRehab, describedWork, fill: job.fill })) {
     try {
       scan = await scanRehabFromPhotos({
         photos, listing,
@@ -1467,18 +1496,9 @@ async function runUnderwrite(job, ctx) {
   }
 
   /* --- the gates --- */
-  // What the agent told us about this house: their value and repairs (for the
-  // rescue below), and whether they described the work (for the photo gate).
-  const contactEvents = job.contactId && typeof store?.listContactEvents === "function"
-    ? await store.listContactEvents(locationId, job.contactId, { limit: 200 }).catch(() => [])
-    : [];
-  const dossier = propertyDossier(contactEvents || [], extraction.address);
-  const theirArv = Math.round(Number(dossier?.have?.arv?.value) || 0);
-  const theirRehab = Math.round(Number(dossier?.have?.rehab?.value) || 0);
-  const describedWork = (contactEvents || []).some((e) => e?.type === "property_details" && e.address && addressKey(e.address) === addressKey(extraction.address));
   const gate = evaluateGates({
     extraction, subject, rehabbedComps: rehabbed, arv, describedWork,
-    photosAnalyzed: photos.length, scan, repairs, proxy, geocode, compsRadiusMiles,
+    photosAnalyzed: scan ? photos.length : 0, scan, repairs, proxy, geocode, compsRadiusMiles,
     compsPool: { rows: compsData?.rows ?? null, pulled: compsData?.pulled ?? null, kept: nearby.length, radiusMiles: compsRadiusMiles },
   });
 

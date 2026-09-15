@@ -81,7 +81,9 @@ export const MAX_UNIT_LOOKUPS = 25;
 function bestPhotoUrl(photo) {
   const jpegs = photo?.mixedSources?.jpeg || [];
   if (jpegs.length) {
-    const under = jpegs.filter((j) => j.width <= 1536).sort((a, b) => b.width - a.width);
+    // 1024, not 1536: image cost scales with pixels, and condition — dated
+    // kitchen, worn floors, bath tier — reads fine at 1024 (2026-09-15).
+    const under = jpegs.filter((j) => j.width <= 1024).sort((a, b) => b.width - a.width);
     return (under[0] || jpegs.sort((a, b) => a.width - b.width)[0])?.url || null;
   }
   return photo?.url || null;
