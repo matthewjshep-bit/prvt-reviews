@@ -5,14 +5,17 @@ import {
 } from "./outreach-sweep.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
-const row = (k, doc = {}, extra = {}) => ({ agentKey: k, status: "new", contactId: null, doc: { name: k, phone: "2065550100", distressedCount: 1, listingCount: 2, hook: { address: `${k} St`, score: 50 }, ghl: {}, ...doc }, ...extra });
+const row = (k, doc = {}, extra = {}) => ({ agentKey: k, status: "new", contactId: null, doc: { name: k, phone: "2065550100", distressedCount: 1, distressRule: "cut-or-cheap", listingCount: 2, hook: { address: `${k} St`, score: 50, price: 400000 }, ghl: {}, ...doc }, ...extra });
 
 test("settings coerce to safe defaults", () => {
   assert.deepEqual(normalizeOutreachAutopilot(undefined), {
     enabled: false, dailyCap: 12, weekdaysOnly: true, firstTouch: "app", requireDistress: true,
     workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14,
     minDaysOnMarket: 45, propertyTypes: ["Single Family", "Multi-Family", "Manufactured", "Townhouse"], maxYearBuilt: 0, reserveRequests: 2,
+    maxListPrice: 1500000,
   });
+  assert.equal(normalizeOutreachAutopilot({ maxListPrice: 0 }).maxListPrice, 0, "0 = no cap");
+  assert.equal(normalizeOutreachAutopilot({ maxListPrice: "900000" }).maxListPrice, 900000);
   assert.equal(normalizeOutreachAutopilot({ enabled: true, dailyCap: "250" }).dailyCap, 250);
   assert.equal(normalizeOutreachAutopilot({ enabled: true, dailyCap: "5000" }).dailyCap, 500);
   assert.equal(normalizeOutreachAutopilot({ firstTouch: "ghl" }).firstTouch, "ghl");
@@ -33,6 +36,37 @@ test("only agents nobody has touched, most distressed first, under the cap", () 
   assert.deepEqual(pickAgentsToImport(rows, { cap: 3 }).map((r) => r.agentKey), ["b", "h", "i"]);
   assert.deepEqual(pickAgentsToImport(rows, { cap: 10 }).map((r) => r.agentKey), ["b", "h", "i", "a"]);
   assert.ok(pickAgentsToImport(rows, { cap: 10, requireDistress: false }).some((r) => r.agentKey === "g"));
+});
+
+test("the pick checks the price cap and the distress rule on the row, not just the pull", () => {
+  const rows = [
+    row("ok"),
+    row("pricey", { hook: { price: 1650000, score: 90 } }),
+    row("noprice", { hook: { score: 90 } }),
+    row("stale-only", { distressRule: "any", distressedCount: 3 }),   // an earlier, looser pull
+    row("legacy", { distressRule: undefined, distressedCount: 3 }),
+  ];
+  const opts = { cap: 10, maxPrice: 1500000, distressRule: "cut-or-cheap" };
+  assert.deepEqual(pickAgentsToImport(rows, opts).map((r) => r.agentKey), ["ok"]);
+  assert.equal(pickAgentsToImport(rows, { ...opts, requireDistress: false }).length, 3, "no rule when distress isn't required");
+});
+
+test("a new price cap or rule starts every county from the top", async () => {
+  _resetJobs();
+  const store = fakeStore([]);
+  store.cursors.set(`loc-sig|${PAGES_CURSOR}`, { doc: { turn: 0, offsets: { "King, WA": 1500 } } }); // saved before the cap
+  const bodies = [];
+  const deps = { runPull: async (_l, _c, b) => { bodies.push(b); return { batchId: "b1", nextOffset: 500, warnings: [] }; }, importAgents: async () => ({ results: [] }) };
+  const saved = { outreachAutopilot: { enabled: true, counties: [{ county: "King", state: "WA" }] } };
+  startOutreachSweep({ locationId: "loc-sig", client: {}, saved, store, deps });
+  await settle();
+  assert.equal(bodies[0].offset, 0);
+  assert.equal(bodies[0].maxPrice, 1500000);
+  assert.equal(bodies[0].distressRule, "cut-or-cheap");
+  _resetJobs();
+  startOutreachSweep({ locationId: "loc-sig", client: {}, saved, store, deps });
+  await settle();
+  assert.equal(bodies[1].offset, 500, "same filters: carries on from its place");
 });
 
 const fakeStore = (rows, pulls = []) => ({
@@ -87,8 +121,8 @@ test("workflow ids and counties come in pasted however", () => {
 });
 
 test("the query asks RentCast for stale houses, not everything", () => {
-  assert.deepEqual(pullQuery(normalizeOutreachAutopilot({})), { daysOld: "45:*", propertyType: "Single Family|Multi-Family|Manufactured|Townhouse" });
-  assert.deepEqual(pullQuery(normalizeOutreachAutopilot({ minDaysOnMarket: 0, propertyTypes: [], maxYearBuilt: 1995 })), { daysOld: "1:*", yearBuilt: "*:1995" });
+  assert.deepEqual(pullQuery(normalizeOutreachAutopilot({})), { daysOld: "45:*", propertyType: "Single Family|Multi-Family|Manufactured|Townhouse", maxPrice: 1500000, distressRule: "cut-or-cheap" });
+  assert.deepEqual(pullQuery(normalizeOutreachAutopilot({ minDaysOnMarket: 0, propertyTypes: [], maxYearBuilt: 1995, maxListPrice: 0, requireDistress: false })), { daysOld: "1:*", yearBuilt: "*:1995" });
   assert.deepEqual(normalizeOutreachAutopilot({ propertyTypes: "condo|bogus|Condo" }).propertyTypes, ["Condo"]);
 });
 
@@ -116,7 +150,7 @@ test("walks a county page by page across runs, then the next county; a dry run k
   const place = () => store.cursors.get(`loc-pg|${PAGES_CURSOR}`)?.doc;
 
   const j1 = await run({ nextOffset: 1000, totalCount: 1400, requestsUsed: 2 });
-  assert.deepEqual(bodies[0], { daysOld: "45:*", propertyType: "Single Family|Multi-Family|Manufactured|Townhouse", maxRequests: 2, county: "King", state: "WA", offset: 0 },
+  assert.deepEqual(bodies[0], { daysOld: "45:*", propertyType: "Single Family|Multi-Family|Manufactured|Townhouse", maxPrice: 1500000, distressRule: "cut-or-cheap", maxRequests: 2, county: "King", state: "WA", offset: 0 },
     "46 spendable over 22 runs = 2 requests");
   assert.equal(j1.county, "King, WA");
   assert.deepEqual(j1.budget, { used: 0, budget: 48, reserve: 2, runsLeft: 22, perRun: 2 });

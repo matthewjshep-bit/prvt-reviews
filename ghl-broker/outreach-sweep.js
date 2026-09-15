@@ -99,6 +99,13 @@ export const PROPERTY_TYPES = ["Single Family", "Multi-Family", "Manufactured", 
 // Flips: houses, small multis, manufactured, townhomes. Condos and land are not the deal.
 export const DEFAULT_PROPERTY_TYPES = ["Single Family", "Multi-Family", "Manufactured", "Townhouse"];
 export const DEFAULT_MIN_DAYS_ON_MARKET = 45;
+// The most a hook listing may ask. Above it the agent is not our buyer's
+// market, however stale the listing. 0 = no cap.
+export const DEFAULT_MAX_LIST_PRICE = 1500000;
+// What counts as distress for the sweep. The query already asks for listings
+// 45+ days old, so "stale" is true of every one of them and proves nothing:
+// it takes a price cut or a price under the market's $/sqft.
+export const SWEEP_DISTRESS_RULE = "cut-or-cheap";
 // Requests left for the Pull button, on top of what the sweep spends.
 export const DEFAULT_RESERVE_REQUESTS = 2;
 // The most one run may spend, however far behind the month is.
@@ -123,6 +130,7 @@ export function normalizeOutreachAutopilot(v = {}) {
   const minDom = Math.round(Number(o.minDaysOnMarket));
   const year = Math.round(Number(o.maxYearBuilt));
   const reserve = Math.round(Number(o.reserveRequests));
+  const maxPrice = Math.round(Number(o.maxListPrice));
   const types = (Array.isArray(o.propertyTypes) ? o.propertyTypes : String(o.propertyTypes ?? "").split("|"))
     .map((t) => PROPERTY_TYPES.find((p) => p.toLowerCase() === String(t).trim().toLowerCase())).filter(Boolean);
   return {
@@ -143,6 +151,8 @@ export function normalizeOutreachAutopilot(v = {}) {
     propertyTypes: o.propertyTypes === undefined ? [...DEFAULT_PROPERTY_TYPES] : [...new Set(types)],
     maxYearBuilt: year >= 1800 && year <= 2100 ? year : 0,
     reserveRequests: Number.isFinite(reserve) && reserve >= 0 ? Math.min(20, reserve) : DEFAULT_RESERVE_REQUESTS,
+    maxListPrice: o.maxListPrice === 0 || o.maxListPrice === "0" ? 0
+      : Number.isFinite(maxPrice) && maxPrice > 0 ? maxPrice : DEFAULT_MAX_LIST_PRICE,
   };
 }
 
@@ -154,6 +164,8 @@ export function pullQuery(oa) {
     daysOld: `${Math.max(1, oa.minDaysOnMarket || 1)}:*`,
     ...(oa.propertyTypes.length ? { propertyType: oa.propertyTypes.join("|") } : {}),
     ...(oa.maxYearBuilt ? { yearBuilt: `*:${oa.maxYearBuilt}` } : {}),
+    ...(oa.maxListPrice ? { maxPrice: oa.maxListPrice } : {}),
+    ...(oa.requireDistress ? { distressRule: SWEEP_DISTRESS_RULE } : {}),
   };
 }
 
@@ -164,14 +176,20 @@ export function pullQuery(oa) {
  * imported, not skipped), no existing GHL contact (a match means a thread we
  * would be talking over), and a phone. The most distressed book first —
  * that is the whole thesis of the outreach — then the biggest.
+ *
+ * `maxPrice` and `distressRule` are checked on the row itself, not trusted to
+ * the pull: the batch keeps agents from earlier pulls made under looser
+ * filters, and a row counted by another rule (or none) doesn't qualify.
  */
-export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true } = {}) {
+export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true, maxPrice = 0, distressRule = null } = {}) {
   const ok = rows.filter((r) => {
     const d = r?.doc || {};
     if (r.status !== "new") return false;
     if (r.contactId || d.ghl?.contactId) return false;
     if (!d.phone) return false;
     if (requireDistress && !(Number(d.distressedCount) > 0)) return false;
+    if (requireDistress && distressRule && d.distressRule !== distressRule) return false;
+    if (maxPrice && !(Number(d.hook?.price) > 0 && Number(d.hook.price) <= maxPrice)) return false;
     return true;
   });
   ok.sort((a, b) =>
@@ -268,8 +286,12 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
   let pages = null;
   let county = null;
   let key = null;
+  // The saved places belong to the filters they were read with: a new price
+  // cap or rule is a different result list, and an old offset would skip into it.
+  const querySig = JSON.stringify(pullQuery(oa));
   if (oa.counties.length) {
     pages = (await store.getJobCursor?.(locationId, PAGES_CURSOR).catch(() => null))?.doc || {};
+    if (pages.query !== querySig) pages = { ...pages, offsets: {}, totals: {} };
     const turn = (Number(pages.turn) || 0) % oa.counties.length;
     county = oa.counties[turn];
     key = `${county.county}, ${county.state}`;
@@ -299,6 +321,7 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
       offsets: { ...(pages.offsets || {}), [key]: next },
       totals: { ...(pages.totals || {}), [key]: pull.totalCount ?? null },
       lastCounty: key,
+      query: querySig,
     } }).catch((e) => job.warnings.push(`page cursor: ${String(e?.message || e).slice(0, 120)}`));
   }
 
@@ -313,7 +336,8 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
   // Pending/sold and condos are already out: the RentCast pull asks for Active
   // listings of the configured property types only. Turnkey can't be told
   // from RentCast, and those agents weed themselves out (a turnkey reply is Tier 2).
-  const picked = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress });
+  const picked = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
+    maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null });
   job.picked = picked.length;
   job.results = picked.map((r) => ({ agentKey: r.agentKey, name: r.doc?.name || "", hook: r.doc?.hook?.address || "", distressed: r.doc?.distressedCount || 0 }));
   if (!picked.length) {

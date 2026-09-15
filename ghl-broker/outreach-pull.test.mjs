@@ -90,6 +90,15 @@ test("the same pull again is a free cache hit with the same place", async () => 
   assert.equal(r.totalCount, TOTAL);
 });
 
+test("the sweep's price cap goes to RentCast, and stale alone is not distress", async () => {
+  // The mock's listings are all stale-by-query, never cut, all the same $/sqft.
+  const r = await pull({ zipCodes: "98004", maxRequests: 1, daysOld: "45:*", maxPrice: 1500000, distressRule: "cut-or-cheap" });
+  assert.equal(r.queries[0].price, "*:1500000");
+  assert.ok(r.warnings.some((w) => /price cap \(\$1,500,000\) kept 500 of 500/.test(w)), r.warnings.join(" | "));
+  assert.equal(r.listingsKept, 0, "no cut and not cheap: nobody qualifies");
+  assert.equal(r.agentsTotal, 0);
+});
+
 test("a manual pull is unchanged: a bare daysOld is still a maximum", async () => {
   const r = await pull({ zipCodes: "98003", daysOld: 180 });
   assert.equal(r.queries[0].daysOld, "180");

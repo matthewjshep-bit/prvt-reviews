@@ -721,6 +721,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                 </span>
               </label>
               <Num label="Listed at least" suffix="days ago" value={form.outreachAutopilot?.minDaysOnMarket ?? 45} onChange={setOutreachAuto("minDaysOnMarket")} />
+              <Num label="Max list price, $ (0 = any)" value={form.outreachAutopilot?.maxListPrice ?? 1500000} onChange={setOutreachAuto("maxListPrice")} />
               <Num label="Built in or before (0 = any)" value={form.outreachAutopilot?.maxYearBuilt ?? 0} onChange={setOutreachAuto("maxYearBuilt")} />
               <Num label="Requests kept for the Pull button" value={form.outreachAutopilot?.reserveRequests ?? 2} onChange={setOutreachAuto("reserveRequests")} />
               <div className="col-span-2">
@@ -748,7 +749,12 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
               <label className="col-span-2 flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" checked={form.outreachAutopilot?.requireDistress !== false}
                   onChange={(e) => setOutreachAuto("requireDistress")(e.target.checked)} />
-                Only agents with at least one distressed listing
+                <span>
+                  Only agents with a distressed listing
+                  <span className="block text-xs text-slate-500">
+                    A price cut, or priced ≤90% of the market's $/sqft. Days on market alone doesn't count — every listing the sweep pulls is already that old.
+                  </span>
+                </span>
               </label>
               <label className="col-span-2 flex items-start gap-2 text-sm text-slate-700">
                 <input type="checkbox" className="mt-1" checked={Boolean(form.outreachAutopilot?.followUpEnabled)}

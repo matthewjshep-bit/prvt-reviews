@@ -39,7 +39,9 @@ export function distressSignals(listing, { medianPpsf = 0, staleDom = 45 } = {})
   const price = Number(listing.price);
   const sqft = Number(listing.squareFootage);
   const cheap = price > 0 && sqft > 0 && medianPpsf > 0 && price / sqft <= 0.9 * medianPpsf;
-  return { stale, cut, cheap, any: stale || cut || cheap };
+  // `priced`: a signal in the price itself (a cut, or cheap for the market),
+  // for pulls where every listing is already stale by query.
+  return { stale, cut, cheap, any: stale || cut || cheap, priced: cut || cheap };
 }
 
 export function scoreListing(listing, { medianPpsf = 0 } = {}) {

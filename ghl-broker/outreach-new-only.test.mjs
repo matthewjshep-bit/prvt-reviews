@@ -81,7 +81,7 @@ test("the daily sweep imports new-only, capped at the day's number, from a longe
   _resetJobs();
   const rows = Array.from({ length: 8 }, (_, i) => ({
     agentKey: `k${i}`, status: "new", contactId: null,
-    doc: { name: `k${i}`, phone: `206555020${i}`, distressedCount: 8 - i, listingCount: 1, hook: { address: `${i} St`, score: 50 }, ghl: {} },
+    doc: { name: `k${i}`, phone: `206555020${i}`, distressedCount: 8 - i, distressRule: "cut-or-cheap", listingCount: 1, hook: { address: `${i} St`, score: 50, price: 400000 }, ghl: {} },
   }));
   const fake = {
     cursors: new Map(),

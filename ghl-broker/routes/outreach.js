@@ -247,7 +247,13 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     // warning so the omission is visible.
     const rawMaxYear = parseInt(body.maxYearBuilt ?? settings.outreachMaxYearBuilt, 10);
     const maxYearBuilt = rawMaxYear >= 1800 && rawMaxYear <= 2100 ? rawMaxYear : 0;
-    return { zips, county, city, state, daysOld, propertyType, yearBuilt, offset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt };
+    // A price ceiling — asked of RentCast (price=*:N) and checked again after.
+    const rawMaxPrice = Math.round(Number(body.maxPrice));
+    const maxPrice = Number.isFinite(rawMaxPrice) && rawMaxPrice > 0 ? rawMaxPrice : 0;
+    // "any" (stale, cut, or cheap) or "cut-or-cheap": the sweep's pages are all
+    // stale by query, so there only a price signal is distress.
+    const distressRule = body.distressRule === "cut-or-cheap" ? "cut-or-cheap" : "any";
+    return { zips, county, city, state, daysOld, propertyType, yearBuilt, offset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule };
   }
 
   async function runPull(locationId, client, body) {
@@ -255,8 +261,9 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     const apiKey = String(settings.rentcastApiKey || "").trim();
     if (!apiKey) throw Object.assign(new Error("RentCast API key not configured — add it in Settings"), { http: 400 });
 
-    const { zips, county, city, state, daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt } =
+    const { zips, county, city, state, daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule } =
       pullParams(body, settings);
+    const isDistressed = (s) => (distressRule === "cut-or-cheap" ? s.priced : s.any);
     // Precedence: zips (one query each) → county (one circular query around
     // the county centroid, post-filtered to the county line) → city/state.
     // RentCast has no county search, but every listing it returns carries its
@@ -295,6 +302,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     const warnings = [];
     const common = {
       daysOld: String(daysOld), ...(propertyType ? { propertyType } : {}), ...(yearBuilt ? { yearBuilt } : {}),
+      ...(maxPrice ? { price: `*:${maxPrice}` } : {}),
       includeTotalCount: "true",
     };
     const paging = startOffset > 0 || body.offset != null;
@@ -364,6 +372,13 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       : 0;
 
     let pool = listings;
+    if (maxPrice) {
+      // RentCast was asked already; this catches a listing with no price, or
+      // a cached page read before the cap existed.
+      const before = pool.length;
+      pool = pool.filter((l) => Number(l.price) > 0 && Number(l.price) <= maxPrice);
+      warnings.push(`price cap ($${maxPrice.toLocaleString()}) kept ${pool.length} of ${before}`);
+    }
     if (maxYearBuilt) {
       const before = pool.length;
       let unknownYear = 0;
@@ -379,9 +394,11 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     }
     if (distressOnly) {
       const before = pool.length;
-      pool = pool.filter((l) => distressSignals(l, { medianPpsf, staleDom }).any);
+      pool = pool.filter((l) => isDistressed(distressSignals(l, { medianPpsf, staleDom })));
       warnings.push(
-        `distress filter (${staleDom}+ DOM, price cut, or ≤90% of $${Math.round(medianPpsf)}/sqft median) kept ${pool.length} of ${before}`
+        distressRule === "cut-or-cheap"
+          ? `distress filter (price cut, or ≤90% of $${Math.round(medianPpsf)}/sqft median) kept ${pool.length} of ${before}`
+          : `distress filter (${staleDom}+ DOM, price cut, or ≤90% of $${Math.round(medianPpsf)}/sqft median) kept ${pool.length} of ${before}`
       );
     }
     if (priceBandPct && medianPrice) {
@@ -460,7 +477,11 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
             score: hook.score, components: hook.components,
           },
           listingCount: g.listings.length,
-          distressedCount: g.listings.filter((x) => x.distress.stale || x.distress.cut || x.distress.cheap).length,
+          // Only listings that passed the filters count — a distressed listing
+          // over the price cap is not a reason to text this agent.
+          distressedCount: qual.filter((x) => isDistressed({ any: x.distress.stale || x.distress.cut || x.distress.cheap, priced: x.distress.cut || x.distress.cheap })).length,
+          distressRule,
+          ...(maxPrice ? { maxPrice } : {}),
         },
       });
     }
@@ -507,7 +528,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     await store.upsertOutreachAgents(locationId, batch.id, agentRows.map(({ agentKey, doc }) => ({ agentKey, doc })));
     await store.recordOutreachPull(locationId, {
       batchId: batch.id,
-      params: { targets, ...(countyMeta ? { county: countyMeta.name } : {}), daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt },
+      params: { targets, ...(countyMeta ? { county: countyMeta.name } : {}), daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule },
       requestsUsed, cached, listingsFetched: listings.length, listingsKept: pool.length,
       agentsTotal: agentRows.length, agentsNew, medianPpsf: Math.round(medianPpsf),
       medianPrice: Math.round(medianPrice),
