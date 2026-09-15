@@ -2030,6 +2030,16 @@ async function runReply(job, ctx) {
       ? `Best we can do${street ? ` on ${street}` : ""} is ${k} as-is, cash. Sending the updated offer over now.`
       : `${k} works for us${street ? ` on ${street}` : ""}. Sending the updated offer over now.`;
   }
+  // They're taking our number to the seller ("I'll run it by them", Julie
+  // Nutley 2026-09-15): the written offer goes by text AND email so they have
+  // it to show. Idempotent (an offer already sent isn't sent twice), and a
+  // miss here never holds the thanks — see the send check in step 5.
+  if (party === "agent" && !isCall && takingItToSeller(job.message, now)
+    && !["counter", "acceptance", "rejection", "opt_out"].includes(draft.intent)
+    && !plan.auto.some((x) => x.type === "send_offer")) {
+    plan.auto.push({ id: `a-seller-send-${job.id}`, type: "send_offer", mode: "auto", status: "pending", party,
+      channels: ["sms", "email"], via: "to seller", why: "they're taking our number to the seller" });
+  }
   if (auto.exception?.passed && draft.intent === "acceptance") {
     plan.suggested.push({ id: `a-acc-${job.id}`, type: "promote_to_deal", mode: "ask", status: "pending", party,
       why: "they say the seller accepted — mint the deal when you've confirmed it" });
@@ -2430,7 +2440,7 @@ async function runReply(job, ctx) {
       holdForBooking = `the underwrite didn't start: ${uwFailed.error || "unknown error"}`;
       record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
     }
-    const sendFailed = done.find((x) => x.type === "send_offer" && x.via !== "counter band"
+    const sendFailed = done.find((x) => x.type === "send_offer" && x.via !== "counter band" && x.via !== "to seller"
       && (x.status !== "done" || !/^(sent the offer|offer on .* already went out)/.test(String(x.detail || ""))));
     if (sendFailed && !holdForBooking) {
       holdForBooking = `the offer didn't go out: ${sendFailed.error || sendFailed.detail || "unknown"}`;

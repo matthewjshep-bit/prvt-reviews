@@ -2911,6 +2911,7 @@ test("'I'll run it by them and get back to you' is thanked on its own and a chec
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
   const rows = [];
+  const sends = [];
   const orig = store.appendContactEvents?.bind(store);
   store.getContactProfile ??= async () => null;
   store.upsertContactProfile ??= async () => ({});
@@ -2918,7 +2919,8 @@ test("'I'll run it by them and get back to you' is thanked on its own and a chec
   const { job } = await startReply({
     client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: JULIE,
     deps: { draft: async () => ({ ...DRAFT, intent: "other", confidence: "medium", needsHuman: false,
-      reply: "Sounds good, no rush on our end. Let me know what they think.", summary: "Julie will present our number to the sellers." }) },
+      reply: "Sounds good, no rush on our end. Let me know what they think.", summary: "Julie will present our number to the sellers." }),
+      sendOfferDocs: async (args) => { sends.push(args); return { ok: true, address: "1833 297th Way SE", channels: args.channels }; } },
   });
   for (let i = 0; i < 40 && job.status === "running"; i++) await settle();
   const d = await store.getReplyDraft(job.draftId);
@@ -2926,4 +2928,23 @@ test("'I'll run it by them and get back to you' is thanked on its own and a chec
   const req = rows.find((r) => r.type === "checkin_requested");
   assert.ok(req, "a check-in is booked in case they don't come back");
   assert.ok(Date.parse(req.data.dueAt) > Date.now());
+  assert.equal(sends.length, 1, "the written offer goes to them");
+  assert.deepEqual(sends[0].channels, ["sms", "email"]);
+  assert.ok(!(d.flags || []).some((f) => /offer didn't go out/.test(f)));
+});
+
+test("a failed offer send on 'taking it to the seller' doesn't hold the thanks", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.getContactProfile ??= async () => null;
+  store.upsertContactProfile ??= async () => ({});
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "Thanks, I'll present it to my sellers and get back to you.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "status_check", confidence: "high", needsHuman: false, reply: "Sounds good, let me know what they think." }),
+      sendOfferDocs: async () => ({ ok: false, reason: "no open offer to send" }) },
+  });
+  for (let i = 0; i < 40 && job.status === "running"; i++) await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.ok(!(d.flags || []).some((f) => /offer didn't go out/.test(f)), JSON.stringify(d.flags));
 });
