@@ -2959,3 +2959,48 @@ test("a failed offer send on 'taking it to the seller' doesn't hold the thanks",
   assert.ok(!(d.flags || []).some((f) => /offer didn't go out/.test(f)), JSON.stringify(d.flags));
   assert.equal(d.reply, "Sounds good, let me know what they think.", "no claim the offer went when it didn't");
 });
+
+test("a book number said the way people text it ('1.144M' for 1,144,500) is not made up; a looser one still is", async () => {
+  const { roundsFromBook, evaluateReplyGates } = await import("./reply-agent.js");
+  const book = new Set([1144500]);
+  assert.equal(roundsFromBook(1144000, book), true);
+  assert.equal(roundsFromBook(1145000, book), true);
+  assert.equal(roundsFromBook(1100000, book), false, "1.1M is 44k off");
+  assert.equal(roundsFromBook(380000, new Set([375500])), false);
+  const draft = { intent: "realm_check", confidence: "high", reply: "Ran the numbers on Sahalee. Based on our analysis we can likely do around 1.144M as-is, cash, 10 to 14 day close. Is that in the realm for the seller?" };
+  const ok = evaluateReplyGates({ draft, allowedAmounts: [1144500] });
+  assert.ok(!ok.flags.some((f) => /not in the offer book/.test(f)), JSON.stringify(ok.flags));
+  const loose = evaluateReplyGates({ draft: { ...draft, reply: "We can likely do around 1.1M as-is." }, allowedAmounts: [1144500] });
+  assert.ok(loose.flags.some((f) => /not in the offer book/.test(f)));
+});
+
+test("an answer to our first text that fits no intent keeps the thread going instead of sitting", async () => {
+  const withThread = (base, outboundBody) => ({
+    ...base,
+    call: async (path, opts = {}) => {
+      if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+      if (path.startsWith("/conversations/cv1/messages")) return { messages: { messages: [
+        { id: "m1", direction: "outbound", messageType: "TYPE_SMS", body: outboundBody, dateAdded: new Date(Date.now() - 3600000).toISOString() },
+      ] } };
+      return base.call(path, opts);
+    },
+  });
+  const run = async (outboundBody, over = {}) => {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const store = fakeStore();
+    const { job } = await startReply({
+      client: withThread(client, outboundBody), locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "Its for sale",
+      deps: { draft: async () => ({ ...DRAFT, intent: "other", confidence: "medium", needsHuman: false,
+        reply: "Good to know it's still available. What kind of shape is it in, does it need much work?", ...over }) },
+    });
+    for (let i = 0; i < 40 && job.status === "running"; i++) await settle();
+    return store.getReplyDraft(job.draftId);
+  };
+  const OPEN = "Hi Steven, came across your listing for 13412 Se 59th St. I'm local here in Seattle and buy places to fix up King and Pierce counties mostly. Is this one a bit of a project, or pretty turnkey?";
+  const d = await run(OPEN);
+  assert.equal(d.intent, "question");
+  assert.ok(!(d.flags || []).some((f) => /person's call/.test(f)), JSON.stringify(d.flags));
+  assert.equal((await run("Hey, following up on the offer we sent.")).intent, "other", "not an answer to our first text: still a person's call");
+  assert.equal((await run(OPEN, { reply: "We could do around 400k on it." })).intent, "other", "a reply that names a number still waits");
+});

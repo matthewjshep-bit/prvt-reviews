@@ -539,7 +539,7 @@ export function evaluateReplyGates({
     flags.push(`the draft names ${[...new Set(leaked)].map((n) => fmtMoney(n)).join(", ")}, which is our contract price or assignment fee`);
   }
   const allowed = new Set([...allowedAmounts, ...moneyIn(inboundMessage)].map((n) => Math.round(n)));
-  const invented = said.filter((n) => !allowed.has(n) && !forbidden.has(n));
+  const invented = said.filter((n) => !allowed.has(n) && !forbidden.has(n) && !roundsFromBook(n, allowed));
   if (invented.length) {
     flags.push(`the draft names ${[...new Set(invented)].map((n) => fmtMoney(n)).join(", ")}, which is not in the ${party === "investor" ? "deal book" : "offer book"}`);
   }
@@ -928,6 +928,26 @@ export function handsOffReason(a) {
 }
 
 export const OUR_OFFER_TEXT_RX = /\bhere's our written cash offer on\b/i;
+
+// A book number said the way a person texts it: "1.144M" for $1,144,500
+// (Angela Jaeger, 2026-09-15, held as "not in the offer book"). It counts when
+// it is that number rounded at the precision it was said, and never more than
+// 1% off, so "1.1M" for 1,144,500 still reads as made up.
+export function roundsFromBook(n, allowed) {
+  const said = Math.round(Number(n) || 0);
+  if (!(said > 0) || said % 1000 !== 0) return false;
+  let unit = 1000;
+  while (said % (unit * 10) === 0 && unit < 1e9) unit *= 10;
+  for (const a of allowed) {
+    const book = Math.round(Number(a) || 0);
+    if (book > 0 && Math.abs(said - book) <= unit / 2 && Math.abs(said - book) <= book * 0.01) return true;
+  }
+  return false;
+}
+
+// Our first text to an agent about their listing (outreach_open): a reply to it
+// is them answering us, not something for a person to decide.
+export const OUTREACH_OPEN_RX = /\bcame across your listing\b/i;
 export async function humanHasThread({ store, locationId, contactId, transcript, minutes = 30, now = Date.now() }) {
   if (!minutes || !contactId) return null;
   const last = lastOutbound(transcript);
@@ -1916,6 +1936,16 @@ async function runReply(job, ctx) {
   // nothing to decide, so the thanks goes, and 4c′ books the check-in.
   if (party === "agent" && draft.intent === "other" && !draft.needsHuman && String(draft.reply || "").trim() && takingItToSeller(job.message, now)) {
     draft = { ...draft, intent: "status_check", reclassifiedFrom: "other" };
+    job.intent = draft.intent;
+  }
+  // An answer to our first text that fits no intent — Steven Jansen's "Its
+  // for sale", Michael Lindekugel's "Not my place to judge the condition"
+  // (2026-09-15) — sat as "a person's call" and the thread stalled. It is
+  // them answering us: the reply that keeps it going sends, provided it names
+  // no number of ours.
+  if (party === "agent" && draft.intent === "other" && !draft.needsHuman && String(draft.reply || "").trim()
+    && !moneyIn(draft.reply).length && OUTREACH_OPEN_RX.test(String(lastOutbound(a.transcript)?.text || ""))) {
+    draft = { ...draft, intent: "question", reclassifiedFrom: "other" };
     job.intent = draft.intent;
   }
   if (party === "agent" && draft.intent === "other" && draft.confidence === "high" && !draft.needsHuman && String(draft.reply || "").trim()) {
