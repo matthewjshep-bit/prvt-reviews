@@ -27,6 +27,7 @@ import { maybeStartOutreachSweep } from "./outreach-sweep.js";
 import { maybeStartOutreachFollowUp } from "./outreach-followup.js";
 import { maybeRunPromiseSweep } from "./promise-sweep.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
+import { maybeRunTierCheck } from "./tier-check.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
@@ -238,6 +239,9 @@ setInterval(async () => {
         deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
       });
       if (watched) console.log(`price watch for ${locationId}: ${JSON.stringify({ watched: watched.watched, checked: watched.checked, dropped: watched.dropped, offMarket: watched.offMarket, texted: watched.texted, error: watched.error || null })}`);
+      // Once a day: every agent's tier tag agrees with their Acquisitions card.
+      const tiered = await maybeRunTierCheck({ client: makeClient(token), locationId, store });
+      if (tiered) console.log(`tier check for ${locationId}: ${tiered.applied}/${tiered.planned} fixed of ${tiered.considered} cards${tiered.errors.length ? `, errors: ${tiered.errors[0]}` : ""}`);
       // Addresses that came in past the daily underwrite cap, once it resets.
       const drained = await offersRouter.drainUnderwriteQueue?.({ client: makeClient(token), locationId });
       if (drained?.started || drained?.dropped) console.log(`underwrite queue for ${locationId}: started ${drained.started}, dropped ${drained.dropped}, waiting ${drained.left}`);
