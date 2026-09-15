@@ -38,6 +38,7 @@ import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-
 import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
 import { addressKey } from "./shared/us-address.js";
+import { effectiveStatus as offerStatusOf } from "./shared/offer-status.js";
 import { expandListingLinks } from "./listing-links.js";
 import { buildTranscript } from "./enrich.js";
 import {
@@ -266,13 +267,33 @@ export async function findRecent({ store, locationId, contactId, address, ignore
   if (!key) return null;
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   for (const o of rows) {
-    if (!o?.autoUnderwrite) continue;
+    // Not just our own runs: an offer built by hand counts too. Lisa Shilling
+    // (2026-09-15) was sent a hand-priced 425,750 at 2:40pm; the queued run
+    // landed at 3:33 and, seeing no auto-underwrite on that offer, made a
+    // second one at 472,500 on the same house.
+    if (!o?.id) continue;
     if (ignoreId && o.id === ignoreId) continue;
     if (addressKey(o.address || "") !== key) continue;
     const ts = Date.parse(o.createdAt || o.autoUnderwrite.startedAt || "");
     if (Number.isFinite(ts) && now - ts <= windowMs) return o;
   }
   return null;
+}
+
+/**
+ * paperAlreadyOut(offers, { address, offerId }) → the offer that went out, or null
+ *
+ * Paper beats a first pass. Once a written offer on a house has gone to the
+ * agent, a "rough number, not underwritten yet" text undercuts it — Lisa
+ * Shilling got 473k floated an hour after the written 425,750 (2026-09-15).
+ * `offerId` is the new offer, excluded from the search.
+ */
+const LIVE_PAPER = new Set(["sent", "countered", "accepted", "realm_yes", "under_contract"]);
+export function paperAlreadyOut(offers = [], { address = "", offerId = null } = {}) {
+  const key = addressKey(address);
+  if (!key) return null;
+  return (offers || []).find((o) => o && o.id !== offerId && addressKey(o.address || "") === key
+    && (LIVE_PAPER.has(offerStatusOf(o)) || (Array.isArray(o.sends) && o.sends.length > 0))) || null;
 }
 
 /* ---------- the waiting line (past the daily cap) ---------- */

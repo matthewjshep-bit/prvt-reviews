@@ -329,7 +329,11 @@ test("findRecent ignores a different address, a different agent, and anything ol
   assert.equal(await miss([row({})], "99 Other Rd, Renton, WA"), null);
   assert.equal(await miss([row({ contactId: "c2" })]), null);
   assert.equal(await miss([row({ createdAt: iso(30 * 3600_000) })]), null);
-  assert.equal(await miss([row({ autoUnderwrite: undefined })]), null);   // a hand-built offer isn't a dupe
+  // A hand-built offer IS a dupe (2026-09-15). Lisa Shilling was sent a
+  // hand-priced 425,750; the queued run couldn't see it — no autoUnderwrite on
+  // that offer — and made a second one at 472,500 on the same house an hour later.
+  const hand = await findRecent({ store: fakeStore([row({ autoUnderwrite: undefined })]), locationId: "LOC", contactId: "c1", address: "1234 NE 8th St, Renton, WA 98056" });
+  assert.equal(hand?.id, "x");
 });
 
 /* ---------- why the comps came up short ---------- */

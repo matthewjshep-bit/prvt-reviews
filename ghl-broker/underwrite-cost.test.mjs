@@ -62,3 +62,28 @@ test("a cached search is dropped once it is a day old", async () => {
     assert.ok(COMPS_CACHE_TTL_MS >= 24 * 3600 * 1000 - 1, "a day");
   } finally { restore(); }
 });
+
+/* ---------- one house, one offer, one number (Lisa Shilling, 2026-09-15) ---------- */
+
+import { findRecent, paperAlreadyOut } from "./auto-underwrite.js";
+
+const SENT = { id: "hand1", address: "33313 Southeast 42nd Street, Fall City, Washington 98024", status: "sent", cashAmount: 425750, createdAt: new Date().toISOString() };
+const bookStore = (offers) => ({ async listOffers() { return offers; } });
+
+test("an offer built by hand counts as already underwritten — the queued run doesn't price it again", async () => {
+  const dupe = await findRecent({ store: bookStore([SENT]), locationId: "LOC", contactId: "c1", address: "33313 Se 42nd St, Fall City, WA 98024" });
+  assert.equal(dupe?.id, "hand1", "the spelling differs; the house doesn't");
+  const other = await findRecent({ store: bookStore([SENT]), locationId: "LOC", contactId: "c1", address: "1 Other St, Fall City, WA 98024" });
+  assert.equal(other, null);
+  const old = { ...SENT, createdAt: new Date(Date.now() - 48 * 3600 * 1000).toISOString() };
+  assert.equal(await findRecent({ store: bookStore([old]), locationId: "LOC", contactId: "c1", address: SENT.address }), null, "yesterday's offer doesn't block today's run");
+});
+
+test("a rough number is never floated after the written offer went out", () => {
+  const found = paperAlreadyOut([SENT], { address: "33313 Se 42nd St, Fall City, WA 98024", offerId: "auto2" });
+  assert.equal(found?.id, "hand1");
+  assert.equal(paperAlreadyOut([SENT], { address: SENT.address, offerId: "hand1" }), null, "the new offer itself doesn't count");
+  assert.equal(paperAlreadyOut([{ ...SENT, status: "new" }], { address: SENT.address, offerId: "auto2" }), null, "an unsent offer is not paper");
+  assert.equal(paperAlreadyOut([{ ...SENT, status: "new", sends: [{ ts: "2026-09-15T21:40:25Z" }] }], { address: SENT.address, offerId: "auto2" })?.id, "hand1", "a send ledger counts");
+  assert.equal(paperAlreadyOut([SENT], { address: "", offerId: "auto2" }), null);
+});

@@ -91,7 +91,7 @@ import {
   startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs, drainUnderwriteQueue,
   cancelJob as cancelUnderwriteJob, publicJob as publicUnderwriteJob, retryArgs as retryUnderwriteArgs,
   AUTO_UNDERWRITE_ENABLED,
-  UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT,
+  UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT, paperAlreadyOut,
 } from "../auto-underwrite.js";
 import {
   startReply, startProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
@@ -3780,6 +3780,20 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           console.log(`clean-underwrite send skipped for ${offer.id}: ${why}`);
           await markSendPending(offer.id, why);
         }
+      }
+
+      // Paper beats a first pass: with a written offer already out on this
+      // house, a "rough number, not underwritten yet" text undercuts it. Lisa
+      // Shilling, 2026-09-15: the queued run landed an hour after the written
+      // 425,750 and floated 473k.
+      const book = await store.listOffers(locationId, { contactId: offer.contactId, limit: 50, lean: true }).catch(() => []);
+      const out = paperAlreadyOut(book, { address: offer.address, offerId: offer.id });
+      if (out) {
+        console.log(`float skipped for ${offer.id}: our offer on ${offer.address} already went out (${out.id})`);
+        await createContactNote(client, offer.contactId, {
+          body: `Underwrote ${offer.address} at ${fmtMoney(offer.cashAmount)}, but our offer there has already gone out${out.cashAmount ? ` at ${fmtMoney(out.cashAmount)}` : ""} — nothing was texted. Yours to decide whether to revise it.`,
+        }).catch(() => {});
+        return;
       }
 
       const kind = chooseProactiveKind({ events, address: offer.address, leadWithNumber });
