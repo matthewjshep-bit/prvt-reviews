@@ -60,11 +60,11 @@ export function milesBetween(a, b) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
 }
 
-// Months between an ISO-ish date string and now. Null when unparseable.
-function monthsSince(dateStr) {
+// Months between an ISO-ish date string and `now`. Null when unparseable.
+export function monthsSince(dateStr, now = Date.now()) {
   const t = Date.parse(String(dateStr || "").slice(0, 10));
   if (!Number.isFinite(t)) return null;
-  return (Date.now() - t) / (1000 * 60 * 60 * 24 * 30.44);
+  return (now - t) / (1000 * 60 * 60 * 24 * 30.44);
 }
 
 /**
@@ -218,9 +218,134 @@ export function markRenovatedByPrice(comps = [], { take = 4, minPool = PRICE_PRO
   };
 }
 
-// Sort helper: best match first, then closest, then most recent sale. Used to
-// order the comps list and to decide which ones get preselected.
+/* ============================================================= *
+ * similarity — how close, not just whether it passes
+ * ============================================================= */
+
+// The scorecard above counts votes, and on the Zillow source most of the
+// votes are unknowable (no year built, stories, material or subdivision on a
+// search row), so a whole ring ties at 4/5 and the pick falls to $/sqft.
+// That is how the priciest house nearby became the ARV evidence: the
+// post-mortem of 2026-09-10 found buyers pay ≤70% of ARV less repairs and the
+// three dead deals were priced off ARVs that were too high.
+//
+// This is the continuous version, for RANKING: each factor is a 0–1 closeness
+// with a linear taper, weighted by how much it moves value, and a factor
+// nobody knows leaves the denominator (rule 1 above, kept). Distance leads —
+// a comp across the street says more about a lot, a school and a street
+// than any field on a listing card. The scorecard stays for the ✓/✗ lines;
+// nothing here filters, either.
+export const SIM_WEIGHTS = { distance: 25, sqft: 20, beds: 15, baths: 10, yearBuilt: 15, recency: 10, lot: 5 };
+export const SIM_DISTANCE_FULL_MI = 0.25;  // 1.0 out to here, 0 at the ring edge
+export const SIM_SQFT_FULL_PCT = 10;       // 1.0 inside ±10% …
+export const SIM_SQFT_FULL_ABS = 300;      // … or ±300 sqft, whichever is wider (Matt's rule)
+export const SIM_SQFT_ZERO_PCT = 30;       // 0 at ±30%
+export const SIM_YEAR_FULL = 5;            // 1.0 inside ±5 years
+export const SIM_YEAR_ZERO = 25;           // 0 at ±25
+export const SIM_RECENCY_FULL_MO = 6;      // 1.0 inside six months
+export const SIM_RECENCY_ZERO_MO = 24;     // 0 at two years
+export const SIM_LOT_ZERO_PCT = 50;        // 0 at a lot half or twice the size
+
+// 1 up to `full`, straight line down to 0 at `zero`.
+const taper = (x, full, zero) => (x <= full ? 1 : x >= zero ? 0 : 1 - (x - full) / (zero - full));
+
+/**
+ * similarity(subject, comp, { radiusMiles, now }) →
+ *   { score: 0–100 | null, known, factors: [{ key, label, weight, value, detail }] }
+ *
+ * `value` is 0–1, or null when either side lacks the fact (and the weight is
+ * then left out of `known`). `score` is null when nothing was knowable.
+ */
+export function similarity(subject = {}, comp = {}, { radiusMiles = DISTANCE_MILES, now = Date.now() } = {}) {
+  const factors = [];
+  const add = (key, label, weight, value, detail) => factors.push({ key, label, weight, value, detail });
+
+  const d = n(comp.distance);
+  add("distance", "Distance", SIM_WEIGHTS.distance,
+    d == null ? null : taper(d, SIM_DISTANCE_FULL_MI, Math.max(radiusMiles, SIM_DISTANCE_FULL_MI + 0.05)),
+    d == null ? "distance unknown" : `${Math.round(d * 100) / 100} mi`);
+
+  const ss = n(subject.sqft), cs = n(comp.sqft);
+  if (ss == null || cs == null || ss <= 0 || cs <= 0) add("sqft", "Size", SIM_WEIGHTS.sqft, null, "sqft unknown");
+  else {
+    const pct = Math.abs(cs - ss) / ss * 100;
+    const value = Math.abs(cs - ss) <= SIM_SQFT_FULL_ABS ? 1 : taper(pct, SIM_SQFT_FULL_PCT, SIM_SQFT_ZERO_PCT);
+    add("sqft", "Size", SIM_WEIGHTS.sqft, value, `${cs.toLocaleString()} vs ${ss.toLocaleString()} sqft (${cs >= ss ? "+" : "−"}${Math.round(pct)}%)`);
+  }
+
+  const sb = n(subject.beds), cb = n(comp.beds);
+  if (sb == null || cb == null) add("beds", "Beds", SIM_WEIGHTS.beds, null, "beds unknown");
+  else {
+    const gap = Math.abs(Math.round(sb) - Math.round(cb));
+    add("beds", "Beds", SIM_WEIGHTS.beds, gap === 0 ? 1 : gap === 1 ? 0.4 : 0, `${cb} vs ${sb}`);
+  }
+
+  const sba = n(subject.baths), cba = n(comp.baths);
+  if (sba == null || cba == null) add("baths", "Baths", SIM_WEIGHTS.baths, null, "baths unknown");
+  else {
+    const gap = Math.abs(sba - cba);
+    add("baths", "Baths", SIM_WEIGHTS.baths, gap === 0 ? 1 : gap <= 0.5 ? 0.7 : gap <= 1 ? 0.3 : 0, `${cba} vs ${sba}`);
+  }
+
+  const sy = n(subject.yearBuilt), cy = n(comp.yearBuilt);
+  if (sy == null || cy == null) add("yearBuilt", "Year built", SIM_WEIGHTS.yearBuilt, null, "year built unknown");
+  else add("yearBuilt", "Year built", SIM_WEIGHTS.yearBuilt, taper(Math.abs(sy - cy), SIM_YEAR_FULL, SIM_YEAR_ZERO), `${cy} vs ${sy}`);
+
+  const ms = monthsSince(comp.saleDate, now);
+  add("recency", "Sold", SIM_WEIGHTS.recency,
+    ms == null ? null : taper(Math.max(0, ms), SIM_RECENCY_FULL_MO, SIM_RECENCY_ZERO_MO),
+    ms == null ? "sale date unknown" : `${Math.round(Math.max(0, ms))} mo ago`);
+
+  const sl = n(subject.lotSqft), cl = n(comp.lotSqft);
+  if (sl == null || cl == null || sl <= 0 || cl <= 0) add("lot", "Lot", SIM_WEIGHTS.lot, null, "lot unknown");
+  else add("lot", "Lot", SIM_WEIGHTS.lot, taper(Math.abs(cl - sl) / sl * 100, 0, SIM_LOT_ZERO_PCT), `${Math.round(cl).toLocaleString()} vs ${Math.round(sl).toLocaleString()} sqft`);
+
+  const knownFactors = factors.filter((f) => f.value != null);
+  const known = knownFactors.reduce((t, f) => t + f.weight, 0);
+  const sum = knownFactors.reduce((t, f) => t + f.weight * f.value, 0);
+  return { score: known ? Math.round((100 * sum) / known) : null, known, factors };
+}
+
+// The chip: "84", or "—" when nothing is knowable. Coarse tones on purpose —
+// a glanceable signal, not a number to optimise.
+export const similarityLabel = (s) => (s && s.score != null ? String(s.score) : "—");
+export function similarityTone(s) {
+  if (!s || s.score == null) return "unknown";
+  if (s.score >= 80) return "strong";
+  if (s.score >= 60) return "fair";
+  return "weak";
+}
+
+/**
+ * inPool(subject, comp, { bedsTol, bathsTol, sqftPct, yearTol }) → { ok, misses }
+ *
+ * The LOOSE gate — what gets to be ranked at all. Matt, 2026-09-16: keep it as
+ * wide as the pull bands already are (beds ±1, baths ±1, size ±25%) plus era
+ * ±15 years now that year built can be known, so runs don't hold more often;
+ * the accuracy comes from the ranking above, not from a tighter door. Unknown
+ * facts pass, as everywhere in this file.
+ */
+export function inPool(subject = {}, comp = {}, { bedsTol = 1, bathsTol = 1, sqftPct = 25, yearTol = 15 } = {}) {
+  const misses = [];
+  const sb = n(subject.beds), cb = n(comp.beds);
+  if (sb != null && cb != null && Math.abs(Math.round(sb) - Math.round(cb)) > bedsTol) misses.push("beds");
+  const sba = n(subject.baths), cba = n(comp.baths);
+  if (sba != null && cba != null && Math.abs(sba - cba) > bathsTol) misses.push("baths");
+  const ss = n(subject.sqft), cs = n(comp.sqft);
+  if (ss != null && cs != null && ss > 0 && cs > 0 && Math.abs(cs - ss) / ss > sqftPct / 100) misses.push("sqft");
+  const sy = n(subject.yearBuilt), cy = n(comp.yearBuilt);
+  if (sy != null && cy != null && Math.abs(sy - cy) > yearTol) misses.push("yearBuilt");
+  return { ok: misses.length === 0, misses };
+}
+
+// Sort helper: most similar first when both sides carry a similarity score,
+// else best scorecard match, then closest, then most recent sale. Used to
+// order the comps list and to decide which ones get preselected. The
+// scorecard fallback keeps every caller that hasn't attached a similarity
+// yet — and every fixture that never will — ordering exactly as before.
 export function compareByMatch(a, b) {
+  const as = a.similarity?.score, bs = b.similarity?.score;
+  if (as != null && bs != null && as !== bs) return bs - as;
   const am = a.match || { pct: 0, score: 0 };
   const bm = b.match || { pct: 0, score: 0 };
   if (bm.pct !== am.pct) return bm.pct - am.pct;

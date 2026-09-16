@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fetchZillowPhotos, lighterZillowRendition, loadImageBlocks } from "./rehab-scan.js";
+import { fetchZillowPhotos, fetchZillowFacts, fetchZillowUnits, lotSqftFromDetail, lighterZillowRendition, loadImageBlocks, _resetFactsCache } from "./rehab-scan.js";
 
 // The detail actor was rebuilt on 2026-09-02 with the same rename as the search
 // one: the carousel became `listingPhotos`, the status `listingStatus`, the
@@ -51,7 +51,7 @@ test("the curated shape yields photos — the ones the runs were missing", async
     assert.equal(r.listing.status, "sold");
     assert.equal(r.listing.listPrice, 995000);
     assert.deepEqual(r.facts, {
-      beds: 3, baths: 1, sqft: 1187, yearBuilt: 1900, homeType: "SINGLE_FAMILY",
+      beds: 3, baths: 1, sqft: 1187, yearBuilt: 1900, lotSqft: null, homeType: "SINGLE_FAMILY",
     });
   } finally { restore(); }
 });
@@ -200,5 +200,80 @@ test("an image over the per-image cap is skipped rather than sent", async () => 
   try {
     const blocks = await loadImageBlocks(["https://cdn.example.com/1-big.jpg", "https://cdn.example.com/ok.jpg"]);
     assert.equal(blocks.length, 1);
+  } finally { restore(); }
+});
+
+
+/* ---------- the facts a search row doesn't carry (2026-09-16) ---------- */
+
+// The comps' year built never reached the match: Zillow search rows don't
+// carry it. The detail actor does — the same call the multifamily path was
+// already making for unit counts and keeping only the units from.
+function stubApifyCounting(items) {
+  const real = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, opts) => { calls.push(JSON.parse(opts.body).addresses); return { ok: true, json: async () => items }; };
+  return { calls, restore: () => { globalThis.fetch = real; } };
+}
+const DETAIL_ROW = (street, over = {}) => ({
+  address: { streetAddress: street, city: "Kent", state: "WA", zipcode: "98031" },
+  bedrooms: 3, bathrooms: 2, livingArea: 1650, yearBuilt: 1971, homeType: "SINGLE_FAMILY",
+  lotAreaValue: 0.18, lotAreaUnits: "acres", dateSold: "2026-05-02T00:00:00Z", lastSoldPrice: 610000,
+  ...over,
+});
+
+test("a facts lookup reads year built, lot and unit count off one detail row", async () => {
+  _resetFactsCache();
+  const { restore } = stubApifyCounting([
+    DETAIL_ROW("10412 SE 219th St"),
+    DETAIL_ROW("10420 SE 219th St", { homeType: "MULTI_FAMILY", description: "Solid triplex, three units all rented" }),
+  ]);
+  try {
+    const m = await fetchZillowFacts(["10412 SE 219th St, Kent, WA 98031", "10420 SE 219th St, Kent, WA 98031"], "t");
+    const a = m.get("10412 se 219th st");
+    assert.equal(a.yearBuilt, 1971);
+    assert.equal(a.lotSqft, 7841, "0.18 acres, in square feet");
+    assert.equal(a.sqft, 1650);
+    assert.equal(a.lastSoldPrice, 610000);
+    assert.equal(a.lastSoldDate, "2026-05-02");
+    assert.equal(a.units, null, "a house has no unit count");
+    assert.equal(m.get("10420 se 219th st").units, 3);
+  } finally { restore(); }
+});
+
+test("a lot in acres is stored in square feet, whichever field carries it", () => {
+  assert.equal(lotSqftFromDetail({ lotAreaValue: 0.25, lotAreaUnits: "acres" }), 10890);
+  assert.equal(lotSqftFromDetail({ lotAreaValue: 6000, lotAreaUnits: "sqft" }), 6000);
+  assert.equal(lotSqftFromDetail({ lotSize: 7200 }), 7200);
+  assert.equal(lotSqftFromDetail({ resoFacts: { lotSize: "0.17 Acres" } }), 7405);
+  assert.equal(lotSqftFromDetail({ resoFacts: { lotSize: "5,227 sqft" } }), 5227);
+  assert.equal(lotSqftFromDetail({}), null);
+});
+
+test("the second ask for the same street is free, and a miss is remembered too", async () => {
+  _resetFactsCache();
+  const { calls, restore } = stubApifyCounting([DETAIL_ROW("1 Main St")]);
+  try {
+    await fetchZillowFacts(["1 Main St, Kent, WA", "2 Main St, Kent, WA"], "t");
+    assert.equal(calls.length, 1);
+    const again = await fetchZillowFacts(["1 Main St, Kent, WA", "2 Main St, Kent, WA"], "t");
+    assert.equal(calls.length, 1, "nothing new to buy");
+    assert.equal(again.get("1 main st").yearBuilt, 1971);
+    assert.equal(again.get("2 main st"), null, "Zillow couldn't read it; that's remembered, not re-bought");
+    await fetchZillowFacts(["3 Main St, Kent, WA"], "t");
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[1], ["3 Main St, Kent, WA"], "only the new address goes out");
+  } finally { restore(); }
+});
+
+test("fetchZillowUnits still answers with units only", async () => {
+  _resetFactsCache();
+  const { restore } = stubApifyCounting([
+    DETAIL_ROW("5 Elm St", { homeType: "MULTI_FAMILY", description: "duplex with two units" }),
+    DETAIL_ROW("6 Elm St"),
+  ]);
+  try {
+    const m = await fetchZillowUnits(["5 Elm St, Kent, WA", "6 Elm St, Kent, WA"], "t");
+    assert.deepEqual([...m], [["5 elm st", 2]]);
   } finally { restore(); }
 });

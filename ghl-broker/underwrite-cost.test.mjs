@@ -20,6 +20,22 @@ test("the comp ladder has no middle rung — every ring re-buys the whole disc",
   assert.deepEqual(UW_RADIUS_LADDER, [0.5, 1.5]);
 });
 
+// 2026-09-16: each ring reached also buys the facts (year built, lot) for its
+// most similar comps — one detail run of at most UW_ENRICH_CANDIDATES
+// addresses, cached a day per street. The search cache above is unchanged.
+test("comp facts are bought once a day per street", async () => {
+  const { fetchZillowFacts, _resetFactsCache } = await import("./rehab-scan.js");
+  _resetFactsCache();
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, opts) => { calls.push(JSON.parse(opts.body).addresses); return { ok: true, json: async () => [], text: async () => "" }; };
+  try {
+    await fetchZillowFacts(["1 A St, Kent, WA"], "t");
+    await fetchZillowFacts(["1 A St, Kent, WA"], "t");
+    assert.equal(calls.length, 1, "the second ask is free — even for an address Zillow couldn't read");
+  } finally { globalThis.fetch = original; }
+});
+
 const ROW = { zpid: "1", price: 800000, latLong: { latitude: 47.5, longitude: -122.2 }, area: 1800, beds: 3, baths: 2 };
 
 function stubApify() {

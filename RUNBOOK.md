@@ -332,10 +332,10 @@ knowing:
   what then goes to Zillow, onto the Subject Property field, into the duplicate
   check and onto the letter. The contact note says so ("resolved from …") so the
   agent's own words are still on the record.
-- Zillow rows carry **no `yearBuilt` at all** (verified: 0 of 78 on a live
-  pull), so the ±10-year era criterion goes quiet. The match scorecard abstains
-  on unknowns rather than penalising them, so comps degrade in ranking, not in
-  correctness — a comp scores "4/5" instead of "5/6".
+- Zillow **search** rows carry no `yearBuilt` at all (verified: 0 of 78 on a
+  live pull). Since 2026-09-16 the most similar comps in each ring get theirs
+  from the detail actor — see "Year built, bought" below. A comp that wasn't
+  looked up still abstains on era rather than being penalised.
 - Zillow's sold map returns condos, townhouses, multi-family and vacant land
   alongside houses (9 of 33 within half a mile on that pull). Comps are matched
   to the **subject's own** `homeType`, read off its Zillow listing: a condo is
@@ -361,23 +361,43 @@ knowing:
   rejects anything under $1,000, because a comp parsed as `$1.23` clears every
   other filter in the file and guts the ARV.
 
-**Two pools, not one.** The comps that carry the ARV must be tight matches. The
-pool the price proxy *ranks* has to be wide enough to have a top tier at all,
-and these are not the same requirement — running both off one tight set was a
-real bug, caught by measurement rather than reasoning:
+**One loose pool, ranked — the most similar first (2026-09-16).** The pull
+uses the pool bands (beds ±1, baths ±1, size ±30%, houses only, half a mile —
+`UW_POOL_*` in `auto-underwrite.js`), plus era ±15 years once a comp's year
+built is known (`UW_POOL_YEAR_TOLERANCE`). That door is as wide as it was, on
+purpose: Matt's call was fewer holds, not tighter bands. What changed is who
+inside it carries the number.
 
-> A live 78-comp pull around a 3/2, 1,610 sqft house in Lake Forest Park left a
-> pool of **four** under the tight bands (beds exact, baths ±0.5, size ±20%).
-> The proxy needs six. Every run on a perfectly ordinary address would have held
-> for review.
+Every comp in the ring is scored by `similarity` in `shared/comp-match.js` — a
+0–100 closeness, not a vote count. Distance leads (full marks inside a quarter
+mile, nothing at the ring edge), then size (±10% or ±300 sqft is a full match,
+nothing at ±30%), beds (exact, or 40% for one off), baths, year built (full
+inside five years, nothing at 25), sale recency, and lot when both are known.
+A fact nobody has leaves the denominator, as the old scorecard's did. The
+scorecard itself stays for the ✓/✗ lines in the pane's tooltip.
 
-So the pull uses pool bands (beds ±1, baths ±1, size ±30%, houses only, half a
-mile — `UW_POOL_*` in `auto-underwrite.js`), the proxy marks the top ~35% by
-$/sqft as renovated, and the ARV then takes the best-**matching** comps from
-inside that tier. `compareByMatch` already scores beds, baths, size, era and
-distance, so the tightening is done by the scorecard rather than by a second set
-of hand-tuned numbers. On that address it yields 12 in the pool, a top tier of
-4, and an ARV of $1,050,000 off comps scoring 5/5 and 4/5.
+Why: the old scorecard counted pass/fail over nine criteria, and on Zillow rows
+only about five were knowable (no year built, stories, material or
+subdivision), so a whole ring tied at 4/5 and the pick fell to $/sqft. The
+price proxy then ranked the **whole ring** by $/sqft and called the top 35%
+renovated — so the priciest houses nearby (bigger lots, newer, better streets)
+were the ARV evidence and the similar-but-cheaper renovated sale next door
+lost. The post-mortem of 2026-09-10 found buyers pay ≤70% of ARV less repairs
+and the three dead deals were priced off ARVs that were too high.
+
+**Year built, bought.** No Zillow search row carries it, so era never counted.
+The detail actor does — the same batched call the multifamily path was already
+making for unit counts and keeping only the units from. Now each ring looks up
+its `UW_ENRICH_CANDIDATES` (20) most similar comps in one detail run
+(`fetchZillowFacts` in `rehab-scan.js`: year built, lot, size, beds, baths,
+units, last sale), keeps the facts a day per street so a retry, the queue or
+the Comps pane pays nothing twice, and merges them onto the search rows without
+touching the price or the sale date (`mergeFacts`). The 1.5 mi ring only buys
+addresses the half-mile ring didn't. Cost: one detail run of ≤20 addresses per
+ring reached; a multifamily pays nothing extra. `UW_ENRICH_CANDIDATES = 0`
+switches it off and the run prices on the search rows alone, as before. The
+run's warnings say `N in the ring, M with a year built, ARV set match 84` so
+the dials can be tuned after a week.
 
 **Renovated comps decided by — `price` (default) or `ai`.** ARV means *after
 repair* value, so it has to rest on comps that were themselves renovated.
@@ -386,23 +406,45 @@ repair* value, so it has to rest on comps that were themselves renovated.
 accurate answer and it is expensive: a scrape plus a multi-image call per comp,
 which is the single slowest and priciest stage in the whole pipeline.
 
-`price` takes the top of the **$/sqft** spread inside a comp set already cut to
-the same beds and baths, ±20% floor area and half a mile. Inside a box that
-tight, most of what is left to explain the price spread *is* condition. Two
-details make it honest rather than convenient:
+`price` takes the top of the **$/sqft** spread — but inside the
+**`UW_SIMILAR_CANDIDATES` (10) most similar comps**, and the top
+`UW_PROXY_SHARE` (half) of those. Similar first, then price: inside ten houses
+that are already the closest in distance, size, beds, baths and era, most of
+what is left to explain the $/sqft spread *is* condition. Two details keep it
+honest:
 
-- It ranks by $/sqft, not by price. Even inside a ±20% band the biggest house
+- It ranks by $/sqft, not by price. Even among close matches the biggest house
   usually posts the biggest number, so ranking on price would mostly
   re-discover square footage.
-- It refuses when there are fewer than 6 priced comps nearby. Calling the best
-  3 of 3 "renovated" is circular — it just restates which comps you have — so
-  the run holds for review and says so in those words.
+- It refuses when there are fewer than 6 priced comps among the candidates.
+  Calling the best 3 of 3 "renovated" is circular, so the run widens to the
+  1.5 mi ring and, failing that, takes the gut check (2–5 priced comps, the top
+  three by $/sqft, said in those words) or holds.
 
-`deriveArv` then takes the **median** of the marked tier, not the maximum, so a
-single optimistic sale can't set the ARV on its own. Marked comps carry
-`conditionSource: "price"` everywhere they travel, and the review panel says
-"condition by $/sqft" rather than letting it read like someone looked at the
-kitchen.
+The ARV set is then the best-matching four of the marked tier, size-fit first
+(±25%), exactly as before. `proxy.reason` leads with `most similar 10 of 41:`.
+
+**How the ARV is weighted.** `deriveArv` (`shared/arv.js`) brings each sale
+to today first — `timeTrend` regresses $/sqft on months-since-sale over the
+**whole ring** (never the four ARV comps), abstains under eight dated comps or
+six months of spread, and is capped at ±1%/month — then applies the usual
+half-$/sqft size adjustment, and takes the **similarity-weighted median** (a
+comp's weight is its score, floored at 0.2; a comp with no score weighs 1, so
+hand-picked and captured comps count fully). The basis now leads with the
+reach of the evidence, because the offer document cuts it at 80 characters:
+
+    4 comps · match 84 · within 0.4 mi · size ±12% · built ±8 yrs; 4 comps
+    (renovated/updated), size-adjusted to 1,890 sqft, time +0.3%/mo
+
+Marked comps carry `conditionSource: "price"` everywhere they travel, and the
+review panel says "condition by $/sqft" rather than letting it read like
+someone looked at the kitchen.
+
+**The Comps pane** ranks and preselects by the same score: the chip is the
+0–100 similarity (tooltip: each factor's share, then the ✓/✗ criteria), the
+route enriches the subject and its twenty most similar comps in one detail
+batch — which is also how the subject's beds/baths/size/year/lot fill in
+again — and the ARV suggestion uses the board's own time trend.
 
 **Wiring it.** There are two front doors. Use the first one if you have a
 qualifying bot; it is cheaper and more accurate.
@@ -1265,6 +1307,57 @@ them by **buy box**, and hands a shortlist to a GHL workflow.
    workflow on the trigger tag to send the deal. Live tagging requires
    `DISPO_BLASTS_ENABLED=true` on the broker; otherwise every blast is a
    dry-run preview.
+
+### The blast text (2026-09-16)
+
+One text per buyer, built from the deal — never a model call, because a blast
+is one message to many people. It now carries what the deal actually knows:
+
+    Hey Dmitriy, got 23706 138th Dr SE in Snohomish under contract — 3bd 2.5ba
+    1,890 sqft, built 1978, moderate rehab. Buyer price 532k, ARV around 735k,
+    rehab about 85k. Corner lot, tenant is out. Want the details?
+
+Beds, baths, sqft and year come from the underwrite's own subject record —
+the same `snapshot.comps.result.info` the dataroom and the agent offer page
+read. They used to be looked for at `offer.subject`, where nothing writes
+them, which is why every blast went out as a street, a rehab word and a price.
+ARV and the rehab estimate come off the offer (the scope's line items when the
+offer names no repair figure, so the text and the dataroom quote one number),
+and the last line is the deal's **dataroom headline** — the operator's own
+sentence, already written for buyers — trimmed out if it runs over 90
+characters. Dollar signs and URLs are stripped whatever is typed: carrier
+rules. Three phrasings still rotate per recipient.
+
+**What a buyer may see is exactly the three figures the dataroom shows them:
+the buyer price, the ARV and the rehab estimate.** The contract price and the
+assignment fee are not in `dealFacts` and must never be — that is asserted in
+`shared/blast-text.test.mjs`.
+
+### Soft commit — "I think I have a buyer for this one" (2026-09-16)
+
+A fourth buyer standing on a deal, between Evaluating and Committed. Set it on
+the buyer in Deals → open the deal, and **outreach on that deal stops**:
+
+- no new blast (the button, the blast on promote, and the second wave),
+- no nudge to any other buyer (`blast_nudge`, `dataroom_nudge`),
+- no automatic dataroom invite to anyone but the buyer it is held for.
+
+What it deliberately does **not** do: it is not `dealSpokenFor`. The deal is
+still live and still priced, other buyers still see it and its numbers, and
+the Conversation AI keeps working everyone on it — including the soft-commit
+buyer, who is a maybe and exactly the person to keep talking to. Only
+`committed` stands the bot down.
+
+Nothing is stored. The pause is read off the buyers every time
+(`dealOutreachPaused` in `shared/offer-status.js`), so putting them back to
+Evaluating — or their passing — resumes outreach with no second switch to
+remember. The deal card says "soft commit — outreach paused" and the deal
+itself carries a banner explaining what is held and how to release it.
+
+**The bot cannot set it.** Deciding a buyer is probably real is a judgement
+about a person, not something a warm text should act on, so the conversation's
+`setInvestorStatus` refuses `soft_commit`; it may still mark evaluating,
+committed or passed.
 
 ### Market tags and buyer import (2026-09-13)
 

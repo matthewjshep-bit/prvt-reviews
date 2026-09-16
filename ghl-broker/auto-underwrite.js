@@ -29,11 +29,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { pullComps } from "./comps-pull.js";
 import { geocodeAddress, atLeast, precisionRank, PRECISION } from "./geocode.js";
-import { pullZillowComps, filterByUnits, streetKey } from "./comps-zillow.js";
+import { pullZillowComps, filterByUnits, streetKey, mergeFacts } from "./comps-zillow.js";
 import { gradeComps } from "./comps-grade.js";
-import { fetchZillowPhotos, fetchListingPhotos, fetchZillowUnits, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
-import { deriveArv, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
-import { scoreComp, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
+import { fetchZillowPhotos, fetchListingPhotos, fetchZillowFacts, MAX_FACT_LOOKUPS, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
+import { deriveArv, timeTrend, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
+import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
 import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
@@ -120,6 +120,28 @@ export const UW_GRADE_CANDIDATES = 6;      // how many we pay Apify+Claude to gr
 export const UW_POOL_BEDS_TOLERANCE = 1;
 export const UW_POOL_BATHS_TOLERANCE = 1;
 export const UW_POOL_SQFT_PCT = 0.30;
+// The pool's era band — only knowable once the comps' year built has been
+// bought (below); a comp with no year passes, as everywhere.
+export const UW_POOL_YEAR_TOLERANCE = 15;
+// Most similar first (2026-09-16). The pool above is as wide as it was, so
+// runs don't hold more often; what changed is who inside it carries the
+// number. The price proxy used to rank the WHOLE ring by $/sqft and call the
+// top 35% renovated, so the priciest houses nearby — bigger lots, newer,
+// better streets — were the ARV evidence, and the similar-but-cheaper
+// renovated sale next door lost. The post-mortem of 2026-09-10 found buyers
+// pay ≤70% of ARV less repairs and the three dead deals were priced off ARVs
+// that were too high. Now the ring is ranked by comp-match.js `similarity`
+// (distance leads, then size, beds, baths, era, recency), the proxy judges
+// only the UW_SIMILAR_CANDIDATES most similar, and the top UW_PROXY_SHARE of
+// THOSE by $/sqft is the renovated evidence.
+export const UW_SIMILAR_CANDIDATES = 10;
+export const UW_PROXY_SHARE = 0.5;
+// Year built is on no Zillow search row. It IS on the detail row — the same
+// call the multifamily path already made for unit counts — so the most
+// similar UW_ENRICH_CANDIDATES per ring are looked up (one batched detail run,
+// billed per address, cached a day per street). 0 switches it off and the run
+// prices on the search rows alone, as it did before.
+export const UW_ENRICH_CANDIDATES = 20;
 export const UW_MIN_SUBJECT_PHOTOS = 8;    // a 3-photo listing is not a scope of work
 export const UW_MIN_PHOTOS_DESCRIBED = 4;  // …unless the agent already told us the work
 // Pricing on the agent's own numbers when ours are stuck (agentNumbersRescue).
@@ -457,14 +479,19 @@ export function nearbyComps({ compsData, subjectFacts, subjectAddress = "", radi
   const isSelf = (c) =>
     (selfKey && addressKey(c.address || "") === selfKey) ||
     (c.distance != null && c.distance < 0.01);   // ~50 ft: same parcel, different string
+  // The era band is the pool's only gate applied here: beds, baths and size
+  // were the pull's own bands, and year built only exists once the ring has
+  // been enriched. Everything else is ranking, not filtering.
+  const era = { bedsTol: Infinity, bathsTol: Infinity, sqftPct: Infinity, yearTol: UW_POOL_YEAR_TOLERANCE };
   return (compsData?.comps || [])
     .map((c) => {
       const miles = c.distance == null && origin ? milesBetween(origin, c) : c.distance;
       const withDist = miles == null ? c : { ...c, distance: Math.round(miles * 100) / 100 };
-      return { ...withDist, match: scoreComp(subjectFacts, withDist) };
+      return { ...withDist, match: scoreComp(subjectFacts, withDist), similarity: similarity(subjectFacts, withDist, { radiusMiles }) };
     })
     .filter((c) => c.distance != null && c.distance <= radiusMiles)
     .filter((c) => !isSelf(c))
+    .filter((c) => inPool(subjectFacts, c, era).ok)
     .sort(compareByMatch);
 }
 
@@ -491,18 +518,24 @@ export function nearbyComps({ compsData, subjectFacts, subjectAddress = "", radi
  * than by another set of hand-tuned bands.
  */
 export function gradeByPriceProxy(nearby = [], { subjectSqft = 0 } = {}) {
-  const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(nearby.length * 0.35));
-  let proxy = markRenovatedByPrice(nearby, { take: tier });
+  // `nearby` arrives most-similar first (nearbyComps). The proxy judges only
+  // the closest UW_SIMILAR_CANDIDATES matches, and the top UW_PROXY_SHARE of
+  // those by $/sqft is the renovated evidence — similar first, then price,
+  // which is the reverse of what let the priciest house in the ring set the
+  // ARV (see the dials).
+  const candidates = nearby.slice(0, UW_SIMILAR_CANDIDATES);
+  const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(candidates.length * UW_PROXY_SHARE));
+  let proxy = markRenovatedByPrice(candidates, { take: tier });
   // The gut check. Too few priced sales for a real top tier (under
   // PRICE_PROXY_MIN_POOL) but at least UW_GUT_CHECK_MIN_COMPS: take the best
   // few by $/sqft as the renovated set and say so. Matt chose this on
   // 2026-09-14 — a rough number he can respond with beats a hold on a house
   // with three sales nearby. The gate asks for fewer comps when this fired,
   // and the ARV basis leads with "gut check".
-  const priced = nearby.filter((c) => Number(c.price) > 0).length;
+  const priced = candidates.filter((c) => Number(c.price) > 0).length;
   if (!proxy.applied && priced >= UW_GUT_CHECK_MIN_COMPS) {
     const take = Math.min(UW_MIN_REHABBED_COMPS, priced);
-    const rough = markRenovatedByPrice(nearby, { take, minPool: UW_GUT_CHECK_MIN_COMPS });
+    const rough = markRenovatedByPrice(candidates, { take, minPool: UW_GUT_CHECK_MIN_COMPS });
     proxy = { ...rough, gutCheck: true, reason: `gut check: only ${priced} priced comps, top ${take} by $/sqft taken as renovated` };
   }
   const markedRenovated = proxy.comps.filter((c) => ARV_CONDITIONS.has(c.condition));
@@ -537,6 +570,9 @@ export function gradeByPriceProxy(nearby = [], { subjectSqft = 0 } = {}) {
       condition: c.condition, confidence: "medium", source: "price", note: proxy.reason,
     }])
   );
+  if (nearby.length > candidates.length) {
+    proxy = { ...proxy, reason: `most similar ${candidates.length} of ${nearby.length}: ${proxy.reason}` };
+  }
   return { grades, rehabbed, proxy };
 }
 
@@ -1304,31 +1340,43 @@ async function runUnderwrite(job, ctx) {
       lat: geo.lat, lng: geo.lng,
       beds: facts?.beds ?? null, baths: facts?.baths ?? null,
       sqft: facts?.sqft ?? null, yearBuilt: facts?.yearBuilt ?? null,
+      lotSqft: facts?.lotSqft ?? null,
       homeType: facts?.homeType ?? null,
       units: facts?.units ?? null,
       stories: null, subdivision: null, material: null,
     };
     got.subject = subject;
-    // A triplex is comped against triplexes. Zillow's type filter already
-    // keeps it to multifamily; the unit count comes from a batched detail
-    // lookup, cached across rings so a widened search only pays for new rows.
-    const unitCache = new Map();
-    const matchUnits = async (data) => {
-      if (!(subject.homeType === "MULTI_FAMILY" && subject.units > 0)) return data;
-      const need = (data.comps || []).filter((c) => !unitCache.has(streetKey(c.address)));
-      if (need.length) {
-        try {
-          const found = await fetchZillowUnits(need.map((c) => c.address), apifyToken);
-          for (const c of need.slice(0, 25)) unitCache.set(streetKey(c.address), found.get(streetKey(c.address)) ?? null);
-        } catch (e) {
-          if (!warnings.some((w) => w.startsWith("unit counts"))) warnings.push(`unit counts for the multifamily comps: ${e.message}`);
+    // The facts a search row doesn't carry — year built, lot, and for a
+    // multifamily the unit count — bought for the most similar comps in the
+    // ring with one batched detail lookup (fetchZillowFacts), cached across
+    // rings so a widened search only pays for new rows. A triplex is still
+    // comped against triplexes: its units come off the same rows.
+    const factsCache = new Map();
+    const enrichLimit = Number.isFinite(deps?.enrichCandidates) ? deps.enrichCandidates : UW_ENRICH_CANDIDATES;
+    const enrichRing = async (data, radiusMiles) => {
+      const comps = data.comps || [];
+      const multi = subject.homeType === "MULTI_FAMILY" && subject.units > 0;
+      const limit = multi ? MAX_FACT_LOOKUPS : enrichLimit;
+      if (limit > 0 && comps.length) {
+        const ranked = multi ? comps : [...comps]
+          .map((c) => ({ c, s: similarity(subject, { ...c, distance: c.distance ?? milesBetween(data.subject || {}, c) }, { radiusMiles }).score ?? -1 }))
+          .sort((a, b) => b.s - a.s).map((x) => x.c);
+        const need = ranked.slice(0, limit).filter((c) => !factsCache.has(streetKey(c.address)));
+        if (need.length) {
+          try {
+            const found = await fetchZillowFacts(need.map((c) => c.address), apifyToken);
+            for (const c of need) factsCache.set(streetKey(c.address), found.get(streetKey(c.address)) ?? null);
+          } catch (e) {
+            if (!warnings.some((w) => w.startsWith("comp facts"))) warnings.push(`comp facts (year built, lot): ${e.message}`);
+          }
         }
       }
-      const withUnits = (data.comps || []).map((c) => ({ ...c, units: c.units ?? unitCache.get(streetKey(c.address)) ?? null }));
-      const f = filterByUnits(withUnits, subject.units);
+      const enriched = mergeFacts(comps, factsCache);
+      if (!multi) return { ...data, comps: enriched };
+      const f = filterByUnits(enriched, subject.units);
       return { ...data, comps: f.comps, units: { subject: subject.units, matched: f.matched, dropped: f.dropped, unknown: f.unknown, keptUnknown: f.keptUnknown } };
     };
-    const pullAt = async (radiusMiles) => matchUnits(await pullZillowComps({
+    const pullAt = async (radiusMiles) => enrichRing(await pullZillowComps({
       apifyToken,
       lat: geo.lat, lng: geo.lng,
       beds: subject.beds || 0, baths: subject.baths || 0, sqft: subject.sqft || 0,
@@ -1347,7 +1395,7 @@ async function runUnderwrite(job, ctx) {
       // wrong for a house.
       homeType: subject.homeType,
       subject,
-    }));
+    }), radiusMiles);
     // Half a mile first; wider only when that ring can't carry an ARV. "Usable"
     // is what the condition step will actually have to work with: comps the
     // price proxy calls renovated, or — for AI grading, which is priced per
@@ -1367,7 +1415,7 @@ async function runUnderwrite(job, ctx) {
       const usable = graded ? (graded.proxy.gutCheck ? 0 : graded.rehabbed.length) : ring.length;
       if (usable >= UW_MIN_REHABBED_COMPS || radius === lastRing) break;
       const found = graded ? graded.proxy.pool : ring.length;
-      warnings.push(`only ${found} priced comp${found === 1 ? "" : "s"} within ${radius} mi — widened the search`);
+      warnings.push(`only ${found} close match${found === 1 ? "" : "es"} within ${radius} mi — widened the search`);
     }
     if (compsData?.units) {
       const u = compsData.units;
@@ -1450,19 +1498,34 @@ async function runUnderwrite(job, ctx) {
   job.compsUsed = rehabbed.map((c) => ({
     address: c.address, price: c.price, sqft: c.sqft, distance: c.distance,
     saleDate: c.saleDate, condition: grades[c.id]?.condition || null,
+    similarity: c.similarity?.score ?? null, yearBuilt: c.yearBuilt ?? null,
   }));
   Object.assign(got, { grades, rehabbed });
+  // The read-out that tunes the dials: how similar the evidence was, and how
+  // much of the ring got its facts. Informational — never a hold.
+  if (rehabbed.length) {
+    const sims = rehabbed.map((c) => c.similarity?.score).filter((v) => v != null);
+    const withYear = nearby.filter((c) => c.yearBuilt).length;
+    warnings.push(`comps: ${nearby.length} in the ring, ${withYear} with a year built` +
+      (sims.length ? `, ARV set match ${Math.round(sims.reduce((t, v) => t + v, 0) / sims.length)}` : ""));
+  }
 
   /* --- 5. ARV --- */
   job.phase = "arv";
   if (canceled(job)) return;
 
   const subjectSqft = Number(subject.sqft) || 0;
+  // The time trend comes off the WHOLE ring — the four ARV comps are too few
+  // to say which way the market moved — and each sale is brought to today
+  // before the median. The comps carry their similarity, so the median leans
+  // on the closest matches.
   const arv = rehabbed.length
     ? deriveArv({
         comps: rehabbed.map((c) => ({ ...c, condition: grades[c.id]?.condition })),
         subjectSqft,
+        subjectYearBuilt: Number(subject.yearBuilt) || 0,
         adjustments: [],
+        trend: timeTrend(nearby),
       })
     : null;
   // A widened search is said out loud wherever the ARV's basis is shown —

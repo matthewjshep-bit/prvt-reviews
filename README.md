@@ -44,8 +44,10 @@ note with the full terms + document link, and an `offer-created` tag).
 A GoHighLevel workflow can webhook an inbound agent text into a finished offer:
 `POST /api/offers/automations/underwrite` reads the address out of the message,
 pulls sold comps within half a mile (Zillow's sold map via Apify, or
-RealEstateAPI), takes the top of their $/sqft spread as renovated, derives the
-ARV from those only, scans the subject's photos into a priced scope of work, and
+RealEstateAPI), buys year built and lot for the most similar ones, ranks them by
+similarity (distance, size, beds/baths, era, recency), takes the top of the
+$/sqft spread inside the ten most similar as renovated, derives the ARV from
+those only, scans the subject's photos into a priced scope of work, and
 creates a blended offer through the same code path the New Offer page uses. It never
 sends, and it saves a draft instead of an offer whenever the underwrite can't
 clear its quality gates. See RUNBOOK.md → Auto-underwrite.

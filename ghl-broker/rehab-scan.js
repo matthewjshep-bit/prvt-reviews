@@ -73,9 +73,29 @@ export async function fetchListingPhotos(address, compsApiKey) {
 // One synchronous actor run: address in, dataset items (facts + photos) out.
 // Caveat, acknowledged when this was chosen: unofficial scraper, Zillow ToS.
 const APIFY_ACTOR = "maxcopell~zillow-detail-scraper";
-// Comps looked up per run for their unit count. The detail actor is billed per
-// address; the nearest ones are the ones the ARV will use.
-export const MAX_UNIT_LOOKUPS = 25;
+// Comps looked up per run for the facts a search row doesn't carry — year
+// built, lot, unit count. The detail actor is billed per address; the most
+// similar ones are the ones the ARV will use, so the caller ranks first.
+export const MAX_FACT_LOOKUPS = 25;
+export const MAX_UNIT_LOOKUPS = MAX_FACT_LOOKUPS;
+
+// A lot, in square feet, off whichever field the detail row carries it in.
+// The curated shape says `lotAreaValue` + `lotAreaUnits` ("acres" | "sqft");
+// the raw one says `lotSize` (sqft) or `resoFacts.lotSize` ("0.17 Acres").
+export function lotSqftFromDetail(item = {}) {
+  const v = Number(item.lotAreaValue);
+  if (v > 0) {
+    const u = String(item.lotAreaUnits || "").toLowerCase();
+    return Math.round(u.startsWith("acre") ? v * 43560 : v);
+  }
+  const raw = item.lotSize ?? item.resoFacts?.lotSize;
+  if (typeof raw === "number" && raw > 0) return Math.round(raw);
+  const m = String(raw || "").match(/([\d,.]+)\s*(acres?|sq\.?\s*ft|sqft)?/i);
+  if (!m) return null;
+  const num = Number(m[1].replace(/,/g, ""));
+  if (!(num > 0)) return null;
+  return Math.round(/acre/i.test(m[2] || "") ? num * 43560 : num);
+}
 
 // Pick a jpeg rendition near 1536px from Zillow's mixedSources photo shape.
 function bestPhotoUrl(photo) {
@@ -146,6 +166,7 @@ export async function fetchZillowPhotos(address, apifyToken) {
       baths: Number(item.bathrooms) || null,
       sqft: Number(item.livingArea ?? item.area) || null,
       yearBuilt: Number(item.yearBuilt) || Number(item.resoFacts?.yearBuilt) || null,
+      lotSqft: lotSqftFromDetail(item),
       // Zillow's own classification of the subject — SINGLE_FAMILY, CONDO,
       // TOWNHOUSE, MULTI_FAMILY… Comps are matched against this rather than
       // against an assumption that every subject is a house.
@@ -197,14 +218,48 @@ export async function fetchZillowListings(addresses = [], apifyToken) {
 }
 
 /**
- * fetchZillowUnits(addresses, apifyToken) → Map(streetKey → units)
+ * fetchZillowFacts(addresses, apifyToken) → Map(streetKey → facts | null)
  *
- * One detail-actor run over a batch of comp addresses, for the one fact the
- * search rows don't carry. Addresses it can't read are simply absent.
+ *   facts: { yearBuilt, lotSqft, sqft, beds, baths, homeType, units,
+ *            lastSoldPrice, lastSoldDate }
+ *
+ * One detail-actor run over a batch of comp addresses, for the facts a search
+ * row doesn't carry — year built above all (absent from every Zillow search
+ * row, so era never counted until this; Matt, 2026-09-16). Cached a day per
+ * street, like the search rows: a retry, the queue re-running a held house or
+ * the Comps pane on the same block pays nothing, and an address Zillow can't
+ * read is remembered as null so it isn't bought twice either.
  */
-export async function fetchZillowUnits(addresses = [], apifyToken) {
-  const list = [...new Set(addresses.filter(Boolean))].slice(0, MAX_UNIT_LOOKUPS);
+export const FACTS_CACHE_TTL_MS = 24 * 3600 * 1000;
+const FACTS_CACHE_MAX = 2000;
+const factsCache = new Map();
+export function _resetFactsCache() { factsCache.clear(); }
+
+function factsFromDetail(item) {
+  return {
+    yearBuilt: Number(item.yearBuilt) || Number(item.resoFacts?.yearBuilt) || null,
+    lotSqft: lotSqftFromDetail(item),
+    sqft: Number(item.livingArea ?? item.area) || null,
+    beds: Number(item.bedrooms) || null,
+    baths: Number(item.bathrooms) || null,
+    homeType: item.homeType || null,
+    units: unitsFromDetail(item) || null,
+    lastSoldPrice: Number(item.lastSoldPrice ?? item.resoFacts?.lastSoldPrice) || null,
+    lastSoldDate: item.dateSold ? new Date(item.dateSold).toISOString().slice(0, 10) : null,
+  };
+}
+
+export async function fetchZillowFacts(addresses = [], apifyToken, { now = Date.now() } = {}) {
   const out = new Map();
+  const want = [];
+  for (const a of new Set(addresses.filter(Boolean))) {
+    const key = streetKey(a);
+    if (!key) continue;
+    const hit = factsCache.get(key);
+    if (hit && now - hit.at <= FACTS_CACHE_TTL_MS) { out.set(key, hit.facts); continue; }
+    want.push(a);
+  }
+  const list = want.slice(0, MAX_FACT_LOOKUPS);
   if (!list.length) return out;
   const r = await fetch(
     `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}&timeout=180`,
@@ -215,15 +270,35 @@ export async function fetchZillowUnits(addresses = [], apifyToken) {
       signal: AbortSignal.timeout(200000),
     }
   );
-  if (!r.ok) throw new Error(`Zillow unit lookup failed (Apify ${r.status})`);
+  if (!r.ok) throw new Error(`Zillow facts lookup failed (Apify ${r.status})`);
   const items = await r.json();
+  const found = new Map();
   for (const item of Array.isArray(items) ? items : []) {
     if (!item || item.isValid === false) continue;
     const a = item.address && typeof item.address === "object" ? item.address : null;
     const key = streetKey(a?.streetAddress || item.streetAddress || item.addressOrUrlFromInput || "");
-    const units = unitsFromDetail(item);
-    if (key && units) out.set(key, units);
+    if (key) found.set(key, factsFromDetail(item));
   }
+  if (factsCache.size >= FACTS_CACHE_MAX) factsCache.clear();
+  for (const a of list) {
+    const key = streetKey(a);
+    const facts = found.get(key) ?? null;
+    factsCache.set(key, { at: now, facts });
+    out.set(key, facts);
+  }
+  return out;
+}
+
+/**
+ * fetchZillowUnits(addresses, apifyToken) → Map(streetKey → units)
+ *
+ * The multifamily unit count, off the same lookup — so a triplex's comps are
+ * bought once for their units AND their year built.
+ */
+export async function fetchZillowUnits(addresses = [], apifyToken) {
+  const facts = await fetchZillowFacts(addresses, apifyToken);
+  const out = new Map();
+  for (const [key, f] of facts) if (f?.units) out.set(key, f.units);
   return out;
 }
 

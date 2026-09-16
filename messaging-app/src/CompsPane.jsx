@@ -16,8 +16,9 @@ import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { ExternalLink, Loader2, MapPin, Plus, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { compareByMatch, matchLabel, matchTone, mergeSelection, milesBetween, scoreComp } from "@shared/comp-match.js";
-import { deriveArv } from "@shared/arv.js";
+import { compareByMatch, mergeSelection, milesBetween, scoreComp, similarity, similarityLabel, similarityTone } from "@shared/comp-match.js";
+import { deriveArv, timeTrend } from "@shared/arv.js";
+import { similarityTitle, COMPS_RULES } from "./comps-copy.js";
 import { claimCompCaptures, geocode, getComps, setCaptureTarget, zillowUrl } from "./api.js";
 
 const INPUT_CLS =
@@ -45,26 +46,15 @@ const COND_CLS = {
 
 // Match-score chip. Coarse bands on purpose — this is a glanceable "is this
 // apples-to-apples?" signal, not a number to optimize.
+// The route searches half a mile around the geocode; the similarity's distance
+// slope runs out at the same edge.
+const COMPS_RADIUS_MILES = 0.5;
+
 const MATCH_CLS = {
   strong: "bg-emerald-100 text-emerald-800",
   fair: "bg-amber-100 text-amber-800",
   weak: "bg-red-100 text-red-700",
   unknown: "bg-slate-100 text-slate-500",
-};
-
-// Tooltip listing what matched and what didn't, so the chip is auditable
-// rather than a black box.
-const matchTitle = (m) => {
-  if (!m || !m.max) return "Not enough data on this comp to score it";
-  const line = (c) => `${c.ok ? "✓" : "✗"} ${c.label}${c.detail ? ` — ${c.detail}` : ""}`;
-  const known = m.checks.filter((c) => c.ok !== null);
-  const unknown = m.checks.filter((c) => c.ok === null);
-  return [
-    `Matches ${m.score} of ${m.max} knowable criteria`,
-    "",
-    ...known.map(line),
-    ...(unknown.length ? ["", `Not knowable: ${unknown.map((c) => c.label).join(", ")}`] : []),
-  ].join("\n");
 };
 
 // Location/site detractors that discount the subject relative to the comps
@@ -186,7 +176,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
       const pre = comps.bedBathRelaxed
         ? []
         : (comps.comps || [])
-            .map((c) => ({ ...c, match: scoreComp(freshSubject, c) }))
+            .map((c) => ({ ...c, match: scoreComp(freshSubject, c), similarity: similarity(freshSubject, c, { radiusMiles: COMPS_RADIUS_MILES }) }))
             .sort(compareByMatch)
             .slice(0, 6)
             .map((c) => c.id);
@@ -356,7 +346,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
         // looking at a different deal.
         const miles = c.distance == null && origin ? milesBetween(origin, c) : null;
         const withDist = miles == null ? c : { ...c, distance: Math.round(miles * 100) / 100 };
-        return { ...withDist, match: scoreComp(subjectFacts, withDist) };
+        return { ...withDist, match: scoreComp(subjectFacts, withDist), similarity: similarity(subjectFacts, withDist, { radiusMiles: COMPS_RADIUS_MILES }) };
       })
       .sort(compareByMatch);
   }, [state, captured, subjectFacts, dismissed]);
@@ -370,10 +360,14 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
     () => deriveArv({
       comps: picked.map((c) => ({ ...c, condition: condOf(c) })),
       subjectSqft: parse(subjectSqft),
+      subjectYearBuilt: Number(subjectFacts.yearBuilt) || 0,
       adjustments,
+      // The market's drift, read off every comp on the board — not the few
+      // that are ticked, which are too few to say which way it moved.
+      trend: timeTrend(allComps),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [picked, subjectSqft, grades, adjustments]
+    [picked, subjectSqft, grades, adjustments, allComps, subjectFacts.yearBuilt]
   );
 
   // Report state upward so drafts/offers can snapshot the comps workspace
@@ -450,15 +444,19 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
             state.info.baths != null ? `${state.info.baths} ba` : "",
             state.info.sqft ? `${state.info.sqft.toLocaleString()} sqft` : "",
             state.info.yearBuilt ? `built ${state.info.yearBuilt}` : "",
+            state.info.lotSqft ? `${Math.round(state.info.lotSqft).toLocaleString()} sqft lot` : "",
             state.info.stories ? `${state.info.stories} story` : "",
             state.info.subdivision ? state.info.subdivision : "",
             state.info.lastSalePrice ? `last sold ${fmtMoney(state.info.lastSalePrice)} (${(state.info.lastSaleDate || "").slice(0, 7)})` : "",
           ].filter(Boolean).join(" · ")}
-          {" — comps: same beds/baths/county, arms-length, ±20% sqft, ±10 yrs, within 1 mi"}
+          {` — comps ${COMPS_RULES}`}
         </div>
       )}
 
       {error && <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+      {state?.factsWarning && (
+        <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{state.factsWarning} — ranked without them.</div>
+      )}
 
       {state?.loadedFor && address?.trim() && state.loadedFor !== address.trim() && (
         <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -499,7 +497,7 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                   }}>
                   <Tooltip direction="top" offset={[0, -8]}>
                     {fmtMoney(c.price)}{c.saleDate ? ` sold ${c.saleDate.slice(0, 7)}` : ""}{c.sqft ? ` · ${c.sqft.toLocaleString()} sqft` : ""}
-                    {c.match?.max ? ` · match ${matchLabel(c.match)}` : ""} — click to {selected.has(c.id) ? "remove" : "include"}
+                    {c.similarity?.score != null ? ` · similarity ${c.similarity.score}` : ""} — click to {selected.has(c.id) ? "remove" : "include"}
                   </Tooltip>
                 </CircleMarker>
               ))}
@@ -619,9 +617,9 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
                       )}
                       {c.address || <span className="text-slate-400">address not provided</span>}
                     </span>
-                    <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${MATCH_CLS[matchTone(c.match)]}`}
-                      title={matchTitle(c.match)}>
-                      {matchLabel(c.match)}
+                    <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${MATCH_CLS[similarityTone(c.similarity)]}`}
+                      title={similarityTitle(c.similarity, c.match)}>
+                      {similarityLabel(c.similarity)}
                     </span>
                     <span className="min-w-0 flex-1 truncate text-right text-xs text-slate-500"
                       title={c.yearBuilt ? `Built ${c.yearBuilt}` : undefined}>
@@ -799,11 +797,9 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
 
       {!state && !captured.length && !error && (
         <p className="text-xs text-slate-500">
-          Enter the property address above, then load comps to see closed sales around the subject on a map —
-          same beds/baths/county, ±20% sqft, ±10 years, within a mile, widening the sold window before the
-          radius. Comps are ranked by how many of those criteria they actually match. Automatic comps use
-          RealEstateAPI.com (key in Settings); the Zillow bookmarklet (also in Settings) and manual entry
-          always work.
+          Enter the property address above, then load comps to see closed sales around the subject on a map,
+          {" "}{COMPS_RULES}. Automatic comps come from Zillow (Apify token in Settings) or RealEstateAPI.com;
+          the Zillow bookmarklet (also in Settings) and manual entry always work.
         </p>
       )}
     </div>

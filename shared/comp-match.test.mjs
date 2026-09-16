@@ -269,3 +269,89 @@ test("the marked set feeds deriveArv's graded pool", async () => {
   // one optimistic comp can't set the ARV on its own.
   assert.equal(arv.arv, 640000);
 });
+
+/* ---------- similarity: how close, not just whether it passes ---------- */
+
+import { similarity, inPool, similarityTone, SIM_WEIGHTS } from "./comp-match.js";
+
+const NOW = Date.parse("2026-09-16T00:00:00Z");
+const SUBJECT = { beds: 3, baths: 2, sqft: 1800, yearBuilt: 1968, lotSqft: 7200 };
+const twin = (over = {}) => ({ beds: 3, baths: 2, sqft: 1800, yearBuilt: 1968, lotSqft: 7200, distance: 0.1, saleDate: "2026-07-01", ...over });
+
+test("similarity: an identical house next door scores 100", () => {
+  const s = similarity(SUBJECT, twin(), { radiusMiles: 0.5, now: NOW });
+  assert.equal(s.score, 100);
+  assert.equal(s.known, Object.values(SIM_WEIGHTS).reduce((a, b) => a + b, 0), "every factor was knowable");
+});
+
+test("distance tapers from a quarter mile to the ring edge, not as a one-mile boolean", () => {
+  const at = (d) => similarity(SUBJECT, twin({ distance: d }), { radiusMiles: 0.5, now: NOW }).score;
+  assert.equal(at(0.2), 100, "inside a quarter mile is full");
+  assert.ok(at(0.3) < at(0.2) && at(0.45) < at(0.3), "and it slides from there");
+  assert.equal(at(0.5), 75, "the ring edge is worth nothing on distance — the other 75 points remain");
+  assert.equal(similarity(SUBJECT, twin({ distance: 0.9 }), { radiusMiles: 1.5, now: NOW }).score > at(0.5), true, "a wider ring is a longer slope");
+});
+
+test("±300 sqft is a full size match even past ten percent", () => {
+  const s = similarity({ ...SUBJECT, sqft: 1200 }, twin({ sqft: 1480 }), { now: NOW });
+  assert.equal(s.factors.find((f) => f.key === "sqft").value, 1, "280 sqft over is inside the absolute band");
+  const big = similarity(SUBJECT, twin({ sqft: 2340 }), { now: NOW });
+  assert.equal(big.factors.find((f) => f.key === "sqft").value, 0, "30% over is worth nothing");
+});
+
+test("a factor nobody knows drops out of the denominator instead of scoring zero", () => {
+  const s = similarity(SUBJECT, twin({ yearBuilt: null, lotSqft: null }), { radiusMiles: 0.5, now: NOW });
+  assert.equal(s.score, 100, "unknown era and lot leave a perfect match perfect");
+  assert.equal(s.known, 100 - SIM_WEIGHTS.yearBuilt - SIM_WEIGHTS.lot);
+  assert.equal(similarity({}, {}, { now: NOW }).score, null, "nothing knowable is no score, not zero");
+});
+
+test("year built counts once a comp carries it, and not before", () => {
+  const without = similarity(SUBJECT, twin({ yearBuilt: null, lotSqft: null }), { radiusMiles: 0.5, now: NOW });
+  const with1995 = similarity(SUBJECT, twin({ yearBuilt: 1995, lotSqft: null }), { radiusMiles: 0.5, now: NOW });
+  assert.equal(without.score, 100);
+  assert.ok(with1995.score < without.score, "27 years newer is a different house");
+  assert.equal(with1995.known, without.known + SIM_WEIGHTS.yearBuilt);
+});
+
+test("beds off by one is a partial, beds off by two is nothing", () => {
+  const v = (beds) => similarity(SUBJECT, twin({ beds }), { now: NOW }).factors.find((f) => f.key === "beds").value;
+  assert.equal(v(3), 1); assert.equal(v(4), 0.4); assert.equal(v(5), 0);
+});
+
+test("the closer twin beats the farther twin, and both beat the 4/3 across the street", () => {
+  const rank = (comps) => comps
+    .map((c) => ({ ...c, similarity: similarity(SUBJECT, c, { radiusMiles: 0.5, now: NOW }) }))
+    .sort(compareByMatch).map((c) => c.id);
+  const near = twin({ id: "near", distance: 0.1 });
+  const far = twin({ id: "far", distance: 0.45 });
+  const bigger = twin({ id: "4/3", distance: 0.05, beds: 4, baths: 3, sqft: 2500 });
+  assert.deepEqual(rank([bigger, far, near]), ["near", "far", "4/3"]);
+});
+
+test("compareByMatch still falls back to the scorecard when nothing carries a similarity", () => {
+  const a = { id: "a", match: { pct: 1, score: 5 }, distance: 0.3 };
+  const b = { id: "b", match: { pct: 0.8, score: 4 }, distance: 0.1 };
+  assert.deepEqual([b, a].sort(compareByMatch).map((c) => c.id), ["a", "b"]);
+  // One side scored, the other not: the scorecard decides, so a half-attached
+  // list never sorts its unscored half to the bottom by accident.
+  const c = { ...b, similarity: { score: 90 } };
+  assert.deepEqual([c, a].sort(compareByMatch).map((c) => c.id), ["a", "b"]);
+});
+
+test("similarityTone is coarse on purpose", () => {
+  assert.equal(similarityTone({ score: 84 }), "strong");
+  assert.equal(similarityTone({ score: 61 }), "fair");
+  assert.equal(similarityTone({ score: 40 }), "weak");
+  assert.equal(similarityTone({ score: null }), "unknown");
+  assert.equal(similarityTone(null), "unknown");
+});
+
+test("inPool is the loose gate and abstains on unknowns", () => {
+  assert.deepEqual(inPool(SUBJECT, twin()), { ok: true, misses: [] });
+  assert.deepEqual(inPool(SUBJECT, twin({ beds: 4, baths: 3, sqft: 2200, yearBuilt: 1980 })), { ok: true, misses: [] }, "one bed, one bath, 22% and 12 years are all inside");
+  assert.deepEqual(inPool(SUBJECT, twin({ beds: 5 })).misses, ["beds"]);
+  assert.deepEqual(inPool(SUBJECT, twin({ yearBuilt: 1990 })).misses, ["yearBuilt"]);
+  assert.deepEqual(inPool(SUBJECT, twin({ sqft: 2400 })).misses, ["sqft"]);
+  assert.equal(inPool(SUBJECT, twin({ yearBuilt: null, sqft: null })).ok, true, "what nobody knows can't miss");
+});

@@ -319,6 +319,33 @@ export function normalizeRow(r) {
   };
 }
 
+/**
+ * mergeFacts(comps, facts) → comps
+ *
+ * A detail row's facts onto its search row (facts is the Map fetchZillowFacts
+ * returns, keyed by streetKey). Fills only what the search row lacks — year
+ * built, lot, units, and a missing size/beds/baths — and never touches the
+ * price or the sale date: the SOLD search row is the record of the sale, the
+ * detail row is the record of the house. Rows with no facts come back as they
+ * were, with `factsSource` unset, so a reader can tell "unknown" from "asked".
+ */
+export function mergeFacts(comps = [], facts = new Map()) {
+  return comps.map((c) => {
+    const f = facts.get(streetKey(c.address));
+    if (!f) return c;
+    return {
+      ...c,
+      yearBuilt: c.yearBuilt ?? f.yearBuilt ?? null,
+      lotSqft: c.lotSqft ?? f.lotSqft ?? null,
+      units: c.units ?? f.units ?? null,
+      sqft: c.sqft || f.sqft || 0,
+      beds: c.beds ?? f.beds ?? null,
+      baths: c.baths ?? f.baths ?? null,
+      factsSource: "zillow-detail",
+    };
+  });
+}
+
 // A curated money object, or whatever else sits in the field: `amount` when
 // the actor filled it in, the display label when it didn't, and null for an
 // empty shell so the next candidate gets a look. parseMoney reads the label.

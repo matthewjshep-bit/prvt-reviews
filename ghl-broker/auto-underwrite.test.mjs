@@ -7,6 +7,7 @@ import {
   listJobs, publicJob, cancelJob, retryArgs, saveLoadedDraft,
   UW_RADIUS_MILES, UW_MIN_REHABBED_COMPS, UW_MIN_SUBJECT_PHOTOS, UW_DEFAULT_DAILY_CAP,
   UW_MAX_ARV_COMPS, UW_RADIUS_LADDER, gradeByPriceProxy, UW_GUT_CHECK_MIN_COMPS, capToList, moneyFromListing, UW_MAX_PCT_OF_LIST,
+  UW_SIMILAR_CANDIDATES, UW_PROXY_SHARE, UW_ENRICH_CANDIDATES, UW_POOL_YEAR_TOLERANCE,
 } from "./auto-underwrite.js";
 import { markRenovatedByPrice } from "./shared/comp-match.js";
 
@@ -586,19 +587,22 @@ test("every comp the proxy judged keeps its grade, not just the ones used", () =
   const pool = Array.from({ length: 18 }, (_, i) => ({
     id: `c${i}`, price: 700000 - i * 20000, sqft: 1400,
   }));
-  const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(pool.length * 0.35));
-  const marked = markRenovatedByPrice(pool, { take: tier }).comps;
+  // The proxy judges the UW_SIMILAR_CANDIDATES most similar and marks the top
+  // UW_PROXY_SHARE of those (2026-09-16); before, 35% of the whole ring.
+  const judged = pool.slice(0, UW_SIMILAR_CANDIDATES);
+  const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(judged.length * UW_PROXY_SHARE));
+  const marked = markRenovatedByPrice(judged, { take: tier }).comps;
   const renovated = marked.filter((c) => ARV_CONDITIONS.has(c.condition));
   const used = renovated.slice(0, UW_MAX_ARV_COMPS);
 
-  assert.equal(tier, 6, "18 comps earn a tier of 6");
-  assert.equal(renovated.length, 6);
+  assert.equal(tier, 5, "the ten most similar earn a tier of 5");
+  assert.equal(renovated.length, 5);
   assert.equal(used.length, 4);
 
   const grades = Object.fromEntries(
     renovated.map((c) => [c.id, { condition: c.condition, source: "price" }])
   );
-  assert.equal(Object.keys(grades).length, 6, "all six judged comps are recorded");
+  assert.equal(Object.keys(grades).length, 5, "all five judged comps are recorded");
   for (const c of renovated) assert.ok(grades[c.id], `${c.id} kept its grade`);
 });
 
@@ -617,7 +621,7 @@ test("comps below the tier are still left unknown, never called dated", () => {
 test("a tier no wider than the ARV cap records exactly what it uses", () => {
   // Small pools: tier floors at UW_MAX_ARV_COMPS, so judged and used coincide.
   const pool = Array.from({ length: 7 }, (_, i) => ({ id: `c${i}`, price: 700000 - i * 20000, sqft: 1400 }));
-  const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(pool.length * 0.35));
+  const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(pool.length * UW_PROXY_SHARE));
   assert.equal(tier, UW_MAX_ARV_COMPS);
   const renovated = markRenovatedByPrice(pool, { take: tier }).comps.filter((c) => ARV_CONDITIONS.has(c.condition));
   assert.equal(renovated.length, UW_MAX_ARV_COMPS);
@@ -842,4 +846,86 @@ test("a 5,100 sqft house carries a $300k scope; $546,500 still holds", () => {
   assert.equal(gate({ subject: big, repairs: 300000 }).held.some((h) => /heavy band/.test(h)), false, "scaled to size, $300k is inside");
   const g = gate({ subject: big, repairs: 546500 });
   assert.ok(g.held.some((h) => /past the heavy band for over 2,500 sqft scaled to 5,100 sqft \(\$265,200\)/.test(h)), g.held.join(" | "));
+});
+
+
+/* ---------- most similar first (2026-09-16) ---------- */
+
+// The post-mortem: buyers pay ≤70% of ARV less repairs, and the dead deals were
+// priced off ARVs that were too high — because the price proxy ranked the
+// whole ring by $/sqft and the priciest houses nearby became the evidence.
+
+// A 3/2, 1,400 sqft, 1968 subject; comps as the underwriter sees them after a
+// pull (distance known, coordinates irrelevant here).
+const house = (id, over = {}) => ({
+  id, address: `${id} St`, price: 600000, sqft: 1400, beds: 3, baths: 2, yearBuilt: 1968, distance: 0.2, saleDate: "2026-06-01", ...over,
+});
+const ring = (comps) => nearbyComps({ compsData: { subject: SUBJECT, comps }, subjectFacts: SUBJECT });
+
+test("the most expensive house in the ring no longer wins on $/sqft alone — it has to be similar first", () => {
+  // Six near-twins that sold 580–620k, and a 4/3 2,100 sqft house at the ring
+  // edge that fetched 900k. By $/sqft over the ring the big house led the
+  // renovated tier; by similarity it isn't among the ten judged at all once
+  // ten twins exist, and here, with seven, it ranks last and the tier is the
+  // top half of the twins.
+  const twins = Array.from({ length: 6 }, (_, i) => house(`t${i}`, { price: 580000 + i * 8000, distance: 0.1 + i * 0.03 }));
+  const pricey = house("big", { price: 900000, sqft: 2100, beds: 4, baths: 3, distance: 0.48 });
+  const g = gradeByPriceProxy(ring([pricey, ...twins]), { subjectSqft: 1400 });
+  assert.ok(!g.rehabbed.some((c) => c.id === "big"), `the 900k house carried the ARV: ${g.rehabbed.map((c) => c.id).join(", ")}`);
+  assert.ok(g.rehabbed.every((c) => c.id.startsWith("t")));
+  assert.match(g.proxy.reason, /top \d of 7 comps by \$\/sqft/, "still the price proxy, over the similar set");
+});
+
+test("the price proxy judges the ten most similar, not the whole ring", () => {
+  const twins = Array.from({ length: 10 }, (_, i) => house(`t${i}`, { price: 590000 + i * 3000, distance: 0.05 + i * 0.02 }));
+  const far = Array.from({ length: 8 }, (_, i) => house(`f${i}`, { price: 800000, sqft: 1900, beds: 4, distance: 0.45 }));
+  const g = gradeByPriceProxy(ring([...far, ...twins]), { subjectSqft: 1400 });
+  assert.match(g.proxy.reason, /^most similar 10 of 18: /);
+  assert.ok(g.rehabbed.every((c) => c.id.startsWith("t")), g.rehabbed.map((c) => c.id).join(", "));
+  assert.equal(Object.keys(g.grades).length, Math.max(UW_MAX_ARV_COMPS, Math.round(10 * UW_PROXY_SHARE)), "the judged tier is half of ten");
+});
+
+test("the 3/2 built 1968 next door outranks the 4/3 across town, whatever its $/sqft", () => {
+  const next = house("next", { distance: 0.05, price: 610000 });
+  const town = house("town", { distance: 0.45, beds: 4, baths: 3, sqft: 1750, yearBuilt: 1982, price: 760000 });
+  const out = ring([town, next]);
+  assert.deepEqual(out.map((c) => c.id), ["next", "town"]);
+  assert.ok(out[0].similarity.score > out[1].similarity.score);
+  assert.equal(out[0].similarity.score, 100);
+});
+
+test("a comp more than fifteen years off the subject's era leaves the pool; one with no year stays", () => {
+  const out = ring([house("old", { yearBuilt: 1940 }), house("new", { yearBuilt: 2004 }), house("noYear", { yearBuilt: null }), house("ok", { yearBuilt: 1980 })]);
+  assert.deepEqual(out.map((c) => c.id).sort(), ["noYear", "ok"]);
+  assert.equal(UW_POOL_YEAR_TOLERANCE, 15);
+});
+
+test("the ring pool's time trend reaches deriveArv; the four ARV comps don't set it", async () => {
+  const { timeTrend } = await import("./shared/arv.js");
+  // Twelve ring comps spanning a year in a market gaining 0.3%/mo; the four
+  // most recent are the ARV set — too few and too bunched to see a slope.
+  const now = Date.parse("2026-09-16T00:00:00Z");
+  const pool = Array.from({ length: 12 }, (_, i) => {
+    const mo = i;
+    return house(`r${i}`, { price: Math.round(1400 * 430 * (1 - 0.003 * mo)), saleDate: new Date(now - mo * 30.44 * 86400000).toISOString().slice(0, 10) });
+  });
+  const whole = timeTrend(pool, now);
+  const few = timeTrend(pool.slice(0, 4), now);
+  assert.equal(whole.applied, true);
+  assert.equal(few.applied, false, "four comps can't carry a trend");
+  const { deriveArv } = await import("./shared/arv.js");
+  const withTrend = deriveArv({ comps: pool.slice(0, 4), subjectSqft: 1400, trend: whole, now });
+  const without = deriveArv({ comps: pool.slice(0, 4), subjectSqft: 1400, now });
+  assert.ok(withTrend.base >= without.base, "a rising market never lowers today's number");
+  assert.match(withTrend.basis, /time \+/);
+});
+
+// The enrichment. `startUnderwrite` is not run end to end here (it needs a
+// geocoder, an Apify token and the whole rest of the pipeline); the batched
+// lookup and its cache are covered in rehab-scan.test.mjs, and the merge in
+// comps-zillow.test.mjs. What this pins is the dial and the off switch.
+test("with enrichment off, the run prices on the search rows alone — the dial says so", () => {
+  assert.equal(UW_ENRICH_CANDIDATES, 20);
+  assert.equal(UW_SIMILAR_CANDIDATES, 10);
+  assert.equal(UW_PROXY_SHARE, 0.5);
 });

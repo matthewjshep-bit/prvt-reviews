@@ -485,7 +485,7 @@ test("a boxful of 0.0.91 rows comes back as comps — the second time this was z
 
 /* ---------- unit counts: a triplex is comped against triplexes ---------- */
 
-import { unitsFromText, unitsFromDetail, filterByUnits, streetKey } from "./comps-zillow.js";
+import { unitsFromText, unitsFromDetail, filterByUnits, streetKey, mergeFacts } from "./comps-zillow.js";
 
 test("unit words in a listing read as a unit count", () => {
   assert.equal(unitsFromText("Hi Matt, the triplex is in excellent condition."), 3);
@@ -515,4 +515,30 @@ test("filterByUnits keeps the same count, drops other counts, and keeps unconfir
 
 test("streetKey matches a search row to its detail row", () => {
   assert.equal(streetKey("4207 S Bateman St, Seattle, WA 98118"), streetKey("4207 S. Bateman St"));
+});
+
+
+test("a detail row's year built lands on its search row, and nothing else is overwritten", () => {
+  const comps = [
+    { id: "a", address: "10412 SE 219th St, Kent, WA 98031", price: 610000, saleDate: "2026-05-02", sqft: 1650, beds: 3, baths: 2, yearBuilt: null },
+    { id: "b", address: "77 Nowhere Rd, Kent, WA 98031", price: 500000, saleDate: "2026-01-10", sqft: 0, beds: null, baths: null, yearBuilt: null },
+  ];
+  const facts = new Map([
+    ["10412 se 219th st", { yearBuilt: 1971, lotSqft: 7841, sqft: 1700, beds: 4, baths: 2.5, units: null, lastSoldPrice: 999999, lastSoldDate: "2020-01-01" }],
+    ["77 nowhere rd", null],
+  ]);
+  const [a, b] = mergeFacts(comps, facts);
+  assert.equal(a.yearBuilt, 1971);
+  assert.equal(a.lotSqft, 7841);
+  assert.equal(a.sqft, 1650, "the search row's size stands when it has one");
+  assert.equal(a.beds, 3, "and so do its beds and baths");
+  assert.equal(a.price, 610000, "the SOLD row is the record of the sale");
+  assert.equal(a.saleDate, "2026-05-02");
+  assert.equal(a.factsSource, "zillow-detail");
+  assert.equal(b.factsSource, undefined, "asked, unreadable: left as it was");
+  assert.equal(b.yearBuilt, null);
+  // A search row with no size takes the detail row's.
+  const [c] = mergeFacts([{ address: "10412 SE 219th St", sqft: 0, beds: null }], facts);
+  assert.equal(c.sqft, 1700);
+  assert.equal(c.beds, 4);
 });

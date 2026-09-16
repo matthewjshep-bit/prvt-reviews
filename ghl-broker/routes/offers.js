@@ -81,17 +81,18 @@ import { PSA_MODES } from "../shared/wa-psa-template.js";
 import {
   DEFAULT_CONTRACT_CLAUSES, DEFAULT_ASSIGNMENT_CLAUSES, ASSIGNMENT_TOKENS, ASSIGNMENT_PREAMBLE,
 } from "../shared/contract-template.js";
-import { fetchListingPhotos, fetchZillowPhotos, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
+import { fetchListingPhotos, fetchZillowPhotos, fetchZillowFacts, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
 import { addressKey, addressQueryVariants, zillowUrl } from "../shared/us-address.js";
 import { pullComps } from "../comps-pull.js";
 import { geocodeAddress } from "../geocode.js";
-import { pullZillowComps } from "../comps-zillow.js";
+import { pullZillowComps, mergeFacts, streetKey } from "../comps-zillow.js";
+import { similarity, milesBetween } from "../shared/comp-match.js";
 import { gradeComps, needsScrape } from "../comps-grade.js";
 import {
   startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs, drainUnderwriteQueue,
   cancelJob as cancelUnderwriteJob, publicJob as publicUnderwriteJob, retryArgs as retryUnderwriteArgs,
   AUTO_UNDERWRITE_ENABLED,
-  UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT, paperAlreadyOut,
+  UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT, UW_ENRICH_CANDIDATES, paperAlreadyOut,
 } from "../auto-underwrite.js";
 import {
   startReply, startProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
@@ -1530,6 +1531,32 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           bathTolerance: UW_POOL_BATHS_TOLERANCE,
           sqftPct: UW_POOL_SQFT_PCT,
         });
+        // The facts a search row doesn't carry — the subject's own year built,
+        // lot, beds/baths/size (so the pane fills them in again, as the
+        // county-record provider used to), and the same for the most similar
+        // comps, in one batched detail lookup. A person is waiting, so the
+        // cost is fine; a failure is a line on the board, never a 500.
+        if (UW_ENRICH_CANDIDATES > 0) {
+          const radiusMiles = Math.min(5, Math.max(0.1, parseFloat(req.query.radius) || 0.5));
+          const rough = { beds: beds || null, baths: baths || null, sqft: sqft || null };
+          const ranked = [...(data.comps || [])]
+            .map((c) => ({ c, s: similarity(rough, { ...c, distance: c.distance ?? milesBetween(geo, c) }, { radiusMiles }).score ?? -1 }))
+            .sort((a, b) => b.s - a.s).slice(0, UW_ENRICH_CANDIDATES).map((x) => x.c);
+          try {
+            const facts = await fetchZillowFacts([address, ...ranked.map((c) => c.address)], apifyToken);
+            const mine = facts.get(streetKey(address));
+            data = {
+              ...data,
+              comps: mergeFacts(data.comps || [], facts),
+              subject: mine ? { ...(data.subject || {}), yearBuilt: mine.yearBuilt, lotSqft: mine.lotSqft,
+                beds: data.subject?.beds ?? mine.beds, baths: data.subject?.baths ?? mine.baths, sqft: data.subject?.sqft ?? mine.sqft,
+                lastSalePrice: mine.lastSoldPrice, lastSaleDate: mine.lastSoldDate } : data.subject,
+              enriched: ranked.length,
+            };
+          } catch (e) {
+            data = { ...data, factsWarning: `year built and lot couldn't be looked up: ${e.message}` };
+          }
+        }
       } else {
         if (!apiKey) return res.json({ enabled: false, comps: [], estimate: null, subject: null });
         data = await pullComps({ apiKey, address, months, sqft, beds, baths });
@@ -4239,11 +4266,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // would fork every key and duplicate the whole counter history.
         { type: `offer_${status}`, offerId: offer.id, source: "conversation", at: ts, ...(counter ? { data: { amount: counter } } : {}) });
       await syncAgentOfferTag(client, locationId, contactId);
-      // "soft_commit" pauses outreach on a live deal, which is an operator's
-      // judgement about whether a buyer is real — not something a warm text
-      // should decide. The bot may mark evaluating, committed (it already
-      // needs a person to confirm) or passed; holding the deal back is ours.
-      if (status === "soft_commit") return { ok: false, reason: "a soft commit is yours to set on the deal, not the bot's" };
       return { ok: true, address: offer.address, status, amount: counter };
     },
     // The investor's standing on a deal: passed, or the committed buyer
@@ -4251,6 +4273,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // page does). Links them first if they weren't.
     setInvestorStatus: async ({ contactId, addressHint, status, reason = null }) => {
       if (!INVESTOR_STATUSES.includes(status)) return { ok: false, reason: `not an investor status: ${status}` };
+      // "soft_commit" pauses outreach on a live deal, which is an operator's
+      // judgement about whether a buyer is real — not something a warm text
+      // should decide. The bot may mark evaluating, committed (it already
+      // needs a person to confirm) or passed; holding the deal back is ours.
+      if (status === "soft_commit") return { ok: false, reason: "a soft commit is yours to set on the deal, not the bot's" };
       const found = await findLiveDealFor({ locationId, contactId, addressHint });
       if (!found.ok) return found;
       const offer = found.offer;
@@ -5402,10 +5429,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const company = offer.calc?.settings?.company || {};
       const subject = (emailSubject || `Cash offer — ${offer.address || "your property"}`).slice(0, 150);
       const emailAttachments = picked.map(([, , url]) => url);
-        ...(pageLink ? [
-          `<p>How we got to the number — the comps, the rehab scope and what your seller nets: ` +
-          `<a href="${esc(pageLink)}">${esc(pageLink)}</a></p>`,
-        ] : []),
       const signoffLines = [company.signer || company.name, company.email, company.phone].filter(Boolean);
       // A bare https:// in an HTML email is a dead string the agent has to
       // copy by hand — the operator's message often ends in the offer-page
@@ -5420,6 +5443,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, as-is, close on your timeline. ` +
           `Happy to answer any questions.</p>`,
         ]),
+        ...(pageLink ? [
+          `<p>How we got to the number — the comps, the rehab scope and what your seller nets: ` +
+          `<a href="${esc(pageLink)}">${esc(pageLink)}</a></p>`,
+        ] : []),
         `<p>Attached:</p><ul>${picked.map(([, label]) => `<li>${esc(label)}</li>`).join("")}</ul>`,
         signoffLines.length ? `<p>${signoffLines.map(esc).join("<br>")}</p>` : "",
       ].filter(Boolean).join("\n");
