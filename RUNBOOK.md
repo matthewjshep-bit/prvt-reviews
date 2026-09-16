@@ -938,6 +938,19 @@ that produced no draft row at all. Every finding names ONE existing mechanism:
 - **Offers that couldn't send themselves** → yours, with the reason.
 - **Ran out of asks** → the address chase is closed with a terminal event.
 
+**Loose (default, Matt 2026-09-16: "fire where it can").** `nightlyAudit.loose`:
+a held draft the money guard passed, that the model didn't flag for a person,
+held only because its intent is a person's call / off the list / the band's
+arithmetic didn't open, is **sent** (scheduled at the next open minute) rather
+than clocked — it is a holding reply that commits to nothing. What the audit
+itself starts (a redraft, a nudge) is released the same way
+(`releaseForAudit` in reply-agent.js, via `deps.releaseHeld`). A stalled
+counter with no numbers to re-run on gets a `counter_nudge` (asks for room,
+names no number of ours; not on the playbook grid — the audit releases it). A
+realm-yes queues the send whatever the underwrite switch says. The gates,
+`needsHuman`, a person holding the thread, and drafts older than three days
+are never released. `loose: false` restores clocks-only.
+
 **Rules it never breaks.** Nothing texts at night — every remedy goes through
 `startReply`/`startProactive` → gates → the dial → the 30-second scheduler at
 the next open minute. Every text-ending remedy is claimed first (`audit_action`

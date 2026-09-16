@@ -3235,3 +3235,20 @@ test("a scheduled text to someone who unsubscribed since is dismissed, not sent 
   assert.match(d.flags.join(" "), /unsubscribed — not sent/);
   assert.ok(tags.some(([, t]) => t.includes("unsubscribed")));
 });
+
+/* ---------- the nightly audit's release (2026-09-16) ---------- */
+
+test("a draft held only as a person's call is released when the audit asks; one the gates caught never is", async () => {
+  const { releaseForAudit } = await import("./reply-agent.js");
+  const gateOk = { ok: true, flags: [] };
+  const draft = { intent: "counter", reply: "Let me run that by my partner.", needsHuman: false };
+  const held = { send: false, code: "never_auto", reason: "a counter is a person's call" };
+  assert.equal(releaseForAudit({ auto: held, gate: gateOk, draft, deps: {} }).send, false, "only when asked");
+  const r = releaseForAudit({ auto: held, gate: gateOk, draft, deps: { releaseHeld: true } });
+  assert.equal(r.send, true);
+  assert.match(r.reason, /released by the nightly audit/);
+  assert.equal(releaseForAudit({ auto: { send: false, code: "gates", reason: "needs a person: names 500k" }, gate: { ok: false, flags: ["x"] }, draft, deps: { releaseHeld: true } }).send, false, "the money guard is never released");
+  assert.equal(releaseForAudit({ auto: held, gate: gateOk, draft: { ...draft, needsHuman: true }, deps: { releaseHeld: true } }).send, false);
+  assert.equal(releaseForAudit({ auto: { send: false, code: "human_active", reason: "you have the thread" }, gate: gateOk, draft, deps: { releaseHeld: true } }).send, false, "a person's thread stays theirs");
+  assert.equal(releaseForAudit({ auto: held, gate: gateOk, draft: { ...draft, intent: "small_talk" }, deps: { releaseHeld: true } }).send, false);
+});

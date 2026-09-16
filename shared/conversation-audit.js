@@ -20,12 +20,14 @@ import { unansweredCheckIn, nextMorning } from "./follow-up.js";
 export const AUDIT_WINDOW_HOURS = 24;
 export const HELD_AGING_HOURS = 24;
 export const COUNTER_STALL_HOURS = 48;
-export const PROMISE_RETEXT_HOURS = 48;
+export const PROMISE_RETEXT_HOURS = 24;
 export const FLOAT_STALL_DAYS = 3;
 export const OFFER_QUIET_DAYS = 3;
 export const CHASE_LAST_STEP = 5;
 export const FOLLOW_UP_STALE_MS = 20 * 3600 * 1000;
 export const MAX_REDRAFTS = 20;
+export const RELEASE_MAX_AGE_HOURS = 72;   // a held reply older than this is stale, not sendable
+export const REALM_SEND_GRACE_HOURS = 24; // a send just before the realm-yes stamp is the send it answered
 
 // The audit's vocabulary, in the order Today shows it.
 export const AUDIT_KINDS = [
@@ -87,6 +89,7 @@ export function auditConversations({
   const sendOfferAuto = Boolean(pb.sendOffer?.onClearUnderwrite)
     || (pb.intentRules?.realm_yes?.actions || []).some((a) => a?.type === "send_offer" && (a.mode === "auto" || pb.intentRules.realm_yes.mode === "auto"));
   const requoteOn = pb.requote?.enabled === true;
+  const loose = config?.nightlyAudit?.loose !== false;
 
   /* --- indexes --- */
   const draftsBy = new Map();
@@ -195,11 +198,17 @@ export function auditConversations({
       const clock = last(ev(c, "checkin_requested").filter((e) => (ms(e.at) ?? 0) >= (ms(newest.createdAt) ?? 0)));
       const age = hoursAgo(newest.createdAt);
       const reason = newest.autoSend?.reason || (newest.flags || [])[0] || "held";
+      // Loose: a holding reply the money guard passed, that the model didn't
+      // flag for a person, held only because of its intent — send it. The
+      // gates, needsHuman, "you have the thread" and age stay in the way.
+      const releasable = loose && newest.autoSendable === true && !newest.needsHuman && age <= RELEASE_MAX_AGE_HOURS
+        && !/you replied to them/.test(reason) && !/^needs a person:/.test(reason);
       add({ kind: age >= HELD_AGING_HOURS ? "held_aging" : "unanswered_inbound", contactId: c, contactName: who(c), party: newest.party,
         address: newest.propertyAddress || "", anchorAt: newest.createdAt, draftId: newest.id,
-        dueAt: clock?.data?.dueAt || unansweredCheckIn(now).dueAt,
-        action: clock || checkInPending(c) ? null : { type: "book_checkin", kind: "unanswered", dueAt: unansweredCheckIn(now).dueAt, draftId: newest.id },
-        why: clock ? `${reason} · check-in set for ${String(clock.data?.dueAt || "").slice(0, 10)}` : reason,
+        dueAt: releasable ? iso(now) : clock?.data?.dueAt || unansweredCheckIn(now).dueAt,
+        action: releasable ? { type: "release", draftId: newest.id }
+          : clock || checkInPending(c) ? null : { type: "book_checkin", kind: "unanswered", dueAt: unansweredCheckIn(now).dueAt, draftId: newest.id },
+        why: releasable ? `${reason} — a holding reply the guard passed; sending it` : clock ? `${reason} · check-in set for ${String(clock.data?.dueAt || "").slice(0, 10)}` : reason,
         evidence: { inbound: clip(newest.inbound), reply: clip(newest.reply, 100), age } });
     }
   }
@@ -249,11 +258,14 @@ export function auditConversations({
     // They said yes to the number and nothing went.
     if (o.realm?.answer === "yes") {
       const at = ms(o.realm.ts) ?? 0;
-      const went = (o.sends || []).some((s) => (ms(s.ts) ?? 0) >= at && Object.values(s.results || {}).some((r) => r?.ok))
-        || ev(c, "offer_sent").some((e) => (ms(e.at) ?? 0) >= at);
+      // The send that answered a realm-yes is often stamped a few minutes
+      // BEFORE the yes (James G Smith, 2026-09-16: sent 19:13, yes 19:17).
+      const since = at - REALM_SEND_GRACE_HOURS * 3600000;
+      const went = (o.sends || []).some((s) => (ms(s.ts) ?? 0) >= since && Object.values(s.results || {}).some((r) => r?.ok))
+        || ev(c, "offer_sent").some((e) => (ms(e.at) ?? 0) >= since);
       if (!went) {
         add({ ...base, kind: "realm_yes_no_offer", anchorAt: o.realm.ts, dueAt: nextMorning(now),
-          action: sendOfferAuto && status === "new" ? { type: "queue_offer_send" } : null,
+          action: (sendOfferAuto || loose) && ["new", "sent"].includes(status) ? { type: "queue_offer_send" } : null,
           why: `they said ${k(o.cashAmount)} is in the realm ${hoursAgo(o.realm.ts)}h ago; the written offer never went`,
           evidence: { ours: o.cashAmount || 0 } });
         continue;
@@ -269,7 +281,7 @@ export function auditConversations({
         const take = ev(c, "agent_estimate").some((e) => (ms(e.at) ?? 0) >= at - 7 * 86400000);
         const theirs = o.counter?.amount || 0;
         add({ ...base, kind: "counter_stalled", anchorAt: counterAt, dueAt: nextMorning(now),
-          action: take && requoteOn ? { type: "requote" } : null,
+          action: take && requoteOn ? { type: "requote" } : loose ? { type: "nudge_counter" } : null,
           why: `countered${theirs ? ` at ${k(theirs)}` : ""} against our ${k(o.cashAmount)} ${Math.round((now - at) / 86400000)}d ago; nobody came back`,
           evidence: { theirs, ours: o.cashAmount || 0, gap: theirs && o.cashAmount ? theirs - o.cashAmount : null, take } });
         continue;
@@ -287,7 +299,7 @@ export function auditConversations({
     const floatAt = ms(o.proactive?.realmCheckAt) ?? ms(o.proactive?.takeCheckAt);
     if (status === "new" && floatAt && !o.realm && inAt < floatAt && now - floatAt >= FLOAT_STALL_DAYS * 86400000) {
       add({ ...base, kind: "float_unanswered", anchorAt: iso(floatAt), dueAt: nextMorning(now),
-        action: askSweep(),
+        action: askSweep() || (loose && ladderOn ? { type: "nudge_offer" } : null),
         why: `floated ${o.proactive?.realmCheckAt ? k(o.cashAmount) : "our read"} ${Math.round((now - floatAt) / 86400000)}d ago; no word${ladderOn ? "" : " — the offer ladder is off"}`,
         evidence: { ladderOn } });
       continue;
@@ -304,7 +316,7 @@ export function auditConversations({
         // rules, not ours), and saying otherwise hides the offer for good.
         const ladderMissed = ladderOn && days > OFFER_QUIET_DAYS + 2;
         add({ ...base, kind: "offer_no_followup", anchorAt: iso(touch), dueAt: nextMorning(now),
-          severity: ladderOn && !ladderMissed ? "fyi" : "soon", action: ladderMissed ? null : askSweep(),
+          severity: ladderOn && !ladderMissed ? "fyi" : "soon", action: ladderMissed ? (loose ? { type: "nudge_offer" } : null) : askSweep(),
           why: !ladderOn ? `${days}d quiet and the offer follow-up ladder is off`
             : ladderMissed ? `${days}d quiet and the ladder never fired on it`
             : `${days}d quiet; the ladder ${followUpStale ? "is being started" : "has it"}`,
@@ -351,7 +363,7 @@ export function auditConversations({
     counts: {
       touched: touched.size,
       answered: quietWins.length,
-      queued: findings.filter((f) => f.action && ["redraft", "run_follow_up_sweep", "queue_offer_send", "requote"].includes(f.action.type)).length,
+      queued: findings.filter((f) => f.action && ["redraft", "run_follow_up_sweep", "queue_offer_send", "requote", "release", "nudge_counter", "nudge_offer"].includes(f.action.type)).length,
       clocked: findings.filter((f) => f.action && ["book_checkin", "close_chase"].includes(f.action.type)).length,
       owed: findings.filter((f) => f.severity !== "fyi" && (!f.action || f.action.type === "book_checkin")).length,
       dealLag, byKind,

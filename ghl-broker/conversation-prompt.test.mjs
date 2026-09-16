@@ -126,3 +126,10 @@ test("the check-in on a thread we never answered apologises for nothing", () => 
   const weekly = outboundOpening({ kind: "checkin_due", address: "", sourceKind: "source", phrase: "" });
   assert.match(weekly, /weekly check-in/i);
 });
+
+test("a counter nudge asks for room and names no number", () => {
+  const t = outboundOpening({ kind: "counter_nudge", address: "3831 Bagley Ave N, Seattle, WA", days: 6, theirsK: "850k" });
+  assert.match(t, /countered on 3831 Bagley Ave N.*6 days ago/);
+  assert.match(t, /Do NOT name a new number of ours/);
+  assert.match(t, /Set intent to counter_nudge/);
+});

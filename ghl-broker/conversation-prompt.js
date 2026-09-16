@@ -422,6 +422,14 @@ export function outboundOpening(outbound) {
         `repeat the first text's wording. A different angle each time: what we buy, that we're easy to work with, ` +
         `that we can move quickly. Set intent to outreach_nudge.`;
 
+    // They countered, we went quiet. Keep it alive without moving: ask for
+    // room, never a number of ours, never theirs read back.
+    case "counter_nudge":
+      return `${START} This agent countered on ${o.address}${o.days ? ` ${o.days} days ago` : ""} and nobody on our side came back to them. ` +
+        `Keep the negotiation alive in one or two lines: say we're still interested and ask whether the seller has any room ` +
+        `toward our number, or what it would take. Do NOT name a new number of ours, do NOT restate their number, do NOT ` +
+        `hint we'd go higher — movement on price is a person's call. ${CONTINUE} Set intent to counter_nudge.`;
+
     // The nudges. They introduce NO number — the money guard would flag one
     // anyway, but the instruction has to match the gate or every draft parks.
     case "offer_nudge":

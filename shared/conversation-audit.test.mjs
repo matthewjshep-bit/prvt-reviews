@@ -114,11 +114,11 @@ test("a counter two days old with no re-quote, no band, no decline is stalled â€
   const f = r.findings[0];
   assert.equal(f.kind, "counter_stalled");
   assert.deepEqual(f.evidence, { theirs: 850000, ours: 782500, gap: 67500, take: false });
-  assert.equal(f.action, null, "no numbers of theirs to re-run on");
+  assert.deepEqual(f.action, { type: "nudge_counter" }, "no numbers of theirs to re-run on: keep it alive instead");
   assert.match(f.why, /countered at 850k against our 783k/);
   // With their read on file, the re-quote runs on its own.
   const take = [{ contactId: "c1", type: "agent_estimate", at: ago(55), address: o.address, data: { arv: 1200000, rehab: 60000 } }];
-  assert.equal(audit({ drafts: [], events: take, offers: [o] }).findings[0].action, null, "re-quoting is off in this playbook");
+  assert.equal(audit({ drafts: [], events: take, offers: [o] }).findings[0].action?.type, "nudge_counter", "re-quoting is off in this playbook, so it's nudged");
   const requoting = normalizeConversationAi({ version: 2, parties: { agent: { requote: { enabled: true } } } });
   assert.equal(auditConversations({ config: requoting, now: NOW, drafts: [], events: take, offers: [o] }).findings[0].action?.type, "requote");
   // Any movement on price since means it's a negotiation, not a stall.
@@ -130,7 +130,9 @@ test("a realm yes with nothing sent is first on the list, and queues the send on
   const o = offer({ status: "new", sends: [], realm: { answer: "yes", ts: ago(20) } });
   const r = audit({ drafts: [], events: [], offers: [o] });
   assert.equal(r.findings[0].kind, "realm_yes_no_offer");
-  assert.equal(r.findings[0].action, null, "sending on a yes is off in this playbook");
+  assert.equal(r.findings[0].action?.type, "queue_offer_send", "loose: a yes is a yes");
+  const careful = normalizeConversationAi({ version: 2, nightlyAudit: { loose: false } });
+  assert.equal(auditConversations({ config: careful, now: NOW, drafts: [], events: [], offers: [o] }).findings[0].action, null, "careful mode leaves it to the playbook");
   const auto = normalizeConversationAi({ version: 2, parties: { agent: { sendOffer: { onClearUnderwrite: true } } } });
   assert.equal(auditConversations({ config: auto, now: NOW, drafts: [], events: [], offers: [o] }).findings[0].action?.type, "queue_offer_send");
   const went = { ...o, sends: [{ ts: ago(10), results: { sms: { ok: true } } }] };
@@ -146,7 +148,7 @@ test("a float nobody answered rides the ladder when it's on and stale, and is yo
   const on = auditConversations({ config: ladderOn, now: NOW, drafts: [], events: [], offers: [o], followUpCursorAt: ago(30) });
   assert.deepEqual(on.findings[0].action, { type: "run_follow_up_sweep" });
   const ranToday = auditConversations({ config: ladderOn, now: NOW, drafts: [], events: [], offers: [o], followUpCursorAt: ago(3) });
-  assert.equal(ranToday.findings[0].action, null, "the sweep ran today; it has the thread");
+  assert.deepEqual(ranToday.findings[0].action, { type: "nudge_offer" }, "the sweep ran today and still left it: nudged directly");
 });
 
 test("an offer out with no follow-up clock is a row; the sweep is asked once per night, not per offer", () => {
@@ -187,10 +189,10 @@ test("Today's queue gets only the rows that are Matt's", () => {
   const drafts = [draft({ id: "h", status: "draft", createdAt: ago(30), sentAt: null, autoSend: { decided: false, reason: "held" } })];
   const r = audit({ drafts, events: [], offers: [offer({ status: "countered", counter: { amount: 900000, at: ago(72) } })] });
   const actions = auditActions({ ...r, finishedAt: r.generatedAt });
-  assert.equal(actions.length, 2);
+  assert.equal(actions.length, 1, "the counter is nudged on its own; the held draft (no guard verdict on it) is yours");
   assert.ok(actions.every((a) => a.kind === "audit_owed"));
-  assert.match(actions.find((a) => a.offerId)?.title || "", /Counters nobody moved on/);
-  assert.equal(actions.find((a) => a.draftId)?.ops[0].key, "open_outbox");
+  assert.match(actions[0].title, /Held over a day/);
+  assert.equal(actions[0].ops[0].key, "open_outbox");
 });
 
 
@@ -204,4 +206,29 @@ test("one row per property, and a ladder that never fired is not 'the ladder has
   // Three days quiet with the ladder on: still the ladder's, for information.
   const fresh = auditConversations({ config: ladderOn, now: NOW, drafts: [], events: [], offers: [offer({ statusAt: ago(76), sends: [{ ts: ago(76), results: { sms: { ok: true } } }] })], followUpCursorAt: ago(3) });
   assert.equal(fresh.findings[0].severity, "fyi");
+});
+
+/* ---------- loose: fire where it can (Matt, 2026-09-16) ---------- */
+
+test("a held holding-reply the guard passed is sent, not clocked; the gates, needsHuman and 'you have the thread' still hold it", () => {
+  const held = (over) => draft({ id: "h", status: "draft", createdAt: ago(4), sentAt: null, autoSendable: true, needsHuman: false,
+    autoSend: { decided: false, reason: "a counter is a person's call" }, ...over });
+  assert.deepEqual(audit({ drafts: [held()], events: [], offers: [] }).findings[0].action, { type: "release", draftId: "h" });
+  assert.equal(audit({ drafts: [held({ autoSendable: false, autoSend: { decided: false, reason: "needs a person: the draft names 500k" } })], events: [], offers: [] }).findings[0].action?.type, "book_checkin", "the money guard is never released");
+  assert.equal(audit({ drafts: [held({ needsHuman: true })], events: [], offers: [] }).findings[0].action?.type, "book_checkin");
+  assert.equal(audit({ drafts: [held({ autoSend: { decided: false, reason: "you replied to them 12 minutes ago â€” you have the thread" } })], events: [], offers: [] }).findings[0].action?.type, "book_checkin");
+  assert.equal(audit({ drafts: [held({ createdAt: ago(80) })], events: [], offers: [] }).findings[0].action?.type, "book_checkin", "three days old is stale");
+  const careful = normalizeConversationAi({ version: 2, nightlyAudit: { loose: false } });
+  assert.equal(auditConversations({ config: careful, now: NOW, drafts: [held()], events: [], offers: [] }).findings[0].action?.type, "book_checkin", "careful mode clocks it");
+});
+
+test("a stalled counter with nothing to re-run on is nudged; a realm-yes answered four minutes before its stamp is not a finding", () => {
+  const o = offer({ status: "countered", counter: { amount: 850000, at: ago(140), source: "conversation" } });
+  assert.deepEqual(audit({ drafts: [], events: [], offers: [o] }).findings[0].action, { type: "nudge_counter" });
+  // James G Smith: the send at 19:13 answered the yes stamped 19:17.
+  const james = offer({ status: "sent", realm: { answer: "yes", ts: ago(20) }, sends: [{ ts: ago(20.07), results: { sms: { ok: true }, email: { ok: true } } }] });
+  assert.equal(audit({ drafts: [], events: [], offers: [james] }).findings.length, 0);
+  // A ladder that skipped an offer: nudged directly when the ladder is on.
+  const skipped = offer({ createdAt: ago(1200), statusAt: ago(1200), sends: [{ ts: ago(1200), results: { sms: { ok: true } } }] });
+  assert.deepEqual(auditConversations({ config: ladderOn, now: NOW, drafts: [], events: [], offers: [skipped], followUpCursorAt: ago(3) }).findings[0].action, { type: "nudge_offer" });
 });

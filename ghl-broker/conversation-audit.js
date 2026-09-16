@@ -16,6 +16,8 @@ import { conversationConfig, startReply as defaultStartReply } from "./reply-age
 import { startFollowUpSweep as defaultStartFollowUpSweep } from "./follow-up-sweep.js";
 import { recordEvent } from "./contact-record.js";
 import { workHour } from "./outreach-sweep.js";
+import { nextSendTime } from "./conversation-scheduler.js";
+import { startProactive as defaultStartProactive } from "./reply-agent.js";
 
 export const CURSOR_NAME = "conversationAudit";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -82,6 +84,12 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
   phase("acting");
   const startReply = typeof deps.startReply === "function" ? deps.startReply : defaultStartReply;
   const startSweep = typeof deps.startFollowUpSweep === "function" ? deps.startFollowUpSweep : defaultStartFollowUpSweep;
+  const startProactive = typeof deps.startProactive === "function" ? deps.startProactive : defaultStartProactive;
+  // Loose: what the audit starts may send a holding reply the guard passed
+  // even when its intent is a person's call (releaseForAudit in reply-agent.js).
+  const loose = config.nightlyAudit?.loose !== false;
+  const runDeps = { ...deps, releaseHeld: loose };
+  const offerFor = async (f) => (f.offerId && typeof store.getOffer === "function" ? store.getOffer(f.offerId).catch(() => null) : null);
   const claim = async (f, type, extra = {}) => recordEvent({
     store, locationId, contactId: f.contactId, party: f.party || "agent", type, at: iso(now),
     address: f.address || "", offerId: f.offerId || null, source: "sweep", ...extra,
@@ -103,6 +111,20 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         row.status = c.inserted ? "clocked" : "already";
         continue;
       }
+      if (a.type === "release") {
+        // The held reply itself, scheduled at the next open minute. The
+        // scheduler's own checks (a person answered since, sends off) still
+        // apply at send time.
+        const d = await store.getReplyDraft(a.draftId).catch(() => null);
+        if (!d || d.status !== "draft") { row.status = "skipped"; row.reason = d ? `the draft is ${d.status}` : "draft gone"; continue; }
+        const ts = iso(now);
+        const sendAt = nextSendTime({ now, delayMs: 60000, quietHours: config.autoSend.quietHours });
+        await store.updateReplyDraft(d.id, { ...d, status: "scheduled", sendAt, scheduledAt: ts, updatedAt: ts,
+          autoSend: { decided: true, reason: "released by the nightly audit — a holding reply, nothing committed" },
+          flags: [...(d.flags || []), "released by the nightly audit"] });
+        row.status = "queued"; row.reason = `sends ${sendAt.slice(11, 16)}Z`;
+        continue;
+      }
       if (a.type === "close_chase") {
         const c = await claim(f, "address_pending_closed", {
           dedupeKey: `address_pending_closed:${f.contactId}:${a.pendingAt}:exhausted`, data: { reason: "exhausted", by: "audit" },
@@ -122,7 +144,7 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         if (isReaction(latest.body)) { row.status = "skipped"; row.reason = "a reaction, not a text"; continue; }
         const r = await startReply({
           client, locationId, saved, store, contactId: f.contactId, message: String(latest.body).slice(0, 4000),
-          channel: /email/i.test(latest.type || "") ? "email" : "sms", attachments: latest.attachments, sendsEnabled, deps,
+          channel: /email/i.test(latest.type || "") ? "email" : "sms", attachments: latest.attachments, sendsEnabled, deps: runDeps,
         });
         if (r?.skipped) { row.status = "skipped"; row.reason = r.skipped; } else row.jobId = r?.job?.id || null;
       } else if (a.type === "queue_offer_send") {
@@ -133,9 +155,15 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         if (typeof deps.requoteFromAgentNumbers !== "function") { row.status = "skipped"; row.reason = "re-quoting is not wired"; continue; }
         const r = await deps.requoteFromAgentNumbers({ contactId: f.contactId, addressHint: f.address });
         if (r?.ok === false) { row.status = "skipped"; row.reason = r.reason || "re-quote declined"; }
+      } else if (a.type === "nudge_counter" || a.type === "nudge_offer") {
+        const offer = await offerFor(f);
+        if (!offer) { row.status = "skipped"; row.reason = "offer gone"; continue; }
+        const kind = a.type === "nudge_counter" ? "counter_nudge" : "offer_nudge";
+        const r = await startProactive({ client, locationId, saved, store, contactId: f.contactId, kind, offer, subject: { address: f.address }, sendsEnabled, deps: runDeps });
+        if (r?.skipped) { row.status = "skipped"; row.reason = r.skipped; } else row.jobId = r?.job?.id || null;
       } else if (a.type === "run_follow_up_sweep") {
         try {
-          const j = startSweep({ client, locationId, saved, store, sendsEnabled, deps, trigger: "audit", now });
+          const j = startSweep({ client, locationId, saved, store, sendsEnabled, deps: runDeps, trigger: "audit", now });
           row.jobId = j?.id || null;
         } catch (e) { row.status = "skipped"; row.reason = String(e?.message || e).slice(0, 120); }
       } else {

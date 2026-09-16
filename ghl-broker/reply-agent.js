@@ -646,6 +646,20 @@ export function decideAutoSend({ gate, party = "agent", intent = "other", channe
 // has the thread right now.
 export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed", "not_allowlisted"]);
 
+// The nightly audit's loosening (Matt, 2026-09-16: "fire where it can"). A
+// draft the money guard passed, that the model didn't flag for a person,
+// held only because its intent is a person's call or off the list or the
+// band's arithmetic didn't open — the reply itself is a holding reply that
+// commits to nothing, and silence is worse. Released, and said so on the
+// row. The gates are never released: `code === "gates"` stays held.
+export const RELEASE_QUIET = new Set(["opt_out", "small_talk", "media"]);
+export function releaseForAudit({ auto, gate, draft, deps }) {
+  if (!deps?.releaseHeld || auto?.send) return auto;
+  if (!HELD_FOR_A_PERSON.has(auto?.code) || auto.code === "gates") return auto;
+  if (!gate?.ok || draft?.needsHuman || RELEASE_QUIET.has(draft?.intent) || !String(draft?.reply || "").trim()) return auto;
+  return { ...auto, send: true, code: "", reason: "released by the nightly audit — a holding reply, nothing committed", released: true };
+}
+
 /**
  * releaseUnderGuard({ base, party, intent, config, guard }) → { send, reason, exception }
  *
@@ -1412,6 +1426,16 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // They countered and nobody came back — Gabe Spruell's 850k against our
+  // 732k sat six days (2026-09-16). Keeps the negotiation alive by asking for
+  // room, names no number of ours; the nightly audit starts it.
+  counter_nudge: {
+    party: "agent",
+    enabled: (pb) => Boolean(pb?.followUp?.enabled),
+    ready: ({ offer }) => (offer?.address && Number(offer?.counter?.amount) > 0 ? true : "no counter on record"),
+    floats: () => [],
+    forbids: () => [],
+  },
   passed_checkin: {
     party: "agent",
     enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.passed_checkin?.enabled,
@@ -1613,6 +1637,12 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       arvText: n.arv ? fmtMoney(n.arv) : "", rehabText: n.rehab ? fmtMoney(n.rehab) : "",
       arvK: n.arv ? kText(n.arv) : "", rehabK: n.rehab ? kText(n.rehab) : "" };
   }
+  if (kind === "counter_nudge") {
+    const theirs = Math.round(Number(offer?.counter?.amount) || 0);
+    const at = Date.parse(offer?.counter?.at || "");
+    return { ...base, theirs, theirsK: theirs ? kText(theirs) : "", ours: offer?.cashAmount || 0,
+      days: Number.isFinite(at) ? Math.max(1, Math.round((Date.now() - at) / 86400000)) : 0 };
+  }
   if (kind === "realm_check") {
     const closeDays = offer.terms?.closingDays || saved?.psa?.closingDays || 0;
     const terms = [closeDays ? `${closeDays}-day close` : "", "as-is"].filter(Boolean).join(", ");
@@ -1668,6 +1698,7 @@ function outboundSummary({ kind, offer, outbound }) {
         ? `Comes back on ${where} with ${fmtMoney(offer.cashAmount)} after re-running their numbers.`
         : `Floats ${fmtMoney(offer.cashAmount)} on ${where} as a rough first pass and asks if it's in the realm.`;
     case "offer_nudge":   return `Follows up on our offer on ${where}${rung}.`;
+    case "counter_nudge": return `Their ${outbound.theirsK || "counter"} on ${where} sat ${outbound.days}d — asks if the seller has any room, names no number of ours.`;
     case "passed_checkin": return `Checks back in on ${where} — they passed; asks if the seller would come closer to our number${rung}.`;
     case "outreach_open": return `First text: saw their listing at ${where}, asks if they have anything distressed.`;
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
@@ -1723,7 +1754,8 @@ async function runProactive(job, ctx) {
     ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]
     : context.forbiddenAmounts;
   const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff });
-  const auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
+  let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
+  auto = releaseForAudit({ auto, gate, draft, deps });
 
   job.phase = "saving";
   const open = [];
@@ -2103,7 +2135,8 @@ async function runReply(job, ctx) {
     : await evaluateBandFor({ store, locationId, party, draft, config, saved, job, now });
   // A booking guard on an intent that is not itself locked (a "question"
   // that picks a time) has nothing to release; the pass still books.
-  const auto = releaseUnderGuard({ base, party, intent: draft.intent, config, guard });
+  let auto = releaseUnderGuard({ base, party, intent: draft.intent, config, guard });
+  auto = releaseForAudit({ auto, gate, draft, deps });
   const bookingVerdict = guard?.kind === "booking" ? guard : null;
   const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };

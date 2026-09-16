@@ -3900,7 +3900,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // queued (the agent said the number works and nothing went) rides on
       // the realm-yes rule instead, and goes at the morning's first open minute.
       if (!cfg.parties.agent.sendOffer.onClearUnderwrite && offer.autoSendPending.by !== "audit") continue;
-      if (effectiveStatus(offer) !== "new" || now - Date.parse(offer.autoSendPending.at) > SEND_RETRY_DAYS * 86400000) { await clear(); continue; }
+      const okStatus = offer.autoSendPending.by === "audit" ? ["new", "sent"].includes(effectiveStatus(offer)) : effectiveStatus(offer) === "new";
+      if (!okStatus || now - Date.parse(offer.autoSendPending.at) > SEND_RETRY_DAYS * 86400000) { await clear(); continue; }
       const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
       if (!drafts.some((d) => d.inbound)) continue;
       const r = await conversationDeps({ client, locationId, saved: fresh }).sendOfferDocs({ contactId: offer.contactId, addressHint: offer.address });

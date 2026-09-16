@@ -42,6 +42,7 @@ const deps = (over = {}) => {
     startFollowUpSweep: () => { calls.push(["sweep"]); return { id: "fu1" }; },
     queueOfferSend: async (a) => { calls.push(["queue", a.offerId]); },
     requoteFromAgentNumbers: async (a) => { calls.push(["requote", a.contactId]); return { ok: true }; },
+    startProactive: async (a) => { calls.push(["proactive", a.contactId, a.kind]); return { job: { id: "p1" } }; },
     ...over,
   };
 };
@@ -159,4 +160,23 @@ test("a tapback is not re-answered", async () => {
   assert.equal(acted[0].status, "skipped");
   assert.match(acted[0].reason, /reaction/);
   assert.equal(d.calls.length, 0);
+});
+
+test("loose: a held holding-reply is scheduled at the next open minute, and a stalled counter starts a counter_nudge", async () => {
+  const held = { id: "h", contactId: "c1", contactName: "Gary", party: "agent", status: "draft", inbound: "Seller wants 850", reply: "Let me run that by my partner and come back to you.", intent: "counter", createdAt: ago(3), autoSendable: true, needsHuman: false, autoSend: { decided: false, reason: "a counter is a person's call" }, flags: [] };
+  const stalled = { id: "o1", contactId: "c2", contactName: "Gabe", address: "3831 Bagley Ave N, Seattle, WA", cashAmount: 732000, status: "countered", statusAt: ago(200), createdAt: ago(400), sends: [{ ts: ago(400), results: { sms: { ok: true } } }], followUps: [], counter: { amount: 850000, at: ago(144) } };
+  const store = fakeStore({ drafts: [held], offers: [stalled] });
+  store.getReplyDraft = async (id) => (id === "h" ? held : null);
+  store.updateReplyDraft = async (id, doc) => { Object.assign(held, doc); return true; };
+  store.getOffer = async (id) => (id === "o1" ? stalled : null);
+  const d = deps({ ghlLastMessages: async () => new Map() });
+  const { acted } = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  const rel = acted.find((a) => a.action === "release");
+  assert.equal(rel.status, "queued");
+  assert.equal(held.status, "scheduled");
+  assert.ok(Date.parse(held.sendAt) > NOW, "at the next open minute, never now");
+  assert.match(held.autoSend.reason, /released by the nightly audit/);
+  const nudge = acted.find((a) => a.action === "nudge_counter");
+  assert.ok(nudge, JSON.stringify(acted));
+  assert.deepEqual(d.calls.find((c) => c[0] === "proactive"), ["proactive", "c2", "counter_nudge"]);
 });
