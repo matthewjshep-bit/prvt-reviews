@@ -826,6 +826,18 @@ is allowed. The first switch that is off is recorded on the draft and shown
 on the row ("Would have been safe to send on its own. Didn't, because
 auto-send is off for agents").
 
+**Unsubscribed (DND) — flagged, never drafted (2026-09-16).** A buyer who
+had texted STOP got a blast reply that failed "Cannot send message as +1425…
+has unsubscribed" and sat in Today as "Needs you" — a text nobody could send.
+GHL records a STOP as `dndSettings.SMS.status: "permanent"` (the top-level
+`dnd` stays false); `smsUnsubscribed(contact)` in `ghl.js` reads both. Now:
+the reply agent and every proactive kind stand down before the model call
+(`handsOffReason` → "they unsubscribed"), the auto-send re-reads the contact
+and dismisses a due draft to anyone who unsubscribed since, GHL's own 400 is
+dismissed rather than handed back, and the contact is flagged once — tag
+`unsubscribed` and an `unsubscribed` timeline row — so lists and the drawer
+show it. "Needs you" is for texts a person could actually send.
+
 **Auto-send.** **On** out of the box for both parties, with the allowlist set
 to everything `NEVER_AUTO` doesn't forbid — reviewing every text is the thing
 that stops a bot being used, and the allowlist is only what the gates would

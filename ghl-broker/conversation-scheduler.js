@@ -218,8 +218,20 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
           if (paceMs > 0) await wait(Math.round(paceMs * (0.6 + 0.8 * random())));
         }
       } catch (e) {
-        out.failed++;
         const fresh = (await store.getReplyDraft(d.id).catch(() => null)) || d;
+        // "Cannot send message as +1… has unsubscribed": there is no send a
+        // person could make either. Dismissed, not handed back as "Needs you".
+        if (/unsubscribed/i.test(String(e?.message || e))) {
+          out.unsubscribed = (out.unsubscribed || 0) + 1;
+          await store.updateReplyDraft(d.id, {
+            ...fresh, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: new Date().toISOString(),
+            flags: [...(fresh.flags || []), "they unsubscribed — not sent"],
+            updatedAt: new Date().toISOString(),
+          }).catch(() => {});
+          log(`scheduler: ${d.id} not sent — the contact unsubscribed`);
+          continue;
+        }
+        out.failed++;
         await store.updateReplyDraft(d.id, {
           ...fresh, status: "draft", sendAt: null, sendingAt: null,
           flags: [...(fresh.flags || []), `auto-send failed: ${String(e?.message || e).slice(0, 160)}`],

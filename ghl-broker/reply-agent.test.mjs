@@ -3174,3 +3174,64 @@ test("a text that turns the conversation still supersedes what was counting down
   assert.equal(job.status, "done", job.error);
   assert.equal((await store.getReplyDraft("sched")).status, "superseded", "a stale 'what work does it need?' must not go out after a no");
 });
+
+/* ---------- unsubscribed (DND) — flagged, never drafted (2026-09-16) ---------- */
+
+// A blast reply to a buyer who had texted STOP failed "Cannot send message
+// as +1425… has unsubscribed" and sat in Today as "Needs you". GHL records a
+// STOP as dndSettings.SMS.status "permanent" with the top-level dnd false.
+function ghlStubDnd(dndSettings) {
+  const notes = []; const tagCalls = [];
+  const client = { call: async (path, opts = {}) => {
+    if (/^\/contacts\/c1$/.test(path) && !opts.method) return { contact: { id: "c1", firstName: "Abey", lastName: "G", tags: ["investor"], dnd: false, dndSettings } };
+    if (path.endsWith("/notes")) { notes.push(opts.body.body); return {}; }
+    if (path.endsWith("/tags")) { tagCalls.push([opts.method || "POST", opts.body.tags]); return {}; }
+    if (path.endsWith("/customFields") && !opts.method) return { customFields: [] };
+    if (path.startsWith("/conversations/search")) return { conversations: [] };
+    return {};
+  } };
+  return { client, notes, tags: tagCalls };
+}
+
+test("a contact who texted STOP is held before the model is called, tagged, and never drafted", async () => {
+  _resetJobs();
+  const { client, tags } = ghlStubDnd({ SMS: { status: "permanent", message: "STOP_KEYWORD" } });
+  const store = fakeStore();
+  let modelCalls = 0;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Is that Snohomish one still available?",
+    deps: { draft: async () => { modelCalls++; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(job.status, "held");
+  assert.match(job.heldReason, /unsubscribed/);
+  assert.equal(modelCalls, 0, "no draft, no model call");
+  assert.ok(!job.draftId, "no draft row either");
+  assert.ok(tags.some(([, t]) => t.includes("unsubscribed")), JSON.stringify(tags));
+  const events = await store.listContactEvents("LOC", "c1", { types: ["unsubscribed"] });
+  assert.equal(events.length, 1, "one timeline row, the flag");
+});
+
+test("a manual DND holds the same way; a contact GHL will text is not held", async () => {
+  const { smsUnsubscribed } = await import("./ghl.js");
+  assert.equal(smsUnsubscribed({ dnd: false, dndSettings: { SMS: { status: "permanent" } } }), true);
+  assert.equal(smsUnsubscribed({ dnd: false, dndSettings: { SMS: { status: "active" } } }), true);
+  assert.equal(smsUnsubscribed({ dnd: true }), true);
+  assert.equal(smsUnsubscribed({ dnd: false, dndSettings: { SMS: { status: "inactive" } } }), false);
+  assert.equal(smsUnsubscribed({ dnd: false, dndSettings: { Email: { status: "permanent" } } }), false, "an email DND is not a text DND");
+  assert.equal(smsUnsubscribed(null), false);
+});
+
+test("a scheduled text to someone who unsubscribed since is dismissed, not sent and not handed back", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const { client, tags } = ghlStubDnd({ SMS: { status: "permanent" } });
+  const store = fakeStore([{ id: "d9", locationId: "LOC", contactId: "c1", status: "scheduled", channel: "sms", reply: "Package is on its way.", party: "investor", createdAt: iso(1000), flags: [] }]);
+  store.getOffer = async () => null; store.listDeals = async () => [];
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d9", live: true, auto: true });
+  assert.equal(r.skipped, "they unsubscribed");
+  const d = await store.getReplyDraft("d9");
+  assert.equal(d.status, "dismissed");
+  assert.match(d.flags.join(" "), /unsubscribed — not sent/);
+  assert.ok(tags.some(([, t]) => t.includes("unsubscribed")));
+});

@@ -182,3 +182,17 @@ test("the ticker paces its sends and stops at the per-tick cap", async () => {
   assert.equal(r.deferred, 2, "the rest wait for the next tick");
   assert.equal([...store.rows.values()].filter((d) => d.status === "scheduled").length, 2);
 });
+
+// 2026-09-16: GHL's own refusal — "Cannot send message as +1… has
+// unsubscribed" — is not a chore for a person; nobody can send that text.
+test("a send GHL refuses as unsubscribed is dismissed, not handed back as 'Needs you'", async () => {
+  const store = fakeStore([draft()]);
+  const send = async () => { throw new Error('GHL POST /conversations/messages -> 400 {"message":"Cannot send message as +14255907078 has unsubscribed"}'); };
+  const r = await sendDueDrafts({ store, locations: [{ locationId: "LOC", client: {} }], live: true, now, send });
+  const d = store.rows.get("d1");
+  assert.equal(d.status, "dismissed");
+  assert.equal(r.failed, 0);
+  assert.equal(r.unsubscribed, 1);
+  assert.match(d.flags.join(" · "), /unsubscribed — not sent/);
+  assert.doesNotMatch(d.flags.join(" · "), /auto-send failed/);
+});

@@ -222,6 +222,19 @@ export async function searchContacts(client, locationId, query) {
   return data.contacts || [];
 }
 
+// A contact GHL will not text. A STOP keyword lands as
+// `dndSettings.SMS.status: "permanent"` (or "active" for a manual DND) while
+// the top-level `dnd` stays false — verified on a live contact, 2026-09-16,
+// after a blast reply failed "Cannot send message as +1425… has unsubscribed".
+// Read both, so neither shape slips a draft through.
+export const DND_TAG = "unsubscribed";
+export function smsUnsubscribed(contact) {
+  if (!contact) return false;
+  if (contact.dnd === true) return true;
+  const status = String(contact.dndSettings?.SMS?.status || "").toLowerCase();
+  return status === "active" || status === "permanent";
+}
+
 export async function getContact(client, contactId) {
   const data = await client.call(`/contacts/${encodeURIComponent(contactId)}`);
   return data.contact || data;

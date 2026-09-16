@@ -61,7 +61,7 @@ import {
   SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutActions, normalizePassReason,
 } from "./shared/conversation-ai.js";
 import {
-  getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
+  getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail, smsUnsubscribed, DND_TAG,
 } from "./ghl.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller, unansweredCheckIn } from "./shared/follow-up.js";
@@ -996,7 +996,9 @@ export function lastOutbound(transcript = "") {
 // A person replied to them recently and it wasn't one of ours going out:
 // they have the thread, so the bot drafts but never sends on its own.
 // Why the bot stood down, in the words the outbox and the job show.
+export const DND_REASON = "they unsubscribed (DND in GHL) — nothing is drafted";
 export function handsOffReason(a) {
+  if (a?.dnd) return DND_REASON;
   if (a?.botOff?.length) return `bot is off for this contact (tag: ${a.botOff[0]})`;
   if (a?.dealHold) {
     return a.dealHold.role === "buyer"
@@ -1004,6 +1006,18 @@ export function handsOffReason(a) {
       : `you have ${a.dealHold.address} under contract with them — the bot stays out of a live deal`;
   }
   return "";
+}
+
+// The flag Matt asked for (2026-09-16): an unsubscribed contact wears the
+// tag, carries one timeline row, and is never drafted for again. Best-effort
+// and idempotent — the dedupe key is the contact.
+export async function markUnsubscribed({ client, store, locationId, contactId, party = "agent", now = Date.now() }) {
+  if (!contactId) return;
+  await addContactTags(client, contactId, [DND_TAG]).catch(() => {});
+  await recordEvent({
+    store, locationId, contactId, party, type: "unsubscribed", at: new Date(now).toISOString(),
+    address: "", source: "ghl", dedupeKey: `unsubscribed:${contactId}`, data: { via: "dnd" },
+  }).catch(() => {});
 }
 
 export const OUR_OFFER_TEXT_RX = /\bhere's our written cash offer on\b/i;
@@ -1112,6 +1126,9 @@ export async function assembleConversation({
     }
   }
   const botOff = matchTagPatterns(tags, config.routing.botOffTags || []);
+  // They texted STOP (or were put on DND in GHL): GHL refuses the send, so
+  // there is nothing to draft. Read off the contact, never assumed.
+  const dnd = smsUnsubscribed(contact);
   // The other hands-off rule, and the one you don't have to remember to set:
   // a property under contract means you're working this person yourself.
   const dealHold = light ? null : await liveDealHold({
@@ -1184,7 +1201,7 @@ export async function assembleConversation({
     : null;
 
   return {
-    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dealHold, humanActive,
+    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dnd, dealHold, humanActive,
     playbook, contact, contactName: name, tags, custom, transcript, context, underwriting, instructions, signer, companyContact,
   };
 }
@@ -1833,6 +1850,7 @@ async function runReply(job, ctx) {
     job.phase = "";
     job.heldReason = handsOff;
     job.finishedAt = new Date().toISOString();
+    if (a.dnd) await markUnsubscribed({ client, store, locationId, contactId: job.contactId, party: a.party, now });
     return;
   }
 
@@ -2907,6 +2925,23 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       });
       await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
       return { ok: true, skipped: why };
+    }
+  }
+
+  // They unsubscribed since (or a blast never looked): GHL would answer 400
+  // "has unsubscribed" and the row would come back as "Needs you" for a text
+  // nobody can send. Dismissed instead, and the contact is flagged.
+  if (auto) {
+    const contact = await getContact(client, d.contactId).catch(() => null);
+    if (smsUnsubscribed(contact)) {
+      const ts = new Date(now).toISOString();
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), "they unsubscribed — not sent"],
+      });
+      await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      await markUnsubscribed({ client, store, locationId, contactId: d.contactId, party: d.party || "agent", now });
+      return { ok: true, skipped: "they unsubscribed" };
     }
   }
 
