@@ -22,10 +22,10 @@ const TONE = {
 // Buyer state on a deal card. Same colours the Deals page uses for the three
 // statuses it knows; the three colder states are new here.
 const BUYER = {
-  committed: "bg-emerald-500", evaluating: "bg-blue-500", passed: "bg-rose-400",
+  committed: "bg-emerald-500", soft_commit: "bg-amber-500", evaluating: "bg-blue-500", passed: "bg-rose-400",
   opened: "bg-violet-500", sent: "bg-sky-400", blasted: "bg-slate-300",
 };
-const BUYER_WORD = { committed: "committed", evaluating: "evaluating", passed: "passed", opened: "opened it", sent: "got the link", blasted: "blasted" };
+const BUYER_WORD = { committed: "committed", soft_commit: "soft commit", evaluating: "evaluating", passed: "passed", opened: "opened it", sent: "got the link", blasted: "blasted" };
 
 function QuickOp({ op, item, onDone }) {
   const [busy, setBusy] = useState(false);

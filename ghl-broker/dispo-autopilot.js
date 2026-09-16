@@ -22,6 +22,7 @@
 import { store as defaultStore } from "./store.js";
 import { blastMessage, dealFacts } from "./shared/blast-text.js";
 import { dealNumbers } from "./dataroom.js";
+import { dealOutreachPaused } from "./shared/offer-status.js";
 import { conversationConfig } from "./reply-agent.js";
 import { nextSendTime, spreadAcrossDay } from "./conversation-scheduler.js";
 
@@ -70,7 +71,17 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     : !config.enabled ? "Conversation AI is switched off" : !allowed ? "'sent them a deal' is not on the investor auto-send list" : "";
 
   const numbers = dealNumbers({ offer, settings: saved });
-  const facts = dealFacts(offer, { price: numbers.investorPrice });
+  // The operator's own line about the deal, off its dataroom headline. That
+  // headline is already written for buyers — it is the one sentence they'd
+  // read at the top of the package — so it belongs in the text that offers
+  // them the deal. Best-effort: a missing room just means a shorter message.
+  let note = "";
+  try {
+    const rooms = await store.listDatarooms(locationId, { offerId: offer.id, limit: 5 });
+    const room = rooms.find((r) => r.status === "active" && r.kind !== "portfolio" && r.kind !== "offer");
+    note = room?.snapshot?.headline || "";
+  } catch { /* the line is a courtesy, never the message */ }
+  const facts = dealFacts(offer, { price: numbers.investorPrice, note });
   const rows = [];
   let queued = 0, drafted = 0, i = 0;
   // Cumulative: each text lands at least `spreadSec` after the one before,
@@ -133,7 +144,8 @@ export async function secondWaveCandidates({ store = defaultStore, locationId, s
     if (!["under_contract"].includes(d.stage)) continue;
     const blasts = Array.isArray(d.blasts) ? d.blasts : [];
     if (blasts.length !== 1) continue;
-    if ((d.investors || []).some((i) => i.status === "committed")) continue;
+    // Committed, or somebody probably taking it: the wave is new outreach.
+    if (dealOutreachPaused(d)) continue;
     const at = Date.parse(blasts[0].at || "");
     if (!Number.isFinite(at) || now - at < da.secondWaveHours * 3600000) continue;
     out.push({ offer: o, blastedAt: blasts[0].at });

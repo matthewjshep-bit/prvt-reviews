@@ -28,6 +28,7 @@ import { FACT_KEYS, factsAsCustom, factsEmpty } from "../shared/contact-record.j
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
 import { queueBlastDrafts, normalizeDispoAutopilot } from "../dispo-autopilot.js";
+import { dealOutreachPaused, outreachPausedReason } from "../shared/offer-status.js";
 import {
   searchAllContactsByTags, getContact, updateContact, listLocationTags,
   findOrCreateCustomFieldByKey, customFieldIdKeyMapForDefs, contactCustomRecord,
@@ -991,6 +992,15 @@ export default function createDispoRouter({ resolveLocation }) {
         return res.json({ ok: true, sendWith: "app", blastTag: r.blastTag, ...r });
       }
 
+      // The tag-and-workflow blast doesn't go through blastFromApp, so it asks
+      // here. Only when it names a deal — a bare prefix blast isn't one deal's.
+      const taggedOfferId = String(req.body?.offerId || "").slice(0, 64);
+      if (taggedOfferId) {
+        const dealOffer = await store.getOffer(taggedOfferId).catch(() => null);
+        const paused = dealOffer?.locationId === locationId ? dealOutreachPaused(dealOffer.deal) : null;
+        if (paused) return res.status(409).json({ error: outreachPausedReason(paused, dealOffer.address), paused });
+      }
+
       const warnings = [];
       const results = await mapPool(contactIds, 2, async (contactId) => {
         try {
@@ -1052,6 +1062,14 @@ export default function createDispoRouter({ resolveLocation }) {
    * the second wave and the feedback package know. Never the trigger tag.
    */
   async function blastFromApp({ locationId, client, offer, investors = [], saved = null, dryRun = false, label = "", wave = 1, now = Date.now() }) {
+    // Somebody is probably taking this one. Every app blast comes through
+    // here — the button, the blast on promote, the second wave — so this is
+    // the one place that has to ask.
+    const paused = dealOutreachPaused(offer?.deal);
+    if (paused) {
+      return { queued: 0, drafted: 0, dryRun: Boolean(dryRun), scheduled: false, paused,
+               reason: outreachPausedReason(paused, offer?.address), rows: [], price: 0, blastTag: "" };
+    }
     const settings = saved || await getSettings(locationId);
     const prefix = sanitizeTag(settings?.dispoBlastTagPrefix || "dispo") || "dispo";
     const blastTag = sanitizeTag(`${prefix}-${label || slugStreet(offer.address) || "deal"}`);

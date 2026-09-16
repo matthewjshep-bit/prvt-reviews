@@ -186,7 +186,19 @@ export const STATUS_HISTORY_PHRASE = {
 // no-answer case was already covered by the blast tag and the dataroom
 // invite trail. It bought a status and paid for it in ambiguity: nothing
 // could tell "not answered yet" from "we never asked".
-export const INVESTOR_STATUSES = ["evaluating", "committed", "passed"];
+//
+// "soft_commit" is the one in the middle: "I think I have a buyer for this
+// one." Nothing is signed and it is not a promise, so it changes nothing
+// about what the deal IS — it is still live, still priced, still every
+// buyer's to look at, and the bot keeps working everyone who already has it.
+// What it changes is what we START: while it is on, the deal is not put in
+// front of anybody new (dealOutreachPaused). Clear it and outreach resumes on
+// its own, because nothing about the pause is stored — it is read off the
+// buyers each time.
+export const INVESTOR_STATUSES = ["evaluating", "soft_commit", "committed", "passed"];
+export const INVESTOR_STATUS_LABEL = {
+  evaluating: "Evaluating", soft_commit: "Soft commit", committed: "Committed", passed: "Passed",
+};
 // The one status that stands the Conversation AI down. "committed" is a
 // single person — the buyer who signs the assignment — and everything after
 // that point is paperwork a bot has no business in.
@@ -194,6 +206,7 @@ export const INVESTOR_STATUSES = ["evaluating", "committed", "passed"];
 // "evaluating" deliberately does NOT: that is every buyer actively weighing
 // the deal, often a dozen at once, and working them toward a walkthrough is
 // exactly the job. "passed" doesn't either — they're free for the next deal.
+// Nor does "soft_commit": a maybe is exactly the buyer to keep talking to.
 export const WORKING_INVESTOR_STATUSES = new Set(["committed"]);
 
 // A deal with a buyer: the stage says so, or somebody on it is committed.
@@ -206,6 +219,35 @@ export const dealIsOver = (deal) => Boolean(deal) && OVER_DEAL_STAGES.has(deal.s
 
 export const dealSpokenFor = (deal) =>
   Boolean(deal) && (deal.stage === "buyer_found" || (deal.investors || []).some((i) => i?.status === "committed"));
+
+/**
+ * dealOutreachPaused(deal) → { status, name, contactId } | null
+ *
+ * Somebody is probably taking this one, so stop shopping it. Blasts, the
+ * second wave, nudges to other buyers and the automatic dataroom invite all
+ * ask this first; nothing that is already in flight is withdrawn and nobody
+ * is told the deal is gone, because a soft commit is a maybe.
+ *
+ * Deliberately NOT dealSpokenFor. That one means the deal is taken — other
+ * buyers hear "spoken for" and see no numbers, and the bot stands down. This
+ * only stops new outreach, and it is derived, so putting the buyer back to
+ * evaluating (or their passing) starts it again with no second switch to
+ * remember.
+ */
+export const OUTREACH_PAUSING_STATUSES = new Set(["soft_commit", "committed"]);
+export function dealOutreachPaused(deal) {
+  if (!deal) return null;
+  const hit = (deal.investors || []).find((i) => OUTREACH_PAUSING_STATUSES.has(investorStatus(i?.status)));
+  if (hit) return { status: investorStatus(hit.status), name: hit.name || "", contactId: hit.contactId || "" };
+  if (deal.stage === "buyer_found") return { status: "committed", name: "", contactId: "" };
+  return null;
+}
+
+// The line an operator reads when something refused to go out because of it.
+export const outreachPausedReason = (p, address = "") =>
+  !p ? "" : p.status === "committed"
+    ? `${address || "this deal"} has a committed buyer${p.name ? ` (${p.name})` : ""}`
+    : `${address || "this deal"} is soft-committed${p.name ? ` to ${p.name}` : ""} — outreach is paused until that clears`;
 
 /**
  * investorStatus(s) → one of INVESTOR_STATUSES

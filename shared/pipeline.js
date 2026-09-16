@@ -71,8 +71,10 @@ export const ACTION_KINDS = [
 // Investor state on a deal card, and its precedence. A buyer who committed
 // is committed whatever else the events say; a buyer who only got a blast is
 // the coldest thing on the card.
-const INVESTOR_RANK = { committed: 6, passed: 5, evaluating: 4, opened: 3, sent: 2, blasted: 1 };
-const INVESTOR_ORDER = ["committed", "evaluating", "opened", "sent", "blasted", "passed"];
+// A soft commit sits just under committed: it outranks evaluating (it is the
+// most it can be without being signed) and loses to the real thing.
+const INVESTOR_RANK = { committed: 7, soft_commit: 6, passed: 5, evaluating: 4, opened: 3, sent: 2, blasted: 1 };
+const INVESTOR_ORDER = ["committed", "soft_commit", "evaluating", "opened", "sent", "blasted", "passed"];
 
 /* ---------- the builder ---------- */
 
@@ -248,7 +250,7 @@ export function buildPipeline({
       const anyBuyer = dd.investors.length > 0;
       const blasts = myEvents.filter((e) => e.type === "blast_sent");
       const views = myEvents.filter((e) => e.type === "dataroom_viewed");
-      const warm = dd.investors.some((i) => i.state === "evaluating" || i.state === "committed");
+      const warm = dd.investors.some((i) => ["evaluating", "soft_commit", "committed"].includes(i.state));
       if (dd.stage === "under_contract" && !anyBuyer && ageDays >= 2) {
         card.actionIds.push(push({ ...base, kind: "deal_no_buyers", severity: "soon",
           title: `${card.address} has nobody on it`, detail: `under contract ${ageDays}d`,

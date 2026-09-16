@@ -21,7 +21,7 @@
 //   The dedupe key is still the real defence — the cursor just stops us
 //   spending model calls on drafts that would be superseded anyway.
 
-import { OPEN_STATUSES, effectiveStatus, dealSpokenFor, dealIsOver } from "./shared/offer-status.js";
+import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreachPausedReason } from "./shared/offer-status.js";
 import { addressKey } from "./shared/us-address.js";
 import { sameStreet } from "./shared/us-address.js";
 import { dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor } from "./shared/follow-up.js";
@@ -376,9 +376,14 @@ async function runSweep(job, ctx) {
       // A deal that found its buyer is not nudged to anyone else.
 
       const mine = (offer?.deal?.investors || []).find((i) => i.contactId === c.contactId);
-      if (dealSpokenFor(offer?.deal) && mine?.status !== "committed") {
+      // Committed elsewhere, or soft-committed: nudging another buyer about it
+      // is putting it in front of them again. The buyer it is held for still
+      // hears from us.
+      const paused = dealOutreachPaused(offer?.deal);
+      if (paused && paused.contactId !== c.contactId) {
         job.skipped++;
-        push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: "the deal is committed to another buyer" });
+        push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped",
+          reason: outreachPausedReason(paused, offer?.address) });
         continue;
       }
     }

@@ -61,7 +61,7 @@ import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../
 import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isExpired,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
-  INVESTOR_STATUSES, investorStatus,
+  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason,
 } from "../shared/offer-status.js";
 import { planRequote } from "../shared/requote.js";
 import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
@@ -4128,8 +4128,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const offer = pickDealByAddress(live, addressHint);
       if (!offer) return { ok: false, reason: "" };
       const link = (offer.deal.investors || []).find((i) => i.contactId === contactId);
+      // Someone else is probably taking it — sending the package to a new
+      // buyer now is the outreach a soft commit exists to stop. The buyer it
+      // is soft-committed to still gets theirs.
+      const paused = dealOutreachPaused(offer.deal);
+      if (paused && paused.contactId !== contactId) {
+        return { ok: false, reason: outreachPausedReason(paused, offer.address), address: offer.address };
+      }
       if (link?.status === "passed") return { ok: false, reason: `they passed on ${offer.address}`, address: offer.address };
-      if (!(link?.status === "evaluating" || link?.status === "committed" || linking)) return { ok: false, reason: `not yet evaluating ${offer.address}`, address: offer.address };
+      if (!(["evaluating", "soft_commit", "committed"].includes(link?.status) || linking)) return { ok: false, reason: `not yet evaluating ${offer.address}`, address: offer.address };
       const rooms = await store.listDatarooms(locationId, { offerId: offer.id, limit: 5 });
       if (!rooms.some((r) => r.status === "active" && r.kind !== "portfolio" && r.kind !== "offer")) return { ok: false, reason: `no dataroom built for ${offer.address}`, address: offer.address };
       const row = await store.getInvestor(locationId, contactId).catch(() => null);
@@ -4232,6 +4239,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // would fork every key and duplicate the whole counter history.
         { type: `offer_${status}`, offerId: offer.id, source: "conversation", at: ts, ...(counter ? { data: { amount: counter } } : {}) });
       await syncAgentOfferTag(client, locationId, contactId);
+      // "soft_commit" pauses outreach on a live deal, which is an operator's
+      // judgement about whether a buyer is real — not something a warm text
+      // should decide. The bot may mark evaluating, committed (it already
+      // needs a person to confirm) or passed; holding the deal back is ours.
+      if (status === "soft_commit") return { ok: false, reason: "a soft commit is yours to set on the deal, not the bot's" };
       return { ok: true, address: offer.address, status, amount: counter };
     },
     // The investor's standing on a deal: passed, or the committed buyer

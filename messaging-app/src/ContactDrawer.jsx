@@ -20,6 +20,7 @@ import { EventDayGroups, when, dayLabel } from "./EventFeed.jsx";
 import { PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { summarizeFeedback } from "@shared/conversation-ai.js";
 import { fmtMoney } from "@shared/offer-calc.js";
+import { INVESTOR_STATUS_LABEL } from "@shared/offer-status.js";
 import { getContactProfile, saveContactFacts, addContactEvent, ghlContactUrl } from "./api.js";
 import { BTN, BTN_PRIMARY, Pill, StatusPill, StagePill } from "./ui.jsx";
 import { PartyPill, DraftRow } from "./ConversationOutbox.jsx";
@@ -168,7 +169,7 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
                     <li key={d.offer.id} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm">
                       <span className="min-w-0 truncate">{d.offer.address}</span>
                       <span className="flex shrink-0 items-center gap-2 text-xs">
-                        {d.standing && <Pill small label={d.standing.status} cls={d.standing.status === "committed" ? "bg-emerald-100 text-emerald-800" : d.standing.status === "passed" ? "bg-red-100 text-red-700" : "bg-blue-100 text-blue-800"} />}
+                        {d.standing && <Pill small label={(INVESTOR_STATUS_LABEL[d.standing.status] || d.standing.status).toLowerCase()} cls={d.standing.status === "committed" ? "bg-emerald-100 text-emerald-800" : d.standing.status === "soft_commit" ? "bg-amber-100 text-amber-900" : d.standing.status === "passed" ? "bg-red-100 text-red-700" : "bg-blue-100 text-blue-800"} />}
                         {d.standing?.reason?.code && <span className="text-slate-500" title={d.standing.reason.note || ""}>{PASS_REASON_LABEL[d.standing.reason.code]}</span>}
                         <StagePill stage={d.offer.deal?.stage} small />
                       </span>

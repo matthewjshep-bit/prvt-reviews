@@ -34,6 +34,7 @@ import {
   statusAfterUnpromote,
   toListOffer,
   INVESTOR_STATUSES, WORKING_INVESTOR_STATUSES, investorStatus,
+  dealOutreachPaused, dealSpokenFor, outreachPausedReason,
 } from "./offer-status.js";
 
 const iso = (d) => d.toISOString();
@@ -244,8 +245,8 @@ test("the audit stamp survives the lean row — the table can see provenance", (
   assert.equal(row.snapshot, undefined);
 });
 
-test("a buyer's standing on a deal has three states, and the retired fourth still reads", () => {
-  assert.deepEqual(INVESTOR_STATUSES, ["evaluating", "committed", "passed"]);
+test("a buyer's standing on a deal has four states, and the retired fifth still reads", () => {
+  assert.deepEqual(INVESTOR_STATUSES, ["evaluating", "soft_commit", "committed", "passed"]);
   // Deals written before "sent" was retired carry it. A buyer we'd sent a deal
   // to was being worked, which is what evaluating means — so no migration.
   assert.equal(investorStatus("sent"), "evaluating");
@@ -260,6 +261,33 @@ test("a buyer's standing on a deal has three states, and the retired fourth stil
   // dozen buyers deep, and working them is the job.
   assert.deepEqual([...WORKING_INVESTOR_STATUSES], ["committed"]);
   assert.equal(WORKING_INVESTOR_STATUSES.has("evaluating"), false);
+  // A maybe is exactly the buyer to keep talking to.
+  assert.equal(WORKING_INVESTOR_STATUSES.has("soft_commit"), false);
+  assert.equal(investorStatus("soft_commit"), "soft_commit");
+});
+
+test("a soft commit pauses outreach without making the deal spoken for", () => {
+  const deal = (investors, stage = "under_contract") => ({ stage, investors });
+  assert.equal(dealOutreachPaused(deal([{ contactId: "b1", name: "Dmitriy", status: "evaluating" }])), null);
+
+  const soft = dealOutreachPaused(deal([{ contactId: "b1", name: "Dmitriy", status: "soft_commit" }]));
+  assert.deepEqual(soft, { status: "soft_commit", name: "Dmitriy", contactId: "b1" });
+  assert.match(outreachPausedReason(soft, "23706 138th Dr SE"), /soft-committed to Dmitriy/);
+
+  // The line that keeps the two apart: the deal is NOT taken. Other buyers
+  // still see it and its numbers; the bot still works everyone on it.
+  assert.equal(dealSpokenFor(deal([{ contactId: "b1", status: "soft_commit" }])), false);
+
+  // Committed pauses it too — and that one IS spoken for.
+  const hard = dealOutreachPaused(deal([{ contactId: "b1", name: "Dmitriy", status: "committed" }]));
+  assert.equal(hard.status, "committed");
+  assert.equal(dealSpokenFor(deal([{ contactId: "b1", status: "committed" }])), true);
+  assert.ok(dealOutreachPaused(deal([], "buyer_found")), "the stage alone says it too");
+
+  // Nothing is stored: putting them back to evaluating starts outreach again.
+  assert.equal(dealOutreachPaused(deal([{ contactId: "b1", status: "evaluating" }])), null);
+  assert.equal(dealOutreachPaused(deal([{ contactId: "b1", status: "passed" }])), null);
+  assert.equal(dealOutreachPaused(null), null);
 });
 
 test("a list row keeps the follow-up rungs and the float stamps", () => {

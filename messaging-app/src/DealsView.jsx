@@ -8,7 +8,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ExternalLink, FileText, Loader2, Lock, Paperclip, Pencil, Sparkles, Target, Trash2, Upload, X, MessageSquare } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { INVESTOR_STATUSES, investorStatus } from "@shared/offer-status.js";
+import { INVESTOR_STATUSES, INVESTOR_STATUS_LABEL, investorStatus, dealOutreachPaused } from "@shared/offer-status.js";
 import { summarizeFeedback } from "@shared/conversation-ai.js";
 import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL, buyerCeiling, codeFromPassReasons } from "@shared/post-mortem.js";
 import { ClipboardCheck } from "lucide-react";
@@ -36,12 +36,13 @@ const TERMINAL = new Set(["closed", "fell_through"]);
 const STATUS_DOT = {
   evaluating: "bg-blue-500",
   passed: "bg-red-400",
+  soft_commit: "bg-amber-500",
   committed: "bg-emerald-500",
 };
 
 // Display order everywhere investors are listed: hottest first, passed last,
 // alphabetical within a status so the list is stable as statuses change.
-const STATUS_ORDER = { committed: 0, evaluating: 1, passed: 2 };
+const STATUS_ORDER = { committed: 0, soft_commit: 1, evaluating: 2, passed: 3 };
 const sortInvestors = (list) =>
   [...(list || [])].sort((a, b) =>
     (STATUS_ORDER[investorStatus(a.status)] ?? 9) - (STATUS_ORDER[investorStatus(b.status)] ?? 9) ||
@@ -79,13 +80,16 @@ function InvestorSummary({ deal }) {
   if (!inv.length) return <span className="text-xs text-slate-400">none yet</span>;
   const live = inv.filter((i) => investorStatus(i.status) !== "passed").length;
   const committed = inv.some((i) => investorStatus(i.status) === "committed");
+  // A soft commit is the state the board most needs to show: the deal looks
+  // idle (nothing is going out) and the reason is a buyer, not a stall.
+  const soft = !committed && inv.some((i) => investorStatus(i.status) === "soft_commit");
   return (
-    <span title={sortInvestors(inv).map((i) => `${i.name} — ${investorStatus(i.status)}`).join("\n")}
+    <span title={sortInvestors(inv).map((i) => `${i.name} — ${INVESTOR_STATUS_LABEL[investorStatus(i.status)] || investorStatus(i.status)}`).join("\n")}
       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${
-        committed ? "bg-emerald-100 text-emerald-900" : "bg-slate-100 text-slate-700"
+        committed ? "bg-emerald-100 text-emerald-900" : soft ? "bg-amber-100 text-amber-900" : "bg-slate-100 text-slate-700"
       }`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${committed ? STATUS_DOT.committed : STATUS_DOT.evaluating}`} />
-      {committed ? "buyer committed" : `${live} of ${inv.length} live`}
+      <span className={`h-1.5 w-1.5 rounded-full ${committed ? STATUS_DOT.committed : soft ? STATUS_DOT.soft_commit : STATUS_DOT.evaluating}`} />
+      {committed ? "buyer committed" : soft ? "soft commit — outreach paused" : `${live} of ${inv.length} live`}
     </span>
   );
 }
@@ -336,6 +340,9 @@ function InvestorPicker({ existingIds, onPick, busy }) {
 
 function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onDataroom, onEdit, onEnrich }) {
   const deal = offer.deal;
+  // Derived, never stored: change a buyer's standing and the banner and the
+  // broker's own gates agree without a second switch to keep in step.
+  const paused = dealOutreachPaused(deal);
   const [terms, setTerms] = useState(() => ({
     contractPrice: deal.contractPrice ?? "",
     assignmentFee: deal.assignmentFee ?? "",
@@ -559,6 +566,17 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
 
           {/* Disposition — who the deal is being shopped to */}
           <div className="space-y-4">
+            {/* Why nothing is going out. Said here rather than left to be
+                inferred from a quiet deal: a paused deal and a stalled one
+                look identical from the board. */}
+            {paused && (
+              <p className={`rounded-lg px-3 py-2 text-xs ${paused.status === "committed" ? "bg-emerald-50 text-emerald-900" : "bg-amber-50 text-amber-900"}`}>
+                <span className="font-semibold">Outreach paused.</span>{" "}
+                {paused.status === "committed"
+                  ? `${paused.name || "A buyer"} is committed — nothing new goes out on this one.`
+                  : `${paused.name || "A buyer"} is a soft commit, so no new blasts, second wave, nudges or package links go to anyone else. Put them back to Evaluating and it picks up where it left off.`}
+              </p>
+            )}
             <div>
               <span className={labelCls}>Disposition investors</span>
               <div className="space-y-1.5">
@@ -572,7 +590,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                       <select value={investorStatus(i.status)} disabled={busy}
                         onChange={(e) => run(() => updateDealInvestor(offer.id, i.contactId, e.target.value))}
                         className="rounded-md border border-slate-300 px-1.5 py-1 text-xs focus:border-blue-500 focus:outline-none">
-                        {INVESTOR_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                        {INVESTOR_STATUSES.map((s) => <option key={s} value={s}>{INVESTOR_STATUS_LABEL[s] || s}</option>)}
                       </select>
                       <button type="button" disabled={busy}
                         title="AI enrichment — summarize the conversation and fill CRM fields"

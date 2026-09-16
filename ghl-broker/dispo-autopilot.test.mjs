@@ -93,3 +93,39 @@ test("the second wave finds a deal blasted once with nobody committed, after the
   assert.deepEqual(seen[1], ["blast", "o2", 2, 2]);
   assert.equal(job.blasted, 2);
 });
+
+/* ---------- the soft commit ---------- */
+
+// "I think I have a buyer for this one." Nothing is signed, so the deal stays
+// live and priced — but we stop putting it in front of anyone new.
+test("a soft-committed deal is not picked up by the second wave, and clearing it lets the wave run", async () => {
+  const blastedAt = new Date(NOW - 50 * 3600000).toISOString();
+  const withStatus = (status) => ({
+    ...offer, id: "o9",
+    deal: { ...offer.deal, blasts: [{ at: blastedAt, count: 10, via: "app" }], investors: [{ contactId: "i1", name: "Dmitriy", status }] },
+  });
+
+  const soft = await secondWaveCandidates({ store: fakeStore([withStatus("soft_commit")]), locationId: "L", saved: {}, now: NOW });
+  assert.deepEqual(soft, [], "the wave is new outreach — it waits");
+
+  const back = await secondWaveCandidates({ store: fakeStore([withStatus("evaluating")]), locationId: "L", saved: {}, now: NOW });
+  assert.deepEqual(back.map((x) => x.offer.id), ["o9"], "nothing was stored, so putting them back resumes it");
+
+  const gone = await secondWaveCandidates({ store: fakeStore([withStatus("passed")]), locationId: "L", saved: {}, now: NOW });
+  assert.deepEqual(gone.map((x) => x.offer.id), ["o9"], "and so does their passing");
+});
+
+test("the buyer price, the ARV and the rehab go out with the blast; what we paid never does", async () => {
+  const store = fakeStore();
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } } };
+  const underwritten = {
+    ...offer, id: "o10",
+    snapshot: { subjectInfo: { beds: 3, baths: 2, sqft: 1480, yearBuilt: 1962 } },
+  };
+  const r = await queueBlastDrafts({ store, locationId: "L", offer: underwritten, investors: [buyers[0]], saved, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(r.queued, 1);
+  const text = [...store.rows.values()][0].reply;
+  assert.match(text, /3bd 2ba 1,480 sqft, built 1962/);
+  assert.match(text, /Buyer price 495k, ARV around 640k, rehab about 60k/);
+  assert.doesNotMatch(text, /465|30k/, "the contract price and the assignment fee stay ours");
+});
