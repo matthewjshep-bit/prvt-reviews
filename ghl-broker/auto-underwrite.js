@@ -49,6 +49,7 @@ import { SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { learnFacts, recordEvent } from "./contact-record.js";
 import { currentFacts } from "./shared/contact-record.js";
 import { propertyDossier } from "./shared/contact-record.js";
+import { VALUE_HOLD, WORK_HOLD } from "./shared/held-underwrites.js";
 import { mostRecentlyMentioned } from "./shared/us-address.js";
 
 /* ---------- the dials ---------- */
@@ -737,8 +738,10 @@ export function evaluateGates({
  */
 export function agentNumbersRescue({ held = [], theirArv = 0, theirRehab = 0, ourArv = 0, repairs = 0, listPrice = 0, sqft = 0 } = {}) {
   if (!held.length || !(theirArv > 0 || theirRehab > 0)) return null;
-  const VALUE = /renovated|priced comps?|price proxy|no ARV|ungraded comps|off the subject's size|sold homes? in the search box|square footage is unknown/i;
-  const WORK = /past the heavy band|listing photos? to scan/i;
+  // The patterns live with the triage (shared/held-underwrites.js) so the
+  // nightly sweep asks the agent for exactly what this rescue can use.
+  const VALUE = VALUE_HOLD;
+  const WORK = WORK_HOLD;
   let needValue = false;
   let needRepairs = false;
   for (const h of held) {
@@ -1664,8 +1667,13 @@ async function runUnderwrite(job, ctx) {
   // Our numbers are stuck, but the agent gave us theirs: price on them,
   // bounded, and say so everywhere the number shows (agentNumbersRescue).
   let arvForOffer = arv?.arv || 0;
+  // The cap for their value is any list price we know — the listing's, the
+  // one the sweep or the workflow handed over, or the one in the message.
+  // With only `job.listPrice` a rescue on a house with no live listing (Helen
+  // Hendricks' park home, 2026-09-15) had nothing to bound against and never ran.
+  const rescueCap = job.listPrice || job.suppliedAskingPrice || (Number(extraction.askingPrice) || 0);
   const rescued = gate.ok ? null : agentNumbersRescue({
-    held: gate.held, theirArv, theirRehab, ourArv: arvForOffer, repairs, listPrice: job.listPrice || 0, sqft,
+    held: gate.held, theirArv, theirRehab, ourArv: arvForOffer, repairs, listPrice: rescueCap, sqft,
   });
   if (rescued) {
     arvForOffer = rescued.value;

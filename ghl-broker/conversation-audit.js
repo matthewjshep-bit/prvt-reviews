@@ -18,6 +18,7 @@ import { recordEvent } from "./contact-record.js";
 import { workHour } from "./outreach-sweep.js";
 import { nextSendTime } from "./conversation-scheduler.js";
 import { startProactive as defaultStartProactive } from "./reply-agent.js";
+import { sweepHeldUnderwrites } from "./held-underwrites.js";
 
 export const CURSOR_NAME = "conversationAudit";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -79,16 +80,32 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
 
   const acted = [];
   const may = !dryRun && config.enabled;
+  // Loose: what the audit starts may send a holding reply the guard passed
+  // even when its intent is a person's call (releaseForAudit in reply-agent.js).
+  const loose = config.nightlyAudit?.loose !== false;
+  const runDeps = { ...deps, releaseHeld: loose };
+
+  // The held underwrites, same pass: dropped, closed out, re-run on the
+  // agent's numbers, or asked about (held-underwrites.js). Its findings ride
+  // on the same result so the card and the queue read one list.
+  phase("held underwrites");
+  try {
+    const h = await sweepHeldUnderwrites({ client, locationId, saved, store, sendsEnabled, deps: runDeps, now, dryRun: !may, pace });
+    result.findings.push(...h.findings);
+    result.counts.held = h.counts;
+    result.counts.queued += h.findings.filter((f) => f.action && ["ask_take", "rerun_held"].includes(f.action.type)).length;
+    result.counts.owed += h.counts.yours;
+    for (const k of ["held_rerun", "held_ask", "held_yours", "held_over", "held_junk"]) result.counts.byKind[k] = h.findings.filter((f) => f.kind === k).length;
+    acted.push(...h.acted);
+  } catch (e) {
+    result.counts.held = { error: String(e?.message || e).slice(0, 160) };
+  }
   if (!may) return { result, acted, reason: dryRun ? "dry run" : "Conversation AI is switched off — reported, nothing started" };
 
   phase("acting");
   const startReply = typeof deps.startReply === "function" ? deps.startReply : defaultStartReply;
   const startSweep = typeof deps.startFollowUpSweep === "function" ? deps.startFollowUpSweep : defaultStartFollowUpSweep;
   const startProactive = typeof deps.startProactive === "function" ? deps.startProactive : defaultStartProactive;
-  // Loose: what the audit starts may send a holding reply the guard passed
-  // even when its intent is a person's call (releaseForAudit in reply-agent.js).
-  const loose = config.nightlyAudit?.loose !== false;
-  const runDeps = { ...deps, releaseHeld: loose };
   const offerFor = async (f) => (f.offerId && typeof store.getOffer === "function" ? store.getOffer(f.offerId).catch(() => null) : null);
   const claim = async (f, type, extra = {}) => recordEvent({
     store, locationId, contactId: f.contactId, party: f.party || "agent", type, at: iso(now),

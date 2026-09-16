@@ -430,6 +430,16 @@ export function outboundOpening(outbound) {
         `toward our number, or what it would take. Do NOT name a new number of ours, do NOT restate their number, do NOT ` +
         `hint we'd go higher — movement on price is a person's call. ${CONTINUE} Set intent to counter_nudge.`;
 
+    // Our numbers are stuck on something they can answer. Ask for exactly
+    // the missing piece — never both when one is known — and nothing of ours.
+    case "take_ask": {
+      const asks = [o.needValue ? "what they figure it's worth once it's fixed up" : "", o.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ");
+      return `${START} We're running numbers on ${o.address} for this agent and they're stuck (${o.heldReason}). ` +
+        `In one or two lines say the comps came back thin and you want to get it right, then ask ${asks || "what they figure it's worth fixed up and what the work would run"} ` +
+        `— their read lets us finish it. Ask for nothing else. Do NOT name any number, range or percentage of ours, ` +
+        `do NOT promise a time, and do NOT apologise. ${CONTINUE} Set intent to take_ask.`;
+    }
+
     // The nudges. They introduce NO number — the money guard would flag one
     // anyway, but the instruction has to match the gate or every draft parks.
     case "offer_nudge":

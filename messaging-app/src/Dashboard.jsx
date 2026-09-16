@@ -362,6 +362,11 @@ function LastNightCard({ audit, error, onRetry, onRun, running }) {
             {last.ghlRead === false ? <span className="text-amber-700"> · GHL wasn't read, so a text with no draft at all can't be seen</span> : null}
             {last.reason ? <span className="text-slate-400"> · {last.reason}</span> : null}
           </div>
+          {last.counts?.held && !last.counts.held.error ? (
+            <div className="mb-3 text-sm text-slate-600">
+              Held underwrites: <b>{last.counts.held.held}</b> on the list · <b>{last.counts.held.dropped}</b> dropped · <b>{last.counts.held.retired}</b> closed out · <b>{last.counts.held.reran}</b> re-run on the agent's numbers · <b>{last.counts.held.asked}</b> asked for their read · <b>{last.counts.held.waiting}</b> waiting on them · <b>{last.counts.held.yours}</b> need you
+            </div>
+          ) : last.counts?.held?.error ? <div className="mb-3 text-sm text-amber-700">Held underwrites weren't swept: {last.counts.held.error}</div> : null}
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <div className="text-xs font-semibold text-slate-600">Need you <span className="font-normal text-slate-400">· {yours.length}</span></div>

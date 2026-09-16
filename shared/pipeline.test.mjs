@@ -38,6 +38,13 @@ test("a held underwrite draft lands in needs_review and produces an underwrite_h
   assert.deepEqual(a.ops.map((o) => o.key), ["open_editor", "drop"]);
 });
 
+test("a held draft a person published is a priced offer, not a look nobody took", () => {
+  const r = build({ offers: [offer({ status: "new", cashAmount: 429000, sends: [], proactive: { realmCheckAt: D(1) },
+    autoUnderwrite: { jobId: "j1", held: ["only 1 listing photo to scan"], finishedAt: D(1), publishedAt: D(1) } })] });
+  assert.equal(laneOf(r, "o1"), "floated");
+  assert.ok(!r.actions.some((x) => x.kind === "underwrite_held"));
+});
+
 test("a hand-made draft is neither a card nor an action, only a hidden count", () => {
   const r = build({ offers: [offer({ status: "draft", sends: [] })] });
   assert.equal(r.cards.length, 0);

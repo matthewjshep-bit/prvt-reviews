@@ -137,7 +137,11 @@ export function buildPipeline({
     if (!o?.id) continue;
     const status = effectiveStatus(o);
     const held = aiHoldReasons(o);
-    const aiHeld = needsAiReview(o) && held.length > 0;
+    // Only a DRAFT is a look nobody took. A held draft a person opened and
+    // published keeps its hold reasons (they travel with the record) but is a
+    // priced offer now — Erin Twedt's 20531 S Danvers (2026-09-16) sat in
+    // "needs a look" for a day after its number had already been floated.
+    const aiHeld = status === "draft" && needsAiReview(o) && held.length > 0;
     const expired = isExpired(o, new Date(now));
 
     // A hand-made draft is the editor's business, not the board's.

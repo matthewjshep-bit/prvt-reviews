@@ -43,7 +43,15 @@ export const AUDIT_KINDS = [
   { key: "offer_no_followup",    label: "Offers with no follow-up clock",               severity: "soon" },
   { key: "held_aging",           label: "Held over a day",                              severity: "soon" },
   { key: "chase_exhausted",      label: "Ran out of asks",                              severity: "fyi" },
+  // Held underwrites (shared/held-underwrites.js) — ridden by the same run.
+  { key: "held_rerun",           label: "Held underwrites re-run on the agent's numbers", severity: "soon" },
+  { key: "held_ask",             label: "Held underwrites — asked the agent for their read", severity: "soon" },
+  { key: "held_yours",           label: "Held underwrites that need you",               severity: "soon" },
+  { key: "held_over",            label: "Held drafts the conversation closed",          severity: "fyi" },
+  { key: "held_junk",            label: "Held drafts with nothing to review",           severity: "fyi" },
 ];
+// A finding's action that ends in a text, a run, or a queued send.
+export const QUEUED_ACTIONS = new Set(["redraft", "run_follow_up_sweep", "queue_offer_send", "requote", "release", "nudge_counter", "nudge_offer", "ask_take", "rerun_held"]);
 export const AUDIT_ACTION_KINDS = [{ key: "audit_owed", label: "From last night" }];
 export const AUDIT_EVENT_TYPES = [
   "text_summary", "call_summary", "promise_owed", "promise_kept", "checkin_requested", "checkin_sent",
@@ -366,7 +374,7 @@ export function auditConversations({
     counts: {
       touched: touched.size,
       answered: quietWins.length,
-      queued: findings.filter((f) => f.action && ["redraft", "run_follow_up_sweep", "queue_offer_send", "requote", "release", "nudge_counter", "nudge_offer"].includes(f.action.type)).length,
+      queued: findings.filter((f) => f.action && QUEUED_ACTIONS.has(f.action.type)).length,
       clocked: findings.filter((f) => f.action && ["book_checkin", "close_chase"].includes(f.action.type)).length,
       owed: findings.filter((f) => f.severity !== "fyi" && (!f.action || f.action.type === "book_checkin")).length,
       dealLag, byKind,
@@ -383,11 +391,14 @@ export function auditConversations({
  * the row's title says which kind it is.
  */
 const STILL_YOURS = new Set(["book_checkin"]);
+export const HELD_SWEEP_KINDS = new Set(["held_rerun", "held_ask", "held_yours", "held_over", "held_junk"]);
 export function auditActions(last, { now = Date.now() } = {}) {
   if (!last?.findings) return [];
   const labelOf = Object.fromEntries(AUDIT_KINDS.map((x) => [x.key, x.label]));
   return last.findings
-    .filter((f) => f.severity !== "fyi" && (!f.action || STILL_YOURS.has(f.action.type)))
+    // A held underwrite that is yours is already on the queue as
+    // underwrite_held (with Open and Drop); the card lists it, the queue doesn't twice.
+    .filter((f) => f.severity !== "fyi" && (!f.action || STILL_YOURS.has(f.action.type)) && !HELD_SWEEP_KINDS.has(f.kind))
     .map((f) => ({
       id: f.id, kind: "audit_owed", severity: f.severity, contactId: f.contactId, contactName: f.contactName || "",
       address: f.address || "", offerId: f.offerId || null, draftId: f.draftId || null,

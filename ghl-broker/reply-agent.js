@@ -1439,6 +1439,17 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // The underwrite held on something the agent can answer (thin comps, too
+  // few photos) and nobody asked them. One text for the missing piece; their
+  // read re-runs it (agentNumbersRescue). Started by the nightly held sweep
+  // (held-underwrites.js), which releases it; not on the playbook grid.
+  take_ask: {
+    party: "agent",
+    enabled: (pb) => Boolean(pb?.followUp?.enabled),
+    ready: ({ offer, subject }) => (offer?.address || subject?.address ? true : "no address to ask about"),
+    floats: () => [],
+    forbids: () => [],
+  },
   passed_checkin: {
     party: "agent",
     enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.passed_checkin?.enabled,
@@ -1640,6 +1651,11 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       arvText: n.arv ? fmtMoney(n.arv) : "", rehabText: n.rehab ? fmtMoney(n.rehab) : "",
       arvK: n.arv ? kText(n.arv) : "", rehabK: n.rehab ? kText(n.rehab) : "" };
   }
+  if (kind === "take_ask") {
+    const needs = Array.isArray(subject?.needs) && subject.needs.length ? subject.needs : ["value", "work"];
+    return { ...base, heldReason: String(subject?.heldReason || "our comps came back thin"), needs,
+      needValue: needs.includes("value"), needWork: needs.includes("work") };
+  }
   if (kind === "counter_nudge") {
     const theirs = Math.round(Number(offer?.counter?.amount) || 0);
     const at = Date.parse(offer?.counter?.at || "");
@@ -1702,6 +1718,7 @@ function outboundSummary({ kind, offer, outbound }) {
         : `Floats ${fmtMoney(offer.cashAmount)} on ${where} as a rough first pass and asks if it's in the realm.`;
     case "offer_nudge":   return `Follows up on our offer on ${where}${rung}.`;
     case "counter_nudge": return `Their ${outbound.theirsK || "counter"} on ${where} sat ${outbound.days}d — asks if the seller has any room, names no number of ours.`;
+    case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held (${outbound.heldReason}).`;
     case "passed_checkin": return `Checks back in on ${where} — they passed; asks if the seller would come closer to our number${rung}.`;
     case "outreach_open": return `First text: saw their listing at ${where}, asks if they have anything distressed.`;
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;

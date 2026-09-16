@@ -57,9 +57,10 @@ export const SILENT_INTENTS = new Set(["opt_out"]);
 // NEVER_AUTO, so autoEligible() offers them as checkboxes and an operator
 // opts a nudge into sending itself exactly the way they opt in a question.
 export const OUTBOUND_INTENTS = {
-  // counter_nudge is deliberately not here: it is started only by the nightly
-  // audit, which releases it itself (releaseForAudit), so it never needs a
-  // box on the playbook grid or a place in the autonomy fingerprint.
+  // counter_nudge and take_ask are deliberately not here: they are started
+  // only by the nightly audit, which releases them itself (releaseForAudit),
+  // so they never need a box on the playbook grid or a place in the autonomy
+  // fingerprint.
   agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "passed_checkin", "outreach_nudge", "call_followup", "promise_due", "price_drop", "checkin_due", "address_chase"],
   investor: ["blast_open", "blast_nudge", "dataroom_nudge", "call_followup"],
 };
@@ -68,7 +69,7 @@ export const INTENT_LABEL = {
   agent: {
     deal_available: "has a deal (tier 1)", new_property: "new property (tier 1)", investor_open: "open to investors (tier 2)",
     realm_yes: "number is in the realm", realm_check: "floated our number", take_check: "floated our read",
-    offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", passed_checkin: "checked back in on a passed offer",
+    offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", take_ask: "asked for their read to finish our numbers", passed_checkin: "checked back in on a passed offer",
     outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text",
     call_followup: "text after a call", promise_due: "kept our word on a number we owed", price_drop: "saw the list price come down", checkin_due: "the check-in they asked for", address_chase: "asked again for the address of a property they said was coming",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
@@ -477,7 +478,7 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // The nightly audit (shared/conversation-audit.js): every thread touched
   // today, checked at `hour` Pacific — answered where the dial allows, owed
   // where it isn't, on Today either way. Matt, 2026-09-16.
-  nightlyAudit: { enabled: true, hour: 19, loose: true },
+  nightlyAudit: { enabled: true, hour: 19, loose: true, heldSweep: true },
 });
 
 /* ---------- coercion helpers ---------- */
@@ -726,7 +727,9 @@ export function normalizeConversationAi(doc, seed = {}) {
       // `loose` (Matt, 2026-09-16: "fire where it can"): a held draft the
       // money guard passed is sent, not clocked; a stalled counter with no
       // numbers to re-run on is nudged; a realm-yes queues the send.
-      return { enabled: bool(a.enabled, D.nightlyAudit.enabled), hour: int(a.hour, D.nightlyAudit.hour, 17, 23), loose: bool(a.loose, D.nightlyAudit.loose) };
+      return { enabled: bool(a.enabled, D.nightlyAudit.enabled), hour: int(a.hour, D.nightlyAudit.hour, 17, 23), loose: bool(a.loose, D.nightlyAudit.loose),
+        // The held-underwrite pass (shared/held-underwrites.js) rides on the audit.
+        heldSweep: bool(a.heldSweep, D.nightlyAudit.heldSweep) };
     })(),
     rules: list(d.rules, { max: 40, each: 300 }),
     examples,

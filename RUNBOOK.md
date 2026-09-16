@@ -993,6 +993,59 @@ on a clock / need you, with Run now), the queue group "From last night", and
 `GET /api/dashboard/audit` (`last`, `run`, `tries`, `failed`); `POST
 /api/dashboard/audit/run { dryRun }` runs it by hand. Cursor `conversationAudit`.
 
+### Held underwrites — the nightly triage (2026-09-16)
+
+"Underwrites that need a look" held 49 rows and Matt wasn't going to get to
+them. Read against the conversations and the GHL stage, most weren't
+decisions: test rows and dry runs; houses that had gone pending or turned out
+turnkey; two-week-old holds the agent never wrote back on; and a dozen held
+on thin comps or too few photos — things the agent could have told us, and in
+three cases already had.
+
+**What it is.** `shared/held-underwrites.js` `triageHeldUnderwrite` is the
+verdict, pure, one held draft in. `ghl-broker/held-underwrites.js`
+`sweepHeldUnderwrites` reads what it needs (the contact's offers, timeline,
+drafts, GHL tags, opportunity stage) and carries it out. It rides on the
+nightly audit — same run, same result, same card — and by hand from the
+card's Run now (dry run first). `nightlyAudit.heldSweep: false` turns it off.
+
+The verdicts, in order:
+
+- **drop** (deleted): no address, a test address, a dry run; a newer draft or
+  a priced offer already on the same house.
+- **retire** (a status, a reason on the row, an `offer_*` event, a GHL note):
+  they unsubscribed / bot-off tag / GHL opportunity lost or in a cold stage
+  (Tier 3, passed on offer) → `we_passed`; the agent said pending, sold, not
+  interested, under contract → `passed`; turnkey per the agent → `we_passed`;
+  held **14 days** with no word → `we_passed`; we asked for their read
+  **7 days** ago and heard nothing → `we_passed`. The `uw-needs-review` tag
+  comes off once nothing of theirs is held.
+- **rerun**: the holds are all ones the agent's numbers answer (value: thin or
+  no comps, unknown sqft; work: too few photos, scope past the band) and the
+  timeline has their ARV / rehab dated after the hold → `startUnderwrite`
+  with `replaceOfferId` (the retry button's path); `agentNumbersRescue`
+  prices it on their figures, bounded (value ≤125% of any list price we
+  know — the listing's, the seller's ask on the timeline, or the message's;
+  the cap used to read only the listing, so a park home with no live
+  listing never rescued). Their value with no list price at all → yours.
+- **ask**: rescuable holds, the missing number(s) not on the timeline, the
+  thread alive (they wrote within 21 days, or the hold is under 3 days) →
+  one `take_ask` text asking for exactly the missing piece — "what's it worth
+  fixed up" and/or "what would the work run" — no number of ours. Released by
+  the audit like a nudge, sent at the next open minute. Never while a
+  `promise_due` text from the last 3 days already asked. Their answer lands
+  as an `agent_estimate`, the reply agent's own re-run rule
+  (`rerunHeld`) or the next night's **rerun** finishes it.
+- **wait**: asked under a week ago — nothing.
+- **yours**: a structural flag, an address we couldn't place, a run that
+  stopped early, their numbers that didn't clear it either.
+
+Every ask and rerun is claimed first (`audit_action`, keyed on the hold or on
+their newest number) so nothing starts twice. Dry run reports and touches
+nothing. **A held draft a person published is not "needs a look"** any more
+— the queue row is only for an unpublished draft (Erin Twedt's 20531 S
+Danvers sat there a day after its number had been floated).
+
 ### Sounding like a person (the send layer)
 
 Conversation AI page → "When it sends on its own". Three things beyond the
