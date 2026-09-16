@@ -136,7 +136,7 @@ import {
 import { OFFER_FIELDS, APP_FIELD_REGISTRY, registryByKey } from "../field-registry.js";
 import { fitSnapshot } from "../offer-snapshot.js";
 import { syncDealNumbers } from "../dataroom.js";
-import { refreshOfferPages } from "../offer-page.js";
+import { ensureOfferPage, refreshOfferPages } from "../offer-page.js";
 import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
@@ -5367,15 +5367,33 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         `${fmtMoney(offer.cashAmount)}, as-is, close on your timeline (attached). ` +
         `Happy to answer any questions.`;
 
-      // SMS: just the message, with the image as the MMS attachment. PDFs are
-      // email-only — no links in the text.
-      const smsText = text;
+      // The agent page — our arithmetic, the comps, the scope and what the
+      // seller nets, at one link. An operator's message already carries it
+      // (SendModal appends it, and unticking that box is a decision this must
+      // not undo), so the link is filled in only for a send that wrote its own
+      // words: the clean-underwrite send, its retry tick, and the
+      // conversation's send_offer. The page is built here if it doesn't exist
+      // yet — an unattended send has no one to press "Build it" first.
+      let pageLink = "";
+      if (!message) {
+        const settings = effectiveSettings(await store.getOfferSettings(locationId).catch(() => null));
+        const room = await ensureOfferPage({ store, locationId, offer, settings, create: live });
+        pageLink = room?.shareToken ? `${publicBaseUrl}/o/${room.shareToken}` : "";
+      }
+
+      // SMS: the message and the link, with the image as the MMS attachment.
+      // PDFs are email-only.
+      const smsText = pageLink ? `${text}\n\n${pageLink}` : text;
       const smsAttachments = imagePicked ? [offer.imageUrl] : [];
 
       // Email: every picked document attached as a file, short HTML body.
       const company = offer.calc?.settings?.company || {};
       const subject = (emailSubject || `Cash offer — ${offer.address || "your property"}`).slice(0, 150);
       const emailAttachments = picked.map(([, , url]) => url);
+        ...(pageLink ? [
+          `<p>How we got to the number — the comps, the rehab scope and what your seller nets: ` +
+          `<a href="${esc(pageLink)}">${esc(pageLink)}</a></p>`,
+        ] : []),
       const signoffLines = [company.signer || company.name, company.email, company.phone].filter(Boolean);
       // A bare https:// in an HTML email is a dead string the agent has to
       // copy by hand — the operator's message often ends in the offer-page

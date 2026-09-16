@@ -941,6 +941,15 @@ drafts. Needs `CARD_SENDS_ENABLED`; a note is left on the contact.
 Both write an `offer_sent` event with `data.by` = `conversation` or
 `underwrite`, so the funnel can tell a machine send from a person's.
 
+**The agent page rides along.** An unattended send has no operator to tick
+"include the link", so the send builds the agent-facing offer page itself (the
+modal's defaults — breakdown off, note prefilled) if the offer has none, and
+puts its `/o/<token>` link at the end of the text and in the email body. A page
+the operator *revoked* is left switched off and no link goes out; a page that
+won't build never blocks the paper. A send that carries the operator's own
+message is untouched — SendModal already appends the link there, and unticking
+that box is a decision the server must not undo.
+
 ## Hardening notes (2026-09)
 
 - **API keys never leave the broker in the clear.** `GET /api/offers/settings`

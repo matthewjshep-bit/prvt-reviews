@@ -25,7 +25,7 @@
 import { netComparison } from "./shared/offer-calc.js";
 import { zillowUrl } from "./shared/us-address.js";
 import { offerBreakdown } from "./shared/offer-breakdown.js";
-import { esc, page, pickedComps } from "./dataroom.js";
+import { esc, hashToken, newToken, page, pickedComps } from "./dataroom.js";
 
 const num = (v) => {
   const n = Number(String(v ?? "").replace(/[$,\s]/g, ""));
@@ -180,6 +180,81 @@ export async function refreshOfferPages({ store, locationId, offer, settings = {
     console.error(`offer-page: refresh failed offer=${offer?.id}:`, e?.message);
   }
   return refreshed;
+}
+
+/* ============================================================= *
+ * the share link
+ * ============================================================= */
+
+// One forwardable link per page: no expiry, no recipient, rotatable. Its token
+// is stored in the clear (personal dataroom invites keep only a hash) because
+// the operator has to be able to re-copy it, and a link you can't retrieve is
+// useless for something you text to an agent. Rotation, not secrecy, controls
+// it — this page is meant to be forwarded to a seller.
+export async function ensureShareLink(store, room) {
+  if (room.shareToken) return room;
+  const token = newToken();
+  await store.createDataroomInvite({
+    dataroomId: room.id,
+    locationId: room.locationId,
+    tokenHash: hashToken(token),
+    contactId: null, name: null, phone: null,
+    expiresAt: null,
+    doc: { share: true, offerPage: true },
+  });
+  room.shareToken = token;
+  await store.updateDataroom(room.id, room);
+  return room;
+}
+
+// The note the agent reads at the top of the page. Kept in step with
+// defaultAgentNote in the app's OfferPageModal.jsx, so a page the machine
+// builds on its way out reads exactly like one the operator built by hand.
+export const defaultAgentNote = (contactName) =>
+  `${String(contactName || "").split(" ")[0] || "Hi"}, put together this offer and the 'why' behind it. ` +
+  `Let me know what you think.`;
+
+// The page behind an offer's link, built if it isn't there yet.
+//
+// An unattended send has no operator to press "Build it" first, and a text
+// that carries only a number invites the bin — the page is the argument. So
+// the send builds one, with the same defaults the modal would have used.
+//
+// Two states are answered with no link rather than a new page: a revoked page
+// (the operator switched that link off, and rebuilding around them would undo
+// the decision) and a draft offer (nothing to publish yet).
+//
+// `create` false looks the page up without building one — a dry-run send
+// previews the link it would use, and a preview must not write.
+//
+// Returns the room, or null. Never throws: paper must go out even when its
+// page won't build.
+export async function ensureOfferPage({ store, locationId, offer, settings = {}, create = true }) {
+  try {
+    if (!offer?.id || offer.status === "draft") return null;
+    const existing = (await store.listDatarooms(locationId, { offerId: offer.id }))
+      .find((r) => r?.kind === "offer");
+    if (existing) {
+      if (existing.status !== "active") return null;
+      if (!existing.shareToken && !create) return null;
+      return await ensureShareLink(store, existing);
+    }
+    if (!create) return null;
+
+    const snapshot = buildOfferSnapshot({ offer, settings, note: defaultAgentNote(offer.contactName) });
+    const room = await store.createDataroom({
+      locationId,
+      offerId: offer.id,
+      address: offer.address || snapshot.property.address || null,
+      status: "active",
+      kind: "offer",
+      snapshot,
+    });
+    return await ensureShareLink(store, room);
+  } catch (e) {
+    console.error(`offer-page: ensure failed offer=${offer?.id}:`, e?.message);
+    return null;
+  }
 }
 
 /* ============================================================= *

@@ -28,36 +28,14 @@ import express from "express";
 import { store } from "../store.js";
 import { effectiveSettings } from "../shared/offer-calc.js";
 import {
-  brandFrom, hashToken, newToken, renderNotice, secureHeaders,
+  brandFrom, hashToken, renderNotice, secureHeaders,
 } from "../dataroom.js";
 import {
-  OFFER_DOC_KINDS, buildOfferSnapshot, normalizeOfferSections, renderOfferPage,
+  OFFER_DOC_KINDS, buildOfferSnapshot, ensureShareLink, normalizeOfferSections, renderOfferPage,
 } from "../offer-page.js";
 
 const isOfferPage = (room) => room?.kind === "offer";
 const clean = (v, max) => String(v ?? "").trim().slice(0, max);
-
-/* ---------- share link ---------- */
-// One forwardable link per offer: no expiry, no recipient, rotatable. Its token
-// is stored in the clear (personal dataroom invites keep only a hash) because
-// the operator has to be able to re-copy it, and a link you can't retrieve is
-// useless for something you text to an agent. Rotation, not secrecy, controls
-// it — this page is meant to be forwarded to a seller.
-async function ensureShareLink(room) {
-  if (room.shareToken) return room;
-  const token = newToken();
-  await store.createDataroomInvite({
-    dataroomId: room.id,
-    locationId: room.locationId,
-    tokenHash: hashToken(token),
-    contactId: null, name: null, phone: null,
-    expiresAt: null,
-    doc: { share: true, offerPage: true },
-  });
-  room.shareToken = token;
-  await store.updateDataroom(room.id, room);
-  return room;
-}
 
 export function createOfferPageRouter({ resolveLocation, publicBaseUrl = "" }) {
   const router = express.Router();
@@ -119,7 +97,7 @@ export function createOfferPageRouter({ resolveLocation, publicBaseUrl = "" }) {
         kind: "offer",
         snapshot,
       });
-      await ensureShareLink(room);
+      await ensureShareLink(store, room);
       res.json({ ok: true, offerPage: await publicShape(room) });
     } catch (err) { fail(res, err); }
   });
@@ -194,7 +172,7 @@ export function createOfferPageRouter({ resolveLocation, publicBaseUrl = "" }) {
       }
       delete room.shareToken;
       await store.updateDataroom(room.id, room);
-      await ensureShareLink(room);
+      await ensureShareLink(store, room);
       await store.logDataroomEvent(room.id, null, "share_rotated", {});
       res.json({ ok: true, shareLink: pageLink(room.shareToken) });
     } catch (err) { fail(res, err); }
