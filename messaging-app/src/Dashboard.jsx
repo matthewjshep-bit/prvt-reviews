@@ -15,7 +15,8 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Pencil, X } from "lucide-react";
-import { getDashboardDigest } from "./api.js";
+import { getDashboardDigest, getDashboardAudit, runDashboardAudit } from "./api.js";
+import { AUDIT_KINDS } from "@shared/conversation-audit.js";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
   getDashboardSummary, getDashboardTagCounts, getDashboardMessages, getDashboardContacts, saveSettings,
@@ -319,6 +320,76 @@ function DigestCard({ digest, loading, error, onRetry }) {
   );
 }
 
+// Last night: what the nightly audit checked, what it did on its own, and
+// what it owes you. The digest below is the same day read raw; this is the
+// day read and acted on. Matt, 2026-09-16.
+function LastNightCard({ audit, error, onRetry, onRun, running }) {
+  if (error) return <Card title="Last night"><ErrorNote message={error} onRetry={onRetry} /></Card>;
+  if (!audit) return null;
+  const last = audit.last;
+  const labelOf = Object.fromEntries(AUDIT_KINDS.map((k) => [k.key, k.label]));
+  const when = (v) => (v ? new Date(v).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
+  const yours = (last?.findings || []).filter((f) => f.severity !== "fyi" && (!f.action || f.action.type === "book_checkin"));
+  const done = (last?.acted || []).filter((a) => ["started", "queued", "clocked", "closed"].includes(a.status));
+  const fyi = (last?.findings || []).filter((f) => f.severity === "fyi");
+  const row = (f, i) => (
+    <li key={`${f.kind}-${f.contactId || f.offerId || i}-${i}`} className="text-sm text-slate-700">
+      <span className="font-medium">{f.contactName || "An agent"}</span>
+      {f.address ? <span className="text-slate-500"> · {String(f.address).split(",")[0]}</span> : null}
+      <span className="text-slate-400"> — {labelOf[f.kind] || f.kind}{f.why ? `: ${f.why}` : ""}</span>
+    </li>
+  );
+  return (
+    <Card
+      title="Last night"
+      right={<span className="flex items-center gap-2 text-[11px] text-slate-400">
+        {last ? `${last.trigger === "daily" ? "ran" : "run by hand"} ${when(last.finishedAt)}${last.dryRun ? " · dry run" : ""}` : `runs at ${audit.hour}:00 Pacific`}
+        {audit.run && !audit.job ? " · a run started and never finished — retrying" : ""}
+        <button type="button" disabled={running} onClick={onRun}
+          className="rounded-md border border-slate-300 px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">
+          {running ? "running…" : "Run now"}
+        </button>
+      </span>}
+    >
+      {!last ? (
+        <div className="text-sm text-slate-400">Hasn't run yet.</div>
+      ) : last.status === "error" ? (
+        <div className="text-sm text-red-700">Failed: {last.error}</div>
+      ) : (
+        <>
+          <div className="mb-3 text-sm text-slate-600">
+            Checked <b>{last.counts?.touched ?? 0}</b> threads · <b>{last.counts?.answered ?? 0}</b> answered · <b>{last.counts?.queued ?? 0}</b> queued for this morning · <b>{last.counts?.clocked ?? 0}</b> put on a clock · <b>{yours.length}</b> need you
+            {last.ghlRead === false ? <span className="text-amber-700"> · GHL wasn't read, so a text with no draft at all can't be seen</span> : null}
+            {last.reason ? <span className="text-slate-400"> · {last.reason}</span> : null}
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <div className="text-xs font-semibold text-slate-600">Need you <span className="font-normal text-slate-400">· {yours.length}</span></div>
+              {yours.length ? <ul className="mt-1 space-y-0.5">{yours.slice(0, 12).map(row)}{yours.length > 12 && <li className="text-xs text-slate-400">+{yours.length - 12} more</li>}</ul>
+                : <div className="mt-1 text-sm text-slate-400">Nothing — every thread is answered or on a clock.</div>}
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-slate-600">Done on its own <span className="font-normal text-slate-400">· {done.length}</span></div>
+              {done.length ? (
+                <ul className="mt-1 space-y-0.5">
+                  {done.slice(0, 12).map((a, i) => (
+                    <li key={`${a.kind}-${a.contactId}-${i}`} className="text-sm text-slate-700">
+                      <span className="font-medium">{a.contactName || "An agent"}</span>
+                      {a.address ? <span className="text-slate-500"> · {String(a.address).split(",")[0]}</span> : null}
+                      <span className="text-slate-400"> — {String(a.action).replace(/_/g, " ")} ({a.status}{a.reason ? `: ${a.reason}` : ""})</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : <div className="mt-1 text-sm text-slate-400">Nothing needed starting.</div>}
+              {fyi.length ? <div className="mt-2 text-xs text-slate-400">{fyi.length} for information only ({[...new Set(fyi.map((f) => labelOf[f.kind] || f.kind))].join(", ")})</div> : null}
+            </div>
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
 export default function Dashboard({ settings, onSettingsSaved }) {
   const [days, setDays] = useState(30);
   // A picked past date shows that single day (same layout as Today).
@@ -342,6 +413,21 @@ export default function Dashboard({ settings, onSettingsSaved }) {
   };
   useEffect(loadSummary, [days, endDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Last night's audit (local; refreshed with the digest, and after Run now).
+  const [audit, setAudit] = useState(null);
+  const [auditError, setAuditError] = useState("");
+  const [auditRunning, setAuditRunning] = useState(false);
+  const loadAudit = () => getDashboardAudit().then((a) => { setAudit(a); setAuditRunning(a?.job?.status === "running"); }).catch((e) => setAuditError(e.message));
+  const runAudit = async () => {
+    setAuditRunning(true);
+    try { await runDashboardAudit({ dryRun: false }); } catch (e) { setAuditError(e.message); setAuditRunning(false); return; }
+    const poll = setInterval(async () => {
+      const a = await getDashboardAudit().catch(() => null);
+      if (a) setAudit(a);
+      if (!a || a.job?.status !== "running") { clearInterval(poll); setAuditRunning(false); }
+    }, 3000);
+  };
+
   // Tonight's digest (local, refreshed every five minutes).
   const [digest, setDigest] = useState(null);
   const [digestLoading, setDigestLoading] = useState(false);
@@ -356,7 +442,8 @@ export default function Dashboard({ settings, onSettingsSaved }) {
   };
   useEffect(() => {
     loadDigest();
-    const t = setInterval(loadDigest, 5 * 60 * 1000);
+    loadAudit();
+    const t = setInterval(() => { loadDigest(); loadAudit(); }, 5 * 60 * 1000);
     return () => clearInterval(t);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -540,6 +627,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
 
       {summaryError && <ErrorNote message={summaryError} onRetry={loadSummary} />}
 
+      {!endDate && <LastNightCard audit={audit} error={auditError} onRetry={loadAudit} onRun={runAudit} running={auditRunning} />}
       {!endDate && <DigestCard digest={digest} loading={digestLoading} error={digestError} onRetry={loadDigest} />}
 
       {/* KPI row */}

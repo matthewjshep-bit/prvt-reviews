@@ -39,6 +39,8 @@ import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_
 import { draftStats } from "../shared/conversation-ai.js";
 import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
 import { conversationConfig } from "../reply-agent.js";
+import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR } from "../conversation-audit.js";
+import { auditActions, summarize as summarizeAudit } from "../shared/conversation-audit.js";
 
 // Same expression routes/offers.js reads: the broker's one send gate. The
 // pipeline only REPORTS it, so the console can say whether a draft's Send
@@ -163,7 +165,7 @@ async function ghlPage(fn) {
 }
 const PACE_MS = 150; // ≈ 66 req / 10s, comfortably under the burst cap
 
-export default function createDashboardRouter({ resolveLocation }) {
+export default function createDashboardRouter({ resolveLocation, conversationDepsFor = null }) {
   const router = express.Router();
   const fail = (res, err) => {
     const code = err.http || err.status || 500;
@@ -384,7 +386,14 @@ export default function createDashboardRouter({ resolveLocation }) {
       for (const i of investors) if (i?.contactId && i.name) contactNames[i.contactId] = i.name;
       const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
       const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, now, eventsLimit: PIPELINE_EVENT_LIMIT });
+      // Last night's audit: the rows that are Matt's join the queue under
+      // "From last night"; the rest of the result rides along for the card.
+      const auditCursor = await store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null);
+      const audit = auditCursor?.doc?.last || null;
+      const fromLastNight = auditActions(audit, { now }).filter((a) =>
+        !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled")));
       res.json({
+        audit: audit ? { lastRunAt: auditCursor.at, run: auditCursor.doc?.run || null, counts: audit.counts, summary: summarizeAudit(audit), finishedAt: audit.finishedAt, trigger: audit.trigger, dryRun: audit.dryRun, error: audit.error, ghlRead: audit.ghlRead } : null,
         ok: true,
         now: new Date(now).toISOString(),
         sendsEnabled: CARD_SENDS_ENABLED,
@@ -395,7 +404,32 @@ export default function createDashboardRouter({ resolveLocation }) {
         // row the outbox uses, so send/edit/dismiss/apply come for free.
         drafts,
         ...out,
+        actions: [...out.actions, ...fromLastNight],
       });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The nightly audit's durable result, and the button that runs it by hand.
+  router.get("/audit", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const cursor = await store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null);
+      const saved = await store.getOfferSettings(locationId).catch(() => null);
+      const cfg = conversationConfig(saved || {});
+      res.json({ ok: true, enabled: cfg.nightlyAudit?.enabled !== false, hour: cfg.nightlyAudit?.hour ?? 19, tz: "America/Los_Angeles",
+        lastRunAt: cursor?.at || null, run: cursor?.doc?.run || null, last: cursor?.doc?.last || null,
+        tries: Number(cursor?.doc?.tries) || 0, failed: Boolean(cursor?.doc?.failed), error: cursor?.doc?.error || null,
+        job: publicAuditJob(getAuditJob(locationId)) });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/audit/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await store.getOfferSettings(locationId).catch(() => null);
+      const dryRun = req.body?.dryRun !== false;
+      const deps = typeof conversationDepsFor === "function" ? conversationDepsFor({ locationId, client, saved: saved || {} }) : {};
+      const job = startConversationAudit({ client, locationId, saved: saved || {}, store, sendsEnabled: CARD_SENDS_ENABLED, deps, trigger: "manual", dryRun });
+      res.status(202).json({ ok: true, job: publicAuditJob(job) });
     } catch (err) { fail(res, err); }
   });
 

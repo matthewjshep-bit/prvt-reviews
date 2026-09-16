@@ -903,6 +903,54 @@ the tab (default 60, plus 12 per contact), counted from the store so a
 restart can't reset it. No Apify. Two drafts in flight per location at a
 time. Settled drafts older than the retention (180 days) are pruned daily.
 
+### The nightly audit (2026-09-16)
+
+Fifteen ticks push pieces of the loop. None of them stood back at the end of
+the day and asked, per thread: did we answer? do we owe them something, and is
+it on a clock? is the next move queued? Three threads went quiet on 2026-09-16
+for three different reasons (a burst superseded the only reply, a held draft
+nobody clocked, a reply job that hung) and each was invisible until Matt asked.
+
+**What it is.** `shared/conversation-audit.js` is the analysis — pure, rows in,
+findings out; read it to know what the sweep would and wouldn't do.
+`ghl-broker/conversation-audit.js` runs it once a night at `nightlyAudit.hour`
+Pacific (19 by default, after the promise window closes; retried through the
+evening, a stale run retried like the outreach sweep's) with **zero GHL calls
+except one cached `ghlLastMessages` read** — that read is what catches a text
+that produced no draft row at all. Every finding names ONE existing mechanism:
+
+- **Texts we never answered** — no row at all, or only rows a burst replaced →
+  redraft via `startReply` (the redraft button's own path); a held draft →
+  make sure the reply agent's "unanswered" check-in clock exists (same dedupe
+  key, so never two); a `handled` wants-a-call → yours.
+- **They said the number works, no offer went** → queued as `autoSendPending`
+  (`by: "audit"`) so the morning tick sends it (`retryPendingOfferSends`
+  honours that without the clean-underwrite switch). Never sends at night.
+- **Still owed a number** — the promise sweep already texted once; the audit
+  never texts twice. Past two days with no word it books a morning check-in;
+  under, a Today row (which is what keeps it visible past the queue's 3-day drop).
+- **Counters nobody moved on** (48h, no re-quote/band/decline) → re-quote on
+  the agent's numbers when re-quoting is on and a take exists; else yours,
+  with their number, ours and the gap.
+- **Floated, never heard back** / **offers with no follow-up clock** → when
+  the offer ladder is on and the follow-up sweep hasn't run today, the sweep
+  is started (once a night); ladder off → yours, said so.
+- **Offers that couldn't send themselves** → yours, with the reason.
+- **Ran out of asks** → the address chase is closed with a terminal event.
+
+**Rules it never breaks.** Nothing texts at night — every remedy goes through
+`startReply`/`startProactive` → gates → the dial → the 30-second scheduler at
+the next open minute. Every text-ending remedy is claimed first (`audit_action`
+with a key on the thing it answers) so a re-run or the morning sweep starts
+nothing twice. A person who replied last owns the thread; unsubscribed,
+opted-out and bot-off contacts are never in the list. With the bot switched
+off it reports and touches nothing. `dryRun` analyses and writes nothing.
+
+**Where to look.** Today's "Last night" card (checked / answered / queued /
+on a clock / need you, with Run now), the queue group "From last night", and
+`GET /api/dashboard/audit` (`last`, `run`, `tries`, `failed`); `POST
+/api/dashboard/audit/run { dryRun }` runs it by hand. Cursor `conversationAudit`.
+
 ### Sounding like a person (the send layer)
 
 Conversation AI page → "When it sends on its own". Three things beyond the

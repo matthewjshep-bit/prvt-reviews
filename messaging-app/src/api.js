@@ -491,6 +491,8 @@ export const getDashboardPipeline = () =>
 // The day's loose ends: acceptances, close counters, owed promises, unanswered texts.
 export const getDashboardDigest = (hours = 24) =>
   fetch(`${API_BASE}/api/dashboard/digest?${locq()}&hours=${hours}`).then(j);
+export const getDashboardAudit = () => fetch(`${API_BASE}/api/dashboard/audit?${locq()}`).then(j);
+export const runDashboardAudit = ({ dryRun = true } = {}) => post(`/api/dashboard/audit/run`, { dryRun });
 export const floatOffer = (id, kind) =>
   post(`/api/offers/${encodeURIComponent(id)}/float`, { kind });
 export const getDashboardFlow = (days = 7, end = "") =>

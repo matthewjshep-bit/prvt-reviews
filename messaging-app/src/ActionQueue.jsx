@@ -8,6 +8,7 @@
 import React, { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { ACTION_KINDS } from "@shared/pipeline.js";
+import { AUDIT_ACTION_KINDS } from "@shared/conversation-audit.js";
 import { BTN, BTN_DANGER, BTN_PRIMARY, Pill } from "./ui.jsx";
 import { DraftRow } from "./ConversationOutbox.jsx";
 import ContactLink from "./ContactLink.jsx";
@@ -70,7 +71,7 @@ function ActionRow({ item, onDone, onShowDraft }) {
 }
 
 export default function ActionQueue({ actions = [], draftsById = {}, sendsEnabled, serverOffsetMs = 0, onDone, highlightDraftId, onShowDraft }) {
-  const groups = ACTION_KINDS
+  const groups = [...ACTION_KINDS, ...AUDIT_ACTION_KINDS]
     .map((k) => ({ ...k, items: actions.filter((a) => a.kind === k.key) }))
     .filter((g) => g.items.length);
   if (!groups.length) {

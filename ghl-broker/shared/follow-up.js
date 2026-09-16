@@ -165,6 +165,9 @@ export function unansweredCheckIn(now = Date.now()) {
   return { dueAt: morningOf(now + UNANSWERED_CHECKIN_DAYS * DAY_MS), phrase: "" };
 }
 
+// The next morning's opening, for a clock the nightly audit sets at dusk.
+export const nextMorning = (now = Date.now()) => morningOf(now + DAY_MS);
+
 /**
  * addressPending({ intent, propertyAddress, message, now }) → { hint, firstDueAt, phrase } | null
  *

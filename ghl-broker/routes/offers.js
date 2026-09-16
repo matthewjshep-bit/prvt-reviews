@@ -3867,11 +3867,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
   // A clean offer that couldn't send itself yet (after hours, sends paused,
   // no reply on record) — remembered so the tick can try again.
-  async function markSendPending(offerId, reason) {
+  async function markSendPending(offerId, reason, { by = "underwrite" } = {}) {
     try {
       const full = await store.getOffer(offerId);
       if (!full) return;
-      full.autoSendPending = { reason: dealStr(reason, 160), at: new Date().toISOString() };
+      full.autoSendPending = { reason: dealStr(reason, 160), at: new Date().toISOString(), by };
       await store.updateOffer(full.id, full);
     } catch (e) { console.error(`send-pending mark ${offerId}: ${e.message}`); }
   }
@@ -3884,7 +3884,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   router.retryPendingOfferSends = async ({ client, locationId, now = Date.now(), limit = 10 }) => {
     const fresh = (await store.getOfferSettings(locationId)) || {};
     const cfg = conversationConfig(fresh);
-    if (!cfg.enabled || !CARD_SENDS_ENABLED || !cfg.parties.agent.sendOffer.onClearUnderwrite) return { sent: 0, checked: 0 };
+    if (!cfg.enabled || !CARD_SENDS_ENABLED) return { sent: 0, checked: 0 };
     const dueAt = nextSendTime({ now, delayMs: 0, quietHours: cfg.autoSend.quietHours });
     if (Date.parse(dueAt) - now > 60000) return { sent: 0, checked: 0 };
     const pending = (await store.listOffers(locationId, { limit: 300 })).filter((o) => o?.autoSendPending?.at && !o.deal).slice(0, limit);
@@ -3896,6 +3896,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         delete full.autoSendPending;
         await store.updateOffer(full.id, { ...full, ...patch });
       };
+      // A clean-underwrite send needs its switch; one the nightly audit
+      // queued (the agent said the number works and nothing went) rides on
+      // the realm-yes rule instead, and goes at the morning's first open minute.
+      if (!cfg.parties.agent.sendOffer.onClearUnderwrite && offer.autoSendPending.by !== "audit") continue;
       if (effectiveStatus(offer) !== "new" || now - Date.parse(offer.autoSendPending.at) > SEND_RETRY_DAYS * 86400000) { await clear(); continue; }
       const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
       if (!drafts.some((d) => d.inbound)) continue;
@@ -3939,6 +3943,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   }
 
   const conversationDeps = ({ client, locationId, saved }) => ({
+    // For the nightly audit (conversation-audit.js): the one GHL read it
+    // makes, the text it re-answers, and the offer send it queues for the
+    // morning. Exposed here so it gets them the way every sweep gets its deps.
+    ghlLastMessages: () => ghlLastMessages(client, locationId),
+    latestInbound: (contactId) => getLatestInboundMessage(client, locationId, contactId),
+    queueOfferSend: ({ offerId, reason }) => markSendPending(offerId, reason, { by: "audit" }),
     // The agent's read just came in. If an offer on that address had our
     // read floated and the price is still unsaid, the realm check goes now.
     afterAgentTake: async ({ contactId, address }) => {

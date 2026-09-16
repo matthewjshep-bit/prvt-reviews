@@ -26,6 +26,7 @@ import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agen
 import { maybeStartOutreachSweep } from "./outreach-sweep.js";
 import { maybeStartOutreachFollowUp } from "./outreach-followup.js";
 import { maybeRunPromiseSweep } from "./promise-sweep.js";
+import { maybeRunConversationAudit } from "./conversation-audit.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeRunTierCheck } from "./tier-check.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
@@ -158,7 +159,7 @@ const outreachRouter = createOutreachRouter({
   },
 });
 app.use("/api/outreach", outreachRouter);
-app.use("/api/dashboard", createDashboardRouter({ resolveLocation }));
+app.use("/api/dashboard", createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor }));
 const dispoRouter = createDispoRouter({ resolveLocation });
 app.use("/api/dispo", dispoRouter);
 offersRouter.setDispoDeps({ matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp, rankBuyerForDeal: dispoRouter.rankBuyerForDeal });
@@ -233,6 +234,14 @@ setInterval(async () => {
         deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
       });
       if (promised?.owed) console.log(`promise sweep for ${locationId}: ${promised.owed} owed, ${promised.kept} kept`);
+      // Once a night, after the promise window closes: every thread touched
+      // today — answered where the dial allows, on a clock where it isn't,
+      // on Today either way.
+      const audited = await maybeRunConversationAudit({
+        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
+      });
+      if (audited) console.log(`conversation audit started for ${locationId}`);
       // Once a day: list prices that moved on houses we priced.
       const watched = await maybeRunPriceWatch({
         client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,

@@ -474,6 +474,10 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
     minConfidence: "medium",           // "high" | "medium"
     holdOnNeedsHuman: false,
   },
+  // The nightly audit (shared/conversation-audit.js): every thread touched
+  // today, checked at `hour` Pacific — answered where the dial allows, owed
+  // where it isn't, on Today either way. Matt, 2026-09-16.
+  nightlyAudit: { enabled: true, hour: 19 },
 });
 
 /* ---------- coercion helpers ---------- */
@@ -717,6 +721,10 @@ export function normalizeConversationAi(doc, seed = {}) {
       useFirstName: bool(persona.useFirstName, D.persona.useFirstName),
       ifAskedIfBot: str(persona.ifAskedIfBot, 300),
     },
+    nightlyAudit: (() => {
+      const a = d.nightlyAudit && typeof d.nightlyAudit === "object" ? d.nightlyAudit : {};
+      return { enabled: bool(a.enabled, D.nightlyAudit.enabled), hour: int(a.hour, D.nightlyAudit.hour, 17, 23) };
+    })(),
     rules: list(d.rules, { max: 40, each: 300 }),
     examples,
     routing: {
