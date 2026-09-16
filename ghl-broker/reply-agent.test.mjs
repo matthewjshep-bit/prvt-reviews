@@ -2495,9 +2495,9 @@ test("a soft floor far over ours keeps the negotiation open: their number filed,
   const statuses = [];
   const { job } = await startReply({
     client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
-    message: "Yes, that offer is still way below what we would be willing to accept. If you were more around $460k we would consider it most likely.",
+    message: "Yes, that offer is still way below what we would be willing to accept. If you were more around $430k we would consider it most likely.",
     deps: {
-      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", counterAmount: 460000, propertyAddress: "12 Elm St",
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", counterAmount: 430000, propertyAddress: "12 Elm St",
         reply: "Understood. Let me run that by my partner and get back to you this afternoon." }),
       setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status }; },
     },
@@ -3051,11 +3051,11 @@ test("a shorthand counter over our number gets an answer instead of silence", as
   const d = await store.getReplyDraft(job.draftId);
   assert.equal(d.counterAmount, 670000, "670 on a 300k offer is 670,000");
   assert.equal(d.intent, "rejection", "well past the most we'd pay — filed as their pass, with the door left open");
-  assert.match(d.reply, /well past where we can be/);
+  assert.match(d.reply, /didn't work out for us/);
   assert.equal(d.status, "scheduled", d.autoSend?.reason);
 });
 
-test("a shorthand counter they can deliver is an opening, and the gap gets worked", async () => {
+test("a shorthand counter they can deliver is still read as their number — and this far past the most we'd pay it's a pass, not a round", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
   const store = negotiationStore(NEGOTIATION_OFFER);
@@ -3068,8 +3068,8 @@ test("a shorthand counter they can deliver is an opening, and the gap gets worke
   await settle();
   const d = await store.getReplyDraft(job.draftId);
   assert.equal(d.counterAmount, 670000, "the model read no number; the message still had one");
-  assert.equal(d.intent, "question");
-  assert.match(d.reply, /close the gap/);
+  assert.equal(d.intent, "rejection", "Matt, 2026-09-16: quicker to pass when the floor is out of reach — 670 against a 360 ceiling is not a gap to work");
+  assert.match(d.reply, /didn't work out for us/);
 });
 
 test("a shorthand counter inside the ceiling still passes 'their own words'", async () => {
@@ -3263,4 +3263,41 @@ test("a never-auto intent's reply passes the gates as locked-but-clean, and the 
   assert.equal(releaseForAudit({ auto: held, gate: locked, draft, deps: { releaseHeld: true } }).send, true);
   const dirty = { ...locked, flags: [...locked.flags, "the draft names 500k, which is not in the offer book"], clean: false };
   assert.equal(releaseForAudit({ auto: { send: false, code: "gates", reason: "needs a person: names 500k" }, gate: dirty, draft, deps: { releaseHeld: true } }).send, false);
+});
+
+test("the list price said in words is their floor, and a soft floor out of reach is a pass, not a round", async () => {
+  // Bryce Buri (2026-09-16): our 900k, "far too low", asked where the seller
+  // needs to be — "Current list price". No digits in the message; the list
+  // price is the number, and it's a pass.
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore({ ...NEGOTIATION_OFFER, askingPrice: 470000 });
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: "Current list price",
+    deps: { draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", needsHuman: false, counterAmount: 0,
+      reply: "Understood. Any chance they'd counter?", propertyAddress: "12 Elm St" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.counterAmount, 470000, "their floor is the list price");
+  assert.equal(d.intent, "rejection");
+  assert.match(d.reply, /didn't work out for us/);
+  assert.ok(d.actions.some((a) => a.type === "mark_offer_passed"), "filed as they passed");
+  assert.ok(d.actions.some((a) => a.type === "add_tags" && a.tags.includes("tier-3")), "and Tier 3");
+
+  // Softly put, but 40% past the most we'd pay: no round, a pass.
+  _resetJobs();
+  const store2 = negotiationStore(NEGOTIATION_OFFER);
+  const r2 = await startReply({
+    client, locationId: "LOC", saved: bandSaved(), store: store2, contactId: "c1", sendsEnabled: true,
+    message: "If you were more around $505k we would consider it most likely.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: 505000,
+      reply: "Let me run that by my partner.", propertyAddress: "12 Elm St" }) },
+  });
+  await settle();
+  const d2 = await store2.getReplyDraft(r2.job.draftId);
+  assert.equal(d2.intent, "rejection");
+  assert.match(d2.summary, /filed as a pass/);
 });

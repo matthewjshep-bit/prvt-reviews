@@ -1180,6 +1180,31 @@ won't build never blocks the paper. A send that carries the operator's own
 message is untouched — SendModal already appends the link there, and unticking
 that box is a decision the server must not undo.
 
+### Walking away (2026-09-16)
+
+Matt: "be quicker to pass on ones that aren't in our buy box and move on. If
+the agent keeps pushing back, say sorry this one didn't work out, move them
+to Tier 3/2, stay in touch, and mark it they passed." The counter block in
+reply-agent.js (`WALK_AWAY_GAP`, `listPriceFloor`):
+
+- **Their floor is the list price, said in words.** "Current list price",
+  "full asking", "nothing under list" on a rejection, counter or question
+  reads as a counter AT the list price (Bryce Buri: "Current list price" =
+  1,195,000 against our 1,038,419, held as a counter with no figure).
+- **Out of reach is a pass, however it's put.** Over `COUNTER_PASS_MARGIN`
+  (10%) past the most we'd pay, a plain or firm floor was already a pass; a
+  soft one ("if you were around 430 we'd consider it") still gets one round —
+  their value and repairs asked for, one re-quote. Past `WALK_AWAY_GAP`
+  (25%) or at the list price, the soft round is skipped too.
+- **The goodbye** names no number: "Sorry, this one didn't work out for us,
+  we're too far apart on the number. Appreciate you working it with me.
+  Keep me in mind for the next one that needs work, and if anything changes
+  with the seller I'm here." The second no with no number closes the same way
+  (prompt: no second ask, no new number).
+- **What follows** is the rejection rule as configured (prod: tier-3 + TIER 3
+  workflow + `mark_offer_passed`) and the passed-offer check-in ladder
+  (every 10 days) — that is the "stay in touch".
+
 ### Terms the bot holds (2026-09-16)
 
 **The inspection period.** Our diligence is the feasibility window after mutual

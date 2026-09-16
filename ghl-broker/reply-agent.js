@@ -811,6 +811,13 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
 // is their pass, not a negotiation (see the counter reclassify in runReply).
 // The same margin the band counters back inside — one number, one place.
 export const COUNTER_PASS_MARGIN = COUNTER_MARGIN;
+// Over this much past the most we'd pay, a softly-put floor is still a pass:
+// a gap a re-quote on their numbers could never close. Under it, one round.
+export const WALK_AWAY_GAP = 0.25;
+// Their floor is the list price, said in words rather than digits.
+export function listPriceFloor(message = "") {
+  return /\b(?:(?:current|the|full|at|our|their|his|her)\s+)?(?:list|listing|asking)\s+price\b|\bfull\s+price\b|\bat\s+asking\b|\bnothing\s+(?:below|under|less\s+than)\s+(?:list|asking)\b/i.test(String(message || ""));
+}
 const KNOWN_OFFER_DAYS = 60;
 const KNOWN_DRAFT_DAYS = 7;
 export function knownOfferFor(rows = [], address = "", now = Date.now()) {
@@ -1991,6 +1998,14 @@ async function runReply(job, ctx) {
   // of our offer and the ceiling, it's filed as their pass: offer passed, Tier
   // 3, and a short reply that names no number of ours.
   let softFloor = false;
+  // "Current list price" / "full asking" IS their number, and it is the list
+  // price. Bryce Buri (2026-09-16): our 900k, "far too low", asked where the
+  // seller needs to be, "Current list price" (1,195,000) — read as a counter
+  // with no figure in the words, so the band held it and nobody walked.
+  if (party === "agent" && ["rejection", "counter", "question", "other"].includes(draft.intent) && listPriceFloor(job.message)) {
+    draft = { ...draft, intent: "counter", counterAmount: 0, counterFloor: "list_price", reclassifiedFrom: draft.intent === "counter" ? draft.reclassifiedFrom : draft.intent };
+    job.intent = draft.intent;
+  }
   if (party === "agent" && draft.intent === "counter") {
     const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
     const open = book.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
@@ -2005,6 +2020,10 @@ async function runReply(job, ctx) {
       if (read !== Math.round(Number(draft.counterAmount) || 0)) {
         draft = { ...draft, counterAmount: read, counterShorthand: true };
       }
+      if (draft.counterFloor === "list_price") {
+        const list = Math.round(Number(full.askingPrice ?? full.calc?.inputs?.askingPrice) || 0);
+        if (list > 0) draft = { ...draft, counterAmount: list };
+      }
       const theirs = Math.round(Number(draft.counterAmount));
       if (theirs > 0) {
         // Once we've already come back with a number (the band countered or
@@ -2013,7 +2032,12 @@ async function runReply(job, ctx) {
         const weMovedOnPrice = Boolean(full.counterBand?.acceptedAt || (full.requotes || []).length);
         const passLine = weMovedOnPrice ? reference : reference * (1 + COUNTER_PASS_MARGIN);
         const firmness = floorFirmness(job.message);
-        if (reference > 0 && theirs > passLine && firmness === "soft" && !(full.requotes || []).length) {
+        // Matt, 2026-09-16: "be quicker to pass on ones that aren't in our
+        // buy box and move on." A floor this far past the most we'd pay is
+        // not a gap to work however softly it's put; the list price as their
+        // floor is the same thing said plainly.
+        const beyondReach = reference > 0 && (theirs > reference * (1 + WALK_AWAY_GAP) || draft.counterFloor === "list_price");
+        if (reference > 0 && theirs > passLine && firmness === "soft" && !beyondReach && !(full.requotes || []).length) {
           // A soft floor is an opening. Keep it a live negotiation: file their
           // number on the offer, and ask for the value and the work so the
           // re-quote has something to run on. No number of ours, no goodbye.
@@ -2032,7 +2056,7 @@ async function runReply(job, ctx) {
             summary: weMovedOnPrice
               ? `Their number (${fmtMoney(theirs)}) is over the most we'd pay (${fmtMoney(reference)}) after we already came back — filed as a pass.`
               : `Their number (${fmtMoney(theirs)}) is more than ${Math.round(COUNTER_PASS_MARGIN * 100)}% over the most we'd pay (${fmtMoney(reference)}) — filed as a pass.`,
-            reply: "Understood, that's well past where we can be on this one. If anything changes with the seller let me know, and send anything else my way that needs work.",
+            reply: "Sorry, this one didn't work out for us, we're too far apart on the number. Appreciate you working it with me. Keep me in mind for the next one that needs work, and if anything changes with the seller I'm here.",
             needsHuman: false,
           };
           job.intent = draft.intent;
