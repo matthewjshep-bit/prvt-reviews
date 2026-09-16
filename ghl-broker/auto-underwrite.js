@@ -370,13 +370,23 @@ export async function drainUnderwriteQueue({ store, locationId, saved = {}, star
   let room = cap === Infinity ? Infinity : cap - (await countToday({ store, locationId, now }));
   const left = [];
   let started = 0;
+  // One start per agent per pass. Colin Foote, 2026-09-15: 811 NE 66th and
+  // 15605 NE 1st sat in line behind the cap; when it lifted, the first
+  // started and the second — asked a second later, while that run was still
+  // in flight — came back `deduped` (startUnderwrite's per-contact guard),
+  // was counted as started, and left the queue without ever running. His
+  // Bellevue flip was never priced until someone opened the offer page the
+  // next day. A second house from the same agent waits for the next tick,
+  // and a deduped answer stays in line rather than counting as a start.
+  const startedFor = new Set();
   for (const item of fresh) {
-    if (room <= 0) { left.push(item); continue; }
+    if (room <= 0 || startedFor.has(item.contactId)) { left.push(item); continue; }
     try {
       const r = await start(item);
       if (r?.skipped && /daily cap/.test(r.skipped)) { left.push(item); room = 0; continue; }
       if (r?.skipped) { dropped++; continue; }
-      started++; room--;
+      if (r?.deduped) { left.push(item); continue; }
+      started++; room--; startedFor.add(item.contactId);
     } catch { dropped++; }
   }
   if (started || dropped || left.length !== all.length) {

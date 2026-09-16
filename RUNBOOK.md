@@ -729,7 +729,13 @@ it" — then picks up again on the next inbound. Pressing Send by hand is a
 person deciding and is never second-guessed. Three texts in a row are one reply: the draft waits the
 debounce (45s on the starter) and a newer text replaces the waiting job; the
 same words twice inside two minutes are one message. Each contact also has
-its own daily cap (12).
+its own daily cap (12). **A burst never silences a thread** (Colin Foote,
+2026-09-15): a link and "$950k, quick close" drew a reply that was counting
+down; "buyer to pay my 3%" a minute later read as a person's call and its
+held draft superseded the one about to go, so nothing went. Now a draft held
+for a person leaves the scheduled reply to the earlier texts alone and waits
+in the outbox on top of it (`keptScheduledIds`) — unless the new text turned
+the conversation (a no, a counter, a yes, an opt-out), which still supersedes.
 
 **A buyer's standing on a deal** is one of three: `evaluating` (actively
 weighing it — many buyers at once, and the bot's to work), `committed` (the
@@ -1529,6 +1535,11 @@ Notes for whoever maintains this:
   `GHL_LOCATION_KEYS`, a per-location daily cap (Settings, default 25) counted
   from the database rather than memory so a crash loop can't reset it, and a
   24-hour dedupe on contact + address. An auto-underwrite never sends.
+  Addresses past the cap wait in `job_cursors` row `uwQueue` and the tick
+  starts them when there's room — **one house per agent per tick**: two from
+  the same agent in one pass collide with each other's in-flight run and the
+  second came back `deduped`, was counted as started and dropped (Colin
+  Foote's 15605 NE 1st, 2026-09-15). A deduped start now stays in line.
 - **The reply agent never sends on its own.** Every draft waits for a person;
   the Send button is dry-run unless `CARD_SENDS_ENABLED=true` (the offer-send
   gate). The webhook needs the same credential as the underwriter, drafts are

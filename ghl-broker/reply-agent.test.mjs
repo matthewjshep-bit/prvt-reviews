@@ -3130,3 +3130,47 @@ test("an opt-out is never put on the check-in clock", async () => {
   const events = await store.listContactEvents("LOC", "c1", { types: ["checkin_requested"] });
   assert.equal(events.length, 0, "silence is the whole point of an opt-out");
 });
+
+/* ---------- a burst never silences a thread (Colin Foote, 2026-09-15) ---------- */
+
+test("a held third text lets the scheduled reply to the first two go, and waits on top of it", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore([{
+    id: "sched", locationId: "LOC", contactId: "c1", status: "scheduled", channel: "sms",
+    reply: "Running 15605 NE 1st by underwriting today. What kind of work does it need?",
+    autoSend: { decided: true, reason: "" }, sendAt: new Date(Date.now() + 30000).toISOString(), createdAt: iso(60000),
+  }]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Buyer to pay my 3% unless list backs are willing. Then flexible",
+    deps: { draft: async () => ({ ...DRAFT, intent: "other", confidence: "medium", needsHuman: false,
+      reply: "Commission structure is my partner's call, I'll get you an answer today. What kind of work is it needing?", propertyAddress: "15605 NE 1st St" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "scheduled", "the premise: the commission question waits for a person");
+  assert.equal((await store.getReplyDraft("sched")).status, "scheduled", "the reply that was counting down still goes");
+  assert.deepEqual(d.keptScheduledIds, ["sched"]);
+  assert.deepEqual(d.supersededIds, []);
+  assert.ok(d.warnings.some((w) => /still goes/.test(w)), d.warnings.join(" | "));
+});
+
+test("a text that turns the conversation still supersedes what was counting down", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore([{
+    id: "sched", locationId: "LOC", contactId: "c1", status: "scheduled", channel: "sms",
+    reply: "Running it today. What kind of work does it need?", autoSend: { decided: true, reason: "" },
+    sendAt: new Date(Date.now() + 30000).toISOString(), createdAt: iso(60000),
+  }]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Actually never mind, seller just accepted another offer.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", needsHuman: false, reply: "Understood, thanks for letting me know.", propertyAddress: "15605 NE 1st St" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal((await store.getReplyDraft("sched")).status, "superseded", "a stale 'what work does it need?' must not go out after a no");
+});

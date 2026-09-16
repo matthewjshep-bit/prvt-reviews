@@ -2256,14 +2256,28 @@ async function runReply(job, ctx) {
   // supersedes it, scheduled or not. The reply is to the conversation, not
   // to a message. (Two reads rather than an IN: the file store and every
   // test double take a single status.)
+  //
+  // With one exception — a burst never silences a thread. Colin Foote,
+  // 2026-09-15: a listing link and "$950k, quick close" drew "Running 15605
+  // NE 1st by underwriting today, what work does it need?", counting down to
+  // send; a minute later "buyer to pay my 3%" arrived, read as a person's
+  // call, and its held draft superseded the one about to go. Nothing went.
+  // When THIS draft is held for a person and the message didn't turn the
+  // conversation (a no, a counter, a yes, an opt-out), the scheduled reply
+  // to the earlier texts still goes, and this one waits in the outbox on top.
+  const turned = ["opt_out", "rejection", "counter", "acceptance", "realm_yes", "we_passed"].includes(draft.intent);
+  const keepScheduled = !auto.send && HELD_FOR_A_PERSON.has(auto.code) && !turned;
   const open = [];
   for (const status of ["draft", "scheduled"]) {
     const rows = await store.listReplyDrafts(locationId, { contactId: job.contactId, status, limit: 5 }).catch(() => []);
     open.push(...rows);
   }
+  const keptScheduled = [];
   for (const old of open) {
+    if (keepScheduled && old.status === "scheduled" && old.autoSend?.decided) { keptScheduled.push(old.id); continue; }
     await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
   }
+  if (keptScheduled.length) warnings.push("the reply already counting down to the earlier texts still goes; this one waits for you");
   const ts = new Date().toISOString();
   // The agent's own numbers and the property details, whichever shape the draft arrived in.
   // The model's read first; the shorthand backstop only when it came back empty.
@@ -2315,7 +2329,8 @@ async function runReply(job, ctx) {
     booking: bookingVerdict ? { offered: bookingVerdict.passed ? bookingVerdict.offered : [], chosen: bookingVerdict.chosen || null } : null,
     humanActive: a.humanActive || null,
     actions: [...plan.auto, ...plan.suggested],
-    supersededIds: open.map((o) => o.id),
+    supersededIds: open.filter((o) => !keptScheduled.includes(o.id)).map((o) => o.id),
+    keptScheduledIds: keptScheduled,
     warnings: warnings.slice(0, 6),
     noteOnAutoSend: config.notes?.onAutoSend !== false,
     promptVersion: 3,
