@@ -656,7 +656,10 @@ export const RELEASE_QUIET = new Set(["opt_out", "small_talk", "media"]);
 export function releaseForAudit({ auto, gate, draft, deps }) {
   if (!deps?.releaseHeld || auto?.send) return auto;
   if (!HELD_FOR_A_PERSON.has(auto?.code) || auto.code === "gates") return auto;
-  if (!gate?.ok || draft?.needsHuman || RELEASE_QUIET.has(draft?.intent) || !String(draft?.reply || "").trim()) return auto;
+  // "Locked but clean" is how the gates report a never-auto intent whose
+  // reply passed every money check — the shape decideAutoSend itself accepts.
+  const clean = Boolean(gate?.ok || (gate?.locked && gate?.clean));
+  if (!clean || draft?.needsHuman || RELEASE_QUIET.has(draft?.intent) || !String(draft?.reply || "").trim()) return auto;
   return { ...auto, send: true, code: "", reason: "released by the nightly audit — a holding reply, nothing committed", released: true };
 }
 
@@ -1781,7 +1784,7 @@ async function runProactive(job, ctx) {
     reply: draft.reply, intent: kind, confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
     summary: draft.summary || outboundSummary({ kind, offer, outbound }),
     propertyAddress: outbound.address || draft.propertyAddress || "", counterAmount: null,
-    autoSendable: gate.ok, flags: gate.flags, party, partySource: "offer", matchedTags: a.matchedTags,
+    autoSendable: gate.ok, gateClean: Boolean(gate.ok || (gate.locked && gate.clean)), flags: gate.flags, party, partySource: "offer", matchedTags: a.matchedTags,
     contextSummary: context.summary || {}, offersInContext: context.offers?.count ?? 0,
     autoSend: { decided: auto.send, reason: auto.reason }, humanActive: a.humanActive || null, actions: [],
     supersededIds: open.map((o) => o.id), warnings: warnings.slice(0, 6), noteOnAutoSend: config.notes?.onAutoSend !== false,
@@ -2362,6 +2365,9 @@ async function runReply(job, ctx) {
     agentTake,
     propertyDetails: propertyDetails || null,
     autoSendable: gate.ok,
+    // The money guard's verdict apart from the intent lock — what the nightly
+    // audit reads to release a held holding-reply (releaseForAudit).
+    gateClean: Boolean(gate.ok || (gate.locked && gate.clean)),
     flags: gate.flags,
     party,
     partySource: a.partySource,

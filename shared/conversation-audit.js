@@ -201,7 +201,7 @@ export function auditConversations({
       // Loose: a holding reply the money guard passed, that the model didn't
       // flag for a person, held only because of its intent — send it. The
       // gates, needsHuman, "you have the thread" and age stay in the way.
-      const releasable = loose && newest.autoSendable === true && !newest.needsHuman && age <= RELEASE_MAX_AGE_HOURS
+      const releasable = loose && (newest.gateClean === true || newest.autoSendable === true) && !newest.needsHuman && age <= RELEASE_MAX_AGE_HOURS
         && !/you replied to them/.test(reason) && !/^needs a person:/.test(reason);
       add({ kind: age >= HELD_AGING_HOURS ? "held_aging" : "unanswered_inbound", contactId: c, contactName: who(c), party: newest.party,
         address: newest.propertyAddress || "", anchorAt: newest.createdAt, draftId: newest.id,

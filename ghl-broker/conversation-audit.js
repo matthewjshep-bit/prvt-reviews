@@ -154,7 +154,16 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
       } else if (a.type === "requote") {
         if (typeof deps.requoteFromAgentNumbers !== "function") { row.status = "skipped"; row.reason = "re-quoting is not wired"; continue; }
         const r = await deps.requoteFromAgentNumbers({ contactId: f.contactId, addressHint: f.address });
-        if (r?.ok === false) { row.status = "skipped"; row.reason = r.reason || "re-quote declined"; }
+        if (r?.ok === false) {
+          // Nothing to re-run on after all (their take predates our last
+          // price — Mike Renard, 2026-09-16): keep it alive the other way.
+          row.reason = r.reason || "re-quote declined";
+          const offer = await offerFor(f);
+          if (offer && loose) {
+            const n = await startProactive({ client, locationId, saved, store, contactId: f.contactId, kind: "counter_nudge", offer, subject: { address: f.address }, sendsEnabled, deps: runDeps });
+            if (n?.skipped) { row.status = "skipped"; row.reason += `; nudge: ${n.skipped}`; } else { row.action = "nudge_counter"; row.jobId = n?.job?.id || null; }
+          } else row.status = "skipped";
+        }
       } else if (a.type === "nudge_counter" || a.type === "nudge_offer") {
         const offer = await offerFor(f);
         if (!offer) { row.status = "skipped"; row.reason = "offer gone"; continue; }

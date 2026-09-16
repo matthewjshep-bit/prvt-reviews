@@ -3252,3 +3252,15 @@ test("a draft held only as a person's call is released when the audit asks; one 
   assert.equal(releaseForAudit({ auto: { send: false, code: "human_active", reason: "you have the thread" }, gate: gateOk, draft, deps: { releaseHeld: true } }).send, false, "a person's thread stays theirs");
   assert.equal(releaseForAudit({ auto: held, gate: gateOk, draft: { ...draft, intent: "small_talk" }, deps: { releaseHeld: true } }).send, false);
 });
+
+test("a never-auto intent's reply passes the gates as locked-but-clean, and the audit releases exactly that", async () => {
+  const { releaseForAudit } = await import("./reply-agent.js");
+  // How evaluateReplyGates reports a counter reply that named no numbers:
+  // not ok (the lock is a flag), locked, and clean apart from the lock.
+  const locked = { ok: false, flags: ["a counter is a person's call"], locked: "a counter is a person's call", clean: true };
+  const held = { send: false, code: "never_auto", reason: "a counter is a person's call" };
+  const draft = { intent: "counter", reply: "Let me run that by my partner.", needsHuman: false };
+  assert.equal(releaseForAudit({ auto: held, gate: locked, draft, deps: { releaseHeld: true } }).send, true);
+  const dirty = { ...locked, flags: [...locked.flags, "the draft names 500k, which is not in the offer book"], clean: false };
+  assert.equal(releaseForAudit({ auto: { send: false, code: "gates", reason: "needs a person: names 500k" }, gate: dirty, draft, deps: { releaseHeld: true } }).send, false);
+});

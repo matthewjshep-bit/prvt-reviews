@@ -232,3 +232,11 @@ test("a stalled counter with nothing to re-run on is nudged; a realm-yes answere
   const skipped = offer({ createdAt: ago(1200), statusAt: ago(1200), sends: [{ ts: ago(1200), results: { sms: { ok: true } } }] });
   assert.deepEqual(auditConversations({ config: ladderOn, now: NOW, drafts: [], events: [], offers: [skipped], followUpCursorAt: ago(3) }).findings[0].action, { type: "nudge_offer" });
 });
+
+test("a held reply the gates called locked-but-clean is releasable; rows from before gateClean fall back to autoSendable", () => {
+  const gary = draft({ id: "g", status: "draft", createdAt: ago(20), sentAt: null, intent: "counter", autoSendable: false, gateClean: true, needsHuman: false,
+    autoSend: { decided: false, reason: "a counter is a person's call" }, flags: ["a counter is a person's call"] });
+  assert.deepEqual(audit({ drafts: [gary], events: [], offers: [] }).findings[0].action, { type: "release", draftId: "g" });
+  const old = draft({ id: "o", status: "draft", createdAt: ago(20), sentAt: null, autoSendable: false, needsHuman: false, autoSend: { decided: false, reason: "a other is a person's call" } });
+  assert.equal(audit({ drafts: [old], events: [], offers: [] }).findings[0].action?.type, "book_checkin", "no verdict on the row: not released");
+});
