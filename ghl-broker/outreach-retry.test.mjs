@@ -59,7 +59,7 @@ const memStore = () => ({
   async listOutreachPulls() { return []; },
 });
 
-test("a failed daily run is tried again that morning, spaced out and at most three times", async () => {
+test("a failed daily run is tried again through the working day, spaced out and at most six times", async () => {
   _resetJobs();
   const store = memStore();
   let pulls = 0;
@@ -78,11 +78,13 @@ test("a failed daily run is tried again that morning, spaced out and at most thr
   await settle();
   assert.equal(await maybeStartOutreachSweep({ ...base, now: at("11:00") }), true, "third try, past the 10am hour");
   await settle();
-  assert.equal(await maybeStartOutreachSweep({ ...base, now: at("11:30") }), false, "three tries is the most");
-  assert.equal(pulls, 3);
+  // 2026-09-16: six tries, until 5pm — Matt asked for it to just happen.
+  for (const t of ["11:30", "12:00", "12:30"]) { assert.equal(await maybeStartOutreachSweep({ ...base, now: at(t) }), true, `try at ${t}`); await settle(); }
+  assert.equal(await maybeStartOutreachSweep({ ...base, now: at("13:00") }), false, "six tries is the most");
+  assert.equal(pulls, 6);
 });
 
-test("retries stop at 1pm, and a run that worked is never repeated", async () => {
+test("retries stop at 5pm, and a run that worked is never repeated", async () => {
   _resetJobs();
   const at = (pt) => Date.parse(`2026-09-15T${pt}:00-07:00`);
   const saved = { rentcastApiKey: "k", outreachAutopilot: { enabled: true } };
@@ -91,7 +93,7 @@ test("retries stop at 1pm, and a run that worked is never repeated", async () =>
   const failDeps = { runPull: async () => { throw new Error("RentCast 503"); }, importAgents: async () => ({}) };
   assert.equal(await maybeStartOutreachSweep({ locationId: "loc-late", client: {}, store: failing, deps: failDeps, saved, hour: 10, now: at("10:05") }), true);
   await settle();
-  assert.equal(await maybeStartOutreachSweep({ locationId: "loc-late", client: {}, store: failing, deps: failDeps, saved, hour: 10, now: at("13:05") }), false, "past the retry window");
+  assert.equal(await maybeStartOutreachSweep({ locationId: "loc-late", client: {}, store: failing, deps: failDeps, saved, hour: 10, now: at("17:05") }), false, "past the retry window");
 
   const worked = memStore();
   await worked.setJobCursor("loc-ok", CURSOR_NAME, { at: new Date(at("10:05")).toISOString(), doc: { tries: 1 } });

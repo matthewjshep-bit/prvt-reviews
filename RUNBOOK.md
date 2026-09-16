@@ -1258,6 +1258,24 @@ Pacific, row `outreachFollowUp`) puts agents enrolled by the "GHL workflow"
 first touch who haven't answered in N days (default 14) into the follow-up
 workflow. It needs `conversations.readonly` to see who wrote back.
 
+**When it doesn't happen (2026-09-16).** The sweep started at 10:03,
+imported one agent at 10:08 and then sat "running" on a GHL request that
+never answered; the tick saw a run in progress and never retried, and the
+11:02 deploy wiped the job with the day stamped as done. Three fixes:
+
+- **No GHL call waits forever** — `GHL_TIMEOUT_MS` (30s) on every request in
+  `ghl.js`, so a hang throws and the retry machinery gets its turn.
+- **The run lives on the cursor, not just in memory**: `doc.run` while it is
+  going, `doc.last` (county, imported, candidates, already-in-GHL, error) once
+  it is over. A run the cursor says is going with nothing behind it for
+  `STALE_RUN_MS` (45 min) is retried as if it had failed. `GET
+  /api/outreach/autopilot` returns `run`, `last`, `tries`, `failed`, `error`,
+  and the Agent Outreach strip shows them when no job is in memory — so
+  "what happened to outreach today?" is answered by the page.
+- **A failed day comes back until the working day is out**: six tries,
+  twenty minutes apart at least, 10am–5pm Pacific (`MAX_DAILY_TRIES`,
+  `RETRY_WINDOW_HOURS`), not three tries by lunch.
+
 **Who says hello** is a setting. `app`: the bot drafts the first text from
 the hook listing (`outreach_open` on the agent playbook — turn on "First text
 to new agents" there) and the GHL trigger tag is *not* applied, so the

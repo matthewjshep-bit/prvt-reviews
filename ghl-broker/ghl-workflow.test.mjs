@@ -23,3 +23,18 @@ test("the enroll body carries an explicit +00:00 offset, whole seconds, no Z", a
   assert.equal(sent.eventStartTime, "2026-09-07T18:00:00+00:00");
   assert.equal(ghlEventTime(new Date("2021-06-23T03:30:00.000Z")), "2021-06-23T03:30:00+00:00");
 });
+
+
+// 2026-09-16: an outreach import hung on one GHL request and the day was
+// lost. No call waits forever now.
+test("every GHL call carries a timeout, so a hung request throws instead of holding a sweep open", async () => {
+  const { makeClient, GHL_TIMEOUT_MS } = await import("./ghl.js");
+  const real = globalThis.fetch;
+  let seen = null;
+  globalThis.fetch = async (url, opts) => { seen = opts; return { ok: true, text: async () => "{}" }; };
+  try {
+    await makeClient("t").call("/contacts/x");
+    assert.ok(seen.signal instanceof AbortSignal, "an AbortSignal rides on the request");
+    assert.equal(GHL_TIMEOUT_MS, 30000);
+  } finally { globalThis.fetch = real; }
+});

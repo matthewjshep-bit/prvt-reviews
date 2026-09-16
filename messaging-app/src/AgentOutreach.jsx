@@ -453,6 +453,21 @@ export default function AgentOutreach({ settings }) {
               : "turn on the daily sweep in Settings → Agent Outreach"}
             {autopilot.lastRunAt ? ` · last ran ${new Date(autopilot.lastRunAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}
           </span>
+          {/* The job in memory is gone after a deploy; the cursor's `last` is
+              what happened, and `run` is a run the tick will retry as stale. */}
+          {!autopilot.job && autopilot.run && (
+            <span className="text-xs text-amber-700">
+              a run started {new Date(autopilot.run.startedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })} and never finished — it retries on the next tick
+            </span>
+          )}
+          {!autopilot.job && !autopilot.run && autopilot.last && (
+            <span className={`text-xs ${autopilot.last.status === "error" ? "text-red-700" : "text-slate-600"}`}>
+              {`${autopilot.last.trigger === "daily" ? "today's run" : "last run"} ${new Date(autopilot.last.startedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: `}
+              {autopilot.last.status === "error" ? `failed — ${autopilot.last.error}`
+                : `${autopilot.last.county ? `${autopilot.last.county} — ` : ""}${autopilot.last.dryRun ? "would import" : "imported"} ${autopilot.last.dryRun ? autopilot.last.picked : autopilot.last.imported} of ${autopilot.last.candidates} new${autopilot.last.skippedExisting ? `, ${autopilot.last.skippedExisting} already in GHL` : ""}${autopilot.last.enrolled ? `, ${autopilot.last.enrolled} enrolled` : ""}${autopilot.last.warning ? ` · ${autopilot.last.warning}` : ""}`}
+              {autopilot.tries > 1 ? ` (try ${autopilot.tries})` : ""}
+            </span>
+          )}
           {autopilot.job && (
             <span className={`text-xs ${autopilot.job.status === "error" ? "text-red-700" : "text-slate-600"}`}>
               {autopilot.job.status === "running" ? `running: ${autopilot.job.phase}…`

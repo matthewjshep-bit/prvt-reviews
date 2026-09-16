@@ -996,6 +996,13 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         hour: OUTREACH_SWEEP_HOUR, tz: WORK_TZ,
         lastRunAt: cursor?.at || null,
         job: publicOutreachJob(getOutreachJob(locationId)),
+        // What the cursor remembers when the job in memory is gone: the run
+        // in progress (if any), the last finished run, and today's tries.
+        run: cursor?.doc?.run || null,
+        last: cursor?.doc?.last || null,
+        tries: Number(cursor?.doc?.tries) || 0,
+        failed: Boolean(cursor?.doc?.failed),
+        error: cursor?.doc?.error || null,
       });
     } catch (err) { fail(res, err); }
   });

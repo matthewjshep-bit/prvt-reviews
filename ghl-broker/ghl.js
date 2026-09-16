@@ -9,8 +9,15 @@ const BASE = "https://services.leadconnectorhq.com";
 const V2 = "2021-07-28";
 const V_CONVERSATIONS = "2021-04-15";
 
+// No call waits forever. The outreach sweep of 2026-09-16 imported one agent
+// at 10:08 and then sat "running" on a GHL request that never answered: the
+// tick saw a run in progress and never retried, and the next deploy wiped
+// the job with the day stamped as done. A request that hangs now throws, and
+// everything above (withRetry, the sweep's failed-run retry) gets its turn.
+export const GHL_TIMEOUT_MS = 30000;
+
 export function makeClient(token) {
-  async function call(path, { method = "GET", body, version = V2 } = {}) {
+  async function call(path, { method = "GET", body, version = V2, timeoutMs = GHL_TIMEOUT_MS } = {}) {
     const res = await fetch(BASE + path, {
       method,
       headers: {
@@ -20,6 +27,7 @@ export function makeClient(token) {
         ...(body ? { "Content-Type": "application/json" } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await res.text();
     let data;

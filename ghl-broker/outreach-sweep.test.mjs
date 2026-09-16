@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  pickAgentsToImport, normalizeOutreachAutopilot, isWorkday, workHour, runsLeftInMonth, pullQuery, startOutreachSweep, maybeStartOutreachSweep, getOutreachJob, _resetJobs, CURSOR_NAME, PAGES_CURSOR,
+  pickAgentsToImport, normalizeOutreachAutopilot, isWorkday, workHour, runsLeftInMonth, pullQuery, startOutreachSweep, maybeStartOutreachSweep, getOutreachJob, _resetJobs, CURSOR_NAME, PAGES_CURSOR, STALE_RUN_MS, RETRY_GAP_MS, RETRY_WINDOW_HOURS, MAX_DAILY_TRIES,
 } from "./outreach-sweep.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
@@ -253,4 +253,63 @@ test("the sweep stands down when the month's RentCast budget is spent", async ()
   assert.equal(job.budget.used, 46);
   assert.equal(job.budget.budget, 48);
   assert.equal(job.budget.perRun, 0);
+});
+
+
+/* ---------- 2026-09-16: a run that dies without saying so ---------- */
+
+// The sweep started at 10:03, imported one agent at 10:08, and then sat
+// "running" on a GHL request that never answered. The tick saw a run in
+// progress and never retried; the 11:02 deploy wiped the job with the day
+// stamped as done. Nothing said so anywhere.
+test("the day's result is written where a restart can't lose it", async () => {
+  _resetJobs();
+  const deps = { runPull: async () => ({ batchId: "b1", warnings: [], requestsUsed: 1 }), importAgents: async () => ({ imported: 3, enrolled: 3, skippedExisting: 7, results: [] }) };
+  const store = fakeStore([row("a", { distressedCount: 1 })]);
+  const inHour = Date.parse("2026-09-16T17:03:00Z");
+  assert.equal(await maybeStartOutreachSweep({ locationId: "loc-d", client: {}, store, deps, hour: 10, saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true } }, now: inHour }), true);
+  await settle();
+  const doc = store.cursors.get(`loc-d|${CURSOR_NAME}`).doc;
+  assert.equal(doc.run, null, "nothing in progress once it's over");
+  assert.equal(doc.last.status, "done");
+  assert.equal(doc.last.imported, 3);
+  assert.equal(doc.last.skippedExisting, 7);
+  assert.equal(doc.last.trigger, "daily");
+});
+
+test("a run the cursor says is going, with nothing behind it, is retried as stale", async () => {
+  _resetJobs();
+  const started = [];
+  const deps = { runPull: async () => { started.push(Date.now()); return { batchId: "b1", warnings: [] }; }, importAgents: async () => ({}) };
+  const store = fakeStore([]);
+  const t0 = Date.parse("2026-09-16T17:03:49Z");
+  // What the cursor looked like at 11:30 that morning: stamped at 10:03, a
+  // run recorded, no job in memory, not failed.
+  store.cursors.set(`loc-s|${CURSOR_NAME}`, { at: new Date(t0).toISOString(), doc: { tries: 1, run: { id: "oa-x", trigger: "daily", startedAt: new Date(t0).toISOString() } } });
+  const base = { locationId: "loc-s", client: {}, store, deps, hour: 10, saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true } } };
+  assert.equal(await maybeStartOutreachSweep({ ...base, now: t0 + 10 * 60000 }), false, "ten minutes in, it may still be running");
+  assert.equal(await maybeStartOutreachSweep({ ...base, now: t0 + STALE_RUN_MS + 60000 }), true, "past the stale line it is retried");
+  await settle();
+  assert.equal(started.length, 1);
+  const doc = store.cursors.get(`loc-s|${CURSOR_NAME}`).doc;
+  assert.equal(doc.tries, 2);
+  assert.equal(doc.last.status, "done", "and this time it finished");
+  assert.equal(doc.run, null);
+});
+
+test("a failed day keeps coming back until the working day is out", async () => {
+  assert.equal(RETRY_WINDOW_HOURS, 7, "10am to 5pm Pacific");
+  assert.equal(MAX_DAILY_TRIES, 6);
+  _resetJobs();
+  const deps = { runPull: async () => ({ batchId: "b1", warnings: [] }), importAgents: async () => ({}) };
+  const store = fakeStore([]);
+  const t0 = Date.parse("2026-09-16T17:03:00Z");
+  store.cursors.set(`loc-r|${CURSOR_NAME}`, { at: new Date(t0).toISOString(), doc: { tries: 1, failed: true, error: "timeout" } });
+  const base = { locationId: "loc-r", client: {}, store, deps, hour: 10, saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true } } };
+  assert.equal(await maybeStartOutreachSweep({ ...base, now: t0 + RETRY_GAP_MS - 1000 }), false, "not before the gap");
+  assert.equal(await maybeStartOutreachSweep({ ...base, now: Date.parse("2026-09-16T23:30:00Z") }), true, "4:30pm Pacific is still the working day");
+  await settle();
+  _resetJobs();
+  store.cursors.set(`loc-r|${CURSOR_NAME}`, { at: new Date(t0).toISOString(), doc: { tries: 1, failed: true, error: "timeout" } });
+  assert.equal(await maybeStartOutreachSweep({ ...base, now: Date.parse("2026-09-17T00:30:00Z") }), false, "5:30pm is not");
 });

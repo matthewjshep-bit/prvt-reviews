@@ -21,9 +21,17 @@ export const MIN_GAP_MS = 20 * 3600 * 1000;
 // morning rather than costing the whole day: up to three tries, 20+ minutes
 // apart, until 1pm Pacific. A run that finished — even with nothing to
 // import — is never repeated.
-export const RETRY_WINDOW_HOURS = 3;
+// A failed day comes back until the working day is out, not just until
+// lunch: Matt, 2026-09-16, after three mornings of reminding — "I want it to
+// be an automatic process every day". Six tries, twenty minutes apart at
+// least, from 10am to 5pm Pacific.
+export const RETRY_WINDOW_HOURS = 7;
 export const RETRY_GAP_MS = 20 * 60 * 1000;
-export const MAX_DAILY_TRIES = 3;
+export const MAX_DAILY_TRIES = 6;
+// A run that has been "running" this long without finishing is not running.
+// The job lives in memory; a hung request or a restart mid-run leaves the
+// cursor saying a run is in progress with nothing behind it.
+export const STALE_RUN_MS = 45 * 60 * 1000;
 // The hour it runs, in Pacific time (so daylight saving doesn't move it).
 export const OUTREACH_SWEEP_HOUR = Number(process.env.OUTREACH_SWEEP_HOUR || 10); // 10–11am Pacific
 export const DEFAULT_DAILY_CAP = 12;
@@ -228,16 +236,29 @@ export function startOutreachSweep({ locationId, client, saved = {}, store = def
     pull: null, county: null, candidates: 0, picked: 0, imported: 0, opened: 0, enrolled: 0, warnings: [], results: [], error: null,
   };
   jobs.set(locationId, job);
-  run(job, { locationId, client, saved, store, deps, now }).catch(async (e) => {
-    job.status = "error";
-    job.error = String(e?.message || e).slice(0, 300);
-    job.finishedAt = new Date().toISOString();
-    // Remembered on the day's cursor, so the tick can try the day again.
-    if (trigger === "daily") {
-      const cur = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
-      await store.setJobCursor?.(locationId, CURSOR_NAME, { at: cur?.at || iso(now), doc: { ...(cur?.doc || {}), failed: true, error: job.error } }).catch(() => {});
-    }
+  // The run, on the cursor, where a restart can't lose it: `run` while it is
+  // going, `last` once it is over. The page and GET /autopilot read these
+  // when the in-memory job is gone, so "what happened to outreach today?"
+  // has an answer after a deploy.
+  const stamp = async (patch) => {
+    const cur = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
+    await store.setJobCursor?.(locationId, CURSOR_NAME, { at: cur?.at || iso(now), doc: { ...(cur?.doc || {}), ...patch } }).catch(() => {});
+  };
+  const summary = () => ({
+    id: job.id, trigger, dryRun: job.dryRun, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt,
+    county: job.county, candidates: job.candidates, picked: job.picked, imported: job.imported, enrolled: job.enrolled,
+    skippedExisting: job.skippedExisting || 0, requestsUsed: job.pull?.requestsUsed ?? null, error: job.error, warning: job.warnings[0] || "",
   });
+  stamp({ run: { id: job.id, trigger, startedAt: job.startedAt } })
+    .then(() => run(job, { locationId, client, saved, store, deps, now }))
+    .then(async () => { await stamp({ run: null, last: summary() }); })
+    .catch(async (e) => {
+      job.status = "error";
+      job.error = String(e?.message || e).slice(0, 300);
+      job.finishedAt = new Date().toISOString();
+      // Remembered on the day's cursor, so the tick can try the day again.
+      await stamp({ run: null, last: summary(), ...(trigger === "daily" ? { failed: true, error: job.error } : {}) });
+    });
   return job;
 }
 
@@ -408,16 +429,19 @@ export async function maybeStartOutreachSweep({ locationId, client, saved = {}, 
   const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
   const doc = cursor?.doc || {};
   const ranToday = cursor?.at && now - Date.parse(cursor.at) < MIN_GAP_MS;
+  // The cursor says a run is going, and nothing in memory is: it hung, or
+  // the process restarted under it. Either way the day isn't done.
+  const stale = doc.run?.startedAt && now - Date.parse(doc.run.startedAt) > STALE_RUN_MS;
   let tries = 1;
   if (ranToday) {
-    // Only a failed run comes back, spaced out and a few times at most.
+    // Only a failed (or vanished) run comes back, spaced out and a few times at most.
     const triedSoFar = Number(doc.tries) || 1;
-    if (!doc.failed || triedSoFar >= MAX_DAILY_TRIES || now - Date.parse(cursor.at) < RETRY_GAP_MS) return false;
+    if (!(doc.failed || stale) || triedSoFar >= MAX_DAILY_TRIES || now - Date.parse(cursor.at) < RETRY_GAP_MS) return false;
     tries = triedSoFar + 1;
   } else if (h !== hour) {
     return false;   // a fresh day starts in its own hour; the window is for retries
   }
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: { tries } }).catch(() => {});
+  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: { tries, last: doc.last || null, ...(stale ? { staleRun: doc.run } : {}) } }).catch(() => {});
   startOutreachSweep({ locationId, client, saved, store, deps, trigger: "daily", now });
   return true;
 }
