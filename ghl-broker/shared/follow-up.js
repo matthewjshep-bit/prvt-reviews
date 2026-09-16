@@ -149,6 +149,23 @@ export function takingItToSeller(text = "", now = Date.now()) {
 }
 
 /**
+ * unansweredCheckIn(now) → { dueAt, phrase }
+ *
+ * Nothing went out. An agent texted us, the draft was held for a person, and
+ * the thread's next move belongs to nobody: Thomas Rinow, 2026-09-15, gave us
+ * the seller's number ("that are willing to go to 670") on a live offer and
+ * heard nothing back, then emailed the next morning to close it out himself.
+ *
+ * The outbox is where a held draft waits, but an outbox row is not a clock.
+ * This is the clock: two mornings on, the check-in sweep comes back to them
+ * unless they (or a person here) spoke first.
+ */
+export const UNANSWERED_CHECKIN_DAYS = 2;
+export function unansweredCheckIn(now = Date.now()) {
+  return { dueAt: morningOf(now + UNANSWERED_CHECKIN_DAYS * DAY_MS), phrase: "" };
+}
+
+/**
  * addressPending({ intent, propertyAddress, message, now }) → { hint, firstDueAt, phrase } | null
  *
  * They told us a property is coming and the message carries no address:

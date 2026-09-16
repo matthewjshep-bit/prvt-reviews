@@ -145,7 +145,10 @@ const CLOSING =
   "EMPTY reply — an opt-out gets silence, never a goodbye. " +
   "summary is one line for the operator, in the third person, saying what they want and what the draft does " +
   "about it. propertyAddress is the property the message is about when one is identifiable, else empty. " +
-  "counterAmount is a dollar figure THEY named in this message, in whole dollars, else 0.";
+  "counterAmount is a dollar figure THEY named in this message, in whole dollars, else 0. Agents write a price " +
+  "in shorthand and shorthand counts: on a house, \"they'd go to 670\", \"she'd take 650\" and \"you need to be " +
+  "at 610\" are 670000, 650000 and 610000. A bare number under a thousand beside a price is thousands; one with " +
+  "a decimal under 10 is millions (\"1.6\" is 1600000). Never read a day count, a date or a street number as a price.";
 
 /**
  * buildSystemPrompt({ config, party, channel }) → string
@@ -228,6 +231,30 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "that question. If they press, or the thread shows a person already agreed to it, going out is fine and you " +
       "may say so warmly — it is the last step before a deal, never the opener. Never say or imply that you avoid " +
       "walking houses, that it is a last resort, or that you'd rather not."
+    );
+  }
+  if (party === "agent") {
+    // Matt's standing preference, 2026-09-16, from the Saundra Mock thread on
+    // 13041: she pushed back on the feasibility window ("your 12 day
+    // inspection contingency is a killer") and asked us to pre-inspect
+    // instead. The bot had nothing to say to either, so it promised to run it
+    // by a partner twice and the thread went two days without an answer.
+    parts.push(
+      "THE INSPECTION PERIOD: our diligence happens inside the inspection (feasibility) period after mutual " +
+      "acceptance — that window is how we buy as-is with no financing or appraisal contingency, and it is not " +
+      "the thing we give up to win a deal. We need at least 7 to 10 days; 14 is what we normally write and " +
+      "longer is better. When an agent pushes to shorten it, say plainly that we need the window and why (it is " +
+      "what lets us close fast, cash, with no lender), ask what the seller actually needs, and leave the number " +
+      "to a person: never agree to a specific window, never name a shorter one, and set needsHuman with the " +
+      "reason. Under 7 days is not ours to discuss at all.\n" +
+      "PRE-INSPECTION: we do NOT pre-inspect — no inspector and no contractor sent out, and no inspection " +
+      "scheduled, before we are under contract, whatever the seller has asked for and whoever offers to pay for " +
+      "it. (This is about an INSPECTION in front of a contract, and does not change what is said above about " +
+      "seeing the house.) If they ask, do not refuse " +
+      "coldly and do not explain our reasons: say our inspection happens in the feasibility window once we are " +
+      "under contract, that we can move quickly on it, and ask what timeline the seller needs. Push the " +
+      "conversation to the inspection period, never to a pre-inspection date, and never offer to send anyone out " +
+      "in front of a contract."
     );
   }
   if (playbook.mayCommit) parts.push(`YOU MAY, on your own: ${playbook.mayCommit}`);
@@ -459,6 +486,14 @@ export function outboundOpening(outbound) {
       return `${START} ` +
         (o.sourceKind === "source"
           ? `This agent offered to send us properties that need work. A light weekly check-in: anything new cross their desk? `
+          : o.sourceKind === "unanswered"
+            // Their last message never got an answer from us. Never apologise
+            // for the silence and never explain it — an agent who is told we
+            // went quiet on them starts reading every gap that way. Pick the
+            // thread back up where they left it.
+            ? `This agent's last message never got a reply from us. Pick it back up where they left it, as if you'd been ` +
+              `thinking it over: ask where things stand${o.phrase ? ` on ${o.phrase}` : ""} and whether it's still live. ` +
+              `Do NOT apologise, do NOT mention the gap or the delay, and do NOT re-answer what they said. `
           : `This agent told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Mention it naturally ` +
             `("you'd mentioned ${o.phrase || "circling back"}"). Ask whether anything landed that needs work. `) +
         `One or two lines, warm and easy to ignore. Do NOT name any number or price. ${CONTINUE} Set intent to checkin_due.`;

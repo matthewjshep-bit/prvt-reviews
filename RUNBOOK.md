@@ -950,6 +950,58 @@ won't build never blocks the paper. A send that carries the operator's own
 message is untouched — SendModal already appends the link there, and unticking
 that box is a decision the server must not undo.
 
+### Terms the bot holds (2026-09-16)
+
+**The inspection period.** Our diligence is the feasibility window after mutual
+acceptance, and it is not the thing we trade away to win a deal: **7–10 days is
+the floor, 14 is what we normally write, longer is better.** The bot may say we
+need the window and why (it is what lets us close fast, cash, with no lender)
+and ask what the seller actually needs — but it may never agree to a specific
+window or name a shorter one, and under 7 days is not its conversation at all.
+Those land as `needsHuman` with the reason.
+
+**No pre-inspection.** We do not send an inspector or a contractor out, and do
+not schedule an inspection, in front of a contract — whoever offers to pay.
+Asked, the bot says our inspection happens in the feasibility window once we're
+under contract, that we can move quickly on it, and asks what timeline the
+seller needs. It never refuses coldly and never explains our reasons. This is
+about an inspection before a contract and does not change "Seeing the house"
+above, which still lets a person go out as the last step before a deal.
+
+Both live in `buildSystemPrompt` (agent party only — an investor is never told
+any of it). From Saundra Mock on 13041, 2026-09-16: "your 12 day inspection
+contingency is a killer… she wants you to preinspect, so obviously the fewer
+days the better." The bot had a policy for neither half, so it promised twice
+to run it by a partner and the thread sat two days.
+
+### A counter typed short, and a thread nobody answered (2026-09-16)
+
+Thomas Rinow answered our $456,250 on 10412 SE 219th with **"That are willing
+to go to 670"** — the number we had just asked him for — and heard nothing back
+at all. Two faults, both fixed:
+
+- **670 is not $670.** `moneyIn` refuses a bare integer on purpose ("14" is a
+  day count, "2026" is a year) and the leak guard needs that. On a counter it
+  meant their number read as *under* ours, so the band failed on "at or under
+  our own number" and the draft parked. `counterDollars` (reply-agent.js) now
+  reads a bare number beside price language — "go to 670", "get them to 650",
+  "you need to be at 610" — as thousands, but only when it lands in a
+  house-price band around our own offer (half to five times it), and only one
+  candidate: two different numbers are left for a person. It fills the model's
+  0 as well as rescaling its 670, and the band's "their own words" check reads
+  the message the same way, so the arithmetic decides instead of the spelling.
+  The model is told the same rule in the prompt.
+- **A held draft is a list, not a clock.** When an agent's text leaves us
+  silent, a `checkin_requested` event with `kind: "unanswered"` starts the
+  check-in sweep two mornings on, and a contact note says so with their message
+  in it. Only when THIS thread is waiting on a person (`HELD_FOR_A_PERSON`: the
+  gates, a person's-call intent, the band didn't open, the intent isn't on the
+  auto-send list) — never because sends or the bot are off for the whole
+  location, and never on an opt-out, small talk, a message that already booked
+  a check-in, or one that started an address chase. The check-in itself never
+  apologises for the gap and never mentions it: it picks the thread back up
+  where they left it.
+
 ## Hardening notes (2026-09)
 
 - **API keys never leave the broker in the clear.** `GET /api/offers/settings`

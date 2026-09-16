@@ -64,7 +64,7 @@ import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
 } from "./ghl.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
-import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller } from "./shared/follow-up.js";
+import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller, unansweredCheckIn } from "./shared/follow-up.js";
 import { resolveParty } from "./conversation-party.js";
 import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts } from "./conversation-context.js";
@@ -366,6 +366,60 @@ export function agentTakeFromText(message = "") {
   return { arv, rehab, note: text.replace(/\s+/g, " ").trim().slice(0, 200) };
 }
 
+// Price language with a bare number right after it: "go to 670", "take 650",
+// "wants 700", "needs to be at 610". The number itself is captured alone — no
+// comma group, no k/m suffix, no unit word behind it — because anything
+// written in full is already money and moneyIn has it.
+const COUNTER_CUE_RX = new RegExp(
+  "\\b(?:(?:go(?:ing)?|get(?:ting)?|come|bring|push|move)\\s+(?:(?:them|him|her|the\\s+sellers?)\\s+)?(?:up\\s+|down\\s+)?to|take|takes|accept|want(?:s|ed)?|" +
+  "need(?:s|ed)?(?:\\s+to\\s+be)?(?:\\s+at)?|ask(?:ing)?(?:\\s+for)?|counter(?:ed|ing)?\\s+at|looking\\s+at|lowest(?:\\s+is)?|" +
+  "at|for|net(?:s|ting)?)\\s*\\$?\\s*(\\d{2,4}(?:\\.\\d+)?)(?![\\d,.])(?!\\s*[kKmM%])" +
+  "(?!\\s*(?:days?|hours?|minutes?|mins?|weeks?|months?|years?|am|pm|sq|st\\b|nd\\b|rd\\b|th\\b))",
+  "gi"
+);
+
+/**
+ * counterDollars(said, { message, reference }) → whole dollars
+ *
+ * The seller's number as the agent actually typed it.
+ *
+ * moneyIn refuses a bare integer on purpose — "14" is a day count and "2026" is
+ * a year, and the leak guard must never read a day as a dollar. On a counter
+ * that rule cost us a live negotiation: Thomas Rinow, 2026-09-15, answered our
+ * $456,250 on 10412 SE 219th with "That are willing to go to 670" — the number
+ * we had just asked him for. The band saw no number in his message, failed on
+ * "at or under our own number", and nobody replied at all.
+ *
+ * Narrow on purpose. The bare number has to sit beside price language in THEIR
+ * message, it is read as thousands the way agents write it (a decimal under 10
+ * is millions, "1.6"), and the result must land in a house-price band around
+ * our own offer — half to five times it. So a day count, a door code, a year
+ * or a phone extension can never become a counter, and two different candidate
+ * numbers are left for a person rather than guessed between.
+ *
+ * A figure they wrote in full ("$670,000", "670k") is already money and stands.
+ * Pure.
+ */
+export function counterDollars(said, { message = "", reference = 0 } = {}) {
+  const asked = Math.max(0, Math.round(Number(said) || 0));
+  const ref = Math.max(0, Math.round(Number(reference) || 0));
+  if (!ref) return asked;
+  const plausible = (n) => n >= ref * 0.5 && n <= ref * 5;
+  if (plausible(asked)) return asked;
+
+  const found = new Set();
+  for (const m of String(message || "").matchAll(COUNTER_CUE_RX)) {
+    const n = shorthandDollars(m[1]);
+    if (plausible(n)) found.add(n);
+  }
+  // The model's own read, scaled — but only when they actually typed it.
+  if (asked > 0) {
+    const scaled = shorthandDollars(String(asked));
+    if (plausible(scaled) && found.has(scaled)) return scaled;
+  }
+  return found.size === 1 ? [...found][0] : asked;
+}
+
 // What the model learned, trimmed to what the fields can hold.
 export function normalizeProfile(p) {
   if (!p || typeof p !== "object") return null;
@@ -578,6 +632,20 @@ export function decideAutoSend({ gate, party = "agent", intent = "other", channe
   return { send: true, code: "", reason: "" };
 }
 
+// Why a reply didn't send itself, split two ways. These four mean THIS thread
+// is waiting on a person — the gates caught something, the intent is a
+// person's call, the band didn't open, the intent isn't on the list — and a
+// person who never gets to it leaves the agent with silence, so the check-in
+// clock starts (see 4c‴ in runReply).
+//
+// The rest are states of the SETUP, not of the thread: the bot is off, sends
+// are off on the broker, auto-send is off for this party, the channel doesn't
+// send, we don't know who they are. Nothing is automated in any of those, an
+// operator is working the outbox by hand, and a clock we set would be a text
+// they never asked us to send. `human_active` is the clearest of all: a person
+// has the thread right now.
+export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed", "not_allowlisted"]);
+
 /**
  * releaseUnderGuard({ base, party, intent, config, guard }) → { send, reason, exception }
  *
@@ -703,8 +771,19 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
   // row deliberately drops them, and the ceiling wants the snapshot.
   const full = picked ? (await store.getOffer(picked.id).catch(() => null)) || picked : null;
   const releasedToday = await bandReleasesToday({ store, locationId, now });
+  // "Their own words" has to read the message the way the counter above it
+  // did. moneyIn refuses a bare integer, so a counter typed short ("go to
+  // 670") failed the check as "not in their message" and the band never got
+  // as far as the arithmetic — see counterDollars. Same number, same rule,
+  // both places; an acceptance that names one is still a counter, which is
+  // what that check is for.
+  const shorthand = counterDollars(0, { message: job.message || "", reference: Math.round(Number(full?.cashAmount) || 0) });
+  const saidMoney = (t) => {
+    const out = moneyIn(t);
+    return shorthand > 0 && !out.includes(shorthand) ? [...out, shorthand] : out;
+  };
   const args = { offer: full, draft, inboundMessage: job.message || "", settings: saved || {},
-                 band, openOffers: open, releasedToday, now, moneyIn };
+                 band, openOffers: open, releasedToday, now, moneyIn: saidMoney };
   return draft.intent === "acceptance" ? evaluateAcceptance(args) : evaluateCounterBand(args);
 }
 
@@ -1577,9 +1656,10 @@ function outboundSummary({ kind, offer, outbound }) {
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
     case "dataroom_nudge": return `Follows up on ${where} — they opened the package and went quiet${rung}.`;
-    case "checkin_due": return outbound.sourceKind === "source"
-      ? "Weekly check-in with an agent who offered to send us deals: anything new that needs work?"
-      : `The check-in they asked for${outbound.phrase ? ` ("${outbound.phrase}")` : ""}: anything land that needs work?`;
+    case "checkin_due":
+      if (outbound.sourceKind === "source") return "Weekly check-in with an agent who offered to send us deals: anything new that needs work?";
+      if (outbound.sourceKind === "unanswered") return `Comes back to them${where ? ` on ${where}` : ""} — their last text never got an answer from us.`;
+      return `The check-in they asked for${outbound.phrase ? ` ("${outbound.phrase}")` : ""}: anything land that needs work?`;
     case "address_chase": return `Asks again for the address of the property they said was coming (check-in ${outbound.rung} of ${outbound.rungs}).`;
     case "price_drop": return `The list price on ${where} came down${outbound.fromK ? ` from ${outbound.fromK}` : ""} to ${outbound.toK}; asks if the seller would look at cash closer to ours now.`;
     case "promise_due": return `Keeps our word on ${where}: we said we'd come back with ${outbound.what === "number" ? "a number" : "an answer"} and nothing went out${outbound.heldReason ? " (the underwrite held)" : ""}.`;
@@ -1841,7 +1921,7 @@ async function runReply(job, ctx) {
   // of our offer and the ceiling, it's filed as their pass: offer passed, Tier
   // 3, and a short reply that names no number of ours.
   let softFloor = false;
-  if (party === "agent" && draft.intent === "counter" && Number(draft.counterAmount) > 0) {
+  if (party === "agent" && draft.intent === "counter") {
     const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
     const open = book.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
     const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
@@ -1849,36 +1929,44 @@ async function runReply(job, ctx) {
     if (full) {
       const ceiling = autoAcceptCeiling({ offer: full, settings: saved || {} });
       const reference = Math.max(Math.round(Number(full.cashAmount) || 0), ceiling.computable ? ceiling.ceiling : 0);
+      // Shorthand first, so everything below — the pass line, the band, the
+      // record — reads the number they meant rather than the digits they typed.
+      const read = counterDollars(draft.counterAmount, { message: isCall ? "" : job.message, reference });
+      if (read !== Math.round(Number(draft.counterAmount) || 0)) {
+        draft = { ...draft, counterAmount: read, counterShorthand: true };
+      }
       const theirs = Math.round(Number(draft.counterAmount));
-      // Once we've already come back with a number (the band countered or
-      // accepted, or a re-quote went out), any counter above what we'd pay is
-      // their answer to it — no margin, no second round.
-      const weMovedOnPrice = Boolean(full.counterBand?.acceptedAt || (full.requotes || []).length);
-      const passLine = weMovedOnPrice ? reference : reference * (1 + COUNTER_PASS_MARGIN);
-      const firmness = floorFirmness(job.message);
-      if (reference > 0 && theirs > passLine && firmness === "soft" && !(full.requotes || []).length) {
-        // A soft floor is an opening. Keep it a live negotiation: file their
-        // number on the offer, and ask for the value and the work so the
-        // re-quote has something to run on. No number of ours, no goodbye.
-        softFloor = true;
-        const street = String(draft.propertyAddress || full.address || "").split(",")[0].trim();
-        draft = {
-          ...draft, intent: "question", reclassifiedFrom: "counter",
-          summary: `Their number (${fmtMoney(theirs)}) is well over ours (${fmtMoney(reference)}), but they sound open — asked for their value and repairs to re-quote.`,
-          reply: `Appreciate you giving me a number to work with${street ? ` on ${street}` : ""}. Help me close the gap: what do you figure it's worth once it's done, and what would you budget for the work? I'll re-run it on your numbers.`,
-          needsHuman: false,
-        };
-        job.intent = draft.intent;
-      } else if (reference > 0 && theirs > passLine) {
-        draft = {
-          ...draft, intent: "rejection", reclassifiedFrom: "counter",
-          summary: weMovedOnPrice
-            ? `Their number (${fmtMoney(theirs)}) is over the most we'd pay (${fmtMoney(reference)}) after we already came back — filed as a pass.`
-            : `Their number (${fmtMoney(theirs)}) is more than ${Math.round(COUNTER_PASS_MARGIN * 100)}% over the most we'd pay (${fmtMoney(reference)}) — filed as a pass.`,
-          reply: "Understood, that's well past where we can be on this one. If anything changes with the seller let me know, and send anything else my way that needs work.",
-          needsHuman: false,
-        };
-        job.intent = draft.intent;
+      if (theirs > 0) {
+        // Once we've already come back with a number (the band countered or
+        // accepted, or a re-quote went out), any counter above what we'd pay is
+        // their answer to it — no margin, no second round.
+        const weMovedOnPrice = Boolean(full.counterBand?.acceptedAt || (full.requotes || []).length);
+        const passLine = weMovedOnPrice ? reference : reference * (1 + COUNTER_PASS_MARGIN);
+        const firmness = floorFirmness(job.message);
+        if (reference > 0 && theirs > passLine && firmness === "soft" && !(full.requotes || []).length) {
+          // A soft floor is an opening. Keep it a live negotiation: file their
+          // number on the offer, and ask for the value and the work so the
+          // re-quote has something to run on. No number of ours, no goodbye.
+          softFloor = true;
+          const street = String(draft.propertyAddress || full.address || "").split(",")[0].trim();
+          draft = {
+            ...draft, intent: "question", reclassifiedFrom: "counter",
+            summary: `Their number (${fmtMoney(theirs)}) is well over ours (${fmtMoney(reference)}), but they sound open — asked for their value and repairs to re-quote.`,
+            reply: `Appreciate you giving me a number to work with${street ? ` on ${street}` : ""}. Help me close the gap: what do you figure it's worth once it's done, and what would you budget for the work? I'll re-run it on your numbers.`,
+            needsHuman: false,
+          };
+          job.intent = draft.intent;
+        } else if (reference > 0 && theirs > passLine) {
+          draft = {
+            ...draft, intent: "rejection", reclassifiedFrom: "counter",
+            summary: weMovedOnPrice
+              ? `Their number (${fmtMoney(theirs)}) is over the most we'd pay (${fmtMoney(reference)}) after we already came back — filed as a pass.`
+              : `Their number (${fmtMoney(theirs)}) is more than ${Math.round(COUNTER_PASS_MARGIN * 100)}% over the most we'd pay (${fmtMoney(reference)}) — filed as a pass.`,
+            reply: "Understood, that's well past where we can be on this one. If anything changes with the seller let me know, and send anything else my way that needs work.",
+            needsHuman: false,
+          };
+          job.intent = draft.intent;
+        }
       }
     }
   }
@@ -2286,10 +2374,12 @@ async function runReply(job, ctx) {
   // A time they named ("in a few weeks") is its first rung, in place of a
   // separate check-in, so they don't get two texts.
   let chaseHasDate = false;
+  let chaseStarted = false;
   if (party === "agent") {
     const pend = addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now });
     if (pend) {
       chaseHasDate = Boolean(pend.firstDueAt);
+      chaseStarted = true;
       await recordEvent({
         store, locationId, contactId: job.contactId, party: "agent", type: "address_pending", at: new Date(now).toISOString(),
         address: "", source: "conversation", ref: record.id,
@@ -2308,9 +2398,11 @@ async function runReply(job, ctx) {
   /* --- 4c′. when they said to check back, and who sends us deals --- */
   // Remembered as `checkin_requested`; promise-sweep.js runCheckInSweep sends
   // the check-in when it's due and they haven't come back first.
+  let checkInBooked = false;
   if (party === "agent" && !isCall && !["opt_out", "counter", "acceptance", "realm_yes"].includes(draft.intent)) {
     const ask = chaseHasDate ? null : (checkInRequested(job.message, now) || takingItToSeller(job.message, now));
     if (ask) {
+      checkInBooked = true;
       await recordEvent({
         store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
         address: draft.propertyAddress || "", source: "conversation", ref: record.id,
@@ -2319,6 +2411,7 @@ async function runReply(job, ctx) {
       }).catch(() => {});
     }
     if (offersToSendDeals(job.message)) {
+      checkInBooked = true;
       await addContactTags(client, job.contactId, ["deal-source"]).catch((e) => warnings.push(`tag: ${e.message}`));
       await recordEvent({
         store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
@@ -2326,6 +2419,38 @@ async function runReply(job, ctx) {
         dedupeKey: `checkin_requested:source:${job.contactId}`,
         data: { kind: "source", phrase: "", dueAt: new Date(now + 7 * 86400000).toISOString(), left: 5 },
       }).catch(() => {});
+    }
+  }
+
+  /* --- 4c‴. nothing is going out, and nobody is holding the thread --- */
+  // A held draft waits in the outbox, which is a list, not a clock. Thomas
+  // Rinow (2026-09-15) answered our 456,250 on 10412 SE 219th with the
+  // seller's number — "that are willing to go to 670" — the draft was held,
+  // no one picked it up, and the next thing that happened was his email the
+  // following morning closing the deal out himself.
+  //
+  // So when an agent's text leaves us silent, the check-in sweep owns the
+  // thread two mornings on (unansweredCheckIn), and a note says so where the
+  // operator will see it. Never on an opt-out (silence is the whole point),
+  // never on small talk, and never when this message already booked a
+  // check-in or started an address chase — nobody gets two texts.
+  const heldSilent = party === "agent" && !isCall && !auto.send && HELD_FOR_A_PERSON.has(auto.code)
+    && !checkInBooked && !chaseStarted
+    && !["opt_out", "small_talk"].includes(draft.intent);
+  if (heldSilent) {
+    const due = unansweredCheckIn(now);
+    const filed = await recordEvent({
+      store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
+      address: draft.propertyAddress || "", source: "conversation", ref: record.id,
+      dedupeKey: `checkin_requested:unanswered:${job.contactId}:${due.dueAt.slice(0, 10)}`,
+      data: { kind: "unanswered", phrase: "", dueAt: due.dueAt, draftId: record.id },
+    }).catch(() => ({ inserted: false }));
+    if (filed?.inserted) {
+      await createContactNote(client, job.contactId, {
+        body: `Nothing went out — their text is waiting on you in the outbox (${auto.reason || "held"}). ` +
+          `If neither of us comes back, we check in on ${new Date(due.dueAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}. ` +
+          `They said: ${String(job.message || "").replace(/\s+/g, " ").slice(0, 200)}`,
+      }).catch((e) => warnings.push(`note: ${e.message}`));
     }
   }
 

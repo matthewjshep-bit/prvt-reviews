@@ -3004,3 +3004,129 @@ test("an answer to our first text that fits no intent keeps the thread going ins
   assert.equal((await run("Hey, following up on the offer we sent.")).intent, "other", "not an answer to our first text: still a person's call");
   assert.equal((await run(OPEN, { reply: "We could do around 400k on it." })).intent, "other", "a reply that names a number still waits");
 });
+
+/* ---------- a counter typed short, and a thread nobody answered ---------- */
+
+test("counterDollars reads the seller's number the way an agent types it", async () => {
+  const { counterDollars } = await import("./reply-agent.js");
+  const ours = 456250;
+
+  // Thomas Rinow, 2026-09-15, on our $456,250 offer — the number we had just
+  // asked him for. The model echoed the digits; the message has no "$" and no
+  // "k", so moneyIn read nothing at all.
+  const said = "That are willing to go to 670";
+  assert.equal(counterDollars(670, { message: said, reference: ours }), 670000);
+  assert.equal(counterDollars(0, { message: said, reference: ours }), 670000, "and it stands in for a model that read none");
+
+  // A figure written in full is already money and is left alone.
+  assert.equal(counterDollars(700000, { message: "Their lowest at this time is $700k.", reference: ours }), 700000);
+  assert.equal(counterDollars(670000, { message: "at $670,000", reference: ours }), 670000);
+
+  // Days, times and door codes are not prices: nothing plausible, nothing read.
+  assert.equal(counterDollars(0, { message: "your 12 day inspection contingency is a killer", reference: ours }), 0);
+  assert.equal(counterDollars(0, { message: "call me at 5", reference: ours }), 0);
+  assert.equal(counterDollars(0, { message: "lockbox is 1421, go anytime", reference: ours }), 0);
+
+  // Out of the house-price band around our own number, so not our counter.
+  assert.equal(counterDollars(0, { message: "she'd take 60", reference: ours }), 0);
+  // No offer to measure against: nothing is scaled on a guess.
+  assert.equal(counterDollars(670, { message: said, reference: 0 }), 670);
+});
+
+test("a shorthand counter over our number gets an answer instead of silence", async () => {
+  // The whole failure this fixes: read as $670, their number was UNDER ours,
+  // the band failed on "at or under our own number", the draft was held, and
+  // Thomas Rinow heard nothing back at all.
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: "That are willing to go to 670",
+    deps: { draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false,
+      counterAmount: 670, reply: "Let me run that by my partner.", propertyAddress: "12 Elm St" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.counterAmount, 670000, "670 on a 300k offer is 670,000");
+  assert.equal(d.intent, "rejection", "well past the most we'd pay — filed as their pass, with the door left open");
+  assert.match(d.reply, /well past where we can be/);
+  assert.equal(d.status, "scheduled", d.autoSend?.reason);
+});
+
+test("a shorthand counter they can deliver is an opening, and the gap gets worked", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: "I could probably get them to 670 on 12 Elm",
+    deps: { draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false,
+      counterAmount: 0, reply: "Let me run that by my partner.", propertyAddress: "12 Elm St" }) },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.counterAmount, 670000, "the model read no number; the message still had one");
+  assert.equal(d.intent, "question");
+  assert.match(d.reply, /close the gap/);
+});
+
+test("a shorthand counter inside the ceiling still passes 'their own words'", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const order = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: "She'd go to 350 on 12 Elm",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false,
+        counterAmount: 350, reply: "Let me run that by my partner.", propertyAddress: "12 Elm St" }),
+      reviseOfferToCounter: async ({ amount }) => { order.push(["revise", amount]); return { ok: true, address: "12 Elm St", amount }; },
+      sendOfferDocs: async ({ afterCounter }) => { order.push(["send", afterCounter]); return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.exception?.passed, true, JSON.stringify(d.exception?.checks));
+  assert.deepEqual(order, [["revise", 350000], ["send", true]]);
+  assert.equal(d.reply, "350k works for us on 12 Elm St. Sending the updated offer over now.");
+});
+
+test("when nothing goes out, the thread gets a clock and a note", async () => {
+  _resetJobs();
+  const { client, notes } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "The seller wants to see proof of funds before we go further.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "proof_of_funds", confidence: "high", needsHuman: true,
+      humanReason: "they want proof of funds", reply: "Let me get that over to you today.", propertyAddress: "12 Elm St" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "scheduled", "the premise: this one waits on a person");
+
+  const events = await store.listContactEvents("LOC", "c1", { types: ["checkin_requested"] });
+  assert.equal(events.length, 1, JSON.stringify(events));
+  assert.equal(events[0].data.kind, "unanswered");
+  assert.ok(Date.parse(events[0].data.dueAt) > Date.now(), "the check-in is ahead of us, not behind");
+  assert.ok(notes.some((n) => /Nothing went out/.test(n)), notes.join(" | "));
+});
+
+test("an opt-out is never put on the check-in clock", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Take me off your list.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "opt_out", confidence: "high", needsHuman: false, reply: "" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const events = await store.listContactEvents("LOC", "c1", { types: ["checkin_requested"] });
+  assert.equal(events.length, 0, "silence is the whole point of an opt-out");
+});

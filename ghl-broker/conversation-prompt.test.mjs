@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildUserContext, buildSystemPrompt } from "./conversation-prompt.js";
+import { buildUserContext, buildSystemPrompt, outboundOpening } from "./conversation-prompt.js";
 
 /* ---------- our own contact details ---------- */
 
@@ -91,4 +91,38 @@ test("the prompt says which name is ours and which is theirs", () => {
 test("an agent who really is called Matt gets no confusing note", () => {
   const ctx = buildUserContext({ party: "agent", contact: { name: "Matt Jones" }, signer: "Matt", message: "hi" });
   assert.doesNotMatch(ctx, /NAMES:/);
+});
+
+/* ---------- the inspection period, and a thread we never answered ---------- */
+
+// Saundra Mock, 13041 (2026-09-16): "your 12 day inspection contingency is a
+// killer... She wants you to preinspect, so obviously the fewer days the
+// better." The bot had no policy for either half, so it promised twice to run
+// it by a partner and the thread sat two days.
+test("the inspection period and the no-pre-inspection rule reach the agent prompt", () => {
+  const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
+  assert.match(sys, /THE INSPECTION PERIOD/);
+  assert.match(sys, /at least 7 to 10 days/);
+  assert.match(sys, /14 is what we normally write/);
+  assert.match(sys, /never agree to a specific window/);
+  assert.match(sys, /PRE-INSPECTION: we do NOT pre-inspect/);
+  assert.match(sys, /once we are under contract/);
+});
+
+test("an investor is never told any of it — it is an agent's negotiation", () => {
+  const sys = buildSystemPrompt({ config: null, party: "investor", channel: "sms" });
+  assert.doesNotMatch(sys, /PRE-INSPECTION/);
+});
+
+test("the check-in on a thread we never answered apologises for nothing", () => {
+  const ours = outboundOpening({ kind: "checkin_due", address: "10412 SE 219th St", sourceKind: "unanswered", phrase: "" });
+  assert.match(ours, /never got a reply from us/);
+  assert.match(ours, /Do NOT apologise/);
+  assert.match(ours, /Set intent to checkin_due/);
+
+  // The two it must not be confused with.
+  const asked = outboundOpening({ kind: "checkin_due", address: "10412 SE 219th St", sourceKind: "date", phrase: "next week" });
+  assert.match(asked, /told us to check back/);
+  const weekly = outboundOpening({ kind: "checkin_due", address: "", sourceKind: "source", phrase: "" });
+  assert.match(weekly, /weekly check-in/i);
 });
