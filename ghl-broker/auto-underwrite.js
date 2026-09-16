@@ -37,7 +37,7 @@ import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenova
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
 import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
-import { addressKey } from "./shared/us-address.js";
+import { addressKey, completeAddress, sameStreet } from "./shared/us-address.js";
 import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed } from "./shared/offer-status.js";
 import { expandListingLinks } from "./listing-links.js";
 import { buildTranscript } from "./enrich.js";
@@ -1259,7 +1259,30 @@ async function runUnderwrite(job, ctx) {
   //
   // Below street precision nothing is adopted — a ZIP centroid has no address
   // to canonicalise to, and the gate at the end holds the run for review.
-  const resolved = await geocodeAddress(extraction.address);
+  // A street-only line ("34418 54th Ave S") is finished from what we already
+  // know about this agent — the listing we texted them about, their Subject
+  // Property, their city, their outreach batch's county — before it goes to
+  // the geocoder, which would otherwise place it anywhere in the country or
+  // nowhere at all (three "couldn't locate" holds on 2026-09-16, all
+  // shorthand from agents who write like people). The bare line is tried last.
+  let resolved = null;
+  {
+    const variants = completeAddress(extraction.address, {
+      candidates: [fieldAddress, ...(await knownAddressesFor({ store, locationId, contactId: job.contactId }))],
+      city: contact?.city || "", state: contact?.state || "", county: countyFromTags(contact?.tags),
+    });
+    for (const v of variants) {
+      resolved = await geocodeAddress(v);
+      if (resolved) {
+        if (v !== extraction.address) {
+          warnings.push(`address completed: "${extraction.address}" → "${v}"`);
+          extraction.address = v;
+          extraction.note = `${extraction.note || ""} Completed to "${v}" from what the contact record already knew.`.trim();
+        }
+        break;
+      }
+    }
+  }
   const chosen = addressToWorkFrom(extraction.address, resolved);
   extraction.address = chosen.address;
   if (chosen.typedAddress) {
@@ -1784,6 +1807,77 @@ async function runUnderwrite(job, ctx) {
     try { await deps.onOfferCreated({ offer, job }); }
     catch (e) { warnings.push(`realm check: ${String(e?.message || e).slice(0, 120)}`); }
   }
+}
+
+// Every full address the contact record already ties to this agent: the
+// listing hook at import, the outreach text, subject-property writes, their
+// own property details. Any of these on the same street line as a shorthand
+// address IS that address.
+async function knownAddressesFor({ store, locationId, contactId }) {
+  if (!contactId || typeof store?.listContactEvents !== "function") return [];
+  try {
+    const events = await store.listContactEvents(locationId, contactId, { limit: 300 });
+    return [...new Set(events.map((e) => String(e?.address || "").trim()).filter((a) => a && /,/.test(a)))];
+  } catch { return []; }
+}
+
+// "agent-outreach-autopilot-king-wa" / "agent-outreach-pierce-county-wa-aug-18" → "King" / "Pierce".
+export function countyFromTags(tags = []) {
+  for (const t of tags || []) {
+    const m = String(t).toLowerCase().match(/^agent-outreach-(?:autopilot-)?([a-z]+)(?:-county)?-wa\b/);
+    if (m) return m[1][0].toUpperCase() + m[1].slice(1);
+  }
+  return "";
+}
+
+/**
+ * restartVanishedUnderwrites({ store, locationId, start, now }) → { checked, restarted, rows }
+ *
+ * A run lives in memory. A redeploy in the middle of one — Boots Swan's
+ * 3925 SW 317th, 2026-09-16 12:56 PT, three deploys between 12:55 and
+ * 12:58 — kills it with no terminal note, no draft, no tag change: the
+ * agent's text just vanishes. The reply draft still says "underwrite
+ * started", so this tick-time check reads those (last 12h, older than 20
+ * minutes), and where nothing exists for that agent on that street — no
+ * offer, no held draft, no job in memory — starts it again, once
+ * (claimed as uw_restart:{draftId} on the timeline).
+ */
+export const VANISHED_MIN_AGE_MS = 20 * 60 * 1000;
+export const VANISHED_MAX_AGE_MS = 12 * 3600 * 1000;
+export async function restartVanishedUnderwrites({ store, locationId, start, now = Date.now() }) {
+  const out = { checked: 0, restarted: 0, rows: [] };
+  if (typeof start !== "function" || typeof store?.listReplyDrafts !== "function") return out;
+  const since = new Date(now - VANISHED_MAX_AGE_MS).toISOString();
+  const drafts = await store.listReplyDrafts(locationId, { since, limit: 500 }).catch(() => []);
+  const started = drafts.filter((d) => d?.contactId && d.propertyAddress
+    && (d.actions || []).some((a) => a?.type === "start_underwrite" && a.status === "done")
+    && now - (Date.parse(d.createdAt || "") || now) >= VANISHED_MIN_AGE_MS);
+  if (!started.length) return out;
+  const offers = await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []);
+  const seen = new Set();
+  for (const d of started) {
+    const key = `${d.contactId}|${addressKey(String(d.propertyAddress).split(",")[0])}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.checked++;
+    const inMemory = [...jobs.values()].some((j) => j.locationId === locationId && j.contactId === d.contactId
+      && (j.status === "queued" || j.status === "running" || (j.address && sameStreet(j.address, d.propertyAddress))));
+    if (inMemory) continue;
+    const anyRow = offers.some((o) => o?.contactId === d.contactId && o.address && sameStreet(o.address, d.propertyAddress));
+    if (anyRow) continue;
+    const claim = await recordEvent({
+      store, locationId, contactId: d.contactId, party: "agent", type: "uw_restart", at: new Date(now).toISOString(),
+      address: d.propertyAddress, source: "sweep", dedupeKey: `uw_restart:${d.id}`, data: { draftId: d.id, why: "the run started and left nothing behind" },
+    }).catch(() => ({ inserted: false }));
+    if (!claim.inserted) continue;
+    const row = { contactId: d.contactId, contactName: d.contactName || "", address: d.propertyAddress, draftId: d.id, status: "restarted", reason: "" };
+    out.rows.push(row);
+    try {
+      const r = await start({ contactId: d.contactId, message: String(d.inbound || "").slice(0, 500), address: d.propertyAddress });
+      if (r?.skipped) { row.status = "skipped"; row.reason = r.skipped; } else out.restarted++;
+    } catch (e) { row.status = "error"; row.reason = String(e?.message || e).slice(0, 160); }
+  }
+  return out;
 }
 
 /* ---------- holding for review ---------- */

@@ -117,3 +117,18 @@ test("the address a conversation touched last wins, whatever spelling it used", 
   // A street line too short to be safe never matches on its own.
   assert.equal(lastMention("meet at 1 Elm", "1 Elm"), -1);
 });
+
+test("completeAddress: a street-only line is finished from what we know, best first; a full one is left alone", async () => {
+  const { completeAddress } = await import("./us-address.js");
+  assert.deepEqual(completeAddress("3925 Sw 317th St, Federal Way, WA 98023"), ["3925 Sw 317th St, Federal Way, WA 98023"]);
+  // The listing we texted them about is the house.
+  assert.deepEqual(completeAddress("34418 54th Ave S", { candidates: ["34418 54th Ave S, Auburn, WA 98001"], city: "Kent", state: "WA", county: "King" }).slice(0, 2),
+    ["34418 54th Ave S, Auburn, WA 98001", "34418 54th Ave S, Kent, WA"]);
+  // No listing: the contact's city, then the batch's county, then the bare line.
+  assert.deepEqual(completeAddress("7034 South K St", { county: "Pierce" }), ["7034 South K St, Pierce County, WA", "7034 South K St"]);
+  assert.deepEqual(completeAddress("7034 South K St", { city: "Tacoma" }), ["7034 South K St, Tacoma, WA", "7034 South K St"]);
+  // A candidate on another street is not this house.
+  assert.deepEqual(completeAddress("12 Elm St", { candidates: ["99 Oak Ave, Kent, WA"] }), ["12 Elm St"]);
+  // A city with no house number has nothing to complete.
+  assert.deepEqual(completeAddress("Medina", { county: "King" }), ["Medina"]);
+});

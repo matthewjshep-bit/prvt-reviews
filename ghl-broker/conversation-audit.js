@@ -10,7 +10,7 @@
 // lands next morning. Matt, 2026-09-16.
 
 import { store as defaultStore } from "./store.js";
-import { auditConversations, auditDedupeKey, AUDIT_EVENT_TYPES } from "./shared/conversation-audit.js";
+import { auditConversations, auditDedupeKey, AUDIT_EVENT_TYPES, HELD_SWEEP_KINDS } from "./shared/conversation-audit.js";
 import { buildPipeline } from "./shared/pipeline.js";
 import { conversationConfig, startReply as defaultStartReply } from "./reply-agent.js";
 import { startFollowUpSweep as defaultStartFollowUpSweep } from "./follow-up-sweep.js";
@@ -114,6 +114,8 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
 
   for (const f of result.findings) {
     if (!f.action) continue;
+    // The held sweep already carried out its own findings above.
+    if (HELD_SWEEP_KINDS.has(f.kind)) continue;
     const row = { contactId: f.contactId, contactName: f.contactName, address: f.address, kind: f.kind, action: f.action.type, status: "started", reason: "", jobId: null };
     acted.push(row);
     try {

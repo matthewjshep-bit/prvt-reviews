@@ -254,6 +254,9 @@ setInterval(async () => {
       // Addresses that came in past the daily underwrite cap, once it resets.
       const drained = await offersRouter.drainUnderwriteQueue?.({ client: makeClient(token), locationId });
       if (drained?.started || drained?.dropped) console.log(`underwrite queue for ${locationId}: started ${drained.started}, dropped ${drained.dropped}, waiting ${drained.left}`);
+      // Runs a redeploy killed with nothing left behind, started again.
+      const revived = await offersRouter.restartVanishedUnderwrites?.({ client: makeClient(token), locationId });
+      if (revived?.restarted) console.log(`underwrites restarted for ${locationId}: ${revived.rows.map((r) => `${r.contactName || r.contactId} ${r.address} (${r.status}${r.reason ? `: ${r.reason}` : ""})`).join("; ")}`);
       // The second wave: deals blasted once, nobody committed, the delay past.
       const waved = await maybeStartDispoSweep({
         client: makeClient(token), locationId, saved, store, utcHour: DISPO_SWEEP_UTC_HOUR,

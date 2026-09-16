@@ -242,3 +242,44 @@ export function zillowUrl(address) {
   const slug = normalizeUsAddress(address).replace(/[,#.]/g, "").replace(/\s+/g, "-");
   return slug ? `https://www.zillow.com/homes/${encodeURIComponent(slug)}_rb/` : "";
 }
+
+/**
+ * completeAddress(raw, { candidates, city, state, county }) → [address, …]
+ *
+ * The ways to finish a street-only address, best first. An agent texts
+ * "34418 54th Ave S" — no city — and a geocoder given only that will happily
+ * put it in another state at street precision (Tim Tilbury, 2026-09-16:
+ * "couldn't locate on the map"; "7034 South K"; three held for the same
+ * reason). We usually know where the house is: the listing we texted them
+ * about, their Subject Property field, the city on their contact record, or
+ * the county their outreach batch was pulled for. Try those first; the bare
+ * line is last.
+ *
+ *   candidates   full addresses we already hold for this contact; one on the
+ *                same street line IS the address
+ *   city/state   the contact's own
+ *   county       "King" — the outreach batch's county, state assumed WA when
+ *                none is known
+ *
+ * An address that already names a city and state comes back alone.
+ */
+export function completeAddress(raw, { candidates = [], city = "", state = "", county = "" } = {}) {
+  const line = String(raw || "").replace(/\s+/g, " ").trim();
+  if (!line) return [];
+  const p = parseUsAddress(line);
+  if (p.city && p.state) return [line];
+  if (!p.houseNo) return [line];   // "Medina": nothing to complete
+  const out = [];
+  const seen = new Set();
+  const add = (a) => { const k = addressKey(a); if (a && !seen.has(k)) { seen.add(k); out.push(a); } };
+  for (const c of candidates) if (c && sameStreet(c, line) && parseUsAddress(c).city) add(String(c).replace(/\s+/g, " ").trim());
+  const st = stateAbbr(state || "") || (p.state || "");
+  const street = segs0(line);
+  if (city && st) add(`${street}, ${city}, ${st}`);
+  else if (city) add(`${street}, ${city}, WA`);
+  if (county) add(`${street}, ${String(county).replace(/\s+county$/i, "")} County, ${st || "WA"}`);
+  else if (st && !p.city) add(`${street}, ${st}`);
+  add(line);
+  return out;
+}
+const segs0 = (line) => String(line).split(",")[0].trim();

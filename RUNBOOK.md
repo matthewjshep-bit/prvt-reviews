@@ -251,6 +251,28 @@ appended. It is a worthwhile change on its own schedule — it also closes the
 cleartext-keys hole on `GET /api/offers/settings` — but it is not a prerequisite
 for this feature and should not be done in the same sitting.
 
+### A shorthand address, and a run a redeploy killed (2026-09-16)
+
+**Short addresses.** Agents write "34418 54th Ave S" — no city. A geocoder
+given only that puts it in another state at street precision or nowhere
+("couldn't locate … on the map" held three runs on 2026-09-16). Before the
+geocode, `completeAddress` (shared/us-address.js) finishes the line from
+what the contact record already knows, best first: a full address we hold
+for this agent on the same street (the listing hook at import, the outreach
+text, Subject Property), the contact's own city/state, the county off their
+outreach batch tag (`agent-outreach-…-king-wa` → "King County, WA"), and
+the bare line last. The run's warnings say `address completed: "…" → "…"`.
+
+**Vanished runs.** An underwrite lives in memory; a deploy in the middle of
+one (Boots Swan's 3925 SW 317th, 12:56 PT, three deploys 12:55–12:58) kills
+it with no note, no draft, no tag change. `restartVanishedUnderwrites`
+(auto-underwrite.js) runs on the 15-minute tick: any reply draft from the
+last 12 hours whose `start_underwrite` action says "done", older than 20
+minutes, with **no row at all** for that agent on that street (no offer, no
+held or failed draft, no job in memory) is started again from the draft,
+once (`uw_restart:{draftId}` on the timeline). Log line: "underwrites
+restarted for <location>: …".
+
 ### Where comps come from
 
 Two Settings dropdowns, both defaulted to the cheap path:

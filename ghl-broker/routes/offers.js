@@ -89,7 +89,7 @@ import { pullZillowComps, mergeFacts, streetKey } from "../comps-zillow.js";
 import { similarity, milesBetween } from "../shared/comp-match.js";
 import { gradeComps, needsScrape } from "../comps-grade.js";
 import {
-  startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs, drainUnderwriteQueue,
+  startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs, drainUnderwriteQueue, restartVanishedUnderwrites,
   cancelJob as cancelUnderwriteJob, publicJob as publicUnderwriteJob, retryArgs as retryUnderwriteArgs,
   AUTO_UNDERWRITE_ENABLED,
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT, UW_ENRICH_CANDIDATES, paperAlreadyOut,
@@ -3929,6 +3929,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       start: (item) => startUnderwrite({
         client, locationId, saved, store, contactId: item.contactId, message: item.message, address: item.address,
         askingPrice: 0, dryRun: !AUTO_UNDERWRITE_ENABLED, deps: underwriteDeps({ client, locationId, saved }),
+      }),
+    });
+  };
+
+  // Runs a redeploy killed mid-flight, started again from the draft that
+  // asked for them. Same start as the queue drain.
+  router.restartVanishedUnderwrites = async ({ client, locationId, now = Date.now() }) => {
+    const saved = (await store.getOfferSettings(locationId)) || {};
+    return restartVanishedUnderwrites({
+      store, locationId, now,
+      start: (item) => startUnderwrite({
+        client, locationId, saved, store, contactId: item.contactId, message: item.message, address: item.address,
+        askingPrice: 0, dryRun: !AUTO_UNDERWRITE_ENABLED, deps: underwriteDeps({ client, locationId, saved }), queueIfCapped: true,
       }),
     });
   };
