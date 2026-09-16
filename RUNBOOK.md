@@ -903,6 +903,35 @@ the tab (default 60, plus 12 per contact), counted from the store so a
 restart can't reset it. No Apify. Two drafts in flight per location at a
 time. Settled drafts older than the retention (180 days) are pruned daily.
 
+### One number per house — the price lock (2026-09-16)
+
+Heather Vandyken, 36721 6th Ave SW. We offered 825 in August and the seller
+accepted it in September; a re-underwrite had quietly dropped our number, so
+her "they agreed to accept 825" read as a counter and was held. A second run
+then floated 795 "after the latest look" — 30k under an accepted price. She
+got the seller to 795, then 800, which the counter band accepted and we
+promised a PSA on. Then a phone call was transcribed, read as a rejection
+with a repair figure in it, re-quoted to 731.5, and **sent** — by text and
+email. She's gone. Three rules now, all in code:
+
+- **A house the agent already has our number on is never re-priced by the
+  machine** — `findOfferOut` in `auto-underwrite.js`: an unattended run on an
+  address with a live sent (or agreed) offer for that agent stops and says so
+  in the note; only a person replacing the offer on purpose (`replaceOfferId`,
+  the form's fill) re-runs it.
+- **An agreed price is locked** — `priceAgreed` / `priceLocked` in
+  `shared/offer-status.js`: a realm-yes, a counter the band accepted, an
+  accepted status or a deal writes `offer.agreed {amount, at, via}` (derived
+  for older rows). `requoteFromAgentNumbers` refuses on a locked offer; a dead
+  offer (passed / no response / we passed) is a fresh negotiation again.
+- **The machine never lowers a number already out** — `planRequote` refuses
+  any re-quote that lands under the sent price. Re-quotes move toward the
+  agent on their numbers; a retraction is a person's call every time.
+
+What a person still owns: the PSA after a yes. "14 days works on the 800k"
+was held as "an acceptance is a person's call" and nobody sent the contract
+that day; the bot had already promised it twice. That handoff is on Today.
+
 ### The nightly audit (2026-09-16)
 
 Fifteen ticks push pieces of the loop. None of them stood back at the end of

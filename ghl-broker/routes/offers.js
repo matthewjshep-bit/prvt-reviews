@@ -61,7 +61,7 @@ import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../
 import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isExpired,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
-  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason,
+  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked,
 } from "../shared/offer-status.js";
 import { planRequote } from "../shared/requote.js";
 import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
@@ -3997,6 +3997,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const offer = picked || mine[0];
       const full = await store.getOffer(offer.id);
       if (!full) return { ok: false, reason: "offer vanished" };
+      // An agreed price is nobody's to re-run — see priceAgreed's note.
+      const agreed = priceLocked(full) ? priceAgreed(full) : null;
+      if (agreed) return { ok: false, reason: `the price is agreed at ${fmtMoney(agreed.amount)} (${String(agreed.via).replace(/_/g, " ")}) — a person changes it, never a re-quote`, address: full.address };
 
       // Their read, from typed events only. Never free text, and never the
       // price they asked for — a number they want is not an input to our math.
@@ -4086,6 +4089,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const acceptedAt = new Date().toISOString();
       // `at` is what the band's once-per-offer check reads.
       revised.counterBand = { ...(revised.counterBand || {}), at: revised.counterBand?.at || acceptedAt, acceptedAt, amount: price, draftId };
+      // Both sides said yes to this number: the price is locked from here
+      // (priceLocked in shared/offer-status.js) — no re-quote, no re-run.
+      revised.agreed = { amount: price, at: acceptedAt, via: "counter_band" };
       await store.updateOffer(revised.id, revised);
       return { ok: true, address: revised.address, amount: price };
     },
@@ -4108,6 +4114,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!full) return { ok: false, reason: "offer vanished" };
       const ts = new Date().toISOString();
       full.realm = { answer: answer === "yes" ? "yes" : "no", ts, note: dealStr(note, 200) };
+      // "That number works": the price is agreed and locked from here.
+      if (answer === "yes" && Number(full.cashAmount) > 0) full.agreed = { amount: Number(full.cashAmount), at: ts, via: "realm_yes" };
       full.statusNote = full.statusNote || (answer === "yes" ? "agent says the number is in the realm" : "");
       await store.updateOffer(full.id, full);
       await appendDealHistory(client, locationId, contactId, "agent_deal_history",

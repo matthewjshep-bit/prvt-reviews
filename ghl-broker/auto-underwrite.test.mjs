@@ -929,3 +929,19 @@ test("with enrichment off, the run prices on the search rows alone — the dial 
   assert.equal(UW_SIMILAR_CANDIDATES, 10);
   assert.equal(UW_PROXY_SHARE, 0.5);
 });
+
+/* ---------- a house we already have a number on (Heather Vandyken, 2026-09-16) ---------- */
+
+test("an unattended run never re-prices a house the agent already has our number on", async () => {
+  const { findOfferOut } = await import("./auto-underwrite.js");
+  const addr = "36721 6th Avenue Southwest, Federal Way, Washington 98023";
+  const out = { id: "o1", contactId: "c1", address: addr, status: "sent", cashAmount: 825240, createdAt: "2026-08-07T17:13:00Z", sends: [{ ts: "2026-08-07T17:14:00Z", results: { sms: { ok: true } } }] };
+  const store = { listOffers: async () => [out] };
+  const hit = await findOfferOut({ store, locationId: "L", contactId: "c1", address: "36721 6th Ave SW, Federal Way, WA 98023" });
+  assert.equal(hit?.id, "o1", "five weeks old and still ours — no second number");
+  // Agreed but never sent counts too; a dead one, or a different house, doesn't.
+  assert.equal((await findOfferOut({ store: { listOffers: async () => [{ ...out, sends: [], realm: { answer: "yes", ts: "x" } }] }, locationId: "L", contactId: "c1", address: addr }))?.id, "o1");
+  assert.equal(await findOfferOut({ store: { listOffers: async () => [{ ...out, status: "passed" }] }, locationId: "L", contactId: "c1", address: addr }), null);
+  assert.equal(await findOfferOut({ store, locationId: "L", contactId: "c1", address: "1 Elm St, Kent, WA" }), null);
+  assert.equal(await findOfferOut({ store, locationId: "L", contactId: "c1", address: addr, ignoreId: "o1" }), null, "replacing it on purpose is allowed");
+});

@@ -224,6 +224,39 @@ export const dealSpokenFor = (deal) =>
   Boolean(deal) && (deal.stage === "buyer_found" || (deal.investors || []).some((i) => i?.status === "committed"));
 
 /**
+ * priceAgreed(offer) → { amount, at, via } | null
+ *
+ * The number both sides have said yes to: the agent said ours is in the realm
+ * (realm_yes), the counter band accepted theirs, a person marked it accepted,
+ * or it became a deal. Written explicitly as `offer.agreed` by those writes;
+ * derived here for rows from before that field existed.
+ *
+ * Heather Vandyken, 36721 6th Ave SW (2026-09-16): the seller accepted our
+ * 825 in August; a re-underwrite quietly dropped our number, so her "they
+ * agreed to accept 825" read as a counter; a second run floated 795 "after
+ * the latest look"; she got the seller to 795, then 800, which the band
+ * accepted; then a call transcript re-quoted us to 731.5 and SENT it with a
+ * PSA at 800 promised. She's gone. Once a number is agreed, the price is
+ * locked — no re-underwrite, no re-quote, no revision by the machine.
+ */
+export function priceAgreed(offer) {
+  if (!offer) return null;
+  if (offer.agreed?.amount > 0) return offer.agreed;
+  if (offer.deal || effectiveStatus(offer) === "accepted") {
+    const h = (offer.statusHistory || []).find((x) => x.status === "accepted");
+    return { amount: Number(offer.deal?.contractPrice) || Number(offer.cashAmount) || 0, at: h?.ts || offer.deal?.createdAt || offer.statusAt || null, via: "accepted" };
+  }
+  if (offer.counterBand?.acceptedAt) return { amount: Number(offer.counterBand.amount) || Number(offer.cashAmount) || 0, at: offer.counterBand.acceptedAt, via: "counter_band" };
+  if (offer.realm?.answer === "yes") return { amount: Number(offer.cashAmount) || 0, at: offer.realm.ts || null, via: "realm_yes" };
+  return null;
+}
+
+// The machine may not touch the price on an agreed offer that is still live.
+// A dead one (passed, no response, we passed) is a fresh negotiation.
+export const priceLocked = (offer) =>
+  Boolean(priceAgreed(offer)) && !DEAD_STATUSES.has(effectiveStatus(offer));
+
+/**
  * dealOutreachPaused(deal) → { status, name, contactId } | null
  *
  * Somebody is probably taking this one, so stop shopping it. Blasts, the

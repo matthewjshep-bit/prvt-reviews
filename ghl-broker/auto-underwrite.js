@@ -38,7 +38,7 @@ import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-
 import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
 import { addressKey } from "./shared/us-address.js";
-import { effectiveStatus as offerStatusOf } from "./shared/offer-status.js";
+import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed } from "./shared/offer-status.js";
 import { expandListingLinks } from "./listing-links.js";
 import { buildTranscript } from "./enrich.js";
 import {
@@ -284,6 +284,27 @@ export async function countToday({ store, locationId, now = Date.now() }) {
 // cost one Apify run, not three.
 // `ignoreId` is the draft a retry is about to replace — without it, a retry
 // finds its own predecessor's draft and "reuses" the run it was asked to redo.
+/**
+ * findOfferOut({ store, locationId, contactId, address, ignoreId }) → offer | null
+ *
+ * A live offer on this address, for this agent, that has been SENT or whose
+ * price is AGREED — whatever its age. The one thing an unattended run must
+ * never do is put a second number on a house the agent already has ours on.
+ */
+export async function findOfferOut({ store, locationId, contactId, address, ignoreId = null }) {
+  const key = addressKey(address);
+  if (!key) return null;
+  const rows = await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []);
+  for (const o of rows) {
+    if (!o?.id || (ignoreId && o.id === ignoreId) || o.deal) continue;
+    if (addressKey(o.address || "") !== key) continue;
+    if (DEAD_STATUSES.has(offerStatusOf(o))) continue;
+    const sent = (o.sends || []).some((s) => Object.values(s?.results || {}).some((r) => r?.ok));
+    if (sent || priceAgreed(o)) return o;
+  }
+  return null;
+}
+
 export async function findRecent({ store, locationId, contactId, address, ignoreId = null, now = Date.now(), windowMs = 24 * 3600 * 1000 }) {
   const key = addressKey(address);
   if (!key) return null;
@@ -1263,6 +1284,26 @@ async function runUnderwrite(job, ctx) {
     await writeSubjectProperty(client, locationId, job.contactId, extraction.address, warnings, { store, jobId: job.id, from: fieldAddress || "" });
   }
 
+  // A house we have already put a number in front of this agent on is not
+  // re-priced by the machine, however old that number is. Heather Vandyken
+  // (2026-09-16): the seller had accepted our August 825; a fresh run on
+  // 2026-09-15 floated 795 "after the latest look", and the deal was lost
+  // from there. Only a person, replacing the offer on purpose, re-runs it.
+  const out = job.fill ? null : await findOfferOut({ store, locationId, contactId: job.contactId, address: extraction.address, ignoreId: job.replaceOfferId });
+  if (out) {
+    job.status = "done";
+    job.phase = "";
+    job.offerId = out.id;
+    job.offerUrl = out.pdfUrl || null;
+    job.cashAmount = out.cashAmount ?? null;
+    job.duplicateOf = out.id;
+    job.finishedAt = new Date().toISOString();
+    await setTag(client, job.contactId, UW_TAGS.done, warnings);
+    await note(client, job.contactId,
+      `Our ${fmtMoney(out.cashAmount || 0)} on ${extraction.address} is already in front of this agent${priceAgreed(out) ? ` and agreed` : ""} — not re-priced. Replace the offer yourself if the number should change.`,
+      warnings);
+    return;
+  }
   // A fill run is a person asking for numbers on the form in front of them;
   // pointing them at yesterday's offer is not an answer to that.
   const dupe = job.fill ? null : await findRecent({

@@ -160,3 +160,16 @@ test("a ceiling at or below our own number still refuses the re-quote", () => {
   assert.equal(r.ok, false);
   assert.match(r.reason, /above what we'd pay/);
 });
+
+test("a re-quote never lowers a number already out; below-ours is only allowed before anything was sent", () => {
+  // Heather Vandyken (2026-09-16): repairs 106k → 175k off a call transcript
+  // put us at 731.5 under an 800 the seller had accepted, and it went out.
+  const base = { id: "o", address: "36721 6th Ave SW", cashAmount: 800000, calc: { inputs: { arv: 1242000, repairs: 106000 } }, createdAt: "2026-09-15T16:37:00Z", requotes: [] };
+  const take = { arv: 1242000, rehab: 175000, at: "2026-09-16T21:10:00Z" };
+  const band = { ...REQUOTE_DEFAULTS, enabled: true, maxRepairCutPct: 90, maxArvLiftPct: 50 };
+  const sent = planRequote({ offer: { ...base, sends: [{ ts: "2026-09-16T15:06:00Z", results: { sms: { ok: true } } }] }, take, band, ceiling: 900000 });
+  assert.equal(sent.ok, false);
+  assert.match(sent.reason, /never lowers a sent price/);
+  const unsent = planRequote({ offer: base, take, band, ceiling: 900000 });
+  assert.notEqual(unsent.reason, sent.reason, "before a send, moving on their numbers is what a re-quote is for");
+});

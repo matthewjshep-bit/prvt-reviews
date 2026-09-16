@@ -34,7 +34,7 @@ import {
   statusAfterUnpromote,
   toListOffer,
   INVESTOR_STATUSES, WORKING_INVESTOR_STATUSES, investorStatus,
-  dealOutreachPaused, dealSpokenFor, outreachPausedReason,
+  dealOutreachPaused, dealSpokenFor, outreachPausedReason, priceAgreed, priceLocked,
 } from "./offer-status.js";
 
 const iso = (d) => d.toISOString();
@@ -306,4 +306,20 @@ test("a list row keeps the follow-up rungs and the float stamps", () => {
   assert.equal(row.counterBand.amount, 300000);
   assert.equal(row.requotes.length, 1);
   assert.equal(row.snapshot, undefined, "the heavy keys still go");
+});
+
+// Heather Vandyken, 36721 6th Ave SW, 2026-09-16: an agreed number was
+// re-underwritten, re-quoted, and re-sent lower. Once agreed, the price is
+// locked — until the offer is dead, when it's a fresh negotiation.
+test("an agreed price is locked while the offer lives, and free once it's dead", () => {
+  assert.equal(priceAgreed({ status: "sent", cashAmount: 795500 }), null, "sent is not agreed");
+  const realm = { status: "sent", cashAmount: 795500, realm: { answer: "yes", ts: "2026-09-16T02:25:00Z" } };
+  assert.deepEqual(priceAgreed(realm), { amount: 795500, at: "2026-09-16T02:25:00Z", via: "realm_yes" });
+  assert.equal(priceLocked(realm), true);
+  const band = { status: "countered", cashAmount: 800000, counterBand: { acceptedAt: "2026-09-16T15:06:00Z", amount: 800000 } };
+  assert.equal(priceAgreed(band).via, "counter_band");
+  assert.equal(priceLocked(band), true);
+  assert.deepEqual(priceAgreed({ status: "sent", cashAmount: 1, agreed: { amount: 800000, at: "x", via: "counter_band" } }), { amount: 800000, at: "x", via: "counter_band" }, "the explicit field wins");
+  assert.equal(priceLocked({ ...band, status: "passed" }), false, "she walked; the next number is a new conversation");
+  assert.equal(priceAgreed({ status: "sent", cashAmount: 1, realm: { answer: "no", ts: "x" } }), null);
 });

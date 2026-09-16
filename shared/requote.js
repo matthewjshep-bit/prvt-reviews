@@ -115,6 +115,15 @@ export function planRequote({ offer, take = {}, band = REQUOTE_DEFAULTS, setting
 
   if (!(to > 0)) return { ok: false, reason: "their numbers put the deal underwater" };
   if (to === from) return { ok: false, reason: "their numbers land on the same price we already sent" };
+  // The machine never lowers a number that is already out. A re-quote exists
+  // to move TOWARD the agent on their numbers; one that lands under what we
+  // sent is a retraction, and a retraction is a person's call every time.
+  // Heather Vandyken (2026-09-16): a call transcript's repair figure re-ran
+  // the math to 731,500 against an 800,000 the seller had just accepted, and
+  // the bot sent it.
+  if (to < from && (offer.sends || []).length) {
+    return { ok: false, reason: `their numbers land below the ${from.toLocaleString("en-US")} already out — the machine never lowers a sent price` };
+  }
   // The shared bound. See the docblock: the re-quote may not talk us above the
   // point where we would have accepted their counter outright. Over it, we go
   // TO it rather than refusing — Thomas Rinow's $60k rehab put us at $497,625
