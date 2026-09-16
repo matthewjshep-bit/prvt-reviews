@@ -3271,7 +3271,10 @@ test("the list price said in words is their floor, and a soft floor out of reach
   // price is the number, and it's a pass.
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
-  const store = negotiationStore({ ...NEGOTIATION_OFFER, askingPrice: 470000 });
+  // No list price on the offer (a published held draft carries none): the
+  // seller's ask on the timeline is the list price.
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  await store.appendContactEvents("LOC", "c1", [{ type: "property_details", at: new Date().toISOString(), address: "12 Elm St, Seattle, WA 98101", data: { sellerAsk: 470000 }, dedupeKey: "pd:1" }]);
   const { job } = await startReply({
     client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
     message: "Current list price",

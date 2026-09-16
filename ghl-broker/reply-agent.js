@@ -2003,7 +2003,7 @@ async function runReply(job, ctx) {
   // seller needs to be, "Current list price" (1,195,000) — read as a counter
   // with no figure in the words, so the band held it and nobody walked.
   if (party === "agent" && ["rejection", "counter", "question", "other"].includes(draft.intent) && listPriceFloor(job.message)) {
-    draft = { ...draft, intent: "counter", counterAmount: 0, counterFloor: "list_price", reclassifiedFrom: draft.intent === "counter" ? draft.reclassifiedFrom : draft.intent };
+    draft = { ...draft, intent: "counter", counterFloor: "list_price", reclassifiedFrom: draft.intent === "counter" ? draft.reclassifiedFrom : draft.intent };
     job.intent = draft.intent;
   }
   if (party === "agent" && draft.intent === "counter") {
@@ -2021,7 +2021,16 @@ async function runReply(job, ctx) {
         draft = { ...draft, counterAmount: read, counterShorthand: true };
       }
       if (draft.counterFloor === "list_price") {
-        const list = Math.round(Number(full.askingPrice ?? full.calc?.inputs?.askingPrice) || 0);
+        // The list price as we know it: on the offer, else the seller's ask
+        // on the timeline ("another price reduction, currently at 1,195,000"
+        // — Bryce Buri, filed as sellerAsk), else the figure the model read
+        // off the thread. A held draft that was published carries no list.
+        let list = Math.round(Number(full.askingPrice ?? full.calc?.inputs?.askingPrice) || 0);
+        if (!(list > 0)) {
+          const evs = await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => []) || [];
+          list = Math.round(Number(propertyDossier(evs, full.address || draft.propertyAddress || "")?.have?.sellerAsk?.value) || 0);
+        }
+        if (!(list > 0)) list = Math.round(Number(draft.counterAmount) || 0);
         if (list > 0) draft = { ...draft, counterAmount: list };
       }
       const theirs = Math.round(Number(draft.counterAmount));
