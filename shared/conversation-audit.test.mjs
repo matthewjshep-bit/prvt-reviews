@@ -192,3 +192,16 @@ test("Today's queue gets only the rows that are Matt's", () => {
   assert.match(actions.find((a) => a.offerId)?.title || "", /Counters nobody moved on/);
   assert.equal(actions.find((a) => a.draftId)?.ops[0].key, "open_outbox");
 });
+
+
+test("one row per property, and a ladder that never fired is not 'the ladder has it'", () => {
+  const seven = Array.from({ length: 7 }, (_, i) => offer({ id: `v${i}`, address: "21904 Vashon Hwy SW, Vashon, WA", createdAt: ago(1200 - i), statusAt: ago(1200 - i), sends: [{ ts: ago(1200 - i), results: { sms: { ok: true } } }] }));
+  const r = auditConversations({ config: ladderOn, now: NOW, drafts: [], events: [], offers: seven, followUpCursorAt: ago(3) });
+  assert.equal(r.findings.length, 1, "seven rows on one house is one finding");
+  assert.equal(r.findings[0].offerId, "v6", "the newest speaks for the house");
+  assert.equal(r.findings[0].severity, "soon");
+  assert.match(r.findings[0].why, /50d quiet and the ladder never fired/);
+  // Three days quiet with the ladder on: still the ladder's, for information.
+  const fresh = auditConversations({ config: ladderOn, now: NOW, drafts: [], events: [], offers: [offer({ statusAt: ago(76), sends: [{ ts: ago(76), results: { sms: { ok: true } } }] })], followUpCursorAt: ago(3) });
+  assert.equal(fresh.findings[0].severity, "fyi");
+});

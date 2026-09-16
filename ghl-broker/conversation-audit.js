@@ -28,6 +28,10 @@ export const PACE_MS = 150;
 const iso = (ms) => new Date(ms).toISOString();
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// iMessage/Android reactions as GHL relays them: an emoji or a verb, then
+// the quoted text. Nothing to answer.
+export const isReaction = (body) => /^\s*(?:[\u{1F44D}\u{1F44E}\u{2764}\u{1F602}\u{203C}\u{2753}\u{1F60D}\u{1F64F}]\uFE0F?|Liked|Loved|Laughed at|Emphasized|Disliked|Questioned)\s*(?:to\s*)?[“"']/u.test(String(body || "").replace(/[\u200B\uFEFF]/g, ""));
+
 const jobs = new Map();
 export const getAuditJob = (locationId) => jobs.get(locationId) || null;
 export function _resetJobs() { jobs.clear(); }
@@ -113,6 +117,9 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
       if (a.type === "redraft") {
         const latest = typeof deps.latestInbound === "function" ? await deps.latestInbound(f.contactId) : null;
         if (!latest?.body) { row.status = "skipped"; row.reason = "no inbound text to answer"; continue; }
+        // A tapback ("👍 to 'Sounds good…'") is them closing the thread, not
+        // asking anything — two of seven on the first dry run, 2026-09-16.
+        if (isReaction(latest.body)) { row.status = "skipped"; row.reason = "a reaction, not a text"; continue; }
         const r = await startReply({
           client, locationId, saved, store, contactId: f.contactId, message: String(latest.body).slice(0, 4000),
           channel: /email/i.test(latest.type || "") ? "email" : "sms", attachments: latest.attachments, sendsEnabled, deps,

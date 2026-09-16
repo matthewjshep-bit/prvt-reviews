@@ -226,7 +226,18 @@ export function auditConversations({
   /* --- 3. the offer book --- */
   let sweepAsked = false;
   const askSweep = () => { if (sweepAsked || !ladderOn || !followUpStale) return null; sweepAsked = true; return { type: "run_follow_up_sweep" }; };
+  // One row per property: the newest open offer on it speaks for the rest
+  // (revisions and re-quotes sit beside it in the book). Same rule as the
+  // follow-up sweep's isTheOfferToAskAbout — Allan Ponio's Vashon house was
+  // seven rows on the first dry run, 2026-09-16.
+  const newestByProperty = new Map();
   for (const o of offers) {
+    if (!o?.contactId || !o.address || o.deal) continue;
+    const key = `${o.contactId}|${street(o.address).toLowerCase()}`;
+    const cur = newestByProperty.get(key);
+    if (!cur || String(o.createdAt || "") > String(cur.createdAt || "")) newestByProperty.set(key, o);
+  }
+  for (const o of newestByProperty.values()) {
     if (!o?.contactId || !o.address || o.deal || excluded(o.contactId) || humanOwns(o.contactId)) continue;
     const status = effectiveStatus(o);
     if (DEAD_STATUSES.has(status) || status === "draft" || status === "accepted") continue;
@@ -287,10 +298,17 @@ export function auditConversations({
     if (status !== "countered" && OPEN_STATUSES.has(status) && !(o.followUps || []).length) {
       const touch = Math.max(ms((o.sends || []).map((s) => s.ts).pop()) ?? ms(o.statusAt) ?? ms(o.createdAt) ?? 0, sentAt);
       if (touch && inAt < touch && now - touch >= OFFER_QUIET_DAYS * 86400000) {
+        const days = Math.round((now - touch) / 86400000);
+        // The ladder "has it" only while its first rung is still ahead. Past
+        // that with nothing sent, the ladder skipped this one (its candidate
+        // rules, not ours), and saying otherwise hides the offer for good.
+        const ladderMissed = ladderOn && days > OFFER_QUIET_DAYS + 2;
         add({ ...base, kind: "offer_no_followup", anchorAt: iso(touch), dueAt: nextMorning(now),
-          severity: ladderOn ? "fyi" : "soon", action: askSweep(),
-          why: ladderOn ? `${Math.round((now - touch) / 86400000)}d quiet; the ladder ${followUpStale ? "is being started" : "has it"}` : `${Math.round((now - touch) / 86400000)}d quiet and the offer follow-up ladder is off`,
-          evidence: { ladderOn, followUpStale } });
+          severity: ladderOn && !ladderMissed ? "fyi" : "soon", action: ladderMissed ? null : askSweep(),
+          why: !ladderOn ? `${days}d quiet and the offer follow-up ladder is off`
+            : ladderMissed ? `${days}d quiet and the ladder never fired on it`
+            : `${days}d quiet; the ladder ${followUpStale ? "is being started" : "has it"}`,
+          evidence: { ladderOn, followUpStale, ladderMissed, days } });
       }
     }
   }

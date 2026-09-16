@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runConversationAudit, startConversationAudit, maybeRunConversationAudit, getAuditJob, _resetJobs, CURSOR_NAME, STALE_RUN_MS, RETRY_GAP_MS, MAX_DAILY_TRIES } from "./conversation-audit.js";
+import { runConversationAudit, startConversationAudit, maybeRunConversationAudit, getAuditJob, _resetJobs, isReaction, CURSOR_NAME, STALE_RUN_MS, RETRY_GAP_MS, MAX_DAILY_TRIES } from "./conversation-audit.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
 // 7:20pm Pacific on 2026-09-16.
@@ -145,4 +145,18 @@ test("the run is on the cursor while it goes and summarised there when it's over
   assert.equal(doc.last.dryRun, true);
   assert.equal(doc.last.counts.touched, 1);
   assert.equal(doc.last.findings.length, 1);
+});
+
+
+test("a tapback is not re-answered", async () => {
+  assert.equal(isReaction("\u200B\u{1F44D}\u200B to \u201C Sounds good, thanks. \u201D"), true, "Alicia Reid, 2026-09-15");
+  assert.equal(isReaction("Liked \u201CHope it signs for them.\u201D"), true);
+  assert.equal(isReaction("Sounds good!"), false);
+  assert.equal(isReaction("Not a fixer. Thanks for checking"), false);
+  const store = fakeStore();
+  const d = deps({ latestInbound: async () => ({ body: "\u{1F44D} to \u201CHope it signs.\u201D", type: "SMS", at: ago(5) }) });
+  const { acted } = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  assert.equal(acted[0].status, "skipped");
+  assert.match(acted[0].reason, /reaction/);
+  assert.equal(d.calls.length, 0);
 });
