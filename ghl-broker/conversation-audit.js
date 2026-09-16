@@ -236,17 +236,21 @@ export async function maybeRunConversationAudit({ client, locationId, saved = {}
   if (jobs.get(locationId)?.status === "running") return false;
   const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
   const doc = cursor?.doc || {};
-  const ranToday = cursor?.at && now - Date.parse(cursor.at) < MIN_GAP_MS;
+  // The night's run is its own clock (`lastDaily`), not the cursor's `at`:
+  // a run by hand at noon — three of them on 2026-09-16 — must not read as
+  // "already ran tonight" and skip the 7pm one.
+  const dailyAt = doc.lastDaily ? Date.parse(doc.lastDaily) : null;
+  const ranToday = dailyAt != null && now - dailyAt < MIN_GAP_MS;
   const stale = doc.run?.startedAt && now - Date.parse(doc.run.startedAt) > STALE_RUN_MS;
   let tries = 1;
   if (ranToday) {
     const triedSoFar = Number(doc.tries) || 1;
-    if (!(doc.failed || stale) || triedSoFar >= MAX_DAILY_TRIES || now - Date.parse(cursor.at) < RETRY_GAP_MS) return false;
+    if (!(doc.failed || stale) || triedSoFar >= MAX_DAILY_TRIES || now - dailyAt < RETRY_GAP_MS) return false;
     tries = triedSoFar + 1;
   } else if (h !== hour) {
     return false;
   }
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: { tries, last: doc.last || null, ...(stale ? { staleRun: doc.run } : {}) } }).catch(() => {});
+  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: { tries, lastDaily: iso(now), last: doc.last || null, ...(stale ? { staleRun: doc.run } : {}) } }).catch(() => {});
   startConversationAudit({ client, locationId, saved, store, sendsEnabled, deps, trigger: "daily", now });
   return true;
 }

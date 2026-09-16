@@ -180,3 +180,17 @@ test("loose: a held holding-reply is scheduled at the next open minute, and a st
   assert.ok(nudge, JSON.stringify(acted));
   assert.deepEqual(d.calls.find((c) => c[0] === "proactive"), ["proactive", "c2", "counter_nudge"]);
 });
+
+test("a run by hand at noon does not count as the night's run", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  const d = deps({ ghlLastMessages: async () => new Map() });
+  const noon = Date.parse("2026-09-16T19:40:00Z");
+  startConversationAudit({ client: {}, locationId: "L3", saved: SAVED, store, sendsEnabled: false, deps: d, trigger: "manual", dryRun: true, now: noon, pace: 0 });
+  await settle();
+  assert.ok(store.cursors.get(`L3|${CURSOR_NAME}`).at, "the cursor was stamped by hand");
+  _resetJobs();
+  assert.equal(await maybeRunConversationAudit({ client: {}, locationId: "L3", saved: SAVED, store, sendsEnabled: false, deps: d, now: NOW }), true, "7pm still runs");
+  await settle();
+  assert.equal(await maybeRunConversationAudit({ client: {}, locationId: "L3", saved: SAVED, store, sendsEnabled: false, deps: d, now: NOW + 600000 }), false, "and only once");
+});
