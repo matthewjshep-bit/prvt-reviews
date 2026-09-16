@@ -539,7 +539,7 @@ export function AutoSendCard({ config, patch }) {
         <Field label="If the model says a person is needed" hint="It usually means an action beside the reply — 'someone has to send the package' — not the reply itself. The note stays on the row either way.">
           <Select value={a.holdOnNeedsHuman ? "hold" : "send"} onChange={(v) => set("holdOnNeedsHuman")(v === "hold")} options={[["send", "send the reply anyway; show the note"], ["hold", "hold the reply for a person"]]} />
         </Field>
-        <Field label="Stand down after you reply (minutes)" hint="If you replied to them this recently, the bot writes nothing at all — no draft and no model call. The thread is yours. 0 turns it off and the bot answers over the top of you.">
+        <Field label="Stand down after you reply (minutes)" hint="If you replied to them this recently, the bot writes nothing at all — no draft and no model call. The thread is yours. Never less than 30: once you've jumped in, the bot stays out for at least half an hour.">
           <Text type="number" value={a.humanActiveMin} onChange={(v) => set("humanActiveMin")(Number(v))} />
         </Field>
         <Field label="Notify instead of drafting" hint="These can never auto-send, so a draft for one is a text nobody will send. Ticked, you get the fact — 'the agent wants to walk 12 Elm' — and no draft to read and bin. Wire a calendar and times get answered for real instead.">

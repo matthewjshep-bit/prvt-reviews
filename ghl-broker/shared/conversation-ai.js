@@ -307,6 +307,15 @@ export const RULE_MODES = ["auto", "ask"];
 export const LENGTHS = ["short", "medium", "long"];
 export const CHANNELS = ["sms", "email"];
 // What a set_field value may interpolate. Anything else is left as typed.
+// Once a person has jumped into a thread the bot stays out of it for at least
+// this long. The 2026-09-07 migration set the window to 0 at Matt's ask
+// ("enable these"), and on 2026-09-16 the bot answered Angela Jaeger three
+// minutes after Matt had — "I'm an assistant on Matt's team keeping up with
+// texts!" — and she closed the thread as "Totally AI". Matt: "if I've jumped
+// into the thread then pause for at least 30 minutes." The page can lengthen
+// it, never shorten it below this, and 0 no longer means off.
+export const HUMAN_ACTIVE_MIN_FLOOR = 30;
+
 export const TOKENS = ["intent", "propertyAddress", "summary", "date", "party", "contactName", "counterAmount"];
 
 /* ---------- defaults ---------- */
@@ -458,7 +467,7 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
     // have the thread. Until 2026-09-12 this only held the SEND, and the
     // default was 0, so it never fired: the bot kept writing replies into
     // conversations Matt was answering himself and they went stale unread.
-    humanActiveMin: 45,
+    humanActiveMin: 45,   // never below HUMAN_ACTIVE_MIN_FLOOR
     // Liberal by default: a draft the model was fairly sure of goes, and its
     // own "needs a human" note is shown on the row rather than holding the
     // send — the action it refers to is ask-only regardless.
@@ -771,7 +780,7 @@ export function normalizeConversationAi(doc, seed = {}) {
         ? list(auto.channels, { max: 10, each: 10, lower: true }).filter((c) => CHANNELS.includes(c))
         : [...D.autoSend.channels],
       debounceSec: int(auto.debounceSec, D.autoSend.debounceSec, 0, 600),
-      humanActiveMin: int(auto.humanActiveMin, D.autoSend.humanActiveMin, 0, 1440),
+      humanActiveMin: int(auto.humanActiveMin, D.autoSend.humanActiveMin, HUMAN_ACTIVE_MIN_FLOOR, 1440),
       minConfidence: oneOf(auto.minConfidence, ["high", "medium"], D.autoSend.minConfidence),
       holdOnNeedsHuman: bool(auto.holdOnNeedsHuman, D.autoSend.holdOnNeedsHuman),
     },
@@ -787,7 +796,7 @@ export function normalizeConversationAi(doc, seed = {}) {
     }
     out.parties.agent.realmCheck = { enabled: true };
     out.parties.agent.takeCheck = { enabled: true };
-    out.autoSend.humanActiveMin = 0;
+    out.autoSend.humanActiveMin = HUMAN_ACTIVE_MIN_FLOOR;
   }
   return out;
 }

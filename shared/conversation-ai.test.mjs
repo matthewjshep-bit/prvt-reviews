@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   normalizeConversationAi, CONVERSATION_AI_DEFAULTS, INTENTS, NEVER_AUTO, autoEligible, OUTBOUND_INTENTS,
   draftStats, substituteTokens, actionAllowedFor, isValidTimeZone,
-  normalizePassReason, summarizeFeedback, ASK_ONLY_ACTIONS,
+  normalizePassReason, summarizeFeedback, ASK_ONLY_ACTIONS, HUMAN_ACTIVE_MIN_FLOOR,
 } from "./conversation-ai.js";
 
 test("an empty doc is the defaults, and normalizing twice changes nothing", () => {
@@ -264,7 +264,7 @@ test("fallback rules, bot-off tags, debounce, human-active, profile and notes al
   });
   assert.deepEqual(c.routing.botOffTags, ["stop bot", "bot-off"]);
   assert.equal(c.autoSend.debounceSec, 45);
-  assert.equal(c.autoSend.humanActiveMin, 0);
+  assert.equal(c.autoSend.humanActiveMin, HUMAN_ACTIVE_MIN_FLOOR, "a negative window clamps to the floor, not to off");
   assert.equal(c.profile.enabled, false);
   assert.equal(c.profile.callTranscripts, 10);
   assert.equal(c.notes.onDraft, false);
@@ -372,7 +372,7 @@ test("a version-1 config is brought up to 'everything on' once; version 2 is lef
   assert.deepEqual(v1.parties.investor.autoSend.intents, autoEligible("investor"));
   assert.equal(v1.parties.agent.realmCheck.enabled, true);
   assert.equal(v1.parties.agent.takeCheck.enabled, true);
-  assert.equal(v1.autoSend.humanActiveMin, 0);
+  assert.equal(v1.autoSend.humanActiveMin, HUMAN_ACTIVE_MIN_FLOOR, "the 2026-09-07 'no stand-down' migration now lands on the floor");
   // Once saved as version 2, the operator's choices stand.
   const v2 = normalizeConversationAi({ ...v1, parties: { ...v1.parties, agent: { ...v1.parties.agent, autoSend: { enabled: false, intents: [] } } }, autoSend: { ...v1.autoSend, humanActiveMin: 30 } });
   assert.equal(v2.parties.agent.autoSend.enabled, false);
@@ -439,4 +439,16 @@ test("send_offer keeps its own mode and options through a save, and the clean-un
   // an investor playbook never carries it
   const inv = normalizeConversationAi({ parties: { investor: { intentRules: { interested: { mode: "auto", actions: [{ type: "send_offer" }] } } } } });
   assert.deepEqual(inv.parties.investor.intentRules.interested?.actions || [], []);
+});
+
+
+// Angela Jaeger, 2026-09-16: Matt texted her at 11:00, the bot answered over
+// the top of him at 11:03 ("I'm an assistant on Matt's team keeping up with
+// texts!"), and she closed the thread as "Totally AI". The window was 0.
+test("once a person has jumped into a thread the bot stays out for at least half an hour", () => {
+  assert.equal(HUMAN_ACTIVE_MIN_FLOOR, 30);
+  assert.equal(normalizeConversationAi({ version: 2, autoSend: { humanActiveMin: 0 } }).autoSend.humanActiveMin, 30, "0 no longer means off");
+  assert.equal(normalizeConversationAi({ version: 2, autoSend: { humanActiveMin: 10 } }).autoSend.humanActiveMin, 30, "and it can't be shortened below the floor");
+  assert.equal(normalizeConversationAi({ version: 2, autoSend: { humanActiveMin: 90 } }).autoSend.humanActiveMin, 90, "longer is the page's call");
+  assert.equal(CONVERSATION_AI_DEFAULTS.autoSend.humanActiveMin, 45);
 });

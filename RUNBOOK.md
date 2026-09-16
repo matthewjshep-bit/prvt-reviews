@@ -714,9 +714,14 @@ for the next deal. A buyer never linked is still the bot's to pitch — that is
 the blast itself, which tags rather than links. A closed or fallen-through deal releases everyone. The routing
 card's "People you're already working" can narrow this to the acquisition
 side only, or switch it off. Both checks run before the model call, so
-neither costs anything. The stand-down window ("stand down after you reply") ships at 0 — off —
-because Matt works the outbox by hand and wants the bot to pick back up
-around him. What replaces it is narrower and always on: an auto-send checks
+neither costs anything. The stand-down window ("stand down after you reply")
+is **never under 30 minutes** (`HUMAN_ACTIVE_MIN_FLOOR`, default 45; the page
+can lengthen it, not shorten it). It shipped at 0 on 2026-09-07 because Matt
+works the outbox by hand and wanted the bot to pick back up around him — and
+on 2026-09-16 it answered Angela Jaeger three minutes after he had ("I'm an
+assistant on Matt's team keeping up with texts!"); she closed the thread as
+"Totally AI". Once a person has jumped in, the bot stays out for at least half
+an hour. Beside it, narrower and always on: an auto-send checks
 the thread the moment it comes due, and if a person answered that thread
 after the draft was written it stands aside for that one — the draft is
 dismissed with "you answered it yourself" and History shows "you answered
