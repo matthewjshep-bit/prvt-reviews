@@ -80,7 +80,13 @@ export const ALIVE_DAYS = 21;          // they wrote within this → the thread 
 export const PROMISE_ASK_DAYS = 3;     // a promise_due text this recent already asked
 
 const TEST_ADDRESS = /\btest\b|\bprobe\b/i;
-const OVER_TEXT = /\b(pending|sold|under contract|off the market|no longer (available|for sale|on the market)|already (has|have|got|accepted) (an|another|multiple)? ?offers?|accepted (an|another) offer|not interested|won'?t sell|isn'?t selling|not (going to|gonna) sell|withdrawn|cancell?ed)\b/i;
+// Read only on a REJECTION, or when the words are unmistakably about this
+// house. "A few went pending in the area" (Tim Tilbury) and "it is being sold
+// as is" (Slavic Sloboda) both say "pending"/"sold" about a house that is
+// still very much for sale — the first dry run (2026-09-16) would have
+// retired both.
+const OVER_TEXT = /\b(pending|sold(?!\s+as[- ]is)|under contract|off the market|no longer (available|for sale|on the market)|already (has|have|got|accepted) (an|another|multiple)? ?offers?|accepted (an|another) offer|not interested|won'?t sell|isn'?t selling|not (going to|gonna) sell|withdrawn|cancell?ed)\b/i;
+const OVER_PLAIN = /\b(it'?s|it is|this (one|property|house|listing)|that (one|property|house|listing)|the (property|house|listing)|she'?s|he'?s|they'?re|seller is)\s+(is |was |went |has gone |are |went )?(already |now |just )?(pending|under contract|sold(?!\s+as[- ]is)|off the market|no longer (available|for sale)|not interested|withdrawn)\b/i;
 const TURNKEY_TEXT = /\b(turn-?key|move-?in ready|fully (updated|renovated|remodeled)|completely (renovated|remodeled|updated)|not (really )?a fixer|isn'?t a fixer|no work needed)\b/i;
 const COLD_STAGE = /^tier\s*3\b|passed on offer|^lost\b|not a good deal/i;
 const CLOSED_OPP = /^(lost|abandoned|abandon)$/i;
@@ -139,7 +145,7 @@ export function triageHeldUnderwrite({
   const said = drafts
     .filter((d) => d && String(d.inbound || "").trim() && aboutThisHouse(d.propertyAddress) && after(d.createdAt))
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-  const over = said.find((d) => OVER_TEXT.test(d.inbound) && (d.intent === "rejection" || d.intent === "status_check" || d.intent === "other" || d.intent === "deal_available" || d.intent === "new_property" || d.intent === "question" || d.intent === "small_talk"));
+  const over = said.find((d) => (d.intent === "rejection" && OVER_TEXT.test(d.inbound)) || OVER_PLAIN.test(d.inbound));
   if (over) return { ...base, action: "retire", status: "passed", reason: `they said "${clip(over.inbound)}"` };
   const turnkey = said.find((d) => TURNKEY_TEXT.test(d.inbound));
   if (turnkey) return { ...base, action: "retire", status: "we_passed", reason: `turnkey per the agent ("${clip(turnkey.inbound)}")` };

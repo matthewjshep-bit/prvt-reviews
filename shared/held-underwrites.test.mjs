@@ -49,6 +49,11 @@ test("the conversation closes it: pending/sold/no, turnkey, a passed event, an u
   assert.match(triage({ contact: { tags: ["tier-2", "stop bot"], dnd: false } }).reason, /stop bot/);
   assert.match(triage({ opportunities: [{ stageName: "Tier 3- Cold/Keep Warm", status: "open" }] }).reason, /Tier 3/);
   assert.match(triage({ opportunities: [{ stageName: "Tier 1 - Hot", status: "lost" }] }).reason, /lost/);
+  // "Pending" about the area, or "sold as is", is not this house going away.
+  assert.notEqual(triage({ drafts: [inbound("I'd have to see it to throw out numbers. A few went pending in the area recently.", { intent: "other" })] }).action, "retire");
+  assert.notEqual(triage({ drafts: [inbound("It is being sold as is", { intent: "question" })] }).action, "retire");
+  // …but plain words about this house are, whatever the intent read.
+  assert.equal(triage({ drafts: [inbound("That one is already pending", { intent: "other" })] }).status, "passed");
   // A "pending" about ANOTHER house does not close this one.
   t = triage({ drafts: [inbound("That one went pending", { intent: "rejection", propertyAddress: "99 Other Rd, Kent, WA" })] });
   assert.notEqual(t.action, "retire");
