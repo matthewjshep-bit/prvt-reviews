@@ -118,17 +118,17 @@ test("the audit runs once in its hour, a failed one comes back that evening, and
 
   // Failed at 7:20: back after the gap, up to the cap, within the window.
   _resetJobs();
-  store.cursors.set(`L|${CURSOR_NAME}`, { at: new Date(NOW).toISOString(), doc: { tries: 1, failed: true, error: "boom" } });
+  store.cursors.set(`L|${CURSOR_NAME}`, { at: new Date(NOW).toISOString(), doc: { tries: 1, lastDaily: new Date(NOW).toISOString(), failed: true, error: "boom" } });
   assert.equal(await maybeRunConversationAudit({ ...base, now: NOW + RETRY_GAP_MS - 1000 }), false);
   assert.equal(await maybeRunConversationAudit({ ...base, now: NOW + RETRY_GAP_MS + 1000 }), true);
   await settle();
   _resetJobs();
-  store.cursors.set(`L|${CURSOR_NAME}`, { at: new Date(NOW).toISOString(), doc: { tries: MAX_DAILY_TRIES, failed: true } });
+  store.cursors.set(`L|${CURSOR_NAME}`, { at: new Date(NOW).toISOString(), doc: { tries: MAX_DAILY_TRIES, lastDaily: new Date(NOW).toISOString(), failed: true } });
   assert.equal(await maybeRunConversationAudit({ ...base, now: NOW + RETRY_GAP_MS + 1000 }), false, "tries are spent");
 
   // Vanished mid-run (a deploy): stale after half an hour, retried.
   _resetJobs();
-  store.cursors.set(`L|${CURSOR_NAME}`, { at: new Date(NOW).toISOString(), doc: { tries: 1, run: { id: "x", startedAt: new Date(NOW).toISOString() } } });
+  store.cursors.set(`L|${CURSOR_NAME}`, { at: new Date(NOW).toISOString(), doc: { tries: 1, lastDaily: new Date(NOW).toISOString(), run: { id: "x", startedAt: new Date(NOW).toISOString() } } });
   assert.equal(await maybeRunConversationAudit({ ...base, now: NOW + 10 * 60000 }), false);
   assert.equal(await maybeRunConversationAudit({ ...base, now: NOW + STALE_RUN_MS + RETRY_GAP_MS }), true);
   await settle();
