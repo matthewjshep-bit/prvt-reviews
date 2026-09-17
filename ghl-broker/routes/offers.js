@@ -5449,9 +5449,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // Kept in step with defaultSendMessage() in the app's SendModal — this
       // is the fallback for callers that send no message of their own.
       const text = message ||
-        `Hi ${firstName}, here's our written cash offer on ${offer.address || "your property"} — ` +
-        `${fmtMoney(offer.cashAmount)}, as-is, close on your timeline (attached). ` +
-        `Happy to answer any questions.`;
+        `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
+        `${fmtMoney(offer.cashAmount)} cash, as-is, close on your timeline (attached).` +
+        ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?`;
 
       // The agent page — our arithmetic, the comps, the scope and what the
       // seller nets, at one link. An operator's message already carries it
@@ -5486,9 +5486,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const html = [
         `<p>${linkify(esc(message || `Hi ${firstName},`).replace(/\n/g, "<br>"))}</p>`,
         ...(message ? [] : [
-          `<p>Please find our written cash offer on <strong>${esc(offer.address || "your property")}</strong> attached — ` +
-          `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, as-is, close on your timeline. ` +
-          `Happy to answer any questions.</p>`,
+          `<p>Please find our letter of intent on <strong>${esc(offer.address || "your property")}</strong> attached — ` +
+          `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, cash, as-is, close on your timeline. ` +
+          `If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign? Happy to answer any questions.</p>`,
         ]),
         ...(pageLink ? [
           `<p>How we got to the number — the comps, the rehab scope and what your seller nets: ` +

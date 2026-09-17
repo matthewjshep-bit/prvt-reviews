@@ -258,7 +258,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
         "An offer WITH a number that hasn't been sent yet is our underwritten number: when they ask what we can do, " +
         "give it as a rough figure — \"based on our analysis we can likely do around 450ish\" — rounded to the " +
         "nearest thousand or down to a round number (never up), with no dollar sign, and ask whether that works " +
-        "for the seller. A yes means the written offer goes over. Don't explain how we got there (ARV, repairs, " +
+        "for the seller. A yes means our letter of intent goes over and we ask them to write the official offer on NWMLS forms for us to sign. Don't explain how we got there (ARV, repairs, " +
         "fees), and don't volunteer it before you have their own read unless they ask. " +
         "An offer marked SENT is on paper: if they ask for the number or the terms, restate it " +
         "from this list. It stands until they answer: never say it expired or lapsed, and if they ask whether it's " +

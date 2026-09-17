@@ -42,7 +42,7 @@ import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
 import { getFreeSlots } from "./ghl.js";
-import { GUARD_FOR_INTENT } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
@@ -1044,7 +1044,7 @@ export async function markUnsubscribed({ client, store, locationId, contactId, p
   }).catch(() => {});
 }
 
-export const OUR_OFFER_TEXT_RX = /\bhere's our written cash offer on\b/i;
+export const OUR_OFFER_TEXT_RX = /\bhere's our (written cash offer|letter of intent) on\b/i;
 
 // A book number said the way a person texts it: "1.144M" for $1,144,500
 // (Angela Jaeger, 2026-09-15, held as "not in the offer book"). It counts when
@@ -1213,7 +1213,8 @@ export async function assembleConversation({
   });
 
   const playbook = config.parties?.[party] || null;
-  const instructions = playbook ? playbook.instructions : config.routing.genericInstructions;
+  const base = playbook ? playbook.instructions : config.routing.genericInstructions;
+  const instructions = party === "agent" ? [base, AGENT_PAPER_RULE].filter(Boolean).join("\n") : base;
   const signer = config.persona.name || saved?.company?.signer || saved?.company?.name || "";
   // Ours to hand out when asked — an agent who asks "what's your email?" got
   // "I'll text it over shortly" until 2026-09-12, because we never sent it.
@@ -2270,7 +2271,7 @@ async function runReply(job, ctx) {
     // words back if the offer didn't actually go.
     const first = firstNameOf(job.contactName || a.contactName || "");
     draft = { ...draft, replyBeforeSend: draft.reply,
-      reply: `Sounds good${first ? ` ${first}` : ""}, no rush. Sent the written offer over by text and email so you have it to share with them.` };
+      reply: `Sounds good${first ? ` ${first}` : ""}, no rush. Sent our letter of intent over by text and email so you have it to share with them. If they're open to it, could you write it up on NWMLS forms for us to sign?` };
   }
   if (auto.exception?.passed && draft.intent === "acceptance") {
     plan.suggested.push({ id: `a-acc-${job.id}`, type: "promote_to_deal", mode: "ask", status: "pending", party,

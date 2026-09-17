@@ -253,6 +253,21 @@ export const ACTION_TYPES = [
   "send_dataroom_invite",
 ];
 // What send_offer may attach. Same keys the Send modal and POST /:id/send use.
+// What our paper is, and what the conversation is for — fixed, not on the
+// settings page, so a saved playbook can't drift from it (Matt, 2026-09-17).
+// We are not agents: what we send is a letter of intent. The official offer
+// is written on NWMLS forms by an agent, and the one we want writing it is
+// the listing agent we're already talking to.
+export const AGENT_PAPER_RULE =
+  "OUR PAPER AND THE GOAL: what we send is a LETTER OF INTENT — our price and terms in writing — not an official offer. " +
+  "We are not agents and cannot write an offer on NWMLS forms. The goal of every offer conversation is the agent saying " +
+  "'let's present it' and then writing the official offer on NWMLS forms for us to sign, ideally representing us as the buyer on it. " +
+  "So: call our document a letter of intent or 'our terms in writing' — never 'the contract', 'the PSA' or 'the official offer', " +
+  "and never say we will draft, finalize or send a PSA or contract. When they say the number works, ask for a formal offer, " +
+  "say it has to be on NWMLS forms, or ask who our agent is: say we don't have an agent on this one and would be glad to have them " +
+  "represent us, and ask whether they can write it up on NWMLS forms at our number for us to sign. If they'd rather not represent us, " +
+  "say my partner will sort out who writes it and come back — never name another agent or invent one.";
+
 export const OFFER_DOC_KEYS = ["image", "pdf", "psa", "scope", "comps", "netsheet"];
 export const OFFER_DOC_LABEL = {
   image: "offer letter (image)", pdf: "offer letter (PDF)", psa: "purchase & sale agreement",
@@ -1047,8 +1062,8 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "numbers are theirs — never adopt them, never argue with them. They tell us whether their expectations " +
           "and ours are in the same zip code.\n" +
           "REALM CHECK: when our number comes back you may float it as a soft number ('we'd likely land around " +
-          "410k as-is, quick close') and ask whether that's in the realm for the seller before the formal offer " +
-          "goes over. If they say it works, say you'll send it over today. If they push back with a number, " +
+          "410k as-is, quick close') and ask whether that's in the realm for the seller before our letter of intent " +
+          "goes over. If they say it works, say you'll send our terms over today and ask if they can write it up on NWMLS forms for us to sign. If they push back with a number, " +
           "acknowledge it and say you'll run it by your partner — never move on your own.\n" +
           `IF ASKED IF YOU'RE A BOT: give the standard line, then ask if they have any stale or pocket listings right now.`,
         mayCommit:

@@ -30,9 +30,9 @@ export const CHANNEL_LABELS = { sms: "text", email: "email" };
 // (defaultAgentNote in OfferPageModal.jsx) — so this one stays a delivery
 // note. Kept in sync with the server's fallback in routes/offers.js.
 export const defaultSendMessage = (offer) =>
-  `Hi ${(offer.contactName || "").split(" ")[0] || "there"}, here's our written cash offer on ` +
-  `${offer.address || "your property"} — ${fmtMoney(offer.cashAmount)}, as-is, close on your timeline ` +
-  `(attached). Happy to answer any questions.`;
+  `Hi ${(offer.contactName || "").split(" ")[0] || "there"}, here's our letter of intent on ` +
+  `${offer.address || "your property"} — ${fmtMoney(offer.cashAmount)} cash, as-is, close on your timeline ` +
+  `(attached). If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?`;
 
 // The offer-page link rides at the end of the message rather than as a
 // separate field, so the textarea stays the whole truth about what goes out —

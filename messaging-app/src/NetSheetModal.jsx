@@ -19,7 +19,7 @@ function buildMessage(offer, net) {
   const first = (offer.contactName || "").split(" ")[0] || "there";
   const addr = offer.address || "the property";
   return (
-    `Hi ${first} — here's our written cash offer on ${addr}: ${fmtMoney(offer.cashAmount)}, ` +
+    `Hi ${first} — here's our letter of intent on ${addr}: ${fmtMoney(offer.cashAmount)}, ` +
     `as-is, closing on your timeline (attached).\n\n` +
     `Worth framing it this way: we're buying directly, so no buyer's-agent commission comes off the top. ` +
     `At our offer the seller nets about ${fmtMoney(Math.round(net.netA))} after the listing side's ${net.sellerPct}%. ` +

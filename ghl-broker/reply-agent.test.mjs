@@ -258,7 +258,9 @@ test("a clean run saves the draft, tags the contact, and leaves the draft in a n
   // what the model was given
   assert.equal(seen.contact.name, "Dana Reyes");
   assert.equal(seen.signer, "Matt");
-  assert.equal(seen.instructions, "Sign as Matt.");
+  // The saved playbook, then the fixed letter-of-intent rule every agent draft carries.
+  assert.ok(seen.instructions.startsWith("Sign as Matt."));
+  assert.match(seen.instructions, /LETTER OF INTENT[\s\S]*NWMLS forms/);
   assert.equal(seen.offers.count, 3);
   assert.match(seen.offers.text, /12 Elm St/);
   // what was saved
@@ -2931,7 +2933,7 @@ test("'I'll run it by them and get back to you' is thanked on its own and a chec
   assert.equal(sends.length, 1, "the written offer goes to them");
   assert.deepEqual(sends[0].channels, ["sms", "email"]);
   assert.ok(!(d.flags || []).some((f) => /offer didn't go/.test(f)));
-  assert.match(d.reply, /Sent the written offer over by text and email/);
+  assert.match(d.reply, /Sent our letter of intent over by text and email/);
 });
 
 test("our own offer text in the thread is the app, not a person taking over", async () => {

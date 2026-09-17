@@ -105,7 +105,7 @@ test("an unattended send carries the page link on both channels", async () => {
   const r = await req("POST", `/api/offers/${o.id}/send`, { channels: ["sms", "email"], docs: ["image"] });
   assert.equal(r.status, 200);
   assert.ok(r.json.previews.sms.message.endsWith(link), r.json.previews.sms.message);
-  assert.match(r.json.previews.sms.message, /written cash offer on 14 Cedar Ave/);
+  assert.match(r.json.previews.sms.message, /letter of intent on 14 Cedar Ave/);
   assert.ok(r.json.previews.email.html.includes(`<a href="${link}">`), r.json.previews.email.html);
 });
 

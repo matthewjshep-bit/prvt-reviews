@@ -392,7 +392,7 @@ export function outboundOpening(outbound) {
         return `${START} Our analysis on ${o.address} is done and we're confident in it: it lands at ${o.amountK}. ` +
           `Tell them in one short text — e.g. "based on our analysis we can likely do around ${o.amountK}ish on ${o.street || o.address}" — ` +
           `rounded to the nearest thousand or down (never up), as-is and a quick close if the terms are listed. ` +
-          `Ask whether that works for the seller; if it does, the written offer comes next. Don't explain the math ` +
+          `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. Don't explain the math ` +
           `(ARV, repairs, fees) and don't call it final. Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
       }
       return `${START} ${theirs ? `They came back on ${o.address} with ${theirs}.` : `We have numbers on ${o.address}.`} ` +
