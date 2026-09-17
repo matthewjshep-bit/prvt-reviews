@@ -274,6 +274,17 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   if (playbook.mayNotCommit) parts.push(`YOU MAY NOT, ever: ${playbook.mayNotCommit}`);
   if (config?.rules?.length) parts.push(`HOUSE RULES — never break these:\n${config.rules.map((r) => `- ${r}`).join("\n")}`);
 
+  // Asked once, answered by the owner on Today. These are facts, unlike the
+  // examples below: the point is that the bot stops saying "let me check".
+  const answers = (config?.answers || []).filter((a) => a.party === "any" || a.party === party).slice(-20);
+  if (answers.length) {
+    parts.push(
+      "ANSWERS THE OWNER HAS ALREADY GIVEN (these are facts. When the same thing comes up, answer it yourself in your own " +
+      "words, and do NOT say you'll check with a partner or get back to them on it):\n" +
+      answers.map((a) => `Q: ${a.question || "(asked in passing)"}\nA: ${a.answer}`).join("\n\n")
+    );
+  }
+
   const intents = INTENTS[party] || INTENTS.agent;
   const gloss = INTENT_GLOSS[party] || INTENT_GLOSS.agent;
   parts.push(
@@ -442,6 +453,15 @@ export function outboundOpening(outbound) {
         `Keep the negotiation alive in one or two lines: say we're still interested and ask whether the seller has any room ` +
         `toward our number, or what it would take. Do NOT name a new number of ours, do NOT restate their number, do NOT ` +
         `hint we'd go higher — movement on price is a person's call. ${CONTINUE} Set intent to counter_nudge.`;
+
+    // They asked something only the owner knew, we said we'd find out, and
+    // he has now answered. His words are the content; ours is the voice.
+    case "partner_answer":
+      return `${START} Earlier this agent asked us something we couldn't answer on the spot` +
+        `${o.question ? ` ("${o.question}")` : ""}, and we said we'd come back to them. The owner has now answered. ` +
+        `THE ANSWER, which is the whole content of this message: "${o.answer}". ` +
+        `Say exactly that, in our voice, in one or two short lines. Add no fact, number, term or promise that is not in ` +
+        `the answer, leave nothing in it out, and do NOT say you'll check on anything else. ${CONTINUE} Set intent to partner_answer.`;
 
     // Our numbers are stuck on something they can answer. Ask for exactly
     // the missing piece — never both when one is known — and nothing of ours.

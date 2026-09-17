@@ -452,3 +452,28 @@ test("once a person has jumped into a thread the bot stays out for at least half
   assert.equal(normalizeConversationAi({ version: 2, autoSend: { humanActiveMin: 90 } }).autoSend.humanActiveMin, 90, "longer is the page's call");
   assert.equal(CONVERSATION_AI_DEFAULTS.autoSend.humanActiveMin, 45);
 });
+
+/* ---------- answers the owner gave once ---------- */
+
+test("a saved answer survives a save, and normalizing twice changes nothing", () => {
+  const once = normalizeConversationAi({ answers: [
+    { id: "ans-1", party: "agent", question: "What's your inspection window?", answer: "Ten days, and we can shorten it for a clean house.", at: "2026-09-17T20:00:00.000Z", draftId: "d1" },
+    { question: "no answer given", answer: "   " },
+    { party: "martian", question: "Do you pay referrals?", answer: "Yes, at closing." },
+    "junk",
+  ] });
+  assert.equal(once.answers.length, 2, "an entry with no answer is dropped");
+  assert.equal(once.answers[0].id, "ans-1");
+  assert.equal(once.answers[1].party, "any", "an unknown party means everyone");
+  assert.ok(once.answers[1].id, "an id is given when there is none");
+  assert.deepEqual(normalizeConversationAi(once).answers, once.answers);
+  assert.deepEqual(normalizeConversationAi({}).answers, []);
+});
+
+test("standing answers are capped at forty, newest kept", () => {
+  const many = Array.from({ length: 45 }, (_, i) => ({ id: `a${i}`, question: `q${i}`, answer: `a${i}`, at: new Date(Date.UTC(2026, 8, 1) + i * 86400000).toISOString() }));
+  const n = normalizeConversationAi({ answers: many });
+  assert.equal(n.answers.length, 40);
+  assert.equal(n.answers.some((a) => a.id === "a44"), true);
+  assert.equal(n.answers.some((a) => a.id === "a0"), false);
+});

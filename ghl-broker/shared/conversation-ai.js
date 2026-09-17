@@ -72,7 +72,7 @@ export const INTENT_LABEL = {
   agent: {
     deal_available: "has a deal (tier 1)", new_property: "new property (tier 1)", investor_open: "open to investors (tier 2)",
     realm_yes: "number is in the realm", realm_check: "floated our number", take_check: "floated our read",
-    offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", take_ask: "asked for their read to finish our numbers", passed_checkin: "checked back in on a passed offer",
+    offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", take_ask: "asked for their read to finish our numbers", partner_answer: "your answer to a question the bot couldn't", passed_checkin: "checked back in on a passed offer",
     outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text",
     call_followup: "text after a call", promise_due: "kept our word on a number we owed", price_drop: "saw the list price come down", checkin_due: "the check-in they asked for", address_chase: "asked again for the address of a property they said was coming",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
@@ -493,6 +493,10 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   persona: { name: "", role: "", voice: "", signOff: "", length: "short", useFirstName: true, ifAskedIfBot: "" },
   rules: [],
   examples: [],
+  // Questions the bot couldn't answer, answered once by the owner on Today
+  // (the answer box). Facts, unlike examples: the prompt tells the bot to
+  // answer these itself rather than deflect to "my partner".
+  answers: [],
   routing: {
     agentTags: ["agent", "agent-*"],
     investorTags: ["investor", "investor-*", "on-deal"],
@@ -583,6 +587,7 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
 
 /* ---------- coercion helpers ---------- */
 
+export const ANSWERS_MAX = 40;
 const str = (v, max) => String(v == null ? "" : v).replace(/\r\n/g, "\n").trim().slice(0, max);
 const bool = (v, def) => (v == null ? def : v === true || v === "true" || v === 1 || v === "1");
 const int = (v, def, min, max) => {
@@ -795,6 +800,22 @@ export function normalizeConversationAi(doc, seed = {}) {
     if (examples.length >= 30) break;
   }
 
+  // Saved in the order they were given, so the newest are last; over the cap,
+  // the oldest go.
+  const answers = [];
+  for (const [i, a] of (Array.isArray(d.answers) ? d.answers : []).entries()) {
+    if (!a || typeof a !== "object") continue;
+    const answer = str(a.answer, 600);
+    if (!answer) continue;
+    answers.push({
+      id: str(a.id, 40) || `ans-${i + 1}`,
+      party: oneOf(a.party, [...PARTIES, "any"], "any"),
+      question: str(a.question, 300), answer,
+      at: str(a.at, 40), draftId: str(a.draftId, 64),
+    });
+  }
+  if (answers.length > ANSWERS_MAX) answers.splice(0, answers.length - ANSWERS_MAX);
+
   const agentTags = "agentTags" in routing ? list(routing.agentTags, { max: 30, each: 80, lower: true }) : [...D.routing.agentTags];
   const investorTags = "investorTags" in routing ? list(routing.investorTags, { max: 30, each: 80, lower: true }) : [...D.routing.investorTags];
   const botOffTags = "botOffTags" in routing ? list(routing.botOffTags, { max: 20, each: 80, lower: true }) : [...D.routing.botOffTags];
@@ -837,6 +858,7 @@ export function normalizeConversationAi(doc, seed = {}) {
     })(),
     rules: list(d.rules, { max: 40, each: 300 }),
     examples,
+    answers,
     routing: {
       agentTags,
       investorTags,

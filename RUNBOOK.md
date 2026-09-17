@@ -1071,6 +1071,47 @@ held triage from the contact's timeline and drafts only. GHL is not asked, so
 the tag and stage checks are skipped on the row; the nightly sweep makes them
 before anything is actually done.
 
+### Answers the bot didn't have (2026-09-17)
+
+**Why.** Three of Today's "we owe them an answer" rows were the bot saying "let
+me check with my partner" about things only Matt knows: the inspection window,
+how we handle referrals, when a full PSA goes out. The row offered Dismiss. The
+agent never got the answer, and the next agent to ask got the same deflection.
+
+**The row.** An owed answer the resolver can't close (`move: "yours"`, `kind:
+"partner_answer"`) shows the question they asked — the inbound of the reply
+that deflected, via `questionIn` (shared/follow-up.js) — with a box. `isDeflection`
+is the same read as a predicate, for anything that wants to count them.
+
+**What typing an answer does** (`ghl-broker/partner-answer.js`,
+`POST /api/dashboard/answers`):
+
+1. Drafts it to that agent in the bot's voice: the `partner_answer` outbound
+   kind, whose prompt is "say exactly this, add nothing". The figures typed
+   are the only ones it may say. It is **not** in `OUTBOUND_INTENTS`, so it is
+   never on the auto-send grid, and it is in `RELEASE_QUIET`, so the nightly
+   audit never releases it. The owner's words leave on the owner's Send.
+2. Keeps it as a standing answer in `conversationAi.answers` (`{ id, party,
+   question, answer, at, draftId }`, 40 kept, oldest dropped), unless "Save for
+   next time" is unticked. The system prompt carries them as **ANSWERS THE
+   OWNER HAS ALREADY GIVEN** — facts, answer it yourself, don't say you'll check
+   with a partner — filtered by party, the newest 20. An answer carrying a
+   phone number, an email or a street address still goes to them but is never
+   kept. The box offers Undo; the Conversation AI tab has the full list
+   ("Answers you've given") to edit, add to, or prune.
+3. Settles the promise (`promise_kept`, `by: "answered"`) and writes
+   `partner_answered`, so the row leaves Today. If the draft can't start
+   (the bot is off), nothing is saved and the row stays.
+
+**Money.** A dollar amount in a standing answer is not added to the money
+guard's allowed amounts. The bot will draft it next time and the guard will
+hold the draft for a person, every time. The box warns before Send. Day counts
+and percentages pass.
+
+**The coach** is shown the answers as current guidance so it doesn't propose
+them again. It never writes one: its validator refuses fees, earnest money and
+amounts, which is exactly what these answers contain.
+
 ### The nightly coach (2026-09-17)
 
 The bot used to get better only when Matt noticed a bad reply and said so in a coding session. The coach closes that loop. An hour after the audit (8pm Pacific by default) it reads what a person did with the day's drafts and **proposes** what the bot should learn. It never applies anything; Today's "Learned last night" card is where a person answers.

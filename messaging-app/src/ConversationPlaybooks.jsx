@@ -442,6 +442,40 @@ export function ExamplesEditor({ config, patch }) {
   );
 }
 
+// What you answered from Today when the bot didn't know (the answer box).
+// Facts, where the examples above are tone: the bot is told to answer these
+// itself rather than say it will check with a partner.
+export function AnswersEditor({ config, patch }) {
+  const list = config.answers || [];
+  const update = (i, k, v) => patch({ answers: list.map((a, j) => (j === i ? { ...a, [k]: v } : a)) });
+  return (
+    <Section title="Answers you've given"
+      intro="Questions the bot couldn't answer, that you answered from Today. It answers these itself now. Add the ones you already know are coming: inspection window, earnest money, closing timeline, referrals. A dollar amount here still waits for you each time it is said.">
+      <div className="space-y-3">
+        {list.map((a, i) => (
+          <div key={a.id || i} className="rounded-lg border border-slate-200 p-3">
+            <div className="mb-2 flex items-center gap-2">
+              <select className="rounded-lg border border-slate-300 px-2 py-1 text-xs" value={a.party} onChange={(ev) => update(i, "party", ev.target.value)}>
+                <option value="any">Either party</option>
+                <option value="agent">Agents</option>
+                <option value="investor">Investors</option>
+              </select>
+              <button type="button" className={`${BTN} ml-auto`} aria-label="Remove answer" onClick={() => patch({ answers: list.filter((_, j) => j !== i) })}><Trash2 size={13} /></button>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Field label="They ask"><Area rows={2} value={a.question} onChange={(v) => update(i, "question", v)} placeholder="What's your inspection window?" /></Field>
+              <Field label="The answer"><Area rows={2} value={a.answer} onChange={(v) => update(i, "answer", v)} placeholder="Ten days, and we can shorten it for a clean house." /></Field>
+            </div>
+          </div>
+        ))}
+        <button type="button" className={BTN} onClick={() => patch({ answers: [...list, { id: `ans-${Date.now().toString(36)}`, party: "agent", question: "", answer: "", at: new Date().toISOString() }] })}>
+          <Plus size={13} /> Add an answer
+        </button>
+      </div>
+    </Section>
+  );
+}
+
 /* ---------- routing ---------- */
 
 export function RoutingCard({ config, patch, version }) {

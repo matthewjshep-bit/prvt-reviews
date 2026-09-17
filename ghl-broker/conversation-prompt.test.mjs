@@ -133,3 +133,20 @@ test("a counter nudge asks for room and names no number", () => {
   assert.match(t, /Do NOT name a new number of ours/);
   assert.match(t, /Set intent to counter_nudge/);
 });
+
+test("a question Matt already answered is in the prompt, for the right party only", async () => {
+  const { normalizeConversationAi } = await import("./shared/conversation-ai.js");
+  const config = normalizeConversationAi({ answers: [
+    { party: "agent", question: "What's your inspection window?", answer: "Ten days." },
+    { party: "investor", question: "Is the fee negotiable?", answer: "Not on this one." },
+    { party: "any", question: "Are you local?", answer: "Yes, we're in Seattle." },
+  ] });
+  const agent = buildSystemPrompt({ config, party: "agent", channel: "sms" });
+  assert.match(agent, /ANSWERS THE OWNER HAS ALREADY GIVEN/);
+  assert.match(agent, /inspection window\?\s*\n?\s*A: Ten days\./);
+  assert.match(agent, /Are you local/);
+  assert.doesNotMatch(agent, /fee negotiable/);
+  assert.match(agent, /do not say you'll check with a partner/i);
+  const none = buildSystemPrompt({ config: normalizeConversationAi({}), party: "agent", channel: "sms" });
+  assert.doesNotMatch(none, /ANSWERS THE OWNER/);
+});

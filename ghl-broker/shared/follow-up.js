@@ -85,6 +85,30 @@ export function detectPromise(text = "") {
   return null;
 }
 
+/**
+ * isDeflection(text) → boolean
+ *
+ * An owed ANSWER that names a partner or "checking": the bot was asked
+ * something it had no answer for and said it would find out. The owner's
+ * answer (Today's answer box) is what keeps it, and what stops the next one.
+ */
+export function isDeflection(text = "") {
+  const t = String(text || "");
+  if (detectPromise(t) !== "answer") return false;
+  return /\b(?:my|our)\s+(?:business\s+)?partner(?:'s)?\b|\bcheck\s+(?:on\s+that|with|into)\b|\bfind\s+out\b|\bnot\s+something\s+I\s+want\s+to\s+guess\b/i.test(t);
+}
+
+/**
+ * questionIn(inbound) → string
+ * The question they asked: the last sentence ending in "?", else the whole
+ * message, clipped.
+ */
+export function questionIn(inbound = "") {
+  const t = String(inbound || "").replace(/\s+/g, " ").trim();
+  const asked = t.split(/(?<=[.!?])\s+/).filter((x) => x.trim().endsWith("?")).at(-1);
+  return (asked || t).trim().slice(0, 240);
+}
+
 /* ---------- when they said to check back ---------- */
 
 // "I'll check back in when I get into the office this Wednesday" (Tyler

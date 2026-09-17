@@ -186,6 +186,9 @@ export function buildCoachContext({ signals, config = {} } = {}) {
     rules: config.rules || [],
     examples: (config.examples || []).map((e) => ({ id: e.id, party: e.party, theySaid: clip(e.theySaid, 200), weSay: clip(e.weSay, 200) })),
     instructions: Object.fromEntries(PARTIES.map((p) => [p, clip(config.parties?.[p]?.instructions, 2000)])),
+    // Answered by the owner from Today (the answer box). The coach never
+    // writes these; it is shown them so it doesn't propose them again.
+    answers: (config.answers || []).map((a) => ({ party: a.party, question: clip(a.question, 200), answer: clip(a.answer, 200) })),
   };
   const { knownIds: _k, empty: _e, ...shown } = signals || {};
   return `CURRENT GUIDANCE (do not repeat it):\n${JSON.stringify(current, null, 1)}\n\nTODAY'S VERDICTS:\n${JSON.stringify(shown, null, 1)}`;
@@ -198,6 +201,9 @@ const HANDS_OFF = /\b(fees?|assign(ment|ing)?|wholesal\w*|earnest|emd|auto-?send
 const PHONE = /\+?\d[\d\s().-]{8,}\d/;
 const EMAIL = /[^\s@<>"']+@[^\s@<>"']+\.[a-z]{2,}/i;
 const STREET = /\b\d{1,6}\s+(?:[NSEW]{1,2}\.?\s+)?[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,3}\s+(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|way|blvd|boulevard|ct|court|pl|place|pkwy|parkway|hwy|highway|ter|terrace|cir|circle|loop|trl|trail)\b\.?/i;
+
+/** A phone number, an email or a street address: never kept in standing guidance. */
+export const hasContactDetails = (text) => { const t = String(text || ""); return PHONE.test(t) || EMAIL.test(t) || STREET.test(t); };
 
 const norm = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 

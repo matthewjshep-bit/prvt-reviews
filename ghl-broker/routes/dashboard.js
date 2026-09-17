@@ -22,6 +22,7 @@
 // chart components never handle gaps.
 
 import { settlePromise, heldTriageForPromises } from "../promise-sweep.js";
+import { answerPartnerQuestion, forgetAnswer } from "../partner-answer.js";
 import express from "express";
 import { store } from "../store.js";
 import {
@@ -442,6 +443,30 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       if (!contactId) return res.status(400).json({ error: "contactId is required" });
       const r = await settlePromise({ store, locationId, contactId, address: String(req.body?.address || "").slice(0, 200), by: "dismissed", reason: req.body?.reason || null });
       res.json({ ok: true, ...r });
+    } catch (err) { fail(res, err); }
+  });
+  // A question the bot couldn't answer, answered from Today's answer box:
+  // drafted to them in our voice (it waits in the outbox for Send), kept as a
+  // standing answer unless told not to, and the owed-an-answer row clears.
+  // Body: { contactId, draftId?, address?, question, answer, saveAsFact? }.
+  router.post("/answers", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      const saved = await store.getOfferSettings(locationId).catch(() => null);
+      const deps = typeof conversationDepsFor === "function" ? conversationDepsFor({ locationId, client, saved: saved || {} }) : {};
+      const r = await answerPartnerQuestion({
+        client, locationId, store, contactId: b.contactId, draftId: b.draftId, address: b.address,
+        question: b.question, answer: b.answer, saveAsFact: b.saveAsFact !== false, sendsEnabled: CARD_SENDS_ENABLED, deps,
+      });
+      res.status(r.started ? 202 : 200).json({ ok: true, ...r });
+    } catch (err) { fail(res, err); }
+  });
+  // Undo on the answer box: forget that one standing answer.
+  router.delete("/answers/:id", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ ok: true, ...(await forgetAnswer({ store, locationId, id: String(req.params.id || "").slice(0, 40) })) });
     } catch (err) { fail(res, err); }
   });
   router.post("/audit/run", async (req, res) => {

@@ -507,6 +507,12 @@ export const getDashboardAudit = () => fetch(`${API_BASE}/api/dashboard/audit?${
 // Close an "Owed a number" row by hand. `reason` is { code, note } from
 // PROMISE_DISMISS_REASONS; the nightly coach reads it.
 export const dismissPromise = (contactId, address = "", reason = null) => post(`/api/dashboard/promises/dismiss`, { contactId, address, reason });
+// A question the bot couldn't answer, answered from Today: drafted to them in
+// our voice (waits in the outbox for Send) and kept as a standing answer.
+export const answerPartnerQuestion = ({ contactId, draftId = null, address = "", question = "", answer, saveAsFact = true }) =>
+  post(`/api/dashboard/answers`, { contactId, draftId, address, question, answer, saveAsFact });
+export const forgetStandingAnswer = (id) =>
+  fetch(`${API_BASE}/api/dashboard/answers/${encodeURIComponent(id)}?${locq()}`, { method: "DELETE" }).then(j);
 export const runDashboardAudit = ({ dryRun = true } = {}) => post(`/api/dashboard/audit/run`, { dryRun });
 // The nightly coach: what it proposed from the day's edits and dismissals.
 export const getCoach = () => fetch(`${API_BASE}/api/dashboard/coach?${locq()}`).then(j);

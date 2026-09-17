@@ -20,7 +20,7 @@ import {
   DEAD_STATUSES, LIVE_DEAL_STAGES,
   offerHeat,
 } from "./offer-status.js";
-import { stepLabel, exhausted, normalizeSteps } from "./follow-up.js";
+import { stepLabel, exhausted, normalizeSteps, questionIn } from "./follow-up.js";
 import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
 import { addressKey } from "./contact-record.js";
 import { openPromises, resolvePromise } from "./promise-resolver.js";
@@ -436,9 +436,15 @@ export function buildPipeline({
     const who = contactNames[p.contactId] || "An agent";
     const heldReason = v.offerId && ["rerun", "ask_numbers", "yours", "wait"].includes(v.move) && mine.some((o) => o.id === v.offerId && aiHoldReasons(o).length)
       ? String(aiHoldReasons(mine.find((o) => o.id === v.offerId))[0]).split(" — ")[0].slice(0, 120) : "";
-    const ops = PROMISE_OPS[v.move] || [];
+    // A question the bot couldn't answer: the row is the question, with a
+    // box. What they asked is the inbound of the reply that deflected.
+    const theirs = [...sentDrafts, ...drafts].filter((d) => d?.contactId === p.contactId);
+    const from = v.kind === "partner_answer" ? (theirs.find((d) => d.id === p.draftId) || null) : null;
+    const question = from ? questionIn(from.inbound) : "";
+    const ops = question ? [{ key: "answer", label: "Answer", intent: "primary" }] : (PROMISE_OPS[v.move] || []);
     push({ id: `promise_owed:${p.contactId}:${p.owedAt}`, kind: "promise_owed", severity: "now", contactId: p.contactId, contactName: contactNames[p.contactId] || "",
       address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0,
+      draftId: null, fromDraftId: p.draftId || null, ...(question ? { question } : {}),
       title: `${who}: we owe them ${p.what === "number" ? "a number" : "an answer"}${p.address ? ` on ${String(p.address).split(",")[0]}` : ""}`,
       detail: [PROMISE_MOVE_LABEL[v.move] || "", heldReason ? `underwrite held: ${heldReason}` : "", p.text ? `we said "${String(p.text).slice(0, 90)}"` : ""].filter(Boolean).join(" · "),
       // Settled some other way (a call, a no that never reached the offer):

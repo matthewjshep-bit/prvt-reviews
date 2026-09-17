@@ -38,3 +38,15 @@ test("an owed number on a priced offer offers to send it, not only Dismiss", () 
   expect(html).toContain("the number is ready and hasn&#x27;t gone out");
   expect(html).toContain("Dismiss");
 });
+
+test("the answer box renders the question they asked, with somewhere to type", () => {
+  const now = Date.parse("2026-09-20T17:00:00Z");
+  const events = [{ contactId: "c1", type: "promise_owed", at: "2026-09-20T13:00:00Z", address: "", data: { what: "answer", text: "Let me check with my partner and get back to you.", draftId: "d0" } }];
+  const sentDrafts = [{ id: "d0", contactId: "c1", status: "sent", inbound: "Quick one. What's your inspection window?", reply: "Let me check with my partner and get back to you.", createdAt: "2026-09-20T09:00:00Z", sentAt: "2026-09-20T09:00:00Z" }];
+  const r = buildPipeline({ events, sentDrafts, now });
+  const html = renderToStaticMarkup(<ActionQueue actions={r.actions} draftsById={{}} sendsEnabled onDone={() => {}} />);
+  expect(html).toContain("They asked: “What&#x27;s your inspection window?”");
+  expect(html).toContain("<textarea");
+  expect(html).toContain("Save for next time");
+  expect(html).toContain("Draft the reply");
+});

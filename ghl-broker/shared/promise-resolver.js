@@ -178,3 +178,13 @@ export function normalizePromiseDismissal(v) {
   const code = PROMISE_DISMISS_REASONS.includes(raw.code) ? raw.code : "other";
   return { code, note: String(raw.note || "").trim().slice(0, 200) };
 }
+
+/* ---------- the answer box ---------- */
+
+/**
+ * answerNamesMoney(text) → boolean
+ * A dollar figure in a standing answer means every reply that repeats it
+ * waits for a person: the money guard only passes numbers from the offer
+ * book. Day counts and percentages are fine. The box says so before Send.
+ */
+export const answerNamesMoney = (text = "") => /\$\s?\d|\b\d{1,3}(?:,\d{3})+\b|\b\d+(?:\.\d+)?\s?(?:k|m|mm|grand)\b/i.test(String(text || ""));

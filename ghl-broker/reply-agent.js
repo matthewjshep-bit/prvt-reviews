@@ -672,7 +672,9 @@ export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed",
 // band's arithmetic didn't open — the reply itself is a holding reply that
 // commits to nothing, and silence is worse. Released, and said so on the
 // row. The gates are never released: `code === "gates"` stays held.
-export const RELEASE_QUIET = new Set(["opt_out", "small_talk", "media"]);
+// `partner_answer` is the owner's own words (partner-answer.js): it leaves on
+// his Send and no other way.
+export const RELEASE_QUIET = new Set(["opt_out", "small_talk", "media", "partner_answer"]);
 export function releaseForAudit({ auto, gate, draft, deps }) {
   if (!deps?.releaseHeld || auto?.send) return auto;
   if (!HELD_FOR_A_PERSON.has(auto?.code) || auto.code === "gates") return auto;
@@ -1511,6 +1513,17 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // The owner's answer to a question the bot deflected (partner-answer.js,
+  // Today's answer box). A person typed it and pressed the button, so no
+  // playbook switch gates it; it is not on the auto-send grid, so it waits in
+  // the outbox for his Send. The figures he typed may be said, and only those.
+  partner_answer: {
+    party: "agent",
+    enabled: () => true,
+    ready: ({ subject }) => (String(subject?.answer || "").trim() ? true : "there is no answer to send"),
+    floats: ({ subject }) => moneyIn(String(subject?.answer || "")),
+    forbids: () => [],
+  },
   passed_checkin: {
     party: "agent",
     enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.passed_checkin?.enabled,
@@ -1718,6 +1731,9 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     return { ...base, heldReason: String(subject?.heldReason || "our comps came back thin"), needs,
       needValue: needs.includes("value"), needWork: needs.includes("work") };
   }
+  if (kind === "partner_answer") {
+    return { ...base, address: offer?.address || subject?.address || "", question: String(subject?.question || "").slice(0, 300), answer: String(subject?.answer || "").slice(0, 600) };
+  }
   if (kind === "counter_nudge") {
     const theirs = Math.round(Number(offer?.counter?.amount) || 0);
     const at = Date.parse(offer?.counter?.at || "");
@@ -1780,6 +1796,7 @@ function outboundSummary({ kind, offer, outbound }) {
         : `Floats ${fmtMoney(offer.cashAmount)} on ${where} as a rough first pass and asks if it's in the realm.`;
     case "offer_nudge":   return `Follows up on our offer on ${where}${rung}.`;
     case "counter_nudge": return `Their ${outbound.theirsK || "counter"} on ${where} sat ${outbound.days}d — asks if the seller has any room, names no number of ours.`;
+    case "partner_answer": return "Your answer to a question the bot couldn't answer, in its voice.";
     case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held (${outbound.heldReason}).`;
     case "passed_checkin": return `Checks back in on ${where} — they passed; asks if the seller would come closer to our number${rung}.`;
     case "outreach_open": return `First text: saw their listing at ${where}, asks if they have anything distressed.`;

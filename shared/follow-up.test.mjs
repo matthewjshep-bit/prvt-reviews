@@ -194,3 +194,16 @@ test("a repeat rung is labelled as still asking, not as a step past the end", ()
   assert.equal(labelR(7, [3, 7, 14]), "step 2 of 3");
   assert.equal(labelR(28, [3, 7, 14]), "still asking (day 28)");
 });
+
+/* ---------- a question the bot couldn't answer ---------- */
+
+test("'let me check with my partner and get back to you' is a deflection, and a promised number is not", async () => {
+  const { isDeflection, questionIn } = await import("./follow-up.js");
+  assert.equal(isDeflection("Good question. Let me check with my partner on how we handle referrals and get back to you."), true);
+  assert.equal(isDeflection("That's my partner's call, not something I want to guess at. I'll check with him and come back to you."), true);
+  assert.equal(isDeflection("I'll run it by underwriting and get back to you with a number."), false);
+  assert.equal(isDeflection("Sounds good, talk soon."), false);
+  assert.equal(questionIn("Hi Matt. Do you pay a referral fee if I send you a seller? Thanks!"), "Do you pay a referral fee if I send you a seller?");
+  assert.equal(questionIn("what's your inspection window"), "what's your inspection window");
+  assert.equal(questionIn("x".repeat(400)).length, 240);
+});

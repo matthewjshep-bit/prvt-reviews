@@ -438,3 +438,13 @@ test("a failed underwrite can be retried from Today", () => {
   const nowhere = build({ jobs: [{ ...job, address: "", contactId: null }] }).actions.find((a) => a.kind === "underwrite_failed");
   assert.deepEqual(nowhere.ops, [], "nothing to retry without a contact");
 });
+
+test("an owed answer nobody has given shows the question they asked, with a box to answer it", () => {
+  const asked = draft({ id: "d0", status: "sent", inbound: "Hi Matt. What's your inspection window on these?", reply: "Let me run that by my partner and get back to you.", createdAt: H(9), sentAt: H(9) });
+  const r = build({ events: [owed({ address: "" }, { what: "answer", text: asked.reply, draftId: "d0" })], sentDrafts: [asked] });
+  const row = promiseRow(r);
+  assert.equal(row.question, "What's your inspection window on these?");
+  assert.deepEqual(row.ops.map((o) => o.key), ["answer", "dismiss_promise"]);
+  assert.equal(row.draftId, null, "not a draft row: the draft it came from is long sent");
+  assert.equal(row.fromDraftId, "d0");
+});
