@@ -11,7 +11,8 @@ import { ACTION_KINDS } from "@shared/pipeline.js";
 import { AUDIT_ACTION_KINDS } from "@shared/conversation-audit.js";
 import { BTN, BTN_DANGER, BTN_PRIMARY, Pill } from "./ui.jsx";
 import { DraftRow } from "./ConversationOutbox.jsx";
-import ContactLink from "./ContactLink.jsx";
+import ContactLink, { useOpenContact } from "./ContactLink.jsx";
+import { ghlContactUrl } from "./api.js";
 import { CONFIRM, describeResult, linkFor, runOp } from "./pipeline-ops.js";
 
 const SEV = {
@@ -48,8 +49,22 @@ function OpButton({ op, item, onDone }) {
   );
 }
 
-function ActionRow({ item, onDone, onShowDraft }) {
+function ActionRow({ item, onDone, onShowDraft, draft, sendsEnabled, serverOffsetMs }) {
   const sev = SEV[item.severity] || SEV.fyi;
+  const drawer = useOpenContact();
+  const [showing, setShowing] = useState(false);
+  // The audit's rows open somewhere rather than do something: the thread is
+  // the contact's record; the draft opens right here when the board has it,
+  // and in their record (which lists their drafts) when it doesn't.
+  function openContact() {
+    if (!item.contactId) return;
+    if (drawer) drawer.open(item.contactId, { party: "agent", name: item.contactName || null });
+    else window.open(ghlContactUrl(item.contactId), "_blank", "noreferrer");
+  }
+  const OPENERS = {
+    open_contact: openContact,
+    open_outbox: () => (draft ? setShowing((v) => !v) : openContact()),
+  };
   return (
     <li className="flex flex-wrap items-start gap-3 px-3 py-2.5">
       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${sev.dot}`} title={sev.label} />
@@ -64,8 +79,15 @@ function ActionRow({ item, onDone, onShowDraft }) {
       <div className="flex flex-wrap items-start gap-1.5">
         {item.ops.map((op) => op.key === "show_draft"
           ? <button key={op.key} type="button" className={BTN} onClick={() => onShowDraft?.(item.draftId)}>{op.label}</button>
+          : OPENERS[op.key]
+          ? <button key={op.key} type="button" className={op.intent === "primary" ? BTN_PRIMARY : BTN} onClick={OPENERS[op.key]}>{showing && op.key === "open_outbox" ? "Hide the draft" : op.label}</button>
           : <OpButton key={op.key} op={op} item={item} onDone={onDone} />)}
       </div>
+      {showing && draft && (
+        <ul className="w-full rounded-lg border border-slate-100">
+          <DraftRow draft={draft} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} />
+        </ul>
+      )}
     </li>
   );
 }
@@ -103,7 +125,8 @@ export default function ActionQueue({ actions = [], draftsById = {}, sendsEnable
                     </li>
                   );
                 }
-                return <ActionRow key={item.id} item={item} onDone={onDone} onShowDraft={onShowDraft} />;
+                return <ActionRow key={item.id} item={item} onDone={onDone} onShowDraft={onShowDraft}
+                  draft={item.draftId ? draftsById[item.draftId] : null} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} />;
               })}
             </ul>
           </details>

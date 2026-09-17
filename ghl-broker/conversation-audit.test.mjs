@@ -63,7 +63,34 @@ test("a second audit the same night starts nothing twice", async () => {
   await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
   const again = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW + 600000, pace: 0 });
   assert.equal(d.calls.length, 1);
-  assert.equal(again.acted[0].status, "claimed");
+  // Still unanswered after a try: it goes to Matt's queue, not back to "started".
+  assert.equal(again.acted[0].status, "yours");
+  assert.equal(again.result.findings[0].action, null);
+});
+
+test("a redraft the bot would only stand down from, or that would answer the wrong words, is handed over before the claim", async () => {
+  const run = (store, d) => runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  // Under contract with them (Christian Simonson, 2026-09-16).
+  let store = fakeStore({ offers: [{ id: "o1", contactId: "c9", address: "1415 2nd St", deal: { stage: "under_contract" } }] });
+  let d = deps();
+  let r = await run(store, d);
+  assert.equal(r.acted[0].status, "yours");
+  assert.match(r.acted[0].reason, /under contract/);
+  // Their newest message has no words; the newest with words is old (Tim Tilbury).
+  store = fakeStore(); d = deps({ latestInbound: async () => ({ body: "I'd have to see it", type: "SMS", at: ago(9) }) });
+  r = await run(store, d);
+  assert.match(r.acted[0].reason, /no text/);
+  // Our own sent reply echoed back as their inbound (Julie Leonard).
+  const ours = "Sorry that one didn't land. Any chance the seller would counter?";
+  store = fakeStore({ drafts: [{ id: "d1", contactId: "c9", status: "sent", inbound: "thanks", reply: ours, createdAt: ago(30), sentAt: ago(30) }] });
+  d = deps({ latestInbound: async () => ({ body: ours, type: "Email", at: ago(5) }) });
+  r = await run(store, d);
+  assert.match(r.acted[0].reason, /echoed/);
+  for (const x of [r]) {
+    assert.equal(d.calls.length, 0);
+    assert.equal(x.result.findings[0].action, null, "on Matt's queue");
+    assert.ok(!store.events.some((e) => e.type === "audit_action"), "no claim spent");
+  }
 });
 
 test("a dry run writes no events and starts nothing; the bot switched off reports and touches nothing", async () => {

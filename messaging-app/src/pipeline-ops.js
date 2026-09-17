@@ -29,7 +29,8 @@ export function askFellThrough(item) {
 // Ops that open somewhere rather than change something.
 export function linkFor(key, item) {
   switch (key) {
-    case "open_editor": return item.offerId ? offerEditorUrl(item.offerId) : null;
+    case "open_editor":
+    case "open_offer": return item.offerId ? offerEditorUrl(item.offerId) : null;
     case "open_deals": return item.offerId ? offerEditorUrl(item.offerId, { view: "deals" }) : null;
     default: return null;
   }

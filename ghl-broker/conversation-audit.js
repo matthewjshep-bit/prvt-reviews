@@ -19,6 +19,7 @@ import { workHour } from "./outreach-sweep.js";
 import { nextSendTime } from "./conversation-scheduler.js";
 import { startProactive as defaultStartProactive } from "./reply-agent.js";
 import { sweepHeldUnderwrites } from "./held-underwrites.js";
+import { liveDealHold } from "./conversation-context.js";
 
 export const CURSOR_NAME = "conversationAudit";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -112,6 +113,26 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
     address: f.address || "", offerId: f.offerId || null, source: "sweep", ...extra,
   }).catch(() => ({ inserted: false }));
 
+  // A redraft the reply agent would only stand down from, or that would answer
+  // the wrong words, is Matt's — found out before the claim is spent, and put
+  // on his queue rather than "started" night after night (2026-09-16: Christian
+  // Simonson, under contract; Tim Tilbury, a photo with no text after an
+  // answered text; Julie Leonard, our own email echoed back as inbound).
+  const norm = (t) => String(t || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 80);
+  const redraftIsYours = async (f, latest) => {
+    const hold = await liveDealHold({ store, locationId, contactId: f.contactId, mode: config.routing?.holdOnLiveDeal }).catch(() => null);
+    if (hold) return hold.role === "buyer" ? `a buyer on your live deal at ${hold.address} — the bot stays out` : `${hold.address} is under contract with them — the bot stays out`;
+    if (!latest?.body) return "";
+    if ((Date.parse(latest.at) || 0) < (Date.parse(f.anchorAt) || 0) - 10 * 60000) return "their newest message has no text (a photo or attachment?) — the last one with words was answered";
+    const said = norm(latest.body);
+    if (said.length > 20 && drafts.some((d) => d.contactId === f.contactId && d.status === "sent" && norm(d.reply) === said)) return "their newest message reads as our own text echoed back — look at it in GHL";
+    return "";
+  };
+  const handToMatt = (f, row, why) => {
+    row.status = "yours"; row.reason = why; f.action = null; f.why = why;
+    result.counts.owed += 1; result.counts.queued = Math.max(0, result.counts.queued - 1);
+  };
+
   for (const f of result.findings) {
     if (!f.action) continue;
     // The held sweep already carried out its own findings above.
@@ -151,12 +172,23 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         row.status = c.inserted ? "closed" : "already";
         continue;
       }
+      let latest = null;
+      if (a.type === "redraft") {
+        latest = typeof deps.latestInbound === "function" ? await deps.latestInbound(f.contactId).catch(() => null) : null;
+        const why = await redraftIsYours(f, latest);
+        if (why) { handToMatt(f, row, why); continue; }
+      }
       // Everything that ends in a text is claimed first, so a second audit
       // the same night — or the morning sweep — starts nothing twice.
       const c = await claim(f, "audit_action", { dedupeKey: auditDedupeKey(f), data: { kind: f.kind, action: a.type, why: f.why } });
-      if (!c.inserted) { row.status = "claimed"; continue; }
+      if (!c.inserted) {
+        // Tried on an earlier run and the text is still unanswered: whatever
+        // that attempt came to, it wasn't a reply.
+        if (a.type === "redraft") handToMatt(f, row, "drafting was tried on an earlier run and nothing came of it");
+        else row.status = "claimed";
+        continue;
+      }
       if (a.type === "redraft") {
-        const latest = typeof deps.latestInbound === "function" ? await deps.latestInbound(f.contactId) : null;
         if (!latest?.body) { row.status = "skipped"; row.reason = "no inbound text to answer"; continue; }
         // A tapback ("👍 to 'Sounds good…'") is them closing the thread, not
         // asking anything — two of seven on the first dry run, 2026-09-16.
