@@ -302,6 +302,7 @@ export function buildPipeline({
     }
     if (lane === "ready" && card.ai.made && !(o.sends || []).length) {
       card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon",
+        readyAt: o.autoUnderwrite?.finishedAt || o.createdAt || null,
         title: `${card.address} is priced and nothing has gone out`, why: o.proactive?.skipped?.reason ? String(o.proactive.skipped.reason).slice(0, 140) : "",
         detail: [`cash ${money(o.cashAmount)}`, o.proactive?.skipped?.reason ? `didn't float: ${String(o.proactive.skipped.reason).slice(0, 140)}` : ""].filter(Boolean).join(" · "),
         ops: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "float_realm", label: "Float the number", intent: "secondary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
@@ -371,7 +372,7 @@ export function buildPipeline({
       counts.lanes.underwriting++;
     }
     if (j.status === "error" && ms(j.finishedAt) != null && now - ms(j.finishedAt) < 3600000) {
-      push({ kind: "underwrite_failed", severity: "fyi", jobId: j.id, contactId: j.contactId || null, contactName: j.contactName || "",
+      push({ kind: "underwrite_failed", severity: "fyi", jobId: j.id, error: String(j.error || "").slice(0, 160), askingPrice: Number(j.askingPrice) || 0, contactId: j.contactId || null, contactName: j.contactName || "",
         address: j.address || j.suppliedAddress || "", offerId: j.offerId || null,
         title: `Underwrite failed on ${j.address || j.suppliedAddress || "an address"}`, detail: String(j.error || "").slice(0, 160),
         // The run is still in memory for the hour this row lives, so Retry
@@ -505,11 +506,63 @@ export function buildPipeline({
       ops: [...ops.filter((o) => v.offerId || !NEEDS_OFFER.has(o.key)), { key: "dismiss_promise", label: "Dismiss" }] });
   }
 
+  // Timers: rows the machine clears by itself after a wait (driver.timers).
+  // The row says what happens and when, and sits with the machine's.
+  for (const m of timerMoves(actions, { config, now })) {
+    const a = actions.find((x) => x.id === m.actionId);
+    if (!a) continue;
+    counts.actions.byGroup[a.group]--;
+    a.group = "machine"; a.next = { what: m.what, at: m.due ? null : m.dueAt };
+    counts.actions.byGroup.machine++;
+  }
+
   actions.sort((a, b) => (SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]) || String(a.title).localeCompare(String(b.title)));
   cards.sort((a, b) => b.ageDays - a.ageDays);
 
   const lanes = ALL_LANES.map((l) => ({ ...l, count: counts.lanes[l.key], cardIds: cards.filter((c) => c.lane === l.key).map((c) => c.id) }));
   return { lanes, cards, actions, counts };
+}
+
+/* ---------- timers ---------- */
+
+// A failure that was the network's, not the house's: worth one more try.
+const RETRYABLE_ERROR = /timed?\s?out|timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|socket hang up|\b50[0234]\b|\b429\b|rate.?limit|overloaded/i;
+
+/**
+ * timerMoves(actions, { config, now }) → [{ actionId, kind, move, what, dueAt, due, offerId, jobId, contactId, address }]
+ *
+ * What the machine does by itself about a row, and when (driver.timers, off
+ * by default). One table for the row's "Next:" line and for the runner
+ * (ghl-broker/today-timers.js), so they can never disagree.
+ *
+ *   offer_ready        floated `floatAfterHours` after it was priced. Never
+ *                      when the float was skipped: that row is stuck, with why.
+ *   gone_quiet         marked no response (the row only exists once they have
+ *                      been silent `goneQuietDays` with the ladder off).
+ *   underwrite_failed  retried, once, when the failure was the network's.
+ *
+ * Deliberately not here: `ladder_exhausted` (the follow-up sweep already
+ * marks no response unless the ladder says "stop", and "stop" is a setting,
+ * not an oversight); `blast_no_opens` (the follow-up sweep owns those rungs
+ * and refuses a second run inside 20 hours); closings, hand-offs, deals with
+ * no buyers and failed bands, which are a person's.
+ */
+export function timerMoves(actions = [], { config = null, now = Date.now() } = {}) {
+  const t = config?.driver?.timers;
+  if (!config?.enabled || !t?.enabled) return [];
+  const out = [];
+  for (const a of actions) {
+    const base = { actionId: a.id, kind: a.kind, offerId: a.offerId || null, jobId: a.jobId || null, contactId: a.contactId || null, address: a.address || "" };
+    if (a.kind === "offer_ready" && !a.why && a.offerId) {
+      const dueMs = (ms(a.readyAt) ?? now) + t.floatAfterHours * 3600000;
+      out.push({ ...base, move: "float", what: "floats the number", dueAt: new Date(dueMs).toISOString(), due: dueMs <= now });
+    } else if (a.kind === "gone_quiet" && a.offerId) {
+      out.push({ ...base, move: "mark_no_response", what: "marks it no response on the next pass", dueAt: new Date(now).toISOString(), due: true });
+    } else if (a.kind === "underwrite_failed" && a.contactId && a.address && RETRYABLE_ERROR.test(a.error || "")) {
+      out.push({ ...base, move: "retry_underwrite", what: "retries the underwrite once", dueAt: new Date(now).toISOString(), due: true, askingPrice: a.askingPrice || 0 });
+    }
+  }
+  return out;
 }
 
 /* ---------- placement ---------- */

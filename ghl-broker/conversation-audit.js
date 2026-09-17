@@ -21,6 +21,7 @@ import { startProactive as defaultStartProactive } from "./reply-agent.js";
 import { sweepHeldUnderwrites } from "./held-underwrites.js";
 import { liveDealHold } from "./conversation-context.js";
 import { threadHealth, STOP_LABEL } from "./shared/thread-health.js";
+import { runTodayTimers } from "./today-timers.js";
 
 export const CURSOR_NAME = "conversationAudit";
 // The daytime pass keeps its own cursor: `last` on the night's cursor is what
@@ -255,6 +256,20 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
       row.status = "error"; row.reason = String(e?.message || e).slice(0, 160);
     }
     if (pace > 0) await wait(pace);
+  }
+
+  // The timers ride the daytime pass (today-timers.js): a priced offer nobody
+  // floated, a thread gone quiet, a failed underwrite worth one more try.
+  // A no-op unless driver.timers is on.
+  if (day) {
+    phase("timers");
+    const run = typeof deps.runTodayTimers === "function" ? deps.runTodayTimers : runTodayTimers;
+    try {
+      const t = await run({ client, locationId, saved, store, deps, now });
+      for (const r of t.results || []) acted.push({ contactId: r.contactId, contactName: "", address: "", kind: `timer_${r.kind}`, action: r.move, status: r.status, reason: r.reason || "", jobId: null });
+    } catch (e) {
+      acted.push({ contactId: null, contactName: "", address: "", kind: "timers", action: "run", status: "error", reason: String(e?.message || e).slice(0, 160), jobId: null });
+    }
   }
   return { result, acted, reason: "" };
 }

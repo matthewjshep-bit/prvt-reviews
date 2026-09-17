@@ -503,6 +503,9 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   driver: {
     promises: { enabled: false },
     daytime: { enabled: false, startHour: 9, endHour: 18, everyHours: 2, releaseMinAgeMin: 120, heldSweep: false },
+    // Rows on Today the machine clears by itself after a wait (shared/
+    // pipeline.js timerMoves). They ride the daytime pass, so they need it on.
+    timers: { enabled: false, floatAfterHours: 4, goneQuietDays: 14 },
   },
   // Questions the bot couldn't answer, answered once by the owner on Today
   // (the answer box). Facts, unlike examples: the prompt tells the bot to
@@ -882,6 +885,11 @@ export function normalizeConversationAi(doc, seed = {}) {
           releaseMinAgeMin: int(t.releaseMinAgeMin, DT.releaseMinAgeMin, 30, 720),
           heldSweep: bool(t.heldSweep, DT.heldSweep),
         },
+        timers: (() => {
+          const m = v.timers && typeof v.timers === "object" ? v.timers : {};
+          const TM = D.driver.timers;
+          return { enabled: bool(m.enabled, TM.enabled), floatAfterHours: int(m.floatAfterHours, TM.floatAfterHours, 1, 72), goneQuietDays: int(m.goneQuietDays, TM.goneQuietDays, 7, 90) };
+        })(),
       };
     })(),
     rules: list(d.rules, { max: 40, each: 300 }),

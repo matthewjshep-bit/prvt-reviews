@@ -521,3 +521,39 @@ test("the counts say how many are yours, the machine's and stuck", () => {
   const r = build({ offers: [offer()], drafts: [draft({ id: "d1" }), draft({ id: "d2", status: "scheduled", sendAt })] });
   assert.deepEqual(r.counts.actions.byGroup, { yours: 1, machine: 1, stuck: 0 });
 });
+
+/* ---------- timers: what the machine does about a row, and when ---------- */
+
+const { timerMoves } = await import("./pipeline.js");
+const TIMED = normalizeConversationAi({ enabled: true, driver: { timers: { enabled: true, floatAfterHours: 4, goneQuietDays: 14 } } });
+
+test("a priced offer nobody floated is floated four hours on, but not one whose offer already went out", () => {
+  const fresh = offer({ status: "new", sends: [], createdAt: H(2), autoUnderwrite: { jobId: "j1", held: [], finishedAt: H(2) } });
+  const r1 = build({ config: TIMED, offers: [fresh] });
+  const m1 = timerMoves(r1.actions, { config: TIMED, offers: [fresh], now: NOW });
+  assert.equal(m1[0].move, "float");
+  assert.equal(m1[0].due, false);
+  assert.equal(m1[0].dueAt, new Date(Date.parse(H(2)) + 4 * 3600000).toISOString());
+  assert.match(r1.actions.find((a) => a.kind === "offer_ready").next.what, /floats the number/);
+  const old = { ...fresh, createdAt: H(6), autoUnderwrite: { ...fresh.autoUnderwrite, finishedAt: H(6) } };
+  assert.equal(timerMoves(build({ config: TIMED, offers: [old] }).actions, { config: TIMED, offers: [old], now: NOW })[0].due, true);
+  const paper = { ...old, proactive: { skipped: { kind: "realm_check", reason: "our offer there has already gone out", at: H(5) } } };
+  assert.deepEqual(timerMoves(build({ config: TIMED, offers: [paper] }).actions, { config: TIMED, offers: [paper], now: NOW }), [], "stuck is stuck: a second float would undercut the paper");
+});
+
+test("an offer gone quiet is marked no response, and a failed underwrite is retried once only when the failure was the network's", () => {
+  const noLadder = normalizeConversationAi({ enabled: true, driver: { timers: { enabled: true } } });
+  const quiet = offer({ id: "o2", statusAt: D(40), createdAt: D(41), sends: [{ ts: D(40) }] });
+  const timeout = { id: "j9", contactId: "a1", status: "error", address: "9 Oak St, Kent, WA", error: "stopped early — the comps provider timed out", finishedAt: new Date(NOW - 600000).toISOString() };
+  const noAddress = { id: "j8", contactId: "a1", status: "error", address: "", error: "no property address in the message", finishedAt: new Date(NOW - 600000).toISOString() };
+  const r = build({ config: noLadder, offers: [quiet], jobs: [timeout, noAddress] });
+  const moves = timerMoves(r.actions, { config: noLadder, offers: [quiet], now: NOW });
+  assert.deepEqual(moves.map((m) => [m.kind, m.move, m.due]).sort(), [["gone_quiet", "mark_no_response", true], ["underwrite_failed", "retry_underwrite", true]]);
+});
+
+test("with the timers off there are no moves, and rows say nothing about next", () => {
+  const old = offer({ status: "new", sends: [], createdAt: H(6), autoUnderwrite: { jobId: "j1", held: [], finishedAt: H(6) } });
+  const r = build({ offers: [old] });
+  assert.deepEqual(timerMoves(r.actions, { config: CFG, offers: [old], now: NOW }), []);
+  assert.equal(r.actions.find((a) => a.kind === "offer_ready").next, undefined);
+});

@@ -313,3 +313,13 @@ test("a daytime run that died is retried once it is stale, not before", async ()
   assert.equal(await maybeRunDaytimeDriver({ client: {}, locationId: "LS", saved: DAY_SAVED, store, deps: d, now: ELEVEN + STALE_RUN_MS }), true);
   await settle();
 });
+
+test("the timers ride the daytime pass, and never the night's", async () => {
+  const ran = [];
+  const d = deps({ ghlLastMessages: async () => new Map(), runTodayTimers: async () => { ran.push("timers"); return { results: [{ kind: "offer_ready", move: "float", status: "started", contactId: "c1" }] }; } });
+  const { acted } = await runConversationAudit({ client: {}, locationId: "L", saved: DAY_SAVED, store: fakeStore(), sendsEnabled: true, deps: d, now: ELEVEN, pace: 0, mode: "day" });
+  assert.deepEqual(ran, ["timers"]);
+  assert.ok(acted.some((a) => a.kind === "timer_offer_ready" && a.status === "started"));
+  await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store: fakeStore(), sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  assert.deepEqual(ran, ["timers"], "7pm changes nothing");
+});

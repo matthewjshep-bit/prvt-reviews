@@ -1054,6 +1054,33 @@ night" keeps meaning last night. Weekends are skipped unless
 Today shows its last run above the queue ("Daytime pass last ran 1:05 PM: 2
 started, 1 left alone by the brake"). The Autopilot switchboard has the switch.
 
+### Timers on Today's rows (2026-09-17)
+
+`driver.timers` (off by default; Normal on the dial): `{ enabled,
+floatAfterHours: 4, goneQuietDays: 14 }`. `timerMoves` in shared/pipeline.js is
+the one table: the Today row reads it for its "Next:" line (and moves to "The
+machine is on it"), and `ghl-broker/today-timers.js` carries it out at the end
+of every **daytime pass**, so the timers do nothing while `driver.daytime` is
+off (the switchboard says so).
+
+| Row | What the machine does | Guard |
+|---|---|---|
+| Priced, not floated | floats it `floatAfterHours` after it was priced, through `deps.floatOffer` (their read first, "our offer already went out" still stops it) | asks the brake; never when the float was skipped, because that row is Stuck with why |
+| Gone quiet | marks it no response through `deps.setOfferStatus`, the door the board's button uses (tags, mirror, promise settle all fire) | not braked: it ends a thread, it doesn't push one |
+| Underwrites that failed | one retry, only when the error reads as the network's (a timeout, a 5xx, a rate limit), never "no address" | the underwriter's daily cap; a dry run unless it is live |
+
+Each is claimed first (`audit:timer_float:<offerId>`, `audit:timer_quiet:
+<offerId>`, `audit:timer_uw_retry:<jobId>`), once ever. The file reads no
+environment switch; a test asserts it.
+
+**Left out on purpose.** "Followed up, no reply": the follow-up sweep already
+marks no response when the ladder runs out, unless the ladder is set to
+"stop", and that is a setting, not an oversight. "Blasted, nobody opened it":
+those rungs are the follow-up sweep's, which refuses a second run inside 20
+hours, so a timer would do nothing. "Stage is behind": check the deal's commit
+path first; the row looks like a bug there rather than a job for a timer.
+Closings, hand-offs, deals with nobody on them and failed bands stay yours.
+
 ### Promises — what the machine would do about each one (2026-09-17)
 
 **Why.** Today carried ten "we owe them a number / an answer" rows and every
