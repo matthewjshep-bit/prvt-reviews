@@ -256,6 +256,37 @@ export function priceAgreed(offer) {
 export const priceLocked = (offer) =>
   Boolean(priceAgreed(offer)) && !DEAD_STATUSES.has(effectiveStatus(offer));
 
+/* ---------- heat: which offers are close to a contract ---------- */
+
+// "Hot" is a second axis, like provenance above, and for the same reason: a
+// hot offer is still sent or countered, and the counter band, the follow-up
+// ladder and the audit all read that status. Folding heat into status would
+// mean an offer that got hot stopped being countered.
+//
+//   offer.hot = { at, by: "operator", note }        you flagged it
+//   offer.hot = { off: true, at }                   you cooled it; beats the signals below
+//
+// With neither, heat is derived: the price is agreed (they said our number
+// works, the counter band took theirs) and the offer is still alive. A deal
+// is past hot — it's on the dispo side of the board — and a dead offer is cold.
+const HOT_VIA = {
+  realm_yes: "they said our number works",
+  counter_band: "we took their counter",
+  accepted: "accepted",
+};
+export function offerHeat(offer) {
+  if (!offer || offer.deal) return null;
+  const status = effectiveStatus(offer);
+  if (DEAD_STATUSES.has(status) || status === "accepted") return null;
+  if (offer.hot?.off) return null;
+  if (offer.hot?.at) return { at: offer.hot.at, by: "you", reason: offer.hot.note || "you flagged it" };
+  if (status === "draft") return null;
+  const agreed = priceAgreed(offer);
+  if (agreed) return { at: agreed.at || null, by: "auto", reason: HOT_VIA[agreed.via] || String(agreed.via || "price agreed").replace(/_/g, " "), amount: agreed.amount || 0 };
+  return null;
+}
+export const isHot = (offer) => Boolean(offerHeat(offer));
+
 /**
  * dealOutreachPaused(deal) → { status, name, contactId } | null
  *
@@ -308,6 +339,8 @@ export const OFFER_LIST_FIELDS = [
   // The outcome ledger ({status, ts, note} rows) — a counter with its number
   // is the one thing the Conversation AI needs from it, and it's small.
   "statusHistory", "realm",
+  // Heat (offerHeat): the hand-set flag and the agreed price it is derived from.
+  "hot", "agreed",
   // What the GHL Opportunities mirror last wrote ({ acquisitions, dispositions }),
   // so the reconcile can tell "unchanged" from a lean row.
   "mirror",

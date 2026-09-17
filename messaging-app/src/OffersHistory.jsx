@@ -16,7 +16,7 @@ import React, { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
-  DEAD_STATUSES, OFFER_STATUS, OFFER_STATUS_KEYS, effectiveStatus, isAiGenerated, needsAiReview,
+  DEAD_STATUSES, OFFER_STATUS, OFFER_STATUS_KEYS, effectiveStatus, isAiGenerated, isHot, needsAiReview,
   toListOffer,
 } from "@shared/offer-status.js";
 import {
@@ -73,6 +73,9 @@ function SentBadge({ offer }) {
 // a chip's number always matches what clicking it shows.
 const FILTERS = [
   { key: "all", label: "All", test: () => true },
+  // Close to a contract: the price is agreed, or you flagged it. First after
+  // All because it is the list you open the page for.
+  { key: "hot", label: "🔥 Hot", title: "Close to a contract — the price is agreed, or you flagged it", test: (o) => isHot(o) },
   { key: "unsent", label: "Not sent", test: (o) => !o.deal && effectiveStatus(o) === "new" && o.status !== "draft" },
   { key: "waiting", label: "Awaiting reply", test: (o) => !o.deal && effectiveStatus(o) === "sent" },
   { key: "countered", label: "Countered", test: (o) => !o.deal && effectiveStatus(o) === "countered" },

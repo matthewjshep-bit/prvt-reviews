@@ -370,3 +370,15 @@ test("a pending send_offer on a realm-yes reply is one click from a person", () 
   const auto = build({ offers: [o], drafts: [{ ...d, actions: [{ id: "a2", type: "send_offer", mode: "auto", status: "pending" }] }] });
   assert.equal(auto.actions.filter((a) => a.kind === "handoff").length, 0);
 });
+
+test("a hot offer sits in the Hot lane on the board; the mirror's laneFor still answers with its status lane", async () => {
+  const { buildPipeline, laneFor } = await import("./pipeline.js");
+  const ts = new Date(Date.now() - 86400000).toISOString();
+  const o = { id: "h1", locationId: "L", contactId: "c1", address: "1 Hot St, Tacoma, WA", cashAmount: 400000, status: "countered", statusAt: ts, createdAt: ts, hot: { at: ts, by: "operator", note: "presenting tonight" } };
+  const out = buildPipeline({ offers: [o], drafts: [], events: [], jobs: [], config: {}, contactNames: {}, now: Date.now() });
+  const card = out.cards.find((c) => c.id === "h1");
+  assert.equal(card.lane, "hot");
+  assert.equal(card.under, "countered");
+  assert.equal(out.counts.lanes.hot, 1);
+  assert.equal(laneFor(o).lane, "countered");
+});

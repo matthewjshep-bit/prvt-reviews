@@ -18,6 +18,7 @@
 import {
   effectiveStatus, isExpired, offerExpiresAt, investorStatus, needsAiReview, aiHoldReasons, isAiGenerated,
   DEAD_STATUSES, LIVE_DEAL_STAGES,
+  offerHeat,
 } from "./offer-status.js";
 import { stepLabel, exhausted, normalizeSteps } from "./follow-up.js";
 import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
@@ -38,6 +39,7 @@ export const AGENT_LANES = [
   { key: "floated",      label: "Floated",      hint: "our read or a soft number is out; waiting on theirs" },
   { key: "sent",         label: "Sent",         hint: "the offer is with the agent" },
   { key: "countered",    label: "Countered",    hint: "they came back with a number" },
+  { key: "hot",          label: "Hot",          hint: "close to a contract — the price is agreed, or you flagged it" },
 ];
 export const DISPO_LANES = [
   { key: "under_contract", label: "Under contract", hint: "ours to sell" },
@@ -149,6 +151,11 @@ export function buildPipeline({
 
     const placed = placeOffer(o, { status, aiHeld });
     if (!placed) { counts.hidden.drafts++; continue; }
+    // Heat moves the card on the board only: laneFor (the GHL mirror's
+    // question) still answers with the status lane underneath.
+    const heat = placed.side === "agent" && placed.lane !== "needs_review" ? offerHeat(o) : null;
+    // `lane` stays the status lane for the chips and nudges below; only the
+    // card's place on the board changes.
     const { lane, side, stageSince, deadReason } = placed;
 
     const myDrafts = draftsByOffer.get(o.id) || [];
@@ -161,7 +168,7 @@ export function buildPipeline({
     const expiresInDays = expiresAt ? Math.floor((expiresAt.getTime() - now) / DAY_MS) : null;
 
     const card = {
-      id: o.id, kind: "offer", lane, side, offerId: o.id,
+      id: o.id, kind: "offer", lane: heat ? "hot" : lane, side, offerId: o.id,
       contactId: o.contactId || null, contactName: o.contactName || contactNames[o.contactId] || "",
       address: o.address || "", cashAmount: round(o.cashAmount), askingPrice: round(o.askingPrice),
       status, stageSince, ageDays,
@@ -170,7 +177,9 @@ export function buildPipeline({
       lastInboundAt, silentDays: Math.max(0, Math.floor((now - silentSince) / DAY_MS)),
       expiresAt: expiresAt ? expiresAt.toISOString() : null, expiresInDays, expired,
       deal: null, deadReason: deadReason || null, actionIds: [],
+      hot: heat ? { by: heat.by, reason: heat.reason } : null, under: heat ? placed.lane : null,
     };
+    if (heat) card.chips.push({ key: "hot", label: `hot: ${heat.reason}`, tone: "warn" });
 
     /* chips */
     const ladder = ladders.agent?.ladders?.offer_nudge;
@@ -275,7 +284,7 @@ export function buildPipeline({
       }
     }
 
-    counts.lanes[lane]++;
+    counts.lanes[card.lane]++;
     if (lane === "dead") counts.hidden.dead++;
     if (lane === "closed") counts.hidden.closed++;
     cards.push(card);

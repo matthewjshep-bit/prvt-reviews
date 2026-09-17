@@ -331,8 +331,15 @@ export const deleteOffer = (id) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}?${locq()}`, { method: "DELETE" }).then(j);
 // Record an offer outcome. "accepted" promotes to a deal server-side and comes
 // back with `promoted: true` — the caller navigates to the Deals tab.
+// "Hot" rides the same menu as status but is its own axis (offerHeat), so the
+// two menu keys below go to their own endpoint. Same { offer } back, so every
+// caller patches its copy exactly as it does for a status.
+export const HOT_ON = "__hot_on";
+export const HOT_OFF = "__hot_off";
 export const setOfferStatus = (id, status, note = "") =>
-  post(`/api/offers/${encodeURIComponent(id)}/status`, { status, note }, "PATCH");
+  status === HOT_ON || status === HOT_OFF
+    ? post(`/api/offers/${encodeURIComponent(id)}/hot`, { hot: status === HOT_ON, note }, "PATCH")
+    : post(`/api/offers/${encodeURIComponent(id)}/status`, { status, note }, "PATCH");
 // Bulk outcome for the history selection bar. Returns { results, offers } —
 // per-id so one failure doesn't hide the rest.
 export const setOfferStatusBulk = (ids, status, note = "") =>

@@ -62,7 +62,7 @@ import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../shared/offer-calc.js";
 import {
-  SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isExpired,
+  SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked,
 } from "../shared/offer-status.js";
@@ -3202,6 +3202,29 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
 
       res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Heat: flag an offer as close to a contract, or cool one the signals made
+  // hot. A second axis beside status (shared/offer-status.js offerHeat), so
+  // nothing the status drives changes. Body: { hot: boolean, note? }.
+  router.patch("/:id/hot", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { locationId, client, offer } = ctx;
+      const ts = new Date().toISOString();
+      const want = req.body?.hot !== false;
+      const was = isHot(offer);
+      offer.hot = want ? { at: ts, by: "operator", note: dealStr(req.body?.note, 200) } : { off: true, at: ts };
+      offer.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      if (want !== was && offer.contactId) {
+        await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
+          historyLine(ts, offer.address, want ? "flagged hot — close to a contract" : "no longer hot", dealStr(req.body?.note, 120)),
+          { offerId: offer.id, source: "operator", at: ts }).catch(() => {});
+      }
+      res.json({ ok: true, offer, heat: offerHeat(offer) });
     } catch (err) { fail(res, err); }
   });
 

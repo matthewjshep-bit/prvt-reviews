@@ -323,3 +323,16 @@ test("an agreed price is locked while the offer lives, and free once it's dead",
   assert.equal(priceLocked({ ...band, status: "passed" }), false, "she walked; the next number is a new conversation");
   assert.equal(priceAgreed({ status: "sent", cashAmount: 1, realm: { answer: "no", ts: "x" } }), null);
 });
+
+test("heat is its own axis: an agreed price or your flag makes an offer hot; dead, dealt and cooled offers are not", async () => {
+  const { offerHeat, isHot } = await import("./offer-status.js");
+  const ts = "2026-09-17T18:00:00.000Z";
+  assert.equal(isHot({ id: "a", status: "sent" }), false);
+  assert.equal(offerHeat({ id: "a", status: "sent", cashAmount: 410000, realm: { answer: "yes", ts } }).by, "auto");
+  assert.match(offerHeat({ id: "a", status: "countered", counterBand: { acceptedAt: ts, amount: 800000 } }).reason, /counter/);
+  assert.equal(offerHeat({ id: "a", status: "countered", hot: { at: ts, by: "operator", note: "she's presenting it tonight" } }).reason, "she's presenting it tonight");
+  assert.equal(isHot({ id: "a", status: "draft", hot: { at: ts } }), true, "a draft you flagged is hot");
+  assert.equal(isHot({ id: "a", status: "sent", realm: { answer: "yes", ts }, hot: { off: true, at: ts } }), false, "cooled by hand beats the signal");
+  assert.equal(isHot({ id: "a", status: "passed", hot: { at: ts } }), false);
+  assert.equal(isHot({ id: "a", status: "sent", hot: { at: ts }, deal: { stage: "under_contract" } }), false, "a deal is past hot");
+});

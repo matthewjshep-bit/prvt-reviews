@@ -13,9 +13,10 @@
 
 import React, { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, Loader2, Search, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, Flame, Loader2, Search, X } from "lucide-react";
+import { HOT_ON, HOT_OFF } from "./api.js";
 import {
-  OFFER_STATUS, OFFER_STATUS_KEYS, SETTABLE_STATUSES, effectiveStatus,
+  OFFER_STATUS, OFFER_STATUS_KEYS, SETTABLE_STATUSES, DEAD_STATUSES, effectiveStatus, offerHeat,
 } from "@shared/offer-status.js";
 import { EVENT_LABEL } from "@shared/contact-record.js";
 
@@ -127,6 +128,17 @@ export function AttachWarning({ offer }) {
 // The status pill as a control: click it, pick an outcome. This is the primary
 // verb of the history table, so it sits in the row itself rather than behind an
 // overflow menu — at ten offers a day, an extra click per row is the whole job.
+// The flame beside a status: this offer is close to a contract, and why.
+export function HotPill({ heat }) {
+  if (!heat) return null;
+  return (
+    <span title={`Hot — ${heat.reason}${heat.by === "auto" ? " (set by the conversation)" : ""}`}
+      className="inline-flex items-center gap-0.5 rounded-full bg-orange-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-orange-700">
+      <Flame size={10} aria-hidden="true" /> hot
+    </span>
+  );
+}
+
 export function StatusMenu({ offer, onSelect, busy, onDealNav }) {
   // A promoted offer's outcome is settled; the pill becomes a link to the deal.
   if (offer.deal) {
@@ -145,12 +157,21 @@ export function StatusMenu({ offer, onSelect, busy, onDealNav }) {
     selected: key === current,
     onSelect: () => onSelect?.(key),
   }));
+  // Heat is a flag beside the status, not one of them: a hot offer is still
+  // sent or countered. Dead offers and deals can't be hot, so no item there.
+  const heat = offerHeat(offer);
+  if (!DEAD_STATUSES.has(current) && current !== "accepted") {
+    items.push(heat
+      ? { key: HOT_OFF, label: "Not hot anymore", onSelect: () => onSelect?.(HOT_OFF) }
+      : { key: HOT_ON, label: "🔥 Hot — close to a contract", onSelect: () => onSelect?.(HOT_ON) });
+  }
   return (
     <Menu align="left" label={`Change status (currently ${OFFER_STATUS[current]?.label || current})`}
       items={items}
       trigger={
         <span className="inline-flex items-center gap-0.5">
           {busy ? <Pill label="…" small /> : <StatusPill offer={offer} small />}
+          {heat && !busy && <HotPill heat={heat} />}
           <ChevronDown size={12} className="text-slate-400" aria-hidden="true" />
         </span>
       } />
