@@ -109,6 +109,18 @@ async function withRetry(fn) {
 
 // Overridable so tests can point at a local mock instead of spending real
 // free-tier requests.
+// Where a county's houses actually are, by county FIPS: a circle over the
+// population centre rather than the county's geometric middle (King's is in
+// the Cascades). Counties not listed fall back to the whole-county circle.
+export const METRO_CIRCLES = {
+  "53033": { lat: 47.53, lng: -122.22, radiusMi: 16 },   // King: Seattle, Bellevue, Renton, Kent, Shoreline, Federal Way's north edge
+  "53053": { lat: 47.16, lng: -122.40, radiusMi: 13 },   // Pierce: Tacoma, Lakewood, University Place, Puyallup, Spanaway, Graham, Bonney Lake
+  "53061": { lat: 47.95, lng: -122.18, radiusMi: 14 },   // Snohomish: Everett, Lynnwood, Marysville, Lake Stevens, Mill Creek, Monroe
+  "53035": { lat: 47.60, lng: -122.65, radiusMi: 12 },   // Kitsap: Bremerton, Silverdale, Port Orchard, Poulsbo
+  "53067": { lat: 47.02, lng: -122.87, radiusMi: 12 },   // Thurston: Olympia, Lacey, Tumwater
+  "53063": { lat: 47.66, lng: -117.35, radiusMi: 14 },   // Spokane: Spokane, Spokane Valley, Liberty Lake
+};
+
 const RENTCAST_BASE = process.env.RENTCAST_BASE_URL || "https://api.rentcast.io/v1";
 
 // A 500-listing page of a whole county can take RentCast well past 15s
@@ -284,10 +296,19 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       if (!countyMeta)
         throw Object.assign(new Error(`unknown county "${county}" in ${state} — check the spelling`), { http: 400 });
     }
+    // The sweep asks for the county's metro circle instead (body.metro): the
+    // whole-county circle reaches deep into the neighbours, RentCast doesn't
+    // return nearest-first, and on 2026-09-17 the first 400 listings of the
+    // Pierce circle were all King County — two requests for nothing, on a
+    // query heavy enough that RentCast's gateway 504'd on it. The county-line
+    // filter below still applies; the hand-made Pull keeps the whole county.
+    const circle = (body.metro === true || body.metro === "true") && countyMeta && METRO_CIRCLES[countyMeta.geoid]
+      ? METRO_CIRCLES[countyMeta.geoid]
+      : countyMeta ? { lat: countyMeta.lat, lng: countyMeta.lng, radiusMi: countyMeta.radiusMi } : null;
     const targets = zips.length
       ? zips.map((z) => ({ zipCode: z }))
       : countyMeta
-        ? [{ latitude: String(countyMeta.lat), longitude: String(countyMeta.lng), radius: String(countyMeta.radiusMi) }]
+        ? [{ latitude: String(circle.lat), longitude: String(circle.lng), radius: String(circle.radiusMi) }]
         : city && state
           ? [{ city, state }]
           : null;

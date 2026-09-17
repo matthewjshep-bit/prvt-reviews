@@ -174,6 +174,10 @@ export function pullQuery(oa) {
     ...(oa.maxYearBuilt ? { yearBuilt: `*:${oa.maxYearBuilt}` } : {}),
     ...(oa.maxListPrice ? { maxPrice: oa.maxListPrice } : {}),
     ...(oa.requireDistress ? { distressRule: SWEEP_DISTRESS_RULE } : {}),
+    // The county's population centre, not the whole-county circle (see
+    // METRO_CIRCLES in routes/outreach.js). Part of the query signature, so
+    // the saved page offsets from the old circles start over.
+    metro: true,
   };
 }
 
