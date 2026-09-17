@@ -205,3 +205,22 @@ test("with no offer_sent events the send ledger on the offer counts as a person'
   const s = Object.fromEntries(buildFlow({ ...win, offers }).stages.map((x) => [x.key, x]));
   assert.deepEqual([s.offered.count, s.offered.person], [1, 1]);
 });
+
+test("Offered counts documents that went out, not offers that merely exist", async () => {
+  const { buildFlow } = await import("./flow.js");
+  const now = Date.parse("2026-09-17T20:00:00Z"); const at = "2026-09-17T18:00:00.000Z";
+  const events = [
+    { type: "offer_sent", at, contactId: "c1", offerId: "o1", source: "offer", data: { phrase: "we offered $458,125", amount: 458125 } },          // written at creation
+    { type: "offer_sent", at, contactId: "c2", offerId: "o2", source: "conversation", data: { by: "conversation", channels: ["sms"] } },           // the machine sent it
+    { type: "offer_sent", at, contactId: "c3", offerId: "o3", source: "offer", data: { by: "operator", channels: ["sms", "email"] } },             // you sent it
+  ];
+  const offers = [
+    { id: "o1", contactId: "c1", status: "new", createdAt: at, sends: [] },
+    { id: "o4", contactId: "c4", status: "sent", createdAt: at, sends: [{ ts: at, channels: ["sms"], results: { sms: { ok: true } } }] },         // a send with no timeline row
+  ];
+  const out = buildFlow({ offers, events, drafts: [], jobs: [], now, windowStartMs: now - 86400000, windowEndMs: now });
+  const offered = out.stages.find((s) => s.key === "offered");
+  assert.equal(offered.count, 3);
+  assert.equal(offered.machine, 1);
+  assert.equal(offered.person, 2);
+});

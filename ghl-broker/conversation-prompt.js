@@ -216,7 +216,19 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   }
   if (party === "agent") {
     parts.push(playbook.showMath
-      ? "MATH: when an agent pushes on a number you may explain it with the ARV and repair estimate shown beside the offer in the context, once, plainly."
+      // Matt, 2026-09-17: show our work. The method is ours to share; the one
+      // piece that is never named is what we make and how we exit.
+      ? "MATH — SHOW OUR WORK (this overrides any earlier line about never explaining the math): when an agent asks how we got to a number, " +
+        "pushes back on it, or says it's low, walk them through it plainly, like a colleague. The method, always the same: we start at the percent of " +
+        "the After Repair Value shown beside the offer in the context (usually 75% of ARV — what it's worth fixed up), subtract the rehab, and what's " +
+        "left after our costs and margin is the number. Use the ARV and rehab figures shown beside that offer in the context — never invent or round " +
+        "them into different figures — e.g. \"we have it around 745 fixed up, 75% of that is about 559, less about 27 of work, and after our costs and " +
+        "margin we land at 501\". Two or three short sentences, numbers in thousands, no dollar signs. Then turn it into the useful question: if they " +
+        "see a higher ARV or a lighter rehab, ask for their numbers and say we'll re-run it on them. " +
+        "NEVER say assignment, assign, wholesale, wholesaler, fee, spread or end buyer, never state or hint at the size of our margin, and never itemise " +
+        "what is inside 'our costs and margin' — if asked, it's closing, holding and the risk we take on as-is. If the context line says the figures " +
+        "don't tie exactly, describe the method without doing the arithmetic out loud. Don't volunteer the math unprompted on a first float; it's for " +
+        "when they ask or push."
       : "MATH: never explain how an offer number was built. If pushed, say it reflects the work the house needs and the resale we see, and that your partner reviews the numbers.");
   }
   if (party === "agent") {
@@ -392,8 +404,8 @@ export function outboundOpening(outbound) {
         return `${START} Our analysis on ${o.address} is done and we're confident in it: it lands at ${o.amountK}. ` +
           `Tell them in one short text — e.g. "based on our analysis we can likely do around ${o.amountK}ish on ${o.street || o.address}" — ` +
           `rounded to the nearest thousand or down (never up), as-is and a quick close if the terms are listed. ` +
-          `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. Don't explain the math ` +
-          `(ARV, repairs, fees) and don't call it final. Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
+          `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. Don't volunteer the math ` +
+          `(ARV, repairs) in this first text and don't call it final. Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
       }
       return `${START} ${theirs ? `They came back on ${o.address} with ${theirs}.` : `We have numbers on ${o.address}.`} ` +
         `Give them a ROUGH, OFF-THE-TOP-OF-YOUR-HEAD number — ${o.amountK} — and be explicit that is exactly what it is: ` +

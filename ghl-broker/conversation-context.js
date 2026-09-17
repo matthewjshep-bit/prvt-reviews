@@ -125,7 +125,17 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     if (t.earnestMoney) amounts.add(Math.round(t.earnestMoney));
     const arv = Number(o.arv ?? o.calc?.inputs?.arv) || 0;
     const repairs = Number(o.repairs ?? o.calc?.inputs?.repairs) || 0;
-    if (showMath) { if (arv) amounts.add(arv); if (repairs) amounts.add(repairs); }
+    // Showing our work: the percent of ARV the offer starts from, and the two
+    // stepping stones the bot may say out loud on the way to the number.
+    const pct = Number(o.calc?.settings?.maoPctOfArv) || 0;
+    const atPct = arv && pct ? Math.round(arv * pct / 100) : 0;
+    // What's left between (pct × ARV − rehab) and the offer is our costs and
+    // margin. It's never named; it only has to be plausible as that. A gap
+    // that is negative or huge means the offer was capped or overridden and
+    // the arithmetic shouldn't be walked through.
+    const gap = atPct && amount ? atPct - repairs - amount : 0;
+    const ties = Boolean(atPct && amount) && gap >= 0 && gap <= Math.max(60000, amount * 0.08);
+    if (showMath) { for (const n of [arv, repairs, atPct, atPct && repairs ? atPct - repairs : 0]) if (n > 0) amounts.add(n); }
     const counters = (o.statusHistory || []).filter((h) => h?.status === "countered").slice(-2)
       .map((h) => `countered${h.note ? ` (${String(h.note).slice(0, 60)})` : ""} ${dateWord(h.ts)}`);
     const heat = offerHeat(o);
@@ -139,7 +149,11 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
         : "no amount recorded",
       asking ? `(asking ${fmtMoney(asking)})` : "",
       terms ? `terms: ${terms}` : "",
-      showMath && (arv || repairs) ? `[our math: ARV ${arv ? fmtMoney(arv) : "n/a"}, repairs ${repairs ? fmtMoney(repairs) : "n/a"}]` : "",
+      showMath && (arv || repairs)
+        ? `[our math: ARV ${arv ? fmtMoney(arv) : "n/a"}${atPct ? `; ${pct}% of ARV = ${fmtMoney(atPct)}` : ""}; rehab ${repairs ? fmtMoney(repairs) : "n/a"}` +
+          `${atPct && repairs ? `; less rehab = ${fmtMoney(atPct - repairs)}` : ""}; after our costs and margin = the offer` +
+          `${ties ? "" : " — the figures don't tie exactly (the number was capped or set by hand): describe the method, don't do the arithmetic out loud"}]`
+        : "",
       `— status: ${statusWord(status)}`,
       lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" ? "" : "not sent yet",
       // No expiry date: the offer stands until they answer, and a date here
@@ -261,8 +275,11 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
         "An offer WITH a number that hasn't been sent yet is our underwritten number: when they ask what we can do, " +
         "give it as a rough figure — \"based on our analysis we can likely do around 450ish\" — rounded to the " +
         "nearest thousand or down to a round number (never up), with no dollar sign, and ask whether that works " +
-        "for the seller. A yes means our letter of intent goes over and we ask them to write the official offer on NWMLS forms for us to sign. Don't explain how we got there (ARV, repairs, " +
-        "fees), and don't volunteer it before you have their own read unless they ask. " +
+        "for the seller. A yes means our letter of intent goes over and we ask them to write the official offer on NWMLS forms for us to sign. " +
+        (showMath
+          ? "If they ask how we got there or push on the number, follow the MATH rule (show our work; never our margin or how we exit). "
+          : "Don't explain how we got there (ARV, repairs, fees). ") +
+        "Don't volunteer it before you have their own read unless they ask. " +
         "An offer marked SENT is on paper: if they ask for the number or the terms, restate it " +
         "from this list. It stands until they answer: never say it expired or lapsed, and if they ask whether it's " +
         "still good, it is. Rules against quoting numbers are about numbers we don't have; these we do. Never promise " +

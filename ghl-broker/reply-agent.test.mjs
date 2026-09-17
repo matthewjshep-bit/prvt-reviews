@@ -1354,7 +1354,8 @@ test("'in the realm' notes the offer and tags the agent; the math stays hidden u
   let seen2;
   await startReply({ client, locationId: "LOC", saved: shown, store, contactId: "c1", message: "why so low?", deps: { draft: async (args) => { seen2 = args; return DRAFT; } } });
   await settle();
-  assert.match(seen2.context.text, /\[our math: ARV \$620,000, repairs \$55,000\]/);
+  assert.match(seen2.context.text, /\[our math: ARV \$620,000.*rehab \$55,000.*after our costs and margin = the offer/);
+  assert.doesNotMatch(seen2.context.text, /assign|wholesale|\bfee\b/i, "what we make and how we exit is never in the math line");
   assert.ok(seen2.context.amounts.includes(620000) && seen2.context.amounts.includes(55000));
 });
 

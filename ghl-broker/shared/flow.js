@@ -112,6 +112,8 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   // A reply is the agent's act; the machine's share of the stage is whether
   // the bot answered it on its own.
   const botAnswered = new Set(drafts.filter((d) => d?.status === "sent" && d.autoSent && d.contactId && inWin(ms(d.sentAt || d.updatedAt), a, b)).map((d) => d.contactId));
+  const isRealSend = (e) => Array.isArray(e?.data?.channels) ? e.data.channels.length > 0 : Boolean(e?.data?.by);
+  const sentByEvent = new Set(); // offers whose send is already counted from the timeline
   for (const e of events) {
     const t = ms(e.at);
     if (!inWin(t, a, b)) continue;
@@ -127,7 +129,11 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
         if (e.contactId && !replied.has(e.contactId)) { replied.add(e.contactId); bump("replied", botAnswered.has(e.contactId), feedRow(e, names)); }
         break;
       }
-      case "offer_sent": bump("offered", m, feedRow(e, names)); break;
+      // Only a real send: the row the send itself writes carries its channels
+      // (and who sent it). The "we offered $X" ledger line is written when an
+      // offer is CREATED — counting it made every offer the machine priced and
+      // floated read as "you offered" (2026-09-17: 37 of 69 had never been sent).
+      case "offer_sent": if (isRealSend(e)) { bump("offered", m, feedRow(e, names)); if (e.offerId) sentByEvent.add(e.offerId); } break;
       case "realm_yes": break; // shown on the float's sub-line
       case "deal_promoted": bump("contract", false, feedRow(e, names)); break;
       case "blast_sent": {
@@ -158,8 +164,8 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   let held = 0, clear = 0, realmYes = 0;
   const counteredInWin = (o) => (o.statusHistory || []).some((h) => h.status === "countered" && inWin(ms(h.ts), a, b))
     || (o.counter?.at && inWin(ms(o.counter.at), a, b));
-  const sentInWin = (o) => (o.sends || []).some((s) => inWin(ms(s.ts), a, b));
-  const hasOfferSentEvent = events.some((e) => e.type === "offer_sent");
+  // A send that worked, on the offer's own ledger.
+  const sentInWin = (o) => (o.sends || []).some((s) => inWin(ms(s.ts), a, b) && (!s.results || Object.values(s.results).some((r) => r?.ok)));
   for (const o of offers) {
     if (!o?.id) continue;
     const created = ms(o.createdAt);
@@ -173,7 +179,7 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
     }
     // Sends: the offer's own send ledger, when the timeline has no offer_sent
     // rows (sends from the button write the ledger; the automation writes both).
-    if (!hasOfferSentEvent && sentInWin(o)) {
+    if (!sentByEvent.has(o.id) && sentInWin(o)) {
       const sentAt = (o.sends || []).filter((s) => inWin(ms(s.ts), a, b)).map((s) => s.ts).sort().at(-1);
       bump("offered", false, offerItem(o, sentAt, false));
     }

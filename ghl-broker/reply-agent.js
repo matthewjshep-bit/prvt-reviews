@@ -584,6 +584,12 @@ export function evaluateReplyGates({
   if (channel === "sms" && style?.noLinks && /https?:\/\/|www\./i.test(draft.reply)) {
     flags.push("a link in a text trips carrier spam filters");
   }
+  // Showing our work never means showing how we exit or what we make. The
+  // prompt says so; this is the backstop that holds the text if it slips.
+  if (party === "agent") {
+    const slip = draft.reply.match(/\b(assign(?:ment|ing|ed|s)?|wholesal(?:e|er|ing)|end buyer|our fee|my fee|spread)\b/i);
+    if (slip) flags.push(`the draft says "${slip[0]}" — how we exit and what we make never goes to an agent`);
+  }
   // The two rules that are not judgment calls. A number the other side must
   // never hear — our contract price, our fee — is flagged even if they said
   // it first. And a number that is in neither the record book nor their own
