@@ -20,6 +20,7 @@
 
 import { PARTIES, INTENTS, OUTBOUND_INTENTS, DRAFT_FEEDBACK_LABEL, draftStats } from "./conversation-ai.js";
 import { verdictsIn } from "./graduation.js";
+import { PROMISE_DISMISS_LABEL } from "./promise-resolver.js";
 
 export const COACH_KINDS = ["example", "rule", "instruction", "code_gap"];
 export const COACH_KIND_LABEL = {
@@ -63,9 +64,11 @@ const base = (d) => ({
  *
  * Everything a person or the audit said about the bot's work since `since`.
  * `stats` is draftStats over the graduation window; `audit` is the audit
- * cursor's doc.last; `errors` is store.listAppErrorsSince.
+ * cursor's doc.last; `errors` is store.listAppErrorsSince; `promiseEvents`
+ * are `promise_kept` contact events (an "Owed a number" row dismissed on
+ * Today carries why, and what the bot had said).
  */
-export function gatherSignals({ drafts = [], audit = null, stats = null, errors = [], since, now = Date.now() } = {}) {
+export function gatherSignals({ drafts = [], audit = null, stats = null, errors = [], promiseEvents = [], since, now = Date.now() } = {}) {
   const from = ms(since) || now - 24 * 3600000;
   const recent = drafts.filter((d) => d && ms(when(d)) >= from && ms(when(d)) <= now);
   const newest = (a, b) => ms(when(b)) - ms(when(a));
@@ -78,6 +81,13 @@ export function gatherSignals({ drafts = [], audit = null, stats = null, errors 
     .slice(0, SIGNAL_CAP).map(base);
   const held = recent.filter((d) => d.heldAt && ms(d.heldAt) >= from).sort(newest)
     .slice(0, SIGNAL_CAP).map(base);
+
+  // "Owed a number" rows a person closed by hand, with why. "We didn't owe
+  // anything" more than once is a promise the code keeps misreading.
+  const promiseDismissals = (promiseEvents || [])
+    .filter((e) => e?.type === "promise_kept" && e.data?.by === "dismissed" && e.data?.reason?.code && ms(e.at) >= from && ms(e.at) <= now)
+    .sort((a, b) => ms(b.at) - ms(a.at)).slice(0, SIGNAL_CAP)
+    .map((e) => ({ id: e.data.draftId || null, code: e.data.reason.code, label: PROMISE_DISMISS_LABEL[e.data.reason.code] || e.data.reason.code, note: clip(e.data.reason.note, 300), botWrote: clip(e.data.ourText) }));
 
   // Why the gates stopped a draft, counted: one flag seen nine times is a
   // pattern; nine flags seen once are a Tuesday.
@@ -115,12 +125,12 @@ export function gatherSignals({ drafts = [], audit = null, stats = null, errors 
 
   const errs = (errors || []).slice(0, 15).map((e) => ({ fingerprint: e.fingerprint, area: e.area, message: clip(e.message, 300), count: e.count, context: e.context || {} }));
 
-  const counts = { edits: edits.length, dismissals: dismissals.length, yours: yours.length, held: held.length, blocked: blocked.length, needsHuman: needsHuman.length, weakIntents: weakIntents.length, auditFindings: (audit?.findings || []).length, errors: errs.length };
-  const knownIds = [...new Set([...edits, ...dismissals, ...yours, ...held, ...needsHuman].map((r) => r.id).concat(blocked.flatMap((b) => b.draftIds)))];
+  const counts = { edits: edits.length, dismissals: dismissals.length, yours: yours.length, held: held.length, blocked: blocked.length, needsHuman: needsHuman.length, promiseDismissals: promiseDismissals.length, weakIntents: weakIntents.length, auditFindings: (audit?.findings || []).length, errors: errs.length };
+  const knownIds = [...new Set([...edits, ...dismissals, ...yours, ...held, ...needsHuman, ...promiseDismissals.filter((r) => r.id)].map((r) => r.id).concat(blocked.flatMap((b) => b.draftIds)))];
   // Something a person DID, or something that broke. A quiet day with only
   // audit findings is the audit's business, not a lesson.
-  const empty = !(edits.length || dismissals.length || yours.length || held.length || blocked.length || errs.length || auditErrors.length);
-  return { since: new Date(from).toISOString(), until: new Date(now).toISOString(), edits, dismissals, yours, held, blocked, needsHuman, weakIntents, auditKinds, auditErrors, errors: errs, counts, knownIds, empty };
+  const empty = !(edits.length || dismissals.length || yours.length || held.length || promiseDismissals.length || blocked.length || errs.length || auditErrors.length);
+  return { since: new Date(from).toISOString(), until: new Date(now).toISOString(), edits, dismissals, yours, held, promiseDismissals, blocked, needsHuman, weakIntents, auditKinds, auditErrors, errors: errs, counts, knownIds, empty };
 }
 
 /* ---------- what the model is asked ---------- */
@@ -132,6 +142,8 @@ You may propose four kinds of change:
 - "rule": one short house rule the bot must never break, in the imperative, under 200 characters. Only when the same mistake appears more than once.
 - "instruction": one or two sentences of standing guidance for one party (agent or investor), for judgement calls a rule is too blunt for.
 - "code_gap": something no wording can fix — a bug, a gate that fires wrongly, a missing capability, a repeated runtime error. Give a title, the suspected area, and a one-sentence test that would fail today.
+
+The data may include "promiseDismissals": times the app told the owner "we owe them a number" or "an answer" and the owner closed it by hand. botWrote is the text that was read as a promise. When the reason is "We didn't owe anything" more than once, the app is misreading what the bot says as a promise: that is a code_gap, citing those ids.
 
 Hard limits. Break one and the proposal is thrown away:
 - Never mention a dollar amount, a percentage, a fee, earnest money, what the company may or may not commit to, auto-send, or the counter band. Those are set by hand.

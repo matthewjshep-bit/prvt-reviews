@@ -73,13 +73,14 @@ export async function runCoach({ locationId, saved = {}, store = defaultStore, d
   const config = conversationConfig(saved);
   const from = Math.max(since ? Date.parse(since) || 0 : 0, now - LOOKBACK_MAX_MS) || now - 24 * 3600 * 1000;
   const windowFrom = iso(now - GRADUATION.windowDays * 86400000);
-  const [recent, auditCursor, errors, existing] = await Promise.all([
+  const [recent, auditCursor, errors, existing, promiseEvents] = await Promise.all([
     store.listReplyDrafts(locationId, { since: windowFrom, limit: 2000 }).catch(() => []),
     store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null),
     store.listAppErrorsSince?.(locationId, iso(from)).catch(() => []) || [],
     store.listCoachProposals?.(locationId, { since: iso(now - 120 * 86400000), limit: 500 }).catch(() => []) || [],
+    store.listContactEventsSince?.(locationId, iso(from), { types: ["promise_kept"], limit: 500 }).catch(() => []) || [],
   ]);
-  const signals = gatherSignals({ drafts: recent, audit: auditCursor?.doc?.last || null, stats: draftStats(recent), errors, since: iso(from), now });
+  const signals = gatherSignals({ drafts: recent, audit: auditCursor?.doc?.last || null, stats: draftStats(recent), errors, promiseEvents, since: iso(from), now });
   const out = { since: signals.since, until: signals.until, counts: signals.counts, summary: "", proposed: 0, kept: [], dropped: [], skipped: "", dryRun };
   if (signals.empty) return { ...out, skipped: "nothing to learn from — nobody edited, dismissed or broke anything" };
 

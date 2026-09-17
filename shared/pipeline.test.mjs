@@ -382,3 +382,42 @@ test("a hot offer sits in the Hot lane on the board; the mirror's laneFor still 
   assert.equal(out.counts.lanes.hot, 1);
   assert.equal(laneFor(o).lane, "countered");
 });
+
+/* ---------- promises: the row says what the machine would do ---------- */
+
+const H = (n) => new Date(NOW - n * 3600000).toISOString();
+const owed = (over = {}, data = {}) => ({
+  type: "promise_owed", contactId: "a1", at: H(5), address: "12 Elm St, Renton, WA",
+  data: { what: "number", text: "I'll run it by underwriting and get back to you with a number.", draftId: "d0", ...data }, ...over,
+});
+const promiseRow = (r) => r.actions.find((a) => a.kind === "promise_owed");
+
+test("an owed-a-number row offers Send the number when the offer is priced", () => {
+  const r = build({ offers: [offer({ status: "new", sends: [] })], events: [owed()] });
+  const row = promiseRow(r);
+  assert.equal(row.move, "send_number");
+  assert.equal(row.offerId, "o1");
+  assert.deepEqual(row.ops.map((o) => o.key), ["float_take", "float_realm", "dismiss_promise"]);
+});
+
+test("a promise we ended with a question to them is not on Today", () => {
+  const r = build({ events: [owed({}, { text: "Fair enough. Is the seller showing any flexibility on price at this point?" })] });
+  assert.equal(promiseRow(r), undefined);
+  assert.equal(r.counts.actions.now, 0);
+});
+
+test("a held underwrite their numbers would clear offers Re-run, and one nobody can clear offers Open and fix", () => {
+  const heldOffer = offer({ id: "h1", status: "draft", cashAmount: null, sends: [], autoUnderwrite: { held: ["only 1 priced comps — the price proxy needs 6"] } });
+  const rerun = promiseRow(build({ offers: [heldOffer], events: [owed()], heldTriageByOffer: { h1: { action: "rerun", needs: ["value"], reason: "run it on their numbers" } } }));
+  assert.deepEqual(rerun.ops.map((o) => o.key), ["rerun_held", "open_editor", "dismiss_promise"]);
+  const yours = promiseRow(build({ offers: [heldOffer], events: [owed()] }));
+  assert.equal(yours.move, "yours");
+  assert.deepEqual(yours.ops.map((o) => o.key), ["open_editor", "dismiss_promise"]);
+  assert.match(yours.detail, /only 1 priced comps/);
+});
+
+test("an owed answer we have since given is not on Today", () => {
+  const sent = draft({ id: "d9", status: "sent", inbound: "what about referrals?", reply: "We pay a referral at closing.", createdAt: H(2), sentAt: H(2) });
+  const r = build({ events: [owed({}, { what: "answer", text: "Let me check with my partner and get back to you." })], sentDrafts: [sent] });
+  assert.equal(promiseRow(r), undefined);
+});

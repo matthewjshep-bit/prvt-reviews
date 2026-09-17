@@ -26,3 +26,15 @@ test("the queue groups what the pipeline builder emits and shows each op", () =>
 test("an empty queue says so", () => {
   expect(renderToStaticMarkup(<ActionQueue actions={[]} />)).toContain("Nothing is waiting on you.");
 });
+
+test("an owed number on a priced offer offers to send it, not only Dismiss", () => {
+  const now = Date.parse("2026-09-20T17:00:00Z");
+  const offers = [{ id: "o1", contactId: "c1", address: "12 Elm St, Renton, WA", cashAmount: 410000, status: "new", createdAt: "2026-09-20T12:00:00Z", sends: [] }];
+  const events = [{ contactId: "c1", type: "promise_owed", at: "2026-09-20T13:00:00Z", address: "12 Elm St, Renton, WA", data: { what: "number", text: "I'll get back to you with a number." } }];
+  const r = buildPipeline({ offers, events, now });
+  const html = renderToStaticMarkup(<ActionQueue actions={r.actions} draftsById={{}} sendsEnabled onDone={() => {}} />);
+  expect(html).toContain("Owed a number");
+  expect(html).toContain("Float our read");
+  expect(html).toContain("the number is ready and hasn&#x27;t gone out");
+  expect(html).toContain("Dismiss");
+});

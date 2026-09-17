@@ -9,6 +9,7 @@ import React, { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { ACTION_KINDS } from "@shared/pipeline.js";
 import { AUDIT_ACTION_KINDS } from "@shared/conversation-audit.js";
+import { PROMISE_DISMISS_REASONS, PROMISE_DISMISS_LABEL } from "@shared/promise-resolver.js";
 import { BTN, BTN_DANGER, BTN_PRIMARY, Pill } from "./ui.jsx";
 import { DraftRow } from "./ConversationOutbox.jsx";
 import ContactLink, { useOpenContact } from "./ContactLink.jsx";
@@ -49,6 +50,42 @@ function OpButton({ op, item, onDone }) {
   );
 }
 
+// Dismissing an owed promise asks why in one tap, the way a dismissed draft
+// does: the nightly coach reads the answer. A second press skips the why.
+function DismissPromise({ op, item, onDone }) {
+  const [askWhy, setAskWhy] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  async function go(code = "") {
+    setBusy(true); setNote("");
+    try {
+      const r = await runOp(op.key, item, code ? { reason: { code } } : null);
+      setNote(describeResult(op.key, r));
+      onDone?.();
+    } catch (e) {
+      setNote(e.message || "That didn't work.");
+    } finally { setBusy(false); }
+  }
+  return (
+    <span className="inline-flex flex-col items-end gap-1">
+      <button type="button" className={BTN} disabled={busy} onClick={() => (askWhy ? go() : setAskWhy(true))}>
+        {busy ? "…" : askWhy ? "Just dismiss" : op.label}
+      </button>
+      {askWhy && (
+        <span className="flex max-w-xs flex-wrap justify-end gap-1" role="group" aria-label="Why dismiss it">
+          {PROMISE_DISMISS_REASONS.map((code) => (
+            <button key={code} type="button" disabled={busy} onClick={() => go(code)}
+              className="rounded-full border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-50">
+              {PROMISE_DISMISS_LABEL[code]}
+            </button>
+          ))}
+        </span>
+      )}
+      {note && <span className="text-[11px] text-slate-500">{note}</span>}
+    </span>
+  );
+}
+
 function ActionRow({ item, onDone, onShowDraft, draft, sendsEnabled, serverOffsetMs }) {
   const sev = SEV[item.severity] || SEV.fyi;
   const drawer = useOpenContact();
@@ -83,6 +120,8 @@ function ActionRow({ item, onDone, onShowDraft, draft, sendsEnabled, serverOffse
           ? <button key={op.key} type="button" className={BTN} onClick={() => onShowDraft?.(item.draftId)}>{op.label}</button>
           : OPENERS[op.key]
           ? <button key={op.key} type="button" className={op.intent === "primary" ? BTN_PRIMARY : BTN} onClick={OPENERS[op.key]}>{showing && op.key === "open_outbox" ? "Hide the draft" : op.label}</button>
+          : op.key === "dismiss_promise"
+          ? <DismissPromise key={op.key} op={op} item={item} onDone={onDone} />
           : <OpButton key={op.key} op={op} item={item} onDone={onDone} />)}
       </div>
       {showing && draft && (

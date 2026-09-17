@@ -197,3 +197,18 @@ test("the model is shown the current guidance and the day's verdicts, not the bo
   assert.match(ctx, /"youSent": "Fair\."/);
   assert.doesNotMatch(ctx, /knownIds/);
 });
+
+test("the coach is shown why a promise row was dismissed", () => {
+  const kept = (over = {}, data = {}) => ({ type: "promise_kept", contactId: "c1", at: new Date(NOW - 3600000).toISOString(),
+    data: { by: "dismissed", reason: { code: "not_a_promise", note: "we asked them" }, ourText: "Is the seller flexible on price?", draftId: "d7", ...data }, ...over });
+  const s = gatherSignals({ now: NOW, drafts: [], promiseEvents: [
+    kept(),
+    kept({ contactId: "c2" }, { by: "offer_sent", reason: undefined }),          // kept by numbers: nothing to learn
+    kept({ contactId: "c3", at: new Date(NOW - 5 * 86400000).toISOString() }),   // before the window
+  ] });
+  assert.equal(s.promiseDismissals.length, 1);
+  assert.deepEqual(s.promiseDismissals[0], { id: "d7", code: "not_a_promise", label: "We didn't owe anything", note: "we asked them", botWrote: "Is the seller flexible on price?" });
+  assert.equal(s.counts.promiseDismissals, 1);
+  assert.equal(s.empty, false, "a dismissed promise is something a person did");
+  assert.ok(s.knownIds.includes("d7"), "so a proposal may cite the draft that made the promise");
+});

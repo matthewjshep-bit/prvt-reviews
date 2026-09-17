@@ -21,7 +21,7 @@
 // day. Daily arrays are dense (one zero-filled entry per day in the window) so
 // chart components never handle gaps.
 
-import { settlePromise } from "../promise-sweep.js";
+import { settlePromise, heldTriageForPromises } from "../promise-sweep.js";
 import express from "express";
 import { store } from "../store.js";
 import {
@@ -57,7 +57,7 @@ const PIPELINE_EVENT_TYPES = [
   "investor_evaluating", "investor_committed", "investor_passed",
   "follow_up_sent", "text_summary", "call_summary",
   "outreach_sent",
-  "promise_owed", "promise_kept",
+  "promise_made", "promise_owed", "promise_kept",
 ];
 
 const DAY_MS = 86400000;
@@ -387,7 +387,11 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const contactNames = {};
       for (const i of investors) if (i?.contactId && i.name) contactNames[i.contactId] = i.name;
       const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
-      const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, now, eventsLimit: PIPELINE_EVENT_LIMIT });
+      // What the machine would do about each owed promise: the answers we
+      // have since given, and the triage of any held underwrite in the way.
+      const sentDrafts = recentDrafts.filter((d) => d?.status === "sent");
+      const heldTriageByOffer = await heldTriageForPromises({ store, locationId, offers, events, config, now }).catch(() => ({}));
+      const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT });
       // Last night's audit: the rows that are Matt's join the queue under
       // "From last night"; the rest of the result rides along for the card.
       const auditCursor = await store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null);
@@ -426,13 +430,14 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   });
   // "Owed a number" rows you've dealt with some other way (a call, a no
   // that never reached the offer): close the promise so the row leaves Today
-  // and the promise sweep stops counting it. Body: { contactId, address? }.
+  // and the promise sweep stops counting it. Body: { contactId, address?,
+  // reason?: { code, note } } — the reason is what the nightly coach reads.
   router.post("/promises/dismiss", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
       const contactId = String(req.body?.contactId || "").slice(0, 64);
       if (!contactId) return res.status(400).json({ error: "contactId is required" });
-      const r = await settlePromise({ store, locationId, contactId, address: String(req.body?.address || "").slice(0, 200), by: "dismissed" });
+      const r = await settlePromise({ store, locationId, contactId, address: String(req.body?.address || "").slice(0, 200), by: "dismissed", reason: req.body?.reason || null });
       res.json({ ok: true, ...r });
     } catch (err) { fail(res, err); }
   });

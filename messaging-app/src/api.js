@@ -242,6 +242,10 @@ export const cancelUnderwrite = (jobId) =>
 // Same contact, same house, again — replacing whatever draft the last try left.
 export const retryUnderwrite = (jobId) =>
   post(`/api/offers/automations/underwrite/retry`, { jobId });
+// The same, for a held draft whose run is long out of memory: by contact and
+// house, replacing the draft it left.
+export const rerunHeldUnderwrite = ({ contactId, address, askingPrice = 0, offerId }) =>
+  post(`/api/offers/automations/underwrite/retry`, { contactId, address, askingPrice, replaceOfferId: offerId });
 
 /* ---------- Conversation AI (inbound text -> drafted or auto-sent reply) ---------- */
 // Drafts are started by a GHL workflow webhook, not from here. The outbox
@@ -500,8 +504,9 @@ export const getDashboardPipeline = () =>
 export const getDashboardDigest = (hours = 24) =>
   fetch(`${API_BASE}/api/dashboard/digest?${locq()}&hours=${hours}`).then(j);
 export const getDashboardAudit = () => fetch(`${API_BASE}/api/dashboard/audit?${locq()}`).then(j);
-// Close an "Owed a number" row by hand.
-export const dismissPromise = (contactId, address = "") => post(`/api/dashboard/promises/dismiss`, { contactId, address });
+// Close an "Owed a number" row by hand. `reason` is { code, note } from
+// PROMISE_DISMISS_REASONS; the nightly coach reads it.
+export const dismissPromise = (contactId, address = "", reason = null) => post(`/api/dashboard/promises/dismiss`, { contactId, address, reason });
 export const runDashboardAudit = ({ dryRun = true } = {}) => post(`/api/dashboard/audit/run`, { dryRun });
 // The nightly coach: what it proposed from the day's edits and dismissals.
 export const getCoach = () => fetch(`${API_BASE}/api/dashboard/coach?${locq()}`).then(j);

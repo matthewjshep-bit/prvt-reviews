@@ -26,11 +26,13 @@ import { conversationConfig, startProactive } from "./reply-agent.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { addressKey } from "./shared/us-address.js";
 import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
+import { triageHeldUnderwrite } from "./shared/held-underwrites.js";
+import { openPromises, resolvePromise, normalizePromiseDismissal } from "./shared/promise-resolver.js";
 
 const HOUR_MS = 3600000;
 
 /**
- * settlePromise({ store, locationId, contactId, address, by, offerId, now }) → { settled }
+ * settlePromise({ store, locationId, contactId, address, by, reason, offerId, now }) → { settled }
  *
  * A promise closed by a person rather than by numbers going out: the offer on
  * that house was marked sent / passed / we passed, or the Today row was
@@ -38,9 +40,10 @@ const HOUR_MS = 3600000;
  * "Owed a number" row clears and the sweep never texts about it again.
  * With an `address`, only a promise about that house (or about no house in
  * particular) is settled — a status on one offer doesn't close what we owe
- * the same agent on another.
+ * the same agent on another. A dismissal's `reason` ({ code, note }) rides on
+ * the event with what we had said, which is what the nightly coach reads.
  */
-export async function settlePromise({ store, locationId, contactId, address = "", by = "operator", offerId = null, now = Date.now() }) {
+export async function settlePromise({ store, locationId, contactId, address = "", by = "operator", reason = null, offerId = null, now = Date.now() }) {
   if (!contactId) return { settled: false };
   const events = await store.listContactEventsSince(locationId, new Date(now - PROMISE_WINDOW_HOURS * HOUR_MS).toISOString(), {
     types: ["promise_made", "promise_owed", "promise_kept"], limit: 5000,
@@ -53,12 +56,40 @@ export async function settlePromise({ store, locationId, contactId, address = ""
   const street = (a) => addressKey(String(a || "").split(",")[0]);
   if (key && !open.some((e) => !e.address || addressKey(e.address) === key || street(e.address) === street(address))) return { settled: false };
   const at = new Date(now).toISOString();
+  const why = normalizePromiseDismissal(reason);
+  const said = [...open].reverse().find((e) => e.data?.text) || open.at(-1);
   const r = await recordEvent({
     store, locationId, contactId, party: "agent", type: "promise_kept", at, address: address || open.at(-1).address || "",
-    offerId, source: "operator", dedupeKey: `promise_kept:${contactId}:${by}:${at}`, data: { by },
+    offerId, source: "operator", dedupeKey: `promise_kept:${contactId}:${by}:${at}`,
+    data: { by, ...(why ? { reason: why, ourText: String(said.data?.text || "").slice(0, 200), draftId: said.data?.draftId || null } : {}) },
   });
   return { settled: Boolean(r?.inserted) };
 }
+/**
+ * heldTriageForPromises({ store, locationId, offers, events, config, now }) → { offerId: verdict }
+ *
+ * For Today: the held-underwrite triage for every held draft an owed promise
+ * is waiting on, from local reads only (the contact's timeline and drafts).
+ * GHL is not asked, so the triage's tag and stage checks are skipped here;
+ * the nightly sweep makes those calls before anything is actually done.
+ */
+export async function heldTriageForPromises({ store, locationId, offers = [], events = [], config = null, now = Date.now() }) {
+  const out = {};
+  const botOffTags = (config?.routing?.botOffTags || []).map((t) => String(t).toLowerCase());
+  for (const p of openPromises(events, { now, windowHours: PROMISE_WINDOW_HOURS })) {
+    if (!p.owedAt) continue;
+    const siblings = offers.filter((o) => o?.contactId === p.contactId);
+    const held = siblings.filter((o) => effectiveStatus(o) === "draft" && aiHoldReasons(o).length);
+    if (!held.length) continue;
+    const [timeline, drafts] = await Promise.all([
+      store.listContactEvents(locationId, p.contactId, { limit: 300 }).catch(() => []),
+      store.listReplyDrafts(locationId, { contactId: p.contactId, limit: 40 }).catch(() => []),
+    ]);
+    for (const o of held) out[o.id] = triageHeldUnderwrite({ offer: o, siblings, events: timeline, drafts, contact: null, opportunities: [], botOffTags, now });
+  }
+  return out;
+}
+
 // Older than this, the thread has moved on and a "we owe you" would be odd.
 export const PROMISE_WINDOW_HOURS = 72;
 // An underwrite still running past the due time gets this long to land.
@@ -121,6 +152,18 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
       });
       out.kept++;
       out.results.push({ contactId, address, status: "kept" });
+      continue;
+    }
+    // Never owed: our text ended by asking THEM something, or it was an
+    // answer we have since given. No "we owe you" text, no Today row, and a
+    // row already there clears.
+    const mine = openPromises(list, { now, windowHours: PROMISE_WINDOW_HOURS })[0] || null;
+    if (mine && resolvePromise({ promise: mine, drafts: sent, now }).move === "not_owed") {
+      await recordEvent({
+        store, locationId, contactId, party: "agent", type: "promise_kept", at: iso(now), address,
+        source: "conversation", dedupeKey: `promise_kept:${contactId}:${since}`, data: { by: "not_owed" },
+      });
+      out.results.push({ contactId, address, status: "not_owed" });
       continue;
     }
     // Already said so once. Today carries it from here; no second text.

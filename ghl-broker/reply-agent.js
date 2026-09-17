@@ -65,6 +65,7 @@ import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail, smsUnsubscribed, DND_TAG,
 } from "./ghl.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
+import { endsWithQuestionToThem } from "./shared/promise-resolver.js";
 import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller, unansweredCheckIn } from "./shared/follow-up.js";
 import { resolveParty } from "./conversation-party.js";
 import {
@@ -3207,7 +3208,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         store, locationId, contactId: d.contactId, party: "agent", type: "promise_made", at: ts,
         address: d.propertyAddress || d.outbound?.address || "", source: "conversation", ref: d.id,
         dedupeKey: `promise_made:${d.id}`,
-        data: { what, draftId: d.id, dueAt: new Date(Date.parse(ts) + PROMISE_DUE_HOURS * 3600000).toISOString(), text: body.slice(0, 200) },
+        data: { what, draftId: d.id, dueAt: new Date(Date.parse(ts) + PROMISE_DUE_HOURS * 3600000).toISOString(), text: body.slice(0, 200), asksThem: endsWithQuestionToThem(body) },
       }).catch(() => {});
     }
   }

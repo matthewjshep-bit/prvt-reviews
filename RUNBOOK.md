@@ -978,7 +978,8 @@ that produced no draft row at all. Every finding names ONE existing mechanism:
   (`by: "audit"`) so the morning tick sends it (`retryPendingOfferSends`
   honours that without the clean-underwrite switch). Never sends at night.
 - **Still owed a number** — the promise sweep already texted once; the audit
-  never texts twice. Past two days with no word it books a morning check-in;
+  never texts twice. (What the machine would do about each one, and the rows
+  that are never owed: "Promises", below.) Past two days with no word it books a morning check-in;
   under, a Today row (which is what keeps it visible past the queue's 3-day drop).
 - **Counters nobody moved on** (48h, no re-quote/band/decline) → re-quote on
   the agent's numbers when re-quoting is on and a take exists; else yours,
@@ -1014,6 +1015,55 @@ off it reports and touches nothing. `dryRun` analyses and writes nothing.
 on a clock / need you, with Run now), the queue group "From last night", and
 `GET /api/dashboard/audit` (`last`, `run`, `tries`, `failed`); `POST
 /api/dashboard/audit/run { dryRun }` runs it by hand. Cursor `conversationAudit`.
+
+### Promises — what the machine would do about each one (2026-09-17)
+
+**Why.** Today carried ten "we owe them a number / an answer" rows and every
+one offered a single button, Dismiss. Some were never owed (our text ended by
+asking THEM something), one had a priced offer nobody had floated, several had
+an underwrite held on thin comps that the agent's own numbers would clear.
+
+**What it is.** `shared/promise-resolver.js`, pure. `openPromises(events)` is
+the one derivation of "what is open for this contact"; `resolvePromise` picks
+one move, in this order:
+
+| Move | When | The Today row offers |
+|---|---|---|
+| `not_owed` | an owed ANSWER we have since given (a sent reply to something they wrote, not small talk, not another "I'll get back to you"); or our text ended with a real question to them ("sound good?" does not count) | no row |
+| `send_number` | a priced open offer on that house, nothing sent or floated since the promise | Float our read / Float the number |
+| `wait` | an underwrite for them is queued or running, or the triage says we already asked | nothing but Dismiss |
+| `rerun` | held, and they have given the numbers that clear it (`triageHeldUnderwrite`) | Re-run on their numbers / Open and fix |
+| `ask_numbers` | held on a value or work hold, never asked | Open and fix |
+| `start_underwrite` | a promised number, a full address, and nothing ever ran | nothing yet |
+| `yours` | anything else, with the reason | Open and fix when there is a draft |
+
+A promised number is only ever kept by a number: "ok thanks" and "sounds good"
+back never closes it.
+
+**What changed in behaviour.** The promise sweep settles a `not_owed` promise
+(`promise_kept`, `by: "not_owed"`) before it writes `promise_owed` or texts
+`promise_due`, so nobody we asked a question gets "we owe you", and a row
+already on Today for one clears by itself on the next tick. It only removes a
+send, so it has no switch. Nothing else acts yet: the moves are shown, and a
+person presses the button. The resolver acting by itself is a later phase,
+behind `driver.promises` (off by default).
+
+**The send records the ending.** `promise_made` keeps only the first 200
+characters of what we said, so a long text's ending is unknown. `sendReplyDraft`
+now writes `data.asksThem` from the whole body; for older events a text that
+fills the 200 characters is never read as ending in a question.
+
+**Dismiss asks why.** One tap: Handled it by phone / We didn't owe anything /
+They went quiet / Not a deal / Something else (`PROMISE_DISMISS_REASONS`); a
+second press on the button skips it. The reason rides on the `promise_kept`
+event with what we had said, and the nightly coach reads it as
+`promiseDismissals`. "We didn't owe anything" more than once is a `code_gap`:
+`detectPromise` is misreading something.
+
+**Today's read is local.** `heldTriageForPromises` (promise-sweep.js) runs the
+held triage from the contact's timeline and drafts only. GHL is not asked, so
+the tag and stage checks are skipped on the row; the nightly sweep makes them
+before anything is actually done.
 
 ### The nightly coach (2026-09-17)
 

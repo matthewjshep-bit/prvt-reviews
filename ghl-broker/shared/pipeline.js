@@ -26,6 +26,7 @@ import {
 import { stepLabel, exhausted, normalizeSteps } from "./follow-up.js";
 import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
 import { addressKey } from "./contact-record.js";
+import { openPromises, resolvePromise } from "./promise-resolver.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -81,6 +82,25 @@ export const ACTION_KINDS = [
 const INVESTOR_RANK = { committed: 7, soft_commit: 6, passed: 5, evaluating: 4, opened: 3, sent: 2, blasted: 1 };
 const INVESTOR_ORDER = ["committed", "soft_commit", "evaluating", "opened", "sent", "blasted", "passed"];
 
+// What a promise row offers for each of the resolver's moves. `wait`,
+// `ask_numbers` and `start_underwrite` have no button yet: the row says so.
+const PROMISE_OPS = {
+  send_number: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "float_realm", label: "Float the number", intent: "secondary" }],
+  rerun: [{ key: "rerun_held", label: "Re-run on their numbers", intent: "primary" }, { key: "open_editor", label: "Open and fix", intent: "secondary" }],
+  ask_numbers: [{ key: "open_editor", label: "Open and fix", intent: "secondary" }],
+  wait: [],
+  start_underwrite: [],
+  yours: [{ key: "open_editor", label: "Open and fix", intent: "primary" }],
+};
+const NEEDS_OFFER = new Set(["float_take", "float_realm", "rerun_held", "open_editor"]);
+const PROMISE_MOVE_LABEL = {
+  send_number: "the number is ready and hasn't gone out",
+  rerun: "they gave us their numbers",
+  ask_numbers: "needs their value or repairs",
+  wait: "waiting",
+  start_underwrite: "no underwrite has run on this house",
+};
+
 /* ---------- the builder ---------- */
 
 /**
@@ -93,10 +113,16 @@ const INVESTOR_ORDER = ["committed", "soft_commit", "evaluating", "opened", "sen
  *   jobs          auto-underwrite jobs (in memory; queued|running make cards)
  *   config        the normalized Conversation AI config (for ladder steps)
  *   contactNames  { contactId: name } for buyers not on the deal record
+ *   sentDrafts    recent sent replies, so an owed answer we have since given
+ *                 leaves the queue (shared/promise-resolver.js)
+ *   heldTriageByOffer  { offerId: triageHeldUnderwrite() verdict } for held
+ *                 drafts a promise is waiting on — the route reads what the
+ *                 triage needs so this stays pure
  *   eventsLimit   what the route asked for, so we can say if the read filled
  */
 export function buildPipeline({
   offers = [], drafts = [], events = [], jobs = [], config = null, contactNames = {},
+  sentDrafts = [], heldTriageByOffer = {},
   now = Date.now(), eventsLimit = 0,
 } = {}) {
   const ladders = {
@@ -396,18 +422,30 @@ export function buildPipeline({
 
   /* --- promises we made and haven't kept (promise-sweep.js) --- */
   // Owed until a promise_kept for that contact lands after it; three days on,
-  // the thread has moved and the row would only be noise.
-  for (const e of events) {
-    if (e?.type !== "promise_owed" || !e.contactId || now - (ms(e.at) ?? now) > 3 * DAY_MS) continue;
-    if (events.some((k) => k?.type === "promise_kept" && k.contactId === e.contactId && String(k.at) >= String(e.at))) continue;
-    const who = contactNames[e.contactId] || e.data?.contactName || "An agent";
-    push({ id: `promise_owed:${e.contactId}:${e.at}`, kind: "promise_owed", severity: "now", contactId: e.contactId, contactName: contactNames[e.contactId] || "",
-      address: e.address || "", offerId: e.offerId || null,
-      title: `${who}: we owe them ${e.data?.what === "number" ? "a number" : "an answer"}${e.address ? ` on ${String(e.address).split(",")[0]}` : ""}`,
-      detail: [e.data?.heldReason ? `underwrite held: ${e.data.heldReason}` : "", e.data?.text ? `we said "${String(e.data.text).slice(0, 90)}"` : ""].filter(Boolean).join(" · "),
+  // the thread has moved and the row would only be noise. Each row carries
+  // the machine's own next move (promise-resolver.js) and the button for it;
+  // a promise that was never owed is not a row at all.
+  for (const p of openPromises(events, { now })) {
+    if (!p.owedAt) continue;
+    const mine = byContact.get(p.contactId) || [];
+    const v = resolvePromise({
+      promise: p, offers: mine, jobs,
+      drafts: [...sentDrafts, ...drafts].filter((d) => d?.contactId === p.contactId),
+      heldTriageByOffer, now,
+    });
+    if (v.move === "not_owed") continue;
+    const who = contactNames[p.contactId] || "An agent";
+    const heldReason = v.offerId && ["rerun", "ask_numbers", "yours", "wait"].includes(v.move) && mine.some((o) => o.id === v.offerId && aiHoldReasons(o).length)
+      ? String(aiHoldReasons(mine.find((o) => o.id === v.offerId))[0]).split(" — ")[0].slice(0, 120) : "";
+    const ops = PROMISE_OPS[v.move] || [];
+    push({ id: `promise_owed:${p.contactId}:${p.owedAt}`, kind: "promise_owed", severity: "now", contactId: p.contactId, contactName: contactNames[p.contactId] || "",
+      address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0,
+      title: `${who}: we owe them ${p.what === "number" ? "a number" : "an answer"}${p.address ? ` on ${String(p.address).split(",")[0]}` : ""}`,
+      detail: [PROMISE_MOVE_LABEL[v.move] || "", heldReason ? `underwrite held: ${heldReason}` : "", p.text ? `we said "${String(p.text).slice(0, 90)}"` : ""].filter(Boolean).join(" · "),
       // Settled some other way (a call, a no that never reached the offer):
-      // the row can be closed by hand. Marking the offer sent / passed closes it too.
-      ops: [{ key: "dismiss_promise", label: "Dismiss" }] });
+      // the row can always be closed by hand, with why. Marking the offer
+      // sent / passed closes it too.
+      ops: [...ops.filter((o) => v.offerId || !NEEDS_OFFER.has(o.key)), { key: "dismiss_promise", label: "Dismiss" }] });
   }
 
   actions.sort((a, b) => (SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]) || String(a.title).localeCompare(String(b.title)));

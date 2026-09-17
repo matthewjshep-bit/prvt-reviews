@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runPromiseSweep, maybeRunPromiseSweep, localHour } from "./promise-sweep.js";
+import { runPromiseSweep, maybeRunPromiseSweep, settlePromise, localHour } from "./promise-sweep.js";
 import { detectPromise, PROMISE_DUE_HOURS } from "./shared/follow-up.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { buildPipeline } from "./shared/pipeline.js";
@@ -287,4 +287,37 @@ test("settlePromise: an outcome on that house closes what we owed; another house
   assert.ok(rows.some((e) => e.type === "promise_kept" && e.data?.by === "offer_we_passed"));
   const again = await settlePromise({ store, locationId: "L", contactId: "c1", by: "dismissed", now: now + 1000 });
   assert.equal(again.settled, false, "nothing left open");
+});
+
+/* ---------- promises that were never owed ---------- */
+
+test("we asked them a question, so no 'we owe you' text goes out", async () => {
+  const asked = promise(5, { data: { what: "answer", draftId: "d5", dueAt: at(1), text: "Fair enough, I'll get back to you. Is the seller showing any flexibility on price at this point?" } });
+  const store = fakeStore({ events: [asked] });
+  const s = starter();
+  const r = await runPromiseSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, listUnderwriteJobs: () => [] } });
+  assert.equal(s.calls.length, 0, "nothing texted");
+  assert.equal(r.owed, 0);
+  assert.equal(store.events.some((e) => e.type === "promise_owed"), false, "and nothing lands on Today");
+  const kept = store.events.find((e) => e.type === "promise_kept");
+  assert.equal(kept?.data?.by, "not_owed");
+});
+
+test("a row already on Today for a promise that was never owed clears by itself", async () => {
+  const asked = promise(9, { data: { what: "answer", draftId: "d9", dueAt: at(5), text: "Got it. What did the seller say about the roof?" } });
+  const owed = { id: "w1", contactId: "c1", type: "promise_owed", at: at(4), address: asked.address, dedupeKey: "promise_owed:c1:x", data: { what: "answer", text: asked.data.text } };
+  const store = fakeStore({ events: [asked, owed] });
+  const s = starter();
+  await runPromiseSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, listUnderwriteJobs: () => [] } });
+  assert.equal(s.calls.length, 0);
+  assert.equal(store.events.find((e) => e.type === "promise_kept")?.data?.by, "not_owed");
+});
+
+test("a dismissal keeps its reason", async () => {
+  const store = fakeStore({ events: [promise(9), { id: "w1", contactId: "c1", type: "promise_owed", at: at(4), address: promise(9).address, dedupeKey: "promise_owed:c1:y", data: { what: "number" } }] });
+  const r = await settlePromise({ store, locationId: "LOC", contactId: "c1", by: "dismissed", reason: { code: "handled_by_call", note: "talked Tuesday" }, now: NOW });
+  assert.equal(r.settled, true);
+  const kept = store.events.find((e) => e.type === "promise_kept");
+  assert.deepEqual(kept.data.reason, { code: "handled_by_call", note: "talked Tuesday" });
+  assert.match(kept.data.ourText, /underwriting team/, "with what we said, so the coach can see what was misread");
 });
