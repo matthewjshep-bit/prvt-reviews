@@ -80,11 +80,14 @@ test("an unknown status is refused", async () => {
   assert.match(r.json.error, /status must be one of/);
 });
 
-test("a draft has no outcome to record", async () => {
+test("a draft can be closed out by hand, but not tracked as a deal", async () => {
   const o = await mkOffer({ status: "draft" });
-  const r = await req("PATCH", `/api/offers/${o.id}/status`, { status: "passed" });
-  assert.equal(r.status, 400);
+  const no = await req("PATCH", `/api/offers/${o.id}/status`, { status: "accepted" });
+  assert.equal(no.status, 400);
   assert.equal((await store.getOffer(o.id)).status, "draft");
+  const r = await req("PATCH", `/api/offers/${o.id}/status`, { status: "we_passed" });
+  assert.equal(r.status, 200);
+  assert.equal((await store.getOffer(o.id)).status, "we_passed");
 });
 
 test("an offer from another location is invisible", async () => {

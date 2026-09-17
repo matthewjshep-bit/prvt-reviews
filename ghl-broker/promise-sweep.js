@@ -28,6 +28,37 @@ import { addressKey } from "./shared/us-address.js";
 import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
 
 const HOUR_MS = 3600000;
+
+/**
+ * settlePromise({ store, locationId, contactId, address, by, offerId, now }) → { settled }
+ *
+ * A promise closed by a person rather than by numbers going out: the offer on
+ * that house was marked sent / passed / we passed, or the Today row was
+ * dismissed. Writes the same `promise_kept` the sweep writes, so Today's
+ * "Owed a number" row clears and the sweep never texts about it again.
+ * With an `address`, only a promise about that house (or about no house in
+ * particular) is settled — a status on one offer doesn't close what we owe
+ * the same agent on another.
+ */
+export async function settlePromise({ store, locationId, contactId, address = "", by = "operator", offerId = null, now = Date.now() }) {
+  if (!contactId) return { settled: false };
+  const events = await store.listContactEventsSince(locationId, new Date(now - PROMISE_WINDOW_HOURS * HOUR_MS).toISOString(), {
+    types: ["promise_made", "promise_owed", "promise_kept"], limit: 5000,
+  }).catch(() => []);
+  const list = events.filter((e) => e?.contactId === contactId).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  const lastKept = list.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
+  const open = list.filter((e) => e.type !== "promise_kept" && String(e.at) >= lastKept);
+  if (!open.length) return { settled: false };
+  const key = address ? addressKey(address) : "";
+  const street = (a) => addressKey(String(a || "").split(",")[0]);
+  if (key && !open.some((e) => !e.address || addressKey(e.address) === key || street(e.address) === street(address))) return { settled: false };
+  const at = new Date(now).toISOString();
+  const r = await recordEvent({
+    store, locationId, contactId, party: "agent", type: "promise_kept", at, address: address || open.at(-1).address || "",
+    offerId, source: "operator", dedupeKey: `promise_kept:${contactId}:${by}:${at}`, data: { by },
+  });
+  return { settled: Boolean(r?.inserted) };
+}
 // Older than this, the thread has moved on and a "we owe you" would be odd.
 export const PROMISE_WINDOW_HOURS = 72;
 // An underwrite still running past the due time gets this long to land.

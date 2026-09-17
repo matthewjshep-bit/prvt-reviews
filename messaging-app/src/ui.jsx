@@ -138,7 +138,8 @@ export function StatusMenu({ offer, onSelect, busy, onDealNav }) {
     );
   }
   const current = effectiveStatus(offer);
-  const items = SETTABLE_STATUSES.map((key) => ({
+  // A draft has no documents yet, so it can't become a deal from here.
+  const items = SETTABLE_STATUSES.filter((key) => !(offer.status === "draft" && key === "accepted")).map((key) => ({
     key,
     label: key === "accepted" ? "Accepted → track as deal" : OFFER_STATUS[key].label,
     selected: key === current,

@@ -54,6 +54,9 @@
 //   DELETE /api/offers/:id/deal/investors/:contactId    unlink
 //   POST   /api/offers/deals/sync-investor-tags   backfill the on-deal GHL tag for all deal investors
 
+import { settlePromise } from "../promise-sweep.js";
+// An outcome that means we no longer owe them a number on that house.
+const PROMISE_SETTLING_STATUSES = new Set(["sent", "countered", "no_response", "passed", "we_passed"]);
 import express from "express";
 import crypto from "node:crypto";
 import { store } from "../store.js";
@@ -1989,8 +1992,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       };
       if (id) {
         const prev = await store.getOffer(id);
-        if (prev && prev.locationId === locationId && prev.status === "draft") {
-          const full = { ...prev, ...record, id, createdAt: prev.createdAt };
+        // A draft given an outcome by hand (sent, passed, we passed) is still
+        // this form's row: keep the outcome, don't fork a second draft.
+        const wasDraft = prev?.status === "draft" || (prev?.draft && !prev.deal && (prev.statusHistory || []).length > 0 && !prev.documents && !prev.pdfUrl);
+        if (prev && prev.locationId === locationId && wasDraft) {
+          const full = { ...prev, ...record, status: prev.status, id, createdAt: prev.createdAt };
           await store.updateOffer(id, full);
           return res.json({ ok: true, offer: full });
         }
@@ -3165,8 +3171,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!SETTABLE_STATUSES.includes(status)) {
         return res.status(400).json({ error: `status must be one of: ${SETTABLE_STATUSES.join(", ")}` });
       }
-      if (offer.status === "draft") {
-        return res.status(400).json({ error: "drafts have no outcome — create the offer first" });
+      // A draft can be closed out or marked sent by hand (a held underwrite
+      // you answered yourself, a house you're walking from); it can't be
+      // accepted — a deal needs the offer's documents.
+      if (offer.status === "draft" && status === "accepted") {
+        return res.status(400).json({ error: "create the offer first — a draft can't be tracked as a deal" });
       }
       const note = dealStr(req.body?.note, 200);
 
@@ -3187,6 +3196,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), note),
         { type: `offer_${status}`, offerId: offer.id, source: "operator", at: ts });
       await syncAgentOfferTag(client, locationId, offer.contactId);
+      // What we owed them on this house is settled by the outcome.
+      if (PROMISE_SETTLING_STATUSES.has(status)) {
+        await settlePromise({ store, locationId, contactId: offer.contactId, address: offer.address, offerId: offer.id, by: `offer_${status}` }).catch(() => {});
+      }
 
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
@@ -3215,10 +3228,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         try {
           const offer = await store.getOffer(id);
           if (!offer || offer.locationId !== locationId) throw new Error("offer not found");
-          if (offer.status === "draft") throw new Error("drafts have no outcome");
           if (offer.deal) throw new Error("already a deal — change its stage instead");
           recordStatus(offer, status, note, ts);
           await store.updateOffer(id, offer);
+          if (PROMISE_SETTLING_STATUSES.has(status)) {
+            await settlePromise({ store, locationId, contactId: offer.contactId, address: offer.address, offerId: offer.id, by: `offer_${status}` }).catch(() => {});
+          }
           offers.push(offer);
           if (offer.contactId) touchedContacts.add(offer.contactId);
           await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",

@@ -951,6 +951,9 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const liveOffer = fromOffer
     ? agentOffers.find((o) => o.id === fromOffer.id) || fromOffer
     : null;
+  // The status control also shows on a draft: a held underwrite you answered
+  // yourself, or a house you're walking from, is closed out right here.
+  const statusOffer = liveOffer || (restore?.id ? agentOffers.find((o) => o.id === restore.id) || restore : null);
 
   // Money fields format with thousands separators as you type; the calc
   // engine strips $ , and spaces, so the formatted string feeds it directly.
@@ -1453,11 +1456,11 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               passing" arrives while you're mid-revision on the next number —
               recording it shouldn't cost you a trip to the Offers tab and the
               form you had open. */}
-          {liveOffer && (
+          {statusOffer && (
             <span className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-sm">
               <span className="text-xs font-medium text-slate-500">Status</span>
-              <StatusMenu offer={liveOffer} busy={statusBusy} onDealNav={onDeal}
-                onSelect={(status) => changeOfferStatus(liveOffer, status)} />
+              <StatusMenu offer={statusOffer} busy={statusBusy} onDealNav={onDeal}
+                onSelect={(status) => changeOfferStatus(statusOffer, status)} />
             </span>
           )}
           {/* The editor shows the working copy; this is the offer as it went

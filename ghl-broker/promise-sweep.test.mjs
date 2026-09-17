@@ -267,3 +267,24 @@ test("a time they named ('in a few weeks') is the first check-in", async () => {
   assert.equal((await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW + 5 * DAY + HOUR, deps: s })).sent, 1);
   assert.equal(s.calls[0].subject.phrase, "a few weeks");
 });
+
+test("settlePromise: an outcome on that house closes what we owed; another house's promise stays open", async () => {
+  const { settlePromise } = await import("./promise-sweep.js");
+  const now = Date.now();
+  const rows = [
+    { contactId: "c1", type: "promise_made", at: new Date(now - 5 * 3600000).toISOString(), address: "13025 Ambaum Blvd SW, Burien, WA 98146" },
+    { contactId: "c1", type: "promise_owed", at: new Date(now - 2 * 3600000).toISOString(), address: "13025 Ambaum Blvd SW, Burien, WA 98146" },
+  ];
+  const store = {
+    async listContactEventsSince() { return rows; },
+    async appendContactEvents(_l, contactId, add) { for (const r of add) rows.push({ ...r, contactId }); return { inserted: add.length, skipped: 0 }; },
+    async getContactProfile() { return null; }, async upsertContactProfile() { return {}; },
+  };
+  const other = await settlePromise({ store, locationId: "L", contactId: "c1", address: "4207 S Bateman St, Seattle, WA 98118", by: "offer_we_passed", now });
+  assert.equal(other.settled, false);
+  const hit = await settlePromise({ store, locationId: "L", contactId: "c1", address: "13025 Ambaum Blvd SW", by: "offer_we_passed", now });
+  assert.equal(hit.settled, true);
+  assert.ok(rows.some((e) => e.type === "promise_kept" && e.data?.by === "offer_we_passed"));
+  const again = await settlePromise({ store, locationId: "L", contactId: "c1", by: "dismissed", now: now + 1000 });
+  assert.equal(again.settled, false, "nothing left open");
+});

@@ -492,6 +492,8 @@ export const getDashboardPipeline = () =>
 export const getDashboardDigest = (hours = 24) =>
   fetch(`${API_BASE}/api/dashboard/digest?${locq()}&hours=${hours}`).then(j);
 export const getDashboardAudit = () => fetch(`${API_BASE}/api/dashboard/audit?${locq()}`).then(j);
+// Close an "Owed a number" row by hand.
+export const dismissPromise = (contactId, address = "") => post(`/api/dashboard/promises/dismiss`, { contactId, address });
 export const runDashboardAudit = ({ dryRun = true } = {}) => post(`/api/dashboard/audit/run`, { dryRun });
 export const floatOffer = (id, kind) =>
   post(`/api/offers/${encodeURIComponent(id)}/float`, { kind });

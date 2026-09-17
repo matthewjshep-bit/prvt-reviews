@@ -393,7 +393,9 @@ export function buildPipeline({
       address: e.address || "", offerId: e.offerId || null,
       title: `${who}: we owe them ${e.data?.what === "number" ? "a number" : "an answer"}${e.address ? ` on ${String(e.address).split(",")[0]}` : ""}`,
       detail: [e.data?.heldReason ? `underwrite held: ${e.data.heldReason}` : "", e.data?.text ? `we said "${String(e.data.text).slice(0, 90)}"` : ""].filter(Boolean).join(" · "),
-      ops: [] });
+      // Settled some other way (a call, a no that never reached the offer):
+      // the row can be closed by hand. Marking the offer sent / passed closes it too.
+      ops: [{ key: "dismiss_promise", label: "Dismiss" }] });
   }
 
   actions.sort((a, b) => (SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]) || String(a.title).localeCompare(String(b.title)));

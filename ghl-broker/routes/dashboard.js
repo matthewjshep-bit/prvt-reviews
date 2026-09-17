@@ -21,6 +21,7 @@
 // day. Daily arrays are dense (one zero-filled entry per day in the window) so
 // chart components never handle gaps.
 
+import { settlePromise } from "../promise-sweep.js";
 import express from "express";
 import { store } from "../store.js";
 import {
@@ -420,6 +421,18 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         lastRunAt: cursor?.at || null, run: cursor?.doc?.run || null, last: cursor?.doc?.last || null,
         tries: Number(cursor?.doc?.tries) || 0, failed: Boolean(cursor?.doc?.failed), error: cursor?.doc?.error || null,
         job: publicAuditJob(getAuditJob(locationId)) });
+    } catch (err) { fail(res, err); }
+  });
+  // "Owed a number" rows you've dealt with some other way (a call, a no
+  // that never reached the offer): close the promise so the row leaves Today
+  // and the promise sweep stops counting it. Body: { contactId, address? }.
+  router.post("/promises/dismiss", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const contactId = String(req.body?.contactId || "").slice(0, 64);
+      if (!contactId) return res.status(400).json({ error: "contactId is required" });
+      const r = await settlePromise({ store, locationId, contactId, address: String(req.body?.address || "").slice(0, 200), by: "dismissed" });
+      res.json({ ok: true, ...r });
     } catch (err) { fail(res, err); }
   });
   router.post("/audit/run", async (req, res) => {

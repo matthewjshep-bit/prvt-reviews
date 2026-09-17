@@ -7,7 +7,7 @@
 // after any of them.
 
 import {
-  applyDraftAction, deleteOffer, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
+  applyDraftAction, deleteOffer, dismissPromise, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
   runFollowUps, setOfferStatus, updateDeal,
 } from "./api.js";
 import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL } from "@shared/post-mortem.js";
@@ -61,6 +61,7 @@ export async function runOp(key, item) {
     case "match_investors":    return matchInvestorsToDeal(item.offerId);
     case "preview_follow_ups": return getFollowUps(true);
     case "run_follow_ups":     return runFollowUps(false);
+    case "dismiss_promise":    return dismissPromise(item.contactId, item.address);
     default: throw new Error(`no such op: ${key}`);
   }
 }
@@ -78,6 +79,7 @@ export function describeResult(key, r) {
     const n = (r.matches || r.investors || []).length;
     return n ? `${n} buyer${n === 1 ? "" : "s"} fit — open the deal to add them.` : "No buyers fit this one yet.";
   }
+  if (key === "dismiss_promise") return r.settled ? "Cleared." : "Already cleared.";
   if (key === "apply") return r.action?.detail || "Done.";
   return "Done.";
 }
