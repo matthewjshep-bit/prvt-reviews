@@ -154,3 +154,21 @@ test("a fresh settings document is custom (bot on, everything drafts), and every
 test("autonomyPlan rejects an unknown mode", () => {
   assert.throws(() => autonomyPlan("yolo"), /unknown autonomy mode/);
 });
+
+/* ---------- the driver (2026-09-17) ---------- */
+
+test("the promise driver is off until Normal, and the dial turns it on and off", () => {
+  assert.equal(normalizeConversationAi({}).driver.promises.enabled, false, "new automation ships off");
+  for (const [mode, want] of [["off", false], ["cautious", false], ["normal", true], ["full", true]]) {
+    assert.equal(applyAutonomy(starter(), mode).conversationAi.driver.promises.enabled, want, mode);
+  }
+});
+
+test("a location at Normal before the driver shipped reads Custom until Normal is pressed again, and the driver is off", () => {
+  const before = applyAutonomy(starter(), "normal");
+  delete before.conversationAi.driver;                     // the blob as it was saved last week
+  assert.equal(normalizeConversationAi(before.conversationAi).driver.promises.enabled, false);
+  assert.equal(detectAutonomy(before), "custom");
+  assert.deepEqual(autonomyDiff(before, "normal"), ["driver.promises"]);
+  assert.equal(detectAutonomy(applyAutonomy(before, "normal")), "normal");
+});

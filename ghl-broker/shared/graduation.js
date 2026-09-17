@@ -124,6 +124,11 @@ export function autopilotSummary({ config = {}, sendsEnabled = false, underwrite
   const mr = mirror || {};
   out.push(sw("mirror", "GHL Opportunities mirror", mr.enabled && (mr.acquisitions?.pipelineId || mr.dispositions?.pipelineId) ? "on" : "off",
     mr.enabled ? `${[mr.acquisitions?.pipelineName || (mr.acquisitions?.pipelineId ? "acquisitions" : ""), mr.dispositions?.pipelineName || (mr.dispositions?.pipelineId ? "dispositions" : "")].filter(Boolean).join(" + ") || "no pipeline mapped"}` : "GHL's pipeline board stays blank", "broker"));
+  // The driver (2026-09-17): what the machine does about a promise itself
+  // instead of putting a row on Today.
+  const dr = config.driver?.promises?.enabled;
+  out.push(sw("driver:promises", "Keeping promised numbers", dr && config.enabled && sendsEnabled ? "on" : dr ? "drafting" : "off",
+    dr ? "floats a number that is ready, asks for the numbers that clear a hold, re-runs on the ones they gave" : "an owed number waits on Today for you", "broker"));
   const bk = config.booking || {};
   out.push(sw("booking", "Booking calls on the calendar", bk.enabled && config.enabled && sendsEnabled ? "on" : bk.enabled ? "drafting" : "off",
     bk.enabled ? `${bk.calendarName || bk.calendarId || "no calendar picked"} · offers ${bk.slotsToOffer} times` : "'let's talk Thursday' is handed to you", "broker"));

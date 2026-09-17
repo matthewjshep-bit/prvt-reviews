@@ -321,3 +321,30 @@ test("a dismissal keeps its reason", async () => {
   assert.deepEqual(kept.data.reason, { code: "handled_by_call", note: "talked Tuesday" });
   assert.match(kept.data.ourText, /underwriting team/, "with what we said, so the coach can see what was misread");
 });
+
+/* ---------- the driver goes first ---------- */
+
+test("the driver already moved on a promise, so no 'still working on it' text goes out, but Today still knows", async () => {
+  const p = promise(5);
+  const claim = { id: "a1", contactId: "c1", type: "audit_action", at: at(0.2), address: p.address, dedupeKey: `audit:promise_send_number:c1:${p.at}`, data: { kind: "promise_send_number" } };
+  const store = fakeStore({ events: [p, claim] });
+  const s = starter();
+  const r = await runPromiseSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, listUnderwriteJobs: () => [] } });
+  assert.equal(s.calls.length, 0, "one voice at a time");
+  assert.equal(r.owed, 1);
+  assert.ok(store.events.some((e) => e.type === "promise_owed"), "the row still reaches Today, where it reads as waiting");
+});
+
+test("with the driver switched on, the tick drives before it sweeps", async () => {
+  const on = { ...SAVED, conversationAi: normalizeConversationAi({ ...SAVED.conversationAi, driver: { promises: { enabled: true } } }) };
+  const offers = [{ id: "o1", locationId: "LOC", contactId: "c1", address: promise(5).address, status: "new", cashAmount: 400000, sends: [], createdAt: at(1) }];
+  const store = fakeStore({ events: [promise(5)], offers });
+  store.listContactEvents = async (_l, contactId) => store.events.filter((e) => e.contactId === contactId);
+  const s = starter();
+  const floats = [];
+  const r = await maybeRunPromiseSweep({ locationId: "LOC", saved: on, store, now: NOW, sendsEnabled: true,
+    deps: { ...s, listUnderwriteJobs: () => [], floatOffer: async (a) => { floats.push(a); return { skipped: null, job: { id: "jf" } }; } } });
+  assert.deepEqual(floats, [{ offerId: "o1" }]);
+  assert.equal(s.calls.length, 0, "the number went; 'still working on it' did not");
+  assert.equal(r.driven, 1);
+});

@@ -20,6 +20,9 @@ import { detectPromise } from "./follow-up.js";
 const HOUR_MS = 3600000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 
+// Older than this, the thread has moved on and a "we owe you" would be odd.
+export const PROMISE_WINDOW_HOURS = 72;
+
 export const PROMISE_MOVES = ["send_number", "start_underwrite", "ask_numbers", "rerun", "wait", "not_owed", "yours"];
 
 // promise_made keeps the first 200 characters of what we said
@@ -53,7 +56,7 @@ export function endsWithQuestionToThem(text = "") {
  * `since` is the earliest open promise, `owedAt` when the sweep said so.
  * The same derivation the sweep, settlePromise and Today each did by hand.
  */
-export function openPromises(events = [], { now = Date.now(), windowHours = 72 } = {}) {
+export function openPromises(events = [], { now = Date.now(), windowHours = PROMISE_WINDOW_HOURS } = {}) {
   const floor = now - windowHours * HOUR_MS;
   const byContact = new Map();
   for (const e of events) {

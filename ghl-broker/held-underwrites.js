@@ -34,6 +34,55 @@ const wait = (msec) => new Promise((r) => setTimeout(r, msec));
 export const KIND_OF = { drop: "held_junk", retire: "held_over", rerun: "held_rerun", ask: "held_ask", yours: "held_yours", wait: null };
 export const ACTION_OF = { drop: "drop_draft", retire: "retire_draft", rerun: "rerun_held", ask: "ask_take" };
 
+// The finding a triage verdict becomes. Its id is the claim key, so the
+// nightly sweep and the promise driver (promise-resolver.js) can never both
+// ask the same agent about the same hold, or re-run on the same numbers twice.
+export function heldFinding(o, t, now = Date.now()) {
+  const kind = KIND_OF[t.action];
+  const f = {
+    kind, severity: t.action === "yours" || t.action === "ask" || t.action === "rerun" ? "soon" : "fyi",
+    contactId: o.contactId || "", contactName: o.contactName || "", party: "agent", address: o.address || "", offerId: o.id,
+    why: t.reason, anchorAt: t.anchorAt, dueAt: iso(now), evidence: { held: t.held, needs: t.needs || [] },
+    action: ACTION_OF[t.action] ? { type: ACTION_OF[t.action], ...(t.status ? { status: t.status } : {}), ...(t.needs ? { needs: t.needs } : {}) } : null,
+  };
+  f.id = auditDedupeKey(f);
+  return f;
+}
+
+/**
+ * carryOutHeldVerdict({ client, locationId, saved, store, sendsEnabled, deps, offer, triage, now })
+ *   → { status: "started"|"queued"|"claimed"|"skipped", reason, jobId }
+ *
+ * The two verdicts that text or spend: `ask` (one take_ask for the missing
+ * piece) and `rerun` (the underwriter again, on their numbers). Claimed first,
+ * keyed on the thing it answers: the hold for an ask, their newest number for
+ * a re-run.
+ */
+export async function carryOutHeldVerdict({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, offer: o, triage: t, now = Date.now() }) {
+  if (t?.action !== "rerun" && t?.action !== "ask") return { status: "skipped", reason: `nothing to carry out for "${t?.action}"`, jobId: null };
+  const f = heldFinding(o, t, now);
+  const contactId = o.contactId || "";
+  const c = await recordEvent({
+    store, locationId, contactId, party: "agent", type: "audit_action", at: iso(now), address: o.address || "", offerId: o.id,
+    source: "sweep", dedupeKey: f.id, data: { kind: f.kind, action: f.action.type, why: t.reason, needs: t.needs || [] },
+  }).catch(() => ({ inserted: false }));
+  if (!c.inserted) return { status: "claimed", reason: "", jobId: null };
+  if (t.action === "rerun") {
+    if (typeof deps.startUnderwrite !== "function") return { status: "skipped", reason: "the underwriter is not wired", jobId: null };
+    const r = await deps.startUnderwrite({ contactId, message: "", address: o.address, askingPrice: t.askingPrice || 0, replaceOfferId: o.id });
+    if (r?.skipped) return { status: "skipped", reason: r.skipped, jobId: null };
+    return { status: r?.queued ? "queued" : "started", reason: "", jobId: r?.job?.id || null };
+  }
+  const start = typeof deps.startProactive === "function" ? deps.startProactive : defaultStartProactive;
+  const full = (await store.getOffer?.(o.id).catch(() => null)) || o;
+  const r = await start({
+    client, locationId, saved, store, contactId, kind: "take_ask", offer: full,
+    subject: { address: o.address, heldReason: t.heldReason, needs: t.needs || ["value", "work"] }, sendsEnabled, deps,
+  });
+  if (r?.skipped) return { status: "skipped", reason: r.skipped, jobId: null };
+  return { status: "started", reason: "", jobId: r?.job?.id || null };
+}
+
 /**
  * sweepHeldUnderwrites({ client, locationId, saved, store, sendsEnabled, deps, now, dryRun, pace })
  *   → { findings, acted, counts, reason }
@@ -93,13 +142,7 @@ export async function sweepHeldUnderwrites({
       const t = triageHeldUnderwrite({ offer: o, siblings, events, drafts, contact, opportunities, botOffTags, now });
       const kind = KIND_OF[t.action];
       if (t.action === "wait") { counts.waiting++; continue; }
-      const f = {
-        kind, severity: t.action === "yours" || t.action === "ask" || t.action === "rerun" ? "soon" : "fyi",
-        contactId, contactName: o.contactName || "", party: "agent", address: o.address || "", offerId: o.id,
-        why: t.reason, anchorAt: t.anchorAt, dueAt: iso(now), evidence: { held: t.held, needs: t.needs || [] },
-        action: ACTION_OF[t.action] ? { type: ACTION_OF[t.action], ...(t.status ? { status: t.status } : {}), ...(t.needs ? { needs: t.needs } : {}) } : null,
-      };
-      f.id = auditDedupeKey(f);
+      const f = heldFinding(o, t, now);
       findings.push(f);
       if (t.action === "yours") { counts.yours++; continue; }
       if (!may) continue;
@@ -127,26 +170,12 @@ export async function sweepHeldUnderwrites({
           if (contactId) await createContactNote(client, contactId, { body: note }).catch(() => {});
           row.status = "retired"; counts.retired++; closed++;
         } else {
-          // A text or a run: claimed first, keyed on the thing it answers (the
-          // hold for an ask, their newest number for a re-run).
-          const c = await recordEvent({
-            store, locationId, contactId, party: "agent", type: "audit_action", at: iso(now), address: o.address || "", offerId: o.id,
-            source: "sweep", dedupeKey: f.id, data: { kind, action: f.action.type, why: t.reason, needs: t.needs || [] },
-          }).catch(() => ({ inserted: false }));
-          if (!c.inserted) { row.status = "claimed"; continue; }
-          if (t.action === "rerun") {
-            if (typeof deps.startUnderwrite !== "function") { row.status = "skipped"; row.reason = "the underwriter is not wired"; continue; }
-            const r = await deps.startUnderwrite({ contactId, message: "", address: o.address, askingPrice: t.askingPrice || 0, replaceOfferId: o.id });
-            if (r?.skipped) { row.status = "skipped"; row.reason = r.skipped; }
-            else { row.jobId = r?.job?.id || null; row.status = r?.queued ? "queued" : "started"; counts.reran++; }
-          } else if (t.action === "ask") {
-            const full = (await store.getOffer?.(o.id).catch(() => null)) || o;
-            const r = await startProactive({
-              client, locationId, saved, store, contactId, kind: "take_ask", offer: full,
-              subject: { address: o.address, heldReason: t.heldReason, needs: t.needs || ["value", "work"] }, sendsEnabled, deps,
-            });
-            if (r?.skipped) { row.status = "skipped"; row.reason = r.skipped; } else { row.jobId = r?.job?.id || null; counts.asked++; }
-          }
+          const r = await carryOutHeldVerdict({ client, locationId, saved, store, sendsEnabled, deps: { ...deps, startProactive }, offer: o, triage: t, now });
+          row.status = r.status; row.jobId = r.jobId;
+          if (r.reason) row.reason = r.reason;
+          if (r.status === "claimed") continue;
+          if (t.action === "rerun" && (r.status === "started" || r.status === "queued")) counts.reran++;
+          if (t.action === "ask" && r.status === "started") counts.asked++;
         }
       } catch (e) {
         row.status = "error"; row.reason = String(e?.message || e).slice(0, 160);

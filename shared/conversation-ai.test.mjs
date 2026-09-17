@@ -477,3 +477,11 @@ test("standing answers are capped at forty, newest kept", () => {
   assert.equal(n.answers.some((a) => a.id === "a44"), true);
   assert.equal(n.answers.some((a) => a.id === "a0"), false);
 });
+
+test("the driver's switches default off, survive a save, and normalizing twice changes nothing", () => {
+  assert.deepEqual(normalizeConversationAi({}).driver, { promises: { enabled: false } });
+  const on = normalizeConversationAi({ driver: { promises: { enabled: true }, nonsense: 1 } });
+  assert.deepEqual(on.driver, { promises: { enabled: true } });
+  assert.deepEqual(normalizeConversationAi(on).driver, on.driver);
+  assert.deepEqual(normalizeConversationAi({ driver: "yes" }).driver, { promises: { enabled: false } });
+});

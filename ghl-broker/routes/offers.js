@@ -54,6 +54,7 @@
 //   DELETE /api/offers/:id/deal/investors/:contactId    unlink
 //   POST   /api/offers/deals/sync-investor-tags   backfill the on-deal GHL tag for all deal investors
 
+import { driveOpenPromises } from "../promise-driver.js";
 import { settlePromise } from "../promise-sweep.js";
 // An outcome that means we no longer owe them a number on that house.
 const PROMISE_SETTLING_STATUSES = new Set(["sent", "countered", "no_response", "passed", "we_passed"]);
@@ -3847,30 +3848,50 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         }
       }
 
-      // Paper beats a first pass: with a written offer already out on this
-      // house, a "rough number, not underwritten yet" text undercuts it. Lisa
-      // Shilling, 2026-09-15: the queued run landed an hour after the written
-      // 425,750 and floated 473k.
-      const book = await store.listOffers(locationId, { contactId: offer.contactId, limit: 50, lean: true }).catch(() => []);
-      const out = paperAlreadyOut(book, { address: offer.address, offerId: offer.id });
-      if (out) {
-        console.log(`float skipped for ${offer.id}: our offer on ${offer.address} already went out (${out.id})`);
-        await markFloatSkipped(offer.id, "realm_check", "our offer there has already gone out");
-        await createContactNote(client, offer.contactId, {
-          body: `Underwrote ${offer.address} at ${fmtMoney(offer.cashAmount)}, but our offer there has already gone out${out.cashAmount ? ` at ${fmtMoney(out.cashAmount)}` : ""} — nothing was texted. Yours to decide whether to revise it.`,
-        }).catch(() => {});
-        return;
-      }
-
-      const kind = chooseProactiveKind({ events, address: offer.address, leadWithNumber });
-      const r = await startProactive({
-        client, locationId, saved: fresh, store, contactId: offer.contactId, kind,
-        offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
+      await floatNumber({ client, locationId, fresh, offer, events, leadWithNumber });
+    },
+    // The run held. If we promised this agent a number, don't wait for the
+    // nightly sweep to ask what clears it (driver.promises, off by default).
+    onHeld: async ({ offer }) => {
+      if (!offer?.contactId) return;
+      const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      if (!conversationConfig(fresh).driver?.promises?.enabled) return;
+      await driveOpenPromises({
+        client, locationId, saved: fresh, store, sendsEnabled: CARD_SENDS_ENABLED,
+        deps: conversationDeps({ client, locationId, saved: fresh }), only: offer.contactId,
       });
-      if (r.skipped) { console.log(`${kind} skipped for ${offer.id}: ${r.skipped}`); await markFloatSkipped(offer.id, kind, r.skipped); }
-      else await markProactive(offer.id, kind);
     },
   });
+
+  // Our number, floated in conversation: their read first unless they have
+  // given it (or the underwrite was confident). One path for a finished
+  // underwrite (onOfferCreated) and for a promised number the driver sends
+  // (promise-driver.js), so both honour the same guards.
+  async function floatNumber({ client, locationId, fresh, offer, events = null, leadWithNumber = false }) {
+    // Paper beats a first pass: with a written offer already out on this
+    // house, a "rough number, not underwritten yet" text undercuts it. Lisa
+    // Shilling, 2026-09-15: the queued run landed an hour after the written
+    // 425,750 and floated 473k.
+    const book = await store.listOffers(locationId, { contactId: offer.contactId, limit: 50, lean: true }).catch(() => []);
+    const out = paperAlreadyOut(book, { address: offer.address, offerId: offer.id });
+    if (out) {
+      console.log(`float skipped for ${offer.id}: our offer on ${offer.address} already went out (${out.id})`);
+      await markFloatSkipped(offer.id, "realm_check", "our offer there has already gone out");
+      await createContactNote(client, offer.contactId, {
+        body: `Underwrote ${offer.address} at ${fmtMoney(offer.cashAmount)}, but our offer there has already gone out${out.cashAmount ? ` at ${fmtMoney(out.cashAmount)}` : ""} — nothing was texted. Yours to decide whether to revise it.`,
+      }).catch(() => {});
+      return { skipped: "our offer there has already gone out", kind: null, job: null };
+    }
+    const timeline = events || await store.listContactEvents(locationId, offer.contactId, { limit: 200 }).catch(() => []);
+    const kind = chooseProactiveKind({ events: timeline, address: offer.address, leadWithNumber });
+    const r = await startProactive({
+      client, locationId, saved: fresh, store, contactId: offer.contactId, kind,
+      offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
+    });
+    if (r.skipped) { console.log(`${kind} skipped for ${offer.id}: ${r.skipped}`); await markFloatSkipped(offer.id, kind, r.skipped); }
+    else await markProactive(offer.id, kind);
+    return { skipped: r.skipped || null, kind, job: r.job || null };
+  }
 
   // Every conversation's last message, newest first, straight from GHL — one
   // paged read for the whole location (100 a page, up to 1,000), cached ten
@@ -4014,6 +4035,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     ghlLastMessages: () => ghlLastMessages(client, locationId),
     latestInbound: (contactId) => getLatestInboundMessage(client, locationId, contactId),
     queueOfferSend: ({ offerId, reason }) => markSendPending(offerId, reason, { by: "audit" }),
+    // A priced offer's number, floated the way a finished underwrite floats it
+    // (promise-driver.js: a number we promised that is ready).
+    floatOffer: async ({ offerId }) => {
+      const offer = await store.getOffer(offerId);
+      if (!offer || offer.locationId !== locationId) return { skipped: "no such offer", kind: null, job: null };
+      if (offer.deal || !OPEN_STATUSES.has(effectiveStatus(offer)) || !offer.contactId) return { skipped: `nothing to float on a ${effectiveStatus(offer)} offer`, kind: null, job: null };
+      const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      return floatNumber({ client, locationId, fresh, offer, leadWithNumber: leadsWithNumber({ offer, job: null, config: conversationConfig(fresh) }) });
+    },
     // The agent's read just came in. If an offer on that address had our
     // read floated and the price is still unsaid, the realm check goes now.
     afterAgentTake: async ({ contactId, address }) => {

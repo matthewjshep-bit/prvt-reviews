@@ -490,6 +490,13 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   persona: { name: "", role: "", voice: "", signOff: "", length: "short", useFirstName: true, ifAskedIfBot: "" },
   rules: [],
   examples: [],
+  // The driver: what the machine does by itself to keep a thread moving
+  // instead of putting a row on Today (shared/promise-resolver.js). Every
+  // switch ships off; the autonomy dial turns them on at Normal.
+  //   promises  the resolver acts on an owed promise: floats a number that is
+  //             ready, starts the underwrite nobody started, asks for the
+  //             numbers that clear a hold, re-runs on the ones they gave.
+  driver: { promises: { enabled: false } },
   // Questions the bot couldn't answer, answered once by the owner on Today
   // (the answer box). Facts, unlike examples: the prompt tells the bot to
   // answer these itself rather than deflect to "my partner".
@@ -852,6 +859,11 @@ export function normalizeConversationAi(doc, seed = {}) {
     coach: (() => {
       const c = d.coach && typeof d.coach === "object" ? d.coach : {};
       return { enabled: bool(c.enabled, D.coach.enabled), hour: int(c.hour, D.coach.hour, 18, 23) };
+    })(),
+    driver: (() => {
+      const v = d.driver && typeof d.driver === "object" ? d.driver : {};
+      const p = v.promises && typeof v.promises === "object" ? v.promises : {};
+      return { promises: { enabled: bool(p.enabled, D.driver.promises.enabled) } };
     })(),
     rules: list(d.rules, { max: 40, each: 300 }),
     examples,

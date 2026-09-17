@@ -1906,6 +1906,15 @@ async function finishHeld(job, ctx, { extraction, held, partial, cleared = false
     await setTag(client, job.contactId, UW_TAGS.review, warnings);
     await note(client, job.contactId, heldNote(job, held), warnings);
   }
+
+  // Held, and an agent may be waiting on the number this run was for. The
+  // route decides what to do about that (promise-driver.js: ask for their
+  // numbers now rather than at the nightly sweep). A failure here is a
+  // warning on the run, never a failed underwrite.
+  if (typeof ctx.deps?.onHeld === "function") {
+    try { await ctx.deps.onHeld({ offer: saved, job }); }
+    catch (e) { warnings.push(`held hook: ${String(e?.message || e).slice(0, 120)}`); }
+  }
 }
 
 // A run that THREW — a timeout, a provider refusal — keeps whatever the stages

@@ -27,7 +27,8 @@ import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { addressKey } from "./shared/us-address.js";
 import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
 import { triageHeldUnderwrite } from "./shared/held-underwrites.js";
-import { openPromises, resolvePromise, normalizePromiseDismissal } from "./shared/promise-resolver.js";
+import { openPromises, resolvePromise, normalizePromiseDismissal, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
+import { driveOpenPromises, promiseClaimed } from "./promise-driver.js";
 
 const HOUR_MS = 3600000;
 
@@ -90,8 +91,9 @@ export async function heldTriageForPromises({ store, locationId, offers = [], ev
   return out;
 }
 
-// Older than this, the thread has moved on and a "we owe you" would be odd.
-export const PROMISE_WINDOW_HOURS = 72;
+// Older than this, the thread has moved on and a "we owe you" would be odd
+// (shared/promise-resolver.js owns the number).
+export { PROMISE_WINDOW_HOURS };
 // An underwrite still running past the due time gets this long to land.
 export const RUNNING_GRACE_HOURS = 8;
 // Texts only go out in the working day.
@@ -119,7 +121,7 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
   const jobsFor = typeof deps.listUnderwriteJobs === "function" ? deps.listUnderwriteJobs : listUnderwriteJobs;
 
   const events = await store.listContactEventsSince(locationId, iso(now - PROMISE_WINDOW_HOURS * HOUR_MS), {
-    types: ["promise_made", "promise_owed", "promise_kept", "offer_sent"], limit: 5000,
+    types: ["promise_made", "promise_owed", "promise_kept", "offer_sent", "audit_action"], limit: 5000,
   }).catch(() => []);
   const byContact = new Map();
   for (const e of events) {
@@ -194,6 +196,10 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
     });
     if (!claim.inserted) continue;
     out.owed++;
+    // The driver (promise-driver.js) has already moved on this one: floated
+    // the number, started the underwrite, asked for theirs. One voice at a
+    // time; Today still carries the row, where it reads as waiting.
+    if (mine && promiseClaimed(list, mine)) { out.results.push({ contactId, address, status: "owed", reason: "the driver is on it" }); continue; }
 
     const r = await start({
       client, locationId, saved, store, contactId, kind: "promise_due", offer: null,
@@ -379,10 +385,14 @@ export async function maybeRunPromiseSweep({ client, locationId, saved = {}, sto
   if (inFlight.has(locationId)) return null;
   inFlight.add(locationId);
   try {
+    // The driver goes first: a number that is ready goes out instead of
+    // "still working on it". A no-op unless driver.promises is switched on.
+    const driven = await driveOpenPromises({ client, locationId, saved, store, sendsEnabled, deps, now })
+      .catch((e) => ({ started: 0, results: [], reason: String(e?.message || e).slice(0, 160) }));
     const promises = await runPromiseSweep({ client, locationId, saved, store, sendsEnabled, deps, now });
     const checkins = await runCheckInSweep({ client, locationId, saved, store, sendsEnabled, deps, now });
     const chases = await runAddressChase({ client, locationId, saved, store, sendsEnabled, deps, now });
-    return { ...promises, checkins: checkins.sent, addressChases: chases.sent };
+    return { ...promises, driven: driven.started || 0, checkins: checkins.sent, addressChases: chases.sent };
   } finally {
     inFlight.delete(locationId);
   }

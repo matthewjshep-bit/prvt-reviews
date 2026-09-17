@@ -1045,13 +1045,43 @@ back never closes it.
 `promise_due`, so nobody we asked a question gets "we owe you", and a row
 already on Today for one clears by itself on the next tick. It only removes a
 send, so it has no switch. Nothing else acts yet: the moves are shown, and a
-person presses the button. The resolver acting by itself is a later phase,
-behind `driver.promises` (off by default).
+person presses the button, unless the driver below is on.
 
 **The send records the ending.** `promise_made` keeps only the first 200
 characters of what we said, so a long text's ending is unknown. `sendReplyDraft`
 now writes `data.asksThem` from the whole body; for older events a text that
 fills the 200 characters is never read as ending in a question.
+
+**The driver (`conversationAi.driver.promises`, off by default; the dial turns
+it on at Normal).** `ghl-broker/promise-driver.js` presses the row's button
+itself. It runs first on the promise sweep's tick (same working hours, same
+in-flight guard), and straight away for one contact when an underwrite holds
+(`deps.onHeld` from `finishHeld`):
+
+- `send_number` → `deps.floatOffer`, which is `floatNumber` in routes/offers.js:
+  the same step a finished underwrite takes, so "our offer there has already
+  gone out" still stops it, and their read is still asked for before our price.
+- `start_underwrite` → `deps.startUnderwrite`: the daily cap, queued if capped,
+  a dry run unless `AUTO_UNDERWRITE_ENABLED`. Only with a full address on the
+  promise; an address is never read out of a text here.
+- `ask_numbers` / `rerun` → `carryOutHeldVerdict` (held-underwrites.js), the
+  nightly held sweep's own carrier and its own claim key, so day and night can
+  never both ask, or both re-run on the same numbers. The two GHL reads the
+  triage needs (the contact, their opportunities) are made here, only when a
+  hold is in the way.
+
+A promise younger than 30 minutes is left alone (the reply agent may be
+starting the underwrite itself), and nobody who unsubscribed is driven. Every
+float and start is claimed first (`audit_action`, `audit:promise_<move>:
+<contactId>:<since>`). When the driver has moved, the promise sweep still
+writes `promise_owed` (Today shows the row as waiting) but does **not** send
+the "still working on it" text: one voice at a time. Everything the driver
+starts is a draft in the ordinary lane; the gates, the auto-send list, the
+caps and `CARD_SENDS_ENABLED` decide whether it leaves.
+
+Adding the switch means a location that was at Normal or Full reads **Custom**
+on the dial until the mode is pressed again (`detectAutonomy` matches the plan
+exactly). That is the rollout: nothing new runs until Matt re-presses.
 
 **Dismiss asks why.** One tap: Handled it by phone / We didn't owe anything /
 They went quiet / Not a deal / Something else (`PROMISE_DISMISS_REASONS`); a
