@@ -5669,7 +5669,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!channels.length) return res.status(400).json({ error: "no channel selected" });
       const live = dryRun === false && CARD_SENDS_ENABLED;
       try {
-        const r = await sendOfferDocs({ locationId, client, offer, message, emailSubject, channels, docKeys, live });
+        // Optional: an address other than the contact's own, and people to copy.
+        const emailTo = dealStr(b.emailTo, 200);
+        const emailCc = (Array.isArray(b.emailCc) ? b.emailCc : []).map((x) => dealStr(x, 200)).filter(Boolean).slice(0, 5);
+        const r = await sendOfferDocs({ locationId, client, offer, message, emailSubject, channels, docKeys, live, emailTo, emailCc });
         // A hand-sent offer is on the contact's timeline too, so the
         // conversation knows the paper went out and doesn't promise it again.
         if (r?.sent && offer.contactId) {
