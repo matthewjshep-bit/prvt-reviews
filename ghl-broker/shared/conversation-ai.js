@@ -271,6 +271,15 @@ export const AGENT_PAPER_RULE =
   "represent us, and ask whether they can write it up on NWMLS forms at our number for us to sign. If they'd rather not represent us, " +
   "say my partner will sort out who writes it and come back — never name another agent or invent one.";
 
+// The bot only writes words; the app sends things. A text that says a thing
+// was done when it wasn't is the worst text it can write (Lee Dedinsky,
+// 2026-09-17: told twice her email had gone, nothing had been sent).
+export const AGENT_HONESTY_RULE =
+  "WHAT YOU CAN'T DO: you cannot send an email, a document, a link or a calendar invite yourself — the app does that, and the context tells you " +
+  "when it has. Never say something was sent, emailed, resent, forwarded, scheduled or fixed unless the context says it happened. If they ask for " +
+  "something by email, say you'll get it over to them (the app sends it and corrects your wording when it has); if they say it never arrived, don't " +
+  "insist that it went — say you'll check and resend.";
+
 // Where every listing-agent conversation is going — fixed beside the paper
 // rule for the same reason. Each step has one job; the bot's reply should move
 // the thread one step along, never skip ahead and never circle.

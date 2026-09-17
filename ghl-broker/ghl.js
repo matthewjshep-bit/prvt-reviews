@@ -754,7 +754,9 @@ export async function sendSms(client, { contactId, message, attachments }) {
   });
 }
 
-export async function sendEmail(client, { contactId, subject, html, attachments }) {
+// `emailTo` sends to an address other than the one saved on the contact (an
+// agent who says "my email is …"); `emailCc` copies others. Both optional.
+export async function sendEmail(client, { contactId, subject, html, attachments, emailTo = "", emailCc = [] }) {
   return client.call(`/conversations/messages`, {
     method: "POST",
     version: V_CONVERSATIONS,
@@ -763,6 +765,8 @@ export async function sendEmail(client, { contactId, subject, html, attachments 
       contactId,
       subject,
       html,
+      ...(emailTo ? { emailTo } : {}),
+      ...(Array.isArray(emailCc) && emailCc.length ? { emailCc } : {}),
       ...(attachments && attachments.length ? { attachments } : {}),
     },
   });

@@ -42,7 +42,7 @@ import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
 import { getFreeSlots } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
@@ -1052,6 +1052,38 @@ export async function markUnsubscribed({ client, store, locationId, contactId, p
   }).catch(() => {});
 }
 
+// A reply that says an email has gone: "emailed it", "sent it to x@y.com",
+// "it went to …@…", "check your inbox". Future tense ("I'll email it") is fine.
+export const CLAIMS_EMAIL_RX = /\b(just |already )?e-?mailed\b|\b(sent|went|resent|forwarded)\b[^.?!]{0,60}\b(to\s+\S+@\S+|by e-?mail|via e-?mail|to your e-?mail|to your inbox)|\bcheck your (inbox|e-?mail|spam)\b/i;
+
+const EMAIL_RX = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+/**
+ * emailRequest(message, transcript) → { to, cc[] } | null
+ *
+ * An address to send the documents to. From the message itself ("my email is
+ * a@b.com, please cc c@d.com" — everything after "cc" is copied); or, when the
+ * message only asks after the email ("did you email it?", "nothing yet"), the
+ * last addresses THEY gave earlier in the thread.
+ */
+export function emailRequest(message = "", transcript = "") {
+  const split = (text) => {
+    const [head, ...tail] = String(text || "").split(/\bcc\b|\bcopy\b/i);
+    const to = head.match(EMAIL_RX) || [];
+    const cc = tail.join(" ").match(EMAIL_RX) || [];
+    if (!to.length && !cc.length) return null;
+    const first = (to[0] || cc[0]).replace(/[.,;]+$/, "");
+    const rest = [...to.slice(1), ...(to.length ? cc : cc.slice(1))].map((x) => x.replace(/[.,;]+$/, ""));
+    return { to: first, cc: [...new Set(rest.filter((x) => x.toLowerCase() !== first.toLowerCase()))].slice(0, 5) };
+  };
+  const direct = split(message);
+  if (direct) return direct;
+  const asksAfterIt = /\be-?mail/i.test(message) && /\b(did you|didn'?t|haven'?t|have not|nothing|not (seeing|showing|received|get)|resend|re-send|send it again|where)\b/i.test(message);
+  if (!asksAfterIt) return null;
+  const theirs = String(transcript || "").split(/\r?\n/).filter((l) => /\bTHEM\b/.test(l) && EMAIL_RX.test(l));
+  EMAIL_RX.lastIndex = 0;
+  return theirs.length ? split(theirs.at(-1).replace(/^.*?\bTHEM\b[^:]*:/, "")) : null;
+}
+
 export const OUR_OFFER_TEXT_RX = /\bhere's our (written cash offer|letter of intent) on\b/i;
 
 // A book number said the way a person texts it: "1.144M" for $1,144,500
@@ -1222,7 +1254,7 @@ export async function assembleConversation({
 
   const playbook = config.parties?.[party] || null;
   const base = playbook ? playbook.instructions : config.routing.genericInstructions;
-  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE].filter(Boolean).join("\n") : base;
+  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE, AGENT_HONESTY_RULE].filter(Boolean).join("\n") : base;
   const signer = config.persona.name || saved?.company?.signer || saved?.company?.name || "";
   // Ours to hand out when asked — an agent who asks "what's your email?" got
   // "I'll text it over shortly" until 2026-09-12, because we never sent it.
@@ -2281,6 +2313,23 @@ async function runReply(job, ctx) {
     draft = { ...draft, replyBeforeSend: draft.reply,
       reply: `Sounds good${first ? ` ${first}` : ""}, no rush. Sent our letter of intent over by text and email so you have it to share with them. If they're open to it, could you write it up on NWMLS forms for us to sign?` };
   }
+  // They gave us an address to email it to ("my email is …, please cc …"), or
+  // ask where the email is. The documents go to THAT address, by email, and
+  // the reply says so only because it is about to be true — step 5 takes the
+  // words back and holds the text if the email didn't go. (Lee Dedinsky,
+  // 2026-09-17: asked twice, told twice it had been emailed, nothing was.)
+  const mail = party === "agent" && !isCall && !["rejection", "opt_out"].includes(draft.intent)
+    ? emailRequest(job.originalMessage || job.message, a.transcript) : null;
+  if (mail) {
+    const existing = plan.auto.find((x) => x.type === "send_offer");
+    if (existing) Object.assign(existing, { channels: [...new Set([...(existing.channels || ["sms"]), "email"])], emailTo: mail.to, emailCc: mail.cc });
+    else plan.auto.push({ id: `a-email-send-${job.id}`, type: "send_offer", mode: "auto", status: "pending", party,
+      channels: ["email"], emailTo: mail.to, emailCc: mail.cc, via: "to their email", why: `they asked for it by email (${mail.to})` });
+    if (!existing) {
+      draft = { ...draft, replyBeforeSend: draft.replyBeforeSend ?? draft.reply,
+        reply: `Just emailed it to ${mail.to}${mail.cc.length ? ` with ${mail.cc.join(" and ")} copied` : ""}. Let me know if it doesn't show up in the next few minutes.` };
+    }
+  }
   if (auto.exception?.passed && draft.intent === "acceptance") {
     plan.suggested.push({ id: `a-acc-${job.id}`, type: "promote_to_deal", mode: "ask", status: "pending", party,
       why: "they say the seller accepted — mint the deal when you've confirmed it" });
@@ -2761,6 +2810,24 @@ async function runReply(job, ctx) {
     if (sellerSend && record.replyBeforeSend
       && (sellerSend.status !== "done" || !/^(sent the offer|offer on .* already went out)/.test(String(sellerSend.detail || "")))) {
       record = { ...record, reply: record.replyBeforeSend, flags: [...(record.flags || []), `the offer didn't go with it: ${sellerSend.error || sellerSend.detail || "unknown"}`] };
+    }
+    // "Just emailed it" stands only if the email went. Otherwise the honest
+    // line, held for a person: they are waiting on a document.
+    const SENT_OK = /^(sent the offer|offer on .* already went out)/;
+    const emailSend = done.find((x) => x.type === "send_offer" && x.emailTo);
+    const emailWent = emailSend && emailSend.status === "done" && SENT_OK.test(String(emailSend.detail || ""));
+    if (emailSend && !emailWent && emailSend.via === "to their email") {
+      const why = `the email to ${emailSend.emailTo} didn't go: ${emailSend.error || emailSend.detail || "unknown"}`;
+      record = { ...record, reply: "Having trouble getting that email out on my end. I'll get it over to you shortly and confirm once it's sent.",
+        flags: [...(record.flags || []), why], autoSend: { decided: false, reason: `needs a person: ${why}` } };
+      holdForBooking = holdForBooking || why;
+    }
+    // And the general rule: no text claims an email went unless one did, in
+    // this run. The model has no way to send mail; only the action above does.
+    if (!emailWent && CLAIMS_EMAIL_RX.test(String(record.reply || "")) && !holdForBooking) {
+      const why = "the draft says something was emailed, and nothing was";
+      record = { ...record, flags: [...(record.flags || []), why], autoSend: { decided: false, reason: `needs a person: ${why}` } };
+      holdForBooking = why;
     }
     const sendFailed = done.find((x) => x.type === "send_offer" && x.via !== "counter band" && x.via !== "to seller"
       && (x.status !== "done" || !/^(sent the offer|offer on .* already went out)/.test(String(x.detail || ""))));

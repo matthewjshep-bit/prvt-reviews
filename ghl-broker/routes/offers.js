@@ -4312,7 +4312,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // `afterCounter`: the counter band just re-issued this offer at their
     // number — only a send AFTER that counts as already sent, and an offer
     // that was not re-issued is refused rather than sent at the old price.
-    sendOfferDocs: async ({ contactId, addressHint = "", channels = null, docs = null, draftId = null, afterCounter = false }) => {
+    sendOfferDocs: async ({ contactId, addressHint = "", channels = null, docs = null, draftId = null, afterCounter = false, emailTo = "", emailCc = [] }) => {
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
       const so = conversationConfig(fresh).parties.agent.sendOffer;
       const open = (await store.listOffers(locationId, { contactId, limit: 50 }))
@@ -4325,24 +4325,35 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!offer) return { ok: false, reason: "offer vanished" };
       const since = afterCounter ? offer.counterBand?.acceptedAt : null;
       if (afterCounter && !since) return { ok: false, reason: "the offer was not re-issued at their number" };
-      const already = (offer.sends || []).find((x) => (!since || String(x.ts) > String(since)) && Object.values(x.results || {}).some((r) => r?.ok));
-      if (already) return { ok: true, unchanged: true, address: offer.address, sentAt: already.ts };
-      const ch = (Array.isArray(channels) && channels.length ? channels : so.channels).filter((c) => c === "sms" || c === "email");
+      // Already out — per CHANNEL. A text that went is not an email that went
+      // (Lee Dedinsky, 2026-09-17: she asked for it by email, the earlier text
+      // read as "already sent", nothing was emailed and the bot said it had been).
+      // An email to a different address than last time is a new send too.
+      const wanted = (Array.isArray(channels) && channels.length ? channels : so.channels).filter((c) => c === "sms" || c === "email");
+      const prior = (offer.sends || []).filter((x) => !since || String(x.ts) > String(since));
+      const went = (c) => prior.find((x) => x.results?.[c]?.ok
+        && (c !== "email" || !emailTo || String(x.results.email.to || "").toLowerCase() === String(emailTo).toLowerCase()));
+      const ch = wanted.filter((c) => !went(c));
+      if (!ch.length) { const a = went(wanted[0]) || prior.at(-1); return { ok: true, unchanged: true, address: offer.address, sentAt: a?.ts || null, channels: wanted }; }
       const dk = Array.isArray(docs) && docs.length ? docs : so.docs;
       let r;
       try {
-        r = await sendOfferDocs({ locationId, client, offer, channels: ch, docKeys: dk, live: CARD_SENDS_ENABLED });
+        r = await sendOfferDocs({ locationId, client, offer, channels: ch, docKeys: dk, live: CARD_SENDS_ENABLED, emailTo, emailCc });
       } catch (e) {
         if (e.http === 502) return { ok: false, reason: `send failed — ${e.detail}` };
         return { ok: false, reason: e.message };
       }
       if (r.dryRun) return { ok: true, dryRun: true, address: offer.address, channels: ch };
+      // An email they asked for that didn't go is a failure, whatever the text did.
+      if (ch.includes("email") && r.results?.email && !r.results.email.ok && (emailTo || ch.length === 1)) {
+        return { ok: false, reason: `the email didn't go — ${String(r.results.email.error || "unknown").slice(0, 200)}`, address: offer.address };
+      }
       await recordEvent({
         store, locationId, contactId, party: "agent", type: "offer_sent", at: new Date().toISOString(),
         address: offer.address, offerId: offer.id, source: "conversation", ref: draftId,
-        data: { channels: ch, docs: dk, by: draftId ? "conversation" : "underwrite", amount: offer.cashAmount || null },
+        data: { channels: ch, docs: dk, by: draftId ? "conversation" : "underwrite", amount: offer.cashAmount || null, ...(emailTo ? { emailTo } : {}) },
       }).catch(() => {});
-      return { ok: true, address: offer.address, channels: ch, results: r.results };
+      return { ok: true, address: offer.address, channels: ch, results: r.results, emailTo: r.results?.email?.to || "" };
     },
     setOfferStatus: async ({ contactId, addressHint, status, note = "", amount = 0 }) => {
       // "we_passed" is deliberately absent: walking away from a property is
@@ -5469,7 +5480,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
    * Throws { http: 400 } with nothing to send, { http: 502 } when every
    * channel failed.
    */
-  async function sendOfferDocs({ locationId, client, offer, message = "", emailSubject = "", channels = ["sms"], docKeys = ["image"], live = false }) {
+  const validEmail = (v) => { const m = String(v || "").trim().match(/^[^\s@<>",;]+@[^\s@<>",;]+\.[a-z]{2,}$/i); return m ? m[0] : ""; };
+  async function sendOfferDocs({ locationId, client, offer, message = "", emailSubject = "", channels = ["sms"], docKeys = ["image"], live = false, emailTo = "", emailCc = [] }) {
       // Requested documents, filtered to what this offer actually has.
       const DOC_DEFS = [
         ["pdf", "Offer letter (PDF)", offer.pdfUrl],
@@ -5491,7 +5503,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         contact = await getContact(client, offer.contactId);
       } catch (e) { contactErr = e.message; }
       const phone = contact?.phone || "";
-      const email = contact?.email || "";
+      // An address the agent gave us in the thread beats the one on file.
+      const email = validEmail(emailTo) || contact?.email || "";
+      const cc = (Array.isArray(emailCc) ? emailCc : []).map(validEmail).filter((x) => x && x.toLowerCase() !== email.toLowerCase()).slice(0, 5);
       const channelErr = (dest, label) =>
         contactErr ? `contact lookup failed: ${contactErr}` : !dest ? `contact has no ${label}` : "";
 
@@ -5594,8 +5608,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         if (err) results.email = { ok: false, error: err };
         else {
           try {
-            await sendEmail(client, { contactId: offer.contactId, subject, html, attachments: emailAttachments });
-            results.email = { ok: true };
+            await sendEmail(client, { contactId: offer.contactId, subject, html, attachments: emailAttachments,
+              ...(email !== (contact?.email || "") ? { emailTo: email } : {}), emailCc: cc });
+            results.email = { ok: true, to: email, ...(cc.length ? { cc } : {}) };
           } catch (e) {
             // GHL refuses an address it has marked invalid (it bounced before,
             // or failed their verification) — the address can look fine. Say

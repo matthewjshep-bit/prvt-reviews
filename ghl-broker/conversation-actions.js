@@ -243,11 +243,12 @@ const EXECUTORS = {
       contactId, addressHint: draft?.propertyAddress || "", channels: action?.channels || (wantsEmail ? ["email", "sms"] : undefined),
       docs: action?.docs, draftId: draft?.id || null,
       ...(action?.afterCounter === true ? { afterCounter: true } : {}),
+      ...(action?.emailTo ? { emailTo: action.emailTo, emailCc: action.emailCc || [] } : {}),
     });
     if (!r?.ok) return r?.reason || "no open offer to send";
     if (r.unchanged) return `offer on ${r.address} already went out ${r.sentAt ? `on ${String(r.sentAt).slice(0, 10)}` : ""}`.trim();
     if (r.dryRun) return `would send ${r.address} by ${(r.channels || []).join(" + ")} — sends are off on the broker`;
-    return `sent the offer on ${r.address} by ${(r.channels || []).join(" + ")}`;
+    return `sent the offer on ${r.address} by ${(r.channels || []).join(" + ")}${r.emailTo ? ` (email to ${r.emailTo})` : ""}`;
   },
   // The calendar. Runs unattended only when the booking guard passed on this
   // very message (the time was one we offered and is still free); a person

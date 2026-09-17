@@ -3340,3 +3340,31 @@ test("an agent warming to our number raises the offer's heat; a rejection never 
     else assert.equal(calls.length, 0, message);
   }
 });
+
+test("'my email is …, please cc …' emails the documents there; the text only says so if it went", async () => {
+  const MSG = "My email is Ldedinsky3@gmail.com, please cc info@homesteadhomegroup.com I will get it in front of them";
+  for (const went of [true, false]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const store = fakeStore();
+    const sends = [];
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: MSG,
+      deps: {
+        draft: async () => ({ ...DRAFT, intent: "question", propertyAddress: "3618 Chrisella Rd E, Edgewood, WA 98372", reply: "Good catch, sending to you with info copied." }),
+        sendOfferDocs: async (args) => { sends.push(args); return went ? { ok: true, address: "3618 Chrisella Rd E", channels: ["email"], emailTo: args.emailTo } : { ok: false, reason: "the email didn't go — GHL 400" }; },
+      },
+    });
+    await settle();
+    assert.equal(job.status, "done", job.error);
+    assert.equal(sends.length, 1);
+    assert.deepEqual([sends[0].channels, sends[0].emailTo, sends[0].emailCc], [["email"], "Ldedinsky3@gmail.com", ["info@homesteadhomegroup.com"]]);
+    const d = await store.getReplyDraft(job.draftId);
+    if (went) assert.match(d.reply, /Just emailed it to Ldedinsky3@gmail\.com with info@homesteadhomegroup\.com copied/);
+    else {
+      assert.match(d.reply, /Having trouble getting that email out/);
+      assert.notEqual(d.status, "sent"); assert.notEqual(d.status, "scheduled");
+      assert.ok((d.flags || []).some((f) => /didn't go/.test(f)));
+    }
+  }
+});
