@@ -18,8 +18,8 @@ test("the queue groups what the pipeline builder emits and shows each op", () =>
   const html = renderToStaticMarkup(<ActionQueue actions={r.actions} draftsById={{}} sendsEnabled onDone={() => {}} />);
   expect(html).toContain("One click from you");
   expect(html).toContain("Send the formal offer (the documents)");
-  expect(html).toContain("Cold agents who never answered");
-  expect(html).toContain("Sam Okafor: 3 texts, no reply");
+  expect(html).not.toContain("Sam Okafor");   // a cold agent is a number on Reports, not a row here
+  expect(r.counts.coldNoReply).toBe(1);
   expect(html).toContain("Do it");
 });
 

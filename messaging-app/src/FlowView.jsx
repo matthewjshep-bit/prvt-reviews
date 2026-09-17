@@ -154,6 +154,7 @@ export default function FlowView() {
         <span className="ml-auto text-xs text-slate-500">
           <b className="text-violet-600">{t.machine ?? 0}</b> moves by the machine · <b>{t.person ?? 0}</b> by you
           {t.messages ? ` · texts: ${t.messages.autoSent} sent itself, ${t.messages.personSent} by you` : ""}
+          {data?.coldNoReply ? <span title="Their outreach follow-ups ran out with nothing back. They leave this count the moment they answer."> · {data.coldNoReply} cold agent{data.coldNoReply === 1 ? "" : "s"} never answered</span> : null}
         </span>
         <button type="button" className={BTN} onClick={() => setRefreshKey((k) => k + 1)} title="Refresh now">
           <RefreshCw size={13} className={loading ? "animate-spin" : ""} />

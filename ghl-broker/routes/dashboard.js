@@ -319,6 +319,9 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         ...flow,
         autopilot: autopilotFor({ saved, config, recentDrafts }),
         queue: pipeline.counts.actions,
+        // Agents whose outreach ladder ran out with nothing back. A number for
+        // Reports; there is nothing on Today for a person to do about them.
+        coldNoReply: pipeline.counts.coldNoReply || 0,
         conversationEnabled: config.enabled,
       });
     } catch (err) { fail(res, err); }

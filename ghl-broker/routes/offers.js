@@ -3855,6 +3855,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const out = paperAlreadyOut(book, { address: offer.address, offerId: offer.id });
       if (out) {
         console.log(`float skipped for ${offer.id}: our offer on ${offer.address} already went out (${out.id})`);
+        await markFloatSkipped(offer.id, "realm_check", "our offer there has already gone out");
         await createContactNote(client, offer.contactId, {
           body: `Underwrote ${offer.address} at ${fmtMoney(offer.cashAmount)}, but our offer there has already gone out${out.cashAmount ? ` at ${fmtMoney(out.cashAmount)}` : ""} — nothing was texted. Yours to decide whether to revise it.`,
         }).catch(() => {});
@@ -3866,7 +3867,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         client, locationId, saved: fresh, store, contactId: offer.contactId, kind,
         offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
       });
-      if (r.skipped) console.log(`${kind} skipped for ${offer.id}: ${r.skipped}`);
+      if (r.skipped) { console.log(`${kind} skipped for ${offer.id}: ${r.skipped}`); await markFloatSkipped(offer.id, kind, r.skipped); }
       else await markProactive(offer.id, kind);
     },
   });
@@ -3984,12 +3985,24 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     });
   };
 
+  // A float that didn't go, and why: Today's "priced, not floated" row says
+  // it, so a person isn't left guessing whether pressing Float will work.
+  async function markFloatSkipped(offerId, kind, reason) {
+    try {
+      const full = await store.getOffer(offerId);
+      if (!full) return;
+      full.proactive = { ...(full.proactive || {}), skipped: { kind, reason: String(reason || "").slice(0, 200), at: new Date().toISOString() } };
+      await store.updateOffer(full.id, full);
+    } catch (e) { console.error(`offers: could not note the skipped ${kind} on ${offerId}:`, e?.message); }
+  }
+
   // Which floats have gone on an offer: { takeCheckAt, realmCheckAt }.
   async function markProactive(offerId, kind) {
     try {
       const full = await store.getOffer(offerId);
       if (!full) return;
-      full.proactive = { ...(full.proactive || {}), [kind === "take_check" ? "takeCheckAt" : "realmCheckAt"]: new Date().toISOString() };
+      const { skipped: _skipped, ...went } = full.proactive || {};
+      full.proactive = { ...went, [kind === "take_check" ? "takeCheckAt" : "realmCheckAt"]: new Date().toISOString() };
       await store.updateOffer(full.id, full);
     } catch (e) { console.error(`offers: could not mark ${kind} on ${offerId}:`, e?.message); }
   }

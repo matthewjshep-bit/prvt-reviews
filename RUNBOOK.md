@@ -1060,6 +1060,12 @@ event with what we had said, and the nightly coach reads it as
 `promiseDismissals`. "We didn't owe anything" more than once is a `code_gap`:
 `detectPromise` is misreading something.
 
+**Two other rows now say why and offer the fix.** "Priced, not floated" shows
+why the float didn't go (`offer.proactive.skipped = { kind, reason, at }`,
+written by `onOfferCreated`, cleared when a float does go). "Underwrites that
+failed" offers Retry (the strip's own retry, while the run is in memory) and
+Open what loaded when the run saved a draft.
+
 **Today's read is local.** `heldTriageForPromises` (promise-sweep.js) runs the
 held triage from the contact's timeline and drafts only. GHL is not asked, so
 the tag and stage checks are skipped on the row; the nightly sweep makes them
@@ -1560,8 +1566,9 @@ on the agent auto-send list — that is the shakedown. When it actually leaves,
 an `outreach_sent` event lands on the contact, and that is what the
 "Reached out, no reply" ladder (2/5/9/14/21/30 by default, off by default)
 counts from. Any reply, an offer, a realm-yes, or a deal ends the ladder;
-when it runs out the agent shows in the Pipeline queue under "Cold agents
-who never answered".
+when it runs out the agent is counted on Reports → Flow ("N cold agents never
+answered", `counts.coldNoReply`). It is not a row on Today (2026-09-17): there
+is nothing for a person to do about an agent who never answered.
 
 On the Agents page the strip at the top says whether the sweep is on, when
 it last ran, and offers "Preview today's sweep" (pull + pick, writes nothing

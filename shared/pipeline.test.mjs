@@ -333,7 +333,7 @@ test("days until a date counts today as zero", () => {
 
 /* ---------- cold agents ---------- */
 
-test("a cold agent whose outreach ladder ran out is a queue item with no card; a reply or an offer clears it", () => {
+test("a cold agent who never answered is counted for Reports and is not on Today; a reply or an offer clears it", () => {
   const DAY = 86400000, now = Date.parse("2026-09-20T17:00:00Z"), ago = (d) => new Date(now - d * DAY).toISOString();
   const config = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, ladders: { outreach_nudge: { enabled: true, steps: [2, 5] } } } } } });
   const opened = (c) => ({ contactId: c, type: "outreach_sent", at: ago(12), address: "9 Cold Creek Rd", data: { contactName: "Sam" } });
@@ -343,18 +343,16 @@ test("a cold agent whose outreach ladder ran out is a queue item with no card; a
     opened("replied"), rung("replied", 2, 10), { contactId: "replied", type: "text_summary", at: ago(6) },
     opened("pending"),                                            // no rungs sent yet: day 5 is still DUE, so the ladder is not over
   ], contactNames: { cold: "Sam Okafor" } });
-  const items = r.actions.filter((a) => a.kind === "outreach_no_reply");
-  assert.deepEqual(items.map((a) => a.contactId), ["cold"]);
-  const sam = items.find((a) => a.contactId === "cold");
-  assert.equal(sam.title, "Sam Okafor: 3 texts, no reply");
-  assert.match(sam.detail, /12d ago about 9 Cold Creek Rd/);
+  assert.equal(r.counts.coldNoReply, 1, "only the one whose ladder ran out with nothing back");
+  assert.equal(r.actions.length, 0, "there is nothing for a person to do about a cold agent");
+  assert.equal(ACTION_KINDS.some((k) => k.key === "outreach_no_reply"), false);
   assert.equal(r.cards.length, 0, "no card for a contact with no property");
   // an offer on anything of theirs moves them off the cold list
   const withOffer = buildPipeline({ offers: [{ id: "o1", contactId: "cold", address: "1 Any St", status: "sent", createdAt: ago(1) }], drafts: [], now, config, events: [opened("cold"), rung("cold", 2, 10), rung("cold", 5, 7)] });
-  assert.equal(withOffer.actions.filter((a) => a.kind === "outreach_no_reply").length, 0);
+  assert.equal(withOffer.counts.coldNoReply, 0);
   // ladder off: nothing to say
   const off = buildPipeline({ offers: [], drafts: [], now, config: normalizeConversationAi({}), events: [opened("cold"), rung("cold", 2, 10), rung("cold", 5, 7)] });
-  assert.equal(off.actions.filter((a) => a.kind === "outreach_no_reply").length, 0);
+  assert.equal(off.counts.coldNoReply, 0);
 });
 
 test("a pending send_offer on a realm-yes reply is one click from a person", () => {
@@ -420,4 +418,23 @@ test("an owed answer we have since given is not on Today", () => {
   const sent = draft({ id: "d9", status: "sent", inbound: "what about referrals?", reply: "We pay a referral at closing.", createdAt: H(2), sentAt: H(2) });
   const r = build({ events: [owed({}, { what: "answer", text: "Let me check with my partner and get back to you." })], sentDrafts: [sent] });
   assert.equal(promiseRow(r), undefined);
+});
+
+/* ---------- rows that say why, and offer the fix ---------- */
+
+test("a priced offer that couldn't float says why", () => {
+  const o = offer({ status: "new", sends: [], autoUnderwrite: { jobId: "j1", held: [] }, proactive: { skipped: { kind: "realm_check", reason: "our offer there has already gone out", at: D(0) } } });
+  const row = build({ offers: [o] }).actions.find((a) => a.kind === "offer_ready");
+  assert.ok(row, "still a row");
+  assert.match(row.detail, /didn't float: our offer there has already gone out/);
+});
+
+test("a failed underwrite can be retried from Today", () => {
+  const job = { id: "j9", contactId: "a1", status: "error", address: "12 Elm St, Renton, WA", error: "stopped early — the comps provider timed out", finishedAt: new Date(NOW - 600000).toISOString() };
+  const row = build({ jobs: [job] }).actions.find((a) => a.kind === "underwrite_failed");
+  assert.deepEqual(row.ops.map((o) => o.key), ["retry_underwrite"]);
+  const withDraft = build({ jobs: [{ ...job, offerId: "o7" }] }).actions.find((a) => a.kind === "underwrite_failed");
+  assert.deepEqual(withDraft.ops.map((o) => o.key), ["retry_underwrite", "open_editor"]);
+  const nowhere = build({ jobs: [{ ...job, address: "", contactId: null }] }).actions.find((a) => a.kind === "underwrite_failed");
+  assert.deepEqual(nowhere.ops, [], "nothing to retry without a contact");
 });

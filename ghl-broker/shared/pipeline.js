@@ -65,7 +65,6 @@ export const ACTION_KINDS = [
   { key: "underwrite_held",   label: "Underwrites that need a look" },
   { key: "offer_ready",       label: "Priced, not floated" },
   { key: "ladder_exhausted",  label: "Followed up, no reply" },
-  { key: "outreach_no_reply", label: "Cold agents who never answered" },
   { key: "deal_no_buyers",    label: "Deals with nobody on them" },
   { key: "blast_no_opens",    label: "Blasted, nobody opened it" },
   { key: "draft_scheduled",   label: "Sending itself" },
@@ -138,6 +137,7 @@ export function buildPipeline({
     lanes: Object.fromEntries(ALL_LANES.map((l) => [l.key, 0])),
     actions: { now: 0, soon: 0, fyi: 0 },
     hidden: { dead: 0, closed: 0, drafts: 0 },
+    coldNoReply: 0,
     eventsTruncated: eventsLimit > 0 && events.length >= eventsLimit,
   };
   const push = (a) => {
@@ -268,7 +268,8 @@ export function buildPipeline({
     }
     if (lane === "ready" && card.ai.made && !(o.sends || []).length) {
       card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon",
-        title: `${card.address} is priced and nothing has gone out`, detail: `cash ${money(o.cashAmount)}`,
+        title: `${card.address} is priced and nothing has gone out`,
+        detail: [`cash ${money(o.cashAmount)}`, o.proactive?.skipped?.reason ? `didn't float: ${String(o.proactive.skipped.reason).slice(0, 140)}` : ""].filter(Boolean).join(" · "),
         ops: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "float_realm", label: "Float the number", intent: "secondary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
     }
     if (ladderDone && !replied) {
@@ -339,7 +340,12 @@ export function buildPipeline({
       push({ kind: "underwrite_failed", severity: "fyi", jobId: j.id, contactId: j.contactId || null, contactName: j.contactName || "",
         address: j.address || j.suppliedAddress || "", offerId: j.offerId || null,
         title: `Underwrite failed on ${j.address || j.suppliedAddress || "an address"}`, detail: String(j.error || "").slice(0, 160),
-        ops: [] });
+        // The run is still in memory for the hour this row lives, so Retry
+        // is the strip's own retry; a saved draft can be opened and finished.
+        ops: [
+          ...(j.contactId ? [{ key: "retry_underwrite", label: "Retry", intent: "primary" }] : []),
+          ...(j.contactId && j.offerId ? [{ key: "open_editor", label: "Open what loaded", intent: "secondary" }] : []),
+        ] });
     }
   }
 
@@ -388,9 +394,10 @@ export function buildPipeline({
   }
 
   /* cold agents: reached out from the app, the ladder ran out, nothing back */
-  // No card — a card is a property, and a cold agent has none yet. The
-  // moment they answer, a draft exists and they leave this list; the moment
-  // we offer on something, they have a card.
+  // Counted, not queued: there is nothing for a person to do about an agent
+  // who never answered, so it is a number on Reports and not a row on Today.
+  // The moment they answer they leave the count; the moment we offer on
+  // something, they have a card.
   const outreachLadder = ladders.agent?.ladders?.outreach_nudge || null;
   if (ladders.agent?.enabled && outreachLadder?.enabled) {
     const cold = new Map();
@@ -411,12 +418,7 @@ export function buildPipeline({
       if (answered) continue;
       const sentSteps = list.filter((e) => e.type === "follow_up_sent" && String(e.at) > String(opened.at)).map((e) => Number(e.data?.step));
       if (!exhausted({ steps: outreachLadder.steps, sentSteps, startedAt: opened.at, now })) continue;
-      const ageDays = Math.floor((now - ms(opened.at)) / DAY_MS);
-      push({ contactId, contactName: contactNames[contactId] || opened.data?.contactName || "", address: opened.address || "",
-        kind: "outreach_no_reply", severity: "fyi",
-        title: `${contactNames[contactId] || opened.data?.contactName || "An agent"}: ${sentSteps.length + 1} texts, no reply`,
-        detail: `first text ${ageDays}d ago${opened.address ? ` about ${opened.address}` : ""}`,
-        ops: [] });
+      counts.coldNoReply++;
     }
   }
 
