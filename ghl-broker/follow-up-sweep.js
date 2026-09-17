@@ -21,10 +21,11 @@
 //   The dedupe key is still the real defence — the cursor just stops us
 //   spending model calls on drafts that would be superseded anyway.
 
-import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreachPausedReason } from "./shared/offer-status.js";
+import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreachPausedReason, isHot, offerHeat } from "./shared/offer-status.js";
 import { addressKey } from "./shared/us-address.js";
 import { sameStreet } from "./shared/us-address.js";
-import { dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor } from "./shared/follow-up.js";
+import { dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor, HOT_MIN_HOURS } from "./shared/follow-up.js";
+import { threadHealth } from "./shared/thread-health.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
 
@@ -77,6 +78,7 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
   const pb = config?.parties?.agent;
   const ladder = pb?.followUp?.ladders?.offer_nudge;
   if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
+  const hotLadderOn = Boolean(pb.followUp.ladders?.hot_push?.enabled);
   const earliest = Math.min(...ladder.steps);
   const rows = await store.listOffersForFollowUp(locationId, {
     statuses: [...OPEN_STATUSES], before: iso(now - earliest * DAY_MS), limit: 200,
@@ -104,6 +106,9 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     if (o.deal) continue;                                  // it became a deal; not our business
     if (!OPEN_STATUSES.has(effectiveStatus(o))) continue;  // the mirror was stale
     if (!isTheOfferToAskAbout(o, byProperty.get(propertyKeyOf(o)) || [])) continue;
+    // A price is agreed: the hot push has it, and two ladders would be two
+    // texts about one house.
+    if (hotLadderOn && isHot(o)) continue;
     // Its expiry date is not checked: the offer stands until they answer, and
     // asking about it is the follow-up, not a re-offer.
     // Count from the last time we actually put it in front of them.
@@ -181,9 +186,43 @@ export async function passedCandidates({ store, locationId, config, now = Date.n
   return out;
 }
 
+/**
+ * hotCandidates({ store, locationId, config, now }) → [candidate]
+ *
+ * Open offers with an agreed price and no deal (shared/offer-status.js
+ * isHot). The ladder counts from the later of when it went hot and when THEY
+ * last wrote: a reply is the agent working it, so the push starts over from
+ * there, with a subject id that carries the anchor day so the restarted
+ * rungs get fresh claims. Rungs sent before the anchor belong to the old one.
+ */
+export async function hotCandidates({ store, locationId, config, now = Date.now() }) {
+  const pb = config?.parties?.agent;
+  const ladder = pb?.followUp?.ladders?.hot_push;
+  if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
+  const rows = await store.listOffersForFollowUp(locationId, { statuses: [...OPEN_STATUSES], before: iso(now), limit: 200 }).catch(() => []);
+  const out = [];
+  for (const o of rows) {
+    if (!o?.contactId || !o.address || o.deal) continue;
+    if (!OPEN_STATUSES.has(effectiveStatus(o)) || !isHot(o)) continue;
+    const heat = offerHeat(o);
+    const hotAt = heat?.at || o.counterBand?.acceptedAt || o.realm?.ts || o.statusAt || o.createdAt;
+    if (!hotAt) continue;
+    const drafts = await store.listReplyDrafts(locationId, { contactId: o.contactId, limit: 20 }).catch(() => []);
+    const lastIn = drafts.filter((d) => d.inbound).map((d) => d.createdAt).sort().at(-1) || "";
+    const anchor = lastIn > hotAt ? lastIn : hotAt;
+    out.push({
+      kind: "hot_push", party: "agent", contactId: o.contactId, subjectId: `${o.id}@${String(anchor).slice(0, 10)}`,
+      offerId: o.id, address: o.address, startedAt: anchor,
+      sentSteps: (o.followUps || []).filter((f) => f?.kind === "hot_push" && String(f.at || "") > anchor).map((f) => f.step),
+      ladder,
+    });
+  }
+  return out;
+}
+
 // Kinds that are about one of our offers: the offer rides into the draft
 // and the offer remembers its own rungs.
-const OFFER_KINDS = new Set(["offer_nudge", "passed_checkin"]);
+const OFFER_KINDS = new Set(["offer_nudge", "passed_checkin", "hot_push"]);
 // A passed offer's check-in isn't ended by them texting us about something
 // else — only paused while a conversation is actually live.
 const CHECKIN_QUIET_HOURS = 72;
@@ -342,6 +381,7 @@ async function runSweep(job, ctx) {
 
   const candidates = [
     ...(await agentCandidates({ store, locationId, config, now })),
+    ...(await hotCandidates({ store, locationId, config, now })),
     ...(await passedCandidates({ store, locationId, config, now })),
     ...(await outreachCandidates({ store, locationId, config, now })),
     ...(await investorCandidates({ store, locationId, config, now })),
@@ -404,6 +444,23 @@ async function runSweep(job, ctx) {
       } catch { /* no drafts to read is not a reason to skip a nudge */ }
     }
 
+    // The hot push is the machine pressing: it asks the brake first
+    // (shared/thread-health.js). Two pushes with nothing back, an annoyed
+    // agent, a thread you stopped or picked up: it stands down, and Today
+    // says the next move is a call.
+    if (c.kind === "hot_push") {
+      const [rows, timeline, offer] = await Promise.all([
+        store.listReplyDrafts(locationId, { contactId: c.contactId, limit: 20 }).catch(() => []),
+        typeof store.listContactEvents === "function" ? store.listContactEvents(locationId, c.contactId, { limit: 300 }).catch(() => []) : [],
+        store.getOffer(c.offerId).catch(() => null),
+      ]);
+      const health = threadHealth({ offer, drafts: rows, events: timeline, now });
+      if (!health.drive) {
+        job.skipped++;
+        push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: `${health.reason}: ${health.detail}` });
+        continue;
+      }
+    }
     if (c.kind === "passed_checkin" && lastInboundAt && now - Date.parse(lastInboundAt) < CHECKIN_QUIET_HOURS * 3600000) {
       job.skipped++;
       push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: "we're talking to them right now" });
@@ -412,7 +469,10 @@ async function runSweep(job, ctx) {
     const d = dueStep({
       steps: c.ladder.steps, startedAt: c.startedAt, sentSteps: c.sentSteps,
       lastInboundAt, lastTouchAt, now,
-      stopOnAnyInbound: c.kind === "passed_checkin" ? false : fu.stopOnAnyInbound, minHoursBetween: fu.minHoursBetween,
+      // The hot push re-anchors on their reply instead of stopping on it,
+      // and keeps its own floor between texts.
+      stopOnAnyInbound: c.kind === "passed_checkin" || c.kind === "hot_push" ? false : fu.stopOnAnyInbound,
+      minHoursBetween: c.kind === "hot_push" ? HOT_MIN_HOURS : fu.minHoursBetween,
       repeatEvery: c.ladder.repeatEvery,
     });
 
@@ -442,7 +502,8 @@ async function runSweep(job, ctx) {
 
     job.due++;
     const already = weekCount.get(c.contactId) || 0;
-    if (already >= fu.maxPerContactPerWeek) {
+    // An agreed price is not held up by this week's other nudges.
+    if (c.kind !== "hot_push" && already >= fu.maxPerContactPerWeek) {
       job.skipped++;
       push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: "they've had enough from us this week" });
       continue;

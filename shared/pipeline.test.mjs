@@ -557,3 +557,24 @@ test("with the timers off there are no moves, and rows say nothing about next", 
   assert.deepEqual(timerMoves(r.actions, { config: CFG, offers: [old], now: NOW }), []);
   assert.equal(r.actions.find((a) => a.kind === "offer_ready").next, undefined);
 });
+
+/* ---------- a hot offer the agent went quiet on ---------- */
+
+test("a price agreed, two pushes and nothing back is stuck, and the next move is a call", () => {
+  const HOT = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, ladders: { hot_push: { enabled: true } } } } } });
+  const hot = offer({ status: "countered", statusAt: D(9), realm: { answer: "yes", ts: D(9) }, hot: { at: D(9), by: "conversation", signal: "writing_up" },
+    followUps: [{ kind: "hot_push", step: 1, at: D(8) }, { kind: "hot_push", step: 3, at: D(6) }] });
+  const row = build({ config: HOT, offers: [hot] }).actions.find((a) => a.kind === "hot_stalled");
+  assert.ok(row, "there is a row");
+  assert.equal(row.group, "stuck");
+  assert.equal(row.severity, "now");
+  assert.match(row.title, /price agreed.*2 pushes.*nothing back/i);
+  assert.match(row.why, /call/);
+  assert.ok(row.ops.some((o) => o.key === "open_contact"));
+  // They answered after the second push: the machine has it again.
+  const answered = build({ config: HOT, offers: [hot], events: [{ type: "text_summary", contactId: "a1", at: D(5) }] });
+  assert.equal(answered.actions.some((a) => a.kind === "hot_stalled"), false);
+  // One push is not two.
+  const once = build({ config: HOT, offers: [{ ...hot, followUps: hot.followUps.slice(0, 1) }] });
+  assert.equal(once.actions.some((a) => a.kind === "hot_stalled"), false);
+});

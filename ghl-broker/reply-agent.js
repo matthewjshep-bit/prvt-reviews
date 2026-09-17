@@ -48,7 +48,7 @@ import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, isHot } from "./shared/offer-status.js";
 import { sameStreet } from "./shared/us-address.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
@@ -601,6 +601,11 @@ export function evaluateReplyGates({
   if (party === "agent") {
     const slip = draft.reply.match(/\b(assign(?:ment|ing|ed|s)?|wholesal(?:e|er|ing)|end buyer|our fee|my fee|spread)\b/i);
     if (slip) flags.push(`the draft says "${slip[0]}" — how we exit and what we make never goes to an agent`);
+    // The hot push has one ask: the listing agent writes it up on NWMLS
+    // forms for us to sign. Offering our own paper is a different move, and
+    // a person's.
+    const paper = draft.intent === "hot_push" ? draft.reply.match(/\bPSA\b|purchase\s+(?:and|&)\s+sale|\bcontracts?\b/i) : null;
+    if (paper) flags.push(`the draft says "${paper[0]}" — the hot push asks for the NWMLS offer, never our paper`);
   }
   // The two rules that are not judgment calls. A number the other side must
   // never hear — our contract price, our fee — is flagged even if they said
@@ -1513,6 +1518,22 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // A price is agreed and nothing is on paper (follow-up-sweep.js
+  // hotCandidates). The ask is always the same one: the listing agent writes
+  // it up on NWMLS forms for us to sign. The agreed number is the offer's own
+  // and may be said; nothing new may.
+  hot_push: {
+    party: "agent",
+    enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.hot_push?.enabled,
+    ready: ({ offer }) => {
+      if (!offer?.address) return "no offer to push";
+      if (offer.deal) return "it became a deal";
+      if (!isHot(offer)) return "no price is agreed on it";
+      return true;
+    },
+    floats: ({ offer }) => [Math.round(Number(offer?.cashAmount) || 0)].filter(Boolean),
+    forbids: () => [],
+  },
   // The owner's answer to a question the bot deflected (partner-answer.js,
   // Today's answer box). A person typed it and pressed the button, so no
   // playbook switch gates it; it is not on the auto-send grid, so it waits in
@@ -1797,6 +1818,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "offer_nudge":   return `Follows up on our offer on ${where}${rung}.`;
     case "counter_nudge": return `Their ${outbound.theirsK || "counter"} on ${where} sat ${outbound.days}d — asks if the seller has any room, names no number of ours.`;
     case "partner_answer": return "Your answer to a question the bot couldn't answer, in its voice.";
+    case "hot_push": return `Pushes the agreed price on ${where} toward paper: asks them to write it up on NWMLS forms for us to sign${rung}.`;
     case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held (${outbound.heldReason}).`;
     case "passed_checkin": return `Checks back in on ${where} — they passed; asks if the seller would come closer to our number${rung}.`;
     case "outreach_open": return `First text: saw their listing at ${where}, asks if they have anything distressed.`;

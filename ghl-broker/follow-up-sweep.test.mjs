@@ -458,3 +458,83 @@ test("a different house for the same agent is its own follow-up", async () => {
   const c = await candidatesFor([sentOffer("a"), sentOffer("b", { address: "9 Oak Ave, Kent, WA 98031" })]);
   assert.deepEqual(c.map((x) => x.offerId).sort(), ["a", "b"]);
 });
+
+/* ---------- the hot push: a price is agreed, push it to paper (2026-09-17) ---------- */
+
+const { hotCandidates } = await import("./follow-up-sweep.js");
+const HOT_SAVED = { aiApiKey: "k", conversationAi: configWith({ agent: { followUp: { enabled: true, ladders: {
+  offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 0 }, hot_push: { enabled: true } } } } }) };
+const hotOffer = (over = {}) => anOffer({ status: "countered", statusAt: at(0), realm: { answer: "yes", ts: at(0) }, hot: { at: at(0), by: "conversation", signal: "writing_up" }, ...over });
+const hotSweep = (store, now) => spySweep(store, { now, opts: { saved: HOT_SAVED } });
+const theirReply = (day, text = "seller is good with it, let me get it written") => ({ id: `in${day}`, contactId: "c1", status: "sent", intent: "acceptance", inbound: text, reply: "great", createdAt: at(day), updatedAt: at(day) });
+
+test("a price agreed yesterday gets the write-it-up ask today", async () => {
+  _resetJobs();
+  const store = fakeStore({ offers: [hotOffer()] });
+  const { job, started } = hotSweep(store, T0 + 1.2 * DAY);
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(started.map((s) => [s.kind, s.subject.step]), [["hot_push", 1]]);
+  assert.equal(started[0].offer.id, "o1", "the offer rides along: the agreed number is in its book");
+});
+
+test("a hot offer is not also nudged by the offer ladder", async () => {
+  _resetJobs();
+  const store = fakeStore({ offers: [hotOffer()] });
+  const { started } = hotSweep(store, T0 + 4 * DAY);
+  await settle();
+  assert.equal(started.filter((s) => s.kind === "offer_nudge").length, 0);
+  assert.equal(started.filter((s) => s.kind === "hot_push").length, 1);
+  const cands = await agentCandidates({ store, locationId: "LOC", config: HOT_SAVED.conversationAi, now: T0 + 4 * DAY });
+  assert.deepEqual(cands, []);
+  const off = await agentCandidates({ store, locationId: "LOC", config: SAVED.conversationAi, now: T0 + 4 * DAY });
+  assert.equal(off.length, 1, "with the hot ladder off, the offer ladder still has it");
+});
+
+test("they answered, so the ladder starts again from their answer and does not re-send rung one's claim", async () => {
+  _resetJobs();
+  const pushed = hotOffer({ followUps: [{ kind: "hot_push", step: 1, at: at(1) }] });
+  const store = fakeStore({ offers: [pushed], drafts: [theirReply(2)],
+    events: [{ contactId: "c1", type: "follow_up_sent", at: at(1), dedupeKey: followUpDedupeKey({ kind: "hot_push", subjectId: `o1@${at(0).slice(0, 10)}`, step: 1 }), data: { kind: "hot_push", step: 1 } }] });
+  const [c] = await hotCandidates({ store, locationId: "LOC", config: HOT_SAVED.conversationAi, now: T0 + 3.2 * DAY });
+  assert.equal(c.startedAt, at(2), "anchored on their reply");
+  assert.deepEqual(c.sentSteps, [], "the rung sent before they answered belongs to the old anchor");
+  assert.equal(c.subjectId, `o1@${at(2).slice(0, 10)}`);
+  const { started } = hotSweep(store, T0 + 3.2 * DAY);
+  await settle();
+  assert.deepEqual(started.map((s) => [s.kind, s.subject.step]), [["hot_push", 1]], "day one after their answer, with a fresh claim");
+});
+
+test("two pushes with nothing back stops: the next move is a phone call", async () => {
+  _resetJobs();
+  const twice = hotOffer({ followUps: [{ kind: "hot_push", step: 1, at: at(1) }, { kind: "hot_push", step: 3, at: at(3) }] });
+  const sent = (day, step) => ({ id: `p${step}`, contactId: "c1", status: "sent", intent: "hot_push", outbound: { kind: "hot_push" }, inbound: "", reply: "checking in", createdAt: at(day), sentAt: at(day), updatedAt: at(day) });
+  const store = fakeStore({ offers: [twice], drafts: [sent(1, 1), sent(3, 3)] });
+  const { job, started } = hotSweep(store, T0 + 6.2 * DAY);
+  await settle();
+  assert.equal(started.length, 0);
+  assert.match(job.results.find((r) => r.kind === "hot_push").reason, /two_unanswered/);
+});
+
+test("a deal is past hot, a dead offer is cold, and the ladder off means nobody is pushed", async () => {
+  const now = T0 + 2 * DAY;
+  const cfg = HOT_SAVED.conversationAi;
+  assert.deepEqual(await hotCandidates({ store: fakeStore({ offers: [hotOffer({ status: "accepted", deal: { stage: "under_contract" } })] }), locationId: "LOC", config: cfg, now }), []);
+  assert.deepEqual(await hotCandidates({ store: fakeStore({ offers: [hotOffer({ status: "passed" })] }), locationId: "LOC", config: cfg, now }), []);
+  assert.deepEqual(await hotCandidates({ store: fakeStore({ offers: [hotOffer()] }), locationId: "LOC", config: SAVED.conversationAi, now }), []);
+  assert.deepEqual(await hotCandidates({ store: fakeStore({ offers: [anOffer()] }), locationId: "LOC", config: cfg, now }), [], "an offer nobody agreed to is not hot");
+});
+
+test("the hot push ignores the weekly cap, but never goes twice inside twenty hours", async () => {
+  _resetJobs();
+  const others = [anOffer({ id: "o2", address: "9 Oak St, Kent, WA" }), anOffer({ id: "o3", address: "44 Pine St, Kent, WA" })];
+  const store = fakeStore({ offers: [...others, hotOffer({ statusAt: at(3), hot: { at: at(3), by: "conversation", signal: "writing_up" }, realm: { answer: "yes", ts: at(3) } })] });
+  const { started } = hotSweep(store, T0 + 4.2 * DAY);
+  await settle();
+  assert.deepEqual(started.map((x) => x.kind), ["offer_nudge", "offer_nudge", "hot_push"], "two other nudges this week do not hold up an agreed price");
+  _resetJobs();
+  const touched = { id: "t", contactId: "c1", status: "sent", intent: "checkin_due", outbound: { kind: "checkin_due" }, inbound: "", reply: "hi", createdAt: at(1.0), updatedAt: at(1.0) };
+  const again = hotSweep(fakeStore({ offers: [hotOffer()], drafts: [touched] }), T0 + 1.2 * DAY);
+  await settle();
+  assert.equal(again.started.length, 0, "we texted them five hours ago");
+});

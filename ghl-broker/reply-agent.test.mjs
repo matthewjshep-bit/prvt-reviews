@@ -3387,3 +3387,15 @@ test("'my email is …, please cc …' emails the documents there; the text only
     }
   }
 });
+
+/* ---------- the hot push never asks for a contract (2026-09-17) ---------- */
+
+test("a hot push that says PSA or contract is held: we ask for the NWMLS offer, never our paper", async () => {
+  const { evaluateReplyGates } = await import("./reply-agent.js");
+  const gate = (reply) => evaluateReplyGates({ draft: { intent: "hot_push", reply, confidence: "high", needsHuman: false }, party: "agent", allowedAmounts: [410000], forbiddenAmounts: [], inboundMessage: "", channel: "sms", style: {}, minConfidence: "medium", holdOnNeedsHuman: false });
+  assert.equal(gate("Glad 410 works. Could you write it up on the NWMLS forms and send it over for us to sign?").flags.some((f) => /NWMLS offer/.test(f)), false);
+  assert.ok(gate("Glad 410 works. I'll send over our PSA today.").flags.some((f) => /NWMLS offer/.test(f)));
+  assert.ok(gate("Great, I'll get a contract over to you.").flags.some((f) => /NWMLS offer/.test(f)));
+  const other = evaluateReplyGates({ draft: { intent: "question", reply: "Once it's under contract we close in two weeks.", confidence: "high", needsHuman: false }, party: "agent", allowedAmounts: [], forbiddenAmounts: [], inboundMessage: "", channel: "sms", style: {}, minConfidence: "medium", holdOnNeedsHuman: false });
+  assert.equal(other.flags.some((f) => /NWMLS offer/.test(f)), false, "only the hot push is held to this");
+});

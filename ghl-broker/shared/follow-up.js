@@ -27,9 +27,18 @@ export const FOLLOW_UP_KINDS = {
   // A pass is rarely final: listings sit, sellers soften. Check back in on
   // the offer they turned down — would the seller come closer to our number?
   passed_checkin: { party: "agent",    trigger: "offer_passed",    label: "Passed offer, check back in" },
+  // A price is agreed and nothing is on paper. The goal from here is the
+  // listing agent writing it up on NWMLS forms for us to sign; this ladder
+  // keeps asking, tightly, until they do or go quiet.
+  hot_push:       { party: "agent",    trigger: "price_agreed",    label: "Price agreed, push to paper" },
   blast_nudge:    { party: "investor", trigger: "blast_sent",      label: "Blasted, no reply" },
   dataroom_nudge: { party: "investor", trigger: "dataroom_viewed", label: "Opened the package, went quiet" },
 };
+
+// The hot push's own floor between texts. A constant, not a setting: it
+// ignores the shared 40-hour gap and the weekly cap on purpose, and this is
+// what it keeps instead.
+export const HOT_MIN_HOURS = 20;
 
 export const FOLLOW_UP_KIND_KEYS = Object.keys(FOLLOW_UP_KINDS);
 export const kindsFor = (party) => FOLLOW_UP_KIND_KEYS.filter((k) => FOLLOW_UP_KINDS[k].party === party);
@@ -51,6 +60,10 @@ export const DEFAULT_LADDERS = {
   offer_nudge:    { enabled: false, steps: [3, 7, 14], repeatEvery: 7, onExhausted: "mark_no_response" },
   // Every ten days, for four months.
   passed_checkin: { enabled: false, steps: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], repeatEvery: 0, onExhausted: "stop" },
+  // Tight: an agreed price cools fast. It re-anchors on their every reply
+  // (follow-up-sweep.js hotCandidates), so these are days since they last
+  // spoke, and two with nothing back is a phone call, not a third text.
+  hot_push:       { enabled: false, steps: [1, 3, 6, 10], repeatEvery: 0, onExhausted: "stop" },
   blast_nudge:    { enabled: false, steps: [2, 6], repeatEvery: 0, onExhausted: "stop" },
   dataroom_nudge: { enabled: false, steps: [1, 4], repeatEvery: 0, onExhausted: "stop" },
 };

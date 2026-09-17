@@ -19,7 +19,7 @@
 // does the reading, the console does the doing.
 
 import {
-  effectiveStatus, isExpired, offerExpiresAt, investorStatus, needsAiReview, aiHoldReasons, isAiGenerated,
+  effectiveStatus, isExpired, offerExpiresAt, investorStatus, needsAiReview, aiHoldReasons, isAiGenerated, isHot,
   DEAD_STATUSES, LIVE_DEAL_STAGES,
   offerHeat,
 } from "./offer-status.js";
@@ -27,6 +27,7 @@ import { stepLabel, exhausted, normalizeSteps, questionIn } from "./follow-up.js
 import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
 import { addressKey } from "./contact-record.js";
 import { openPromises, resolvePromise } from "./promise-resolver.js";
+import { UNANSWERED_LIMIT } from "./thread-health.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -62,6 +63,7 @@ export const ACTION_KINDS = [
   { key: "draft_waiting",     label: "Drafts waiting on you" },
   { key: "handoff",           label: "One click from you" },
   { key: "closing_soon",      label: "Closing" },
+  { key: "hot_stalled",       label: "Price agreed, gone quiet" },
   { key: "underwrite_held",   label: "Underwrites that need a look" },
   { key: "offer_ready",       label: "Priced, not floated" },
   { key: "ladder_exhausted",  label: "Followed up, no reply" },
@@ -90,7 +92,7 @@ export const ACTION_GROUPS = [
   { key: "machine", label: "The machine is on it" },
   { key: "stuck",   label: "Stuck" },
 ];
-const STUCK_KINDS = new Set(["underwrite_held", "underwrite_failed", "ladder_exhausted", "gone_quiet"]);
+const STUCK_KINDS = new Set(["hot_stalled", "underwrite_held", "underwrite_failed", "ladder_exhausted", "gone_quiet"]);
 
 /**
  * groupFor(action) → "yours" | "machine" | "stuck"
@@ -306,6 +308,20 @@ export function buildPipeline({
         title: `${card.address} is priced and nothing has gone out`, why: o.proactive?.skipped?.reason ? String(o.proactive.skipped.reason).slice(0, 140) : "",
         detail: [`cash ${money(o.cashAmount)}`, o.proactive?.skipped?.reason ? `didn't float: ${String(o.proactive.skipped.reason).slice(0, 140)}` : ""].filter(Boolean).join(" · "),
         ops: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "float_realm", label: "Float the number", intent: "secondary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
+    }
+    // A price is agreed and the hot push has asked twice since they last
+    // wrote. A third text is not the move (shared/thread-health.js stops the
+    // ladder here too); a call is.
+    if (isHot(o) && !o.deal && ladders.agent?.enabled && ladders.agent?.ladders?.hot_push?.enabled) {
+      const pushes = (o.followUps || []).filter((f) => f?.kind === "hot_push" && (ms(f.at) ?? 0) > (ms(lastInboundAt) ?? 0));
+      if (pushes.length >= UNANSWERED_LIMIT) {
+        const lastPush = pushes.map((f) => f.at).sort().at(-1);
+        card.actionIds.push(push({ ...base, kind: "hot_stalled", severity: "now",
+          title: `${card.address}: price agreed, ${pushes.length} pushes and nothing back`,
+          detail: `last push ${Math.max(0, Math.floor((now - (ms(lastPush) ?? now)) / DAY_MS))}d ago`,
+          why: "the machine has stopped texting; the next move is a call",
+          ops: [{ key: "open_contact", label: "Open their record", intent: "primary" }, { key: "mark_no_response", label: "Mark no response", intent: "secondary" }] }));
+      }
     }
     if (ladderDone && !replied) {
       card.actionIds.push(push({ ...base, kind: "ladder_exhausted", severity: "soon",

@@ -403,7 +403,7 @@ test("a party never carries the other party's ladder", () => {
   const c = normalizeConversationAi({
     parties: { agent: { followUp: { ladders: { dataroom_nudge: { enabled: true } } } } },
   });
-  assert.deepEqual(Object.keys(c.parties.agent.followUp.ladders), ["outreach_nudge", "offer_nudge", "passed_checkin"]);
+  assert.deepEqual(Object.keys(c.parties.agent.followUp.ladders), ["outreach_nudge", "offer_nudge", "passed_checkin", "hot_push"]);
 });
 
 test("a ladder saved with every day deleted falls back to the default rather than reading as on but silent", () => {

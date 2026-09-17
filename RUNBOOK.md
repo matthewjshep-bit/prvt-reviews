@@ -1054,6 +1054,43 @@ night" keeps meaning last night. Weekends are skipped unless
 Today shows its last run above the queue ("Daytime pass last ran 1:05 PM: 2
 started, 1 left alone by the brake"). The Autopilot switchboard has the switch.
 
+### The hot push — an agreed price, pushed to paper (2026-09-17)
+
+**Why.** "Hot" was the end of the machine's road: a price was agreed (a realm
+yes, the counter band, a warm signal) and nothing chased the paper. The goal
+from there is the listing agent writing it up on NWMLS forms for us to sign.
+
+**What it is.** A sixth follow-up ladder, `hot_push` (agent; `[1, 3, 6, 10]`
+days, stops when it runs out; **off by default**, on with the other ladders at
+Normal; on the auto-send grid as "pushed an agreed price toward paper", so a
+second tick is needed before it sends itself). `hotCandidates` in
+follow-up-sweep.js: open offers where `isHot` and there is no deal.
+
+- **It re-anchors on their reply.** The ladder counts from the later of when it
+  went hot and when they last wrote, and the subject id carries the anchor day
+  (`<offerId>@<yyyy-mm-dd>`), so a restarted ladder gets fresh claims. Rungs
+  sent before the anchor belong to the old one. So `stopOnAnyInbound` does not
+  apply to it: a reply is the agent working it.
+- **Its own rails.** A fixed 20-hour floor between texts (`HOT_MIN_HOURS`, a
+  constant) instead of the shared 40; the weekly cap does not hold up an agreed
+  price. With the ladder on, the offer ladder skips hot offers: one house, one
+  ladder.
+- **It asks the brake first** (`threadHealth`). Two pushes with nothing back,
+  an annoyed agent, a thread you stopped or picked up: it stands down, and
+  Today gets a **Stuck** row, "price agreed, 2 pushes and nothing back", whose
+  next move is a call (`hot_stalled`).
+- **The ask.** Rung 1: can you write it up on NWMLS forms at the agreed number
+  and send it for us to sign. 2: what do you need from us to get it written.
+  3: is the seller still good at that number. 4: a quick call today. The agreed
+  number (the offer's own) may be said; nothing new may.
+- **Never our paper.** A `hot_push` draft that says PSA, purchase and sale, or
+  contract is held by `evaluateReplyGates`. Offering our own paperwork is a
+  different move, and a person's.
+
+The auto-send list's length bound went from 20 to 40: with this ladder the
+agent side has 21 eligible intents, and the last one was being dropped on
+save. Every entry is still filtered against `autoEligible`.
+
 ### Timers on Today's rows (2026-09-17)
 
 `driver.timers` (off by default; Normal on the dial): `{ enabled,

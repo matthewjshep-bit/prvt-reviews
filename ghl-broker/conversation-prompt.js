@@ -481,6 +481,23 @@ export function outboundOpening(outbound) {
         `name a number, sweeten it, or imply we'd go higher — that is a person's call. Asking whether they got it, ` +
         `whether the seller has seen it, or where it stands are all good. ${CONTINUE} Set intent to offer_nudge.`;
 
+    // A price is agreed and nothing is on paper. One ask, said a different
+    // way each rung: the listing agent writes it up on NWMLS forms and sends
+    // it for us to sign. Never our paper.
+    case "hot_push": {
+      const asks = [
+        "ask if they can write it up on NWMLS forms at the agreed number and send it over for us to sign",
+        "ask what they need from us to get it written up (buyer name and entity, earnest money, closing date) and offer to send it right now",
+        "ask whether the seller is still good at that number, and whether anything is holding up getting it in writing",
+        "say you want to keep this moving for their seller and ask for a quick call today to get it written",
+      ];
+      return `${START} We and this agent have agreed a price on ${o.address} and nothing is in writing yet. ` +
+        `In one or two lines, ${asks[Math.min(asks.length, Math.max(1, o.stepIndex || 1)) - 1]}. ` +
+        `The goal is THEIR offer, drafted by them on NWMLS forms, for us to sign: do NOT say PSA, contract, or that we'll send ` +
+        `paperwork. You may say the agreed number (it is in the offer book); do NOT name any other number or reopen the price. ` +
+        `${o.stepIndex > 1 ? "Don't repeat the wording of the last message. " : ""}Warm and brisk, never pushy. ${CONTINUE} Set intent to hot_push.`;
+    }
+
     // A pass is not the end of a listing. Check back in on it: is it still
     // sitting, has the seller softened, would they come closer to our number?
     case "passed_checkin":

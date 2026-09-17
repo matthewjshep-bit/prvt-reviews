@@ -142,7 +142,7 @@ test("a rung keeps its identity when the operator inserts one before it", () => 
 /* ---------- the vocabulary ---------- */
 
 test("each party owns only its own ladders", () => {
-  assert.deepEqual(kindsFor("agent"), ["outreach_nudge", "offer_nudge", "passed_checkin"]);
+  assert.deepEqual(kindsFor("agent"), ["outreach_nudge", "offer_nudge", "passed_checkin", "hot_push"]);
   assert.deepEqual(kindsFor("investor"), ["blast_nudge", "dataroom_nudge"]);
 });
 
@@ -206,4 +206,12 @@ test("'let me check with my partner and get back to you' is a deflection, and a 
   assert.equal(questionIn("Hi Matt. Do you pay a referral fee if I send you a seller? Thanks!"), "Do you pay a referral fee if I send you a seller?");
   assert.equal(questionIn("what's your inspection window"), "what's your inspection window");
   assert.equal(questionIn("x".repeat(400)).length, 240);
+});
+
+test("the hot push is an agent ladder, tight, off by default, and stops when it runs out", async () => {
+  const { FOLLOW_UP_KINDS, DEFAULT_LADDERS, kindsFor, HOT_MIN_HOURS } = await import("./follow-up.js");
+  assert.equal(FOLLOW_UP_KINDS.hot_push.party, "agent");
+  assert.ok(kindsFor("agent").includes("hot_push"));
+  assert.deepEqual(DEFAULT_LADDERS.hot_push, { enabled: false, steps: [1, 3, 6, 10], repeatEvery: 0, onExhausted: "stop" });
+  assert.equal(HOT_MIN_HOURS, 20);
 });

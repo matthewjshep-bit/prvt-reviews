@@ -64,7 +64,7 @@ export const OUTBOUND_INTENTS = {
   // only by the nightly audit, which releases them itself (releaseForAudit),
   // so they never need a box on the playbook grid or a place in the autonomy
   // fingerprint.
-  agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "passed_checkin", "outreach_nudge", "call_followup", "promise_due", "price_drop", "checkin_due", "address_chase"],
+  agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "hot_push", "passed_checkin", "outreach_nudge", "call_followup", "promise_due", "price_drop", "checkin_due", "address_chase"],
   investor: ["blast_open", "blast_nudge", "dataroom_nudge", "call_followup"],
 };
 
@@ -72,7 +72,7 @@ export const INTENT_LABEL = {
   agent: {
     deal_available: "has a deal (tier 1)", new_property: "new property (tier 1)", investor_open: "open to investors (tier 2)",
     realm_yes: "number is in the realm", realm_check: "floated our number", take_check: "floated our read",
-    offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", take_ask: "asked for their read to finish our numbers", partner_answer: "your answer to a question the bot couldn't", passed_checkin: "checked back in on a passed offer",
+    offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", take_ask: "asked for their read to finish our numbers", partner_answer: "your answer to a question the bot couldn't", passed_checkin: "checked back in on a passed offer", hot_push: "pushed an agreed price toward paper",
     outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text",
     call_followup: "text after a call", promise_due: "kept our word on a number we owed", price_drop: "saw the list price come down", checkin_due: "the check-in they asked for", address_chase: "asked again for the address of a property they said was coming",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
@@ -96,6 +96,7 @@ export const INTENT_GLOSS = {
   agent: {
     outreach_open: "the text it starts when a new agent is imported: saw their listing, we buy as-is for cash, anything distressed?",
     outreach_nudge: "a follow-up on that first text when nothing came back",
+    hot_push: "once a price is agreed and nothing is on paper: can you write it up on NWMLS forms for us to sign? what do you need from us?",
     passed_checkin: "every ten days after they pass on an offer: still sitting? would the seller come closer to our number?",
     call_followup: "the text sent right after a phone call, drafted from the transcript: what we took from it and the next step",
     promise_due: "when we told them we'd come back with a number or an answer and nothing went out in time: an honest update, and their value and repairs if our numbers are stuck",
@@ -701,7 +702,7 @@ function normalizePlaybook(p, party, seed = {}) {
     mayNotCommit: str(src.mayNotCommit, 1500),
     autoSend: {
       enabled: bool(auto.enabled, false),
-      intents: list(auto.intents, { max: 20, each: 40 }).filter((i) => eligible.includes(i)),
+      intents: list(auto.intents, { max: 40, each: 40 }).filter((i) => eligible.includes(i)),
     },
     intentRules,
     fallback: {
