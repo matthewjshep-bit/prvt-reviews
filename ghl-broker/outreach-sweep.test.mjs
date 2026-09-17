@@ -137,7 +137,8 @@ test("walks a county page by page across runs, then the next county; a dry run k
   const counties = [{ county: "King", state: "WA" }, { county: "Pierce", state: "WA" }];
   const saved = { outreachAutopilot: { enabled: true, counties } };
   const day = Date.parse("2026-09-01T15:00:00Z");
-  const store = fakeStore([]);
+  // Somebody to text in every page: an empty county gives up its turn (the test below).
+  const store = fakeStore([row("someone")]);
   const bodies = [];
   let reply;
   const deps = { runPull: async (_l, _c, b) => { bodies.push(b); return { batchId: "b1", warnings: [], ...reply }; }, importAgents: async () => ({ results: [] }) };
@@ -170,6 +171,31 @@ test("walks a county page by page across runs, then the next county; a dry run k
   assert.equal(bodies[3].county, "Pierce");
   assert.equal(bodies[3].offset, 0);
   assert.equal(place().turn, 0, "then round to King again");
+});
+
+test("a county with nobody new doesn't cost the day: the same run moves on to the next county, and the empty one gives up its turn", async () => {
+  // 2026-09-17: King's 844 "new" rows were all in GHL already or had no phone; Pierce and Snohomish never got a turn.
+  _resetJobs();
+  const counties = [{ county: "King", state: "WA" }, { county: "Pierce", state: "WA" }, { county: "Snohomish", state: "WA" }];
+  const saved = { outreachAutopilot: { enabled: true, counties } };
+  const byBatch = { "b-King": [row("k1", { ghl: { contactId: "already" } }), row("k2", { phone: "" })], "b-Pierce": [row("p1"), row("p2")] };
+  const store = { ...fakeStore([]), listOutreachAgents: async (_l, { batchId }) => byBatch[batchId] || [] };
+  const pulled = [];
+  let imported;
+  const deps = {
+    runPull: async (_l, _c, b) => { pulled.push(b.county); return { batchId: `b-${b.county}`, warnings: [], nextOffset: 500, totalCount: 900, requestsUsed: b.county === "King" ? 0 : 1 }; },
+    importAgents: async (a) => { imported = a; return { imported: 2, enrolled: 2, results: [] }; },
+  };
+  const job = startOutreachSweep({ locationId: "loc-mv", client: {}, saved, store, deps, now: Date.parse("2026-09-01T15:00:00Z") });
+  await settle();
+  assert.deepEqual(pulled, ["King", "Pierce"], "stops at the first county with someone to text");
+  assert.equal(job.county, "Pierce, WA");
+  assert.deepEqual(imported.agentKeys, ["p1", "p2"]);
+  assert.deepEqual(job.tried.map((t) => [t.county, t.picked]), [["King, WA", 0], ["Pierce, WA", 2]]);
+  assert.ok(job.warnings.some((w) => /King, WA: nobody new to text/.test(w)));
+  const place = store.cursors.get(`loc-mv|${PAGES_CURSOR}`)?.doc;
+  assert.equal(place.turn, 1, "Pierce has more pages and people: it keeps the turn, King doesn't get it back first");
+  assert.equal(place.offsets["King, WA"], 500, "King's place is kept for when its turn comes round");
 });
 
 test("firstTouch 'workflow' enrolls by id: no tag, no bot draft", async () => {

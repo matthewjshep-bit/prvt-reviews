@@ -248,6 +248,8 @@ export function startOutreachSweep({ locationId, client, saved = {}, store = def
     id: job.id, trigger, dryRun: job.dryRun, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt,
     county: job.county, candidates: job.candidates, picked: job.picked, imported: job.imported, enrolled: job.enrolled,
     skippedExisting: job.skippedExisting || 0, requestsUsed: job.pull?.requestsUsed ?? null, error: job.error, warning: job.warnings[0] || "",
+    // Which counties this run read before it found somebody (or gave up).
+    tried: (job.tried || []).slice(0, 6),
   });
   stamp({ run: { id: job.id, trigger, startedAt: job.startedAt } })
     .then(() => run(job, { locationId, client, saved, store, deps, now }))
@@ -302,66 +304,88 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
   // turn it is, from where the last run stopped, then the next county once
   // it's read to the end. Without one: the saved market defaults. A cache
   // hit is free.
-  job.phase = "pulling";
-  const query = { ...pullQuery(oa), maxRequests: perRun };
-  let pages = null;
-  let county = null;
-  let key = null;
-  // The saved places belong to the filters they were read with: a new price
-  // cap or rule is a different result list, and an old offset would skip into it.
+  //
+  // A county that yields nobody doesn't cost the day (2026-09-17: King's 844
+  // "new" rows were all already in GHL or had no phone, three runs running,
+  // while Pierce and Snohomish waited their turn): the run moves on to the
+  // next county, while requests last, until somebody is picked or every
+  // county has been tried. An empty county gives up its turn either way.
   const querySig = JSON.stringify(pullQuery(oa));
-  if (oa.counties.length) {
-    pages = (await store.getJobCursor?.(locationId, PAGES_CURSOR).catch(() => null))?.doc || {};
-    if (pages.query !== querySig) pages = { ...pages, offsets: {}, totals: {} };
-    const turn = (Number(pages.turn) || 0) % oa.counties.length;
-    county = oa.counties[turn];
-    key = `${county.county}, ${county.state}`;
-    query.county = county.county; query.state = county.state;
-    query.offset = Number(pages.offsets?.[key]) || 0;
-    pages = { ...pages, turn };
-  }
-  job.county = key;
-  // Its own batch per market. Without a batchId the pull lands in the most
-  // recent batch, whatever that is — on 2026-09-14 a King pull went into a
-  // hand-made "Spokane County · Sep 3" batch and picked Spokane agents from
-  // it. The pick below reads the whole batch, so the batch IS the market.
-  const batchId = await autopilotBatchId({ store, locationId, market: key || "saved market" }).catch(() => undefined);
-  if (batchId) query.batchId = batchId;
-  const pull = await deps.runPull(locationId, client, query);
-  job.pull = { batchId: pull.batchId, batchName: pull.batchName, requestsUsed: pull.requestsUsed, cached: pull.cached,
-    listingsFetched: pull.listingsFetched, listingsKept: pull.listingsKept, agentsTotal: pull.agentsTotal, agentsNew: pull.agentsNew,
-    offset: query.offset ?? 0, nextOffset: pull.nextOffset || 0, totalCount: pull.totalCount ?? null };
-  job.warnings.push(...(pull.warnings || []).filter((w) => !/^county filter kept/.test(w)).slice(0, 5));
+  let left = perRun;
+  let pull = null;
+  let picked = [];
+  job.tried = [];
+  const tries = Math.max(1, oa.counties.length);
+  for (let attempt = 0; attempt < tries; attempt++) {
+    job.phase = "pulling";
+    const query = { ...pullQuery(oa), maxRequests: Math.max(1, left) };
+    let pages = null;
+    let county = null;
+    let key = null;
+    // The saved places belong to the filters they were read with: a new price
+    // cap or rule is a different result list, and an old offset would skip into it.
+    if (oa.counties.length) {
+      pages = (await store.getJobCursor?.(locationId, PAGES_CURSOR).catch(() => null))?.doc || {};
+      if (pages.query !== querySig) pages = { ...pages, offsets: {}, totals: {} };
+      // A live run reads the turn it just saved; a preview saves nothing, so
+      // it steps through the counties on its own to show the same walk.
+      const turn = ((Number(pages.turn) || 0) + (job.dryRun ? attempt : 0)) % oa.counties.length;
+      county = oa.counties[turn];
+      key = `${county.county}, ${county.state}`;
+      query.county = county.county; query.state = county.state;
+      query.offset = Number(pages.offsets?.[key]) || 0;
+      pages = { ...pages, turn };
+    }
+    job.county = key;
+    // Its own batch per market. Without a batchId the pull lands in the most
+    // recent batch, whatever that is — on 2026-09-14 a King pull went into a
+    // hand-made "Spokane County · Sep 3" batch and picked Spokane agents from
+    // it. The pick below reads the whole batch, so the batch IS the market.
+    const batchId = await autopilotBatchId({ store, locationId, market: key || "saved market" }).catch(() => undefined);
+    if (batchId) query.batchId = batchId;
+    pull = await deps.runPull(locationId, client, query);
+    left -= Number(pull.requestsUsed) || 0;
+    job.pull = { batchId: pull.batchId, batchName: pull.batchName, requestsUsed: (job.pull?.requestsUsed || 0) + (Number(pull.requestsUsed) || 0), cached: pull.cached,
+      listingsFetched: pull.listingsFetched, listingsKept: pull.listingsKept, agentsTotal: pull.agentsTotal, agentsNew: pull.agentsNew,
+      offset: query.offset ?? 0, nextOffset: pull.nextOffset || 0, totalCount: pull.totalCount ?? null };
+    job.warnings.push(...(pull.warnings || []).filter((w) => !/^county filter kept/.test(w)).slice(0, 5));
 
-  // Remember where this county stopped. A dry run leaves the place alone,
-  // so the live run after a preview reads the same pages (from the cache).
-  if (county && !job.dryRun) {
-    const next = Number(pull.nextOffset) || 0;
-    await store.setJobCursor?.(locationId, PAGES_CURSOR, { at: iso(now), doc: {
-      turn: next ? pages.turn : (pages.turn + 1) % oa.counties.length,
-      offsets: { ...(pages.offsets || {}), [key]: next },
-      totals: { ...(pages.totals || {}), [key]: pull.totalCount ?? null },
-      lastCounty: key,
-      query: querySig,
-    } }).catch((e) => job.warnings.push(`page cursor: ${String(e?.message || e).slice(0, 120)}`));
-  }
+    // 2. Who is new to us, and how many of them today.
+    job.phase = "picking";
+    const rows = await store.listOutreachAgents(locationId, { batchId: pull.batchId, status: "new", limit: 1000 });
+    job.candidates = rows.length;
+    // Ranked, and deliberately longer than the day's number: the import walks it
+    // one agent at a time, skips anyone already in GHL, and stops once
+    // `dailyCap` brand-new contacts exist. Handing it exactly `dailyCap` let a
+    // pull whose GHL check was rate-limited pass 10 existing contacts in 12.
+    // Pending/sold and condos are already out: the RentCast pull asks for Active
+    // listings of the configured property types only. Turnkey can't be told
+    // from RentCast, and those agents weed themselves out (a turnkey reply is Tier 2).
+    picked = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
+      maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null });
+    job.picked = picked.length;
+    job.tried.push({ county: key, candidates: rows.length, picked: picked.length, requestsUsed: Number(pull.requestsUsed) || 0 });
 
-  // 2. Who is new to us, and how many of them today.
-  job.phase = "picking";
-  const rows = await store.listOutreachAgents(locationId, { batchId: pull.batchId, status: "new", limit: 1000 });
-  job.candidates = rows.length;
-  // Ranked, and deliberately longer than the day's number: the import walks it
-  // one agent at a time, skips anyone already in GHL, and stops once
-  // `dailyCap` brand-new contacts exist. Handing it exactly `dailyCap` let a
-  // pull whose GHL check was rate-limited pass 10 existing contacts in 12.
-  // Pending/sold and condos are already out: the RentCast pull asks for Active
-  // listings of the configured property types only. Turnkey can't be told
-  // from RentCast, and those agents weed themselves out (a turnkey reply is Tier 2).
-  const picked = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
-    maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null });
-  job.picked = picked.length;
+    // Remember where this county stopped. A dry run leaves the place alone,
+    // so the live run after a preview reads the same pages (from the cache).
+    // The turn passes on when the county is read to the end — or came up empty.
+    if (county && !job.dryRun) {
+      const next = Number(pull.nextOffset) || 0;
+      await store.setJobCursor?.(locationId, PAGES_CURSOR, { at: iso(now), doc: {
+        turn: next && picked.length ? pages.turn : (pages.turn + 1) % oa.counties.length,
+        offsets: { ...(pages.offsets || {}), [key]: next },
+        totals: { ...(pages.totals || {}), [key]: pull.totalCount ?? null },
+        lastCounty: key,
+        query: querySig,
+      } }).catch((e) => job.warnings.push(`page cursor: ${String(e?.message || e).slice(0, 120)}`));
+    }
+    if (picked.length) break;
+    if (key) job.warnings.push(`${key}: nobody new to text (${rows.length} on file, all already in GHL, without a phone, or outside the rules) — moving on`);
+    if (!county || left <= 0) break;
+  }
   job.results = picked.map((r) => ({ agentKey: r.agentKey, name: r.doc?.name || "", hook: r.doc?.hook?.address || "", distressed: r.doc?.distressedCount || 0 }));
   if (!picked.length) {
+    job.warnings.push("no county had anyone new to text today");
     job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
     return;
   }
