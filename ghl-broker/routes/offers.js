@@ -4156,6 +4156,33 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await store.updateOffer(full.id, full);
       return { ok: true, address: full.address };
     },
+    // The agent is warming to our number ("might work", "let me present it",
+    // "I'll write it up"): the offer goes hot. Only an offer whose number is
+    // actually out — sent, countered, or floated — can be warmed to; a flag
+    // you set or cleared by hand is yours and is never overwritten.
+    raiseOfferHeat: async ({ contactId, addressHint, signal, note = "", draftId = null }) => {
+      const offer = pickOfferForStatus(await store.listOffers(locationId, { contactId, limit: 50 }), addressHint, "hot");
+      if (!offer?.id) return { ok: false, reason: offer?.reason || "no open offer to flag" };
+      const full = await store.getOffer(offer.id);
+      if (!full || !(Number(full.cashAmount) > 0)) return { ok: false, reason: "no number on that offer yet" };
+      const numberOut = ["sent", "countered"].includes(effectiveStatus(full)) || Boolean(full.proactive?.realmCheckAt);
+      if (!numberOut) return { ok: false, reason: "our number hasn't gone out on that one" };
+      if (full.hot?.off || full.hot?.by === "operator") return { ok: true, raised: false, address: full.address };
+      const was = isHot(full);
+      const ts = new Date().toISOString();
+      // The strongest thing they've said stands: "writing it up" isn't walked back by a later "might work".
+      const rank = { warm: 1, presenting: 2, writing_up: 3 };
+      if ((rank[full.hot?.signal] || 0) >= (rank[signal] || 0) && full.hot?.at) return { ok: true, raised: false, address: full.address };
+      full.hot = { at: full.hot?.at || ts, by: "conversation", signal, note: dealStr(note, 200), signalAt: ts, draftId };
+      full.updatedAt = ts;
+      await store.updateOffer(full.id, full);
+      if (!was) {
+        await appendDealHistory(client, locationId, contactId, "agent_deal_history",
+          historyLine(ts, full.address, "hot — close to a contract", dealStr(note, 120)),
+          { offerId: full.id, source: "conversation", at: ts }).catch(() => {});
+      }
+      return { ok: true, raised: true, address: full.address, signal };
+    },
     // "In the realm": remembered on the offer, so the book says so next time
     // and History can show which offers are cleared to send.
     setOfferRealm: async ({ contactId, addressHint, answer, note = "" }) => {

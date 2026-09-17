@@ -6,7 +6,7 @@
 // me" is a textarea, not a redeploy, and an investor is answered by someone
 // who knows they are an investor. Pure.
 
-import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS } from "./shared/conversation-ai.js";
+import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS, DEAL_SIGNALS } from "./shared/conversation-ai.js";
 
 const LENGTH_RULE = {
   short: "One to three sentences.",
@@ -610,7 +610,7 @@ export function schemaFor(party = "agent", { profile = true, outbound = null, bo
     type: "object",
     additionalProperties: false,
     required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount",
-      ...(party === "investor" ? ["passReason"] : []), ...(party === "agent" ? ["propertyDetails", "agentArv", "agentRehab", "agentTakeNote"] : []), ...(profile ? ["profile"] : []),
+      ...(party === "investor" ? ["passReason"] : []), ...(party === "agent" ? ["propertyDetails", "agentArv", "agentRehab", "agentTakeNote", "dealSignal"] : []), ...(profile ? ["profile"] : []),
       ...(booking ? ["offeredSlots", "chosenSlot"] : [])],
     properties: {
       ...(profile ? { profile: profileSchemaFor(party) } : {}),
@@ -649,6 +649,11 @@ export function schemaFor(party = "agent", { profile = true, outbound = null, bo
         agentArv: { type: "integer", description: "What THEY think it is worth fixed up, whole dollars; 0 if not stated" },
         agentRehab: { type: "integer", description: "What THEY think the work costs, whole dollars; 0 if not stated" },
         agentTakeNote: { type: "string", description: "Their own words on value or work, under 25 words; empty if none" },
+        dealSignal: { type: "string", enum: ["", ...DEAL_SIGNALS], description:
+          "How warm THEIR newest message is toward OUR number or offer on this house. 'warm': they think it might work, is close, is doable, " +
+          "or the seller might take it. 'presenting': they will present it, take it to the seller, run it by their client. " +
+          "'writing_up': they will write or draft the offer / put it on NWMLS forms / represent us. Empty when they said none of that, " +
+          "when no number of ours has been mentioned yet, or when they are turning it down or countering well above it." },
       } : {}),
     },
   };

@@ -3306,3 +3306,36 @@ test("the list price said in words is their floor, and a soft floor out of reach
   assert.equal(d2.intent, "rejection");
   assert.match(d2.summary, /filed as a pass/);
 });
+
+test("the agent's words read as a deal signal; a no or a hedge the other way does not", async () => {
+  const { dealSignalFromText: f } = await import("./shared/conversation-ai.js");
+  assert.equal(f("That might work. Let me talk to them"), "warm");
+  assert.equal(f("you're getting closer"), "warm");
+  assert.equal(f("Let's present it"), "presenting");
+  assert.equal(f("I will run it by them"), "presenting");
+  assert.equal(f("Sure, I'll write it up tonight"), "writing_up");
+  for (const no of ["that wont work", "I don't think that would work for them", "probably not going to work", "That is way too low", "Sounds good!", "Not a fixer. Thanks"]) assert.equal(f(no), "", no);
+});
+
+test("an agent warming to our number raises the offer's heat; a rejection never does", async () => {
+  for (const [message, draft, want] of [
+    ["That might work. Let me talk to them", { intent: "other", dealSignal: "" }, "warm"],              // the words alone
+    ["ok", { intent: "other", dealSignal: "writing_up" }, "writing_up"],                                   // the model's read
+    ["That might work for someone else, we're passing", { intent: "rejection", dealSignal: "warm" }, null],
+  ]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const calls = [];
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: STARTER_NOW, store: fakeStore(), contactId: "c1", message,
+      deps: {
+        draft: async () => ({ ...DRAFT, propertyAddress: "12 Elm St, Renton, WA 98056", reply: "Appreciate it.", ...draft }),
+        raiseOfferHeat: async (args) => { calls.push(args); return { ok: true, raised: true, address: args.addressHint }; },
+      },
+    });
+    await settle();
+    assert.equal(job.status, "done", job.error);
+    if (want) { assert.equal(calls.length, 1, message); assert.equal(calls[0].signal, want); assert.equal(calls[0].contactId, "c1"); }
+    else assert.equal(calls.length, 0, message);
+  }
+});

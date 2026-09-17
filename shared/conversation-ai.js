@@ -268,6 +268,46 @@ export const AGENT_PAPER_RULE =
   "represent us, and ask whether they can write it up on NWMLS forms at our number for us to sign. If they'd rather not represent us, " +
   "say my partner will sort out who writes it and come back — never name another agent or invent one.";
 
+// Where every listing-agent conversation is going — fixed beside the paper
+// rule for the same reason. Each step has one job; the bot's reply should move
+// the thread one step along, never skip ahead and never circle.
+export const AGENT_GOAL_RULE =
+  "THE GOAL, IN ORDER: (1) get an address and enough on condition to price it, so we can generate an offer; " +
+  "(2) find out what price would actually work for the seller — their number, what they'd take, how firm; " +
+  "(3) make sure that price works for us — our underwritten number and my partner decide that, never you; " +
+  "(4) get to a number both sides can live with — any sign the agent thinks it could work ('might work', 'that's closer', " +
+  "'I can take that to them', 'let me present it') is progress: acknowledge it and move straight to the next step, " +
+  "don't reopen the price; (5) get the AGENT to write it up — ask them to represent us and put it on NWMLS forms for us to sign. " +
+  "Every reply to a listing agent should be doing one of those five things. When the thread is at step 4 or 5, keep it short and keep it moving: " +
+  "the only open question is who writes it and when.";
+
+// How warm the agent's newest message is toward OUR number, read by the model
+// (dealSignal in the output schema) with a plain-text fallback. Any of these on
+// an offer whose number is already out flags the offer hot (offerHeat).
+export const DEAL_SIGNALS = ["warm", "presenting", "writing_up"];
+export const DEAL_SIGNAL_LABEL = {
+  warm: "agent says the number might work",
+  presenting: "agent is taking it to the seller",
+  writing_up: "agent is writing it up",
+};
+const SIGNAL_NEGATED = /\b(won'?t|will not|not going to|isn'?t going to|doesn'?t|does not|don'?t think|do not think|might not|may not|probably not|never|no way|can'?t see|cannot see|too low|way off|not even close|not close)\b/i;
+const SIGNAL_RX = {
+  writing_up: /\b(i'?ll|i will|i can|let me|happy to|going to|gonna)\s+(write|draw|draft|type)\s+(it|that|this|one|an offer|the offer|something)?\s*up\b|\bwrit(e|ing) (it|the offer|an offer) up\b|\bon (nwmls|mls) forms\b.*\b(i'?ll|i can|i will)\b|\bi'?ll (represent|write the offer)\b/i,
+  presenting: /\b(let'?s|i'?ll|i will|i can|happy to|going to|gonna)\s+(present|submit|take|bring|run|send|pass|forward)\s+(it|that|this|your offer|the offer|your number)\b|\bi'?ll (talk|speak|check) (to|with) (the |my )?(seller|sellers|client|clients|owner|owners)\b|\brun it by (the |my )?(seller|sellers|client|clients|owner)\b/i,
+  warm: /\b(might|may|could|should|would|will) (probably |possibly |likely |actually |just )?(work|do it|get it done|fly)\b|\b(that|this|it) (might|may|could) be (doable|workable|possible)\b|\b(that'?s|thats|that is|you'?re|we'?re|getting) (a lot |much |way |pretty |very |really )?(closer|close|in the ballpark|in the range|in range|in the realm|doable|workable|reasonable)\b|\bnot (too )?far off\b|\b(sounds?|seems?|looks?) (doable|workable|reasonable|promising|good to me)\b|\bi think (they|she|he|the seller|we)('?d| would| could| might| can)? (take|accept|consider|go for|do|entertain|be open)\b|\b(they|she|he|seller)('?d| would| might| may| could) (take|accept|consider|go for|entertain|be open to) (it|that|this)\b|\bworth (presenting|a shot|a try|taking to)\b/i,
+};
+/** dealSignalFromText(message) → "writing_up" | "presenting" | "warm" | "" — strongest wins; a negated sentence is none. */
+export function dealSignalFromText(message = "") {
+  const text = String(message || "");
+  if (!text.trim()) return "";
+  for (const key of ["writing_up", "presenting", "warm"]) {
+    for (const sentence of text.split(/(?<=[.!?\n])\s+/)) {
+      if (SIGNAL_RX[key].test(sentence) && !SIGNAL_NEGATED.test(sentence)) return key;
+    }
+  }
+  return "";
+}
+
 export const OFFER_DOC_KEYS = ["image", "pdf", "psa", "scope", "comps", "netsheet"];
 export const OFFER_DOC_LABEL = {
   image: "offer letter (image)", pdf: "offer letter (PDF)", psa: "purchase & sale agreement",

@@ -12,7 +12,7 @@
 // The loaders do I/O; the builders are pure and tested.
 
 import { fmtMoney } from "./shared/offer-calc.js";
-import { effectiveStatus, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor } from "./shared/offer-status.js";
+import { effectiveStatus, offerHeat, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor } from "./shared/offer-status.js";
 import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybox.js";
 import { dealToQuery } from "./dispo.js";
 import { dealNumbers } from "./dataroom.js";
@@ -128,6 +128,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     if (showMath) { if (arv) amounts.add(arv); if (repairs) amounts.add(repairs); }
     const counters = (o.statusHistory || []).filter((h) => h?.status === "countered").slice(-2)
       .map((h) => `countered${h.note ? ` (${String(h.note).slice(0, 60)})` : ""} ${dateWord(h.ts)}`);
+    const heat = offerHeat(o);
     const realm = o.realm?.answer === "yes" ? "agent said the number is in the realm" : "";
     const parts = [
       `${o.address}:`,
@@ -145,6 +146,8 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       // is what had the bot telling agents an offer had lapsed.
       counters.length ? `history: ${counters.join("; ")}` : "",
       realm,
+      // Step 4 of the goal is reached: what's left is getting it written up.
+      heat ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on NWMLS forms for us to sign` : "",
       o.statusNote ? `note: ${String(o.statusNote).slice(0, 120)}` : "",
     ].filter(Boolean);
     lines.push(`- ${parts.join(" ")}`);

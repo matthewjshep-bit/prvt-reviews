@@ -264,6 +264,8 @@ export const priceLocked = (offer) =>
 // mean an offer that got hot stopped being countered.
 //
 //   offer.hot = { at, by: "operator", note }        you flagged it
+//   offer.hot = { at, by: "conversation", signal }  the agent said it might work / they'll
+//                                                   present it / write it up (reply-agent 4c‴)
 //   offer.hot = { off: true, at }                   you cooled it; beats the signals below
 //
 // With neither, heat is derived: the price is agreed (they said our number
@@ -279,7 +281,11 @@ export function offerHeat(offer) {
   const status = effectiveStatus(offer);
   if (DEAD_STATUSES.has(status) || status === "accepted") return null;
   if (offer.hot?.off) return null;
-  if (offer.hot?.at) return { at: offer.hot.at, by: "you", reason: offer.hot.note || "you flagged it" };
+  if (offer.hot?.at) {
+    return offer.hot.by === "conversation"
+      ? { at: offer.hot.at, by: "auto", reason: offer.hot.note || "the agent is warming to it", signal: offer.hot.signal || "" }
+      : { at: offer.hot.at, by: "you", reason: offer.hot.note || "you flagged it" };
+  }
   if (status === "draft") return null;
   const agreed = priceAgreed(offer);
   if (agreed) return { at: agreed.at || null, by: "auto", reason: HOT_VIA[agreed.via] || String(agreed.via || "price agreed").replace(/_/g, " "), amount: agreed.amount || 0 };

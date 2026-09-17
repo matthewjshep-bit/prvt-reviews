@@ -42,7 +42,7 @@ import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
 import { getFreeSlots } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
@@ -243,6 +243,8 @@ export async function draftReply({
     passReason: normalizePassReason(p.passReason),
     // Agents only: what THEY think it's worth and costs. Theirs, never ours.
     agentTake: normalizeAgentTake(p),
+    // Agents only: how warm they are toward our number ("might work", "let's present it").
+    dealSignal: DEAL_SIGNALS.includes(p.dealSignal) ? p.dealSignal : "",
     // Agents only: what this message added to the property's dossier.
     propertyDetails: normalizePropertyDetails(p.propertyDetails),
     profile: normalizeProfile(p.profile),
@@ -1214,7 +1216,7 @@ export async function assembleConversation({
 
   const playbook = config.parties?.[party] || null;
   const base = playbook ? playbook.instructions : config.routing.genericInstructions;
-  const instructions = party === "agent" ? [base, AGENT_PAPER_RULE].filter(Boolean).join("\n") : base;
+  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE].filter(Boolean).join("\n") : base;
   const signer = config.persona.name || saved?.company?.signer || saved?.company?.name || "";
   // Ours to hand out when asked — an agent who asks "what's your email?" got
   // "I'll text it over shortly" until 2026-09-12, because we never sent it.
@@ -2487,6 +2489,23 @@ async function runReply(job, ctx) {
     if (typeof deps.afterAgentTake === "function") {
       try { await deps.afterAgentTake({ contactId: job.contactId, address: draft.propertyAddress }); }
       catch (e) { warnings.push(`realm follow-up: ${String(e?.message || e).slice(0, 120)}`); }
+    }
+  }
+
+  /* --- 4c‴. they're warming to our number: the offer goes hot --- */
+  // "Might work", "let me present it", "I'll write it up" — and a yes on the
+  // number. The model's read first, the plain words second; never on a no or
+  // a counter, which say the opposite. The broker decides whether there is
+  // an offer of ours, with its number already out, for this to be about.
+  if (party === "agent" && !isCall && typeof deps.raiseOfferHeat === "function" && !["rejection", "opt_out", "we_passed"].includes(draft.intent)) {
+    const signal = draft.dealSignal
+      || (draft.intent === "counter" ? "" : dealSignalFromText(job.originalMessage || job.message))
+      || (["realm_yes", "acceptance"].includes(draft.intent) ? "warm" : "");
+    if (signal) {
+      try {
+        const r = await deps.raiseOfferHeat({ contactId: job.contactId, addressHint: draft.propertyAddress || "", signal, note: DEAL_SIGNAL_LABEL[signal], draftId: record.id });
+        if (r?.ok && r.raised) job.warnings.push(`flagged hot: ${r.address} — ${DEAL_SIGNAL_LABEL[signal]}`);
+      } catch (e) { warnings.push(`hot flag: ${String(e?.message || e).slice(0, 120)}`); }
     }
   }
 
