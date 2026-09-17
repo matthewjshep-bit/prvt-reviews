@@ -122,6 +122,12 @@ export default function PipelineView({ section = "queue" }) {
               <h2 className="text-sm font-bold">Today</h2>
               {refreshBtn}
             </div>
+            {data?.daytime && (
+              <p className="mb-2 text-xs text-slate-500">
+                Daytime pass last ran {new Date(data.daytime.finishedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: {data.daytime.started} started
+                {data.daytime.stopped ? `, ${data.daytime.stopped} left alone by the brake` : ""}{data.daytime.error ? `. It failed: ${data.daytime.error}` : "."}
+              </p>
+            )}
             <ActionQueue actions={actions} draftsById={draftsById} sendsEnabled={data?.sendsEnabled}
               serverOffsetMs={offsetRef.current} onDone={refresh} highlightDraftId={highlightDraftId} onShowDraft={showDraft} />
           </div>

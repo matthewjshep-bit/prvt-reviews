@@ -42,7 +42,7 @@ import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_
 import { draftStats } from "../shared/conversation-ai.js";
 import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
 import { conversationConfig } from "../reply-agent.js";
-import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR } from "../conversation-audit.js";
+import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, summarize as summarizeAudit } from "../shared/conversation-audit.js";
 import { startCoach, coachReport, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
 
@@ -401,6 +401,9 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // Last night's audit: the rows that are Matt's join the queue under
       // "From last night"; the rest of the result rides along for the card.
       const auditCursor = await store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null);
+      // The daytime pass's last run, for the line above the machine's group.
+      const dayCursor = config.driver?.daytime?.enabled ? await store.getJobCursor?.(locationId, DAY_CURSOR_NAME).catch(() => null) : null;
+      const dayLast = dayCursor?.doc?.last || null;
       const audit = auditCursor?.doc?.last || null;
       const fromLastNight = auditActions(audit, { now }).filter((a) =>
         !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled")))
@@ -408,6 +411,8 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       out.counts.actions.byGroup.yours += fromLastNight.length;
       res.json({
         audit: audit ? { lastRunAt: auditCursor.at, run: auditCursor.doc?.run || null, counts: audit.counts, summary: summarizeAudit(audit), finishedAt: audit.finishedAt, trigger: audit.trigger, dryRun: audit.dryRun, error: audit.error, ghlRead: audit.ghlRead } : null,
+        daytime: dayLast ? { finishedAt: dayLast.finishedAt, started: (dayLast.acted || []).filter((a) => ["started", "queued", "clocked"].includes(a.status)).length,
+          stopped: (dayLast.acted || []).filter((a) => a.status === "stopped").length, error: dayLast.error || null } : null,
         ok: true,
         now: new Date(now).toISOString(),
         sendsEnabled: CARD_SENDS_ENABLED,

@@ -129,6 +129,9 @@ export function autopilotSummary({ config = {}, sendsEnabled = false, underwrite
   const dr = config.driver?.promises?.enabled;
   out.push(sw("driver:promises", "Keeping promised numbers", dr && config.enabled && sendsEnabled ? "on" : dr ? "drafting" : "off",
     dr ? "floats a number that is ready, asks for the numbers that clear a hold, re-runs on the ones they gave" : "an owed number waits on Today for you", "broker"));
+  const dt = config.driver?.daytime || {};
+  out.push(sw("driver:daytime", "Daytime pass", dt.enabled && config.enabled && sendsEnabled ? "on" : dt.enabled ? "drafting" : "off",
+    dt.enabled ? `the audit's fixes every ${dt.everyHours}h, ${dt.startHour}:00 to ${dt.endHour}:00 Pacific; never a person's call, never a reply held under ${dt.releaseMinAgeMin} min` : "a stalled thread waits for the 7pm audit", "broker"));
   const bk = config.booking || {};
   out.push(sw("booking", "Booking calls on the calendar", bk.enabled && config.enabled && sendsEnabled ? "on" : bk.enabled ? "drafting" : "off",
     bk.enabled ? `${bk.calendarName || bk.calendarId || "no calendar picked"} · offers ${bk.slotsToOffer} times` : "'let's talk Thursday' is handed to you", "broker"));

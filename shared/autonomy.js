@@ -67,6 +67,7 @@ export const AUTONOMY_DOES = {
     "Outreach sweep imports and texts new agents daily; re-quotes on their numbers",
     "Deal blasts go out on promote; the assignment drafts on commit",
     "A number we promised goes out when it is ready; a held underwrite asks for their numbers and re-runs on them",
+    "The audit's fixes run every two hours in the working day too, not only at 7pm",
     "Offer, counters, calls, dataroom invites: yours",
   ],
   full: [
@@ -129,7 +130,7 @@ export function autonomyPlan(mode, { hasCalendar = false } = {}) {
     outreachAutopilot: normal,
     dispoAutopilot: { autoBlastOnPromote: normal, paperworkOnCommit: normal, autoInvite: full },
     // What the machine does by itself instead of putting a row on Today.
-    driver: { promises: normal },
+    driver: { promises: normal, daytime: normal },
   };
 }
 
@@ -180,7 +181,7 @@ export function applyAutonomy(saved = {}, mode) {
   cfg.enabled = plan.enabled;
   cfg.autoSend = { ...cfg.autoSend, ...plan.autoSend };
   cfg.booking = { ...cfg.booking, enabled: plan.booking };
-  cfg.driver = { ...cfg.driver, promises: { ...cfg.driver?.promises, enabled: plan.driver.promises } };
+  cfg.driver = { ...cfg.driver, promises: { ...cfg.driver?.promises, enabled: plan.driver.promises }, daytime: { ...cfg.driver?.daytime, enabled: plan.driver.daytime } };
   for (const party of PARTIES) {
     const pb = cfg.parties[party];
     const p = plan.parties[party];
@@ -248,7 +249,7 @@ export function autonomyFingerprint(saved = {}) {
     booking: Boolean(cfg.booking?.enabled),
     outreachAutopilot: oa.enabled === true,
     dispoAutopilot: { autoBlastOnPromote: da.autoBlastOnPromote === true, paperworkOnCommit: da.paperworkOnCommit === true, autoInvite: da.autoInvite === true },
-    driver: { promises: Boolean(cfg.driver?.promises?.enabled) },
+    driver: { promises: Boolean(cfg.driver?.promises?.enabled), daytime: Boolean(cfg.driver?.daytime?.enabled) },
   };
 }
 

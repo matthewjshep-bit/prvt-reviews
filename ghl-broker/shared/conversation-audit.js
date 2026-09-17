@@ -19,6 +19,7 @@
 
 import { OPEN_STATUSES, DEAD_STATUSES, effectiveStatus, dealIsOver } from "./offer-status.js";
 import { unansweredCheckIn, nextMorning } from "./follow-up.js";
+import { NEVER_AUTO } from "./conversation-ai.js";
 
 export const AUDIT_WINDOW_HOURS = 24;
 export const HELD_AGING_HOURS = 24;
@@ -89,7 +90,7 @@ export const auditDedupeKey = (f) => `audit:${f.kind}:${f.contactId || f.offerId
  */
 export function auditConversations({
   drafts = [], events = [], offers = [], ghlLast = null, pipelineActions = [], followUpCursorAt = null,
-  config = {}, now = Date.now(), hours = AUDIT_WINDOW_HOURS,
+  config = {}, now = Date.now(), hours = AUDIT_WINDOW_HOURS, mode = "night", releaseMinAgeMin = 0,
 } = {}) {
   const from = now - hours * 3600000;
   const inWin = (v) => { const t = ms(v); return t != null && t >= from && t <= now; };
@@ -212,7 +213,13 @@ export function auditConversations({
       // Loose: a holding reply the money guard passed, that the model didn't
       // flag for a person, held only because of its intent — send it. The
       // gates, needsHuman, "you have the thread" and age stay in the way.
-      const releasable = loose && (newest.gateClean === true || newest.autoSendable === true) && !newest.needsHuman && age <= RELEASE_MAX_AGE_HOURS
+      // By day (the daytime pass) two more things stand in the way. At 7pm a
+      // person has had the day to look; at 11am a reply held ten minutes ago
+      // is a decision they may be about to make. And a person's call (a
+      // counter, an acceptance) is never released by day at all.
+      const ageMin = Math.floor((now - (ms(newest.createdAt) ?? now)) / 60000);
+      const dayOk = mode !== "day" || (ageMin >= releaseMinAgeMin && !(NEVER_AUTO[newest.party || "agent"] || []).includes(newest.intent));
+      const releasable = loose && dayOk && (newest.gateClean === true || newest.autoSendable === true) && !newest.needsHuman && age <= RELEASE_MAX_AGE_HOURS
         && !/you replied to them/.test(reason) && !/^needs a person:/.test(reason);
       add({ kind: age >= HELD_AGING_HOURS ? "held_aging" : "unanswered_inbound", contactId: c, contactName: who(c), party: newest.party,
         address: newest.propertyAddress || "", anchorAt: newest.createdAt, draftId: newest.id,

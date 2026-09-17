@@ -26,7 +26,7 @@ import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agen
 import { maybeStartOutreachSweep } from "./outreach-sweep.js";
 import { maybeStartOutreachFollowUp } from "./outreach-followup.js";
 import { maybeRunPromiseSweep } from "./promise-sweep.js";
-import { maybeRunConversationAudit } from "./conversation-audit.js";
+import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation-audit.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeRunTierCheck } from "./tier-check.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
@@ -244,6 +244,14 @@ setInterval(async () => {
         deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
       });
       if (audited) console.log(`conversation audit started for ${locationId}`);
+      // The same fixes by day, every couple of hours, so a stalled thread
+      // doesn't wait for 7pm. Off until driver.daytime is switched on; by day
+      // it never releases a person's call or a freshly held reply.
+      const drove = await maybeRunDaytimeDriver({
+        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
+      });
+      if (drove) console.log(`daytime pass started for ${locationId}`);
       // An hour behind it: what today's edits and dismissals say the bot
       // should learn. Proposes; a person applies. Off until switched on.
       if (await maybeRunCoach({ locationId, saved, store })) console.log(`coach started for ${locationId}`);

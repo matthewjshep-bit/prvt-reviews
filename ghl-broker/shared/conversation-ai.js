@@ -499,7 +499,14 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   //   promises  the resolver acts on an owed promise: floats a number that is
   //             ready, starts the underwrite nobody started, asks for the
   //             numbers that clear a hold, re-runs on the ones they gave.
-  driver: { promises: { enabled: false } },
+  //   daytime   the nightly audit's acting pass, run every couple of hours in
+  //             the working day as well, so a stalled thread doesn't wait for
+  //             7pm. By day it never releases a person's call, and never a
+  //             held reply younger than releaseMinAgeMin.
+  driver: {
+    promises: { enabled: false },
+    daytime: { enabled: false, startHour: 9, endHour: 18, everyHours: 2, releaseMinAgeMin: 120, heldSweep: false },
+  },
   // Questions the bot couldn't answer, answered once by the owner on Today
   // (the answer box). Facts, unlike examples: the prompt tells the bot to
   // answer these itself rather than deflect to "my partner".
@@ -866,7 +873,19 @@ export function normalizeConversationAi(doc, seed = {}) {
     driver: (() => {
       const v = d.driver && typeof d.driver === "object" ? d.driver : {};
       const p = v.promises && typeof v.promises === "object" ? v.promises : {};
-      return { promises: { enabled: bool(p.enabled, D.driver.promises.enabled) } };
+      const t = v.daytime && typeof v.daytime === "object" ? v.daytime : {};
+      const DT = D.driver.daytime;
+      const startHour = int(t.startHour, DT.startHour, 7, 12);
+      return {
+        promises: { enabled: bool(p.enabled, D.driver.promises.enabled) },
+        daytime: {
+          enabled: bool(t.enabled, DT.enabled), startHour,
+          endHour: Math.max(startHour + 1, int(t.endHour, DT.endHour, 13, 20)),
+          everyHours: int(t.everyHours, DT.everyHours, 1, 6),
+          releaseMinAgeMin: int(t.releaseMinAgeMin, DT.releaseMinAgeMin, 30, 720),
+          heldSweep: bool(t.heldSweep, DT.heldSweep),
+        },
+      };
     })(),
     rules: list(d.rules, { max: 40, each: 300 }),
     examples,

@@ -20,8 +20,12 @@ import { nextSendTime } from "./conversation-scheduler.js";
 import { startProactive as defaultStartProactive } from "./reply-agent.js";
 import { sweepHeldUnderwrites } from "./held-underwrites.js";
 import { liveDealHold } from "./conversation-context.js";
+import { threadHealth, STOP_LABEL } from "./shared/thread-health.js";
 
 export const CURSOR_NAME = "conversationAudit";
+// The daytime pass keeps its own cursor: `last` on the night's cursor is what
+// Today's "From last night" reads, and a noon run must never overwrite it.
+export const DAY_CURSOR_NAME = "daytimeDriver";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
 export const RETRY_WINDOW_HOURS = 3;          // the evening: hour..hour+3 Pacific
 export const RETRY_GAP_MS = 20 * 60 * 1000;
@@ -37,7 +41,10 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 export const isReaction = (body) => /^\s*(?:[\u{1F44D}\u{1F44E}\u{2764}\u{1F602}\u{203C}\u{2753}\u{1F60D}\u{1F64F}]\uFE0F?|Liked|Loved|Laughed at|Emphasized|Disliked|Questioned)\s*(?:to\s*)?[“"']/u.test(String(body || "").replace(/[\u200B\uFEFF]/g, ""));
 
 const jobs = new Map();
-export const getAuditJob = (locationId) => jobs.get(locationId) || null;
+// What the machine starts by itself, as opposed to answering something.
+const DRIVING_REMEDIES = new Set(["requote", "nudge_counter", "nudge_offer"]);
+const jobKey = (locationId, mode) => (mode === "day" ? `${locationId}|day` : locationId);
+export const getAuditJob = (locationId, mode = "night") => jobs.get(jobKey(locationId, mode)) || null;
 export function _resetJobs() { jobs.clear(); }
 export function publicAuditJob(job) { return job ? { ...job } : null; }
 
@@ -51,8 +58,15 @@ export function publicAuditJob(job) { return job ? { ...job } : null; }
  * writes nothing. With the bot switched off the audit still reports —
  * findings are findings — but starts nothing.
  */
-export async function runConversationAudit({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now(), dryRun = false, job = null, pace = PACE_MS }) {
+export async function runConversationAudit({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now(), dryRun = false, job = null, pace = PACE_MS, mode = "night" }) {
   const config = conversationConfig(saved);
+  // The daytime pass (driver.daytime): the same findings, claims and remedies,
+  // with a narrower hand. It never releases a person's call or a reply held
+  // for less than releaseMinAgeMin, leaves the follow-up sweep and (unless
+  // asked) the held underwrites to the night, and asks the thread's brake
+  // before it nudges anybody.
+  const day = mode === "day";
+  const daytime = config.driver?.daytime || {};
   const phase = (p) => { if (job) job.phase = p; };
 
   phase("reading");
@@ -77,7 +91,8 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
   if (typeof deps.ghlLastMessages === "function") ghlLast = await deps.ghlLastMessages().catch(() => null);
 
   phase("auditing");
-  const result = auditConversations({ drafts, events, offers, ghlLast, pipelineActions, followUpCursorAt: fuCursor?.at || null, config, now });
+  const result = auditConversations({ drafts, events, offers, ghlLast, pipelineActions, followUpCursorAt: fuCursor?.at || null, config, now,
+    mode, releaseMinAgeMin: day ? Number(daytime.releaseMinAgeMin) || 120 : 0 });
 
   const acted = [];
   const may = !dryRun && config.enabled;
@@ -90,7 +105,7 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
   // agent's numbers, or asked about (held-underwrites.js). Its findings ride
   // on the same result so the card and the queue read one list.
   phase("held underwrites");
-  try {
+  if (!day || daytime.heldSweep === true) try {
     const h = await sweepHeldUnderwrites({ client, locationId, saved, store, sendsEnabled, deps: runDeps, now, dryRun: !may, pace });
     result.findings.push(...h.findings);
     result.counts.held = h.counts;
@@ -160,8 +175,8 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         const ts = iso(now);
         const sendAt = nextSendTime({ now, delayMs: 60000, quietHours: config.autoSend.quietHours });
         await store.updateReplyDraft(d.id, { ...d, status: "scheduled", sendAt, scheduledAt: ts, updatedAt: ts,
-          autoSend: { decided: true, reason: "released by the nightly audit — a holding reply, nothing committed" },
-          flags: [...(d.flags || []), "released by the nightly audit"] });
+          autoSend: { decided: true, reason: `released by the ${day ? "daytime pass" : "nightly audit"} — a holding reply, nothing committed` },
+          flags: [...(d.flags || []), `released by the ${day ? "daytime pass" : "nightly audit"}`] });
         row.status = "queued"; row.reason = `sends ${sendAt.slice(11, 16)}Z`;
         continue;
       }
@@ -171,6 +186,13 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         });
         row.status = c.inserted ? "closed" : "already";
         continue;
+      }
+      if (day && a.type === "run_follow_up_sweep") { row.status = "skipped"; row.reason = "the follow-up sweep keeps its own hour"; continue; }
+      // By day, anything the machine STARTS asks the brake first: a thread
+      // that is annoyed, dead, stopped or a person's is not nudged.
+      if (day && DRIVING_REMEDIES.has(a.type)) {
+        const health = threadHealth({ offer: offers.find((o) => o.id === f.offerId) || null, drafts: drafts.filter((d) => d.contactId === f.contactId), events: events.filter((e) => e.contactId === f.contactId), now });
+        if (!health.drive) { row.status = "stopped"; row.reason = `${health.reason}: ${STOP_LABEL[health.reason] || health.detail}`; continue; }
       }
       let latest = null;
       if (a.type === "redraft") {
@@ -243,14 +265,15 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
  * The outreach sweep's pattern verbatim: one job per location, the run on
  * the cursor while it goes, the summary there when it's over.
  */
-export function startConversationAudit({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, trigger = "manual", dryRun = false, now = Date.now(), pace = PACE_MS }) {
-  const existing = jobs.get(locationId);
+export function startConversationAudit({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, trigger = "manual", dryRun = false, now = Date.now(), pace = PACE_MS, mode = "night" }) {
+  const cursorName = mode === "day" ? DAY_CURSOR_NAME : CURSOR_NAME;
+  const existing = jobs.get(jobKey(locationId, mode));
   if (existing?.status === "running") throw Object.assign(new Error("a conversation audit is already running for this location"), { http: 409 });
-  const job = { id: `ca-${Date.now().toString(36)}`, locationId, trigger, dryRun, status: "running", phase: "reading", startedAt: iso(now), finishedAt: null, counts: null, findings: [], acted: [], error: null };
-  jobs.set(locationId, job);
+  const job = { id: `${mode === "day" ? "dd" : "ca"}-${Date.now().toString(36)}`, locationId, mode, trigger, dryRun, status: "running", phase: "reading", startedAt: iso(now), finishedAt: null, counts: null, findings: [], acted: [], error: null };
+  jobs.set(jobKey(locationId, mode), job);
   const stamp = async (patch) => {
-    const cur = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
-    await store.setJobCursor?.(locationId, CURSOR_NAME, { at: cur?.at || iso(now), doc: { ...(cur?.doc || {}), ...patch } }).catch(() => {});
+    const cur = await store.getJobCursor?.(locationId, cursorName).catch(() => null);
+    await store.setJobCursor?.(locationId, cursorName, { at: cur?.at || iso(now), doc: { ...(cur?.doc || {}), ...patch } }).catch(() => {});
   };
   const summary = () => ({
     id: job.id, trigger, dryRun, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt,
@@ -258,7 +281,7 @@ export function startConversationAudit({ client, locationId, saved = {}, store =
     quietWins: (job.quietWins || []).slice(0, 100), error: job.error, reason: job.reason || "",
   });
   stamp({ run: { id: job.id, trigger, startedAt: job.startedAt } })
-    .then(() => runConversationAudit({ client, locationId, saved, store, sendsEnabled, deps, now, dryRun, job, pace }))
+    .then(() => runConversationAudit({ client, locationId, saved, store, sendsEnabled, deps, now, dryRun, job, pace, mode }))
     .then(async ({ result, acted, reason }) => {
       job.counts = result.counts; job.findings = result.findings; job.acted = acted; job.quietWins = result.quietWins; job.ghlRead = result.ghlRead; job.reason = reason;
       job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
@@ -266,7 +289,7 @@ export function startConversationAudit({ client, locationId, saved = {}, store =
     })
     .catch(async (e) => {
       job.status = "error"; job.phase = ""; job.error = String(e?.message || e).slice(0, 300); job.finishedAt = new Date().toISOString();
-      await stamp({ run: null, last: summary(), ...(trigger === "daily" ? { failed: true, error: job.error } : {}) });
+      await stamp({ run: null, last: summary(), ...(trigger === "daily" || trigger === "daytime" ? { failed: true, error: job.error } : {}) });
     });
   return job;
 }
@@ -303,5 +326,46 @@ export async function maybeRunConversationAudit({ client, locationId, saved = {}
   }
   await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: { tries, lastDaily: iso(now), last: doc.last || null, ...(stale ? { staleRun: doc.run } : {}) } }).catch(() => {});
   startConversationAudit({ client, locationId, saved, store, sendsEnabled, deps, trigger: "daily", now });
+  return true;
+}
+
+/**
+ * maybeRunDaytimeDriver({ client, locationId, saved, store, sendsEnabled, deps, now }) → boolean
+ *
+ * The audit's acting pass by day (driver.daytime, off by default; the dial
+ * turns it on at Normal): every `everyHours` between `startHour` and
+ * `endHour` Pacific, on its own cursor. The same gating as the night's: the
+ * cursor is written before the run, a run that died is retried once it is
+ * stale, and the day's tries are capped. Weekends are skipped unless the
+ * auto-send setting says machine-started texts may go then, because
+ * everything this starts is machine-started.
+ */
+export async function maybeRunDaytimeDriver({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now() }) {
+  const config = conversationConfig(saved);
+  const dt = config.driver?.daytime;
+  if (!config.enabled || !dt?.enabled) return false;
+  const h = workHour(now);
+  if (h < dt.startHour || h >= dt.endHour) return false;
+  const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "America/Los_Angeles" }).format(new Date(now));
+  if ((weekday === "Sat" || weekday === "Sun") && config.autoSend?.weekends !== "all") return false;
+  if (jobs.get(jobKey(locationId, "day"))?.status === "running" || jobs.get(jobKey(locationId, "night"))?.status === "running") return false;
+
+  const cursor = await store.getJobCursor?.(locationId, DAY_CURSOR_NAME).catch(() => null);
+  const doc = cursor?.doc || {};
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(now));
+  const triesToday = doc.day === today ? Number(doc.tries) || 0 : 0;
+  const maxTries = Math.ceil((dt.endHour - dt.startHour) / dt.everyHours) + 2;
+  if (triesToday >= maxTries) return false;
+  const lastRun = doc.lastRun ? Date.parse(doc.lastRun) : null;
+  const stale = doc.run?.startedAt && now - Date.parse(doc.run.startedAt) >= STALE_RUN_MS;
+  const due = lastRun == null || now - lastRun >= dt.everyHours * 3600000;
+  // A run still on the cursor and not yet stale may simply be going (another
+  // broker, or this one a minute ago): leave it.
+  if (doc.run && !stale) return false;
+  if (!due && !(stale || doc.failed)) return false;
+  if (!due && now - lastRun < RETRY_GAP_MS) return false;
+
+  await store.setJobCursor?.(locationId, DAY_CURSOR_NAME, { at: iso(now), doc: { day: today, tries: triesToday + 1, lastRun: iso(now), last: doc.last || null, ...(stale ? { staleRun: doc.run } : {}) } }).catch(() => {});
+  startConversationAudit({ client, locationId, saved, store, sendsEnabled, deps, trigger: "daytime", now, mode: "day" });
   return true;
 }

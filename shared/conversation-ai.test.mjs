@@ -479,9 +479,10 @@ test("standing answers are capped at forty, newest kept", () => {
 });
 
 test("the driver's switches default off, survive a save, and normalizing twice changes nothing", () => {
-  assert.deepEqual(normalizeConversationAi({}).driver, { promises: { enabled: false } });
-  const on = normalizeConversationAi({ driver: { promises: { enabled: true }, nonsense: 1 } });
-  assert.deepEqual(on.driver, { promises: { enabled: true } });
+  const OFF = { promises: { enabled: false }, daytime: { enabled: false, startHour: 9, endHour: 18, everyHours: 2, releaseMinAgeMin: 120, heldSweep: false } };
+  assert.deepEqual(normalizeConversationAi({}).driver, OFF);
+  const on = normalizeConversationAi({ driver: { promises: { enabled: true }, daytime: { enabled: true, everyHours: 99, releaseMinAgeMin: 1, startHour: 3 }, nonsense: 1 } });
+  assert.deepEqual(on.driver, { promises: { enabled: true }, daytime: { enabled: true, startHour: 7, endHour: 18, everyHours: 6, releaseMinAgeMin: 30, heldSweep: false } }, "numbers are bounded, never trusted");
   assert.deepEqual(normalizeConversationAi(on).driver, on.driver);
-  assert.deepEqual(normalizeConversationAi({ driver: "yes" }).driver, { promises: { enabled: false } });
+  assert.deepEqual(normalizeConversationAi({ driver: "yes" }).driver, OFF);
 });

@@ -1016,6 +1016,44 @@ on a clock / need you, with Run now), the queue group "From last night", and
 `GET /api/dashboard/audit` (`last`, `run`, `tries`, `failed`); `POST
 /api/dashboard/audit/run { dryRun }` runs it by hand. Cursor `conversationAudit`.
 
+### The daytime pass (2026-09-17)
+
+**Why.** The audit's fixes ran once, at 7pm. A thread that stalled at 9am sat
+for ten hours, and the morning's counters, realm-yeses and unanswered texts
+were exactly the rows on Today.
+
+**What it is.** `driver.daytime` (off by default; the dial turns it on at
+Normal): `{ enabled, startHour: 9, endHour: 18, everyHours: 2,
+releaseMinAgeMin: 120, heldSweep: false }`, hours in Pacific. It is a second
+**mode** of the audit's own runner, not a sibling: `runConversationAudit({ mode:
+"day" })`, the same findings, the same claim keys (`auditDedupeKey`), the same
+remedies, so day and night can never start the same thing twice.
+`maybeRunDaytimeDriver` hangs off the 15-minute tick after the nightly audit's
+gate, with the same gating (cursor written before the run, a stale run retried
+after 30 minutes, tries capped at passes-per-day + 2) on **its own cursor,
+`daytimeDriver`**. The night's `last` is never touched, so Today's "From last
+night" keeps meaning last night. Weekends are skipped unless
+`autoSend.weekends` is `all`: everything it starts is machine-started.
+
+**What is narrower by day.**
+
+- A held reply is released only when it is at least `releaseMinAgeMin` old
+  **and** its intent is not a person's call (`NEVER_AUTO`). At 7pm you have had
+  the day to look; at 11am a counter held at 10:50 is a decision you may be
+  about to make. The night's "loose" rule is unchanged.
+- The follow-up sweep is not started (it keeps its own hour and its own 20-hour
+  cursor).
+- The held underwrites are left for the night unless `heldSweep` is on: two
+  GHL reads per held house, five times a day, is about 500 reads. The promise
+  driver's `onHeld` hook covers the urgent ones.
+- Anything it **starts** (a re-quote, a counter nudge, an offer nudge) asks the
+  brake first (`threadHealth`); a stopped row says why. A redraft is an answer
+  to something they said, not a push, and is not braked.
+- A released reply says "released by the daytime pass".
+
+Today shows its last run above the queue ("Daytime pass last ran 1:05 PM: 2
+started, 1 left alone by the brake"). The Autopilot switchboard has the switch.
+
 ### Promises — what the machine would do about each one (2026-09-17)
 
 **Why.** Today carried ten "we owe them a number / an answer" rows and every

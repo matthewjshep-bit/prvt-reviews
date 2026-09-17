@@ -161,6 +161,7 @@ test("the promise driver is off until Normal, and the dial turns it on and off",
   assert.equal(normalizeConversationAi({}).driver.promises.enabled, false, "new automation ships off");
   for (const [mode, want] of [["off", false], ["cautious", false], ["normal", true], ["full", true]]) {
     assert.equal(applyAutonomy(starter(), mode).conversationAi.driver.promises.enabled, want, mode);
+    assert.equal(applyAutonomy(starter(), mode).conversationAi.driver.daytime.enabled, want, `daytime at ${mode}`);
   }
 });
 
@@ -169,6 +170,9 @@ test("a location at Normal before the driver shipped reads Custom until Normal i
   delete before.conversationAi.driver;                     // the blob as it was saved last week
   assert.equal(normalizeConversationAi(before.conversationAi).driver.promises.enabled, false);
   assert.equal(detectAutonomy(before), "custom");
-  assert.deepEqual(autonomyDiff(before, "normal"), ["driver.promises"]);
+  assert.deepEqual(autonomyDiff(before, "normal"), ["driver.promises", "driver.daytime"]);
   assert.equal(detectAutonomy(applyAutonomy(before, "normal")), "normal");
+  const tuned = applyAutonomy(before, "normal");
+  tuned.conversationAi.driver.daytime.everyHours = 3;
+  assert.equal(applyAutonomy(tuned, "full").conversationAi.driver.daytime.everyHours, 3, "the dial moves the switch and leaves the hours alone");
 });
