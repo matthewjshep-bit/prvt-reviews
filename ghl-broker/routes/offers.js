@@ -5596,7 +5596,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           try {
             await sendEmail(client, { contactId: offer.contactId, subject, html, attachments: emailAttachments });
             results.email = { ok: true };
-          } catch (e) { results.email = { ok: false, error: e.message }; }
+          } catch (e) {
+            // GHL refuses an address it has marked invalid (it bounced before,
+            // or failed their verification) — the address can look fine. Say
+            // that, not the raw 400 (Patrick Cruz, 2026-09-17).
+            const raw = `${e.message || ""} ${e.detail || ""}`;
+            results.email = { ok: false, error: /MSG_INVALID_EMAIL|e-?mail is invalid/i.test(raw)
+              ? `GoHighLevel has ${email} marked as an invalid address (it bounced before, or failed their verification), so it won't send to it. Fix or replace the email on the contact in GHL, then send again with Email only.`
+              : e.message };
+          }
         }
       }
 
