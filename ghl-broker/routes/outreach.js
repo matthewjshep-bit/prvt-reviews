@@ -123,8 +123,14 @@ const RENTCAST_RETRY_MS = Number(process.env.RENTCAST_RETRY_MS || 3000);
 // A timeout, a dropped connection, a 429 or a 5xx is tried once more; a
 // refusal (bad key, bad query) is not.
 async function rentcastPage(apiKey, params) {
-  const qs = new URLSearchParams({ status: "Active", limit: "500", ...params });
   for (let attempt = 0; ; attempt++) {
+    // The second try asks for less: no total count (a count is a second scan
+    // of the whole circle) and a shorter page. RentCast's own gateway gave up
+    // (504) on the full Pierce query three times running on 2026-09-17.
+    const light = attempt > 0;
+    const limit = light ? 200 : 500;
+    const { includeTotalCount, ...rest } = params;
+    const qs = new URLSearchParams({ status: "Active", limit: String(limit), ...(light ? rest : params) });
     try {
       const r = await fetch(`${RENTCAST_BASE}/listings/sale?${qs}`, {
         headers: { "X-Api-Key": apiKey, Accept: "application/json" },
@@ -139,7 +145,7 @@ async function rentcastPage(apiKey, params) {
       // match in all, so the sweep knows how many pages a county has.
       const header = r.headers.get("x-total-count");
       const total = header != null && header !== "" && Number.isFinite(Number(header)) ? Number(header) : null;
-      return { listings: Array.isArray(data) ? data : data.listings || [], total };
+      return { listings: Array.isArray(data) ? data : data.listings || [], total, limit };
     } catch (e) {
       const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
       const retryable = e?.retryable || timedOut || e?.name === "TypeError";
@@ -333,10 +339,10 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         while (budgetLeft > 0) {
           budgetLeft--;
           requestsUsed++;
-          const { listings: page, total } = await rentcastPage(apiKey, { ...common, ...target, ...(offset ? { offset: String(offset) } : {}) });
+          const { listings: page, total, limit: pageLimit } = await rentcastPage(apiKey, { ...common, ...target, ...(offset ? { offset: String(offset) } : {}) });
           listings.push(...page);
           if (total != null) totalCount = total;
-          moreAvailable = total != null ? offset + page.length < total && page.length > 0 : page.length >= 500;
+          moreAvailable = total != null ? offset + page.length < total && page.length > 0 : page.length >= (pageLimit || 500);
           offset += page.length;
           if (!moreAvailable) break; // last page for this target
         }

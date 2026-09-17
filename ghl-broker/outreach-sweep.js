@@ -343,7 +343,23 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
     // it. The pick below reads the whole batch, so the batch IS the market.
     const batchId = await autopilotBatchId({ store, locationId, market: key || "saved market" }).catch(() => undefined);
     if (batchId) query.batchId = batchId;
-    pull = await deps.runPull(locationId, client, query);
+    // A county RentCast can't answer today is an empty county, not the end
+    // of the run: say so, pass the turn, try the next. Only when every county
+    // fails does the run fail (and come back on the retry clock).
+    try {
+      pull = await deps.runPull(locationId, client, query);
+    } catch (e) {
+      const why = String(e?.message || e).slice(0, 120);
+      job.tried.push({ county: key, error: why });
+      job.warnings.push(`${key || "the saved market"}: the pull failed (${why}) — moving on`);
+      const last = attempt === tries - 1 || !county;
+      if (last && !job.tried.some((t) => !t.error)) throw e;
+      if (county && !job.dryRun) {
+        await store.setJobCursor?.(locationId, PAGES_CURSOR, { at: iso(now), doc: { ...pages, turn: (pages.turn + 1) % oa.counties.length, query: querySig } }).catch(() => {});
+      }
+      if (last) break;
+      continue;
+    }
     left -= Number(pull.requestsUsed) || 0;
     job.pull = { batchId: pull.batchId, batchName: pull.batchName, requestsUsed: (job.pull?.requestsUsed || 0) + (Number(pull.requestsUsed) || 0), cached: pull.cached,
       listingsFetched: pull.listingsFetched, listingsKept: pull.listingsKept, agentsTotal: pull.agentsTotal, agentsNew: pull.agentsNew,

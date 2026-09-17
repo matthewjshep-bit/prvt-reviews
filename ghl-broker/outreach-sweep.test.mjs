@@ -198,6 +198,31 @@ test("a county with nobody new doesn't cost the day: the same run moves on to th
   assert.equal(place.offsets["King, WA"], 500, "King's place is kept for when its turn comes round");
 });
 
+test("a county RentCast can't answer is skipped, not fatal; when every county fails the run fails", async () => {
+  _resetJobs();
+  const counties = [{ county: "Pierce", state: "WA" }, { county: "Snohomish", state: "WA" }];
+  const saved = { outreachAutopilot: { enabled: true, counties } };
+  const store = { ...fakeStore([]), listOutreachAgents: async (_l, { batchId }) => (batchId === "b-Snohomish" ? [row("s1")] : []) };
+  let imported;
+  const deps = {
+    runPull: async (_l, _c, b) => { if (b.county === "Pierce") throw Object.assign(new Error("RentCast 504"), { http: 502 }); return { batchId: `b-${b.county}`, warnings: [], nextOffset: 0, requestsUsed: 1 }; },
+    importAgents: async (a) => { imported = a; return { imported: 1, enrolled: 1, results: [] }; },
+  };
+  const job = startOutreachSweep({ locationId: "loc-504", client: {}, saved, store, deps, now: Date.parse("2026-09-01T15:00:00Z") });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(imported.agentKeys, ["s1"]);
+  assert.match(job.tried[0].error, /504/);
+  assert.ok(job.warnings.some((w) => /Pierce, WA: the pull failed/.test(w)));
+
+  _resetJobs();
+  const dead = { ...deps, runPull: async () => { throw new Error("RentCast 504"); } };
+  const j2 = startOutreachSweep({ locationId: "loc-504b", client: {}, saved, store: fakeStore([]), deps: dead, now: Date.parse("2026-09-01T15:00:00Z") });
+  await settle();
+  assert.equal(j2.status, "error");
+  assert.match(j2.error, /504/);
+});
+
 test("firstTouch 'workflow' enrolls by id: no tag, no bot draft", async () => {
   _resetJobs();
   let seen;
