@@ -313,7 +313,7 @@ test("buildPipeline with empty inputs returns every lane with zero and no action
   assert.ok(r.lanes.length >= 10);
   assert.ok(r.lanes.every((l) => l.count === 0 && l.cardIds.length === 0));
   assert.deepEqual(r.actions, []);
-  assert.deepEqual(r.counts.actions, { now: 0, soon: 0, fyi: 0 });
+  assert.deepEqual(r.counts.actions, { now: 0, soon: 0, fyi: 0, byGroup: { yours: 0, machine: 0, stuck: 0 } });
 });
 
 test("actions come now first, and lanes carry their card ids", () => {
@@ -447,4 +447,77 @@ test("an owed answer nobody has given shows the question they asked, with a box 
   assert.deepEqual(row.ops.map((o) => o.key), ["answer", "dismiss_promise"]);
   assert.equal(row.draftId, null, "not a draft row: the draft it came from is long sent");
   assert.equal(row.fromDraftId, "d0");
+});
+
+/* ---------- three groups: your call, the machine is on it, stuck ---------- */
+
+const groupsOf = (r) => Object.fromEntries(r.actions.map((a) => [a.kind + (a.move ? `:${a.move}` : ""), a.group]));
+const DRIVING = normalizeConversationAi({ enabled: true, driver: { promises: { enabled: true } }, parties: { agent: { followUp: { enabled: true, ladders: { offer_nudge: { enabled: true, steps: [3, 7, 14] } } } } } });
+
+test("a scheduled text is the machine's, with when", () => {
+  const sendAt = new Date(NOW + 5 * 60000).toISOString();
+  const r = build({ offers: [offer()], drafts: [draft({ status: "scheduled", sendAt })] });
+  const row = r.actions.find((a) => a.kind === "draft_scheduled");
+  assert.equal(row.group, "machine");
+  assert.equal(row.next.at, sendAt);
+  assert.match(row.next.what, /sends itself/);
+});
+
+test("a draft waiting on you, a hand-off and a closing are your call", () => {
+  const r = build({ offers: [offer({ status: "accepted", deal: { stage: "under_contract", closingDate: ymd(2), investors: [{ contactId: "b1", status: "evaluating" }] } })],
+    drafts: [draft({ intent: "counter", actions: [{ id: "a1", type: "promote_to_deal", mode: "ask", status: "pending" }] })] });
+  const g = groupsOf(r);
+  assert.equal(g.draft_waiting, "yours");
+  assert.equal(g.handoff, "yours");
+  assert.equal(g.closing_soon, "yours");
+});
+
+test("a float that was skipped is stuck, with why; one nobody tried yet is your call", () => {
+  const ready = offer({ status: "new", sends: [], autoUnderwrite: { jobId: "j1", held: [] } });
+  assert.equal(build({ offers: [ready] }).actions.find((a) => a.kind === "offer_ready").group, "yours");
+  const row = build({ offers: [{ ...ready, proactive: { skipped: { kind: "realm_check", reason: "our offer there has already gone out", at: D(0) } } }] }).actions.find((a) => a.kind === "offer_ready");
+  assert.equal(row.group, "stuck");
+  assert.match(row.why, /already gone out/);
+});
+
+test("a held underwrite, a failed one and a ladder that ran out are stuck", () => {
+  const heldOffer = offer({ id: "h1", status: "draft", cashAmount: null, sends: [], autoUnderwrite: { held: ["the photo scan flagged a possible foundation or structural problem"] } });
+  const job = { id: "j9", contactId: "a1", status: "error", address: "9 Oak St", error: "stopped early", finishedAt: new Date(NOW - 600000).toISOString() };
+  const quiet = offer({ id: "o2", address: "44 Pine St, Kent, WA", statusAt: D(40), createdAt: D(41), sends: [{ ts: D(40) }] });
+  const noLadder = normalizeConversationAi({ enabled: true });
+  const g = groupsOf(build({ config: noLadder, offers: [heldOffer, quiet], jobs: [job] }));
+  assert.equal(g.gone_quiet, "stuck");
+  assert.equal(g.underwrite_held, "stuck");
+  assert.equal(g.underwrite_failed, "stuck");
+});
+
+test("an owed number: yours when the driver is off, the machine's when it is on, stuck when nobody's numbers clear the hold", () => {
+  const ready = offer({ status: "new", sends: [] });
+  assert.equal(promiseRow(build({ offers: [ready], events: [owed()] })).group, "yours");
+  const driven = promiseRow(build({ config: DRIVING, offers: [ready], events: [owed()] }));
+  assert.equal(driven.group, "machine");
+  assert.match(driven.next.what, /sends the number/);
+  assert.deepEqual(driven.ops.map((o) => o.key), ["float_take", "float_realm", "stop_drive", "dismiss_promise"], "you can still do it yourself, or stop it");
+  const heldOffer = offer({ id: "h1", status: "draft", cashAmount: null, sends: [], autoUnderwrite: { held: ["the photo scan flagged a possible foundation or structural problem"] } });
+  assert.equal(promiseRow(build({ config: DRIVING, offers: [heldOffer], events: [owed()], heldTriageByOffer: { h1: { action: "yours", reason: "structural" } } })).group, "stuck");
+  const waiting = promiseRow(build({ config: DRIVING, offers: [heldOffer], events: [owed()], heldTriageByOffer: { h1: { action: "wait", reason: "asked 1d ago, waiting on them" } } }));
+  assert.equal(waiting.group, "machine");
+  assert.match(waiting.next.what, /waiting on them/);
+});
+
+test("a thread you stopped is your call again, and offers Resume", () => {
+  const ready = offer({ status: "new", sends: [] });
+  const stop = { type: "drive_stopped", contactId: "a1", at: H(1), data: { reason: "calling her" } };
+  const row = promiseRow(build({ config: DRIVING, offers: [ready], events: [owed(), stop] }));
+  assert.equal(row.group, "yours");
+  assert.ok(row.ops.some((o) => o.key === "resume_drive"));
+  assert.equal(row.ops.some((o) => o.key === "stop_drive"), false);
+  const resumed = promiseRow(build({ config: DRIVING, offers: [ready], events: [owed(), stop, { type: "drive_resumed", contactId: "a1", at: H(0.5) }] }));
+  assert.equal(resumed.group, "machine");
+});
+
+test("the counts say how many are yours, the machine's and stuck", () => {
+  const sendAt = new Date(NOW + 5 * 60000).toISOString();
+  const r = build({ offers: [offer()], drafts: [draft({ id: "d1" }), draft({ id: "d2", status: "scheduled", sendAt })] });
+  assert.deepEqual(r.counts.actions.byGroup, { yours: 1, machine: 1, stuck: 0 });
 });

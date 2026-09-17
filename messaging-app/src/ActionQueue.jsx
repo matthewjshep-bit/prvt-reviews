@@ -7,7 +7,7 @@
 
 import React, { useState } from "react";
 import { ChevronDown } from "lucide-react";
-import { ACTION_KINDS } from "@shared/pipeline.js";
+import { ACTION_GROUPS, ACTION_KINDS } from "@shared/pipeline.js";
 import { AUDIT_ACTION_KINDS } from "@shared/conversation-audit.js";
 import { PROMISE_DISMISS_REASONS, PROMISE_DISMISS_LABEL, answerNamesMoney } from "@shared/promise-resolver.js";
 import { BTN, BTN_DANGER, BTN_PRIMARY, Pill } from "./ui.jsx";
@@ -22,6 +22,19 @@ const SEV = {
   fyi: { dot: "bg-slate-300", label: "fyi", cls: "bg-slate-100 text-slate-600" },
 };
 const DRAFT_KINDS = new Set(["draft_waiting", "draft_scheduled"]);
+// "1:05 PM" today, "Thu 9:00 AM" otherwise.
+const whenLabel = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+};
+// What each group is, said once under its heading.
+const GROUP_HINT = {
+  yours: "Decisions only you make.",
+  machine: "Already moving. Nothing to do unless you want to stop one.",
+  stuck: "The machine tried and couldn't. Usually a phone call or a fix.",
+};
 
 function OpButton({ op, item, onDone }) {
   const [busy, setBusy] = useState(false);
@@ -168,6 +181,10 @@ function ActionRow({ item, onDone, onShowDraft, draft, sendsEnabled, serverOffse
             : <span>{item.address}</span>)}
           {item.detail && <span className="text-slate-400">· {item.detail}</span>}
         </div>
+        {item.next?.what && (
+          <div className="mt-0.5 text-xs text-violet-700">Next: {item.next.what}{item.next.at ? ` · ${whenLabel(item.next.at)}` : ""}</div>
+        )}
+        {item.group === "stuck" && item.why && <div className="mt-0.5 text-xs text-amber-700">Stuck because: {item.why}</div>}
       </div>
       <div className="flex flex-wrap items-start gap-1.5">
         {item.ops.filter((op) => op.key !== "answer").map((op) => op.key === "show_draft"
@@ -188,29 +205,22 @@ function ActionRow({ item, onDone, onShowDraft, draft, sendsEnabled, serverOffse
   );
 }
 
-export default function ActionQueue({ actions = [], draftsById = {}, sendsEnabled, serverOffsetMs = 0, onDone, highlightDraftId, onShowDraft }) {
+function KindGroups({ items, draftsById, sendsEnabled, serverOffsetMs, onDone, highlightDraftId, onShowDraft, quiet = false }) {
   const groups = [...ACTION_KINDS, ...AUDIT_ACTION_KINDS]
-    .map((k) => ({ ...k, items: actions.filter((a) => a.kind === k.key) }))
+    .map((k) => ({ ...k, items: items.filter((a) => a.kind === k.key) }))
     .filter((g) => g.items.length);
-  if (!groups.length) {
-    return (
-      <div className="rounded-xl border border-dashed border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-400">
-        Nothing is waiting on you.
-      </div>
-    );
-  }
   return (
     <div className="space-y-2">
       {groups.map((g) => {
         const now = g.items.filter((i) => i.severity === "now").length;
-        const open = now > 0 || g.items.some((i) => i.draftId === highlightDraftId);
+        const open = !quiet && (now > 0 || g.items.some((i) => i.draftId === highlightDraftId));
         return (
           <details key={g.key} open={open} className="group rounded-xl border border-slate-200 bg-white">
             <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-sm font-semibold">
               <ChevronDown size={14} className="text-slate-400 transition-transform group-open:rotate-180" />
               {g.label}
               <Pill small label={String(g.items.length)} />
-              {now > 0 && <Pill small label={`${now} now`} cls={SEV.now.cls} />}
+              {!quiet && now > 0 && <Pill small label={`${now} now`} cls={SEV.now.cls} />}
             </summary>
             <ul className="divide-y divide-slate-100 border-t border-slate-100">
               {g.items.map((item) => {
@@ -228,6 +238,51 @@ export default function ActionQueue({ actions = [], draftsById = {}, sendsEnable
           </details>
         );
       })}
+    </div>
+  );
+}
+
+// Three groups (shared/pipeline.js ACTION_GROUPS): your call, the machine is
+// on it, stuck. Inside each, the same kind-by-kind sections as before. An
+// action with no group (an older broker) is yours.
+export default function ActionQueue({ actions = [], draftsById = {}, sendsEnabled, serverOffsetMs = 0, onDone, highlightDraftId, onShowDraft }) {
+  const by = (key) => actions.filter((a) => (a.group || "yours") === key);
+  const rowProps = { draftsById, sendsEnabled, serverOffsetMs, onDone, highlightDraftId, onShowDraft };
+  const yours = by("yours"), machine = by("machine"), stuck = by("stuck");
+  return (
+    <div className="space-y-5">
+      <section aria-label={ACTION_GROUPS[0].label}>
+        <GroupHeading group="yours" count={yours.length} />
+        {yours.length
+          ? <KindGroups items={yours} {...rowProps} />
+          : <div className="rounded-xl border border-dashed border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-400">Nothing is waiting on you.</div>}
+      </section>
+      {stuck.length > 0 && (
+        <section aria-label={ACTION_GROUPS[2].label}>
+          <GroupHeading group="stuck" count={stuck.length} />
+          <KindGroups items={stuck} {...rowProps} />
+        </section>
+      )}
+      {machine.length > 0 && (
+        <details className="group/m" open={machine.some((i) => i.draftId && i.draftId === highlightDraftId)}>
+          <summary className="flex cursor-pointer list-none items-baseline gap-2">
+            <ChevronDown size={14} className="self-center text-slate-400 transition-transform group-open/m:rotate-180" />
+            <GroupHeading group="machine" count={machine.length} inline />
+          </summary>
+          <div className="mt-2"><KindGroups items={machine} {...rowProps} quiet /></div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function GroupHeading({ group, count, inline = false }) {
+  const g = ACTION_GROUPS.find((x) => x.key === group);
+  return (
+    <div className={inline ? "flex flex-wrap items-baseline gap-2" : "mb-2 flex flex-wrap items-baseline gap-2"}>
+      <h3 className="text-sm font-bold text-slate-800">{g.label}</h3>
+      <Pill small label={String(count)} />
+      <span className="text-xs text-slate-500">{GROUP_HINT[group]}</span>
     </div>
   );
 }

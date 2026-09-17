@@ -8,7 +8,7 @@
 
 import {
   applyDraftAction, deleteOffer, dismissPromise, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
-  rerunHeldUnderwrite, retryUnderwrite, runFollowUps, setOfferStatus, updateDeal,
+  rerunHeldUnderwrite, resumeDrive, retryUnderwrite, runFollowUps, stopDrive, setOfferStatus, updateDeal,
 } from "./api.js";
 import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL } from "@shared/post-mortem.js";
 
@@ -64,6 +64,10 @@ export async function runOp(key, item, extra = null) {
     case "dismiss_promise":    return dismissPromise(item.contactId, item.address, extra?.reason || null);
     case "rerun_held":         return rerunHeldUnderwrite(item);
     case "retry_underwrite":   return retryUnderwrite(item.jobId);
+    // A stop is the whole thread with this agent, not one house: the point is
+    // that you are picking it up yourself.
+    case "stop_drive":         return stopDrive({ contactId: item.contactId, address: item.address });
+    case "resume_drive":       return resumeDrive({ contactId: item.contactId, address: item.address });
     default: throw new Error(`no such op: ${key}`);
   }
 }
@@ -81,6 +85,8 @@ export function describeResult(key, r) {
     const n = (r.matches || r.investors || []).length;
     return n ? `${n} buyer${n === 1 ? "" : "s"} fit — open the deal to add them.` : "No buyers fit this one yet.";
   }
+  if (key === "stop_drive") return "Stopped. It is yours until you press Resume.";
+  if (key === "resume_drive") return "Back with the machine.";
   if (key === "retry_underwrite") return "Running it again.";
   if (key === "rerun_held") return "Running it again — the number lands in the outbox when it clears.";
   if (key === "dismiss_promise") return r.settled ? "Cleared." : "Already cleared.";

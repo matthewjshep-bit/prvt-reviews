@@ -116,6 +116,16 @@ test("somebody who unsubscribed is never driven", async () => {
   const r = await drive(store, s.deps);
   assert.deepEqual(s.calls.float, []);
   assert.equal(r.results[0].status, "stopped");
+  assert.equal(r.results[0].reason, "opted_out");
+});
+
+test("a thread the brake stopped is not driven: they sound annoyed, or you pressed Stop", async () => {
+  const s = spies();
+  const cross = fakeStore({ events: [made(5)], offers: [priced()], drafts: [inbound("I already told you the price is firm")] });
+  assert.equal((await drive(cross, s.deps)).results[0].reason, "irritated");
+  const stopped = fakeStore({ events: [made(5), { type: "drive_stopped", contactId: "c1", at: at(1), data: {} }], offers: [priced()] });
+  assert.equal((await drive(stopped, s.deps)).results[0].reason, "stopped_by_you");
+  assert.deepEqual(s.calls.float, []);
 });
 
 test("a promise we never owed, one that is waiting, and one that is yours are all left alone", async () => {

@@ -1142,6 +1142,43 @@ and percentages pass.
 them again. It never writes one: its validator refuses fees, earnest money and
 amounts, which is exactly what these answers contain.
 
+### Today's three groups, and the brake (2026-09-17)
+
+**The groups.** Every action `buildPipeline` emits carries `group` (`groupFor`,
+shared/pipeline.js), and Today shows three sections instead of one list:
+
+- **Your call** — decisions only a person makes: drafts waiting, one-click
+  hand-offs, closings, deals with no buyers, a priced offer nobody floated, a
+  question for the answer box, last night's audit rows. Open, first.
+- **Stuck** — the machine would normally handle it and couldn't, with why: a
+  held or failed underwrite, a float that was skipped (`proactive.skipped`), a
+  ladder that ran out, a thread gone quiet, a promised number behind a hold
+  nobody's numbers clear. Usually a phone call or a fix to the data.
+- **The machine is on it** — already moving: texts sending themselves (with
+  when), a promise waiting on an underwrite or on their answer, and, with
+  `driver.promises` on, the move the driver makes on its next pass. Collapsed;
+  each row says `Next: …`. A driven promise row has **Stop**.
+
+The KPI row reads Your call / Stuck / Machine is on it (`counts.actions.byGroup`).
+
+**The brake.** `shared/thread-health.js` `threadHealth({ offer, drafts, events,
+now }) → { drive, reason, detail, since }`. Every driver asks it before it
+claims anything. It stops on, strongest first: they opted out · you pressed
+Stop · it is a deal now · they passed (a rejection as their newest word, or a
+dead status) · the house is pending or sold (`OVER_PLAIN`, the strict one:
+"a few went pending nearby" and "sold as is" do not trip it) · they sound
+annoyed (`IRRITATED_RX`, words only, read from their newest three messages) ·
+you answered by hand in the last 3 days · two texts we started are sitting
+unanswered. There is no tone field on the classifier; the regex is the first
+version on purpose, and the coach's dismissal reasons will show what it misses.
+
+The existing ladders keep their own rules. The brake is for what the machine
+starts by itself between rungs.
+
+**Stop / Resume.** `POST /api/dashboard/drive/stop` and `/drive/resume` write
+`drive_stopped` / `drive_resumed`. A stop from Today is the whole thread with
+that agent, until Resume; a stopped promise row moves back to Your call.
+
 ### The nightly coach (2026-09-17)
 
 The bot used to get better only when Matt noticed a bad reply and said so in a coding session. The coach closes that loop. An hour after the audit (8pm Pacific by default) it reads what a person did with the day's drafts and **proposes** what the bot should learn. It never applies anything; Today's "Learned last night" card is where a person answers.
@@ -1474,7 +1511,7 @@ Custom Menu Links, each one job, each component in exactly one place:
 
 | Menu link | URL | Tabs |
 |---|---|---|
-| Today (the old Overview link — rename it) | `https://<site>/dashboard?location_id={{location.id}}` | Needs you (autopilot status line, counts, action queue with reply drafts) · Board |
+| Today (the old Overview link — rename it) | `https://<site>/dashboard?location_id={{location.id}}` | Needs you (autopilot status line, counts, the queue in three groups: your call · stuck · the machine is on it) · Board |
 | Autopilot | `https://<site>/autopilot?location_id={{location.id}}` | Controls (the dial + every switch) · Conversation AI |
 | Reports | `https://<site>/reports?location_id={{location.id}}` | Flow · Activity (charts) · Lessons (outcomes + fell-through lessons) |
 

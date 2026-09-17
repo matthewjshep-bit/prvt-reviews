@@ -111,15 +111,15 @@ export default function PipelineView({ section = "queue" }) {
         <>
           <AutopilotStatus autopilot={data?.autopilot} />
           <KpiRow cols="sm:grid-cols-5" items={[
-            { label: "Now", value: counts.actions?.now ?? 0, hint: "waiting on you, urgently" },
-            { label: "Soon", value: counts.actions?.soon ?? 0 },
-            { label: "FYI", value: counts.actions?.fyi ?? 0 },
+            { label: "Your call", value: counts.actions?.byGroup?.yours ?? ((counts.actions?.now ?? 0) + (counts.actions?.soon ?? 0)), hint: `${counts.actions?.now ?? 0} of them now` },
+            { label: "Stuck", value: counts.actions?.byGroup?.stuck ?? 0, hint: "the machine tried and couldn't" },
+            { label: "Machine is on it", value: counts.actions?.byGroup?.machine ?? 0, hint: "already moving" },
             { label: "Working offers", value: working, hint: "priced, floated, sent or countered" },
             { label: "Live deals", value: liveDeals },
           ]} />
           <div>
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-sm font-bold">Needs you</h2>
+              <h2 className="text-sm font-bold">Today</h2>
               {refreshBtn}
             </div>
             <ActionQueue actions={actions} draftsById={draftsById} sendsEnabled={data?.sendsEnabled}

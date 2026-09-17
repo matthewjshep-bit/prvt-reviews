@@ -22,6 +22,7 @@
 // chart components never handle gaps.
 
 import { settlePromise, heldTriageForPromises } from "../promise-sweep.js";
+import { recordEvent } from "../contact-record.js";
 import { answerPartnerQuestion, forgetAnswer } from "../partner-answer.js";
 import express from "express";
 import { store } from "../store.js";
@@ -59,6 +60,7 @@ const PIPELINE_EVENT_TYPES = [
   "follow_up_sent", "text_summary", "call_summary",
   "outreach_sent",
   "promise_made", "promise_owed", "promise_kept",
+  "drive_stopped", "drive_resumed",
 ];
 
 const DAY_MS = 86400000;
@@ -401,7 +403,9 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const auditCursor = await store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null);
       const audit = auditCursor?.doc?.last || null;
       const fromLastNight = auditActions(audit, { now }).filter((a) =>
-        !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled")));
+        !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled")))
+        .map((a) => ({ ...a, group: "yours" }));
+      out.counts.actions.byGroup.yours += fromLastNight.length;
       res.json({
         audit: audit ? { lastRunAt: auditCursor.at, run: auditCursor.doc?.run || null, counts: audit.counts, summary: summarizeAudit(audit), finishedAt: audit.finishedAt, trigger: audit.trigger, dryRun: audit.dryRun, error: audit.error, ghlRead: audit.ghlRead } : null,
         ok: true,
@@ -445,6 +449,26 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       res.json({ ok: true, ...r });
     } catch (err) { fail(res, err); }
   });
+  // Stop / Resume on a row the machine is driving (shared/thread-health.js
+  // reads these). Body: { contactId, offerId?, address?, reason? }. A stop with
+  // no offerId is the whole thread.
+  for (const [path, type] of [["/drive/stop", "drive_stopped"], ["/drive/resume", "drive_resumed"]]) {
+    router.post(path, async (req, res) => {
+      try {
+        const { locationId } = resolveLocation(req);
+        const contactId = String(req.body?.contactId || "").slice(0, 64);
+        if (!contactId) return res.status(400).json({ error: "contactId is required" });
+        const at = new Date().toISOString();
+        const r = await recordEvent({
+          store, locationId, contactId, party: "agent", type, at, address: String(req.body?.address || "").slice(0, 200),
+          offerId: req.body?.offerId ? String(req.body.offerId).slice(0, 64) : null, source: "operator",
+          dedupeKey: `${type}:${contactId}:${at}`, data: { reason: String(req.body?.reason || "").slice(0, 200) },
+        });
+        res.json({ ok: true, recorded: Boolean(r?.inserted) });
+      } catch (err) { fail(res, err); }
+    });
+  }
+
   // A question the bot couldn't answer, answered from Today's answer box:
   // drafted to them in our voice (it waits in the outbox for Send), kept as a
   // standing answer unless told not to, and the owed-an-answer row clears.

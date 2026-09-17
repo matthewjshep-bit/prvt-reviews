@@ -32,6 +32,8 @@ import { carryOutHeldVerdict } from "./held-underwrites.js";
 import { triageHeldUnderwrite } from "./shared/held-underwrites.js";
 import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
 import { openPromises, resolvePromise, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
+import { threadHealth } from "./shared/thread-health.js";
+import { sameStreet } from "./shared/us-address.js";
 
 const HOUR_MS = 3600000;
 const iso = (ms) => new Date(ms).toISOString();
@@ -75,8 +77,12 @@ export async function driveOpenPromises({ client = null, locationId, saved = {},
         store.listReplyDrafts(locationId, { contactId: p.contactId, limit: 40 }).catch(() => []),
         store.listContactEvents(locationId, p.contactId, { limit: 300 }).catch(() => []),
       ]);
-      // The brake, in its smallest form: nobody who told us to stop is driven.
-      if (timeline.some((e) => e?.type === "unsubscribed")) { row.status = "stopped"; row.reason = "they unsubscribed"; continue; }
+      // The brake (shared/thread-health.js): opted out, stopped on Today, they
+      // passed, the house is gone, they sound annoyed, a person has the
+      // thread, or two texts of ours are already sitting unanswered.
+      const about = offers.find((o) => p.address && o.address && sameStreet(o.address, p.address)) || null;
+      const health = threadHealth({ offer: about, drafts, events: timeline, now });
+      if (!health.drive) { row.status = "stopped"; row.reason = health.reason; continue; }
 
       // The held triage needs GHL's word on them (unsubscribed, bot-off tag, a
       // lost opportunity) before anything is asked or re-run: the same two

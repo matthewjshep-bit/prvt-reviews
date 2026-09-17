@@ -50,3 +50,17 @@ test("the answer box renders the question they asked, with somewhere to type", (
   expect(html).toContain("Save for next time");
   expect(html).toContain("Draft the reply");
 });
+
+test("machine rows are collapsed under their own heading and carry a Stop; your calls come first", () => {
+  const now = Date.parse("2026-09-20T17:00:00Z");
+  const config = normalizeConversationAi({ enabled: true, driver: { promises: { enabled: true } } });
+  const offers = [{ id: "o1", contactId: "c1", address: "12 Elm St, Renton, WA", cashAmount: 410000, status: "new", createdAt: "2026-09-20T12:00:00Z", sends: [] }];
+  const events = [{ contactId: "c1", type: "promise_owed", at: "2026-09-20T13:00:00Z", address: "12 Elm St, Renton, WA", data: { what: "number", text: "I'll get back to you with a number." } }];
+  const drafts = [{ id: "d1", contactId: "c9", contactName: "Dana", status: "draft", intent: "counter", party: "agent", propertyAddress: "9 Oak St", createdAt: "2026-09-20T16:00:00Z", actions: [] }];
+  const r = buildPipeline({ offers, events, drafts, config, now });
+  const html = renderToStaticMarkup(<ActionQueue actions={r.actions} draftsById={{}} sendsEnabled onDone={() => {}} />);
+  expect(html.indexOf("Your call")).toBeLessThan(html.indexOf("The machine is on it"));
+  expect(html).toContain("Next: sends the number on the next pass");
+  expect(html).toContain(">Stop<");
+  expect(html).not.toContain(">Stuck<");   // nothing is stuck, so the heading isn't there
+});

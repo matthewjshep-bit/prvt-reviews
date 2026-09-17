@@ -85,8 +85,8 @@ const TEST_ADDRESS = /\btest\b|\bprobe\b/i;
 // as is" (Slavic Sloboda) both say "pending"/"sold" about a house that is
 // still very much for sale — the first dry run (2026-09-16) would have
 // retired both.
-const OVER_TEXT = /\b(pending|sold(?!\s+as[- ]is)|under contract|off the market|no longer (available|for sale|on the market)|already (has|have|got|accepted) (an|another|multiple)? ?offers?|accepted (an|another) offer|not interested|won'?t sell|isn'?t selling|not (going to|gonna) sell|withdrawn|cancell?ed)\b/i;
-const OVER_PLAIN = /\b(it'?s|it is|this (one|property|house|listing)|that (one|property|house|listing)|the (property|house|listing)|she'?s|he'?s|they'?re|seller is)\s+(is |was |went |has gone |are |went )?(already |now |just )?(pending|under contract|sold(?!\s+as[- ]is)|off the market|no longer (available|for sale)|not interested|withdrawn)\b/i;
+export const OVER_TEXT = /\b(pending|sold(?!\s+as[- ]is)|under contract|off the market|no longer (available|for sale|on the market)|already (has|have|got|accepted) (an|another|multiple)? ?offers?|accepted (an|another) offer|not interested|won'?t sell|isn'?t selling|not (going to|gonna) sell|withdrawn|cancell?ed)\b/i;
+export const OVER_PLAIN = /\b(it'?s|it is|this (one|property|house|listing)|that (one|property|house|listing)|the (property|house|listing)|she'?s|he'?s|they'?re|seller is)\s+(is |was |went |has gone |are |went )?(already |now |just )?(pending|under contract|sold(?!\s+as[- ]is)|off the market|no longer (available|for sale)|not interested|withdrawn)\b/i;
 const TURNKEY_TEXT = /\b(turn-?key|move-?in ready|fully (updated|renovated|remodeled)|completely (renovated|remodeled|updated)|not (really )?a fixer|isn'?t a fixer|no work needed)\b/i;
 const COLD_STAGE = /^tier\s*3\b|passed on offer|^lost\b|not a good deal/i;
 const CLOSED_OPP = /^(lost|abandoned|abandon)$/i;

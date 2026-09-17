@@ -513,6 +513,9 @@ export const answerPartnerQuestion = ({ contactId, draftId = null, address = "",
   post(`/api/dashboard/answers`, { contactId, draftId, address, question, answer, saveAsFact });
 export const forgetStandingAnswer = (id) =>
   fetch(`${API_BASE}/api/dashboard/answers/${encodeURIComponent(id)}?${locq()}`, { method: "DELETE" }).then(j);
+// Stop / Resume on a row the machine is driving.
+export const stopDrive = ({ contactId, offerId = null, address = "", reason = "" }) => post(`/api/dashboard/drive/stop`, { contactId, offerId, address, reason });
+export const resumeDrive = ({ contactId, offerId = null, address = "" }) => post(`/api/dashboard/drive/resume`, { contactId, offerId, address });
 export const runDashboardAudit = ({ dryRun = true } = {}) => post(`/api/dashboard/audit/run`, { dryRun });
 // The nightly coach: what it proposed from the day's edits and dismissals.
 export const getCoach = () => fetch(`${API_BASE}/api/dashboard/coach?${locq()}`).then(j);

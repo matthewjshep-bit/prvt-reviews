@@ -81,6 +81,38 @@ export const ACTION_KINDS = [
 const INVESTOR_RANK = { committed: 7, soft_commit: 6, passed: 5, evaluating: 4, opened: 3, sent: 2, blasted: 1 };
 const INVESTOR_ORDER = ["committed", "soft_commit", "evaluating", "opened", "sent", "blasted", "passed"];
 
+// Today's three groups. "Your call" is a decision only a person makes. "The
+// machine is on it" is something already moving, with what happens next and
+// when. "Stuck" is something the machine would normally handle and couldn't,
+// with why: usually a phone call or a fix to the data.
+export const ACTION_GROUPS = [
+  { key: "yours",   label: "Your call" },
+  { key: "machine", label: "The machine is on it" },
+  { key: "stuck",   label: "Stuck" },
+];
+const STUCK_KINDS = new Set(["underwrite_held", "underwrite_failed", "ladder_exhausted", "gone_quiet"]);
+
+/**
+ * groupFor(action) → "yours" | "machine" | "stuck"
+ * A promise row is grouped where it is built (it depends on the resolver's
+ * move and the driver switch); every other kind is grouped by what it is.
+ */
+export function groupFor(a) {
+  if (a.group) return a.group;
+  if (a.kind === "draft_scheduled") return "machine";
+  if (a.kind === "offer_ready") return a.why ? "stuck" : "yours";
+  if (STUCK_KINDS.has(a.kind)) return "stuck";
+  return "yours";
+}
+
+// What the driver does next, in the row's words.
+const DRIVER_NEXT = {
+  send_number: "sends the number on the next pass",
+  start_underwrite: "starts the underwrite on the next pass",
+  ask_numbers: "asks for their numbers on the next pass",
+  rerun: "re-runs on their numbers on the next pass",
+};
+
 // What a promise row offers for each of the resolver's moves. `wait`,
 // `ask_numbers` and `start_underwrite` have no button yet: the row says so.
 const PROMISE_OPS = {
@@ -135,15 +167,17 @@ export function buildPipeline({
   const actions = [];
   const counts = {
     lanes: Object.fromEntries(ALL_LANES.map((l) => [l.key, 0])),
-    actions: { now: 0, soon: 0, fyi: 0 },
+    actions: { now: 0, soon: 0, fyi: 0, byGroup: { yours: 0, machine: 0, stuck: 0 } },
     hidden: { dead: 0, closed: 0, drafts: 0 },
     coldNoReply: 0,
     eventsTruncated: eventsLimit > 0 && events.length >= eventsLimit,
   };
   const push = (a) => {
     a.id = a.id || `${a.kind}:${a.offerId || a.draftId || a.jobId || a.contactId}`;
+    a.group = groupFor(a);
     actions.push(a);
     counts.actions[a.severity]++;
+    counts.actions.byGroup[a.group]++;
     return a.id;
   };
 
@@ -268,7 +302,7 @@ export function buildPipeline({
     }
     if (lane === "ready" && card.ai.made && !(o.sends || []).length) {
       card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon",
-        title: `${card.address} is priced and nothing has gone out`,
+        title: `${card.address} is priced and nothing has gone out`, why: o.proactive?.skipped?.reason ? String(o.proactive.skipped.reason).slice(0, 140) : "",
         detail: [`cash ${money(o.cashAmount)}`, o.proactive?.skipped?.reason ? `didn't float: ${String(o.proactive.skipped.reason).slice(0, 140)}` : ""].filter(Boolean).join(" · "),
         ops: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "float_realm", label: "Float the number", intent: "secondary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
     }
@@ -373,12 +407,14 @@ export function buildPipeline({
       if (existing) { existing.count++; existing.title = `Blast on ${existing.address || "a deal"}: ${existing.count} texts sending themselves`; }
       else {
         const id = push({ ...base, id: key, kind: "draft_scheduled", severity: "fyi", count: 1,
-          address: d.outbound.address || base.address, title: `Blast on ${d.outbound.address || base.address || "a deal"}: 1 text sending itself`, detail: "staggered over the auto-send hours", ops: [] });
+          address: d.outbound.address || base.address, title: `Blast on ${d.outbound.address || base.address || "a deal"}: 1 text sending itself`, detail: "staggered over the auto-send hours",
+          next: { what: "the blast sends itself, staggered over the auto-send hours", at: d.sendAt || null }, ops: [] });
         if (card) card.actionIds.push(id);
       }
     } else if (d.status === "scheduled") {
       const id = push({ ...base, kind: "draft_scheduled", severity: "fyi",
-        title: `${d.contactName || "Someone"}: sends itself${d.sendAt ? ` at ${d.sendAt}` : ""}`, detail: "", ops: [] });
+        title: `${d.contactName || "Someone"}: sends itself${d.sendAt ? ` at ${d.sendAt}` : ""}`, detail: "",
+        next: { what: "sends itself", at: d.sendAt || null }, ops: [] });
       if (card) card.actionIds.push(id);
     }
     for (const a of d.actions || []) {
@@ -444,12 +480,25 @@ export function buildPipeline({
     const theirs = [...sentDrafts, ...drafts].filter((d) => d?.contactId === p.contactId);
     const from = v.kind === "partner_answer" ? (theirs.find((d) => d.id === p.draftId) || null) : null;
     const question = from ? questionIn(from.inbound) : "";
-    const ops = question ? [{ key: "answer", label: "Answer", intent: "primary" }] : (PROMISE_OPS[v.move] || []);
+    const moveOps = question ? [{ key: "answer", label: "Answer", intent: "primary" }] : (PROMISE_OPS[v.move] || []);
+    // Where the row sits. You stopped it: yours, with Resume. Waiting on an
+    // underwrite or on them: the machine's. A move the driver will make when
+    // it is switched on: the machine's, with Stop. A hold nobody's numbers
+    // clear: stuck. Everything else: yours.
+    const toggle = events.filter((e) => (e?.type === "drive_stopped" || e?.type === "drive_resumed") && e.contactId === p.contactId)
+      .sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1);
+    const stopped = toggle?.type === "drive_stopped";
+    const driving = Boolean(config?.enabled && config?.driver?.promises?.enabled) && Boolean(DRIVER_NEXT[v.move]);
+    const group = stopped ? "yours" : v.move === "wait" || driving ? "machine" : v.move === "yours" && v.offerId ? "stuck" : "yours";
+    const next = group === "machine" ? { what: v.move === "wait" ? (v.reason || "waiting") : DRIVER_NEXT[v.move], at: null } : null;
+    const ops = [...moveOps,
+      ...(stopped ? [{ key: "resume_drive", label: "Resume", intent: "secondary" }] : []),
+      ...(group === "machine" && driving ? [{ key: "stop_drive", label: "Stop", intent: "secondary" }] : [])];
     push({ id: `promise_owed:${p.contactId}:${p.owedAt}`, kind: "promise_owed", severity: "now", contactId: p.contactId, contactName: contactNames[p.contactId] || "",
       address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0,
-      draftId: null, fromDraftId: p.draftId || null, ...(question ? { question } : {}),
+      draftId: null, fromDraftId: p.draftId || null, ...(question ? { question } : {}), group, ...(next ? { next } : {}),
       title: `${who}: we owe them ${p.what === "number" ? "a number" : "an answer"}${p.address ? ` on ${String(p.address).split(",")[0]}` : ""}`,
-      detail: [PROMISE_MOVE_LABEL[v.move] || "", heldReason ? `underwrite held: ${heldReason}` : "", p.text ? `we said "${String(p.text).slice(0, 90)}"` : ""].filter(Boolean).join(" · "),
+      detail: [stopped ? `you stopped it${toggle.data?.reason ? `: ${String(toggle.data.reason).slice(0, 80)}` : ""}` : "", PROMISE_MOVE_LABEL[v.move] || "", heldReason ? `underwrite held: ${heldReason}` : "", p.text ? `we said "${String(p.text).slice(0, 90)}"` : ""].filter(Boolean).join(" · "),
       // Settled some other way (a call, a no that never reached the offer):
       // the row can always be closed by hand, with why. Marking the offer
       // sent / passed closes it too.
