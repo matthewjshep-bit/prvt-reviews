@@ -110,7 +110,7 @@ function PipelineCard({ card, actionsById, draftsById, expanded, onToggle, sends
               )}
               {drafts.length > 0 && (
                 <ul className="divide-y divide-slate-100 rounded-lg border border-slate-100">
-                  {drafts.map((d) => <DraftRow key={d.id} draft={d} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} />)}
+                  {drafts.map((d) => <DraftRow key={d.id} draft={d} offerId={card.offerId} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} />)}
                 </ul>
               )}
               {!ops.size && !drafts.length && <p className="text-xs text-slate-400">Nothing waiting here.</p>}

@@ -72,7 +72,9 @@ function ActionRow({ item, onDone, onShowDraft, draft, sendsEnabled, serverOffse
         <div className="text-sm text-slate-800">{item.title}</div>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
           {item.contactId && <ContactLink contactId={item.contactId} name={item.contactName || "contact"} party={item.kind.startsWith("deal") || item.kind === "blast_no_opens" ? "investor" : "agent"} stopPropagation />}
-          {item.address && <span>{item.address}</span>}
+          {item.address && (item.offerId
+            ? <a href={linkFor("open_editor", item)} target="_blank" rel="noreferrer" title="Open the offer" className="text-blue-700 hover:underline">{item.address}</a>
+            : <span>{item.address}</span>)}
           {item.detail && <span className="text-slate-400">· {item.detail}</span>}
         </div>
       </div>
@@ -85,7 +87,7 @@ function ActionRow({ item, onDone, onShowDraft, draft, sendsEnabled, serverOffse
       </div>
       {showing && draft && (
         <ul className="w-full rounded-lg border border-slate-100">
-          <DraftRow draft={draft} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} />
+          <DraftRow draft={draft} offerId={item.offerId} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} />
         </ul>
       )}
     </li>
@@ -121,7 +123,7 @@ export default function ActionQueue({ actions = [], draftsById = {}, sendsEnable
                 if (DRAFT_KINDS.has(g.key) && draftsById[item.draftId]) {
                   return (
                     <li key={item.id} className={item.draftId === highlightDraftId ? "ring-2 ring-inset ring-blue-300" : ""} id={`draft-${item.draftId}`}>
-                      <ul><DraftRow draft={draftsById[item.draftId]} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} /></ul>
+                      <ul><DraftRow draft={draftsById[item.draftId]} offerId={item.offerId} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} /></ul>
                     </li>
                   );
                 }

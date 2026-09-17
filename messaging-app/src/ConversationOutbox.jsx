@@ -7,10 +7,10 @@
 // draft looks and behaves the same wherever you meet it.
 
 import React, { useEffect, useState } from "react";
-import { AlertTriangle, Check, ChevronDown, ChevronRight, Clock, Loader2, MessageSquare, Pause, Play, Send } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Clock, ExternalLink, Loader2, MessageSquare, Pause, Play, Send } from "lucide-react";
 import { ACTION_LABEL, INTENT_LABEL, PARTY_LABEL, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
-import { applyDraftAction, dismissReplyDraft, getContactThread, holdReplyDraft, resumeConversationBot, sendReplyDraft } from "./api.js";
+import { applyDraftAction, dismissReplyDraft, getContactThread, offerEditorUrl, holdReplyDraft, resumeConversationBot, sendReplyDraft } from "./api.js";
 import ContactLink from "./ContactLink.jsx";
 import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
 
@@ -153,7 +153,9 @@ function ThreadPeek({ contactId }) {
   );
 }
 
-export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone }) {
+export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, offerId = null }) {
+  // The offer this draft is about, when the caller knows it (Today's queue does).
+  const offerHref = (offerId || d.outbound?.offerId) ? offerEditorUrl(offerId || d.outbound.offerId) : null;
   const [showThread, setShowThread] = useState(false);
   const [text, setText] = useState(d.reply || "");
   const [busy, setBusy] = useState("");
@@ -207,7 +209,13 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone })
           <span className="font-semibold text-slate-900">{d.contactName || "Unknown contact"}</span>
         )}
         <PartyPill party={d.party} />
-        {d.propertyAddress && <span className="text-xs text-slate-500">{d.propertyAddress}</span>}
+        {d.propertyAddress && !offerHref && <span className="text-xs text-slate-500">{d.propertyAddress}</span>}
+        {offerHref && (
+          <a href={offerHref} target="_blank" rel="noreferrer" title="Open the offer"
+            className="inline-flex items-center gap-1 text-xs text-blue-700 hover:underline">
+            {d.propertyAddress || "Open the offer"} <ExternalLink size={11} />
+          </a>
+        )}
         <IntentPill party={d.party} intent={d.intent} />
         {d.channel === "email" && <Pill label="email" small />}
         <span className="ml-auto text-xs text-slate-500">{ago(d.createdAt)}</span>
