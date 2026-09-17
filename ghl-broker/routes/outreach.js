@@ -368,8 +368,17 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     // stores the raw circle).
     if (countyMeta) {
       const before = listings.length;
+      const raw = listings;
       listings = listings.filter((l) => listingInCounty(l, countyMeta));
       warnings.push(`county filter kept ${listings.length} of ${before} circle listings inside ${countyMeta.name}`);
+      // Nearly nothing inside the county we centred on is a labelling problem,
+      // not a market: say what the listings called themselves.
+      if (before >= 20 && listings.length < before * 0.05) {
+        const seen = new Map();
+        for (const l of raw) { const k = `${l.county || "?"}/${l.stateFips || ""}${l.countyFips || ""}/${l.state || "?"}`; seen.set(k, (seen.get(k) || 0) + 1); }
+        const top = [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k}×${n}`).join(", ");
+        warnings.push(`county labels seen (county/fips/state): ${top} — wanted ${countyMeta.name} ${countyMeta.geoid}`);
+      }
     }
 
     // Cohort medians come from the FULL pull (pre-filter) so they describe the

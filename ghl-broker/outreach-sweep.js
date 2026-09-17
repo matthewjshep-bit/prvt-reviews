@@ -364,7 +364,7 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
     job.pull = { batchId: pull.batchId, batchName: pull.batchName, requestsUsed: (job.pull?.requestsUsed || 0) + (Number(pull.requestsUsed) || 0), cached: pull.cached,
       listingsFetched: pull.listingsFetched, listingsKept: pull.listingsKept, agentsTotal: pull.agentsTotal, agentsNew: pull.agentsNew,
       offset: query.offset ?? 0, nextOffset: pull.nextOffset || 0, totalCount: pull.totalCount ?? null };
-    job.warnings.push(...(pull.warnings || []).filter((w) => !/^county filter kept/.test(w)).slice(0, 5));
+    job.warnings.push(...(pull.warnings || []).filter((w) => !/^county filter kept [1-9]/.test(w)).slice(0, 6));
 
     // 2. Who is new to us, and how many of them today.
     job.phase = "picking";
