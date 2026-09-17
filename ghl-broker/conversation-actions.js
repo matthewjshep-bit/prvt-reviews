@@ -221,6 +221,18 @@ const EXECUTORS = {
     if (!r?.ok) return r?.reason || "no offer to re-issue";
     return `re-issued ${r.address} at ${fmtMoney(amount)}`;
   },
+  // The investor band said yes to a buyer's own number; this writes it down
+  // so the next message quotes it and the assignment drafts at it. No rule may
+  // carry it (absent from INTERNAL_ACTIONS_FOR): only the reply agent injects
+  // it, after evaluateInvestorBand passed on this very message.
+  async agree_investor_price({ deps, contactId, draft, action }) {
+    if (typeof deps?.agreeInvestorPrice !== "function") throw new Error("agreeing a buyer's price is not wired on this broker");
+    const amount = Math.round(Number(action?.amount) || 0);
+    if (!amount || !action?.offerId) return "no price or deal to agree";
+    const r = await deps.agreeInvestorPrice({ contactId, offerId: action.offerId, amount, draftId: draft?.id || null });
+    if (!r?.ok) throw new Error(r?.reason || "the price could not be recorded");
+    return `agreed ${fmtMoney(amount)} with them on ${r.address}`;
+  },
   // Minting the deal sets a contract price and an assignment fee, fires GHL
   // writes and re-prices every dataroom built off the offer — on the evidence
   // of one sentence. A person confirms it.

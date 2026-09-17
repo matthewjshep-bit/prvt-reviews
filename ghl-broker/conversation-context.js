@@ -397,7 +397,7 @@ const reasonWords = (r) =>
 
 const dealLine = (d) => {
   const money = [
-    d.price ? `buyer price ${fmtMoney(d.price)}` : "price not set yet",
+    d.price ? `buyer price ${fmtMoney(d.price)}${d.agreed ? " (agreed with them; hold it, do not reopen it)" : ""}` : "price not set yet",
     d.arv ? `ARV ${fmtMoney(d.arv)}` : "",
     d.repairs ? `est. repairs ${fmtMoney(d.repairs)}` : "",
   ].filter(Boolean).join(", ");
@@ -472,10 +472,20 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
       continue;
     }
     const n = investorFacingPrice({ offer, room, settings });
+    // A price the investor band agreed with THIS buyer is their price from
+    // here on. What they must never hear grows with it: the fee they are
+    // actually paying, and how far we came down.
+    const agreed = Math.round(Number(link?.agreedPrice?.amount) || 0);
+    if (agreed > 0 && agreed < n.price) {
+      const contract = Math.round(Number(offer.deal.contractPrice) || Number(offer.cashAmount) || 0);
+      n.forbidden.push(...[agreed - contract, n.price - agreed].filter((x) => x > 0));
+      n.price = agreed;
+      n.agreed = true;
+    }
     const row = {
       address: offer.address || "a property", stage: offer.deal.stage,
       linkStatus: link ? investorStatus(link.status) : (blasted ? "blasted" : null), blasted,
-      price: n.price, arv: n.arv, repairs: n.repairs, invite: room ? inviteByRoom.get(room.id) || null : null,
+      price: n.price, agreed: Boolean(n.agreed), arv: n.arv, repairs: n.repairs, invite: room ? inviteByRoom.get(room.id) || null : null,
       offerId: offer.id, reason: reasonWords(link?.reason),
     };
     if (link || blasted) linked.push(row);

@@ -17,7 +17,7 @@ import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, Pill, SkeletonRows, Ta
 import { appHref } from "./links.js";
 import ConversationTryIt from "./ConversationTryIt.jsx";
 import {
-  AnswersEditor, AutoSendCard, BookingCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, MediaCard, OptOutCard, PartyPlaybooks,
+  AnswersEditor, AutoSendCard, BookingCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, InvestorBandCard, MediaCard, OptOutCard, PartyPlaybooks,
   CoachSettingsCard, PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
 } from "./ConversationPlaybooks.jsx";
 import { IntentPill, PartyPill, ago } from "./ConversationOutbox.jsx";
@@ -243,6 +243,7 @@ export default function ConversationAi({ settings }) {
       <FollowUpCard config={form} patch={patch} />
       <AutoSendCard config={form} patch={patch} />
       <CounterBandCard config={form} patch={patch} example={bandExample} />
+      <InvestorBandCard config={form} patch={patch} />
       <BookingCard config={form} patch={patch} calendars={calendars} />
       <RequoteCard config={form} patch={patch} />
       <ProfileCard config={form} patch={patch} />

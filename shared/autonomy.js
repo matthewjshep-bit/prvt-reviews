@@ -75,6 +75,7 @@ export const AUTONOMY_DOES = {
     "Everything in Normal",
     "The offer sends itself after a clean underwrite, and when they say the number works",
     "Yes to a counter at or under the ceiling, and to an acceptance",
+    "Yes to a buyer's own number, never under contract plus the minimum fee, once per deal",
     "Dataroom invites go to evaluating buyers whose buy box fits",
     "Calls are booked on the calendar when one is picked in Settings",
   ],
@@ -125,7 +126,11 @@ export function autonomyPlan(mode, { hasCalendar = false } = {}) {
         counterBand: full,
         sendOfferOnClearUnderwrite: full,
         sendOfferUnasked: full,
-      } : {}),
+      } : {
+        // The investor band: a buyer's own number, above contract plus the
+        // minimum fee, once per deal. Full only.
+        priceBand: full,
+      }),
     }])),
     booking: full && hasCalendar,
     outreachAutopilot: normal,
@@ -199,6 +204,8 @@ export function applyAutonomy(saved = {}, mode) {
       pb.counterBand = { ...pb.counterBand, enabled: p.counterBand, acceptance: p.counterBand };
       pb.sendOffer = { ...pb.sendOffer, onClearUnderwrite: p.sendOfferOnClearUnderwrite };
       setSendOfferActions(pb, p.sendOfferUnasked);
+    } else {
+      pb.priceBand = { ...pb.priceBand, enabled: p.priceBand };
     }
   }
 
@@ -240,7 +247,9 @@ export function autonomyFingerprint(saved = {}) {
         sendOfferOnClearUnderwrite: Boolean(pb.sendOffer?.onClearUnderwrite),
         sendOfferUnasked: Object.values(pb.intentRules || {}).some((r) =>
           r?.mode === "auto" && (r.actions || []).some((a) => a?.type === "send_offer" && a.mode === "auto")),
-      } : {}),
+      } : {
+        priceBand: Boolean(pb.priceBand?.enabled),
+      }),
     };
   }
   return {

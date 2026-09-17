@@ -290,3 +290,79 @@ export function evaluateAcceptance({
     reason: passed ? "" : (failed?.detail || failed?.name.replace(/_/g, " ") || ""),
   };
 }
+
+/* ---------- the investor band (2026-09-17) ---------- */
+
+// Matt, 2026-09-17: a buyer who pushes back on price ("it's a deal for me
+// around 400k") used to wait for a person every time. The bot may now come
+// down by itself, inside a band, and the band is the whole safety argument:
+//
+//   - the figure is THEIR OWN, typed in their message — never one we made up
+//   - never under our contract price plus a minimum assignment fee
+//   - never more than a few percent off asking, whatever the fee — a second,
+//     independent rail, because the contract price on the deal is one typed
+//     field and the floor is only as right as it is
+//   - one concession per deal, ever, to anyone; a daily cap across deals
+//   - a high-confidence read the model didn't flag for a person
+//
+// It never counters back at a number they didn't say, never mints a second
+// concession, and never commits the buyer: marking them committed is still a
+// person's press. Off by default; the autonomy dial turns it on at Full only.
+
+// No setting may push the minimum fee under this.
+export const INVESTOR_MIN_FEE_FLOOR = 5000;
+
+/**
+ * evaluateInvestorBand({ offer, asking, contactId, liveDeals, draft, inboundMessage,
+ *                        band, releasedToday, now, moneyIn }) → verdict
+ *
+ *   offer      the deal (an offer with `.deal`) the pushback is about, or null
+ *   asking     the price this buyer has been quoted (investorFacingPrice)
+ *   liveDeals  every live deal this buyer is on, for "which one?"
+ *
+ * Every check is recorded, pass or fail, like the counter band's.
+ */
+export function evaluateInvestorBand({
+  offer = null, asking = 0, contactId = "", liveDeals = [], draft = {}, inboundMessage = "", band = {},
+  releasedToday = 0, now = Date.now(), moneyIn = defaultMoneyIn,
+} = {}) {
+  const checks = [];
+  const check = (name, ok, detail) => { checks.push({ name, ok: Boolean(ok), detail }); return Boolean(ok); };
+  const theirAmount = round(draft.counterAmount);
+  const deal = offer?.deal || null;
+  const contractPrice = round(deal?.contractPrice) || round(offer?.cashAmount);
+  const minFee = Math.max(INVESTOR_MIN_FEE_FLOOR, round(band.minFee));
+  const floor = contractPrice > 0 ? contractPrice + minFee : 0;
+  const ask = round(asking);
+  const dropPct = Math.min(15, Math.max(1, Number(band.maxDropPct) || 5));
+  const dropLimit = ask > 0 ? Math.ceil(ask * (1 - dropPct / 100)) : 0;
+
+  const said = moneyIn(inboundMessage).map(round);
+  check("their_own_words", theirAmount > 0 && said.includes(theirAmount),
+    theirAmount > 0 ? (said.includes(theirAmount) ? `they typed ${theirAmount}` : `${theirAmount} is not in their message`) : "no number read");
+  check("one_deal", Boolean(offer?.id) && (liveDeals.length <= 1 || Boolean(draft.propertyAddress)),
+    !offer?.id ? "no live deal of theirs to answer on" : liveDeals.length > 1 && !draft.propertyAddress ? `${liveDeals.length} live deals and no address named` : "one deal");
+  const taken = (deal?.investors || []).some((i) => i?.status === "committed" && i.contactId !== contactId);
+  check("deal_live", deal?.stage === "under_contract" && !taken,
+    !deal ? "not a deal" : taken ? "spoken for by another buyer" : deal.stage === "under_contract" ? "under contract, still shopping" : `the deal is ${String(deal.stage).replace(/_/g, " ")}`);
+  check("below_asking", ask > 0 && theirAmount > 0 && theirAmount < ask,
+    ask > 0 ? (theirAmount < ask ? `${theirAmount} is under the ${ask} they were quoted` : `${theirAmount} is not under the ${ask} they were quoted`) : "no asking price on the deal");
+  check("above_floor", floor > 0 && theirAmount >= floor,
+    floor > 0 ? `${theirAmount} against a floor of ${floor} (contract plus the ${minFee} minimum fee)` : "no contract price on the deal");
+  check("within_drop", dropLimit > 0 && theirAmount >= dropLimit,
+    dropLimit > 0 ? `${theirAmount} against ${dropLimit}, ${dropPct}% off asking` : "no asking price on the deal");
+  check("sure", draft.confidence === "high" && !draft.needsHuman,
+    draft.needsHuman ? "the model flagged it for a person" : `confidence ${draft.confidence || "unknown"}`);
+  check("once_per_deal", !deal?.investorBand?.at, deal?.investorBand?.at ? "this deal already came down once" : "first concession on this deal");
+  const cap = Math.max(0, round(band.dailyCap));
+  check("under_daily_cap", cap === 0 ? false : releasedToday < cap, cap === 0 ? "the daily cap is zero" : `${releasedToday} of ${cap} today`);
+
+  const on = band.enabled === true;
+  const bad = checks.find((c) => !c.ok);
+  const passed = on && !bad;
+  return {
+    kind: "investor_band", passed, checks, theirAmount, asking: ask, floor, dropLimit, releaseAmount: passed ? theirAmount : 0,
+    counterBack: false, offerId: offer?.id || null, at: new Date(now).toISOString(),
+    reason: !on ? "the investor band is switched off" : bad ? bad.detail : `${theirAmount} is at or above the ${Math.max(floor, dropLimit)} limit`,
+  };
+}

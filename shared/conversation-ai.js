@@ -163,9 +163,12 @@ export const NEVER_AUTO = {
 // Two guards today: the counter band (a number against a ceiling) and the
 // calendar (a time against the free slots). Which guard may release which
 // intent is fixed here; releaseUnderGuard checks the guard's KIND matches.
-export const GUARDED_AUTO = { agent: ["counter", "acceptance", "wants_call", "scheduling"], investor: ["wants_call", "wants_walkthrough"] };
+// price_pushback (investor): Matt, 2026-09-17. The investor band is its guard,
+// with its own switch (parties.investor.priceBand) and its own arithmetic
+// (evaluateInvestorBand). It stays in NEVER_AUTO and off the auto-send grid.
+export const GUARDED_AUTO = { agent: ["counter", "acceptance", "wants_call", "scheduling"], investor: ["wants_call", "wants_walkthrough", "price_pushback"] };
 export const GUARD_FOR_INTENT = {
-  counter: "band", acceptance: "band",
+  counter: "band", acceptance: "band", price_pushback: "band",
   wants_call: "booking", scheduling: "booking", wants_walkthrough: "booking",
 };
 export const guardedFor = (party) => GUARDED_AUTO[party] || [];
@@ -280,6 +283,9 @@ export const ACTION_TYPES = [
   // Injected by the broker's own guard only (see reply-agent.js); absent
   // from INTERNAL_ACTIONS_FOR, so no rule may carry it.
   "send_dataroom_invite",
+  // The same: only the investor band injects it, after its arithmetic passed
+  // on this very message. It records the price one buyer was given on one deal.
+  "agree_investor_price",
 ];
 // What send_offer may attach. Same keys the Send modal and POST /:id/send use.
 // What our paper is, and what the conversation is for — fixed, not on the
@@ -362,6 +368,7 @@ export const ACTION_LABEL = {
   mark_investor_passed: "Mark them passed on the deal", mark_investor_committed: "Mark them the committed buyer",
   record_deal_feedback: "File what they said about the deal as feedback",
   revise_offer_to_counter: "Re-issue the offer at their number",
+  agree_investor_price: "Agree the price with this buyer",
   promote_to_deal: "Promote it to a deal",
   send_offer: "Send the formal offer (the documents)",
   book_call: "Book the time they picked on the calendar",
@@ -374,6 +381,7 @@ export const INTERNAL_ACTIONS = new Set([
   "link_deal_evaluating", "start_underwrite", "requote_from_agent_numbers", "suggest_dataroom_invite",
   "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes", "mark_investor_passed", "mark_investor_committed",
   "record_deal_feedback", "revise_offer_to_counter", "promote_to_deal", "send_offer", "book_call", "send_dataroom_invite",
+  "agree_investor_price",
 ]);
 export const INTERNAL_ACTIONS_FOR = {
   agent: ["start_underwrite", "requote_from_agent_numbers", "mark_offer_countered", "mark_offer_passed", "mark_offer_realm_yes",
@@ -457,6 +465,12 @@ const PLAYBOOK = () => ({
   // say yes in words — and then hand off. It never mints a deal and never
   // sends a contract. See shared/auto-accept.js for the ceiling, which is
   // derived and has no knobs; what is configurable here is only safety.
+  // The investor's side of the same idea (Matt, 2026-09-17): a buyer who
+  // pushes back with a number of their own may get a yes, never under our
+  // contract price plus `minFee`, never more than `maxDropPct` off asking,
+  // once per deal, `dailyCap` a day. Read only on the investor playbook. See
+  // evaluateInvestorBand in shared/auto-accept.js. Off; Full on the dial.
+  priceBand: { enabled: false, dailyCap: 1, minFee: 10000, maxDropPct: 5 },
   counterBand: {
     enabled: false,
     dailyCap: 2,          // releases per location per day, counted from the store
@@ -721,6 +735,13 @@ function normalizePlaybook(p, party, seed = {}) {
       return { onClearUnderwrite: bool(so.onClearUnderwrite, false), channels: channels.length ? channels : ["sms"], docs: docs.length ? docs : ["image", "pdf"] };
     })(),
     followUp: normalizeFollowUp(src.followUp, party),
+    priceBand: {
+      // Investor only: an agent playbook can never carry it switched on.
+      enabled: party === "investor" && bool(src.priceBand?.enabled, false),
+      dailyCap: int(src.priceBand?.dailyCap, 1, 1, 10),
+      minFee: int(src.priceBand?.minFee, 10000, 5000, 1000000),
+      maxDropPct: int(src.priceBand?.maxDropPct, 5, 1, 15),
+    },
     counterBand: {
       enabled: bool(src.counterBand?.enabled, false),
       dailyCap: int(src.counterBand?.dailyCap, 2, 1, 50),

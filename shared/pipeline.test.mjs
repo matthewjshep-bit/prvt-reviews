@@ -578,3 +578,19 @@ test("a price agreed, two pushes and nothing back is stuck, and the next move is
   const once = build({ config: HOT, offers: [{ ...hot, followUps: hot.followUps.slice(0, 1) }] });
   assert.equal(once.actions.some((a) => a.kind === "hot_stalled"), false);
 });
+
+/* ---------- a price the investor band agreed ---------- */
+
+test("a price the machine agreed with a buyer is your call to follow up: the dataroom still shows the old one", () => {
+  const dealOffer = (inv = {}) => offer({ status: "accepted", deal: { stage: "under_contract", contractPrice: 400000, assignmentFee: 25000, closingDate: ymd(30),
+    investors: [{ contactId: "b1", name: "Alex", status: "evaluating", agreedPrice: { amount: 415000, at: D(1), via: "investor_band" }, ...inv }],
+    investorBand: { at: D(1), contactId: "b1", amount: 415000, asking: 425000 } } });
+  const row = build({ offers: [dealOffer()] }).actions.find((a) => a.kind === "investor_price_agreed");
+  assert.ok(row);
+  assert.equal(row.group, "yours");
+  assert.match(row.title, /agreed \$415,000 with Alex/i);
+  assert.match(row.detail, /dataroom still says \$425,000/);
+  assert.ok(row.ops.some((o) => o.key === "open_deals"));
+  assert.equal(build({ offers: [dealOffer({ status: "committed" })] }).actions.some((a) => a.kind === "investor_price_agreed"), false, "once they're committed it is the deal's business");
+  assert.equal(build({ offers: [dealOffer({ status: "passed" })] }).actions.some((a) => a.kind === "investor_price_agreed"), false);
+});

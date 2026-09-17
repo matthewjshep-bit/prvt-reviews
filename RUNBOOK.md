@@ -842,6 +842,9 @@ every draft. And every intent
 in `NEVER_AUTO` (agent: counter, acceptance, wants a call, scheduling, proof
 of funds, new property, other; investor: price pushback, wants to buy, wants
 to walk it, wants a call, other) is a person's call whatever the tab says.
+(Two guarded doors exist, each with its own switch and its own arithmetic: the
+agent's counter band, and since 2026-09-17 "The investor band" for a price
+pushback. Both are off by default and both leave `NEVER_AUTO` itself alone.)
 `decideAutoSend` then adds the tab's switches: the bot is on, the broker can
 send, the party's auto-send is on, the intent is on its allowlist, the channel
 is allowed. The first switch that is off is recorded on the draft and shown
@@ -1053,6 +1056,69 @@ night" keeps meaning last night. Weekends are skipped unless
 
 Today shows its last run above the queue ("Daytime pass last ran 1:05 PM: 2
 started, 1 left alone by the brake"). The Autopilot switchboard has the switch.
+
+### The investor band (2026-09-17, Matt's decision)
+
+**Why.** A buyer pushing back on price ("it's a deal for me around 400k") always
+waited for a person. Matt chose a guarded band for it, modelled on the agent's
+counter band, in the task that built it. It is the one addition to
+`GUARDED_AUTO` (`investor: price_pushback`, guard family "band").
+`NEVER_AUTO.investor` is unchanged, and a price pushback is still never a box
+on the auto-send grid.
+
+**The switch.** `parties.investor.priceBand = { enabled: false, dailyCap: 1,
+minFee: 10000, maxDropPct: 5 }`. Off by default; **Full** on the dial and no
+lower; a card on the Conversation AI tab ("Buyers who push back on price").
+The normaliser holds `minFee` at 5,000 or more, `maxDropPct` between 1 and 15,
+and never lets an agent playbook carry the switch on.
+
+**The guard.** `evaluateInvestorBand` in shared/auto-accept.js, pure, every
+check recorded pass or fail on the draft:
+
+| Check | Means |
+|---|---|
+| `their_own_words` | the exact figure is in the message they sent |
+| `one_deal` | one live deal of theirs, or the address is named |
+| `deal_live` | under contract, not spoken for by another buyer |
+| `below_asking` | under the price they were quoted (the dataroom's headline when there is one) |
+| `above_floor` | at or over contract price + `minFee` |
+| `within_drop` | no more than `maxDropPct` off asking. A second, independent rail: the floor is only as right as the contract price typed on the deal |
+| `sure` | confidence high, and the model didn't flag it for a person |
+| `once_per_deal` | `deal.investorBand` is unset. One concession per deal, ever, to anyone |
+| `under_daily_cap` | investor releases today, counted from the store, separately from the agent band's |
+
+There is no counter-back: it never says a number they did not say.
+
+**Neither band borrows from the other.** `releaseUnderGuard` releases an
+investor's pushback only on an `investor_band` verdict under `priceBand.enabled`,
+and an agent's counter never on the investor's. `base.code === "never_auto"`
+still bears the whole argument: a draft the money guard flagged, or one that
+arrived while a person had the thread, is never released.
+
+**What a release does.**
+
+1. The reply is fixed words: "415k works on 138th. Want to walk it this week,
+   or should I send the paperwork over?" It names their number and nothing
+   else. Our contract price and fee stay forbidden; the gate that flags them is
+   untouched.
+2. The reply agent injects `agree_investor_price`, an action no rule can carry
+   (absent from `INTERNAL_ACTIONS_FOR`, like the dataroom invite). It runs
+   `agreeInvestorPrice` (ghl-broker/investor-price.js), which **re-checks** the
+   floor and once-per-deal before writing `deal.investors[i].agreedPrice` and
+   `deal.investorBand`. The deal's own contract price and fee are never touched.
+   If the write fails the text is held: "works for us" has to be true.
+3. From then on that buyer's context quotes the agreed price, marked "agreed
+   with them; hold it, do not reopen it". Every other buyer still sees asking.
+   Two more figures become forbidden for that buyer: the fee they are actually
+   paying, and how far we came down.
+4. Today gets a **Your call** row: "the machine agreed $415,000 with Alex · the
+   dataroom still says $425,000 · they are not marked committed". A note lands
+   on the contact. Marking them committed is still a person's press, and when
+   it happens the assignment drafts at the agreed price.
+
+**The risk to know about.** The floor is contract price + minimum fee, and the
+contract price is one typed field on the deal. `within_drop`, the daily cap of
+1 and once-per-deal are the backstops if it is wrong.
 
 ### The hot push — an agreed price, pushed to paper (2026-09-17)
 
@@ -2034,6 +2100,14 @@ Notes for whoever maintains this:
   auto-send switches and intent allowlists, `NEVER_AUTO` above them, and the
   broker's `CARD_SENDS_ENABLED` gate above that. Every auto-send is scheduled
   minutes out with a Hold button. See "Conversation AI" above.
+- **The drivers and the investor band ship off** (2026-09-17):
+  `conversationAi.driver.promises / daytime / timers`, the `hot_push` ladder and
+  `parties.investor.priceBand`. The dial turns the drivers and the ladder on at
+  Normal and the investor band at Full only. Adding them makes a location that
+  was at Normal or Full read **Custom** until the mode is pressed again, which
+  is the rollout: nothing new runs until then. None of them reads or sets an
+  environment switch, and everything they start is a draft in the ordinary
+  lane, under the same gates, allow-lists, caps and `CARD_SENDS_ENABLED`.
 - **Auto-underwrites are dry-run by default** — same double gate via
   `AUTO_UNDERWRITE_ENABLED`. A dry run still does all the work (and spends the
   Apify/Anthropic money); it just saves a draft instead of publishing an offer.

@@ -317,3 +317,23 @@ test("a deal committed to another buyer is never pitched, and to a buyer who kno
   const theirs = buildInvestorContext({ investor: INVESTOR, deals: [{ offer: deal({ deal: buyer }) }], contactId: "c1", now: NOW });
   assert.equal(theirs.summary.linkedDeals, 1, "the committed buyer still has their deal");
 });
+
+/* ---------- a price agreed with one buyer (the investor band, 2026-09-17) ---------- */
+
+test("the next message from that buyer quotes the agreed price, and another buyer still sees the asking price", () => {
+  const offer = deal({ deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000,
+    investors: [{ contactId: "c1", status: "evaluating", agreedPrice: { amount: 435000, at: "2026-09-03T17:00:00Z", via: "investor_band" } }, { contactId: "c2", status: "evaluating" }],
+    investorBand: { at: "2026-09-03T17:00:00Z", contactId: "c1", amount: 435000, asking: 445000 } } });
+  const theirs = buildInvestorContext({ investor: INVESTOR, deals: [{ offer }], contactId: "c1", now: NOW });
+  assert.match(theirs.text, /buyer price \$435,000/);
+  assert.match(theirs.text, /agreed with them/i);
+  assert.equal(theirs.text.includes("$445,000"), false, "the old asking price is not theirs any more");
+  assert.ok(theirs.amounts.includes(435000));
+  assert.equal(theirs.amounts.includes(445000), false);
+  // What they must never hear: the contract price, the deal's fee, the fee they are actually paying, and how far we came down.
+  for (const n of [420000, 25000, 15000, 10000]) assert.ok(theirs.forbiddenAmounts.includes(n), `${n} is forbidden`);
+  const others = buildInvestorContext({ investor: INVESTOR, deals: [{ offer }], contactId: "c2", now: NOW });
+  assert.match(others.text, /buyer price \$445,000/);
+  assert.equal(others.text.includes("435,000"), false, "one buyer's price is nobody else's business");
+  assert.equal(others.amounts.includes(435000), false);
+});

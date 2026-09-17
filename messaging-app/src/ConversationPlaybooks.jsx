@@ -314,6 +314,45 @@ export function CounterBandCard({ config, patch, example = null }) {
 
 /* ---------- re-quoting ---------- */
 
+// The investor's side of the same idea: a buyer who pushes back with a number
+// of their own. The rails are the card: a floor, a second rail off asking,
+// once per deal, a daily cap.
+export function InvestorBandCard({ config, patch }) {
+  const pb = config.parties.investor;
+  const band = pb.priceBand || { enabled: false, dailyCap: 1, minFee: 10000, maxDropPct: 5 };
+  const set = (next) => patch({ parties: { ...config.parties, investor: { ...pb, priceBand: { ...band, ...next } } } });
+  return (
+    <Section title="Buyers who push back on price"
+      intro="A price pushback is normally yours to answer. This lets the bot say yes to a buyer's own number, inside the rails below, and then hand off to you.">
+      <Toggle checked={band.enabled} onChange={(v) => set({ enabled: v })}>
+        Let it come down for a buyer, inside the band
+      </Toggle>
+      {band.enabled && (
+        <div className="mt-3 space-y-3">
+          <ul className="space-y-1 text-xs text-slate-500">
+            <li>· The number has to be theirs, typed in their own message. It never offers a number they did not say.</li>
+            <li>· Never under your contract price plus the minimum fee below.</li>
+            <li>· Never further off the asking price than the limit below, whatever the fee. That second rail is there in case the contract price on the deal is wrong.</li>
+            <li>· One concession per deal, ever, to anyone. A second pushback waits for you.</li>
+            <li>· It says yes in words and writes the price on that buyer. Marking them committed is still one click, by you, and the dataroom keeps showing the asking price.</li>
+          </ul>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Minimum fee" hint="Dollars. It will never agree a price under contract plus this. Cannot go under 5,000.">
+              <Text type="number" value={band.minFee} onChange={(v) => set({ minFee: Number(v) })} />
+            </Field>
+            <Field label="Most off asking" hint="Percent, 1 to 15.">
+              <Text type="number" value={band.maxDropPct} onChange={(v) => set({ maxDropPct: Number(v) })} />
+            </Field>
+            <Field label="Most per day" hint="Counted from what actually went out.">
+              <Text type="number" value={band.dailyCap} onChange={(v) => set({ dailyCap: Number(v) })} />
+            </Field>
+          </div>
+        </div>
+      )}
+    </Section>
+  );
+}
+
 export function RequoteCard({ config, patch }) {
   const pb = config.parties.agent;
   const rq = pb.requote;

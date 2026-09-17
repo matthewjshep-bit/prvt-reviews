@@ -55,6 +55,7 @@
 //   POST   /api/offers/deals/sync-investor-tags   backfill the on-deal GHL tag for all deal investors
 
 import { driveOpenPromises } from "../promise-driver.js";
+import { agreeInvestorPrice } from "../investor-price.js";
 import { settlePromise } from "../promise-sweep.js";
 // An outcome that means we no longer owe them a number on that house.
 const PROMISE_SETTLING_STATUSES = new Set(["sent", "countered", "no_response", "passed", "we_passed"]);
@@ -4035,6 +4036,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     ghlLastMessages: () => ghlLastMessages(client, locationId),
     latestInbound: (contactId) => getLatestInboundMessage(client, locationId, contactId),
     queueOfferSend: ({ offerId, reason }) => markSendPending(offerId, reason, { by: "audit" }),
+    // The investor band's one write (investor-price.js): the price this buyer
+    // was given on this deal, and a note so it is never a surprise.
+    agreeInvestorPrice: async ({ contactId, offerId, amount, draftId = null }) => {
+      const r = await agreeInvestorPrice({ store, locationId, contactId, offerId, amount, draftId });
+      if (r.ok) {
+        await createContactNote(client, contactId, {
+          body: `The investor band agreed ${fmtMoney(r.amount)} with this buyer on ${r.address} (they were quoted ${fmtMoney(r.asking)}). The dataroom still shows ${fmtMoney(r.asking)}. They are NOT marked committed: that is yours.`,
+        }).catch(() => {});
+      }
+      return r;
+    },
     // A priced offer's number, floated the way a finished underwrite floats it
     // (promise-driver.js: a number we promised that is ready).
     floatOffer: async ({ offerId }) => {
@@ -4461,7 +4473,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             await generateAssignment({ locationId, offer, fields: {
               effectiveDate: ts.slice(0, 10), assignorName: settings.company?.signer || "", assignorCompany: settings.company?.name || "",
               assigneeName: inv.name || "", assigneeCompany: "", address: offer.address || "",
-              totalPrice: (Number(offer.deal.contractPrice) || 0) + (Number(offer.deal.assignmentFee) || 0),
+              // A price the investor band agreed with this buyer is the price on their paper.
+              totalPrice: Number(inv.agreedPrice?.amount) || ((Number(offer.deal.contractPrice) || 0) + (Number(offer.deal.assignmentFee) || 0)),
               deposit: Number(settings.earnestMoney) || 0, depositDueDate: "", closingDate: offer.deal.closingDate || "",
             } });
             offer.deal.paperwork = { assignmentDraftedAt: ts, for: contactId };
@@ -4469,7 +4482,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         } catch (e) { console.error(`assignment on commit failed for ${offer.id}: ${e?.message}`); }
         await createContactNote(client, contactId, {
           body: `COMMITTED BUYER — ${offer.address || "property"} (${dateLabel()})` +
-            (offer.deal.assignmentFee ? `\nAssignment fee: ${fmtMoney(offer.deal.assignmentFee)}` : ""),
+            (inv.agreedPrice?.amount
+              ? `\nAgreed price: ${fmtMoney(inv.agreedPrice.amount)} (assignment fee ${fmtMoney(inv.agreedPrice.amount - (Number(offer.deal.contractPrice) || 0))})`
+              : offer.deal.assignmentFee ? `\nAssignment fee: ${fmtMoney(offer.deal.assignmentFee)}` : ""),
         }).catch(() => {});
       }
       offer.deal.updatedAt = ts;

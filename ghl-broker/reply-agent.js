@@ -46,7 +46,7 @@ import { getFreeSlots } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
-import { evaluateCounterBand, evaluateAcceptance, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
+import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
 import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, isHot } from "./shared/offer-status.js";
 import { sameStreet } from "./shared/us-address.js";
@@ -69,7 +69,8 @@ import { endsWithQuestionToThem } from "./shared/promise-resolver.js";
 import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller, unansweredCheckIn } from "./shared/follow-up.js";
 import { resolveParty } from "./conversation-party.js";
 import {
-  loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts } from "./conversation-context.js";
+  loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts,
+  investorFacingPrice, INVESTOR_DEAL_STAGES } from "./conversation-context.js";
 import {
   buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext,
 } from "./conversation-prompt.js";
@@ -713,10 +714,21 @@ export function releaseUnderGuard({ base, party = "agent", intent = "other", con
   // counter. Each family has its own switch on the page.
   const family = guard.kind === "booking" ? "booking" : "band";
   if (GUARD_FOR_INTENT[intent] !== family) return { ...base, exception: null };
-  const on = family === "booking" ? config?.booking?.enabled : config?.parties?.[party]?.counterBand?.enabled;
+  // Two bands, and neither borrows from the other: an investor's pushback is
+  // released only by the investor band's own verdict under its own switch,
+  // and an agent's counter never by the investor's.
+  const investorBand = party === "investor" && intent === "price_pushback";
+  if (family === "band" && investorBand !== (guard.kind === "investor_band")) return { ...base, exception: null };
+  const on = family === "booking" ? config?.booking?.enabled
+    : investorBand ? config?.parties?.investor?.priceBand?.enabled
+      : config?.parties?.[party]?.counterBand?.enabled;
   if (!on) return { ...base, exception: null };
   if (!guard.passed) {
     return { send: false, code: "guard_failed", reason: `needs a person: ${guard.reason || (family === "booking" ? "the calendar did not open" : "the band did not open")}`, exception: guard };
+  }
+  if (investorBand) {
+    return { send: true, code: "released", exception: guard,
+      reason: `released under the investor band — ${fmtMoney(guard.theirAmount)} is their own number, at or above the ${fmtMoney(Math.max(guard.floor || 0, guard.dropLimit || 0))} limit` };
   }
   return {
     send: true, code: "released",
@@ -780,11 +792,46 @@ export async function prepareBooking({ client, store, locationId, contactId, par
  * spend rails keep, and for the same reason: a crash loop must not hand a
  * misconfigured setup a fresh budget every restart.
  */
-export async function bandReleasesToday({ store, locationId, now = Date.now() }) {
+export async function bandReleasesToday({ store, locationId, now = Date.now(), kind = null }) {
   const d = new Date(now);
   const dayStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
   const rows = await store.listReplyDrafts(locationId, { since: dayStart, limit: 500 }).catch(() => []);
-  return rows.filter((r) => r?.exception?.passed).length;
+  // The investor band keeps its own daily count; the agent's count is
+  // everything else, as it always was.
+  return rows.filter((r) => r?.exception?.passed && (kind ? r.exception.kind === kind : r.exception.kind !== "investor_band")).length;
+}
+
+/**
+ * evaluateInvestorBandFor({ store, locationId, draft, config, saved, job, now }) → verdict | null
+ *
+ * The investor's side (shared/auto-accept.js evaluateInvestorBand). The deal
+ * is one this buyer is already on, or the one their message names; the asking
+ * price is the one they have been quoted (the dataroom's headline when there
+ * is one). Null when the band is off, so the ordinary path reads nothing.
+ */
+export async function evaluateInvestorBandFor({ store, locationId, draft, config, saved, job, now = Date.now() }) {
+  const band = config?.parties?.investor?.priceBand;
+  if (!band?.enabled || draft?.intent !== "price_pushback") return null;
+  const deals = (await (store.listDeals ? store.listDeals(locationId, { limit: 100 }) : Promise.resolve([])).catch(() => []))
+    .filter((o) => INVESTOR_DEAL_STAGES.has(o?.deal?.stage));
+  const mine = deals.filter((o) => (o.deal.investors || []).some((i) => i.contactId === job.contactId));
+  const named = draft.propertyAddress ? deals.find((o) => sameStreet(o.address, draft.propertyAddress)) || null : null;
+  const offer = named || (mine.length === 1 ? mine[0] : null);
+  let asking = 0;
+  if (offer) {
+    const link = (offer.deal.investors || []).find((i) => i.contactId === job.contactId) || null;
+    let room = null;
+    try {
+      const rooms = await store.listDatarooms(locationId, { offerId: offer.id, limit: 5 });
+      room = rooms.find((r) => r.status === "active" && r.kind !== "portfolio" && r.kind !== "offer") || null;
+    } catch { room = null; }
+    asking = Number(link?.agreedPrice?.amount) || investorFacingPrice({ offer, room, settings: saved || {} }).price;
+  }
+  const releasedToday = await bandReleasesToday({ store, locationId, now, kind: "investor_band" });
+  return evaluateInvestorBand({
+    offer, asking, contactId: job.contactId, liveDeals: named ? [named] : mine, draft, inboundMessage: job.message || "",
+    band, releasedToday, now, moneyIn,
+  });
 }
 
 /**
@@ -799,6 +846,7 @@ export async function bandReleasesToday({ store, locationId, now = Date.now() })
  * is computed (and no store reads happen) on the ordinary path.
  */
 export async function evaluateBandFor({ store, locationId, party, draft, config, saved, job, now = Date.now() }) {
+  if (party === "investor" && draft?.intent === "price_pushback") return evaluateInvestorBandFor({ store, locationId, draft, config, saved, job, now });
   const band = config?.parties?.[party]?.counterBand;
   if (!band?.enabled) return null;
   if (!(GUARDED_AUTO[party] || []).includes(draft?.intent)) return null;
@@ -2351,6 +2399,18 @@ async function runReply(job, ctx) {
       ? `Best we can do${street ? ` on ${street}` : ""} is ${k} as-is, cash. Sending the updated offer over now.`
       : `${k} works for us${street ? ` on ${street}` : ""}. Sending the updated offer over now.`;
   }
+  // The investor band released a buyer's own number: write the price down
+  // for this buyer on this deal, and say yes in fixed words that name that
+  // number and nothing else. Marking them committed stays a person's press.
+  // If the write fails the reply is held below: "works for us" must be true.
+  if (auto.exception?.passed && auto.exception.kind === "investor_band" && draft.intent === "price_pushback") {
+    const amount = guard.releaseAmount;
+    plan.auto.push({ id: `a-iband-${job.id}`, type: "agree_investor_price", mode: "auto", status: "pending", party, amount, offerId: guard.offerId, via: "investor band",
+      why: `they named ${fmtMoney(amount)}, at or above the ${fmtMoney(Math.max(guard.floor, guard.dropLimit))} limit` });
+    const street = String(draft.propertyAddress || "").split(",")[0].trim();
+    const k = amount % 1000 === 0 ? `${amount / 1000}k` : amount.toLocaleString("en-US");
+    draft.reply = `${k} works${street ? ` on ${street}` : ""}. Want to walk it this week, or should I send the paperwork over?`;
+  }
   // They're taking our number to the seller ("I'll run it by them", Julie
   // Nutley 2026-09-15): the written offer goes by text AND email so they have
   // it to show. Idempotent (an offer already sent isn't sent twice), and a
@@ -2893,6 +2953,12 @@ async function runReply(job, ctx) {
     const bandFailed = bandChain.find((x) => x.status !== "done" || !/^(re-issued|sent the offer)/.test(String(x.detail || "")));
     if (bandFailed && !holdForBooking) {
       holdForBooking = `the counter-band offer did not go out: ${bandFailed.error || bandFailed.detail || bandFailed.type}`;
+      record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
+    }
+    // "415k works" leaves only if the price was actually written down.
+    const investorBandFailed = done.find((x) => x.via === "investor band" && (x.status !== "done" || !/^agreed /.test(String(x.detail || ""))));
+    if (investorBandFailed && !holdForBooking) {
+      holdForBooking = `the agreed price was not recorded: ${investorBandFailed.error || investorBandFailed.detail || investorBandFailed.type}`;
       record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
     }
     await store.updateReplyDraft(record.id, record).catch(() => {});

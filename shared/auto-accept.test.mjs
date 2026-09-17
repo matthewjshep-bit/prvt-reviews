@@ -317,3 +317,76 @@ test("the share of list comes from the offer's snapshot settings when set", () =
   const r = autoAcceptCeiling({ offer: { ...OFFER, cashAmount: 100000, askingPrice: 250000, calc: { settings: { ...DEFAULT_OFFER_SETTINGS, maxOfferPctOfList: 80 } } } });
   assert.equal(r.ceiling, 200000);
 });
+
+/* ---------- the investor band (2026-09-17, Matt's decision) ---------- */
+
+import { evaluateInvestorBand, INVESTOR_MIN_FEE_FLOOR } from "./auto-accept.js";
+
+// Contract 400k + a 25k fee = asking 425k. Floor with a 10k minimum fee: 410k.
+// Five percent off asking: 403,750. So the tighter limit is the floor, 410k.
+const DEAL_OFFER = { id: "deal1", address: "23706 138th Dr SE, Snohomish, WA 98296", cashAmount: 400000,
+  deal: { stage: "under_contract", contractPrice: 400000, assignmentFee: 25000, investors: [{ contactId: "b1", status: "evaluating" }] } };
+const IBAND = { enabled: true, dailyCap: 1, minFee: 10000, maxDropPct: 5 };
+const ib = (over = {}) => evaluateInvestorBand({
+  offer: DEAL_OFFER, asking: 425000, contactId: "b1", liveDeals: [DEAL_OFFER], band: IBAND, releasedToday: 0,
+  draft: { intent: "price_pushback", counterAmount: 415000, confidence: "high", needsHuman: false, propertyAddress: DEAL_OFFER.address },
+  inboundMessage: "I could do 415k on this one", ...over,
+});
+
+test("a buyer who names a number above our floor gets a yes, at their number", () => {
+  const v = ib();
+  assert.equal(v.passed, true, v.reason);
+  assert.equal(v.kind, "investor_band");
+  assert.equal(v.releaseAmount, 415000);
+  assert.equal(v.floor, 410000);
+  assert.equal(v.counterBack, false, "no counter-back in this version");
+});
+
+test("a number under contract plus the minimum fee is a person's call", () => {
+  const v = ib({ draft: { intent: "price_pushback", counterAmount: 405000, confidence: "high" }, inboundMessage: "405k and I'm in" });
+  assert.equal(v.passed, false);
+  assert.equal(failed(v), "above_floor");
+});
+
+test("more than five percent off asking waits for a person even when the fee survives", () => {
+  // A fat fee: contract 300k, asking 425k. 380k keeps an 80k fee but is 10.6% off asking.
+  const fat = { ...DEAL_OFFER, deal: { ...DEAL_OFFER.deal, contractPrice: 300000, assignmentFee: 125000 } };
+  const v = ib({ offer: fat, liveDeals: [fat], draft: { intent: "price_pushback", counterAmount: 380000, confidence: "high" }, inboundMessage: "380k" });
+  assert.equal(v.passed, false);
+  assert.equal(failed(v), "within_drop", "a second rail, in case the contract price on the deal is wrong");
+});
+
+test("a number the buyer did not type is never accepted", () => {
+  const v = ib({ inboundMessage: "that's too rich for me, can you do better?" });
+  assert.equal(failed(v), "their_own_words");
+});
+
+test("a minimum fee set below the floor is lifted to it", () => {
+  const v = ib({ band: { ...IBAND, minFee: 1000 }, draft: { intent: "price_pushback", counterAmount: 402000, confidence: "high" }, inboundMessage: "402k" });
+  assert.equal(v.floor, 400000 + INVESTOR_MIN_FEE_FLOOR);
+  assert.equal(v.passed, false);
+});
+
+test("the second pushback on the same deal waits for a person, even from a different buyer", () => {
+  const used = { ...DEAL_OFFER, deal: { ...DEAL_OFFER.deal, investorBand: { at: "2026-09-16T00:00:00Z", contactId: "b9", amount: 418000 } } };
+  assert.equal(failed(ib({ offer: used, liveDeals: [used] })), "once_per_deal");
+});
+
+test("anything but a sure read, a live deal and one deal waits for a person", () => {
+  assert.equal(failed(ib({ draft: { intent: "price_pushback", counterAmount: 415000, confidence: "medium" } })), "sure");
+  assert.equal(failed(ib({ draft: { intent: "price_pushback", counterAmount: 415000, confidence: "high", needsHuman: true } })), "sure");
+  const found = { ...DEAL_OFFER, deal: { ...DEAL_OFFER.deal, stage: "buyer_found" } };
+  assert.equal(failed(ib({ offer: found, liveDeals: [found] })), "deal_live");
+  const spoken = { ...DEAL_OFFER, deal: { ...DEAL_OFFER.deal, investors: [{ contactId: "b2", status: "committed" }] } };
+  assert.equal(failed(ib({ offer: spoken, liveDeals: [spoken] })), "deal_live", "spoken for by someone else");
+  const other = { ...DEAL_OFFER, id: "deal2", address: "9 Oak St, Kent, WA" };
+  assert.equal(failed(ib({ liveDeals: [DEAL_OFFER, other], draft: { intent: "price_pushback", counterAmount: 415000, confidence: "high", propertyAddress: "" } })), "one_deal");
+  assert.equal(failed(ib({ offer: null, liveDeals: [] })), "one_deal");
+});
+
+test("at or over asking is not a pushback, the daily cap holds, and the switch has to be on", () => {
+  assert.equal(failed(ib({ draft: { intent: "price_pushback", counterAmount: 425000, confidence: "high" }, inboundMessage: "425k works" })), "below_asking");
+  assert.equal(failed(ib({ releasedToday: 1 })), "under_daily_cap");
+  assert.equal(ib({ band: { ...IBAND, enabled: false } }).passed, false);
+  assert.equal(failed(ib({ asking: 0 })), "below_asking", "no asking price, no arithmetic");
+});

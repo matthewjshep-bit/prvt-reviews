@@ -1774,12 +1774,33 @@ test("an intent outside the guarded set is never released", () => {
   }
 });
 
-test("an investor is never released by the band — it is an agent feature; only the calendar reaches investors", () => {
-  assert.deepEqual(GUARDED_AUTO.investor, ["wants_call", "wants_walkthrough"]);
+test("an investor's price pushback is released only by the investor band: its own switch, its own guard, nothing borrowed from the agent's", () => {
+  // Matt, 2026-09-17: a guarded investor band. It is the only addition to the guarded set.
+  assert.deepEqual(GUARDED_AUTO.investor, ["wants_call", "wants_walkthrough", "price_pushback"]);
+  assert.ok(NEVER_AUTO.investor.includes("price_pushback"), "still a person's call everywhere the band doesn't reach");
+  assert.equal(autoEligible("investor").includes("price_pushback"), false, "and never a box on the auto-send grid");
   const base = { send: false, code: "never_auto", reason: "price pushback is a person's call" };
+  const investorPass = { kind: "investor_band", passed: true, theirAmount: 415000, floor: 410000, releaseAmount: 415000, checks: [] };
+  const investorOn = normalizeConversationAi({ enabled: true, parties: { investor: { priceBand: { enabled: true } } } });
+  // The agent's band switched on releases nothing for an investor, whatever guard arrives.
   assert.equal(releaseUnderGuard({ base, party: "investor", intent: "price_pushback", config: bandOn(), guard: passing }).send, false);
-  // a passing BAND guard on a scheduling intent is the wrong guard
-  assert.equal(releaseUnderGuard({ base, party: "investor", intent: "wants_call", config: bandOn(), guard: passing }).send, false);
+  assert.equal(releaseUnderGuard({ base, party: "investor", intent: "price_pushback", config: bandOn(), guard: investorPass }).send, false, "the investor band's own switch is off");
+  // The investor band on, but the guard is the agent's counter band: the wrong guard.
+  assert.equal(releaseUnderGuard({ base, party: "investor", intent: "price_pushback", config: investorOn, guard: passing }).send, false);
+  // Its own switch and its own guard: released, and it says so.
+  const r = releaseUnderGuard({ base, party: "investor", intent: "price_pushback", config: investorOn, guard: investorPass });
+  assert.equal(r.send, true);
+  assert.match(r.reason, /released under the investor band/);
+  // A failed investor band says why and stays held.
+  const held = releaseUnderGuard({ base, party: "investor", intent: "price_pushback", config: investorOn, guard: { kind: "investor_band", passed: false, reason: "405000 against a floor of 410000", checks: [] } });
+  assert.equal(held.send, false);
+  assert.equal(held.code, "guard_failed");
+  // Blocked by anything other than NEVER_AUTO (a gate, a person on the thread): never released.
+  assert.equal(releaseUnderGuard({ base: { send: false, code: "gates", reason: "needs a person: names 400000" }, party: "investor", intent: "price_pushback", config: investorOn, guard: investorPass }).send, false);
+  // a passing BAND guard on a scheduling intent is still the wrong guard
+  assert.equal(releaseUnderGuard({ base, party: "investor", intent: "wants_call", config: investorOn, guard: investorPass }).send, false);
+  // And an agent is never released by the investor's guard.
+  assert.equal(releaseUnderGuard({ base: { send: false, code: "never_auto", reason: "a counter is a person's call" }, party: "agent", intent: "counter", config: bandOn(), guard: investorPass }).send, false);
 });
 
 /* ---------- the calendar as a guard ---------- */
@@ -3398,4 +3419,59 @@ test("a hot push that says PSA or contract is held: we ask for the NWMLS offer, 
   assert.ok(gate("Great, I'll get a contract over to you.").flags.some((f) => /NWMLS offer/.test(f)));
   const other = evaluateReplyGates({ draft: { intent: "question", reply: "Once it's under contract we close in two weeks.", confidence: "high", needsHuman: false }, party: "agent", allowedAmounts: [], forbiddenAmounts: [], inboundMessage: "", channel: "sms", style: {}, minConfidence: "medium", holdOnNeedsHuman: false });
   assert.equal(other.flags.some((f) => /NWMLS offer/.test(f)), false, "only the hot push is held to this");
+});
+
+/* ---------- the investor band reads the deal (2026-09-17) ---------- */
+
+const IDEAL = { id: "deal1", locationId: "LOC", address: "23706 138th Dr SE, Snohomish, WA 98296", cashAmount: 400000,
+  deal: { stage: "under_contract", contractPrice: 400000, assignmentFee: 25000, investors: [{ contactId: "b1", status: "evaluating" }] } };
+const investorStore = ({ deals = [IDEAL], drafts = [], rooms = [] } = {}) => ({
+  async listDeals() { return deals; },
+  async listDatarooms() { return rooms; },
+  async listReplyDrafts() { return drafts; },
+});
+const iCfg = (on = true) => normalizeConversationAi({ enabled: true, parties: { investor: { priceBand: { enabled: on } } } });
+const iDraft = (over = {}) => ({ intent: "price_pushback", counterAmount: 415000, confidence: "high", needsHuman: false, propertyAddress: IDEAL.address, ...over });
+const iJob = (message = "I could do 415k on this one") => ({ contactId: "b1", message });
+
+test("the investor band reads the buyer's own deal: contract plus fee is the asking price, and their typed number above the floor opens it", async () => {
+  const v = await evaluateBandFor({ store: investorStore(), locationId: "LOC", party: "investor", config: iCfg(), saved: {}, draft: iDraft(), job: iJob(), now: Date.now() });
+  assert.equal(v.kind, "investor_band");
+  assert.equal(v.passed, true, v.reason);
+  assert.equal(v.asking, 425000);
+  assert.equal(v.releaseAmount, 415000);
+});
+
+test("with the band off a price pushback is still yours, and nothing is read", async () => {
+  let reads = 0;
+  const store = { ...investorStore(), async listDeals() { reads++; return [IDEAL]; } };
+  assert.equal(await evaluateBandFor({ store, locationId: "LOC", party: "investor", config: iCfg(false), saved: {}, draft: iDraft(), job: iJob(), now: Date.now() }), null);
+  assert.equal(reads, 0);
+});
+
+test("the dataroom's own headline is the asking price when the buyer has seen one", async () => {
+  const rooms = [{ id: "r1", status: "active", kind: "deal", snapshot: { numbers: { investorPrice: 440000 } } }];
+  const v = await evaluateBandFor({ store: investorStore({ rooms }), locationId: "LOC", party: "investor", config: iCfg(), saved: {}, draft: iDraft(), job: iJob(), now: Date.now() });
+  assert.equal(v.asking, 440000);
+  assert.equal(v.passed, false, "415k is more than five percent under 440k");
+});
+
+test("the daily cap counts investor releases from the store, and the agent's band does not eat it", async () => {
+  const today = new Date().toISOString();
+  const agentRelease = { id: "x", createdAt: today, exception: { kind: "counter_band", passed: true } };
+  const open = await evaluateBandFor({ store: investorStore({ drafts: [agentRelease] }), locationId: "LOC", party: "investor", config: iCfg(), saved: {}, draft: iDraft(), job: iJob(), now: Date.now() });
+  assert.equal(open.passed, true, open.reason);
+  const used = { id: "y", createdAt: today, exception: { kind: "investor_band", passed: true } };
+  const shut = await evaluateBandFor({ store: investorStore({ drafts: [used] }), locationId: "LOC", party: "investor", config: iCfg(), saved: {}, draft: iDraft(), job: iJob(), now: Date.now() });
+  assert.equal(shut.passed, false);
+  assert.match(shut.reason, /1 of 1 today/);
+  const { bandReleasesToday } = await import("./reply-agent.js");
+  assert.equal(await bandReleasesToday({ store: investorStore({ drafts: [agentRelease, used] }), locationId: "LOC" }), 1, "and the investor's does not eat the agent's");
+});
+
+test("a buyer on two live deals who names no address is a person's call", async () => {
+  const other = { ...IDEAL, id: "deal2", address: "9 Oak St, Kent, WA", deal: { ...IDEAL.deal } };
+  const v = await evaluateBandFor({ store: investorStore({ deals: [IDEAL, other] }), locationId: "LOC", party: "investor", config: iCfg(), saved: {}, draft: iDraft({ propertyAddress: "" }), job: iJob(), now: Date.now() });
+  assert.equal(v.passed, false);
+  assert.equal(v.checks.find((c) => !c.ok && c.name === "one_deal")?.name, "one_deal");
 });

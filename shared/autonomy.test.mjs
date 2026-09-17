@@ -177,3 +177,17 @@ test("a location at Normal before the driver shipped reads Custom until Normal i
   tuned.conversationAi.driver.daytime.everyHours = 3;
   assert.equal(applyAutonomy(tuned, "full").conversationAi.driver.daytime.everyHours, 3, "the dial moves the switch and leaves the hours alone");
 });
+
+test("only Full turns the investor band on, and it is never on an agent's playbook", () => {
+  for (const [mode, want] of [["off", false], ["cautious", false], ["normal", false], ["full", true]]) {
+    const cfg = applyAutonomy(starter(), mode).conversationAi;
+    assert.equal(cfg.parties.investor.priceBand.enabled, want, mode);
+    assert.equal(cfg.parties.agent.priceBand.enabled, false, `agent at ${mode}`);
+  }
+  const forced = normalizeConversationAi({ parties: { agent: { priceBand: { enabled: true } }, investor: { priceBand: { enabled: true, minFee: 100, maxDropPct: 60, dailyCap: 99 } } } });
+  assert.equal(forced.parties.agent.priceBand.enabled, false);
+  assert.deepEqual(forced.parties.investor.priceBand, { enabled: true, dailyCap: 10, minFee: 5000, maxDropPct: 15 }, "the minimum fee has a floor and the drop a ceiling, whatever is typed");
+  const tuned = applyAutonomy(starter(), "normal");
+  tuned.conversationAi.parties.investor.priceBand.minFee = 15000;
+  assert.equal(applyAutonomy(tuned, "full").conversationAi.parties.investor.priceBand.minFee, 15000, "the dial moves the switch and leaves the numbers alone");
+});

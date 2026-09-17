@@ -59,6 +59,7 @@ export const ACTION_KINDS = [
   { key: "promise_owed",      label: "Owed a number" },
   { key: "draft_waiting",     label: "Drafts waiting on you" },
   { key: "handoff",           label: "One click from you" },
+  { key: "investor_price_agreed", label: "Prices the machine agreed" },
   { key: "closing_soon",      label: "Closing" },
   { key: "hot_stalled",       label: "Price agreed, gone quiet" },
   { key: "underwrite_held",   label: "Underwrites that need a look" },
@@ -287,6 +288,20 @@ export function buildPipeline({
         contractPrice: round(d.contractPrice), assignmentFee: round(d.assignmentFee),
         investors: investorChips(d, myEvents, contactNames),
       };
+      // The investor band agreed a price with one buyer. It said yes in words
+      // and wrote the number down; committing them, and the dataroom that
+      // still shows the asking price, are a person's.
+      for (const inv of d.investors || []) {
+        const agreed = Math.round(Number(inv?.agreedPrice?.amount) || 0);
+        if (!agreed || ["committed", "passed"].includes(inv.status) || !LIVE_DEAL_STAGES.has(d.stage)) continue;
+        const asking = Math.round(Number(d.investorBand?.asking) || (Number(d.contractPrice) || 0) + (Number(d.assignmentFee) || 0));
+        const who = inv.name || contactNames[inv.contactId] || "a buyer";
+        card.actionIds.push(push({ offerId: o.id, contactId: inv.contactId, contactName: who, address: card.address,
+          id: `investor_price_agreed:${o.id}:${inv.contactId}`, kind: "investor_price_agreed", severity: "now",
+          title: `${card.address}: the machine agreed ${money(agreed)} with ${who}`,
+          detail: `the dataroom still says ${money(asking)} · they are not marked committed`,
+          ops: [{ key: "open_deals", label: "Open the deal", intent: "primary" }] }));
+      }
       if (closingInDays != null && closingInDays <= 7 && LIVE_DEAL_STAGES.has(d.stage)) {
         card.chips.push({ key: "closing", label: closingInDays < 0 ? `closing ${-closingInDays}d overdue` : closingInDays === 0 ? "closes today" : `closes in ${closingInDays}d`, tone: closingInDays < 0 ? "bad" : "warn" });
       }

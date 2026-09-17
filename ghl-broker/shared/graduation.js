@@ -186,6 +186,9 @@ export function autopilotSummary({ config = {}, sendsEnabled = false, underwrite
     if (party === "investor") {
       const da = dispo || {};
       const viaApp = da.sendWith !== "ghl";
+      const ib = pb.priceBand || {};
+      out.push(sw("investor_band", "Investor price band", ib.enabled && canSend ? "on" : "off",
+        ib.enabled ? `says yes to a buyer's own number, never under contract plus ${Math.round((ib.minFee || 0) / 1000)}k or ${ib.maxDropPct}% off asking, ${ib.dailyCap}/day` : "a price pushback always waits for you", party));
       out.push(sw("blast", "Deal blasts", !viaApp ? "off" : allow.includes("blast_open") && canSend && blastsEnabled ? "on" : "drafting",
         !viaApp ? "a GHL workflow sends them — the app only tags" : !blastsEnabled ? "DISPO_BLASTS_ENABLED is not set" : allow.includes("blast_open") ? "staggered texts from the app" : "queued as drafts until 'sent them a deal' is ticked", party));
       out.push(sw("auto_blast", "Blast on promote", da.autoBlastOnPromote ? "on" : "off",
