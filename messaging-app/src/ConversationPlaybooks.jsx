@@ -605,6 +605,23 @@ export function ProfileCard({ config, patch }) {
   );
 }
 
+// The nightly coach (shared/coach.js). It proposes; Today is where you answer.
+export function CoachSettingsCard({ config, patch }) {
+  const c = config.coach || { enabled: false, hour: 20 };
+  const set = (k) => (v) => patch({ coach: { ...c, [k]: v } });
+  return (
+    <Section title="Nightly coach"
+      intro="Each evening it reads the drafts you edited, dismissed or answered yourself, and suggests what the bot should learn: a voice example in your words, a house rule, a line of standing instruction, or a bug to file. Suggestions wait on Today. Nothing changes until you press Apply, and it never touches amounts, fees, what the bot may commit to, or auto-send.">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="flex items-end pb-2"><Toggle checked={c.enabled} onChange={set("enabled")}>Run it every night</Toggle></div>
+        <Field label="Hour (Pacific)" hint="After the 7pm audit. One model call a night, none on a quiet day.">
+          <Text type="number" value={c.hour} onChange={(v) => set("hour")(Number(v))} />
+        </Field>
+      </div>
+    </Section>
+  );
+}
+
 export function OptOutCard({ config, patch, version, workflows }) {
   const o = config.optOut;
   const set = (k) => (v) => patch({ optOut: { ...o, [k]: v } });

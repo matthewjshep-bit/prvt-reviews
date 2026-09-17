@@ -1015,6 +1015,26 @@ on a clock / need you, with Run now), the queue group "From last night", and
 `GET /api/dashboard/audit` (`last`, `run`, `tries`, `failed`); `POST
 /api/dashboard/audit/run { dryRun }` runs it by hand. Cursor `conversationAudit`.
 
+### The nightly coach (2026-09-17)
+
+The bot used to get better only when Matt noticed a bad reply and said so in a coding session. The coach closes that loop. An hour after the audit (8pm Pacific by default) it reads what a person did with the day's drafts and **proposes** what the bot should learn. It never applies anything; Today's "Learned last night" card is where a person answers.
+
+- **What it reads** (`shared/coach.js` `gatherSignals`): drafts sent edited (the bot's words beside yours), drafts a person dismissed or held, threads you answered yourself, gate reasons seen twice or more, intents you keep rewriting (under 70% as written over the graduation window), the audit's errors, and the night's `app_errors`. A draft the machine binned (dead deal, unsubscribed, you got there first) is not a verdict on the words and is left out.
+- **The why**: Dismiss, and Send on an edited draft, take an optional one-tap reason (`DRAFT_FEEDBACK` in `shared/conversation-ai.js`), kept on the draft as `feedback { code, note, at }`.
+- **One model call a night, none on a quiet one.** Nothing edited, dismissed or broken means no call.
+- **Four kinds of proposal**: a voice `example` (your edit, verbatim), a house `rule`, a standing `instruction` for one party, or a `code_gap`.
+- **What it may not touch** (`validateProposal`, enforced in code, not asked of the model): anything naming an amount or a percentage, fees, assignment, earnest money, what the bot may commit to, auto-send, the counter band. Also dropped: a proposal with no draft of yours behind it, one citing draft ids it wasn't shown, one carrying a phone, email or street address, one the prompt already says, one that would overflow a cap. Six a night at most. A rejected lesson is not proposed again for 30 days.
+- **Apply / Revert**: Apply writes through `saveConversationConfig` (the same save the config page uses) and keeps an `undo` on the proposal. Revert removes exactly what Apply added, so a rule you wrote by hand in between survives.
+- **Try it first**: drafts the evidence messages with and without the proposal, beside what you sent. Drafted cold (no contact, no thread, no deal book) because the live thread now holds your answer. Voice, not numbers. Up to 3 drafts, two model calls each, only on a press.
+- **Did it help**: each applied proposal carries a scorecard, as-written % for its party and intent over the 14 days before and since. It reports "worth a look"; it never reverts on its own.
+- **Code gaps** are filed, not applied: "File for a fix" opens a GitHub issue labelled `coach` (Settings → Nightly coach → GitHub: `githubRepo`, `githubToken`, fine-grained, Issues read/write on this repo only). `issueFor` cuts names to first names and removes phones, emails and street addresses; the issue carries draft ids, not thread text. The scheduled coding agent (`.claude/coach-agent.md`) takes one issue a run, writes a failing test, fixes it and opens a PR. It never merges. It has repo access and no app secrets.
+
+Switch: Conversation AI tab → Nightly coach (`conversationAi.coach { enabled, hour }`). **Off by default.** The autonomy dial does not touch it, since it sends nothing. Routes: `GET /api/dashboard/coach`, `POST /api/dashboard/coach/run { dryRun }`, `POST /api/dashboard/coach/:id/{apply,reject,revert,file,preview}`. State: table `coach_proposals`; run state on `job_cursors` name `coach` (the audit's gate: cursor written before the run, stale run retried, 3 tries a night). `coachedThrough` on the cursor is the bookmark, so a missed night is read the next one (72h at most).
+
+### Durable errors (2026-09-17)
+
+Failures in the reply agent, proactive drafts, the underwriter, the 15-minute sweep and the coach used to live in Render's log or on an in-memory job a redeploy forgets. `recordError` (`ghl-broker/app-errors.js`) keeps them in `app_errors`, one row per distinct failure (fingerprint of area + message with ids and numbers flattened), counted. The message has phones and emails knocked out and the context is ids only. It never throws. The coach reads the night's rows; a repeated one becomes a `code_gap`.
+
 ### Held underwrites — the nightly triage (2026-09-16)
 
 "Underwrites that need a look" held 49 rows and Matt wasn't going to get to

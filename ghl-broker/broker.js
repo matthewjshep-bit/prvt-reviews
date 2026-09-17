@@ -32,6 +32,8 @@ import { maybeRunTierCheck } from "./tier-check.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
+import { recordError } from "./app-errors.js";
+import { maybeRunCoach } from "./coach.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -242,6 +244,9 @@ setInterval(async () => {
         deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
       });
       if (audited) console.log(`conversation audit started for ${locationId}`);
+      // An hour behind it: what today's edits and dismissals say the bot
+      // should learn. Proposes; a person applies. Off until switched on.
+      if (await maybeRunCoach({ locationId, saved, store })) console.log(`coach started for ${locationId}`);
       // Once a day: list prices that moved on houses we priced.
       const watched = await maybeRunPriceWatch({
         client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
@@ -273,6 +278,7 @@ setInterval(async () => {
       });
     } catch (e) {
       console.error(`nightly sweep check failed for ${locationId}: ${e.message}`);
+      await recordError(store, { locationId, area: "sweep", err: e });
     }
   }
 }, 15 * 60 * 1000).unref();

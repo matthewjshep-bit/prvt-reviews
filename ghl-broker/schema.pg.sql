@@ -416,3 +416,36 @@ create table if not exists job_cursors (
   doc          jsonb not null default '{}'::jsonb,
   primary key (location_id, name)
 );
+
+-- Runtime errors that used to live only in Render's log, or on an in-memory
+-- job that a redeploy forgets. One row per distinct failure (fingerprint),
+-- counted, so the nightly coach can say "this broke nine times" and a person
+-- can see it the next morning. Context is ids only — never a message body,
+-- a phone number or a name.
+create table if not exists app_errors (
+  location_id  text not null,
+  fingerprint  text not null,
+  area         text not null,
+  message      text not null,
+  context      jsonb not null default '{}'::jsonb,
+  count        integer not null default 1,
+  first_at     timestamptz not null,
+  last_at      timestamptz not null,
+  primary key (location_id, fingerprint)
+);
+create index if not exists app_errors_loc_last_idx on app_errors (location_id, last_at desc);
+
+-- What the nightly coach thinks should change: a new voice example, a house
+-- rule, a standing instruction, or a gap only code can close. Nothing here
+-- touches the bot until a person presses Apply.
+create table if not exists coach_proposals (
+  id           text primary key,
+  location_id  text not null,
+  kind         text not null,
+  status       text not null default 'open',
+  dedupe_key   text,
+  doc          jsonb not null,
+  created_at   timestamptz not null,
+  updated_at   timestamptz not null
+);
+create index if not exists coach_proposals_loc_idx on coach_proposals (location_id, created_at desc);

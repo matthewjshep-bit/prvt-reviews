@@ -99,7 +99,7 @@ import {
 } from "../auto-underwrite.js";
 import {
   startReply, startProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
-  sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig,
+  sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
@@ -805,7 +805,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // characters; PUT keeps the stored value wherever the form sent a blank.
   // `?reveal=1` returns them only for a location that has a location key
   // configured (and therefore presented one to get this far).
-  const SECRET_FIELDS = ["aiApiKey", "apifyToken", "compsApiKey", "rentcastApiKey", "googleApiKey", "captureToken"];
+  const SECRET_FIELDS = ["aiApiKey", "apifyToken", "compsApiKey", "rentcastApiKey", "googleApiKey", "captureToken", "githubToken"];
   const locationHasKey = (locationId) => {
     try { return Boolean(JSON.parse(process.env.GHL_LOCATION_KEYS || "{}")[locationId]); } catch { return false; }
   };
@@ -4553,9 +4553,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const { locationId } = resolveLocation(req);
       const body = req.body?.config && typeof req.body.config === "object" ? req.body.config : {};
-      const saved = (await store.getOfferSettings(locationId)) || {};
-      const config = normalizeConversationAi(body);
-      await store.saveOfferSettings(locationId, { ...saved, conversationAi: config });
+      const config = await saveConversationConfig(store, locationId, body);
       res.json({ ok: true, config });
     } catch (err) { fail(res, err); }
   });
@@ -5029,14 +5027,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         const { locationId, client } = resolveLocation(req);
         const b = req.body || {};
         const live = b.dryRun === false && CARD_SENDS_ENABLED;
-        const out = await sendReplyDraft({ client, store, locationId, draftId: String(req.params.id), text: b.text, live });
+        const out = await sendReplyDraft({ client, store, locationId, draftId: String(req.params.id), text: b.text, live, reason: b.reason });
         res.json({ ...out, sendsEnabled: CARD_SENDS_ENABLED });
       } catch (err) { fail(res, err); }
     });
     router.post(`${prefix}/:id/dismiss`, async (req, res) => {
       try {
         const { locationId, client } = resolveLocation(req);
-        res.json(await dismissReplyDraft({ client, store, locationId, draftId: String(req.params.id) }));
+        res.json(await dismissReplyDraft({ client, store, locationId, draftId: String(req.params.id), reason: (req.body || {}).reason }));
       } catch (err) { fail(res, err); }
     });
     router.post(`${prefix}/:id/hold`, async (req, res) => {

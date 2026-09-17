@@ -42,6 +42,7 @@ import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
 import { conversationConfig } from "../reply-agent.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR } from "../conversation-audit.js";
 import { auditActions, summarize as summarizeAudit } from "../shared/conversation-audit.js";
+import { startCoach, coachReport, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
 
 // Same expression routes/offers.js reads: the broker's one send gate. The
 // pipeline only REPORTS it, so the console can say whether a draft's Send
@@ -248,7 +249,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // A fell-through deal with no post-mortem yet still counts by its numbers.
       const all = [...postMortems, ...pending.map((p) => ({ offerId: p.offerId, address: p.address, street: String(p.address || "").split(",")[0], scorecard: p.scorecard, negotiation: null }))];
       const out = lessons({ postMortems: all, controls, settings });
-      const secrets = ["aiApiKey", "compsApiKey", "apifyToken", "captureToken", "rentcastApiKey", "googleApiKey", "zillowRapidApiKey"];
+      const secrets = ["aiApiKey", "compsApiKey", "apifyToken", "captureToken", "rentcastApiKey", "googleApiKey", "zillowRapidApiKey", "githubToken"];
       res.json({ ok: true, ...out,
         deals: all.map((pm) => ({ offerId: pm.offerId, address: pm.address, street: pm.street, hasPostMortem: Boolean(pm.analysis) || postMortems.includes(pm), generatedAt: pm.generatedAt || null, scorecard: pm.scorecard })),
         controls: controls.map((sc) => ({ offerId: sc.offerId, address: sc.address, street: sc.street, outcome: sc.outcome, scorecard: sc })),
@@ -445,6 +446,39 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       res.status(202).json({ ok: true, job: publicAuditJob(job) });
     } catch (err) { fail(res, err); }
   });
+
+  // The nightly coach: what it proposed, what was applied (scored), and the
+  // four things a person can do with a proposal. Nothing here acts without a press.
+  router.get("/coach", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+      res.json({ ok: true, tz: "America/Los_Angeles", ...(await coachReport({ store, locationId, saved })) });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/coach/run", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+      if (!String(saved.aiApiKey || "").trim()) return res.status(400).json({ error: "add an AI key in settings first" });
+      const job = startCoach({ locationId, saved, store, trigger: "manual", dryRun: req.body?.dryRun !== false });
+      res.status(202).json({ ok: true, job: { id: job.id, status: job.status, dryRun: job.dryRun, startedAt: job.startedAt } });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/coach/:id/preview", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      res.json({ ok: true, ...(await previewCoachProposal({ client, store, locationId, id: String(req.params.id) })) });
+    } catch (err) { fail(res, err); }
+  });
+  for (const [verb, fn] of [["apply", applyCoachProposal], ["reject", rejectCoachProposal], ["revert", revertCoachProposal], ["file", fileCoachProposal]]) {
+    router.post(`/coach/:id/${verb}`, async (req, res) => {
+      try {
+        const { locationId } = resolveLocation(req);
+        res.json({ ok: true, proposal: await fn({ store, locationId, id: String(req.params.id) }) });
+      } catch (err) { fail(res, err); }
+    });
+  }
 
   // Tonight's digest: the day's loose ends in one read — a seller who said
   // yes, counters close to our number, promises still owed, texts nobody

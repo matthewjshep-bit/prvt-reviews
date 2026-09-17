@@ -17,6 +17,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Pencil, X } from "lucide-react";
 import { getDashboardDigest, getDashboardAudit, runDashboardAudit } from "./api.js";
 import { AUDIT_KINDS } from "@shared/conversation-audit.js";
+import CoachCard from "./CoachCard.jsx";
 import { fmtMoney } from "@shared/offer-calc.js";
 import {
   getDashboardSummary, getDashboardTagCounts, getDashboardMessages, getDashboardContacts, saveSettings,
@@ -633,6 +634,7 @@ export default function Dashboard({ settings, onSettingsSaved }) {
       {summaryError && <ErrorNote message={summaryError} onRetry={loadSummary} />}
 
       {!endDate && <LastNightCard audit={audit} error={auditError} onRetry={loadAudit} onRun={runAudit} running={auditRunning} />}
+      {!endDate && <CoachCard />}
       {!endDate && <DigestCard digest={digest} loading={digestLoading} error={digestError} onRetry={loadDigest} />}
 
       {/* KPI row */}

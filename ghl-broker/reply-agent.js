@@ -40,6 +40,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { buildTranscript, enrichFieldDefs, mergeHistory, mergeFacts, SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
+import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
 import { getFreeSlots } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText } from "./shared/conversation-ai.js";
@@ -58,7 +59,7 @@ import { fmtMoney } from "./shared/offer-calc.js";
 import { parseUsAddress, addressKey, lastMention } from "./shared/us-address.js";
 import {
   normalizeConversationAi, INTENTS, NEVER_AUTO, GUARDED_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
-  SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutActions, normalizePassReason,
+  SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutActions, normalizePassReason, normalizeDraftFeedback,
 } from "./shared/conversation-ai.js";
 import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail, smsUnsubscribed, DND_TAG,
@@ -117,6 +118,16 @@ export function conversationConfig(saved = {}) {
     dailyCap: saved?.replyAgentDailyCap,
     signer: saved?.company?.signer || saved?.company?.name,
   });
+}
+
+// The one way the Conversation AI blob is saved: read the settings fresh (the
+// rest of that row belongs to other pages), normalise, write. The config page
+// and the coach's Apply both come through here.
+export async function saveConversationConfig(store, locationId, config) {
+  const saved = (await store.getOfferSettings(locationId)) || {};
+  const next = normalizeConversationAi(config);
+  await store.saveOfferSettings(locationId, { ...saved, conversationAi: next });
+  return next;
 }
 
 /* ---------- job registry ---------- */
@@ -1358,6 +1369,7 @@ export async function startReply({
         job.status = "error";
         job.error = String(e?.message || e).slice(0, 300);
         job.finishedAt = new Date().toISOString();
+        await recordError(store, { locationId, area: "reply", err: e, context: { contactId, jobId: job.id, party: job.party } });
         // Their text is sitting unanswered either way; say so where the
         // operator will see it, or it just vanishes.
         await note(client, contactId,
@@ -1629,6 +1641,7 @@ export async function startProactive({
         job.status = "error";
         job.error = String(e?.message || e).slice(0, 300);
         job.finishedAt = new Date().toISOString();
+        await recordError(store, { locationId, area: "proactive", err: e, context: { contactId, jobId: job.id, kind } });
         await note(client, contactId, `AI ${outboundLabel(kind)} could not be drafted — ${job.error}. Pick it up by hand if you like.`, job.warnings);
       })
   );
@@ -3076,7 +3089,7 @@ const readRecentThread = async (client, locationId, contactId) => {
   } catch { return ""; }
 };
 
-export async function sendReplyDraft({ client, store, locationId, draftId, text, live, auto = false, readThread = readRecentThread, now = Date.now() }) {
+export async function sendReplyDraft({ client, store, locationId, draftId, text, live, auto = false, reason = null, readThread = readRecentThread, now = Date.now() }) {
   const d = await store.getReplyDraft(draftId);
   if (!d || d.locationId !== locationId) throw Object.assign(new Error("no such draft"), { http: 404 });
   const sendable = OPEN_STATUSES.has(d.status) || (auto && d.status === "sending");
@@ -3158,6 +3171,8 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   const updated = {
     ...d, status: "sent", sentAt: ts, sentText: body, autoSent: Boolean(auto),
     edited: auto ? false : body !== String(d.reply || "").trim(),
+    // Why a person changed it, when they said (the nightly coach reads this).
+    ...(!auto && normalizeDraftFeedback(reason) ? { feedback: { ...normalizeDraftFeedback(reason), at: ts } } : {}),
     ghlMessageId: result?.messageId || result?.id || null, sendAt: null, sendingAt: null, updatedAt: ts,
   };
   await store.updateReplyDraft(d.id, updated);
@@ -3204,11 +3219,14 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   return { ok: true, dryRun: false, draft: updated };
 }
 
-export async function dismissReplyDraft({ client, store, locationId, draftId }) {
+export async function dismissReplyDraft({ client, store, locationId, draftId, reason = null }) {
   const d = await store.getReplyDraft(draftId);
   if (!d || d.locationId !== locationId) throw Object.assign(new Error("no such draft"), { http: 404 });
   if (!OPEN_STATUSES.has(d.status)) return { ok: true, draft: d };
-  const updated = { ...d, status: "dismissed", sendAt: null, updatedAt: new Date().toISOString() };
+  const ts = new Date().toISOString();
+  const why = normalizeDraftFeedback(reason);
+  // dismissedBy tells the coach a person binned it, not a gate or a dead deal.
+  const updated = { ...d, status: "dismissed", sendAt: null, dismissedAt: ts, dismissedBy: "you", ...(why ? { feedback: { ...why, at: ts } } : {}), updatedAt: ts };
   await store.updateReplyDraft(d.id, updated);
   await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
   return { ok: true, draft: updated };

@@ -31,6 +31,7 @@ import { pullComps } from "./comps-pull.js";
 import { geocodeAddress, atLeast, precisionRank, PRECISION } from "./geocode.js";
 import { pullZillowComps, filterByUnits, streetKey, mergeFacts } from "./comps-zillow.js";
 import { gradeComps } from "./comps-grade.js";
+import { recordError } from "./app-errors.js";
 import { fetchZillowPhotos, fetchListingPhotos, fetchZillowFacts, MAX_FACT_LOOKUPS, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
 import { deriveArv, timeTrend, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
@@ -1043,6 +1044,7 @@ export async function startUnderwrite({
         job.status = "error";
         job.error = String(e?.message || e).slice(0, 300);
         job.finishedAt = new Date().toISOString();
+        await recordError(store, { locationId, area: "underwrite", err: e, context: { contactId, jobId: job.id, stage: job.stage } });
         // A timeout or a provider refusal still leaves work behind — the
         // resolved address, the listing's facts, maybe the comps. Save it as a
         // draft so "Review" opens the form on what loaded rather than nothing.

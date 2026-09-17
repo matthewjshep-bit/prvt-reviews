@@ -277,10 +277,11 @@ export const getReplyDrafts = () =>
   fetch(`${API_BASE}/api/offers/automations/conversation?${locq()}`).then(j);
 export const getConversationHistory = (days = 30) =>
   fetch(`${API_BASE}/api/offers/automations/conversation/history?${locq()}&days=${encodeURIComponent(days)}`).then(j);
-export const sendReplyDraft = (id, text) =>
-  post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/send`, { text, dryRun: false });
-export const dismissReplyDraft = (id) =>
-  post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/dismiss`, {});
+// `reason` is { code, note } from DRAFT_FEEDBACK — optional, why it was changed or binned.
+export const sendReplyDraft = (id, text, reason = null) =>
+  post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/send`, { text, dryRun: false, ...(reason ? { reason } : {}) });
+export const dismissReplyDraft = (id, reason = null) =>
+  post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/dismiss`, reason ? { reason } : {});
 export const holdReplyDraft = (id) =>
   post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/hold`, {});
 // The clock: what would go out today (preview writes nothing), and a manual run.
@@ -502,6 +503,13 @@ export const getDashboardAudit = () => fetch(`${API_BASE}/api/dashboard/audit?${
 // Close an "Owed a number" row by hand.
 export const dismissPromise = (contactId, address = "") => post(`/api/dashboard/promises/dismiss`, { contactId, address });
 export const runDashboardAudit = ({ dryRun = true } = {}) => post(`/api/dashboard/audit/run`, { dryRun });
+// The nightly coach: what it proposed from the day's edits and dismissals.
+export const getCoach = () => fetch(`${API_BASE}/api/dashboard/coach?${locq()}`).then(j);
+export const runCoach = ({ dryRun = true } = {}) => post(`/api/dashboard/coach/run`, { dryRun });
+// verb: apply | reject | revert | file
+// Before/after drafts for an open proposal — saves and sends nothing; a few model calls.
+export const previewCoachProposal = (id) => post(`/api/dashboard/coach/${encodeURIComponent(id)}/preview`, {});
+export const actOnCoachProposal = (id, verb) => post(`/api/dashboard/coach/${encodeURIComponent(id)}/${verb}`, {});
 export const floatOffer = (id, kind) =>
   post(`/api/offers/${encodeURIComponent(id)}/float`, { kind });
 export const getDashboardFlow = (days = 7, end = "") =>

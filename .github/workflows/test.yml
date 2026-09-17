@@ -1,0 +1,58 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# The suite is hermetic: a temp DATA_DIR, the JSON-file store, stubbed fetch.
+# It needs no secrets, and must never be given any — a run with GHL or send
+# credentials in scope is a run that could text somebody.
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # /shared is the source of truth; the backends run vendored copies. An
+      # edit to /shared that was never synced ships stale rules to the broker.
+      - name: vendored shared/ copies are in sync
+        run: |
+          node scripts/sync-shared.mjs
+          git diff --exit-code -- ghl-broker/shared cardgen/shared
+
+      - run: npm ci
+        working-directory: shared
+      - run: npm ci
+        working-directory: ghl-broker
+      - name: broker + shared tests
+        run: npm run test:all
+        working-directory: ghl-broker
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: shared
+      - run: npm ci
+        working-directory: messaging-app
+      - run: npm test
+        working-directory: messaging-app
+      - run: npm run build
+        working-directory: messaging-app

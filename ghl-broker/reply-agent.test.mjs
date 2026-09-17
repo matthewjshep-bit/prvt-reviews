@@ -504,6 +504,23 @@ test("dismiss closes the draft and clears the tag", async () => {
   assert.equal(again.draft.status, "dismissed");
 });
 
+test("a person who says why they binned or changed a draft has it kept on the draft", async () => {
+  const client = { call: async () => ({ messageId: "m1" }) };
+  const store = fakeStore([openDraft(), { ...openDraft(), id: "d2" }, { ...openDraft(), id: "d3" }]);
+  const gone = await dismissReplyDraft({ client, store, locationId: "LOC", draftId: "d1", reason: { code: "Wrong Tone", note: " too chipper " } });
+  assert.equal(gone.draft.feedback.code, "wrong_tone");
+  assert.equal(gone.draft.feedback.note, "too chipper");
+  assert.equal(gone.draft.dismissedBy, "you");
+  assert.ok(gone.draft.dismissedAt);
+  // an edit carries its why
+  const sent = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", text: "Shorter.", live: true, reason: { code: "too_long" } });
+  assert.equal(sent.draft.edited, true);
+  assert.equal(sent.draft.feedback.code, "too_long");
+  // no reason, or a nonsense one with no note, leaves no feedback at all
+  const plain = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d3", live: true, reason: { code: "nope" } });
+  assert.equal(plain.draft.feedback, undefined);
+});
+
 /* ---------- the Conversation AI: parties, auto-send, actions ---------- */
 
 import {

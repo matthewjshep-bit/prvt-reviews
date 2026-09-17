@@ -8,3 +8,6 @@ uploads/
 # Card Studio local dev fallbacks (Postgres/R2 not configured)
 ghl-broker/data/
 cardgen/files/
+
+# One-off script output — retag CSVs and the like carry real contact data
+ghl-broker/tmp/

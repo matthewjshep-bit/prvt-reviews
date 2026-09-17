@@ -8,7 +8,7 @@
 
 import React, { useEffect, useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Clock, ExternalLink, Loader2, MessageSquare, Pause, Play, Send } from "lucide-react";
-import { ACTION_LABEL, INTENT_LABEL, PARTY_LABEL, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
+import { ACTION_LABEL, DRAFT_FEEDBACK, DRAFT_FEEDBACK_LABEL, INTENT_LABEL, PARTY_LABEL, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
 import { applyDraftAction, dismissReplyDraft, getContactThread, offerEditorUrl, holdReplyDraft, resumeConversationBot, sendReplyDraft } from "./api.js";
 import ContactLink from "./ContactLink.jsx";
@@ -161,6 +161,10 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, o
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [preview, setPreview] = useState(false);
+  // Why it was changed or binned — optional, for the nightly coach. An edit
+  // picks one and sends as usual; Dismiss asks once and a chip is the answer.
+  const [why, setWhy] = useState("");
+  const [askWhy, setAskWhy] = useState(false);
   const [, tick] = useState(0);
   const scheduled = d.status === "scheduled" && d.sendAt;
 
@@ -177,10 +181,11 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, o
     catch (e) { setError(e.message); }
     setBusy("");
   };
+  const dismiss = (code = "") => run("dismiss", () => dismissReplyDraft(d.id, code ? { code } : null));
   const send = async () => {
     setBusy("send"); setError("");
     try {
-      const r = await sendReplyDraft(d.id, text);
+      const r = await sendReplyDraft(d.id, text, edited && why ? { code: why } : null);
       if (r.dryRun) { setPreview(true); setBusy(""); return; }
       onDone?.();
     } catch (e) { setError(e.message); setBusy(""); }
@@ -377,6 +382,19 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, o
         aria-label={`Reply to ${d.contactName || "contact"}`}
       />
 
+      {(askWhy || edited) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5" role="group" aria-label={askWhy ? "Why dismiss it" : "Why the change"}>
+          <span className="text-xs text-slate-500">{askWhy ? "What was wrong with it?" : "Why the change? (optional)"}</span>
+          {DRAFT_FEEDBACK.map((code) => (
+            <button key={code} type="button" disabled={Boolean(busy)} aria-pressed={!askWhy && why === code}
+              onClick={() => (askWhy ? dismiss(code) : setWhy((w) => (w === code ? "" : code)))}
+              className={`rounded-full border px-2 py-0.5 text-xs ${!askWhy && why === code ? "border-blue-600 bg-blue-50 text-blue-800" : "border-slate-300 text-slate-600 hover:bg-slate-50"}`}>
+              {DRAFT_FEEDBACK_LABEL[code]}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="mt-1.5 flex flex-wrap items-center gap-2">
         <span className="text-xs tabular-nums text-slate-400">
           {chars} chars{d.channel !== "email" && chars > 160 ? ` · ${Math.ceil(chars / 153)} texts` : ""}{edited ? " · edited" : ""}
@@ -388,8 +406,8 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, o
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
-          <button type="button" className={BTN} disabled={Boolean(busy)} onClick={() => run("dismiss", () => dismissReplyDraft(d.id))}>
-            {busy === "dismiss" ? "Dismissing…" : "Dismiss"}
+          <button type="button" className={BTN} disabled={Boolean(busy)} onClick={() => (askWhy ? dismiss() : setAskWhy(true))}>
+            {busy === "dismiss" ? "Dismissing…" : askWhy ? "Just dismiss" : "Dismiss"}
           </button>
           <button type="button" className={BTN_PRIMARY} disabled={Boolean(busy) || !text.trim()} onClick={send}>
             <Send size={13} /> {busy === "send" ? "Sending…" : scheduled ? "Send now" : "Send"}

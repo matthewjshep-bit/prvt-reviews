@@ -907,6 +907,60 @@ const pgStore = {
     return { at, doc };
   },
 
+  /* ---- app errors (durable, deduped by fingerprint) ---- */
+  async recordAppError(locationId, { fingerprint, area, message, context = {}, at = nowIso() }) {
+    await query(
+      `insert into app_errors (location_id, fingerprint, area, message, context, count, first_at, last_at)
+       values ($1,$2,$3,$4,$5,1,$6,$6)
+       on conflict (location_id, fingerprint) do update
+         set count = app_errors.count + 1, last_at = excluded.last_at, message = excluded.message, context = excluded.context`,
+      [locationId, fingerprint, area, message, context, at]
+    );
+  },
+  async listAppErrorsSince(locationId, sinceIso, { limit = 100 } = {}) {
+    const { rows } = await query(
+      `select fingerprint, area, message, context, count, first_at as "firstAt", last_at as "lastAt"
+         from app_errors where location_id = $1 and last_at >= $2 order by last_at desc limit $3`,
+      [locationId, sinceIso, limit]);
+    const iso = (v) => (v instanceof Date ? v.toISOString() : v);
+    return rows.map((r) => ({ ...r, firstAt: iso(r.firstAt), lastAt: iso(r.lastAt) }));
+  },
+
+  /* ---- coach proposals ---- */
+  async createCoachProposal(doc) {
+    const id = doc.id || uuid();
+    const ts = nowIso();
+    const full = { ...doc, id, status: doc.status || "open", createdAt: doc.createdAt || ts, updatedAt: ts };
+    await query(
+      `insert into coach_proposals (id, location_id, kind, status, dedupe_key, doc, created_at, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [id, full.locationId, full.kind, full.status, full.dedupeKey || null, full, full.createdAt, ts]
+    );
+    return full;
+  },
+  async listCoachProposals(locationId, { status = null, since = null, limit = 200 } = {}) {
+    const params = [locationId];
+    let where = "";
+    if (Array.isArray(status) && status.length) { params.push(status); where += ` and status = any($${params.length}::text[])`; }
+    else if (status && !Array.isArray(status)) { params.push(status); where += ` and status = $${params.length}`; }
+    if (since) { params.push(since); where += ` and created_at >= $${params.length}`; }
+    params.push(limit);
+    const { rows } = await query(
+      `select doc from coach_proposals where location_id = $1${where} order by created_at desc limit $${params.length}`, params);
+    return rows.map((r) => r.doc);
+  },
+  async getCoachProposal(id) {
+    const { rows } = await query(`select doc from coach_proposals where id = $1`, [id]);
+    return rows[0]?.doc || null;
+  },
+  async updateCoachProposal(id, doc) {
+    const ts = nowIso();
+    const full = { ...doc, updatedAt: ts };
+    const { rowCount } = await query(
+      `update coach_proposals set doc = $2, status = $3, updated_at = $4 where id = $1`, [id, full, full.status || "open", ts]);
+    return rowCount > 0 ? full : null;
+  },
+
   async contactRecordStats(locationId) {
     const { rows } = await query(
       `select (select count(*) from contact_profiles where location_id = $1)::int as profiles,
@@ -1130,6 +1184,8 @@ const fileStore = (() => {
       data.investors = data.investors || {};
       data.jobCursors = data.jobCursors || {};
       data.replyDrafts = data.replyDrafts || {};
+      data.appErrors = data.appErrors || {};
+      data.coachProposals = data.coachProposals || {};
       data.contactProfiles = data.contactProfiles || {};
       data.contactEvents = data.contactEvents || {};   // "<loc>|<contact>" → [events]; never pruned (dev backend)
       adoptLegacyOutreachRows();
@@ -1875,6 +1931,55 @@ const fileStore = (() => {
       data.jobCursors[`${locationId}|${name}`] = { at, doc };
       persist();
       return { at, doc };
+    },
+
+    async recordAppError(locationId, { fingerprint, area, message, context = {}, at = nowIso() }) {
+      ensure();
+      const k = `${locationId}|${fingerprint}`;
+      const prev = data.appErrors[k];
+      data.appErrors[k] = prev
+        ? { ...prev, message, context, count: prev.count + 1, lastAt: at }
+        : { locationId, fingerprint, area, message, context, count: 1, firstAt: at, lastAt: at };
+      persist();
+    },
+    async listAppErrorsSince(locationId, sinceIso, { limit = 100 } = {}) {
+      ensure();
+      return Object.values(data.appErrors)
+        .filter((e) => e.locationId === locationId && e.lastAt >= sinceIso)
+        .sort((a, b) => b.lastAt.localeCompare(a.lastAt))
+        .slice(0, limit)
+        .map(({ locationId: _l, ...e }) => e);
+    },
+
+    async createCoachProposal(doc) {
+      ensure();
+      const id = doc.id || uuid();
+      const ts = nowIso();
+      const full = { ...doc, id, status: doc.status || "open", createdAt: doc.createdAt || ts, updatedAt: ts };
+      data.coachProposals[id] = full;
+      persist();
+      return full;
+    },
+    async listCoachProposals(locationId, { status = null, since = null, limit = 200 } = {}) {
+      ensure();
+      return Object.values(data.coachProposals)
+        .filter((p) => p.locationId === locationId)
+        .filter((p) => !status || (Array.isArray(status) ? status.includes(p.status) : p.status === status))
+        .filter((p) => !since || (p.createdAt || "") >= since)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .slice(0, limit);
+    },
+    async getCoachProposal(id) {
+      ensure();
+      return data.coachProposals[id] || null;
+    },
+    async updateCoachProposal(id, doc) {
+      ensure();
+      if (!data.coachProposals[id]) return null;
+      const full = { ...doc, updatedAt: nowIso() };
+      data.coachProposals[id] = full;
+      persist();
+      return full;
     },
     async listContactEventsByOffer(locationId, offerId, { limit = 200 } = {}) {
       ensure();

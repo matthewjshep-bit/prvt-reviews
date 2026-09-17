@@ -659,7 +659,21 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       </section>
       </>)}
 
-      {(mode === "offers" || mode === "outreach") && (
+      {(mode === "offers" || mode === "outreach") && (<>
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-bold">Nightly coach → GitHub</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          When the coach finds something only a code change can fix, "File for a fix" on Today opens a GitHub issue
+          labelled <code>coach</code>, which the scheduled coding agent picks up. Use a fine-grained token limited to
+          this one repository with Issues read/write and nothing else. Names are cut to first names, and phone numbers,
+          emails and street addresses are removed before anything is sent.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <Txt label="Repository" value={form.githubRepo || ""} onChange={set("githubRepo")} placeholder="owner/repo" />
+          <Secret label="Issues-only token" value={form.githubToken || ""} onChange={set("githubToken")} placeholder="github_pat_..." secret={form.__secrets?.githubToken} />
+        </div>
+      </section>
+
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Agent Outreach (RentCast)</h2>
         <p className="mb-3 text-xs text-slate-500">
@@ -777,7 +791,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           )}
         </div>
       </section>
-      )}
+      </>)}
 
       {mode === "offers" && (
       <section className="rounded-xl border border-slate-200 bg-white p-4">

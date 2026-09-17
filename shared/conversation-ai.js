@@ -241,6 +241,34 @@ export function summarizeFeedback(rows = []) {
   return { total: rows.length, byCode };
 }
 
+/* ---------- why a person changed or binned a draft ---------- */
+
+// The outbox already knows THAT a draft was edited or dismissed. This is the
+// why, in one tap, so the nightly coach has more to go on than a diff.
+export const DRAFT_FEEDBACK = [
+  "wrong_tone", "wrong_facts", "wrong_number", "too_long",
+  "missed_the_question", "should_not_reply", "other",
+];
+export const DRAFT_FEEDBACK_LABEL = {
+  wrong_tone: "Wrong tone",
+  wrong_facts: "Wrong facts",
+  wrong_number: "Wrong number",
+  too_long: "Too long",
+  missed_the_question: "Missed the question",
+  should_not_reply: "Shouldn't have replied",
+  other: "Other",
+};
+
+/** normalizeDraftFeedback(v) → { code, note } | null. Same shape as a pass reason. */
+export function normalizeDraftFeedback(v) {
+  if (!v || typeof v !== "object") return null;
+  const note = String(v.note == null ? "" : v.note).trim().slice(0, 300);
+  const raw = String(v.code || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const code = DRAFT_FEEDBACK.includes(raw) ? raw : "";
+  if (!code && !note) return null;
+  return { code: code || "other", note };
+}
+
 /* ---------- actions: what an intent may trigger in GHL, or here ---------- */
 
 export const ACTION_TYPES = [
@@ -543,6 +571,11 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // today, checked at `hour` Pacific — answered where the dial allows, owed
   // where it isn't, on Today either way. Matt, 2026-09-16.
   nightlyAudit: { enabled: true, hour: 19, loose: true, heldSweep: true },
+  // The nightly coach (shared/coach.js): reads the day's edits, dismissals and
+  // audit findings an hour after the audit and PROPOSES examples, rules and
+  // instructions. It never applies one; a person does, from Today. Off until
+  // switched on, and the autonomy dial leaves it alone — it sends nothing.
+  coach: { enabled: false, hour: 20 },
 });
 
 /* ---------- coercion helpers ---------- */
@@ -794,6 +827,10 @@ export function normalizeConversationAi(doc, seed = {}) {
       return { enabled: bool(a.enabled, D.nightlyAudit.enabled), hour: int(a.hour, D.nightlyAudit.hour, 17, 23), loose: bool(a.loose, D.nightlyAudit.loose),
         // The held-underwrite pass (shared/held-underwrites.js) rides on the audit.
         heldSweep: bool(a.heldSweep, D.nightlyAudit.heldSweep) };
+    })(),
+    coach: (() => {
+      const c = d.coach && typeof d.coach === "object" ? d.coach : {};
+      return { enabled: bool(c.enabled, D.coach.enabled), hour: int(c.hour, D.coach.hour, 18, 23) };
     })(),
     rules: list(d.rules, { max: 40, each: 300 }),
     examples,
