@@ -113,7 +113,10 @@ const RENTCAST_BASE = process.env.RENTCAST_BASE_URL || "https://api.rentcast.io/
 
 // A 500-listing page of a whole county can take RentCast well past 15s
 // (2026-09-15: the 10am King pull timed out and no outreach went out).
-const RENTCAST_TIMEOUT_MS = Number(process.env.RENTCAST_TIMEOUT_MS || 60000);
+// 2026-09-17: 60s wasn't enough either — a filtered whole-county circle takes
+// RentCast about a minute (King came back just under, Pierce timed out twice
+// in a row). The sweep is a background job with nobody waiting on it.
+const RENTCAST_TIMEOUT_MS = Number(process.env.RENTCAST_TIMEOUT_MS || 150000);
 const RENTCAST_RETRY_MS = Number(process.env.RENTCAST_RETRY_MS || 3000);
 
 // One page of sale listings. Bare array in practice; tolerate a wrapper.
