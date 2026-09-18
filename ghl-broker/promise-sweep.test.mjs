@@ -199,6 +199,39 @@ test("a check-in they got to first — they texted since asking — sends nothin
   assert.equal(s.calls.length, 0);
 });
 
+test("he sent the held text himself, so the 'never got a reply' check-in sends nothing two minutes later", async () => {
+  const store = fakeStore({
+    events: [request(48, { kind: "unanswered", phrase: "", dueAt: at(1), draftId: "d-held" })],
+    drafts: [{ id: "d-held", contactId: "c9", status: "sent", sentAt: at(0.05) }],
+  });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0, "one of us came back — nobody gets two texts");
+  assert.equal(r.answered, 1);
+  const again = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW + HOUR, deps: s });
+  assert.equal(again.considered, 0, "and it is settled, not retried every tick");
+});
+
+test("any text of ours that went after they were left waiting covers the check-in", async () => {
+  const store = fakeStore({
+    events: [request(48, { kind: "unanswered", phrase: "", dueAt: at(1), draftId: "d-held" })],
+    drafts: [{ id: "d-held", contactId: "c9", status: "superseded" }, { id: "d-new", contactId: "c9", status: "sent", sentAt: at(20) }],
+  });
+  const s = starter();
+  await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0);
+});
+
+test("a text of ours from before they were left waiting covers nothing", async () => {
+  const store = fakeStore({
+    events: [request(48, { kind: "unanswered", phrase: "", dueAt: at(1), draftId: "d-held" })],
+    drafts: [{ id: "d-old", contactId: "c9", status: "sent", sentAt: at(90) }],
+  });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 1);
+});
+
 /* ---------- the address they haven't sent yet ---------- */
 
 import { runAddressChase, ADDRESS_CHASE_DAYS } from "./promise-sweep.js";

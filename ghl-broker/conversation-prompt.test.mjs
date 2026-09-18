@@ -174,3 +174,11 @@ test("a check-in on an offer they passed on re-quoted our old price, and every o
   assert.doesNotMatch(t, /You may mention the number/);
   assert.match(t, /still available/);
 });
+
+test("the model is told today's date, so the 18th is never 'past month end'", () => {
+  const ctx = buildUserContext({ party: "agent", contact: { name: "Nate Wright" }, signer: "Matt", message: "hi", now: Date.parse("2026-09-18T17:16:00Z") });
+  assert.match(ctx, /TODAY: Friday, September 18, 2026/);
+  // Pacific, not UTC: 2am UTC on the 19th is still the 18th here.
+  const late = buildUserContext({ party: "agent", contact: { name: "Nate Wright" }, signer: "Matt", message: "hi", now: Date.parse("2026-09-19T02:00:00Z") });
+  assert.match(late, /TODAY: Friday, September 18, 2026/);
+});

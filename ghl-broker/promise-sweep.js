@@ -262,6 +262,23 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
       out.results.push({ contactId, status: "answered" });
       continue;
     }
+    // "If neither of us comes back": one of us did. Gabe Spruell (2026-09-18)
+    // got the held nudge Matt sent at 10:14 and this check-in at 10:18 — the
+    // sweep only looked for THEIR text, never ours. Claimed, so it is settled
+    // rather than asked again every tick.
+    if (req.data?.kind === "unanswered") {
+      const ours = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 20 }).catch(() => []);
+      if (ours.some((d) => String(d.sentAt || d.updatedAt || "") > String(req.at))) {
+        await recordEvent({
+          store, locationId, contactId, party: "agent", type: "checkin_sent", at: iso(now), address: req.address || "",
+          source: "conversation", dedupeKey: `checkin_sent:${contactId}:${req.at}`,
+          data: { requestAt: req.at, kind: "unanswered", covered: true },
+        });
+        out.answered++;
+        out.results.push({ contactId, status: "covered" });
+        continue;
+      }
+    }
     const claim = await recordEvent({
       store, locationId, contactId, party: "agent", type: "checkin_sent", at: iso(now), address: req.address || "",
       source: "conversation", dedupeKey: `checkin_sent:${contactId}:${req.at}`,

@@ -601,8 +601,12 @@ export function outboundOpening(outbound) {
 
 export function buildUserContext({
   party = "agent", contact = {}, signer = "", instructions = "", context = { text: "" }, companyContact = {},
-  underwriting = [], transcript = "", message = "", outbound = null, inboundKind = "text", call = null,
+  underwriting = [], transcript = "", message = "", outbound = null, inboundKind = "text", call = null, now = Date.now(),
 } = {}) {
+  // The model has no clock. Gabe Spruell's check-in (2026-09-18) read "give me
+  // a shout end of the month" in the thread and opened with "we're past month
+  // end" — on the 18th. Pacific, where the people it texts are.
+  const today = new Date(now).toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "long", month: "long", day: "numeric", year: "numeric" });
   const label = party === "investor" ? "INVESTOR" : party === "agent" ? "AGENT" : "CONTACT";
   const them = party === "investor" ? "the investor" : party === "agent" ? "the agent" : "them";
   // A call: the "message" is the transcript, and the reply is the text a
@@ -624,6 +628,7 @@ export function buildUserContext({
   return [
     `${label}: ${contact.name || "unknown name"}${contact.tags?.length ? ` (tags: ${contact.tags.slice(0, 8).join(", ")})` : ""}`,
     signer ? `YOU ARE: ${signer}` : "",
+    `TODAY: ${today}. Dates in the thread are measured against this — never say a day or a month has passed unless it has.`,
     signer && contact.name && signer.split(/\s+/)[0].toLowerCase() !== String(contact.name).split(/\s+/)[0].toLowerCase()
       ? `NAMES: "${signer.split(/\s+/)[0]}" is YOUR name. When they write "Hi ${signer.split(/\s+/)[0]}" they are greeting you — ` +
         `never call them ${signer.split(/\s+/)[0]}. Their name is ${contact.name}.`
