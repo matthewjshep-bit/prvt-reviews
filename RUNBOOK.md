@@ -1256,6 +1256,14 @@ counting down only when the move takes something away: a switch going off, an
 intent leaving an auto-send list, stricter send rules (`autonomyTurnsDown`,
 shared/autonomy.js). It used to treat any move from Custom as down, so pressing
 Full again to pick up new switches pulled back every reply about to send.
+A half-on ladder set going fully on is not down either: that was prod's exact
+shape on 2026-09-18 (every ladder on but the new hot push), the first version
+of the rule read it as down, and ten nudges were pulled back. The undo is
+`POST /api/offers/automations/autonomy/release-held { dryRun }`: every draft the
+dial held in the last day that had passed the gates, and that the dial as it
+stands would still send, goes back to scheduled (`dialHeldReleasable`), nudges
+spread across the day as the sweep spreads them. A dry run unless `dryRun:
+false`.
 
 **Dismiss asks why.** One tap: Handled it by phone / We didn't owe anything /
 They went quiet / Not a deal / Something else (`PROMISE_DISMISS_REASONS`); a

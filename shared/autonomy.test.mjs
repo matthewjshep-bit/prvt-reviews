@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  AUTONOMY_MODES, autonomyPlan, applyAutonomy, detectAutonomy, autonomyFingerprint, autonomyDiff, autonomyTurnsDown,
+  AUTONOMY_MODES, autonomyPlan, applyAutonomy, detectAutonomy, autonomyFingerprint, autonomyDiff, autonomyTurnsDown, dialHeldReleasable,
 } from "./autonomy.js";
 import { starterConfig, autoEligible, normalizeConversationAi } from "./conversation-ai.js";
 import { kindsFor } from "./follow-up.js";
@@ -211,4 +211,30 @@ test("a move between named modes is down only when it goes down, and an intent l
   const half = applyAutonomy(starter(), "normal");
   half.conversationAi.parties.agent.followUp.ladders.offer_nudge.enabled = false;
   assert.equal(autonomyTurnsDown(half, "cautious"), true, "a half-on ladder set going off is down");
+});
+
+test("Full saved before the hot push ladder shipped has every ladder on but the new one, and pressing Full again held ten replies that were about to send", () => {
+  const before = applyAutonomy(starter(), "full");
+  before.conversationAi.parties.agent.followUp.ladders.hot_push.enabled = false;   // prod, 2026-09-18
+  assert.equal(autonomyFingerprint(before).parties.agent.followUp, null, "a half-on ladder set");
+  assert.equal(autonomyTurnsDown(before, "full"), false, "the last ladder coming on takes nothing away");
+  assert.equal(autonomyTurnsDown(before, "cautious"), true, "the ladders going off does");
+});
+
+test("a reply the dial pulled back can go back on its clock, but only one the dial held, that was clean, and that today's dial would still send", () => {
+  const NOW = Date.parse("2026-09-18T18:00:00Z");
+  const saved = applyAutonomy(starter(), "full");
+  const held = { id: "d1", status: "draft", party: "agent", intent: "passed_checkin", gateClean: true, needsHuman: false,
+    heldAt: "2026-09-18T17:40:00Z", flags: ["held: the autopilot was set to Fully autonomous"] };
+  assert.deepEqual(dialHeldReleasable(held, saved, NOW), { ok: true, reason: "" });
+  const no = (d, s = saved) => dialHeldReleasable({ ...held, ...d }, s, NOW).reason;
+  assert.match(no({ flags: ["held: the Conversation AI was switched off"] }), /not held by the dial/);
+  assert.match(no({ flags: [] }), /not held by the dial/);
+  assert.match(no({ status: "sent" }), /is sent/);
+  assert.match(no({ gateClean: false }), /gates/);
+  assert.match(no({ needsHuman: true }), /person/);
+  assert.match(no({ heldAt: "2026-09-16T17:40:00Z" }), /a day/);
+  assert.match(no({ intent: "counter" }), /not on the agent auto-send list/);
+  assert.match(no({}, applyAutonomy(starter(), "cautious")), /not on the agent auto-send list/, "Cautious drafts nudges; an undo never outruns the dial");
+  assert.match(no({}, applyAutonomy(starter(), "off")), /off/);
 });

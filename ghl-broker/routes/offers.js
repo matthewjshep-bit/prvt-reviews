@@ -105,8 +105,8 @@ import {
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
-import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown } from "../shared/autonomy.js";
-import { nextSendTime } from "../conversation-scheduler.js";
+import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
+import { nextSendTime, spreadAcrossDay } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop } from "../ghl-mirror.js";
@@ -4713,6 +4713,40 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const held = down ? await holdScheduledDrafts(locationId, `the autopilot was set to ${AUTONOMY_LABEL[mode]}`) : 0;
       console.log(`autonomy: ${locationId} ${before} → ${mode}${held ? ` (held ${held})` : ""}`);
       res.json({ ok: true, before, held, ...autonomyView(next), config: conversationConfig(next) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The undo for a hold the dial made (2026-09-18: pressing Full from Custom
+  // pulled back ten nudges that only needed their clock). Each draft the dial
+  // held goes back to "scheduled" when dialHeldReleasable says so: what the
+  // machine starts is spread across the day, an answer goes in a minute. A
+  // dry run unless told otherwise. No names in the answer or the log.
+  const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "outreach_nudge", "outreach_open"]);
+  router.post("/automations/autonomy/release-held", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const dryRun = req.body?.dryRun !== false;
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const a = conversationConfig(saved).autoSend || {};
+      const drafts = await store.listReplyDrafts(locationId, { status: "draft", limit: 200 }).catch(() => []);
+      const rows = [];
+      for (const d of drafts) {
+        const now = Date.now();
+        const verdict = dialHeldReleasable(d, saved, now);
+        if (!verdict.ok) { if (verdict.reason !== "not held by the dial") rows.push({ draftId: d.id, intent: d.intent, released: false, reason: verdict.reason }); continue; }
+        const sendAt = STARTED_KINDS.has(d.outbound?.kind)
+          ? spreadAcrossDay({ now, quietHours: a.quietHours, hours: a.nudgeSpreadHours ?? 8, weekends: a.weekends || "all" })
+          : nextSendTime({ now, delayMs: 60000, quietHours: a.quietHours });
+        if (!dryRun) {
+          const ts = new Date(now).toISOString();
+          await store.updateReplyDraft(d.id, { ...d, status: "scheduled", sendAt, scheduledAt: ts, heldAt: null, updatedAt: ts,
+            flags: [...(d.flags || []).filter((f) => !/^held: the autopilot was set to /.test(String(f))), "back on its clock: the dial's hold was undone"],
+            autoSend: { ...(d.autoSend || {}), decided: true, reason: "back on its clock — the dial's hold was undone" } });
+        }
+        rows.push({ draftId: d.id, intent: d.intent, released: true, sendAt });
+      }
+      console.log(`autonomy: ${locationId} release-held ${dryRun ? "(dry run) " : ""}${rows.filter((r) => r.released).length} of ${rows.length}`);
+      res.json({ ok: true, dryRun, released: rows.filter((r) => r.released).length, rows });
     } catch (err) { fail(res, err); }
   });
 

@@ -294,8 +294,9 @@ export function detectAutonomy(saved = {}) {
  * holds every reply that is counting down when it does, and only then: a
  * location that reads Custom because new switches shipped, pressing its own
  * mode again, is adding to what it had, and its replies should keep their
- * minute. Down is a switch going off (or a half-on ladder set changing), an
- * intent leaving an auto-send list, or the send rules getting stricter.
+ * minute. Down is a switch going off (a half-on ladder set going off counts,
+ * going fully on does not), an intent leaving an auto-send list, or the send
+ * rules getting stricter.
  */
 export function autonomyTurnsDown(saved = {}, mode) {
   const have = autonomyFingerprint(saved);
@@ -311,10 +312,36 @@ export function autonomyTurnsDown(saved = {}, mode) {
     if (a === b) return;
     if (path === "autoSend.holdOnNeedsHuman") down = b === true;
     else if (path === "autoSend.minConfidence") down = b === "high";
-    else down = !(a === false && b === true);
+    else down = b !== true;                       // a half-on ladder set (null) going fully on takes nothing away
   };
   walk(have, want, "");
   return down;
+}
+
+/**
+ * dialHeldReleasable(draft, saved, now) → { ok, reason }
+ *
+ * The undo for a hold the dial made. May this draft go back on a clock? Only
+ * one the dial itself pulled back, in the last day, that had passed the gates
+ * and that the dial as it stands now would still send by itself. It reads the
+ * allowlist and never widens it; the scheduler's own checks at send time (a
+ * person answered since, sends off, the caps) still apply.
+ */
+const DIAL_HOLD_RX = /^held: the autopilot was set to /;
+export function dialHeldReleasable(draft = {}, saved = {}, now = Date.now()) {
+  const no = (reason) => ({ ok: false, reason });
+  if (draft.status !== "draft") return no(`the draft is ${draft.status || "gone"}`);
+  if (!(draft.flags || []).some((f) => DIAL_HOLD_RX.test(String(f)))) return no("not held by the dial");
+  const heldMs = Date.parse(draft.heldAt || "");
+  if (!Number.isFinite(heldMs) || now - heldMs > 24 * 3600000) return no("held more than a day ago");
+  if (draft.gateClean !== true) return no("it had not passed the gates");
+  if (draft.needsHuman) return no("it was flagged for a person");
+  const cfg = normalizeConversationAi(clone(saved?.conversationAi));
+  if (!cfg.enabled) return no("the Conversation AI is off");
+  const party = draft.party === "investor" ? "investor" : "agent";
+  const auto = cfg.parties?.[party]?.autoSend;
+  if (!auto?.enabled || !(auto.intents || []).includes(draft.intent)) return no(`${String(draft.intent || "it").replace(/_/g, " ")} is not on the ${party} auto-send list`);
+  return { ok: true, reason: "" };
 }
 
 // For a switchboard line: which switches differ from a given mode, by name.
