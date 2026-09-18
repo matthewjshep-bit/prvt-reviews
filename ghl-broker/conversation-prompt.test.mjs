@@ -167,3 +167,10 @@ test("the agent prompt carries the write-up terms and says to give them in the s
   assert.match(sys, /in the same message/);
   assert.match(sys, /Commission[^.]*not yours to settle/i);
 });
+
+test("a check-in on an offer they passed on re-quoted our old price, and every one was held for a person", () => {
+  const t = outboundOpening({ kind: "passed_checkin", address: "3817 Bells Beach Rd, Langley, WA", stepIndex: 2 });
+  assert.match(t, /do NOT name any number/i, "an old price is not in the offer book, and saying it again recommits us to it");
+  assert.doesNotMatch(t, /You may mention the number/);
+  assert.match(t, /still available/);
+});

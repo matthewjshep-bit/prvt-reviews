@@ -517,9 +517,10 @@ export function outboundOpening(outbound) {
     // sitting, has the seller softened, would they come closer to our number?
     case "passed_checkin":
       return `${START} This agent passed on our offer on ${o.address}. It's been a while — check back in, in one or ` +
-        `two lines: is it still available, has anything changed with the seller, would they come closer to our number? ` +
-        `You may mention the number we offered (it's in the offer book), but do NOT raise it, hint that we'd go higher, ` +
-        `or name any new number — movement on ours is a person's call. Never re-argue why the number is what it is. ` +
+        `two lines: is it still available, has anything changed with the seller, would they come closer to where we were? ` +
+        `Do NOT name any number: not the one we offered (it is weeks old and saying it again recommits us to it), not ` +
+        `theirs, not a new one. Say "our number" or "where we were". Never hint that we'd go higher — movement on ours ` +
+        `is a person's call. Never re-argue why the number is what it is. ` +
         `Keep it light and easy to ignore; ${o.stepIndex > 1 ? "don't repeat the wording of the last check-in. " : ""}` +
         `${CONTINUE} Set intent to passed_checkin.`;
 

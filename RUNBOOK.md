@@ -1361,6 +1361,30 @@ starts by itself between rungs.
 `drive_stopped` / `drive_resumed`. A stop from Today is the whole thread with
 that agent, until Resume; a stopped promise row moves back to Your call.
 
+### Rows that were never a decision (2026-09-18)
+
+Read off Today the day before a week away; three kinds of row the machine made
+for itself:
+
+- **A check-in that re-quoted an old price.** The `passed_checkin` prompt said
+  "you may mention the number we offered (it's in the offer book)". A passed
+  offer's number is not in the book, so the gate held every one, five in a
+  day. The prompt now names no number at all ("where we were"): an August
+  price said again in September recommits us to it.
+- **Nothing to say back.** "That was an auto dial" is small talk with an empty
+  reply. With no actions no draft is saved; with a routing tag stamped on the
+  way a row was saved and waited. Now it closes itself (`dismissed`, flag
+  "nothing to say back — not sent", which the coach reads as the machine's and
+  not a person's). A suggested action still keeps the row.
+- **A ladder drafting someone who had asked off.** An agent wrote "take me off
+  your list" on 8/18, before the bot, and carried no tag. `optOutInTranscript`
+  (shared/conversation-ai.js) reads THEIR lines of the thread; anything the
+  machine starts (`startProactive`) stands down before the model is called:
+  "they asked to be left alone on <date> — nothing is drafted". Stricter than
+  `detectOptOut` on purpose ("Stop by the open house" is not an opt-out). It
+  tags nobody: a false positive costs one nudge, not a contact. An answer to
+  something they send is not this path.
+
 ### The nightly coach (2026-09-17)
 
 The bot used to get better only when Matt noticed a bad reply and said so in a coding session. The coach closes that loop. An hour after the audit (8pm Pacific by default) it reads what a person did with the day's drafts and **proposes** what the bot should learn. It never applies anything; Today's "Learned last night" card is where a person answers.

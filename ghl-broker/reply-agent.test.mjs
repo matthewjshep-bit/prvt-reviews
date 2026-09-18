@@ -416,6 +416,35 @@ test("small talk with nothing to say saves no draft and tags nothing", async () 
   assert.equal(tags.length, 0);
 });
 
+test("'that was an auto dial' had nothing to say back, and sat on Today as a row because a tag had been stamped on the way", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const store = fakeStore();
+  const saved = { ...SAVED, conversationAi: { parties: { agent: { intentRules: { small_talk: { mode: "auto", actions: [{ type: "add_tags", tags: ["chatted"] }] } } } } } };
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "No worries that was an auto dial",
+    deps: { draft: async () => ({ ...DRAFT, intent: "small_talk", reply: "", summary: "Nothing to answer." }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(d.actions.map((a) => [a.type, a.status]), [["add_tags", "done"]], "the tag still ran");
+  assert.equal(d.status, "dismissed", "nothing to send and nothing to decide: it closes itself");
+  assert.ok(d.flags.some((f) => /nothing to say back — not sent/.test(f)));
+  assert.equal((await store.listReplyDrafts("LOC", { status: "draft" })).length, 0);
+
+  // A suggestion waiting on a person keeps the row.
+  _resetJobs();
+  const store2 = fakeStore();
+  const ask = { ...SAVED, conversationAi: { parties: { agent: { intentRules: { small_talk: { mode: "ask", actions: [{ type: "add_tags", tags: ["chatted"] }] } } } } } };
+  const r2 = await startReply({
+    client, locationId: "LOC", saved: ask, store: store2, contactId: "c1", message: "ok",
+    deps: { draft: async () => ({ ...DRAFT, intent: "small_talk", reply: "", summary: "Nothing to answer." }) },
+  });
+  await settle();
+  assert.equal((await store2.getReplyDraft(r2.job.draftId)).status, "draft");
+});
+
 /* ---------- acting on a draft ---------- */
 
 
@@ -3013,6 +3042,33 @@ test("a book number said the way people text it ('1.144M' for 1,144,500) is not 
   assert.ok(!ok.flags.some((f) => /not in the offer book/.test(f)), JSON.stringify(ok.flags));
   const loose = evaluateReplyGates({ draft: { ...draft, reply: "We can likely do around 1.1M as-is." }, allowedAmounts: [1144500] });
   assert.ok(loose.flags.some((f) => /not in the offer book/.test(f)));
+});
+
+test("an agent who asked to be taken off our list a month ago was drafted a check-in by the ladder", async () => {
+  _resetJobs();
+  const base = ghlStubFor(["agent"]).client;
+  const client = { ...base, call: async (path, opts = {}) => {
+    if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+    if (path.startsWith("/conversations/cv1/messages")) return { messages: { messages: [
+      { id: "m1", direction: "outbound", messageType: "TYPE_SMS", body: "Any fixers coming up?", dateAdded: new Date(Date.now() - 31 * 86400000).toISOString() },
+      { id: "m2", direction: "inbound", messageType: "TYPE_SMS", body: "Please take me off your list", dateAdded: new Date(Date.now() - 31 * 86400000 + 60000).toISOString() },
+      { id: "m3", direction: "outbound", messageType: "TYPE_SMS", body: "Done, sorry to bother you.", dateAdded: new Date(Date.now() - 31 * 86400000 + 120000).toISOString() },
+    ] } };
+    return base.call(path, opts);
+  } };
+  let drafted = false;
+  const LADDERS_ON = structuredClone(STARTER_SAVED);
+  LADDERS_ON.conversationAi.parties.agent.followUp = { ...(LADDERS_ON.conversationAi.parties.agent.followUp || {}), enabled: true,
+    ladders: { ...(LADDERS_ON.conversationAi.parties.agent.followUp?.ladders || {}), passed_checkin: { enabled: true, steps: [10, 20] } } };
+  const { job } = await startProactive({
+    client, locationId: "LOC", saved: LADDERS_ON, store: fakeStore(), contactId: "c1", kind: "passed_checkin", offer: { ...LANDED, status: "passed" }, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return { ...DRAFT, intent: "passed_checkin", reply: "Still out there?" }; } },
+  });
+  await settle();
+  assert.equal(job.status, "held");
+  assert.match(job.heldReason, /asked to be left alone .* nothing is drafted/);
+  assert.equal(drafted, false, "stood down before the model was called");
+  assert.equal(job.draftId ?? null, null);
 });
 
 test("an answer to our first text that fits no intent keeps the thread going instead of sitting", async () => {

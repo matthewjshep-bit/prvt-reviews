@@ -1032,6 +1032,35 @@ export function detectOptOut(message, optOut = CONVERSATION_AI_DEFAULTS.optOut) 
   return false;
 }
 
+/**
+ * optOutInTranscript(transcript, optOut) → { at, text } | null
+ *
+ * Did they ask to be left alone earlier in the thread? For what the machine
+ * STARTS (a ladder rung, a check-in): an agent who wrote "take me off your
+ * list" before the bot existed carries no tag, and the ladder drafted him a
+ * month later (2026-09-18). Reads only THEIR lines. Stricter than
+ * detectOptOut, because an old thread is full of "Stop by the open house": a
+ * single-word keyword counts only when it is nearly the whole message; a
+ * phrase counts anywhere. Pure. Their newest such line wins.
+ */
+const LEAVE_ME_ALONE_RX = /\b(take me off|remove me|off (?:your|the|this) list|do(?: not|n'?t) (?:text|contact|message|call)|stop (?:texting|contacting|messaging|calling)|unsubscribe|no more texts|lose my number)\b/i;
+export function optOutInTranscript(transcript = "", optOut = CONVERSATION_AI_DEFAULTS.optOut) {
+  if (!optOut?.enabled) return null;
+  const words = (optOut.keywords || []).map((k) => String(k || "").toLowerCase().trim()).filter(Boolean);
+  let found = null;
+  for (const line of String(transcript || "").split("\n")) {
+    const m = /^\[(\d{4}-\d{2}-\d{2}) \d{2}:\d{2}\] THEM \w+: (.*)$/.exec(line);
+    if (!m) continue;
+    const text = m[2].trim();
+    const low = text.toLowerCase().replace(/[\u2018\u2019]/g, "'");
+    const short = low.split(/\s+/).length <= 3;
+    const hit = LEAVE_ME_ALONE_RX.test(low)
+      || words.some((k) => (k.includes(" ") ? low.includes(k) : short && new RegExp(`^\\W*${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(low)));
+    if (hit) found = { at: m[1], text: text.slice(0, 120) };
+  }
+  return found;
+}
+
 // The actions an opt-out runs: the configured tags on, any listed off, and
 // a workflow if one is named. Never a reply.
 export function optOutActions(optOut = {}) {

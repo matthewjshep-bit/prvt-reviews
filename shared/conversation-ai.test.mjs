@@ -498,3 +498,13 @@ test("the write-up terms default to 1k earnest after inspection, 14 days, Matthe
   assert.deepEqual(c.writeUp, { ...a.writeUp, inspectionDays: 45 });
   assert.match(writeUpTermsText(a.writeUp), /\$1,000 earnest money, preferably due after the inspection period; 14-day inspection; buyer written as Matthew Shepherd and\/or assigns/);
 });
+
+test("an opt-out they sent before is found in the thread, with its date, and only in their own words", async () => {
+  const { optOutInTranscript } = await import("./conversation-ai.js");
+  const t = ["[2026-08-18 17:02] US sms: Any fixers coming up?", "[2026-08-18 17:05] THEM sms: Please take me off your list", "[2026-08-18 17:06] US sms: Done."].join("\n");
+  assert.deepEqual(optOutInTranscript(t), { at: "2026-08-18", text: "Please take me off your list" });
+  assert.equal(optOutInTranscript("[2026-08-18 17:02] US sms: reply STOP to unsubscribe"), null, "our own words are not theirs");
+  assert.equal(optOutInTranscript("[2026-08-18 17:05] THEM sms: Stop by the open house Sunday"), null, "a word at the start is not enough in an old thread");
+  assert.deepEqual(optOutInTranscript("[2026-08-18 17:05] THEM sms: STOP"), { at: "2026-08-18", text: "STOP" });
+  assert.equal(optOutInTranscript("[2026-08-18 17:05] THEM sms: remove me", { enabled: false, keywords: ["remove"] }), null);
+});

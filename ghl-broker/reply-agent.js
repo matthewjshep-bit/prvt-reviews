@@ -59,7 +59,7 @@ import { fmtMoney } from "./shared/offer-calc.js";
 import { parseUsAddress, addressKey, lastMention } from "./shared/us-address.js";
 import {
   normalizeConversationAi, INTENTS, NEVER_AUTO, GUARDED_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
-  SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutActions, normalizePassReason, normalizeDraftFeedback,
+  SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutInTranscript, optOutActions, normalizePassReason, normalizeDraftFeedback,
 } from "./shared/conversation-ai.js";
 import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail, smsUnsubscribed, DND_TAG,
@@ -1919,6 +1919,15 @@ async function runProactive(job, ctx) {
     job.status = "held"; job.phase = ""; job.heldReason = handsOff; job.finishedAt = new Date().toISOString();
     return;
   }
+  // They asked to be left alone earlier in the thread and carry no tag (it
+  // was before the bot, or a person answered it). Nothing the machine starts
+  // goes to them; an answer to something THEY send is not this path.
+  const askedOff = optOutInTranscript(a.transcript, config.optOut);
+  if (askedOff) {
+    job.status = "held"; job.phase = ""; job.finishedAt = new Date().toISOString();
+    job.heldReason = `they asked to be left alone on ${askedOff.at} — nothing is drafted`;
+    return;
+  }
   const { context } = a;
   const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier });
 
@@ -2979,6 +2988,19 @@ async function runReply(job, ctx) {
       record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
     }
     await store.updateReplyDraft(record.id, record).catch(() => {});
+  }
+
+  // Nothing to say back ("that was an auto dial") and nothing left for a
+  // person to decide: the row was only saved because a tag ran on the way.
+  // It closes itself instead of waiting on Today. A suggestion keeps it.
+  const nothingToSay = draft.intent === "small_talk" && !String(draft.reply || "").trim() && !draft.needsHuman
+    && !(record.actions || []).some((x) => x.status === "pending" || x.status === "suggested" || x.status === "error");
+  if (nothingToSay) {
+    const ts = new Date(now).toISOString();
+    record = { ...record, status: "dismissed", dismissedAt: ts, updatedAt: ts, flags: [...(record.flags || []), "nothing to say back — not sent"] };
+    await store.updateReplyDraft(record.id, record).catch(() => {});
+    job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
+    return;
   }
 
   /* --- 6. tell GHL --- */
