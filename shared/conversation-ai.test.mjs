@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   normalizeConversationAi, CONVERSATION_AI_DEFAULTS, INTENTS, NEVER_AUTO, autoEligible, OUTBOUND_INTENTS,
   draftStats, substituteTokens, actionAllowedFor, isValidTimeZone,
-  normalizePassReason, summarizeFeedback, ASK_ONLY_ACTIONS, HUMAN_ACTIVE_MIN_FLOOR,
+  normalizePassReason, summarizeFeedback, ASK_ONLY_ACTIONS, HUMAN_ACTIVE_MIN_FLOOR, writeUpTermsText,
 } from "./conversation-ai.js";
 
 test("an empty doc is the defaults, and normalizing twice changes nothing", () => {
@@ -485,4 +485,16 @@ test("the driver's switches default off, survive a save, and normalizing twice c
   assert.deepEqual(on.driver, { promises: { enabled: true }, daytime: { enabled: true, startHour: 7, endHour: 18, everyHours: 6, releaseMinAgeMin: 30, heldSweep: false }, timers: OFF.timers }, "numbers are bounded, never trusted");
   assert.deepEqual(normalizeConversationAi(on).driver, on.driver);
   assert.deepEqual(normalizeConversationAi({ driver: "yes" }).driver, OFF);
+});
+
+/* ---------- the terms we always write ---------- */
+
+test("the write-up terms default to 1k earnest after inspection, 14 days, Matthew Shepherd and/or assigns, and survive a save", () => {
+  const a = normalizeConversationAi(null);
+  assert.deepEqual(a.writeUp, { earnestMoney: 1000, earnestDue: "after inspection", inspectionDays: 14, buyer: "Matthew Shepherd and/or assigns" });
+  const b = normalizeConversationAi({ writeUp: { earnestMoney: "2500", earnestDue: "mutual acceptance", inspectionDays: 10, buyer: " Shep Flips LLC " } });
+  assert.deepEqual(b.writeUp, { earnestMoney: 2500, earnestDue: "mutual acceptance", inspectionDays: 10, buyer: "Shep Flips LLC" });
+  const c = normalizeConversationAi({ writeUp: { earnestMoney: "abc", inspectionDays: 90, buyer: "" } });
+  assert.deepEqual(c.writeUp, { ...a.writeUp, inspectionDays: 45 });
+  assert.match(writeUpTermsText(a.writeUp), /\$1,000 earnest money, preferably due after the inspection period; 14-day inspection; buyer written as Matthew Shepherd and\/or assigns/);
 });

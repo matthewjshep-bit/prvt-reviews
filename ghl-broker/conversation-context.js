@@ -99,7 +99,70 @@ const statusWord = (s) => ({
 // The offer book, newest first, capped, and every number here is a number the
 // reply is ALLOWED to say. Unchanged from the first version except that the
 // asking price now actually arrives (see toListOffer in shared/offer-status.js).
-export function summarizeOffers(offers = [], { now = Date.now(), showMath = false } = {}) {
+// The last time the offer's own number moved: the newest send, re-quote or
+// status row. A number we floated after that is the number.
+function lastPriceMoveTs(o) {
+  const ts = [
+    ...(o.requotes || []).map((r) => r?.ts),
+    ...(o.sends || []).map((x) => x?.ts),
+    ...(o.statusHistory || []).filter((h) => h?.status === "sent").map((h) => h?.ts),
+    o.createdAt,
+  ].map((t) => Date.parse(t || "")).filter(Number.isFinite);
+  return ts.length ? Math.max(...ts) : 0;
+}
+
+// Money the way we text it, off one line. Kept small: the reply agent's
+// fuller parser lives beside the gates; the book only needs to notice a
+// number of ours.
+const LINE_MONEY_RX = /\$\s?\d[\d,]*(?:\.\d+)?\s?[kK]?\b|\b\d+(?:\.\d+)?\s?[kK]\b|\b\d{1,3}(?:,\d{3})+\b/g;
+const lineMoney = (text) => [...String(text || "").matchAll(LINE_MONEY_RX)].map((m) => {
+  const raw = m[0].replace(/[$,\s]/g, "");
+  const k = /k$/i.test(raw);
+  const n = Number(k ? raw.slice(0, -1) : raw);
+  return Number.isFinite(n) ? Math.round(k ? n * 1000 : n) : 0;
+}).filter((n) => n > 0);
+
+/**
+ * ourComeDown(offer, transcript) → { amount, ts, text } | null
+ *
+ * The lower number WE put to the agent after the offer's number last moved
+ * — "Can we do $65k actually" (Kimberly Pettie, 1510 Maple Lane: the book
+ * said 71,075, Matt texted 65k by hand, and three days later the bot told
+ * her the offer was "still good, 71k"). Ours only (US lines), after the
+ * last send/re-quote, under the book's number and not absurdly under it.
+ * The lowest such number wins: it is the one the seller is deciding on.
+ */
+export function ourComeDown(o, transcript = "") {
+  const amount = Number(o?.cashAmount) || 0;
+  if (!amount || !transcript) return null;
+  const since = lastPriceMoveTs(o);
+  let best = null;
+  for (const line of String(transcript).split(/\r?\n/)) {
+    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US \w+: (.*)$/.exec(line);
+    if (!m) continue;
+    const ts = Date.parse(`${m[1]}T${m[2]}:00Z`);
+    if (!Number.isFinite(ts) || ts < since) continue;
+    const text = m[3].trim();
+    // A message that carries the offer documents restates the book, not a
+    // new number.
+    if (/\bhere's our (written cash offer|letter of intent)\b/i.test(text)) continue;
+    // Under the book's number, not absurdly under it, and not the book's
+    // own number said the way people text it ("71k" for 71,075).
+    const restated = (n) => {
+      let unit = 1000;
+      while (n % (unit * 10) === 0 && unit < 1e9) unit *= 10;
+      return n % 1000 === 0 && Math.abs(n - amount) <= unit / 2 && Math.abs(n - amount) <= amount * 0.01;
+    };
+    const lower = lineMoney(text).filter((n) => n < amount && n >= amount * 0.4 && !restated(n));
+    if (!lower.length) continue;
+    const n = Math.min(...lower);
+    if (!best || n < best.amount) best = { amount: n, ts, text: text.slice(0, 120) };
+  }
+  return best;
+}
+
+export function summarizeOffers(offers = [], { now = Date.now(), showMath = false, transcript = "" } = {}) {
+  const stale = new Set();
   const rows = [...offers]
     .filter((o) => o && o.address)
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
@@ -109,7 +172,11 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
   for (const o of rows) {
     const status = effectiveStatus(o);
     const amount = Number(o.cashAmount) || 0;
-    if (amount) for (const n of roughAmounts(amount)) amounts.add(n);
+    const down = amount && !["passed", "expired", "withdrawn", "accepted", "agreed"].includes(status) ? ourComeDown(o, transcript) : null;
+    if (down) {
+      for (const n of roughAmounts(down.amount)) amounts.add(n);
+      stale.add(Math.round(amount));
+    } else if (amount) for (const n of roughAmounts(amount)) amounts.add(n);
     const asking = Number(o.askingPrice ?? o.inputs?.askingPrice ?? o.calc?.inputs?.askingPrice) || 0;
     if (asking) amounts.add(asking);
     const lastSend = (o.sends || []).filter((s) => s && s.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0];
@@ -142,7 +209,10 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     const realm = o.realm?.answer === "yes" ? "agent said the number is in the realm" : "";
     const parts = [
       `${o.address}:`,
-      amount ? `our cash offer ${fmtMoney(amount)}`
+      down
+        ? `our cash offer was ${fmtMoney(amount)}, then WE CAME DOWN TO ${fmtMoney(down.amount)} ${dateWord(down.ts)} ("${down.text}") and the seller is deciding on that — ` +
+          `${fmtMoney(down.amount)} is our number on this house. Never say ${fmtMoney(amount)} again, and never say the offer is "still good" at it`
+        : amount ? `our cash offer ${fmtMoney(amount)}`
         // A held run is finished, not in progress: someone on the team is
         // checking the numbers, and "coming shortly" would be a promise.
         : status === "draft" ? (o.autoUnderwrite?.held?.length ? "numbers held for our team's review (no number yet)" : "still being underwritten (no number yet)")
@@ -166,7 +236,8 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     ].filter(Boolean);
     lines.push(`- ${parts.join(" ")}`);
   }
-  return { text: lines.join("\n"), amounts: [...amounts], count: rows.length };
+  for (const n of stale) amounts.delete(n);
+  return { text: lines.join("\n"), amounts: [...amounts], stale: [...stale], count: rows.length };
 }
 
 // The tail of a history ledger — the properties they've sent or discussed
@@ -191,9 +262,9 @@ export function historyFromRecord(events = [], party, fallbackField) {
   return historyTail(fallbackField);
 }
 
-export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null }) {
+export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null, transcript = "" }) {
   const custom = recordOverCustom(rawCustom, facts);
-  const book = summarizeOffers(offers, { now, showMath });
+  const book = summarizeOffers(offers, { now, showMath, transcript });
   const amounts = new Set(book.amounts);
   const fields = fieldLines(custom, AGENT_FIELD_KEYS);
 
@@ -293,7 +364,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
     fields.length ? `WHAT WE KNOW ABOUT THEM:\n${fields.join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
   return {
-    text, amounts: [...amounts], forbiddenAmounts: [], offers: book,
+    text, amounts: [...amounts].filter((n) => !book.stale.includes(n)), forbiddenAmounts: [], staleAmounts: book.stale, offers: book,
     summary: { offers: book.count, fields: fields.length, hook: Boolean(hookAddress), history: history.length },
   };
 }
@@ -319,10 +390,10 @@ export function lessonsContextText(digest = "") {
     d.split(/(?<=[.!?])\s+/).filter(Boolean).map((l) => `- ${l.trim()}`).join("\n");
 }
 
-export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false }) {
+export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "" }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   const { facts, events } = await loadRecord(store, locationId, contactId);
-  return buildAgentContext({ offers: rows, custom, now, showMath, facts, events });
+  return buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript });
 }
 
 /* ---------- is this a deal you are working yourself? ---------- */

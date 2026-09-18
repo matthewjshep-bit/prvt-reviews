@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildUserContext, buildSystemPrompt, outboundOpening } from "./conversation-prompt.js";
+import { normalizeConversationAi } from "./shared/conversation-ai.js";
 
 /* ---------- our own contact details ---------- */
 
@@ -149,4 +150,20 @@ test("a question Matt already answered is in the prompt, for the right party onl
   assert.match(agent, /do not say you'll check with a partner/i);
   const none = buildSystemPrompt({ config: normalizeConversationAi({}), party: "agent", channel: "sms" });
   assert.doesNotMatch(none, /ANSWERS THE OWNER/);
+});
+
+/* ---------- the terms we always write (Kimberly Pettie, 1510 Maple Lane, 2026-09-18) ---------- */
+
+// "Earnest? Inspection?" got "let me confirm with my partner". The answer is
+// the same every time: 1k earnest after inspection, 14 days, Matthew
+// Shepherd and/or assigns.
+test("the agent prompt carries the write-up terms and says to give them in the same message", () => {
+  const sys = buildSystemPrompt({ config: normalizeConversationAi(null), party: "agent", channel: "sms" });
+  assert.match(sys, /WRITE-UP TERMS/);
+  assert.match(sys, /\$1,000 earnest money/);
+  assert.match(sys, /after the inspection period/);
+  assert.match(sys, /14-day inspection/);
+  assert.match(sys, /Matthew Shepherd and\/or assigns/);
+  assert.match(sys, /in the same message/);
+  assert.match(sys, /Commission[^.]*not yours to settle/i);
 });

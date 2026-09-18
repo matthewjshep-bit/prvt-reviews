@@ -481,6 +481,25 @@ export function ExamplesEditor({ config, patch }) {
   );
 }
 
+// What we always write when the listing agent drafts the offer. The bot
+// gives these the moment they ask, in the same message, instead of "let me
+// confirm with my partner" (Kimberly Pettie, 1510 Maple Lane, 2026-09-18).
+export function WriteUpTermsEditor({ config, patch }) {
+  const w = config.writeUp || {};
+  const set = (k) => (v) => patch({ writeUp: { ...w, [k]: v } });
+  return (
+    <Section title="Write-up terms"
+      intro="What the bot tells a listing agent who asks how to write it up. Earnest and the inspection window it may say on its own; shortening the window, commission and the closing date still wait for you.">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Earnest money ($)" hint="Said as text, e.g. 1k."><Text type="number" value={w.earnestMoney} onChange={(v) => set("earnestMoney")(Number(v))} /></Field>
+        <Field label="Earnest due" hint='"after inspection" reads as "preferably due after the inspection period".'><Text value={w.earnestDue} onChange={set("earnestDue")} placeholder="after inspection" /></Field>
+        <Field label="Inspection window (days)"><Text type="number" value={w.inspectionDays} onChange={(v) => set("inspectionDays")(Number(v))} /></Field>
+        <Field label="Buyer on the contract"><Text value={w.buyer} onChange={set("buyer")} placeholder="Matthew Shepherd and/or assigns" /></Field>
+      </div>
+    </Section>
+  );
+}
+
 // What you answered from Today when the bot didn't know (the answer box).
 // Facts, where the examples above are tone: the bot is told to answer these
 // itself rather than say it will check with a partner.

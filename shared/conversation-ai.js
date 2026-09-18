@@ -526,6 +526,10 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // (the answer box). Facts, unlike examples: the prompt tells the bot to
   // answer these itself rather than deflect to "my partner".
   answers: [],
+  // What we always write when a listing agent drafts the offer (Matt,
+  // 2026-09-18, after "Earnest? Inspection?" got "let me confirm with my
+  // partner"): the bot gives these in the same message, no checking.
+  writeUp: { earnestMoney: 1000, earnestDue: "after inspection", inspectionDays: 14, buyer: "Matthew Shepherd and/or assigns" },
   routing: {
     agentTags: ["agent", "agent-*"],
     investorTags: ["investor", "investor-*", "on-deal"],
@@ -917,6 +921,16 @@ export function normalizeConversationAi(doc, seed = {}) {
     rules: list(d.rules, { max: 40, each: 300 }),
     examples,
     answers,
+    writeUp: (() => {
+      const w = d.writeUp && typeof d.writeUp === "object" ? d.writeUp : {};
+      const W = D.writeUp;
+      return {
+        earnestMoney: int(w.earnestMoney, W.earnestMoney, 1, 100000),
+        earnestDue: str(w.earnestDue, 80) || W.earnestDue,
+        inspectionDays: int(w.inspectionDays, W.inspectionDays, 1, 45),
+        buyer: str(w.buyer, 120) || W.buyer,
+      };
+    })(),
     routing: {
       agentTags,
       investorTags,
@@ -1326,4 +1340,27 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
     profile: { enabled: true, callTranscripts: 2, writeSummary: true },
     notes: { onDraft: true, onAutoSend: true },
   });
+}
+
+/* ---------- the terms we always write ---------- */
+
+// The write-up terms as one line for the prompt and the outbox.
+export function writeUpTermsText(w = CONVERSATION_AI_DEFAULTS.writeUp) {
+  const t = { ...CONVERSATION_AI_DEFAULTS.writeUp, ...(w || {}) };
+  const due = /^after inspection$/i.test(t.earnestDue) ? "preferably due after the inspection period" : `due ${t.earnestDue}`;
+  return `$${Number(t.earnestMoney).toLocaleString("en-US")} earnest money, ${due}; ${t.inspectionDays}-day inspection; buyer written as ${t.buyer}`;
+}
+
+// The agent asks how to write it up: earnest money, the inspection window,
+// who the buyer is. A closing date question is answered too, but it is not
+// in the terms block, so it is not counted here.
+export const WRITE_UP_ASK_RX = /\b(earnest|emd|deposit|inspection|feasibility|due diligence|contingenc|vesting|buyer('s)? name|(make|made|write|written) (it |the (contract|offer|psa) )?(out )?to|who('s| is) (the )?buyer|(name|entity) (on|for) the (contract|offer|psa|paperwork))/i;
+export function asksWriteUpTerms(message = "") {
+  return WRITE_UP_ASK_RX.test(String(message || ""));
+}
+// A draft that puts one of those off — "let me confirm earnest with my
+// partner", "I'll check on the inspection window and get back to you".
+export const DEFERS_WRITE_UP_RX = /\b(let me|i(?:'ll| will)|need to|going to|gonna|have to)\b[^.?!\n]{0,40}\b(confirm|check|verify|run|clarify|get)\b[^.?!\n]{0,80}\b(earnest|emd|deposit|inspection|feasibility|contingenc|terms|vesting|buyer|entity)\b/i;
+export function defersWriteUpTerms(reply = "") {
+  return DEFERS_WRITE_UP_RX.test(String(reply || ""));
 }

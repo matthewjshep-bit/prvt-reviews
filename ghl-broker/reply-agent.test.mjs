@@ -3475,3 +3475,34 @@ test("a buyer on two live deals who names no address is a person's call", async 
   assert.equal(v.passed, false);
   assert.equal(v.checks.find((c) => !c.ok && c.name === "one_deal")?.name, "one_deal");
 });
+
+/* ---------- the number we came down to, and the terms we always write (Kimberly Pettie, 2026-09-18) ---------- */
+
+test("restating the offer-book number after we came down to a lower one is held", () => {
+  const g = gate(
+    { reply: "Yep, still good. 71k as-is, quick close. Want to write it up on NWMLS forms for us to sign?" },
+    { allowedAmounts: [65000], staleAmounts: [71075], inboundMessage: "Just wanted to see if this offer is still good?" }
+  );
+  assert.equal(g.ok, false);
+  assert.match(g.flags.join(" · "), /71,000.*came down/i);
+  const ok = gate(
+    { reply: "Yep, still good. 65k as-is, quick close." },
+    { allowedAmounts: [65000], staleAmounts: [71075], inboundMessage: "Just wanted to see if this offer is still good?" }
+  );
+  assert.deepEqual(ok.flags, []);
+});
+
+test("'Earnest? Inspection?' answered with 'let me confirm with my partner' is held — those are standing terms", () => {
+  const inbound = "Want to make sure before we write anything up\n71k\nEarnest?\nInspection?";
+  const g = gate(
+    { reply: "71k is right. Let me confirm earnest and the inspection window with my partner and I'll come back to you today." },
+    { allowedAmounts: [71000, 1000], inboundMessage: inbound }
+  );
+  assert.equal(g.ok, false);
+  assert.match(g.flags.join(" · "), /write-up terms/i);
+  const ok = gate(
+    { reply: "71k is right. 1k earnest, preferably due after inspection, 14 day inspection, and make it out to Matthew Shepherd and/or assigns." },
+    { allowedAmounts: [71000, 1000], inboundMessage: inbound }
+  );
+  assert.deepEqual(ok.flags, []);
+});

@@ -337,3 +337,48 @@ test("the next message from that buyer quotes the agreed price, and another buye
   assert.equal(others.text.includes("435,000"), false, "one buyer's price is nobody else's business");
   assert.equal(others.amounts.includes(435000), false);
 });
+
+/* ---------- the number we came down to (Kimberly Pettie, 1510 Maple Lane, 2026-09-18) ---------- */
+
+// The book said 71,075 (a re-quote). Matt then texted "Can we do $65k
+// actually". Three days later the bot answered "still good?" with 71k.
+const MAPLE = {
+  id: "m1", address: "1510 Maple Lane, Kent, Washington 98030", cashAmount: 71075, status: "countered",
+  createdAt: "2026-09-10T22:59:36Z",
+  statusHistory: [{ ts: "2026-09-10T23:00:11Z", status: "sent" }, { ts: "2026-09-15T17:00:47Z", status: "countered", amount: 70000 }],
+  sends: [{ ts: "2026-09-10T23:00:11Z", channels: ["sms"] }],
+  requotes: [{ ts: "2026-09-15T17:00:56Z", from: 60552, to: 71075 }],
+};
+const MAPLE_THREAD = [
+  "[2026-09-15 17:04] US sms: Re-ran Maple Lane using your 200k comps and the vandalism repairs. We land right around 71k as-is, quick close. Does that work for the seller?",
+  "[2026-09-15 17:04] THEM sms: Yes much better",
+  "[2026-09-15 17:06] US sms: Can we do $65k actually the $200k comp is the higher end",
+  "[2026-09-15 17:07] THEM sms: Let me ask her.",
+].join("\n");
+
+test("a lower number we floated after the offer becomes the book's number, and the old one is stale", () => {
+  const b = summarizeOffers([MAPLE], { now: Date.parse("2026-09-18T00:16:00Z"), transcript: MAPLE_THREAD });
+  assert.match(b.text, /we came down to \$65,000/i);
+  assert.match(b.text, /\$65,000 is our number/);
+  assert.match(b.text, /never say \$71,075/i);
+  assert.ok(b.amounts.includes(65000), "65k is allowed");
+  assert.ok(b.stale.includes(71075), "71,075 is stale");
+  assert.ok(!b.amounts.includes(71075), "71,075 is no longer allowed");
+});
+
+test("our own number said again, a higher number, or one said before the re-quote is not a come-down", () => {
+  const same = "[2026-09-15 17:06] US sms: We're at 71k as-is, does that work?";
+  assert.equal(summarizeOffers([MAPLE], { transcript: same }).stale.length, 0);
+  const higher = "[2026-09-15 17:06] US sms: Could you do 80k?";
+  assert.equal(summarizeOffers([MAPLE], { transcript: higher }).stale.length, 0);
+  const before = "[2026-09-12 17:06] US sms: Can we do $65k?";
+  assert.equal(summarizeOffers([MAPLE], { transcript: before }).stale.length, 0);
+  const theirs = "[2026-09-15 17:06] THEM sms: Can we do $65k?";
+  assert.equal(summarizeOffers([MAPLE], { transcript: theirs }).stale.length, 0);
+});
+
+test("the agent context carries the come-down through to the gate's stale list", () => {
+  const ctx = buildAgentContext({ offers: [MAPLE], transcript: MAPLE_THREAD, now: Date.parse("2026-09-18T00:16:00Z") });
+  assert.ok(ctx.staleAmounts.includes(71075));
+  assert.ok(ctx.amounts.includes(65000));
+});

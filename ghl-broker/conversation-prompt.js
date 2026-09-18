@@ -6,7 +6,7 @@
 // me" is a textarea, not a redeploy, and an investor is answered by someone
 // who knows they are an investor. Pure.
 
-import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS, DEAL_SIGNALS } from "./shared/conversation-ai.js";
+import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS, DEAL_SIGNALS, writeUpTermsText } from "./shared/conversation-ai.js";
 
 const LENGTH_RULE = {
   short: "One to three sentences.",
@@ -77,7 +77,8 @@ const FACTS =
 const COMMITMENTS = {
   agent:
     "COMMITMENTS: you may NOT accept a counter, raise or lower an offer, propose or confirm a showing or " +
-    "inspection time, promise proof of funds, or agree to terms. When the agent asks for any of those, write a " +
+    "inspection time, promise proof of funds, or agree to terms other than the WRITE-UP TERMS below, which are " +
+    "standing and yours to give. When the agent asks for anything else on this list, write a " +
     "holding reply that answers it without reading their number back and promises a same-day answer (\"Let me run " +
     "that by my partner and get back to you this afternoon\"), and set needsHuman to true with the reason. " +
     // Matt, 2026-09-14: a number before a showing, always.
@@ -268,6 +269,20 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "under contract, that we can move quickly on it, and ask what timeline the seller needs. Push the " +
       "conversation to the inspection period, never to a pre-inspection date, and never offer to send anyone out " +
       "in front of a contract."
+    );
+  }
+  if (party === "agent") {
+    // Matt, 2026-09-18 (Kimberly Pettie, 1510 Maple Lane): "Earnest?
+    // Inspection?" got "let me confirm with my partner". These never change,
+    // so the bot gives them the moment the write-up comes up.
+    parts.push(
+      `WRITE-UP TERMS — what we always write when the listing agent drafts the offer: ${writeUpTermsText(config?.writeUp)}. ` +
+      "When they ask about earnest money, the inspection window, who the buyer is or how to make it out, give the " +
+      "matching term in the same message, plainly, as a fact — never \"let me confirm\", never a partner, never later. " +
+      "Give all of them at once when they are writing it up and ask for any one of them. Say the earnest as \"1k\" " +
+      "style text, no dollar sign. The inspection window is the one above; shortening it is still a person's call " +
+      "(see THE INSPECTION PERIOD). Commission, a closing date, proof of funds, or anything not listed here is not " +
+      "yours to settle: answer the terms you have, and say you will confirm the rest today, with needsHuman set."
     );
   }
   if (playbook.mayCommit) parts.push(`YOU MAY, on your own: ${playbook.mayCommit}`);
@@ -487,7 +502,7 @@ export function outboundOpening(outbound) {
     case "hot_push": {
       const asks = [
         "ask if they can write it up on NWMLS forms at the agreed number and send it over for us to sign",
-        "ask what they need from us to get it written up (buyer name and entity, earnest money, closing date) and offer to send it right now",
+        "give them what they need to write it up (the WRITE-UP TERMS: buyer name, earnest money, inspection window) and ask what else they need",
         "ask whether the seller is still good at that number, and whether anything is holding up getting it in writing",
         "say you want to keep this moving for their seller and ask for a quick call today to get it written",
       ];

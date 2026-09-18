@@ -43,7 +43,7 @@ import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
 import { getFreeSlots } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
@@ -559,7 +559,7 @@ export function callsThemOurName(reply, { selfName = "", contactName = "", signO
 const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 
 export function evaluateReplyGates({
-  draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], inboundMessage = "", channel = "sms", style = null,
+  draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "",
 }) {
   const flags = [];
@@ -600,13 +600,20 @@ export function evaluateReplyGates({
   // Showing our work never means showing how we exit or what we make. The
   // prompt says so; this is the backstop that holds the text if it slips.
   if (party === "agent") {
-    const slip = draft.reply.match(/\b(assign(?:ment|ing|ed|s)?|wholesal(?:e|er|ing)|end buyer|our fee|my fee|spread)\b/i);
+    // "and/or assigns" is how the buyer is written on the contract, not a
+    // word about how we exit.
+    const slip = draft.reply.replace(/\band\/or assigns\b/gi, "").match(/\b(assign(?:ment|ing|ed|s)?|wholesal(?:e|er|ing)|end buyer|our fee|my fee|spread)\b/i);
     if (slip) flags.push(`the draft says "${slip[0]}" — how we exit and what we make never goes to an agent`);
     // The hot push has one ask: the listing agent writes it up on NWMLS
     // forms for us to sign. Offering our own paper is a different move, and
     // a person's.
     const paper = draft.intent === "hot_push" ? draft.reply.match(/\bPSA\b|purchase\s+(?:and|&)\s+sale|\bcontracts?\b/i) : null;
     if (paper) flags.push(`the draft says "${paper[0]}" — the hot push asks for the NWMLS offer, never our paper`);
+    // "Earnest? Inspection?" has a standing answer (the write-up terms in
+    // the prompt). Putting it off to a partner is the one thing it must not do.
+    if (asksWriteUpTerms(inboundMessage) && defersWriteUpTerms(draft.reply)) {
+      flags.push("the draft puts off earnest, inspection or the buyer name — the write-up terms answer those in the same message");
+    }
   }
   // The two rules that are not judgment calls. A number the other side must
   // never hear — our contract price, our fee — is flagged even if they said
@@ -618,8 +625,16 @@ export function evaluateReplyGates({
   if (leaked.length) {
     flags.push(`the draft names ${[...new Set(leaked)].map((n) => fmtMoney(n)).join(", ")}, which is our contract price or assignment fee`);
   }
+  // The book's old number after we came down from it (Kimberly Pettie,
+  // 2026-09-18: "still good, 71k" three days after Matt texted 65k). Rounded
+  // the way people text it counts too — "71k" for 71,075.
+  const stale = new Set(staleAmounts.map((n) => Math.round(n)));
+  const backTo = said.filter((n) => stale.has(n) || roundsFromBook(n, stale));
+  if (backTo.length) {
+    flags.push(`the draft names ${[...new Set(backTo)].map((n) => fmtMoney(n)).join(", ")}, which we already came down from in the thread`);
+  }
   const allowed = new Set([...allowedAmounts, ...moneyIn(inboundMessage)].map((n) => Math.round(n)));
-  const invented = said.filter((n) => !allowed.has(n) && !forbidden.has(n) && !roundsFromBook(n, allowed));
+  const invented = said.filter((n) => !allowed.has(n) && !forbidden.has(n) && !stale.has(n) && !roundsFromBook(n, allowed) && !roundsFromBook(n, stale));
   if (invented.length) {
     flags.push(`the draft names ${[...new Set(invented)].map((n) => fmtMoney(n)).join(", ")}, which is not in the ${party === "investor" ? "deal book" : "offer book"}`);
   }
@@ -1303,7 +1318,9 @@ export async function assembleConversation({
   if (light) {
     /* an opt-out needs the party and nothing else */
   } else if (party === "agent") {
-    context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath) });
+    context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath), transcript: real });
+    // The write-up terms' earnest money is a number the bot may say.
+    if (config.writeUp?.earnestMoney) context = { ...context, amounts: [...new Set([...context.amounts, Math.round(config.writeUp.earnestMoney)])] };
     // The post-mortem digest rides along only when the switch is on AND a
     // person saved a digest; the machine never writes one for itself.
     const digestText = config.parties.agent?.lessons?.enabled ? lessonsContextText(saved?.postMortem?.digest) : "";
@@ -2307,7 +2324,7 @@ async function runReply(job, ctx) {
   }
 
   const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
-    draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts,
+    draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
     inboundMessage: inboundText, channel: job.channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
   });
@@ -3151,7 +3168,7 @@ export async function previewConversation({
     });
   if (SILENT_INTENTS.has(draft.intent)) return optOutView(draft.confidence, draft.summary || "the model read an opt-out");
   const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
-    draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, inboundMessage: message, channel, style: config.style,
+    draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [], inboundMessage: message, channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive });
