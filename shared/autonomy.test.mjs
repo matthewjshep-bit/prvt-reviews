@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  AUTONOMY_MODES, autonomyPlan, applyAutonomy, detectAutonomy, autonomyFingerprint, autonomyDiff,
+  AUTONOMY_MODES, autonomyPlan, applyAutonomy, detectAutonomy, autonomyFingerprint, autonomyDiff, autonomyTurnsDown,
 } from "./autonomy.js";
 import { starterConfig, autoEligible, normalizeConversationAi } from "./conversation-ai.js";
 import { kindsFor } from "./follow-up.js";
@@ -190,4 +190,25 @@ test("only Full turns the investor band on, and it is never on an agent's playbo
   const tuned = applyAutonomy(starter(), "normal");
   tuned.conversationAi.parties.investor.priceBand.minFee = 15000;
   assert.equal(applyAutonomy(tuned, "full").conversationAi.parties.investor.priceBand.minFee, 15000, "the dial moves the switch and leaves the numbers alone");
+});
+
+test("pressing Full again after new switches shipped pulled back every reply that was about to send, though nothing was being turned off", () => {
+  const before = applyAutonomy(starter(), "full");
+  delete before.conversationAi.driver;                     // Full as it was saved before the drivers shipped
+  assert.equal(detectAutonomy(before), "custom");
+  assert.equal(autonomyTurnsDown(before, "full"), false, "Full only adds to it: nothing counting down needs holding");
+  assert.equal(autonomyTurnsDown(before, "normal"), true, "Normal takes the counter band and the offer away");
+  assert.equal(autonomyTurnsDown(before, "off"), true);
+});
+
+test("a move between named modes is down only when it goes down, and an intent leaving the list is down", () => {
+  assert.equal(autonomyTurnsDown(applyAutonomy(starter(), "cautious"), "normal"), false);
+  assert.equal(autonomyTurnsDown(applyAutonomy(starter(), "normal"), "cautious"), true);
+  assert.equal(autonomyTurnsDown(applyAutonomy(starter(), "full"), "full"), false);
+  const extra = applyAutonomy(starter(), "cautious");
+  extra.conversationAi.parties.agent.autoSend.intents.push("realm_check");
+  assert.equal(autonomyTurnsDown(extra, "cautious"), true, "a hand-added intent comes off the list");
+  const half = applyAutonomy(starter(), "normal");
+  half.conversationAi.parties.agent.followUp.ladders.offer_nudge.enabled = false;
+  assert.equal(autonomyTurnsDown(half, "cautious"), true, "a half-on ladder set going off is down");
 });

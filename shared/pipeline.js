@@ -553,8 +553,9 @@ export function buildPipeline({
 
 /* ---------- timers ---------- */
 
-// A failure that was the network's, not the house's: worth one more try.
-const RETRYABLE_ERROR = /timed?\s?out|timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|socket hang up|\b50[0234]\b|\b429\b|rate.?limit|overloaded/i;
+// A failure that was the network's or the model's, not the house's: worth one
+// more try. A scan cut short at the token limit says "try again" itself.
+const RETRYABLE_ERROR = /timed?\s?out|timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|socket hang up|\b50[0234]\b|\b429\b|rate.?limit|overloaded|output truncated/i;
 
 /**
  * timerMoves(actions, { config, now }) → [{ actionId, kind, move, what, dueAt, due, offerId, jobId, contactId, address }]

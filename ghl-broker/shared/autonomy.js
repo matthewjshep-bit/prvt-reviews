@@ -290,6 +290,36 @@ export function detectAutonomy(saved = {}) {
   return "custom";
 }
 
+/**
+ * autonomyTurnsDown(saved, mode) → boolean
+ *
+ * Does moving to `mode` take anything away from what is running now? The dial
+ * holds every reply that is counting down when it does, and only then: a
+ * location that reads Custom because new switches shipped, pressing its own
+ * mode again, is adding to what it had, and its replies should keep their
+ * minute. Down is a switch going off (or a half-on ladder set changing), an
+ * intent leaving an auto-send list, or the send rules getting stricter.
+ */
+export function autonomyTurnsDown(saved = {}, mode) {
+  const have = autonomyFingerprint(saved);
+  const want = autonomyFingerprint(applyAutonomy(saved, mode));
+  let down = false;
+  const walk = (a, b, path) => {
+    if (down) return;
+    if (Array.isArray(a) || Array.isArray(b)) { down = (a || []).some((x) => !(b || []).includes(x)); return; }
+    if (a && typeof a === "object" && b && typeof b === "object") {
+      for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) walk(a[k], b[k], path ? `${path}.${k}` : k);
+      return;
+    }
+    if (a === b) return;
+    if (path === "autoSend.holdOnNeedsHuman") down = b === true;
+    else if (path === "autoSend.minConfidence") down = b === "high";
+    else down = !(a === false && b === true);
+  };
+  walk(have, want, "");
+  return down;
+}
+
 // For a switchboard line: which switches differ from a given mode, by name.
 export function autonomyDiff(saved = {}, mode) {
   const cfg = normalizeConversationAi(clone(saved?.conversationAi));

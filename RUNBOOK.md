@@ -1170,7 +1170,7 @@ off (the switchboard says so).
 |---|---|---|
 | Priced, not floated | floats it `floatAfterHours` after it was priced, through `deps.floatOffer` (their read first, "our offer already went out" still stops it) | asks the brake; never when the float was skipped, because that row is Stuck with why |
 | Gone quiet | marks it no response through `deps.setOfferStatus`, the door the board's button uses (tags, mirror, promise settle all fire) | not braked: it ends a thread, it doesn't push one |
-| Underwrites that failed | one retry, only when the error reads as the network's (a timeout, a 5xx, a rate limit), never "no address" | the underwriter's daily cap; a dry run unless it is live |
+| Underwrites that failed | one retry, only when the error reads as the network's or the model's (a timeout, a 5xx, a rate limit, an AI scan cut short), never "no address" | the underwriter's daily cap; a dry run unless it is live |
 
 Each is claimed first (`audit:timer_float:<offerId>`, `audit:timer_quiet:
 <offerId>`, `audit:timer_uw_retry:<jobId>`), once ever. The file reads no
@@ -1250,6 +1250,12 @@ caps and `CARD_SENDS_ENABLED` decide whether it leaves.
 Adding the switch means a location that was at Normal or Full reads **Custom**
 on the dial until the mode is pressed again (`detectAutonomy` matches the plan
 exactly). That is the rollout: nothing new runs until Matt re-presses.
+
+Re-pressing holds nothing (2026-09-18). The dial holds every reply that is
+counting down only when the move takes something away: a switch going off, an
+intent leaving an auto-send list, stricter send rules (`autonomyTurnsDown`,
+shared/autonomy.js). It used to treat any move from Custom as down, so pressing
+Full again to pick up new switches pulled back every reply about to send.
 
 **Dismiss asks why.** One tap: Handled it by phone / We didn't owe anything /
 They went quiet / Not a deal / Something else (`PROMISE_DISMISS_REASONS`); a

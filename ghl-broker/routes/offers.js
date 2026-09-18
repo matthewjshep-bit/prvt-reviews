@@ -105,7 +105,7 @@ import {
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
-import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy } from "../shared/autonomy.js";
+import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown } from "../shared/autonomy.js";
 import { nextSendTime } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
@@ -4706,10 +4706,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const before = detectAutonomy(saved);
       const next = applyAutonomy(saved, mode);
       await store.saveOfferSettings(locationId, next);
-      // Down is any move that takes an intent off an allowlist or switches
-      // the bot off. Simplest honest rule: anything but up holds.
-      const rank = { off: 0, cautious: 1, normal: 2, full: 3 };
-      const down = before === "custom" || rank[mode] < rank[before];
+      // Down is any move that takes something away: a switch off, an intent
+      // off an allowlist, stricter send rules. Custom pressing its own mode
+      // again after new switches shipped only adds, and holds nothing.
+      const down = autonomyTurnsDown(saved, mode);
       const held = down ? await holdScheduledDrafts(locationId, `the autopilot was set to ${AUTONOMY_LABEL[mode]}`) : 0;
       console.log(`autonomy: ${locationId} ${before} → ${mode}${held ? ` (held ${held})` : ""}`);
       res.json({ ok: true, before, held, ...autonomyView(next), config: conversationConfig(next) });

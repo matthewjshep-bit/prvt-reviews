@@ -551,6 +551,13 @@ test("an offer gone quiet is marked no response, and a failed underwrite is retr
   assert.deepEqual(moves.map((m) => [m.kind, m.move, m.due]).sort(), [["gone_quiet", "mark_no_response", true], ["underwrite_failed", "retry_underwrite", true]]);
 });
 
+test("an underwrite that failed because the AI scan was cut short sat on Today instead of getting its one retry", () => {
+  const cfg = normalizeConversationAi({ enabled: true, driver: { timers: { enabled: true } } });
+  const cut = { id: "j7", contactId: "a1", status: "error", address: "9 Oak St, Kent, WA", error: "AI scan output truncated — try again", finishedAt: new Date(NOW - 600000).toISOString() };
+  const moves = timerMoves(build({ config: cfg, jobs: [cut] }).actions, { config: cfg, now: NOW });
+  assert.deepEqual(moves.map((m) => [m.kind, m.move, m.due]), [["underwrite_failed", "retry_underwrite", true]]);
+});
+
 test("with the timers off there are no moves, and rows say nothing about next", () => {
   const old = offer({ status: "new", sends: [], createdAt: H(6), autoUnderwrite: { jobId: "j1", held: [], finishedAt: H(6) } });
   const r = build({ offers: [old] });
