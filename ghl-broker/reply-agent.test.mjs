@@ -2709,6 +2709,7 @@ test("an invitation to make an appointment on a project we haven't priced gets '
   assert.equal(d.intent, "deal_available");
   assert.match(d.reply, /Before we set up a time, let me run the numbers on 450 Overlake Dr E/);
   assert.equal(uw.length, 1, "the desktop underwrite starts");
+  assert.equal(d.autoSend.decided, true, `it sends itself: ${d.autoSend.reason}`);
 });
 
 test("a showing offer on a house we haven't priced gets 'numbers first' and an underwrite, not a hold", async () => {
