@@ -297,7 +297,12 @@ export function isShowingOffer(message = "") {
   const t = String(message || "");
   return /\b(?:private\s+)?(?:tours?|showings?|walk[\s-]?throughs?|viewings?|open\s+house)\b/i.test(t)
     || /\b(?:like|want|love|happy|able|welcome)\s+to\s+(?:see|tour|view|walk)\b/i.test(t)
-    || /\b(?:come\s+(?:by|see|take\s+a\s+look)|show\s+(?:it|you|the\s+(?:house|home|property|place|units?))|see\s+it\s+in\s+person)\b/i.test(t);
+    || /\b(?:come\s+(?:by|see|take\s+a\s+look)|show\s+(?:it|you|the\s+(?:house|home|property|place|units?))|see\s+it\s+in\s+person)\b/i.test(t)
+    // Haleh Clapp, 2026-09-14: "Feel free to make an appointment to see it."
+    // An appointment or a time TO SEE it — "a time to talk" is a call.
+    || /\b(?:appointment|appt|time|visit)\s+to\s+(?:see|view|tour|walk|look\s+at|get\s+in(?:to|side)?)\b/i.test(t)
+    || /\b(?:go|feel\s+free\s+to)\s+(?:see|view|tour|walk|take\s+a\s+look\s+at|look\s+at)\s+(?:it|the\s+(?:house|home|property|place|units?))\b/i.test(t)
+    || /\b(?:want|like|need)\s+to\s+get\s+in(?:\s+there|side|to\s+(?:it|the\s+(?:house|home|property|place|units?)))\b/i.test(t);
 }
 
 /**

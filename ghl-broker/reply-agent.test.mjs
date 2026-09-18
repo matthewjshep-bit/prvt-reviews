@@ -2679,6 +2679,38 @@ test("isShowingOffer hears a tour, a showing, or 'would you like to see it'", ()
   assert.equal(isShowingOffer("I see it as a flip"), false);
 });
 
+test("'feel free to make an appointment to see it' is a showing offer, and a call or the photos are not", () => {
+  assert.equal(isShowingOffer("Feel free to make an appointment to see it."), true);
+  assert.equal(isShowingOffer("You can schedule a time to view it"), true);
+  assert.equal(isShowingOffer("It's vacant and on a lockbox, go take a look at it anytime"), true);
+  assert.equal(isShowingOffer("Let me know when you want to get in there"), true);
+  assert.equal(isShowingOffer("give me a call tomorrow"), false);
+  assert.equal(isShowingOffer("can we set up a time to talk?"), false);
+  assert.equal(isShowingOffer("take a look at the photos on the listing"), false);
+});
+
+test("an invitation to make an appointment on a project we haven't priced gets 'numbers first', not a blank row", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Feel free to make an appointment to see it.",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "scheduling", confidence: "high", needsHuman: true, propertyAddress: "450 Overlake Dr E, Medina, WA 98039",
+        reply: "Thanks, what work does it need?" }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-10" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "deal_available");
+  assert.match(d.reply, /Before we set up a time, let me run the numbers on 450 Overlake Dr E/);
+  assert.equal(uw.length, 1, "the desktop underwrite starts");
+});
+
 test("a showing offer on a house we haven't priced gets 'numbers first' and an underwrite, not a hold", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
