@@ -79,7 +79,7 @@ import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend } from "./convers
 
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
-const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "outreach_nudge", "outreach_open"]);
+const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "outreach_nudge", "outreach_open", "buyer_pulse"]);
 function scheduleFor({ config, now, kind = null, intent = "", replyLength = 0, random = Math.random }) {
   const a = config.autoSend || {};
   if (kind && STARTED_KINDS.has(kind)) {
@@ -708,7 +708,7 @@ export function releaseForAudit({ auto, gate, draft, deps }) {
   // reply passed every money check — the shape decideAutoSend itself accepts.
   const clean = Boolean(gate?.ok || (gate?.locked && gate?.clean));
   if (!clean || draft?.needsHuman || RELEASE_QUIET.has(draft?.intent) || !String(draft?.reply || "").trim()) return auto;
-  return { ...auto, send: true, code: "", reason: "released by the nightly audit — a holding reply, nothing committed", released: true };
+  return { ...auto, send: true, code: "", reason: deps.releaseReason || "released by the nightly audit — a holding reply, nothing committed", released: true };
 }
 
 /**
@@ -1683,6 +1683,16 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // The check-in between deals (buyer-pulse.js): are you buying, and what.
+  // No deal, no number. Its switches are dispoAutopilot.pulse, checked by the
+  // runner before it gets here; it is not on the playbook grid.
+  buyer_pulse: {
+    party: "investor",
+    enabled: () => true,
+    ready: () => true,
+    floats: () => [],
+    forbids: () => [],
+  },
 };
 
 const outboundLabel = (kind) => String(kind || "").replace(/_/g, " ");
@@ -1851,6 +1861,15 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       street: String(offer.address || "").split(",")[0].trim(),
       requote: Boolean(subject?.requote) };
   }
+  if (kind === "buyer_pulse") {
+    // Context clues for a check-in with no deal in it (shared/buyer-pulse.js
+    // pulseSubject). There is no property, so no address.
+    const p = subject || {};
+    return { kind, address: "", dealsSent: Number(p.dealsSent) || 0, conversed: Boolean(p.conversed), passed: Number(p.passed) || 0,
+      lookedAtDeals: Boolean(p.lookedAtDeals), boughtFromUs: Boolean(p.boughtFromUs),
+      lastBuyCity: String(p.lastBuyCity || ""), lastBuyYear: p.lastBuyYear || null, purchases: Number(p.purchases) || 0,
+      cities: (p.cities || []).slice(0, 3), types: (p.types || []).slice(0, 3), buyBox: String(p.buyBox || "").slice(0, 200) };
+  }
   if (kind === "outreach_open") {
     // What we know about the listing, for the introduction. Price and days
     // on market are colour ("been sitting a while"), never a number to quote.
@@ -1893,6 +1912,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "passed_checkin": return `Checks back in on ${where} — they passed; asks if the seller would come closer to our number${rung}.`;
     case "outreach_open": return `First text: saw their listing at ${where}, asks if they have anything distressed.`;
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
+    case "buyer_pulse":   return `Checks in between deals: are they buying right now, and ${outbound.buyBox ? "is their buy box still right" : "what is their buy box"}.`;
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
     case "dataroom_nudge": return `Follows up on ${where} — they opened the package and went quiet${rung}.`;
     case "checkin_due":

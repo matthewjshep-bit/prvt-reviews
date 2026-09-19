@@ -28,6 +28,7 @@ import { FACT_KEYS, factsAsCustom, factsEmpty } from "../shared/contact-record.j
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
 import { queueBlastDrafts, normalizeDispoAutopilot } from "../dispo-autopilot.js";
+import { planBuyerPulse, startBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
 import { dealOutreachPaused, outreachPausedReason } from "../shared/offer-status.js";
 import {
   searchAllContactsByTags, getContact, updateContact, listLocationTags,
@@ -1143,6 +1144,42 @@ export default function createDispoRouter({ resolveLocation }) {
     return i ? { rank: i.rank, tier: i.tier, reasons: i.rankReasons } : null;
   }
 
+  /* ---------- the check-in between deals ---------- */
+
+  // Status: the switches, what the broker allows, the last run, and who
+  // today's run would pick (counts only — a dry run lists them).
+  router.get("/pulse", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const cursor = await store.getJobCursor?.(locationId, PULSE_CURSOR).catch(() => null);
+      const plan = await planBuyerPulse({ locationId, saved, store, deps: { book: (loc) => scoredBook(loc, { status: "active" }) } });
+      res.json({
+        ok: true, settings: plan.settings, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED,
+        counts: plan.counts, wouldPick: plan.picks.length,
+        lastRunAt: cursor?.doc?.lastDaily || null, last: cursor?.doc?.last || null, run: cursor?.doc?.run || null,
+        tries: cursor?.doc?.tries || 0, failed: Boolean(cursor?.doc?.failed), job: getBuyerPulseJob(locationId),
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Run now. A dry run (the default) picks and reports and touches nothing.
+  router.post("/pulse/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const dryRun = req.body?.dryRun !== false;
+      const limit = req.body?.limit != null ? Number(req.body.limit) : null;
+      const job = startBuyerPulse({
+        client, locationId, saved, store, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED,
+        deps: { ...(router.conversationDepsFor?.({ locationId, client, saved }) || {}), book: (loc) => scoredBook(loc, { status: "active" }) },
+        trigger: "manual", dryRun, limit,
+      });
+      res.json({ ok: true, job });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.scoredBook = scoredBook;
   router.matchForDeal = matchForDeal;
   router.rankBuyerForDeal = rankBuyerForDeal;
   router.blastFromApp = blastFromApp;

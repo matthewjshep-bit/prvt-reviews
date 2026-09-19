@@ -56,6 +56,10 @@ export const EVENT_TYPES = [
   "outreach_enrolled",
   // They replied, so the app took them out of that outreach workflow.
   "outreach_left",
+  // The check-in between deals was started for this buyer (buyer-pulse.js).
+  // Written BEFORE the draft, so it is also the claim: one per buyer per day,
+  // and the clock the next one counts from.
+  "pulse_sent",
   // The bot (or a person) put a call or a visit on the calendar.
   "call_booked",
   "call_summary", "text_summary", "note",
@@ -84,6 +88,7 @@ export const EVENT_LABEL = {
   outreach_sent: "we reached out about their listing",
   outreach_enrolled: "added to an outreach workflow",
   outreach_left: "taken out of the outreach workflow (they replied)",
+  pulse_sent: "checked in between deals",
   call_booked: "call booked",
   post_mortem_built: "post-mortem written",
   property_financed: "financed a property",
@@ -105,6 +110,7 @@ export const EVENT_ICON = {
   outreach_sent: "Send",
   outreach_enrolled: "Workflow",
   outreach_left: "LogOut",
+  pulse_sent: "BellRing",
   call_booked: "CalendarCheck",
   post_mortem_built: "ClipboardCheck",
 };

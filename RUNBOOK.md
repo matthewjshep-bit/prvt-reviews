@@ -2047,6 +2047,48 @@ that becomes the usual suggestion with the reason on it. Off by default.
 PDF from the deal, the buyer and the company settings (`offer.assignment`),
 for review. Off by default.
 
+### Pulse check between deals (2026-09-18)
+
+Settings → Dispositions → "Pulse check between deals". The buyer pool only
+ever heard from us when we were selling (1,326 of 1,645 buyers blasted, 484
+ever replied, 85 with a buy box). A few buyers each workday get one personal
+text with **no deal in it**: are you buying right now, and what's your buy
+box, so what we send is relevant.
+
+**Who** (`shared/buyer-pulse.js` `pickPulseBuyers`). Active buyers with a
+phone. Left out: a do-not-text tag, on a live deal, any message either way in
+the last `quietDays` (7), a draft already waiting in the outbox, or pulsed
+within `everyDays` (90). Two lines: buyers who never wrote back go first, best
+buyer score first; buyers we have talked with (a reply, or a pass / evaluating
+/ commit on a deal) are deprioritised but keep `conversedShare` (20%) of every
+day's seats, never less than one, longest-silent first. `dailyCap` 10, max 50,
+and the cap is the day's — a retry or a second Run now only fills empty seats.
+
+**What it says.** A `buyer_pulse` outbound message (investor party) through
+`startProactive`, so the bot reads the thread, tags and record itself and
+holds for a hands-off tag, an earlier opt-out, or a person in the thread. The
+clues it is handed (`pulseSubject`): deals sent, whether they've talked with
+us, the **city** of their last financed purchase in the past two years (never
+the street, amount or lender), where and what they buy, and the buy box on
+file — which it confirms rather than asks for again. No price, number, address
+or link; the money guard holds any draft that names one. Their answer is an
+ordinary `buybox_update` / `looking_for_deals` reply.
+
+**Switches.** Two, both off, under `dispoAutopilot.pulse`: `enabled` drafts
+them into the outbox at 11am Pacific on workdays; `autoSend` lets a clean
+draft send itself, spread across the day like every machine-started text —
+and only with `CARD_SENDS_ENABLED` and `DISPO_BLASTS_ENABLED`. It is not on
+the playbook grid and the autonomy dial never touches it (like
+`counter_nudge`). Each buyer is claimed with a `pulse_sent` event before
+anything is drafted (`pulse_sent:<contact>:<Pacific day>`), which is also the
+clock the next one counts from.
+
+**Run / inspect.** `job_cursors` row `buyerPulse` (cursor written before the
+run; a run stale after 45 min is retried, 3 tries, until 4pm).
+`GET /api/dispo/pulse` → switches, gates, eligibility counts, last run.
+`POST /api/dispo/pulse/run {dryRun, limit}` — a dry run (the default, and the
+Preview button) lists who it would text and their clues and touches nobody.
+
 ## Dataroom photos from a Google Drive folder
 
 The dataroom photo box takes a Drive **folder** link and imports everything in

@@ -3595,3 +3595,69 @@ test("'Earnest? Inspection?' answered with 'let me confirm with my partner' is h
   );
   assert.deepEqual(ok.flags, []);
 });
+
+/* ---------- the check-in between deals (buyer-pulse.js) ---------- */
+
+const PULSE_TEXT = "Hey Dana, sent you a couple deals that weren't a fit, sorry about that. I'm a Seattle investor and wholesale the ones I'm too busy to do myself. Are you looking to buy right now, and what's your buy box? Want to make sure what I send is relevant.";
+const PULSE_SUBJECT = { dealsSent: 2, conversed: false, lastBuyCity: "Renton", lastBuyYear: 2025, cities: ["Renton"], types: ["flip"], buyBox: "" };
+
+test("a pulse check is the bot's own message to a buyer: their clues go to the model, and it waits as a draft", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor"]);
+  const store = fakeStore();
+  let seen;
+  const { job, skipped } = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "buyer_pulse", subject: PULSE_SUBJECT, sendsEnabled: true,
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "buyer_pulse", reply: PULSE_TEXT, summary: "Pulse check." }; } },
+  });
+  assert.equal(skipped, null);
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(seen.party, "investor");
+  assert.equal(seen.outbound.kind, "buyer_pulse");
+  assert.equal(seen.outbound.lastBuyCity, "Renton");
+  assert.equal(seen.outbound.address, "", "there is no property in it");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "buyer_pulse");
+  assert.equal(d.party, "investor");
+  assert.equal(d.status, "draft", "not on any auto-send list, so it waits for a person");
+  assert.equal(d.autoSend.decided, false);
+});
+
+test("with the pulse's own send switch it goes on its clock; a number in it still holds it", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor"]);
+  const store = fakeStore();
+  const deps = { releaseHeld: true, releaseReason: "the pulse check may send itself", now: () => NOW, random: () => 0 };
+  const { job } = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "buyer_pulse", subject: PULSE_SUBJECT, sendsEnabled: true,
+    deps: { ...deps, draft: async () => ({ ...DRAFT, intent: "buyer_pulse", reply: PULSE_TEXT }) },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "scheduled", d.autoSend?.reason);
+  assert.match(d.autoSend.reason, /pulse check may send itself/);
+
+  _resetJobs();
+  const store2 = fakeStore();
+  const { job: j2 } = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store: store2, contactId: "c1", kind: "buyer_pulse", subject: PULSE_SUBJECT, sendsEnabled: true,
+    deps: { ...deps, draft: async () => ({ ...DRAFT, intent: "buyer_pulse", reply: "Hey Dana, got one in Renton at $310,000 coming up. Are you buying right now?" }) },
+  });
+  await settle();
+  const held = await store2.getReplyDraft(j2.draftId);
+  assert.equal(held.status, "draft", "the money guard outranks the switch");
+});
+
+test("a buyer tagged hands-off gets no pulse check drafted at all", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor", "stop bot"]);
+  let drafted = 0;
+  const { job } = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1", kind: "buyer_pulse", subject: PULSE_SUBJECT, sendsEnabled: true,
+    deps: { releaseHeld: true, draft: async () => { drafted++; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(job.status, "held");
+  assert.equal(drafted, 0);
+});

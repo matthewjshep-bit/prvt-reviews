@@ -8,7 +8,7 @@ import {
   CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
-import { getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
+import { getBuyerPulse, runBuyerPulse, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
@@ -47,6 +47,49 @@ function WorkflowPick({ label, value, onChange, workflows, hint, className = "" 
       )}
       {(hint || workflows?.error) && <span className="mt-1 block text-xs text-slate-500">{workflows?.error || hint}</span>}
     </label>
+  );
+}
+
+// Who today's pulse check would go to, without touching anybody: a dry run.
+function BuyerPulsePreview() {
+  const [state, setState] = useState({ busy: false, error: "", status: null, job: null });
+  const preview = async () => {
+    setState((s) => ({ ...s, busy: true, error: "" }));
+    try {
+      await runBuyerPulse({ dryRun: true });
+      let status = null;
+      for (let i = 0; i < 20; i++) {
+        status = await getBuyerPulse();
+        if (status?.job && status.job.status !== "running") break;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      setState({ busy: false, error: status?.job?.error || "", status, job: status?.job || null });
+    } catch (e) { setState((s) => ({ ...s, busy: false, error: e.message || "preview failed" })); }
+  };
+  const c = state.status?.counts;
+  const clue = (k) => [k.dealsSent ? `${k.dealsSent} deal${k.dealsSent === 1 ? "" : "s"} sent` : "no deals sent", k.lastBuyCity ? `bought in ${k.lastBuyCity}${k.lastBuyYear ? ` ${k.lastBuyYear}` : ""}` : "", k.buyBox ? "buy box on file" : ""].filter(Boolean).join(" · ");
+  return (
+    <div>
+      <button type="button" onClick={preview} disabled={state.busy}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium hover:bg-slate-50 disabled:opacity-50">
+        {state.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Preview who today's would go to
+      </button>
+      <span className="ml-2 text-xs text-slate-500">Uses the saved settings. Nothing is drafted or sent.</span>
+      {state.error ? <p className="mt-2 text-xs text-red-600">{state.error}</p> : null}
+      {c ? (
+        <p className="mt-2 text-xs text-slate-600">
+          {c.eligible.toLocaleString()} of {c.pool.toLocaleString()} buyers are eligible today — {c.quiet.toLocaleString()} never wrote back, {c.conversed.toLocaleString()} you've talked with.
+          Left out: {c.recentlyTexted} texted recently, {c.pulsedRecently} already checked in with, {c.onDeal} on a live deal, {c.noPhone} no phone, {c.blocked} opted out.
+        </p>
+      ) : null}
+      {state.job?.results?.length ? (
+        <ul className="mt-2 space-y-0.5 text-xs text-slate-600">
+          {state.job.results.map((r) => (
+            <li key={r.contactId}><span className="font-medium text-slate-800">{r.name || r.contactId}</span> · {r.group === "conversed" ? "talked before" : "never replied"} · {clue(r.clues || {})}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 
@@ -317,6 +360,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const setMirrorSide = (side, patch) => setMirror({ [side]: { ...((form.ghlMirror || {})[side] || {}), ...patch } });
   const setMirrorStage = (side, key, stageId) => setMirrorSide(side, { stages: { ...(((form.ghlMirror || {})[side] || {}).stages || {}), [key]: stageId } });
   const setDispoAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), [k]: v } })); };
+  const setPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), pulse: { ...(f.dispoAutopilot?.pulse || {}), [k]: v } } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
   // GHL workflows for the outreach pickers — only once the sweep is on.
   const [outreachWorkflows, setOutreachWorkflows] = useState(null);
@@ -354,6 +398,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       clean.psa = coerce(form.psa || {}, DEFAULT_OFFER_SETTINGS.psa);
       if (form.outreachAutopilot) clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12, followUpDays: Number(form.outreachAutopilot.followUpDays) || 14 };
       if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount", "minMatchScore", "secondWaveMinScore"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
+      if (clean.dispoAutopilot?.pulse) clean.dispoAutopilot.pulse = { ...clean.dispoAutopilot.pulse, ...Object.fromEntries(["dailyCap", "everyDays", "quietDays", "conversedShare"].filter((k) => clean.dispoAutopilot.pulse[k] != null).map((k) => [k, Number(clean.dispoAutopilot.pulse[k])])) };
       const r = await saveSettings(clean);
       onSaved?.(r.settings);
       setForm(effectiveSettings(r.settings));
@@ -943,6 +988,33 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.paperworkOnCommit)} onChange={(e) => setDispoAuto("paperworkOnCommit")(e.target.checked)} />
             <span><span className="font-semibold">Draft the assignment when a buyer commits</span><span className="block text-xs text-slate-500">The assignment PDF is generated from the deal and the buyer for you to review. Nothing is sent.</span></span>
           </label>
+        </div>
+
+        {/* Between deals. The pool only ever hears from us when we're selling;
+            this asks a few of them a day whether they're buying and what. */}
+        <div className="mt-4 space-y-3 rounded-lg border border-slate-200 p-3">
+          <div className="text-sm font-semibold">Pulse check between deals</div>
+          <p className="text-xs text-slate-500">
+            A few buyers each workday get one personal text with no deal in it: are you buying right now, and what's your
+            buy box. The bot writes each one from their thread and record (deals we've sent, the city they last bought in,
+            what they buy). Buyers who never wrote back go first; buyers you've talked with keep a share of every day.
+            Nobody mid-conversation, just blasted, on a live deal, or opted out.
+          </p>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.pulse?.enabled)} onChange={(e) => setPulse("enabled")(e.target.checked)} />
+            <span><span className="font-semibold">Draft pulse checks every workday at 11am</span><span className="block text-xs text-slate-500">They land in the Conversation AI outbox for you to read, edit and send.</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.pulse?.autoSend)} onChange={(e) => setPulse("autoSend")(e.target.checked)} />
+            <span><span className="font-semibold">Let them send themselves</span><span className="block text-xs text-slate-500">Spread across the day. A draft that names any number, or that the bot flagged, still waits for you. Needs DISPO_BLASTS_ENABLED=true on the broker.</span></span>
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <Num label="Buyers a day" value={form.dispoAutopilot?.pulse?.dailyCap ?? 10} onChange={setPulse("dailyCap")} />
+            <Num label="Same buyer again after" suffix="days" value={form.dispoAutopilot?.pulse?.everyDays ?? 90} onChange={setPulse("everyDays")} />
+            <Num label="Skip anyone texted in the last" suffix="days" value={form.dispoAutopilot?.pulse?.quietDays ?? 7} onChange={setPulse("quietDays")} />
+            <Num label="Share for buyers we've talked with" suffix="%" value={form.dispoAutopilot?.pulse?.conversedShare ?? 20} onChange={setPulse("conversedShare")} />
+          </div>
+          <BuyerPulsePreview />
         </div>
       </section>
       )}

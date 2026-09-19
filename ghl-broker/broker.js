@@ -30,6 +30,7 @@ import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation
 import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeRunTierCheck } from "./tier-check.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
+import { maybeRunBuyerPulse } from "./buyer-pulse.js";
 import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
 import { recordError } from "./app-errors.js";
@@ -164,6 +165,7 @@ app.use("/api/outreach", outreachRouter);
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor }));
 const dispoRouter = createDispoRouter({ resolveLocation });
 app.use("/api/dispo", dispoRouter);
+dispoRouter.conversationDepsFor = offersRouter.conversationDepsFor;
 offersRouter.setDispoDeps({ matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp, rankBuyerForDeal: dispoRouter.rankBuyerForDeal });
 // The contact record: the app's own memory of every agent and investor, and
 // the drawer's door to it. GHL's custom fields are a digest of this.
@@ -276,6 +278,13 @@ setInterval(async () => {
         deps: { matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp },
       });
       if (waved) console.log(`dispo second wave started for ${locationId}`);
+      // The check-in between deals: a few buyers a workday, never blasted.
+      // Off until dispoAutopilot.pulse.enabled; drafts until pulse.autoSend.
+      const pulsed = await maybeRunBuyerPulse({
+        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+        deps: { ...offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }), book: (loc) => dispoRouter.scoredBook(loc, { status: "active" }) },
+      });
+      if (pulsed) console.log(`buyer pulse started for ${locationId}`);
       // The board, onto GHL's Opportunities. Every tick, bounded.
       await maybeMirror({ client: makeClient(token), locationId, saved, store, log: console.log });
       // Calls that ended since the last look, read like inbound texts. No

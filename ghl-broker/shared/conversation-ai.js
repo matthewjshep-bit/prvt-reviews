@@ -63,7 +63,8 @@ export const OUTBOUND_INTENTS = {
   // counter_nudge and take_ask are deliberately not here: they are started
   // only by the nightly audit, which releases them itself (releaseForAudit),
   // so they never need a box on the playbook grid or a place in the autonomy
-  // fingerprint.
+  // fingerprint. buyer_pulse likewise: the pulse check has its own two
+  // switches (dispoAutopilot.pulse) and the dial never touches it.
   agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "hot_push", "passed_checkin", "outreach_nudge", "call_followup", "promise_due", "price_drop", "checkin_due", "address_chase"],
   investor: ["blast_open", "blast_nudge", "dataroom_nudge", "call_followup"],
 };
@@ -85,6 +86,7 @@ export const INTENT_LABEL = {
     wants_walkthrough: "wants to walk it", passing: "passing", wants_call: "wants a call",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
     blast_nudge: "followed up on a deal we sent", dataroom_nudge: "followed up after they opened the package",
+    buyer_pulse: "checked in between deals",
     blast_open: "sent them a deal (blast)", call_followup: "text after a call",
   },
 };

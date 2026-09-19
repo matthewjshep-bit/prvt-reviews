@@ -524,6 +524,44 @@ export function outboundOpening(outbound) {
         `Keep it light and easy to ignore; ${o.stepIndex > 1 ? "don't repeat the wording of the last check-in. " : ""}` +
         `${CONTINUE} Set intent to passed_checkin.`;
 
+    // The check-in between deals (shared/buyer-pulse.js). Matt, 2026-09-18:
+    // "hey John, sent you a couple deals sorry they didnt work out, just
+    // curious if youre looking to buy right now and what your buy box is? can
+    // make sure the deals i send your way are relevant. im a seattle investor
+    // and wholesale deals when im too busy to do them." The buyers have only
+    // ever had blasts from us, so this has to read like one person texting
+    // another — and every clue below is optional colour, never a dossier.
+    case "buyer_pulse": {
+      const clues = [
+        o.dealsSent > 1 ? `We have sent them ${o.dealsSent >= 4 ? "several" : "a couple of"} deals by text${o.conversed ? "" : " and never heard back"}.`
+          : o.dealsSent === 1 ? `We have sent them one deal by text${o.conversed ? "" : " and never heard back"}.`
+          : "We have not sent them a deal yet.",
+        o.boughtFromUs ? "They have bought from us before — this is a friend, write like it." : "",
+        !o.boughtFromUs && o.lookedAtDeals ? "They have looked at a deal of ours without taking it." : "",
+        o.passed ? "They passed on something we sent." : "",
+        o.lastBuyCity ? `Public records show a purchase in ${o.lastBuyCity}${o.lastBuyYear ? ` in ${o.lastBuyYear}` : ""} — you may say you noticed they picked something up in ${o.lastBuyCity}, and nothing more specific than the city.` : "",
+        o.cities?.length ? `Where they seem to buy: ${o.cities.join(", ")}.` : "",
+        o.types?.length ? `What they seem to do: ${o.types.join(", ").replace(/-/g, " ")}.` : "",
+        o.buyBox ? `THE BUY BOX WE HAVE ON FILE: ${o.buyBox}. Do not ask for it from scratch — say what you have in a few words (areas and type only; leave any price out of the text) and ask if that is still right or has changed.` : "",
+      ].filter(Boolean).join(" ");
+      return `${START} There is NO deal in this message. It is a check-in with a buyer on our list, between deals. ` +
+        `WHAT WE KNOW: ${clues} ` +
+        `WHAT TO WRITE: two to four short sentences, one text, the way one local investor texts another. ` +
+        `(1) Their first name. (2) ${o.conversed
+          ? "You have talked before — READ THE THREAD and pick up from it like someone who remembers (what they said they buy, what they passed on and why). Do NOT reintroduce yourself. "
+          : o.dealsSent > 0
+            ? "Own it lightly that the deals we sent weren't a fit (\"sent you a couple deals, sorry they weren't a fit\") — once, no grovelling. Then one line on who you are: a Seattle investor who wholesales the deals you're too busy to do yourself. "
+            : "One line on who you are: a Seattle investor who wholesales the deals you're too busy to do yourself. "}` +
+        `(3) The ask, as ONE question: are they looking to buy right now, and what's their buy box — so what you send is ` +
+        `actually relevant to them. ` +
+        `Use at most ONE clue from above, and only if it makes the text warmer; never list what you know about them, ` +
+        `never mention records, lenders, streets, prices or how many properties they own. If the thread shows they ` +
+        `already told us what they buy, confirm it instead of asking again. ` +
+        `Do NOT name a price, a number, a percentage, an address or a link. Do NOT pitch a deal or promise one is coming. ` +
+        `Do NOT say "I'm reaching out", "I hope this finds you well", "touching base" or "just checking in". ` +
+        `No exclamation-mark cheer. Easy to ignore, easy to answer in a line. Set intent to buyer_pulse.`;
+    }
+
     case "blast_nudge":
       return `${START} We sent this buyer the deal on ${o.address} and they never replied. ` +
         `${nudgePressure(o)} One short line asking whether it's of interest. Do NOT name a price, a spread, or ` +
