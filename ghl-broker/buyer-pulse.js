@@ -98,7 +98,11 @@ export function startBuyerPulse({ client, locationId, saved = {}, store = defaul
     // may send buyers anything at all. Otherwise: a draft in the outbox.
     const live = Boolean(sendsEnabled && blastsEnabled);
     job.autoSend = Boolean(plan.settings.autoSend && live && conversationConfig(saved).enabled);
+    // A different way in for each text, continuing across the day's runs so
+    // two batches don't open alike.
+    let n = Number(plan.counts.claimedToday) || 0;
     for (const p of picks) {
+      p.subject = { ...p.subject, variant: n++ };
       if (dryRun) { job.results.push({ contactId: p.contactId, name: p.name, group: p.group, status: "would draft", clues: p.subject }); continue; }
       const claim = await recordEvent({
         store, locationId, contactId: p.contactId, party: "investor", type: "pulse_sent", at: iso(now), source: "conversation",

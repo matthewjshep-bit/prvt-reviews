@@ -380,6 +380,17 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
 //
 // Every one of them says "reference the thread so it reads as a continuation",
 // because the failure mode of an unprompted text is sounding like a broadcast.
+// Ten of these go out a day. The first live batch (2026-09-18) came back as
+// the same three sentences in the same order with the city swapped — which is
+// what a carrier filters and what a buyer reads as another blast. The runner
+// rotates these; each is a different way in, not a different message.
+const PULSE_SHAPES = [
+  "SHAPE FOR THIS ONE: open with the question itself, then who you are, then the reason. Do NOT use the purchase clue in this one.",
+  "SHAPE FOR THIS ONE: if there is a purchase city above, open with having noticed they picked something up there, as a peer would; then the question. Keep who-you-are to a clause.",
+  "SHAPE FOR THIS ONE: open with who you are and that what we sent missed; then make a GUESS at what they buy from where/what they seem to do (\"guessing flips around Auburn is still your lane?\") and ask them to correct you. Do NOT use the purchase clue in this one.",
+  "SHAPE FOR THIS ONE: shortest version you can write that still has their name, the question and the reason — two sentences. No clue at all.",
+];
+
 const START = "YOU ARE STARTING THIS MESSAGE — nothing new came in.";
 const CONTINUE = "Reference the thread so it reads as a continuation.";
 
@@ -554,6 +565,8 @@ export function outboundOpening(outbound) {
             : "One line on who you are: a Seattle investor who wholesales the deals you're too busy to do yourself. "}` +
         `(3) The ask, as ONE question: are they looking to buy right now, and what's their buy box — so what you send is ` +
         `actually relevant to them. ` +
+        `${PULSE_SHAPES[(Number(o.variant) || 0) % PULSE_SHAPES.length]} ` +
+        `Always give the reason for asking in your own words — so what you send them is actually relevant. ` +
         `Use at most ONE clue from above, and only if it makes the text warmer; never list what you know about them, ` +
         `never mention records, lenders, streets, prices or how many properties they own. If the thread shows they ` +
         `already told us what they buy, confirm it instead of asking again. ` +

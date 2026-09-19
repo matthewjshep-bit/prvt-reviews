@@ -1868,7 +1868,8 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     return { kind, address: "", dealsSent: Number(p.dealsSent) || 0, conversed: Boolean(p.conversed), passed: Number(p.passed) || 0,
       lookedAtDeals: Boolean(p.lookedAtDeals), boughtFromUs: Boolean(p.boughtFromUs),
       lastBuyCity: String(p.lastBuyCity || ""), lastBuyYear: p.lastBuyYear || null, purchases: Number(p.purchases) || 0,
-      cities: (p.cities || []).slice(0, 3), types: (p.types || []).slice(0, 3), buyBox: String(p.buyBox || "").slice(0, 200) };
+      cities: (p.cities || []).slice(0, 3), types: (p.types || []).slice(0, 3), buyBox: String(p.buyBox || "").slice(0, 200),
+      variant: Number(p.variant) || 0 };
   }
   if (kind === "outreach_open") {
     // What we know about the listing, for the introduction. Price and days

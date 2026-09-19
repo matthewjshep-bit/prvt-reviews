@@ -147,3 +147,14 @@ test("a run that died is tried again that afternoon, and the dead run's buyers a
   await done();
   assert.deepEqual(s.calls.map((c) => c.contactId), ["b"]);
 });
+
+test("each text in a day gets a different way in, and a second batch carries on rather than starting over", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  const s = starter(Array.from({ length: 6 }, (_, i) => buyer(`b${i}`, { score: 50 - i })));
+  startBuyerPulse({ locationId: "LOC", saved: saved(), store, deps: s, now: NOW, limit: 2 });
+  await done();
+  startBuyerPulse({ locationId: "LOC", saved: saved(), store, deps: s, now: NOW + HOUR, limit: 2 });
+  await done();
+  assert.deepEqual(s.calls.map((c) => c.subject.variant), [0, 1, 2, 3]);
+});
