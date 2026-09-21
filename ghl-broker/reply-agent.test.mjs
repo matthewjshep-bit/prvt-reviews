@@ -3661,3 +3661,16 @@ test("a buyer tagged hands-off gets no pulse check drafted at all", async () => 
   assert.equal(job.status, "held");
   assert.equal(drafted, 0);
 });
+
+/* ---------- the GHL workflow's first text is not a person in the thread ---------- */
+
+test("an agent who answers the workflow's first text within minutes gets an answer, not 'you have the thread'", async () => {
+  const stamp = (minAgo) => new Date(Date.now() - minAgo * 60000).toISOString().slice(0, 16).replace("T", " ");
+  const store = fakeStore([]);
+  const first = `[${stamp(5)}] US sms: Hi Brenton, came across your listing at 719 S Sprague Ave. I'm in Seattle and looking for my next flip project anywher in greater Seatac. Is this one a bit of a project, or pretty turnkey? And if you've got other fixers on your radar, I'm all ears. No worries if not can stop Thanks, Matt\n[${stamp(1)}] THEM sms: It's already been flipped`;
+  assert.equal(await humanHasThread({ store, locationId: "LOC", contactId: "c1", transcript: first, minutes: 30 }), null);
+  const followUp = `[${stamp(5)}] US sms: Hey Brenton, circling back on fixers in your area. No worries if not can stop\n[${stamp(1)}] THEM sms: nothing right now`;
+  assert.equal(await humanHasThread({ store, locationId: "LOC", contactId: "c1", transcript: followUp, minutes: 30 }), null, "the follow-up workflow's template too");
+  const typed = `[${stamp(5)}] US sms: Hey Brenton, Matt here, I'll call you in ten about Sprague.\n[${stamp(1)}] THEM sms: ok`;
+  assert.ok(await humanHasThread({ store, locationId: "LOC", contactId: "c1", transcript: typed, minutes: 30 }), "a text a person typed still holds the bot");
+});

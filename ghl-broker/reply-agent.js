@@ -1192,6 +1192,8 @@ export function roundsFromBook(n, allowed) {
 // Our first text to an agent about their listing (outreach_open): a reply to it
 // is them answering us, not something for a person to decide.
 export const OUTREACH_OPEN_RX = /\bcame across your listing\b/i;
+// The opt-out line every one of Matt's GHL workflow templates ends on.
+export const WORKFLOW_FOOTER_RX = /\bno worries if not,? can stop\b/i;
 export async function humanHasThread({ store, locationId, contactId, transcript, minutes = 30, now = Date.now() }) {
   if (!minutes || !contactId) return null;
   const last = lastOutbound(transcript);
@@ -1203,6 +1205,13 @@ export async function humanHasThread({ store, locationId, contactId, transcript,
   // app, not a person: Julie Nutley's thanks was dismissed as "you answered it
   // yourself" because the offer had just gone out ahead of it (2026-09-15).
   if (OUR_OFFER_TEXT_RX.test(String(last.text || ""))) return null;
+  // A GHL workflow's template is a machine too. The outreach workflow texts a
+  // new agent and the fast ones answer inside the half hour: Paul Redal ("it's
+  // all cosmetic"), Brenton Holland and Andre Bohall (2026-09-21) each got
+  // silence, held as "you replied to them 6 minutes ago — you have the
+  // thread". The first text's own words, or the templates' footer, which no
+  // person types.
+  if (OUTREACH_OPEN_RX.test(String(last.text || "")) || WORKFLOW_FOOTER_RX.test(String(last.text || ""))) return null;
   return { at: new Date(last.ts).toISOString(), minutesAgo: Math.max(0, Math.round((now - last.ts) / 60000)) };
 }
 
