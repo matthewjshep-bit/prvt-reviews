@@ -382,3 +382,19 @@ test("the agent context carries the come-down through to the gate's stale list",
   assert.ok(ctx.staleAmounts.includes(71075));
   assert.ok(ctx.amounts.includes(65000));
 });
+
+test("a deal soft-committed to another buyer is not brought up to someone new", () => {
+  const soft = deal({ deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000, investors: [{ contactId: "other", name: "Other Buyer", status: "soft_commit" }] } });
+  const ctx = buildInvestorContext({ investor: INVESTOR, deals: [{ offer: soft }], contactId: "c1", now: NOW });
+  assert.equal(ctx.text.includes("2010 NE 54th St"), false, "not a candidate, and its numbers are nowhere in what the bot reads");
+  assert.match(ctx.text, /LIVE DEALS THAT FIT THEIR BUY BOX: none right now/);
+  assert.equal(ctx.amounts.includes(445000), false, "so the money guard would hold a draft that quoted it anyway");
+  assert.equal(ctx.summary.matchingDeals, 0);
+});
+
+test("the soft-commit buyer themselves, and a buyer it was already sent to, still have the deal to talk about", () => {
+  const mine = deal({ deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000, investors: [{ contactId: "c1", status: "soft_commit" }] } });
+  assert.match(buildInvestorContext({ investor: INVESTOR, deals: [{ offer: mine }], contactId: "c1", now: NOW }).text, /DEALS THEY ARE ALREADY ON[^]*2010 NE 54th St/);
+  const theirs = deal({ deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000, investors: [{ contactId: "other", status: "soft_commit" }, { contactId: "c1", status: "evaluating" }] } });
+  assert.match(buildInvestorContext({ investor: INVESTOR, deals: [{ offer: theirs }], contactId: "c1", now: NOW }).text, /DEALS THEY ARE ALREADY ON[^]*2010 NE 54th St/, "a soft commit is a maybe — nobody already looking is told it's gone");
+});

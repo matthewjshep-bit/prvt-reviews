@@ -12,7 +12,7 @@
 // The loaders do I/O; the builders are pure and tested.
 
 import { fmtMoney } from "./shared/offer-calc.js";
-import { effectiveStatus, offerHeat, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor } from "./shared/offer-status.js";
+import { effectiveStatus, offerHeat, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused } from "./shared/offer-status.js";
 import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybox.js";
 import { dealToQuery } from "./dispo.js";
 import { dealNumbers } from "./dataroom.js";
@@ -542,6 +542,14 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
       if (link || blasted) gone.push({ address: offer.address || "a property", stage: "spoken_for", at: offer.deal.updatedAt || "", theirs: link?.status || null, reason: reasonWords(link?.reason) });
       continue;
     }
+    // Soft-committed to someone else: outreach on it is paused, and the bot
+    // offering it in a reply IS outreach. Gunnar Eklund (2026-09-21) asked for
+    // anything near Lake Stevens and was pitched 23706 138th Dr SE, numbers
+    // and all, with a soft commit on it. A buyer already on the deal keeps it
+    // — a soft commit is a maybe, and nobody looking is told it's gone — but
+    // it is never brought up to anyone new, and its numbers stay out of what
+    // the bot may say.
+    if (!link && !blasted && dealOutreachPaused(offer.deal)) continue;
     const n = investorFacingPrice({ offer, room, settings });
     // A price the investor band agreed with THIS buyer is their price from
     // here on. What they must never hear grows with it: the fee they are
