@@ -281,8 +281,14 @@ export async function draftReply({
 export function isTurnkeyReply(message = "") {
   const t = String(message || "");
   const done = /\b(turn[\s-]?key|move[\s-]?in[\s-]?ready|(?:fully|completely|recently|totally|newly|just)\s+(?:renovated|remodell?ed|updated|redone|flipped)|(?:was|been|is|it's|its)\s+(?:renovated|remodell?ed|flipped)|no\s+work\s+(?:needed|to\s+do|required)|doesn'?t\s+need\s+(?:any(?:thing)?\s+)?work|nothing\s+to\s+(?:do|fix))\b/i;
-  const needsWork = /\b(needs?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+)?(?:work|tlc|love|repairs?|updating)|fix[\s-]?ups?|fixer|project|tlc|dated|as[\s-]?is|handyman|rough|distressed)\b/i;
-  return done.test(t) && !needsWork.test(t);
+  const needsWork = /\b(needs?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+)?(?:work|tlc|love|repairs?|updating)|fix[\s-]?ups?|fixer|project|tlc|dated|as[\s-]?is|handyman|rough|distressed|cosmetics?|(?:never|not|poorly)\s+maintained|deferred\s+maintenance)\b/i;
+  if (!done.test(t) || needsWork.test(t)) return false;
+  // "No, it's not turnkey, but it's all cosmetic" (Paul Redal, 2026-09-21)
+  // answers our own "project or turnkey?" with a no — and read as turnkey, so a
+  // house that needs work went to Tier 2 with no underwrite. A turnkey word
+  // with a negation just ahead of it is the opposite of turnkey.
+  const negated = new RegExp(`\\b(?:not|isn'?t|is\\s+not|wasn'?t|never|hardly|far\\s+from|no\\s+longer|nothing(?:\\s+has|\\s+was)?(?:\\s+been)?|hasn'?t\\s+been|needs?\\s+to\\s+be)\\s+(?:\\w+\\s+){0,2}?(?:${done.source})`, "i");
+  return !negated.test(t);
 }
 
 /**

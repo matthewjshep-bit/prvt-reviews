@@ -3674,3 +3674,17 @@ test("an agent who answers the workflow's first text within minutes gets an answ
   const typed = `[${stamp(5)}] US sms: Hey Brenton, Matt here, I'll call you in ten about Sprague.\n[${stamp(1)}] THEM sms: ok`;
   assert.ok(await humanHasThread({ store, locationId: "LOC", contactId: "c1", transcript: typed, minutes: 30 }), "a text a person typed still holds the bot");
 });
+
+import { isTurnkeyReply } from "./reply-agent.js";
+
+test("'No, it's not turnkey, but it's all cosmetic' is a house that needs work, not a turnkey one", () => {
+  assert.equal(isTurnkeyReply("No, it's not turnkey, but it's all cosmetic. It's a really nice house. It was custom built but never maintained built in nineteen ninety"), false);
+  assert.equal(isTurnkeyReply("not turn key at all"), false);
+  assert.equal(isTurnkeyReply("It isn't move-in ready"), false);
+  assert.equal(isTurnkeyReply("far from turnkey"), false);
+  assert.equal(isTurnkeyReply("nothing has been renovated"), false);
+  assert.equal(isTurnkeyReply("it's cosmetic, never maintained"), false);
+  assert.equal(isTurnkeyReply("This one is pretty turnkey with tenants in place"), true);
+  assert.equal(isTurnkeyReply("Its turnkey, no work needed"), true);
+  assert.equal(isTurnkeyReply("Not much to do, it was fully renovated last year"), true, "a 'not' about something else doesn't undo it");
+});
