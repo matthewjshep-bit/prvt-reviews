@@ -128,7 +128,7 @@ export default function PipelineView({ section = "queue" }) {
                 {data.daytime.stopped ? `, ${data.daytime.stopped} left alone by the brake` : ""}{data.daytime.error ? `. It failed: ${data.daytime.error}` : "."}
               </p>
             )}
-            <ActionQueue actions={actions} draftsById={draftsById} sendsEnabled={data?.sendsEnabled}
+            <ActionQueue actions={actions} draftsById={draftsById} sendsEnabled={data?.sendsEnabled} rowFeedback={data?.rowFeedback || {}}
               serverOffsetMs={offsetRef.current} onDone={refresh} highlightDraftId={highlightDraftId} onShowDraft={showDraft} />
           </div>
         </>

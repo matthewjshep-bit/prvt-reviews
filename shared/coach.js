@@ -21,6 +21,9 @@
 import { PARTIES, INTENTS, OUTBOUND_INTENTS, DRAFT_FEEDBACK_LABEL, draftStats } from "./conversation-ai.js";
 import { verdictsIn } from "./graduation.js";
 import { PROMISE_DISMISS_LABEL } from "./promise-resolver.js";
+import { ROW_FEEDBACK_EVENT, ROW_FEEDBACK_LABEL, LEARNABLE_FEEDBACK, feedbackEvidenceId } from "./row-feedback.js";
+import { ACTION_KINDS } from "./pipeline.js";
+import { AUDIT_KINDS } from "./conversation-audit.js";
 
 export const COACH_KINDS = ["example", "rule", "instruction", "code_gap"];
 export const COACH_KIND_LABEL = {
@@ -53,6 +56,17 @@ const personDismissed = (d) => d.status === "dismissed" && !d.answeredBy
   && (d.dismissedBy === "you" || !(d.flags || []).some((f) => BINNED_BY_THE_MACHINE.test(f)));
 
 const when = (d) => d.sentAt || d.dismissedAt || d.heldAt || d.updatedAt || d.createdAt;
+// A Today row's kind in the words the page uses ("From last night: Texts we never answered").
+const kindLabelOf = (rowKind, auditKind = "") => {
+  const k = ACTION_KINDS.find((x) => x.key === rowKind);
+  if (k) return k.label;
+  if (rowKind === "audit_owed" || auditKind) {
+    const a = AUDIT_KINDS.find((x) => x.key === auditKind);
+    return a ? `From last night: ${a.label}` : "From last night";
+  }
+  if (rowKind === "draft" || rowKind === "draft_waiting") return "Drafts waiting on you";
+  return String(rowKind || "a row on Today").replace(/_/g, " ");
+};
 const base = (d) => ({
   id: d.id, party: d.party || "agent", intent: d.intent || "other", kind: d.outbound?.kind || null,
   theySaid: clip(d.inbound), botWrote: clip(d.reply),
@@ -88,6 +102,23 @@ export function gatherSignals({ drafts = [], audit = null, stats = null, errors 
     .filter((e) => e?.type === "promise_kept" && e.data?.by === "dismissed" && e.data?.reason?.code && ms(e.at) >= from && ms(e.at) <= now)
     .sort((a, b) => ms(b.at) - ms(a.at)).slice(0, SIGNAL_CAP)
     .map((e) => ({ id: e.data.draftId || null, code: e.data.reason.code, label: PROMISE_DISMISS_LABEL[e.data.reason.code] || e.data.reason.code, note: clip(e.data.reason.note, 300), botWrote: clip(e.data.ourText) }));
+
+  // "What should the bot have done?" said on a Today row (row-feedback.js):
+  // the owner's direct verdict on what the machine did, the strongest signal
+  // here. The row is shown by its kind, its detail and the message, never
+  // its title (a name and a street). "Right to hand it to me" is shown
+  // apart, with no id, so nothing can be built on it.
+  const fbAll = (promiseEvents || [])
+    .filter((e) => e?.type === ROW_FEEDBACK_EVENT && e.data?.category && ms(e.at) >= from && ms(e.at) <= now)
+    .sort((a, b) => ms(b.at) - ms(a.at));
+  const fbRow = (e) => ({
+    rowKind: e.data.rowKind || "", kindLabel: kindLabelOf(e.data.rowKind, e.data.auditKind), category: e.data.category,
+    label: ROW_FEEDBACK_LABEL[e.data.category] || e.data.category, note: clip(e.data.note, 300), detail: clip(e.data.detail, 200),
+    party: e.data.party || null, intent: e.data.intent || null,
+  });
+  const rowFeedback = fbAll.filter((e) => LEARNABLE_FEEDBACK.has(e.data.category)).slice(0, SIGNAL_CAP)
+    .map((e) => ({ id: feedbackEvidenceId(e), ...fbRow(e), draftId: e.data.draftId || null, theySaid: clip(e.data.theySaid), botWrote: clip(e.data.botWrote) }));
+  const counterEvidence = fbAll.filter((e) => !LEARNABLE_FEEDBACK.has(e.data.category)).slice(0, SIGNAL_CAP).map(fbRow);
 
   // Why the gates stopped a draft, counted: one flag seen nine times is a
   // pattern; nine flags seen once are a Tuesday.
@@ -125,12 +156,13 @@ export function gatherSignals({ drafts = [], audit = null, stats = null, errors 
 
   const errs = (errors || []).slice(0, 15).map((e) => ({ fingerprint: e.fingerprint, area: e.area, message: clip(e.message, 300), count: e.count, context: e.context || {} }));
 
-  const counts = { edits: edits.length, dismissals: dismissals.length, yours: yours.length, held: held.length, blocked: blocked.length, needsHuman: needsHuman.length, promiseDismissals: promiseDismissals.length, weakIntents: weakIntents.length, auditFindings: (audit?.findings || []).length, errors: errs.length };
-  const knownIds = [...new Set([...edits, ...dismissals, ...yours, ...held, ...needsHuman, ...promiseDismissals.filter((r) => r.id)].map((r) => r.id).concat(blocked.flatMap((b) => b.draftIds)))];
+  const counts = { edits: edits.length, dismissals: dismissals.length, yours: yours.length, held: held.length, blocked: blocked.length, needsHuman: needsHuman.length, promiseDismissals: promiseDismissals.length, rowFeedback: rowFeedback.length, counterEvidence: counterEvidence.length, weakIntents: weakIntents.length, auditFindings: (audit?.findings || []).length, errors: errs.length };
+  const knownIds = [...new Set([...edits, ...dismissals, ...yours, ...held, ...needsHuman, ...promiseDismissals.filter((r) => r.id), ...rowFeedback].map((r) => r.id)
+    .concat(blocked.flatMap((b) => b.draftIds), rowFeedback.map((r) => r.draftId).filter(Boolean)))];
   // Something a person DID, or something that broke. A quiet day with only
   // audit findings is the audit's business, not a lesson.
-  const empty = !(edits.length || dismissals.length || yours.length || held.length || promiseDismissals.length || blocked.length || errs.length || auditErrors.length);
-  return { since: new Date(from).toISOString(), until: new Date(now).toISOString(), edits, dismissals, yours, held, promiseDismissals, blocked, needsHuman, weakIntents, auditKinds, auditErrors, errors: errs, counts, knownIds, empty };
+  const empty = !(edits.length || dismissals.length || yours.length || held.length || promiseDismissals.length || rowFeedback.length || blocked.length || errs.length || auditErrors.length);
+  return { since: new Date(from).toISOString(), until: new Date(now).toISOString(), edits, dismissals, yours, held, promiseDismissals, rowFeedback, counterEvidence, blocked, needsHuman, weakIntents, auditKinds, auditErrors, errors: errs, counts, knownIds, empty };
 }
 
 /* ---------- what the model is asked ---------- */
@@ -144,6 +176,12 @@ You may propose four kinds of change:
 - "code_gap": something no wording can fix — a bug, a gate that fires wrongly, a missing capability, a repeated runtime error. Give a title, the suspected area, and a one-sentence test that would fail today.
 
 The data may include "promiseDismissals": times the app told the owner "we owe them a number" or "an answer" and the owner closed it by hand. botWrote is the text that was read as a promise. When the reason is "We didn't owe anything" more than once, the app is misreading what the bot says as a promise: that is a code_gap, citing those ids.
+
+The data may include "rowFeedback": the owner saying directly, on a row of the app's to-do page, what the bot should have done. This is the strongest signal you have; one of these can be enough. Each carries an id starting "fb:" (cite it as evidence), the row's kind, the owner's note, and where there is one, the message (theySaid) and the bot's draft (botWrote). Read the category:
+- "Should have replied itself": the bot held or stayed out when it could have answered. Propose an instruction or a rule for that situation. If it was held by a gate, an auto-send switch or a "person's call" rule, that is a code_gap — never a rule that tells the bot to skip a gate.
+- "Should have taken an action": the bot should have sent the offer, run the numbers, marked a status, tagged, or booked. Propose a code_gap that names the action and the situation.
+- "Wrong read of the message": it misread the intent, the party, the address or the number. Propose an example (when the owner's note says what the right reading was) or a rule.
+"counterEvidence" lists rows the owner marked "Right to hand it to me": nothing to learn, and never build a lesson on them. If a rowFeedback note contradicts the current guidance, say so in "why" and propose the change.
 
 Hard limits. Break one and the proposal is thrown away:
 - Never mention a dollar amount, a percentage, a fee, earnest money, what the company may or may not commit to, auto-send, or the counter band. Those are set by hand.
@@ -166,7 +204,7 @@ export const COACH_SCHEMA = {
           party: { type: "string", enum: [...PARTIES, "any"] },
           intent: { type: "string", description: "The intent this is mostly about, when there is one." },
           why: { type: "string", description: "One sentence the owner will read: what you saw that led to this." },
-          evidence: { type: "array", items: { type: "string" }, description: "Draft ids from the data." },
+          evidence: { type: "array", items: { type: "string" }, description: "Draft ids, or fb: feedback ids, from the data." },
           theySaid: { type: "string" }, weSay: { type: "string" },
           text: { type: "string", description: "The rule or the instruction." },
           replaces: { type: "string", description: "The exact existing rule text, or example id, this supersedes. Omit if none." },
@@ -194,7 +232,10 @@ export function buildCoachContext({ signals, config = {} } = {}) {
 /* ---------- validate ---------- */
 
 const MONEY = /\$|\b\d{1,3}(,\d{3})+\b|\b\d{4,}\b|\b\d+(\.\d+)?\s?(k|m|mm|percent|pct)\b|%/i;
-const HANDS_OFF = /\b(fees?|assign(ment|ing)?|wholesal\w*|earnest|emd|auto-?send\w*|counter[- ]?band|ceiling|may ?(not )?commit|commit to|margin|spread)\b/i;
+// …and nothing that would talk the bot around its own gates. A "Should have
+// replied itself" note on a held reply must become a code_gap, not a rule
+// that says "skip the review".
+const HANDS_OFF = /\b(fees?|assign(ment|ing)?|wholesal\w*|earnest|emd|auto-?send\w*|counter[- ]?band|ceiling|may ?(not )?commit|commit to|margin|spread|never[_ -]?auto|guarded[_ -]?auto|gates?|bypass|without (a |the )?(review|approval))\b/i;
 const PHONE = /\+?\d[\d\s().-]{8,}\d/;
 const EMAIL = /[^\s@<>"']+@[^\s@<>"']+\.[a-z]{2,}/i;
 const STREET = /\b\d{1,6}\s+(?:[NSEW]{1,2}\.?\s+)?[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,3}\s+(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|way|blvd|boulevard|ct|court|pl|place|pkwy|parkway|hwy|highway|ter|terrace|cir|circle|loop|trl|trail)\b\.?/i;
@@ -411,7 +452,7 @@ export function issueFor(p, { names = [] } = {}) {
     `**What the coach saw:** ${s(p.why)}`,
     p.suspectedArea ? `**Suspected area:** ${s(p.suspectedArea)}` : "",
     p.suggestedTest ? `**A test that should fail today:** ${s(p.suggestedTest)}` : "",
-    p.evidence?.length ? `**Evidence:** draft ids ${p.evidence.map((id) => `\`${id}\``).join(", ")} (read them in the app; thread text is not copied here)` : "",
+    p.evidence?.length ? `**Evidence:** draft / feedback ids ${p.evidence.map((id) => `\`${id}\``).join(", ")} (read them in the app; thread text and notes are not copied here)` : "",
     "",
     "_Filed from the nightly coach. Rules for the fix are in CLAUDE.md and .claude/coach-agent.md._",
   ].filter((l) => l !== "").join("\n\n");

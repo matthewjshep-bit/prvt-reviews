@@ -75,7 +75,7 @@ export const EVENT_LABEL = {
   realm_yes: "number was in the realm", realm_no: "number was not in the realm",
   deal_promoted: "under contract", deal_stage: "deal stage changed",
   investor_evaluating: "evaluating the deal", investor_committed: "committed buyer", investor_passed: "passed on the deal",
-  feedback: "feedback on the deal",
+  feedback: "feedback on the deal", row_feedback: "you told the bot what it should have done",
   blast_sent: "deal blasted to them", dataroom_sent: "dataroom link sent", dataroom_viewed: "opened the dataroom",
   call_summary: "call", text_summary: "text conversation", note: "note",
   enrich_run: "AI enrichment ran", tag_added: "tag added", tag_removed: "tag removed",

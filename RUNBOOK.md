@@ -1443,6 +1443,45 @@ The bot used to get better only when Matt noticed a bad reply and said so in a c
 
 Switch: Conversation AI tab → Nightly coach (`conversationAi.coach { enabled, hour }`). **Off by default.** The autonomy dial does not touch it, since it sends nothing. Routes: `GET /api/dashboard/coach`, `POST /api/dashboard/coach/run { dryRun }`, `POST /api/dashboard/coach/:id/{apply,reject,revert,file,preview}`. State: table `coach_proposals`; run state on `job_cursors` name `coach` (the audit's gate: cursor written before the run, stale run retried, 3 tries a night). `coachedThrough` on the cursor is the bookmark, so a missed night is read the next one (72h at most).
 
+### Teaching the bot from Today (2026-09-22)
+
+Every row on Today is a place the bot stopped and a person had to act. Matt
+asked to say, on each one, what the bot should have done instead, and to
+have that feed the coach. **Teach it** on every row — drafts, "From last
+night", held underwrites, owed numbers, timers, pulse checks — opens four
+chips and a note (300 chars): *Should have replied itself · Should have
+taken an action · Wrong read of the message · Right to hand it to me*. It is
+separate from resolving the row: saving changes nothing about the row, and
+the draft chips ("What was wrong with it?") stay where they were. The row then
+reads "noted · <category>"; a second save is a newer verdict.
+
+- **Where it lives.** One `contact_events` row of type `row_feedback` per
+  save (`shared/row-feedback.js`; the write is `ghl-broker/row-feedback.js`
+  `recordRowFeedback`). `data` carries the row id and kind, the category and
+  note, and — read from the draft on the broker, never from the client —
+  what they said, what the bot wrote, the party and the intent. Newest per
+  row wins (`latestRowFeedback`). A row with no contact (a blast) is filed
+  under the sentinel contact `_today`, so no profile is made up. Draft rows
+  are keyed `draft:<draftId>`; every other row by its pipeline id.
+- **Routes.** `POST /api/dashboard/feedback` writes it; `GET
+  /api/dashboard/pipeline` returns `rowFeedback` by row id and sets
+  `feedback` on each action.
+- **What the coach does with it.** `gatherSignals` shows the model
+  `rowFeedback` (the three learnable categories, each with an `fb:<eventId>`
+  it may cite, plus the draft id behind it) and `counterEvidence` ("Right to
+  hand it to me", no id: nothing may be built on it). Per category: should
+  have replied → an instruction or rule, unless a gate or a person's-call rule
+  held it, which is a `code_gap`; should have acted → a `code_gap` naming the
+  action; wrong read → an example or a rule. A night with only feedback is not
+  a quiet night. `HANDS_OFF` was tightened at the same time: a rule naming
+  never-auto, guarded-auto, the gates, "bypass" or "without review" is dropped
+  — the bot is never talked around its own gates by a rule.
+- **What is never done.** Nothing is applied on its own (Apply on the Learned
+  card, Matt's 2026-09-17 decision); no new send or spend switch; the note is
+  never logged and never leaves the app unscrubbed (issues carry ids and a
+  scrubbed `why`); the row's title (a name and a street) is kept in `data`
+  and not shown to the model.
+
 ### Durable errors (2026-09-17)
 
 Failures in the reply agent, proactive drafts, the underwriter, the 15-minute sweep and the coach used to live in Render's log or on an in-memory job a redeploy forgets. `recordError` (`ghl-broker/app-errors.js`) keeps them in `app_errors`, one row per distinct failure (fingerprint of area + message with ids and numbers flattened), counted. The message has phones and emails knocked out and the context is ids only. It never throws. The coach reads the night's rows; a repeated one becomes a `code_gap`.

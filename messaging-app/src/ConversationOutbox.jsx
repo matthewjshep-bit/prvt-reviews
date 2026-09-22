@@ -13,6 +13,7 @@ import { PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
 import { applyDraftAction, dismissReplyDraft, getContactThread, offerEditorUrl, holdReplyDraft, resumeConversationBot, sendReplyDraft } from "./api.js";
 import ContactLink from "./ContactLink.jsx";
 import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
+import RowFeedback from "./RowFeedback.jsx";
 
 export const LIVE = new Set(["queued", "running"]);
 
@@ -153,7 +154,10 @@ function ThreadPeek({ contactId }) {
   );
 }
 
-export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, offerId = null }) {
+// `rowKind` / `feedback`: the Today row this draft sits in and what you have
+// already taught it about this row (shared/row-feedback.js). The control
+// renders on every draft, here and in the outbox.
+export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, offerId = null, rowKind = "draft", feedback = null }) {
   // The offer this draft is about, when the caller knows it (Today's queue does).
   const offerHref = (offerId || d.outbound?.offerId) ? offerEditorUrl(offerId || d.outbound.offerId) : null;
   const [showThread, setShowThread] = useState(false);
@@ -417,6 +421,10 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, o
             <Send size={13} /> {busy === "send" ? "Sending…" : scheduled ? "Send now" : "Send"}
           </button>
         </div>
+      </div>
+      <div className="mt-1.5">
+        <RowFeedback rowId={`draft:${d.id}`} rowKind={rowKind} feedback={feedback}
+          item={{ contactId: d.contactId, draftId: d.id, offerId: offerId || d.outbound?.offerId || null, address: d.propertyAddress || "", detail: d.autoSend?.reason || (d.flags || [])[0] || "" }} />
       </div>
     </li>
   );

@@ -160,8 +160,8 @@ export function CoachBody({ coach, error = "", running = false, onRun, onDone: l
       {last && last.status !== "error" && (
         <div className="mb-2 text-sm text-slate-600">
           {last.skipped
-            ? <>Nothing to learn from — nobody edited, dismissed or broke anything.</>
-            : <>Read <b>{c?.edits ?? 0}</b> edits · <b>{c?.dismissals ?? 0}</b> dismissals · <b>{c?.yours ?? 0}</b> you answered yourself · <b>{c?.errors ?? 0}</b> errors. {last.summary}</>}
+            ? <>Nothing to learn from — nobody edited, dismissed, taught or broke anything.</>
+            : <>Read <b>{c?.edits ?? 0}</b> edits · <b>{c?.dismissals ?? 0}</b> dismissals · <b>{c?.yours ?? 0}</b> you answered yourself · <b>{c?.rowFeedback ?? 0}</b> you taught it · <b>{c?.errors ?? 0}</b> errors. {last.summary}</>}
           {last.dropped?.length ? <span className="text-slate-400"> · {last.dropped.length} idea{last.dropped.length === 1 ? "" : "s"} thrown out ({[...new Set(last.dropped.map((d) => d.reason))].slice(0, 2).join("; ")})</span> : null}
         </div>
       )}

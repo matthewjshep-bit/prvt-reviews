@@ -35,3 +35,8 @@ test("a failed run says so, and a quiet night says there was nothing to learn", 
   expect(renderToStaticMarkup(<CoachBody coach={{ ...base, last: { status: "error", error: "overloaded" } }} />)).toContain("The last run failed: overloaded");
   expect(renderToStaticMarkup(<CoachBody coach={{ ...base, last: { status: "done", skipped: "nothing to learn from" } }} />)).toContain("Nothing to learn from");
 });
+
+test("the card counts what you taught it", () => {
+  const html = renderToStaticMarkup(<CoachBody coach={{ ...base, last: { trigger: "daily", status: "done", finishedAt: "2026-09-23T03:21:00Z", counts: { edits: 0, dismissals: 0, yours: 0, rowFeedback: 3, errors: 0 }, summary: "", dropped: [] } }} />);
+  expect(html).toContain("<b>3</b> you taught it");
+});

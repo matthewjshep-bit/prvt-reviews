@@ -78,7 +78,9 @@ export async function runCoach({ locationId, saved = {}, store = defaultStore, d
     store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null),
     store.listAppErrorsSince?.(locationId, iso(from)).catch(() => []) || [],
     store.listCoachProposals?.(locationId, { since: iso(now - 120 * 86400000), limit: 500 }).catch(() => []) || [],
-    store.listContactEventsSince?.(locationId, iso(from), { types: ["promise_kept"], limit: 500 }).catch(() => []) || [],
+    // Promise rows dismissed by hand, and "what should the bot have done?"
+    // said on any Today row (shared/row-feedback.js).
+    store.listContactEventsSince?.(locationId, iso(from), { types: ["promise_kept", "row_feedback"], limit: 500 }).catch(() => []) || [],
   ]);
   const signals = gatherSignals({ drafts: recent, audit: auditCursor?.doc?.last || null, stats: draftStats(recent), errors, promiseEvents, since: iso(from), now });
   const out = { since: signals.since, until: signals.until, counts: signals.counts, summary: "", proposed: 0, kept: [], dropped: [], skipped: "", dryRun };

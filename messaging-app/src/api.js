@@ -507,6 +507,8 @@ export const getDashboardAudit = () => fetch(`${API_BASE}/api/dashboard/audit?${
 // Close an "Owed a number" row by hand. `reason` is { code, note } from
 // PROMISE_DISMISS_REASONS; the nightly coach reads it.
 export const dismissPromise = (contactId, address = "", reason = null) => post(`/api/dashboard/promises/dismiss`, { contactId, address, reason });
+// "What should the bot have done?" on any Today row (shared/row-feedback.js). The nightly coach reads it.
+export const sendRowFeedback = (body) => post(`/api/dashboard/feedback`, body);
 // A question the bot couldn't answer, answered from Today: drafted to them in
 // our voice (waits in the outbox for Send) and kept as a standing answer.
 export const answerPartnerQuestion = ({ contactId, draftId = null, address = "", question = "", answer, saveAsFact = true }) =>

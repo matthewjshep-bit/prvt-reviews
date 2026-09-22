@@ -212,3 +212,53 @@ test("the coach is shown why a promise row was dismissed", () => {
   assert.equal(s.empty, false, "a dismissed promise is something a person did");
   assert.ok(s.knownIds.includes("d7"), "so a proposal may cite the draft that made the promise");
 });
+
+/* ---------- "what should the bot have done?" from Today (2026-09-22) ---------- */
+
+const fb = (id, category, over = {}) => ({ id, type: "row_feedback", contactId: "c1", at: new Date(NOW - 2 * 3600000).toISOString(),
+  data: { rowId: `audit:unanswered_inbound:c1:${id}`, rowKind: "audit_owed", auditKind: "unanswered_inbound", category, note: "it had the answer in the thread",
+    detail: "scheduling — yours to answer", draftId: "d5", party: "agent", intent: "scheduling", theySaid: "Can you do Tuesday?", botWrote: "Let me check with my partner.", ...over } });
+
+test("the coach is shown what you said the bot should have done on a Today row, with the message and the bot's draft", () => {
+  const s = gatherSignals({ now: NOW, drafts: [], promiseEvents: [fb("e1", "should_have_replied")] });
+  assert.equal(s.rowFeedback.length, 1);
+  assert.deepEqual(s.rowFeedback[0], { id: "fb:e1", rowKind: "audit_owed", kindLabel: "From last night: Texts we never answered", category: "should_have_replied", label: "Should have replied itself",
+    note: "it had the answer in the thread", detail: "scheduling — yours to answer", party: "agent", intent: "scheduling", draftId: "d5", theySaid: "Can you do Tuesday?", botWrote: "Let me check with my partner." });
+  assert.equal(s.counts.rowFeedback, 1);
+  assert.equal(s.empty, false, "a night with only your feedback is not a quiet night");
+  const ctx = buildCoachContext({ signals: s, config: {} });
+  assert.match(ctx, /"rowFeedback"/);
+  assert.match(ctx, /Should have replied itself/);
+  assert.doesNotMatch(ctx, /"title"/, "the row's title (a name and a street) is not shown");
+});
+
+test("a lesson may cite your feedback, and the draft behind it", () => {
+  const s = gatherSignals({ now: NOW, drafts: [], promiseEvents: [fb("e1", "wrong_read")] });
+  assert.ok(s.knownIds.includes("fb:e1") && s.knownIds.includes("d5"));
+  const v = validateProposal({ kind: "rule", text: "A named weekday is a scheduling ask; answer the time question first.", why: "you said it misread the day", evidence: ["fb:e1"] }, { config: {}, knownIds: s.knownIds });
+  assert.equal(v.ok, true, v.reason);
+  assert.deepEqual(v.proposal.evidence, ["fb:e1"]);
+});
+
+test("'right to hand it to me' is shown as counter-evidence and no lesson may be built on it alone", () => {
+  const s = gatherSignals({ now: NOW, drafts: [], promiseEvents: [fb("e2", "right_to_hand_over")] });
+  assert.equal(s.rowFeedback.length, 0);
+  assert.equal(s.counterEvidence.length, 1);
+  assert.equal(s.counterEvidence[0].label, "Right to hand it to me");
+  assert.ok(!("id" in s.counterEvidence[0]), "no id to cite");
+  assert.ok(!s.knownIds.includes("fb:e2"));
+  assert.equal(s.empty, true, "nothing to learn from on its own");
+  const v = validateProposal({ kind: "rule", text: "Answer scheduling questions yourself.", why: "x", evidence: ["fb:e2"] }, { config: {}, knownIds: s.knownIds });
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /cites no draft/);
+});
+
+test("a rule that names the gates or never-auto is dropped — that is a code gap, not a lesson", () => {
+  for (const text of ["Skip the gates when the agent asks for a time.", "Treat scheduling as auto, not NEVER_AUTO.", "Send it without the review.", "Bypass the counter check on small numbers."]) {
+    const v = validateProposal({ kind: "rule", text, why: "x", evidence: ["d1"] }, { config: {}, knownIds: ["d1"] });
+    assert.equal(v.ok, false, text);
+    assert.match(v.reason, /fees, commitments or auto-send/);
+  }
+  const ok = validateProposal({ kind: "rule", text: "When they name a weekday, answer the day before anything else.", why: "x", evidence: ["d1"] }, { config: {}, knownIds: ["d1"] });
+  assert.equal(ok.ok, true, ok.reason);
+});

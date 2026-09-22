@@ -60,8 +60,10 @@ export async function ensureProfile({ store, locationId, contactId, party = null
  * One thing that happened. The dedupe key defaults to the shared scheme, so
  * a replay of the same action is a no-op rather than a second row.
  */
-export async function recordEvent({ store, locationId, contactId, party = null, type, at = nowIso(), address = "", offerId = null, dealId = null, data = {}, source = "operator", ref = null, dedupeKey } = {}) {
-  const event = { party, type, at, address: address || "", offerId, dealId, data: data || {}, source, ref };
+export async function recordEvent({ store, locationId, contactId, id = null, party = null, type, at = nowIso(), address = "", offerId = null, dealId = null, data = {}, source = "operator", ref = null, dedupeKey } = {}) {
+  // `id` is the caller's when it needs to know the row it wrote (row feedback
+  // is cited by its event id); the store makes one otherwise.
+  const event = { ...(id ? { id } : {}), party, type, at, address: address || "", offerId, dealId, data: data || {}, source, ref };
   event.dedupeKey = dedupeKey !== undefined ? dedupeKey : eventDedupeKey(event);
   if (!store?.appendContactEvents || !locationId || !contactId || !type) return { event, inserted: false };
   try {

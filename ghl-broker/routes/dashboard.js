@@ -23,6 +23,8 @@
 
 import { settlePromise, heldTriageForPromises } from "../promise-sweep.js";
 import { recordEvent } from "../contact-record.js";
+import { recordRowFeedback } from "../row-feedback.js";
+import { latestRowFeedback, publicRowFeedback, ROW_FEEDBACK_EVENT, ROW_FEEDBACK_DAYS } from "../shared/row-feedback.js";
 import { answerPartnerQuestion, forgetAnswer } from "../partner-answer.js";
 import express from "express";
 import { store } from "../store.js";
@@ -377,7 +379,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const now = Date.now();
       const since = new Date(now - PIPELINE_EVENT_DAYS * DAY_MS).toISOString();
       const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
-      const [offers, drafts, events, saved, investors, recentDrafts] = await Promise.all([
+      const [offers, drafts, events, saved, investors, recentDrafts, feedbackEvents] = await Promise.all([
         store.listOffers(locationId, { limit: 2000, lean: true }),
         store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }),
         store.listContactEventsSince(locationId, since, { types: PIPELINE_EVENT_TYPES, limit: PIPELINE_EVENT_LIMIT }).catch(() => []),
@@ -387,6 +389,8 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         // autopilot card. One indexed read; the verdicts themselves live on
         // the Conversation AI tab.
         store.listReplyDrafts(locationId, { since: gradSince, limit: 1000 }).catch(() => []),
+        // What you said each row's bot should have done, so the row reads "noted".
+        store.listContactEventsSince(locationId, new Date(now - ROW_FEEDBACK_DAYS * DAY_MS).toISOString(), { types: [ROW_FEEDBACK_EVENT], limit: 2000 }).catch(() => []),
       ]);
       const config = conversationConfig(saved || {});
       const autopilot = autopilotFor({ saved, config, recentDrafts });
@@ -409,7 +413,14 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled")))
         .map((a) => ({ ...a, group: "yours" }));
       out.counts.actions.byGroup.yours += fromLastNight.length;
+      // Feedback by row id, newest per row. Draft rows are keyed
+      // `draft:<draftId>` (the console renders them from `drafts`, and two
+      // drafts on one offer share the pipeline's own id).
+      const rowFeedback = {};
+      for (const [rowId, e] of latestRowFeedback(feedbackEvents, { now })) rowFeedback[rowId] = publicRowFeedback(e);
+      const withFeedback = (a) => (rowFeedback[a.id] ? { ...a, feedback: rowFeedback[a.id] } : a);
       res.json({
+        rowFeedback,
         audit: audit ? { lastRunAt: auditCursor.at, run: auditCursor.doc?.run || null, counts: audit.counts, summary: summarizeAudit(audit), finishedAt: audit.finishedAt, trigger: audit.trigger, dryRun: audit.dryRun, error: audit.error, ghlRead: audit.ghlRead } : null,
         daytime: dayLast ? { finishedAt: dayLast.finishedAt, started: (dayLast.acted || []).filter((a) => ["started", "queued", "clocked"].includes(a.status)).length,
           stopped: (dayLast.acted || []).filter((a) => a.status === "stopped").length, error: dayLast.error || null } : null,
@@ -423,7 +434,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         // row the outbox uses, so send/edit/dismiss/apply come for free.
         drafts,
         ...out,
-        actions: [...out.actions, ...fromLastNight],
+        actions: [...out.actions, ...fromLastNight].map(withFeedback),
       });
     } catch (err) { fail(res, err); }
   });
@@ -445,6 +456,17 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   // that never reached the offer): close the promise so the row leaves Today
   // and the promise sweep stops counting it. Body: { contactId, address?,
   // reason?: { code, note } } — the reason is what the nightly coach reads.
+  // "What should the bot have done?" on any row of Today (shared/row-feedback.js).
+  // Body: { rowId, rowKind, category, note?, contactId?, draftId?, offerId?,
+  // jobId?, auditKind?, address?, title?, detail? }. Writes one contact
+  // event; the nightly coach reads it. It never changes the row.
+  router.post("/feedback", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json(await recordRowFeedback({ store, locationId, body: req.body || {} }));
+    } catch (err) { fail(res, err); }
+  });
+
   router.post("/promises/dismiss", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);

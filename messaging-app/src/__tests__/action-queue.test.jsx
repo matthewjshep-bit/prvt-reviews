@@ -64,3 +64,20 @@ test("machine rows are collapsed under their own heading and carry a Stop; your 
   expect(html).toContain(">Stop<");
   expect(html).not.toContain(">Stuck<");   // nothing is stuck, so the heading isn't there
 });
+
+test("every row on Today, a draft or not, can be taught what the bot should have done", () => {
+  const now = Date.parse("2026-09-20T17:00:00Z");
+  const offers = [{ id: "o1", contactId: "c1", address: "12 Elm St, Renton, WA", cashAmount: 410000, status: "new", createdAt: "2026-09-20T12:00:00Z", sends: [] }];
+  const events = [{ contactId: "c1", type: "promise_owed", at: "2026-09-20T13:00:00Z", address: "12 Elm St, Renton, WA", data: { what: "number", text: "I'll get back to you with a number." } }];
+  const r = buildPipeline({ offers, events, now });
+  const audit = { id: "audit:unanswered_inbound:c9:2026-09-19T19:09:53", kind: "audit_owed", severity: "now", group: "yours", contactId: "c9", contactName: "Melissa W", title: "Melissa W: Texts we never answered", detail: "not drafted: the cap", ops: [{ key: "open_contact", label: "Open the thread", intent: "primary" }],
+    feedback: { category: "should_have_replied", label: "Should have replied itself", note: "", at: "2026-09-20T15:00:00Z" } };
+  const draft = { id: "d1", contactId: "c2", contactName: "Alan R", status: "draft", intent: "buyer_pulse", party: "investor", reply: "Alan, buying right now?", createdAt: "2026-09-20T09:00:00Z", outbound: { kind: "buyer_pulse" } };
+  const draftRow = { id: "draft_waiting:d1", kind: "draft_waiting", severity: "now", group: "yours", contactId: "c2", draftId: "d1", title: "Alan R", ops: [] };
+  const html = renderToStaticMarkup(<ActionQueue actions={[...r.actions, audit, draftRow]} draftsById={{ d1: draft }} sendsEnabled onDone={() => {}}
+    rowFeedback={{ "draft:d1": { category: "right_to_hand_over", label: "Right to hand it to me", note: "", at: "2026-09-20T15:00:00Z" } }} />);
+  expect(r.actions.length).toBeGreaterThan(0);
+  expect((html.match(/>Teach it</g) || []).length).toBe(r.actions.length);   // every untaught row offers it, once
+  expect(html).toContain("noted · Should have replied itself");   // the audit row, from the action itself
+  expect(html).toContain("noted · Right to hand it to me");       // the draft row, from the map
+});

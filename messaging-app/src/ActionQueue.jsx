@@ -15,6 +15,7 @@ import { DraftRow } from "./ConversationOutbox.jsx";
 import ContactLink, { useOpenContact } from "./ContactLink.jsx";
 import { answerPartnerQuestion, forgetStandingAnswer, ghlContactUrl } from "./api.js";
 import { CONFIRM, describeResult, linkFor, runOp } from "./pipeline-ops.js";
+import RowFeedback from "./RowFeedback.jsx";
 
 const SEV = {
   now: { dot: "bg-rose-500", label: "now", cls: "bg-rose-100 text-rose-700" },
@@ -153,7 +154,14 @@ function AnswerBox({ item, onDone }) {
   );
 }
 
-function ActionRow({ item, onDone, onShowDraft, draft, sendsEnabled, serverOffsetMs }) {
+// What the feedback control needs to know about a row — ids only, plus the
+// title and detail as a fallback for rows with no draft behind them.
+const feedbackItemOf = (item) => ({
+  contactId: item.contactId || null, draftId: item.draftId || null, offerId: item.offerId || null, jobId: item.jobId || null,
+  auditKind: item.kind === "audit_owed" ? String(item.id || "").split(":")[1] || "" : "", address: item.address || "", title: item.title || "", detail: item.detail || "",
+});
+
+function ActionRow({ item, onDone, onShowDraft, draft, sendsEnabled, serverOffsetMs, rowFeedback = {} }) {
   const sev = SEV[item.severity] || SEV.fyi;
   const drawer = useOpenContact();
   const [showing, setShowing] = useState(false);
@@ -198,14 +206,16 @@ function ActionRow({ item, onDone, onShowDraft, draft, sendsEnabled, serverOffse
       {item.question && item.ops.some((op) => op.key === "answer") && <AnswerBox item={item} onDone={onDone} />}
       {showing && draft && (
         <ul className="w-full rounded-lg border border-slate-100">
-          <DraftRow draft={draft} offerId={item.offerId} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} />
+          <DraftRow draft={draft} offerId={item.offerId} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone}
+            rowKind={item.kind} feedback={rowFeedback[`draft:${draft.id}`] || null} />
         </ul>
       )}
+      <RowFeedback rowId={item.id} rowKind={item.kind} item={feedbackItemOf(item)} feedback={item.feedback || rowFeedback[item.id] || null} />
     </li>
   );
 }
 
-function KindGroups({ items, draftsById, sendsEnabled, serverOffsetMs, onDone, highlightDraftId, onShowDraft, quiet = false }) {
+function KindGroups({ items, draftsById, sendsEnabled, serverOffsetMs, onDone, highlightDraftId, onShowDraft, quiet = false, rowFeedback = {} }) {
   const groups = [...ACTION_KINDS, ...AUDIT_ACTION_KINDS]
     .map((k) => ({ ...k, items: items.filter((a) => a.kind === k.key) }))
     .filter((g) => g.items.length);
@@ -227,11 +237,12 @@ function KindGroups({ items, draftsById, sendsEnabled, serverOffsetMs, onDone, h
                 if (DRAFT_KINDS.has(g.key) && draftsById[item.draftId]) {
                   return (
                     <li key={item.id} className={item.draftId === highlightDraftId ? "ring-2 ring-inset ring-blue-300" : ""} id={`draft-${item.draftId}`}>
-                      <ul><DraftRow draft={draftsById[item.draftId]} offerId={item.offerId} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} /></ul>
+                      <ul><DraftRow draft={draftsById[item.draftId]} offerId={item.offerId} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone}
+                        rowKind={item.kind} feedback={rowFeedback[`draft:${item.draftId}`] || null} /></ul>
                     </li>
                   );
                 }
-                return <ActionRow key={item.id} item={item} onDone={onDone} onShowDraft={onShowDraft}
+                return <ActionRow key={item.id} item={item} onDone={onDone} onShowDraft={onShowDraft} rowFeedback={rowFeedback}
                   draft={item.draftId ? draftsById[item.draftId] : null} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} />;
               })}
             </ul>
@@ -245,9 +256,9 @@ function KindGroups({ items, draftsById, sendsEnabled, serverOffsetMs, onDone, h
 // Three groups (shared/pipeline.js ACTION_GROUPS): your call, the machine is
 // on it, stuck. Inside each, the same kind-by-kind sections as before. An
 // action with no group (an older broker) is yours.
-export default function ActionQueue({ actions = [], draftsById = {}, sendsEnabled, serverOffsetMs = 0, onDone, highlightDraftId, onShowDraft }) {
+export default function ActionQueue({ actions = [], draftsById = {}, sendsEnabled, serverOffsetMs = 0, onDone, highlightDraftId, onShowDraft, rowFeedback = {} }) {
   const by = (key) => actions.filter((a) => (a.group || "yours") === key);
-  const rowProps = { draftsById, sendsEnabled, serverOffsetMs, onDone, highlightDraftId, onShowDraft };
+  const rowProps = { draftsById, sendsEnabled, serverOffsetMs, onDone, highlightDraftId, onShowDraft, rowFeedback };
   const yours = by("yours"), machine = by("machine"), stuck = by("stuck");
   return (
     <div className="space-y-5">

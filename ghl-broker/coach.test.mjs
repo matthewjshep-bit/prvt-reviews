@@ -187,6 +187,24 @@ test("a code gap is filed to GitHub scrubbed — first name only — and never w
   assert.deepEqual(sent.labels, ["coach"]);
 });
 
+test("the runner reads what you said on Today's rows and the model is shown it", async () => {
+  await settings("FB");
+  const at = new Date(NOW - 3 * 3600000).toISOString();
+  await store.appendContactEvents("FB", "c1", [{ id: "fb-ev-1", type: "row_feedback", at, party: "agent", source: "operator", dedupeKey: `row_feedback:r1:${at}`,
+    data: { rowId: "r1", rowKind: "audit_owed", auditKind: "unanswered_inbound", category: "should_have_replied", note: "it had the answer", detail: "scheduling — yours to answer", draftId: null, party: "agent", intent: "scheduling", theySaid: "Tuesday?", botWrote: "" } }]);
+  let shown = null;
+  const out = await runCoach({ locationId: "FB", saved: await store.getOfferSettings("FB"), store, now: NOW, deps: { propose: async ({ signals }) => {
+    shown = signals;
+    return { summary: "You said it should have answered.", proposals: [{ kind: "instruction", party: "agent", text: "When they name a weekday, answer the day question yourself.", why: "you said so on Today", evidence: ["fb:fb-ev-1"] }] };
+  } } });
+  assert.equal(shown.rowFeedback.length, 1);
+  assert.equal(shown.rowFeedback[0].id, "fb:fb-ev-1");
+  assert.equal(shown.counts.rowFeedback, 1);
+  assert.equal(out.kept.length, 1, JSON.stringify(out.dropped));
+  assert.deepEqual(out.kept[0].evidence, ["fb:fb-ev-1"]);
+  assert.equal(out.counts.rowFeedback, 1, "the report counts your feedback");
+});
+
 test("the report Today reads: the open ones, the applied ones with a scorecard, and whether filing is wired", async () => {
   const report = await coachReport({ store, locationId: "APPLY", saved: await store.getOfferSettings("APPLY"), now: NOW });
   assert.equal(report.enabled, true);
