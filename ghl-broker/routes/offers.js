@@ -64,7 +64,7 @@ import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../shared/offer-calc.js";
 import {
-  SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isExpired, isHot, offerHeat,
+  SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked,
 } from "../shared/offer-status.js";
@@ -4175,13 +4175,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     reviseOfferToCounter: async ({ contactId, addressHint, amount, draftId = null }) => {
       const price = Math.round(Number(amount) || 0);
       if (!price) return { ok: false, reason: "no number to re-issue at" };
-      const open = (await store.listOffers(locationId, { contactId, limit: 50 }))
-        .filter((o) => !o.deal && OPEN_STATUSES.has(effectiveStatus(o)));
+      // Open, or dead on their side and revived by this counter — the same
+      // set the band judged (isNegotiable). Never one we walked from.
+      const open = (await store.listOffers(locationId, { contactId, limit: 50 })).filter(isNegotiable);
       if (!open.length) return { ok: false, reason: "no open offer to re-issue" };
       const offer = pickDealByAddress(open, addressHint) || (open.length === 1 ? open[0] : null);
       if (!offer) return { ok: false, reason: "more than one open offer and no address named" };
       const full = await store.getOffer(offer.id);
       if (!full) return { ok: false, reason: "offer vanished" };
+      const revived = !OPEN_STATUSES.has(effectiveStatus(full));
       const out = await createOfferFromRequest({
         locationId, client, existing: full,
         body: { contactId, scope: full.scope,
@@ -4198,8 +4200,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // Both sides said yes to this number: the price is locked from here
       // (priceLocked in shared/offer-status.js) — no re-quote, no re-run.
       revised.agreed = { amount: price, at: acceptedAt, via: "counter_band" };
+      // A revived offer is open again from here, so the paper can go
+      // (sendOfferDocs reads open offers only) and the ladders see it live.
+      if (revived) recordStatus(revised, "countered", "revived by their counter", acceptedAt, { amount: price, source: "conversation" });
       await store.updateOffer(revised.id, revised);
-      return { ok: true, address: revised.address, amount: price };
+      return { ok: true, address: revised.address, amount: price, revived };
     },
     // The first no on a live offer. Stamped so the reply agent lets the second
     // one close it; nothing else about the offer changes.

@@ -844,7 +844,14 @@ of funds, new property, other; investor: price pushback, wants to buy, wants
 to walk it, wants a call, other) is a person's call whatever the tab says.
 (Two guarded doors exist, each with its own switch and its own arithmetic: the
 agent's counter band, and since 2026-09-17 "The investor band" for a price
-pushback. Both are off by default and both leave `NEVER_AUTO` itself alone.)
+pushback. Both are off by default and both leave `NEVER_AUTO` itself alone.
+Since 2026-09-22 the counter band also answers on an offer that is dead on
+THEIR side — `passed` or `no_response`, `REVIVABLE_STATUSES` / `isNegotiable`
+in `shared/offer-status.js` — because the passed-offer check-in asked for
+exactly that answer: Pink Skulls Realtor came back at 144k on Longfellow,
+inside the 145.6k ceiling, and the band said "no open offer". Re-issuing a
+revived offer records it `countered` first so the paper can follow. An offer
+WE passed on is never revived by the machine.)
 `decideAutoSend` then adds the tab's switches: the bot is on, the broker can
 send, the party's auto-send is on, the intent is on its allowlist, the channel
 is allowed. The first switch that is off is recorded on the draft and shown

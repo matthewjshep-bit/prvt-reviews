@@ -48,7 +48,7 @@ import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, isHot } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, isHot, isNegotiable } from "./shared/offer-status.js";
 import { sameStreet } from "./shared/us-address.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
@@ -867,7 +867,10 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
   if (!(GUARDED_AUTO[party] || []).includes(draft?.intent)) return null;
 
   const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
-  const open = rows.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
+  // Open, or dead on their side and revived by this counter (isNegotiable):
+  // the passed-offer check-in asked for exactly this answer. An offer we
+  // walked from stays closed.
+  const open = rows.filter(isNegotiable);
   if (!open.length) {
     return { kind: draft.intent === "acceptance" ? "acceptance_band" : "counter_band", passed: false,
              checks: [{ name: "offer_live", ok: false, detail: "no open offer" }],
@@ -2142,7 +2145,7 @@ async function runReply(job, ctx) {
   // not call something new that the band would have recognised.
   if (party === "agent" && draft.intent === "counter" && draft.propertyAddress) {
     const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => null);
-    const anyOpen = (book || []).some((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
+    const anyOpen = (book || []).some(isNegotiable);
     if (book && !anyOpen && !knownOfferFor(book, draft.propertyAddress, now) && !pickOfferByAddress(book, draft.propertyAddress)) {
       draft = { ...draft, intent: "new_property", reclassifiedFrom: "counter" };
       job.intent = draft.intent;
@@ -2167,7 +2170,7 @@ async function runReply(job, ctx) {
   }
   if (party === "agent" && draft.intent === "counter") {
     const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
-    const open = book.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
+    const open = book.filter(isNegotiable);
     const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
     const full = picked && typeof store.getOffer === "function" ? (await store.getOffer(picked.id).catch(() => null)) || picked : picked;
     if (full) {

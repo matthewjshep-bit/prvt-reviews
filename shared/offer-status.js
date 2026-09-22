@@ -51,6 +51,16 @@ export const SETTABLE_STATUSES = OFFER_STATUS_KEYS.filter((k) => k !== "draft");
 export const OPEN_STATUSES = new Set(["new", "sent", "countered"]);
 // Nothing more will happen here without a new offer.
 export const DEAD_STATUSES = new Set(["no_response", "passed", "we_passed"]);
+// Dead on THEIR side, and the passed-offer check-in exists to bring these
+// back. An agent who answers it with a number is negotiating that offer
+// again — Pink Skulls Realtor, 2414 E Longfellow (2026-09-22): "they passed"
+// on 9/10, the check-in asked if the seller had moved, she came back at 144k
+// inside the ceiling, and the counter band said "no open offer". Our own
+// pass is never revived by the machine (Matt, 2026-09-22).
+export const REVIVABLE_STATUSES = new Set(["passed", "no_response"]);
+// The offers a counter can land on: open, or revivable. Never a deal.
+export const isNegotiable = (o) => Boolean(o) && !o.deal
+  && (OPEN_STATUSES.has(effectiveStatus(o)) || REVIVABLE_STATUSES.has(effectiveStatus(o)));
 // A deal somebody is still working. The same three stages are named locally
 // in routes/offers.js, contact-record.js and conversation-context.js; this
 // is the one the pipeline board classifies by.
