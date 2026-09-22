@@ -5,6 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runConversationAudit, startConversationAudit, maybeRunConversationAudit, getAuditJob, _resetJobs, isReaction, CURSOR_NAME, STALE_RUN_MS, RETRY_GAP_MS, MAX_DAILY_TRIES } from "./conversation-audit.js";
+import { isCloser, MAX_REDRAFT_TRIES } from "./shared/conversation-audit.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
 // 7:20pm Pacific on 2026-09-16.
@@ -66,6 +67,81 @@ test("a second audit the same night starts nothing twice", async () => {
   // Still unanswered after a try: it goes to Matt's queue, not back to "started".
   assert.equal(again.acted[0].status, "yours");
   assert.equal(again.result.findings[0].action, null);
+});
+
+/* ---------- the audit answers what it finds (2026-09-22) ---------- */
+
+// Last night's "From last night" had 18 rows and the bot had touched none of
+// them. Seven read "drafting was tried on an earlier run and nothing came of
+// it": five were tapbacks or closers, one was a bot-off tag, one was the
+// per-contact cap — and none said so.
+test("a closer ('Ok thank you') is not an unanswered text: no claim, no reply, and not on Today", async () => {
+  assert.equal(isCloser("Ok thank you"), true, "Patrick Cruz");
+  assert.equal(isCloser("Sound good."), true, "Brian Rosso");
+  assert.equal(isCloser("Will do, thank you"), true, "Gunnar Eklund");
+  assert.equal(isCloser("Thanks!"), true);
+  assert.equal(isCloser("Sounds good, thanks Matt"), true);
+  assert.equal(isCloser("Thanks, what about the roof?"), false, "a question is a question");
+  assert.equal(isCloser("we received an offer late this morning"), false, "Michael Lindekugel");
+  assert.equal(isCloser("The Seattle one on Bagley has been on the market 3 days. Are you willing to pay closing costs"), false);
+  const store = fakeStore();
+  const d = deps({ latestInbound: async () => ({ body: "Ok thank you", type: "SMS", at: ago(5) }) });
+  const { result, acted } = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  assert.equal(acted[0].status, "skipped");
+  assert.match(acted[0].reason, /closer/);
+  assert.equal(d.calls.length, 0);
+  assert.ok(!store.events.some((e) => e.type === "audit_action"), "no claim spent on a closer");
+  assert.ok(!result.findings.some((f) => f.kind === "unanswered_inbound"), "not a finding");
+  assert.equal(result.counts.byKind.unanswered_inbound, 0);
+});
+
+test("a tapback is read before the claim, so the next night does not report 'nothing came of it'", async () => {
+  const store = fakeStore();
+  const d = deps({ latestInbound: async () => ({ body: "Liked \u201CSorry this one didn't work out\u201D", type: "SMS", at: ago(5) }) });
+  const first = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  assert.ok(!first.result.findings.some((f) => f.kind === "unanswered_inbound"));
+  const again = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW + 86400000, pace: 0 });
+  assert.ok(!again.result.findings.some((f) => f.kind === "unanswered_inbound"));
+  assert.ok(!again.acted.some((a) => /nothing came of it/.test(a.reason)));
+});
+
+test("a redraft the per-contact cap stopped says so on Today and is tried again the next night", async () => {
+  const store = fakeStore();
+  let calls = 0;
+  const d = deps({ startReply: async () => { calls++; return calls === 1 ? { skipped: "this contact's daily cap reached (12/12)", job: null } : { job: { id: "j2" } }; } });
+  const first = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  assert.equal(first.acted[0].status, "yours");
+  assert.match(first.acted[0].reason, /not drafted: this contact's daily cap/);
+  assert.match(first.result.findings[0].why, /daily cap/);
+  assert.ok(store.events.some((e) => e.type === "audit_outcome"), "the outcome is on the record");
+  const next = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW + 86400000, pace: 0 });
+  assert.equal(calls, 2, "tried again");
+  assert.equal(next.acted[0].status, "started");
+  assert.equal(next.acted[0].jobId, "j2");
+});
+
+test("a redraft the bot stood down from names the reason instead of 'nothing came of it'", async () => {
+  const store = fakeStore();
+  const d = deps();
+  await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  // The reply agent's own record of why it held, written after the claim.
+  store.events.push({ contactId: "c9", type: "reply_held", at: ago(-0.1), data: { reason: "bot is off for this contact (tag: stop bot)" } });
+  const next = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW + 86400000, pace: 0 });
+  assert.equal(d.calls.length, 1, "not retried: the reason is a person's");
+  assert.equal(next.acted[0].status, "yours");
+  assert.match(next.acted[0].reason, /stood down: bot is off for this contact \(tag: stop bot\)/);
+});
+
+test("after MAX_REDRAFT_TRIES nights the text is Matt's, and the row says how many", async () => {
+  const store = fakeStore();
+  const d = deps();
+  let last = null;
+  for (let n = 0; n < MAX_REDRAFT_TRIES + 1; n++) {
+    last = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW + n * 86400000, pace: 0 });
+  }
+  assert.equal(d.calls.length, MAX_REDRAFT_TRIES);
+  assert.equal(last.acted[0].status, "yours");
+  assert.match(last.acted[0].reason, new RegExp(`tried ${MAX_REDRAFT_TRIES} nights running`));
 });
 
 test("a redraft the bot would only stand down from, or that would answer the wrong words, is handed over before the claim", async () => {

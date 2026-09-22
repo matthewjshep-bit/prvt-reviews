@@ -2113,6 +2113,15 @@ async function runReply(job, ctx) {
   job.partySource = a.partySource;
   job.contactName = a.contactName;
 
+  // A hold before any draft leaves no row in the outbox, and until 2026-09-22
+  // no trace anywhere: the nightly audit's redraft of Michael Lindekugel
+  // (bot-off tag) came back as "drafting was tried … nothing came of it".
+  // One timeline row per job says why, so the audit can say it too.
+  const noteHeld = async (reason) => recordEvent({
+    store, locationId, contactId: job.contactId, party: a.party === "investor" ? "investor" : "agent", type: "reply_held",
+    at: new Date(now).toISOString(), source: "conversation", ref: job.id, dedupeKey: `reply_held:${job.id}`, data: { reason: String(reason).slice(0, 200) },
+  }).catch(() => {});
+
   const handsOff = handsOffReason(a);
   if (handsOff) {
     // Either the operator tagged them off, or we are mid-deal with them. No
@@ -2122,6 +2131,7 @@ async function runReply(job, ctx) {
     job.heldReason = handsOff;
     job.finishedAt = new Date().toISOString();
     if (a.dnd) await markUnsubscribed({ client, store, locationId, contactId: job.contactId, party: a.party, now });
+    await noteHeld(handsOff);
     return;
   }
 
@@ -2135,6 +2145,7 @@ async function runReply(job, ctx) {
     job.phase = "";
     job.heldReason = `you replied to them ${a.humanActive.minutesAgo} minute${a.humanActive.minutesAgo === 1 ? "" : "s"} ago — you have the thread`;
     job.finishedAt = new Date().toISOString();
+    await noteHeld(job.heldReason);
     return;
   }
 
@@ -2143,6 +2154,7 @@ async function runReply(job, ctx) {
     job.phase = "";
     job.heldReason = "no agent or investor tag on the contact — no draft written";
     job.finishedAt = new Date().toISOString();
+    await noteHeld(job.heldReason);
     await note(client, job.contactId,
       `Conversation AI did not answer: this contact carries none of the tags that mark a listing agent or an investor ` +
       `(see the Conversation AI page → routing). Their message is in the thread above; answer it by hand, or tag them and it will next time.`,
