@@ -2029,6 +2029,30 @@ test("an agent with nothing open gets a verdict that says so rather than a ceili
   assert.match(v.reason, /no open offer/);
 });
 
+test("a counter on a house they passed on, answered through the check-in, opens the band", async () => {
+  // Pink Skulls Realtor, 2414 E Longfellow (2026-09-22): passed 9/10, the
+  // check-in asked if the seller had moved, "we have one at 144k" inside the
+  // ceiling — and the band said "no open offer to answer".
+  const passed = { ...BAND_OFFER, status: "passed", statusHistory: [{ status: "passed", ts: iso(10 * 86400000) }] };
+  const v = await evaluateBandFor({
+    store: bandStore([passed]), locationId: "LOC", party: "agent", config: bandCfg, saved: {},
+    draft: { intent: "counter", counterAmount: 250000, confidence: "high", propertyAddress: BAND_OFFER.address },
+    job: { contactId: "c1", message: "I think we have one at $250,000" }, now: Date.now(),
+  });
+  assert.equal(v.passed, true, v.reason);
+});
+
+test("a house WE passed on is not revived by their counter — the band stays shut", async () => {
+  const ours = { ...BAND_OFFER, status: "we_passed" };
+  const v = await evaluateBandFor({
+    store: bandStore([ours]), locationId: "LOC", party: "agent", config: bandCfg, saved: {},
+    draft: { intent: "counter", counterAmount: 250000, confidence: "high", propertyAddress: BAND_OFFER.address },
+    job: { contactId: "c1", message: "$250,000" },
+  });
+  assert.equal(v.passed, false);
+  assert.match(v.reason, /no open offer/);
+});
+
 test("the daily cap is counted from the store, not from memory", async () => {
   // A crash loop must not hand a misconfigured setup a fresh budget.
   const today = new Date().toISOString();

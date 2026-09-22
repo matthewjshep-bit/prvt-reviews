@@ -70,3 +70,4 @@ test("a counter on a house they passed on reopens it, but only by address", asyn
   const guessed = await deps.setOfferStatus({ contactId: "a-back2", addressHint: "", status: "countered", amount: 350000 });
   assert.equal(guessed.ok, false, "no address, no open offer: nothing is reopened on a guess");
 });
+
