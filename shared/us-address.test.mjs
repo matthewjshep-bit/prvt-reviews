@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
+import { sameHouse,
   normalizeUsAddress, addressKey, addressQueryVariants, zillowUrl,
   parseUsAddress, splitUnit, stateAbbr,
 } from "./us-address.js";
@@ -131,4 +131,11 @@ test("completeAddress: a street-only line is finished from what we know, best fi
   assert.deepEqual(completeAddress("12 Elm St", { candidates: ["99 Oak Ave, Kent, WA"] }), ["12 Elm St"]);
   // A city with no house number has nothing to complete.
   assert.deepEqual(completeAddress("Medina", { county: "King" }), ["Medina"]);
+});
+
+test("sameHouse: Court vs Ct and a missing ZIP are one house; the next town's namesake is not", () => {
+  assert.equal(sameHouse("10702 161st Court NE, Redmond, WA", "10702 161st Ct NE, Redmond, WA 98052"), true);
+  assert.equal(sameHouse("10702 161st Ct NE", "10702 161st Ct NE, Redmond, WA 98052"), true, "no city on one side still matches");
+  assert.equal(sameHouse("10702 161st Ct NE, Bellevue, WA", "10702 161st Ct NE, Redmond, WA 98052"), false);
+  assert.equal(sameHouse("10703 161st Ct NE, Redmond, WA", "10702 161st Ct NE, Redmond, WA 98052"), false);
 });

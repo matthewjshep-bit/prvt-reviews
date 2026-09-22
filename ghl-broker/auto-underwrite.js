@@ -38,7 +38,7 @@ import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenova
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
 import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
-import { addressKey, completeAddress, sameStreet } from "./shared/us-address.js";
+import { addressKey, completeAddress, sameStreet, sameHouse } from "./shared/us-address.js";
 import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed } from "./shared/offer-status.js";
 import { expandListingLinks } from "./listing-links.js";
 import { buildTranscript } from "./enrich.js";
@@ -1625,7 +1625,10 @@ async function runUnderwrite(job, ctx) {
   const dossier = propertyDossier(contactEvents || [], extraction.address);
   const theirArv = Math.round(Number(dossier?.have?.arv?.value) || 0);
   const theirRehab = Math.round(Number(dossier?.have?.rehab?.value) || 0);
-  const describedWork = (contactEvents || []).some((e) => e?.type === "property_details" && e.address && addressKey(e.address) === addressKey(extraction.address));
+  // Same street-level match as the dossier: the thread's spelling of the
+  // address rarely carries the ZIP the listing record does.
+  const describedWork = (contactEvents || []).some((e) => e?.type === "property_details" && e.address
+    && (addressKey(e.address) === addressKey(extraction.address) || sameHouse(e.address, extraction.address)));
 
   /* --- 6. rehab --- */
   job.phase = "rehab";

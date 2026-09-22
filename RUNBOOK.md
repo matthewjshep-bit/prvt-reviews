@@ -1445,6 +1445,12 @@ The verdicts, in order:
   held **14 days** with no word → `we_passed`; we asked for their read
   **7 days** ago and heard nothing → `we_passed`. The `uw-needs-review` tag
   comes off once nothing of theirs is held.
+  Their numbers are read by house, not by the full address key: Shelley
+  Elenbaas' 100k (2026-09-21) was filed under the thread's "161st Court NE,
+  Redmond, WA", the rerun looked under the listing's "161st Ct NE, Redmond,
+  WA 98052", and the underwriter held again on the photo rule with our 16.5k
+  scope. `propertyDossier` and the photo gate's `describedWork` match by
+  `sameHouse` (street and city, ZIP optional).
 - **rerun**: the holds are all ones the agent's numbers answer (value: thin or
   no comps, unknown sqft; work: too few photos, scope past the band) and the
   timeline has their ARV / rehab dated after the hold → `startUnderwrite`

@@ -183,6 +183,21 @@ export function sameStreet(a, b) {
   return Boolean(ka) && ka === key(b);
 }
 
+/**
+ * sameHouse(a, b) → boolean
+ *
+ * sameStreet, plus the city when both spellings carry one. The thread's
+ * spelling of an address rarely has the ZIP the listing record does, so a
+ * full-key match misses; a street-only match would pair a house with its
+ * namesake in the next town.
+ */
+export function sameHouse(a, b) {
+  if (!sameStreet(a, b)) return false;
+  const ca = String(parseUsAddress(a).city || "").trim().toLowerCase();
+  const cb = String(parseUsAddress(b).city || "").trim().toLowerCase();
+  return !ca || !cb || ca === cb;
+}
+
 // Ordered, de-duplicated ladder of address formats to try against picky
 // address matchers. Callers query each until one returns data.
 export function addressQueryVariants(raw) {
