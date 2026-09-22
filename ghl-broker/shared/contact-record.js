@@ -32,7 +32,7 @@ import { PASS_REASON_LABEL } from "./conversation-ai.js";
 // USPS-normalised ("Avenue" is "Ave"): the dossier's notion of "same property".
 // Deliberately NOT the event dedupe key, which must stay byte-compatible with
 // mergeHistory's own normalisation.
-import { addressKey as propertyKey } from "./us-address.js";
+import { addressKey as propertyKey, sameHouse } from "./us-address.js";
 
 /* ---------- vocabulary ---------- */
 
@@ -635,7 +635,12 @@ export function propertyDossier(events = [], address) {
   const k = propertyKey(address);
   if (!k) return null;
   const have = {};
-  const mine = events.filter((e) => e?.address && propertyKey(e.address) === k && (e.type === "property_details" || e.type === "agent_estimate"))
+  // Street-level match, not the full key: Shelley Elenbaas' 100k rehab read
+  // (2026-09-21) was filed under "161st Court NE, Redmond, WA" and the rerun
+  // looked it up under "161st Ct NE, Redmond, WA 98052" — same house, one
+  // ZIP apart — so the underwriter never saw her number and held again.
+  const onHouse = (a) => propertyKey(a) === k || sameHouse(a, address);
+  const mine = events.filter((e) => e?.address && onHouse(e.address) && (e.type === "property_details" || e.type === "agent_estimate"))
     .sort((a, b) => String(a.at).localeCompare(String(b.at)));
   for (const e of mine) {
     const d = e.data || {};

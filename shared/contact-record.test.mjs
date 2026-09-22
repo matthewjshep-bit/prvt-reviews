@@ -238,6 +238,20 @@ test("the drawer groups by local day, newest first", () => {
   assert.deepEqual(g.map((x) => [x.day, x.events.length]), [["2026-09-06", 1], ["2026-09-05", 1]]);
 });
 
+test("the agent's rehab read filed without the ZIP is found when the underwriter asks with it", () => {
+  // Shelley Elenbaas, 2026-09-21: "100k" was recorded under the thread's
+  // spelling and the rerun looked under the listing's. Same house.
+  const events = [
+    { type: "agent_estimate", at: "2026-09-21T23:08:55Z", address: "10702 161st Court NE, Redmond, WA", data: { arv: 0, rehab: 100000 } },
+    { type: "property_details", at: "2026-09-21T23:08:55Z", address: "10702 161st Court NE, Redmond, WA", data: { workNeeded: "full remodel" } },
+    // The same house number and street in the next town is not this house.
+    { type: "agent_estimate", at: "2026-09-22T01:00:00Z", address: "10702 161st Ct NE, Bellevue, WA 98004", data: { rehab: 5000 } },
+  ];
+  const d = propertyDossier(events, "10702 161st Ct NE, Redmond, WA 98052");
+  assert.equal(d.have.rehab.value, 100000);
+  assert.equal(d.have.workNeeded.value, "full remodel");
+});
+
 test("a property's dossier is the newest answer per field, and names what is still missing", () => {
   const A = "12703 Vernon Ave SW, Lakewood, WA";
   const events = [
