@@ -285,6 +285,20 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "yours to settle: answer the terms you have, and say you will confirm the rest today, with needsHuman set."
     );
   }
+  if (party === "agent") {
+    // Matt, 2026-09-22 (Joseph Brazen, Medina): an offer marked "we passed"
+    // is our decision to walk. The bot had been asking whether the seller
+    // would come closer and promising a number by the afternoon.
+    parts.push(
+      "WE PASSED: when the offer book marks a house \"we passed on it\", we walked away from that one and it is closed on " +
+      "our side. Never chase it: do not ask whether the seller has moved, do not float or restate a number, do not say " +
+      "you're running numbers or checking with a partner, and do not promise anything on it. If they bring it up, say " +
+      "once, warmly and plainly, that we've moved on from that one for now, and ask whether they have anything else " +
+      "that needs work. If they come back with a new number or new terms on it, don't engage the price at all: thank " +
+      "them, say you'll pass it along, and set needsHuman with the reason — reopening a house we walked from is a " +
+      "person's call."
+    );
+  }
   if (playbook.mayCommit) parts.push(`YOU MAY, on your own: ${playbook.mayCommit}`);
   if (playbook.mayNotCommit) parts.push(`YOU MAY NOT, ever: ${playbook.mayNotCommit}`);
   if (config?.rules?.length) parts.push(`HOUSE RULES — never break these:\n${config.rules.map((r) => `- ${r}`).join("\n")}`);

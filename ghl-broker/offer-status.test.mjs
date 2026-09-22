@@ -73,6 +73,30 @@ test("an outcome is recorded, noted, and persisted", async () => {
   assert.equal((await store.getOffer(o.id)).status, "passed");
 });
 
+test("marking we passed by hand dismisses the check-in the machine had queued on that house", async () => {
+  const o = await mkOffer({ status: "passed", statusHistory: [{ ts: new Date().toISOString(), status: "passed" }] });
+  const queued = await store.createReplyDraft({
+    locationId: LOC, contactId: o.contactId, status: "scheduled", channel: "sms", party: "agent", flags: [],
+    reply: "Any movement from the seller?", inbound: "", outbound: { kind: "passed_checkin", offerId: o.id, address: o.address },
+  });
+  const r = await req("PATCH", `/api/offers/${o.id}/status`, { status: "we_passed" });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.stoppedDrafts, 1);
+  assert.equal((await store.getReplyDraft(queued.id)).status, "dismissed");
+});
+
+test("marking they passed keeps the check-in ladder's queued text", async () => {
+  const o = await mkOffer({ status: "sent" });
+  const queued = await store.createReplyDraft({
+    locationId: LOC, contactId: o.contactId, status: "scheduled", channel: "sms", party: "agent", flags: [],
+    reply: "Did that land?", inbound: "", outbound: { kind: "offer_nudge", offerId: o.id, address: o.address },
+  });
+  const r = await req("PATCH", `/api/offers/${o.id}/status`, { status: "passed" });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.stoppedDrafts, 0);
+  assert.equal((await store.getReplyDraft(queued.id)).status, "scheduled");
+});
+
 test("an unknown status is refused", async () => {
   const o = await mkOffer();
   const r = await req("PATCH", `/api/offers/${o.id}/status`, { status: "vibes" });

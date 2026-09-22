@@ -225,6 +225,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
           `${ties ? "" : " — the figures don't tie exactly (the number was capped or set by hand): describe the method, don't do the arithmetic out loud"}]`
         : "",
       `— status: ${statusWord(status)}`,
+      status === "we_passed" ? "WE WALKED AWAY from this house: closed on our side, do not chase it or name its number" : "",
       lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" ? "" : "not sent yet",
       // No expiry date: the offer stands until they answer, and a date here
       // is what had the bot telling agents an offer had lapsed.

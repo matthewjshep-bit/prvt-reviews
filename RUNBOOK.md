@@ -1376,6 +1376,19 @@ for itself:
   way a row was saved and waited. Now it closes itself (`dismissed`, flag
   "nothing to say back — not sent", which the coach reads as the machine's and
   not a person's). A suggested action still keeps the row.
+- **A check-in on a house WE walked from.** Two ways an offer dies by a
+  decision (`shared/offer-status.js`): `passed` is theirs and keeps its
+  check-in ladder (every ten days: would the seller come closer?). `we_passed`
+  is ours, and it ends the chasing — Matt, 2026-09-22, the Medina thread:
+  the ladder had asked whether the seller moved, the agent asked for best and
+  final, and the bot promised a number. Now marking `we_passed` (single or
+  bulk) dismisses every open text the machine started about that house
+  (`stopMachineTextsForOffer`, flag "we passed on … — not sent"; replies to
+  something they said are left alone), the auto-send path refuses one that
+  slipped through, and the offer book marks the house "WE WALKED AWAY" with a
+  `WE PASSED` rule in the agent prompt: no chasing, no number, a new number
+  from them is `needsHuman`. The passed-offer ladder and the price watch never
+  read `we_passed` to begin with.
 - **A ladder drafting someone who had asked off.** An agent wrote "take me off
   your list" on 8/18, before the bot, and carried no tag. `optOutInTranscript`
   (shared/conversation-ai.js) reads THEIR lines of the thread; anything the

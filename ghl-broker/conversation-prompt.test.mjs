@@ -46,6 +46,13 @@ test("the agent prompt never offers a walkthrough, and never admits why", () => 
   assert.match(sys, /Never say or imply that you avoid walking houses/);
 });
 
+test("a house we passed on is closed on our side — the bot never chases it or names its number", () => {
+  const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
+  assert.match(sys, /WE PASSED:/);
+  assert.match(sys, /do not ask whether the seller has moved/);
+  assert.match(sys, /set needsHuman/);
+});
+
 test("the stance is agent-only — an investor walking OUR deal is the point", () => {
   const sys = buildSystemPrompt({ config: null, party: "investor", channel: "sms" });
   assert.doesNotMatch(sys, /SEEING THE HOUSE/);

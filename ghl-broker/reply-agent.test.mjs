@@ -3366,6 +3366,67 @@ test("a scheduled text to someone who unsubscribed since is dismissed, not sent 
   assert.ok(tags.some(([, t]) => t.includes("unsubscribed")));
 });
 
+/* ---------- we passed: our own pass ends the chasing (2026-09-22) ---------- */
+
+// Joseph Brazen, Medina: the passed-offer check-in went out, the agent asked
+// for best and final, and Matt marked the offer "we passed". Nothing the
+// machine had queued about that house may go after that.
+test("a queued check-in on a house we passed on since is dismissed, not sent", async () => {
+  const { sendReplyDraft, stopMachineTextsForOffer } = await import("./reply-agent.js");
+  const { client, tags } = ghlStub();
+  const store = fakeStore([
+    { id: "d1", locationId: "LOC", contactId: "c1", status: "scheduled", channel: "sms", party: "agent", createdAt: iso(1000), flags: [],
+      reply: "Is the Medina lot still available?", inbound: "", outbound: { kind: "passed_checkin", offerId: "o1", address: "7 Elm St" } },
+  ]);
+  store.getOffer = async (id) => (id === "o1" ? { id: "o1", locationId: "LOC", contactId: "c1", address: "7 Elm St", status: "we_passed", statusHistory: [{ status: "passed" }, { status: "we_passed" }] } : null);
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true });
+  assert.equal(r.skipped, "we passed on 7 Elm St");
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.status, "dismissed");
+  assert.match(d.flags.join(" "), /we passed on 7 Elm St — not sent/);
+  assert.ok(tags.some(([m]) => m === "DELETE"), "the draft tag comes off");
+  assert.equal(typeof stopMachineTextsForOffer, "function");
+});
+
+test("a check-in on a house THEY passed on still goes — that ladder is the point", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const sent = [];
+  const client = { call: async (path, opts = {}) => {
+    if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Dana", tags: ["agent"] } };
+    if (path.startsWith("/conversations/search")) return { conversations: [] };
+    if (path.startsWith("/conversations/messages")) { sent.push(opts.body); return { messageId: "m1" }; }
+    if (path.endsWith("/tags")) return {};
+    return {};
+  } };
+  const store = fakeStore([
+    { id: "d1", locationId: "LOC", contactId: "c1", status: "scheduled", channel: "sms", party: "agent", createdAt: iso(1000), flags: [],
+      reply: "Any movement from the seller on 7 Elm?", inbound: "", outbound: { kind: "passed_checkin", offerId: "o1", address: "7 Elm St" } },
+  ]);
+  store.getOffer = async () => ({ id: "o1", locationId: "LOC", contactId: "c1", address: "7 Elm St", status: "passed", statusHistory: [{ status: "passed" }] });
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  assert.ok(!r.skipped, JSON.stringify(r));
+  assert.equal(sent.length, 1);
+});
+
+test("marking we passed clears every queued machine text about that house and leaves replies alone", async () => {
+  const { stopMachineTextsForOffer } = await import("./reply-agent.js");
+  const { client } = ghlStub();
+  const store = fakeStore([
+    { id: "d1", locationId: "LOC", contactId: "c1", status: "scheduled", party: "agent", createdAt: iso(3000), flags: [], reply: "x", inbound: "", outbound: { kind: "passed_checkin", offerId: "o1" } },
+    { id: "d2", locationId: "LOC", contactId: "c1", status: "draft", party: "agent", createdAt: iso(2000), flags: [], reply: "x", inbound: "", outbound: { kind: "price_drop", offerId: "o1" } },
+    // A reply to something they said is an answer, not outreach.
+    { id: "d3", locationId: "LOC", contactId: "c1", status: "draft", party: "agent", createdAt: iso(1000), flags: [], reply: "x", inbound: "Flexible based on price", outbound: null },
+    // Another house of theirs keeps its nudge.
+    { id: "d4", locationId: "LOC", contactId: "c1", status: "scheduled", party: "agent", createdAt: iso(500), flags: [], reply: "x", inbound: "", outbound: { kind: "offer_nudge", offerId: "o2" } },
+  ]);
+  const stopped = await stopMachineTextsForOffer({ client, store, locationId: "LOC", offer: { id: "o1", contactId: "c1", address: "7 Elm St" } });
+  assert.deepEqual(stopped.sort(), ["d1", "d2"]);
+  assert.equal((await store.getReplyDraft("d1")).status, "dismissed");
+  assert.equal((await store.getReplyDraft("d2")).status, "dismissed");
+  assert.equal((await store.getReplyDraft("d3")).status, "draft");
+  assert.equal((await store.getReplyDraft("d4")).status, "scheduled");
+});
+
 /* ---------- the nightly audit's release (2026-09-16) ---------- */
 
 test("a draft held only as a person's call is released when the audit asks; one the gates caught never is", async () => {

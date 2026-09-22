@@ -102,6 +102,7 @@ import {
 import {
   startReply, startProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
+  stopMachineTextsForOffer,
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
@@ -3202,8 +3203,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (PROMISE_SETTLING_STATUSES.has(status)) {
         await settlePromise({ store, locationId, contactId: offer.contactId, address: offer.address, offerId: offer.id, by: `offer_${status}` }).catch(() => {});
       }
+      // Our own pass ends the chasing: whatever the machine had queued about
+      // this house is dismissed. Their pass keeps its check-in ladder.
+      const stopped = status === "we_passed"
+        ? await stopMachineTextsForOffer({ client, store, locationId, offer }).catch(() => [])
+        : [];
 
-      res.json({ ok: true, offer });
+      res.json({ ok: true, offer, stoppedDrafts: stopped.length });
     } catch (err) { fail(res, err); }
   });
 
@@ -3259,6 +3265,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           if (PROMISE_SETTLING_STATUSES.has(status)) {
             await settlePromise({ store, locationId, contactId: offer.contactId, address: offer.address, offerId: offer.id, by: `offer_${status}` }).catch(() => {});
           }
+          if (status === "we_passed") await stopMachineTextsForOffer({ client, store, locationId, offer }).catch(() => []);
           offers.push(offer);
           if (offer.contactId) touchedContacts.add(offer.contactId);
           await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",

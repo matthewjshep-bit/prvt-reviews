@@ -98,6 +98,14 @@ test("the agent's book carries the asking price from the lean row, and the field
   assert.deepEqual(fieldLines({ personal_details: " " }, ["personal_details"]), []);
 });
 
+test("an offer we passed on is marked closed on our side in the offer book", () => {
+  const o = { id: "o1", address: "7836 Ne 14th St, Medina, WA 98039", cashAmount: 3131644, status: "we_passed", createdAt: "2026-09-02T19:58:08.268Z",
+    statusHistory: [{ ts: "2026-09-10T00:00:00Z", status: "passed" }, { ts: "2026-09-22T17:01:20Z", status: "we_passed" }] };
+  const r = summarizeOffers([o], { now: Date.parse("2026-09-22T20:00:00Z") });
+  assert.match(r.text, /we passed on it \(withdrawn\)/);
+  assert.match(r.text, /WE WALKED AWAY from this house/);
+});
+
 import { blastTagged } from "./conversation-context.js";
 
 test("the agent's book carries the outreach hook and the properties they've sent before", () => {

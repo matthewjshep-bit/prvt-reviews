@@ -3309,6 +3309,25 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     }
   }
 
+  // We walked away since (marked "we passed" while a check-in counted
+  // down). Matt, 2026-09-22, the Medina thread: our own pass ends every text
+  // the machine starts about that house. Their pass does not — a "they
+  // passed" check-in is the point of that ladder. Only the auto path: a
+  // person pressing Send is a person deciding.
+  if (auto && d.party !== "investor" && d.outbound?.kind && !String(d.inbound || "").trim()) {
+    const offer = d.outbound?.offerId && store.getOffer ? await store.getOffer(d.outbound.offerId).catch(() => null) : null;
+    if (offer && offerStatus(offer) === "we_passed") {
+      const ts = new Date(now).toISOString();
+      const why = `we passed on ${offer.address || "that house"}`;
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `${why} — not sent`],
+      });
+      await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      return { ok: true, skipped: why };
+    }
+  }
+
   // They unsubscribed since (or a blast never looked): GHL would answer 400
   // "has unsubscribed" and the row would come back as "Needs you" for a text
   // nobody can send. Dismissed instead, and the contact is flagged.
@@ -3403,6 +3422,35 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     }).catch(() => {});
   }
   return { ok: true, dryRun: false, draft: updated };
+}
+
+/**
+ * stopMachineTextsForOffer({ client, store, locationId, offer, why }) → [draftId]
+ *
+ * Every open text the machine started about this house (a nudge, a check-in,
+ * a price-drop note — anything with an outbound kind and no inbound) is
+ * dismissed. The status routes call it when an offer is marked "we passed":
+ * a house we walked from gets no more chasing, whatever was already queued.
+ * Replies to something the agent said are left alone — they are answers,
+ * not outreach.
+ */
+export async function stopMachineTextsForOffer({ client, store, locationId, offer, why = "", now = Date.now() }) {
+  if (!offer?.id || !offer.contactId) return [];
+  const open = [];
+  for (const status of ["draft", "scheduled"]) {
+    open.push(...await store.listReplyDrafts(locationId, { contactId: offer.contactId, status, limit: 20 }).catch(() => []));
+  }
+  const ts = new Date(now).toISOString();
+  const flag = `${why || `we passed on ${offer.address || "that house"}`} — not sent`;
+  const stopped = [];
+  for (const d of open) {
+    if (!d?.outbound?.kind || String(d.inbound || "").trim()) continue;
+    if (d.outbound.offerId !== offer.id) continue;
+    await store.updateReplyDraft(d.id, { ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts, flags: [...(d.flags || []), flag] });
+    stopped.push(d.id);
+  }
+  if (stopped.length && client) await removeContactTags(client, offer.contactId, [RA_TAGS.draft]).catch(() => {});
+  return stopped;
 }
 
 export async function dismissReplyDraft({ client, store, locationId, draftId, reason = null }) {
