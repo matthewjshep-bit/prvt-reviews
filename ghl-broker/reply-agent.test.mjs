@@ -1168,15 +1168,19 @@ test("three texts in a row become one draft, and the same text twice is one mess
   assert.equal((await store.listReplyDrafts("LOC", { status: "draft" })).length, 1);
 });
 
-test("a contact has their own daily cap", async () => {
+test("a contact has their own daily cap when one is set; by default there is none", async () => {
   _resetJobs();
   const rows = Array.from({ length: 12 }, (_, i) => ({ id: `d${i}`, jobId: `ra-${i}`, locationId: "LOC", contactId: "c1", createdAt: iso(60_000), status: "sent" }));
   const store = fakeStore(rows);
   assert.equal(await countTodayForContact({ store, locationId: "LOC", contactId: "c1" }), 12);
-  const r = await startReply({ client: deadClient, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "hi" });
+  const capped = { ...STARTER_NOW, conversationAi: { ...STARTER_NOW.conversationAi, dailyCapPerContact: 12 } };
+  const r = await startReply({ client: deadClient, locationId: "LOC", saved: capped, store, contactId: "c1", message: "hi" });
   assert.match(r.skipped, /this contact's daily cap reached \(12\/12\)/);
-  const other = await startReply({ client: deadClient, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c2", message: "hi" });
+  const other = await startReply({ client: deadClient, locationId: "LOC", saved: capped, store, contactId: "c2", message: "hi" });
   assert.ok(other.job, "another contact is unaffected");
+  // Matt, 2026-09-22: Melissa Willet's eighth address filled the old default of 12 and six texts went unanswered.
+  const free = await startReply({ client: deadClient, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "hi again" });
+  assert.ok(free.job, "no per-contact cap by default");
 });
 
 test("when a person replied to them minutes ago, the bot drafts but never sends itself", async () => {
