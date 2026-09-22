@@ -554,7 +554,8 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // the reply lean on it. writeSummary keeps last_convo_summary current.
   profile: { enabled: true, callTranscripts: 2, writeSummary: true },
   notes: { onDraft: true, onAutoSend: true },
-  dailyCapPerContact: 12,
+  // 0 = no cap (Matt, 2026-09-22: an eight-address afternoon filled the old 12 and six texts went unanswered).
+  dailyCapPerContact: 0,
   retentionDays: 180,
   // Carrier-safe texting. A "$" or a link in an SMS is what spam filters key
   // on; an em dash is what a bot sounds like. The first two are gates (a

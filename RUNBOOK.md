@@ -976,6 +976,8 @@ retry hit the same cap). Now:
   no party tag) writes a `reply_held` timeline row from the reply agent, and
   the next night's row says "the bot stood down: bot is off for this contact
   (tag: stop bot)" instead of "nothing came of it".
+The per-contact daily cap now defaults to 0 (none) — Matt, 2026-09-22; the
+location cap (400) still bounds a runaway loop.
 What stays a person's by design: scheduling / wants a call (NEVER_AUTO, or
 turn booking on), a counter with no number read, "other", a live deal.
 
