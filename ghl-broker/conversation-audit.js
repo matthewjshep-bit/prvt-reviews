@@ -10,7 +10,7 @@
 // lands next morning. Matt, 2026-09-16.
 
 import { store as defaultStore } from "./store.js";
-import { auditConversations, auditDedupeKey, AUDIT_EVENT_TYPES, HELD_SWEEP_KINDS } from "./shared/conversation-audit.js";
+import { auditConversations, auditDedupeKey, isCloser, AUDIT_EVENT_TYPES, HELD_SWEEP_KINDS, MAX_REDRAFT_TRIES, REDRAFT_RETRY_AFTER_MS } from "./shared/conversation-audit.js";
 import { buildPipeline } from "./shared/pipeline.js";
 import { conversationConfig, startReply as defaultStartReply } from "./reply-agent.js";
 import { startFollowUpSweep as defaultStartFollowUpSweep } from "./follow-up-sweep.js";
@@ -148,6 +148,29 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
     row.status = "yours"; row.reason = why; f.action = null; f.why = why;
     result.counts.owed += 1; result.counts.queued = Math.max(0, result.counts.queued - 1);
   };
+  // Not a text to answer at all (a tapback, "Ok thank you"): off the findings
+  // entirely, so it is neither started nor put on Matt's queue. No claim is
+  // spent, so nothing about it is remembered — there is nothing to remember.
+  const dropped = new Set();
+  const drop = (f, row, why) => {
+    row.status = "skipped"; row.reason = why; dropped.add(f);
+    result.counts.queued = Math.max(0, result.counts.queued - 1);
+    if (result.counts.byKind?.[f.kind] > 0) result.counts.byKind[f.kind] -= 1;
+  };
+  // What an earlier night's redraft of this same text came to. The claim is
+  // per text (auditDedupeKey carries the inbound's time); tries ride on the
+  // key as a suffix, so each night is its own claim up to MAX_REDRAFT_TRIES.
+  const eventsFor = (c) => events.filter((e) => e?.contactId === c);
+  const redraftHistory = (f) => {
+    const key = auditDedupeKey(f);
+    const claims = eventsFor(f.contactId).filter((e) => e.type === "audit_action" && String(e.dedupeKey || "").startsWith(key))
+      .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const lastClaim = claims.at(-1);
+    const after = (e) => lastClaim && String(e.at) >= String(lastClaim.at);
+    const held = eventsFor(f.contactId).filter((e) => e.type === "reply_held" && after(e)).at(-1) || null;
+    const outcome = eventsFor(f.contactId).filter((e) => e.type === "audit_outcome" && e.data?.key === key && after(e)).at(-1) || null;
+    return { key, tries: claims.length, held, outcome, lastClaimAt: lastClaim ? (Date.parse(lastClaim.at) || 0) : 0 };
+  };
 
   for (const f of result.findings) {
     if (!f.action) continue;
@@ -196,31 +219,58 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         if (!health.drive) { row.status = "stopped"; row.reason = `${health.reason}: ${STOP_LABEL[health.reason] || health.detail}`; continue; }
       }
       let latest = null;
+      let redraftKey = null;
       if (a.type === "redraft") {
         latest = typeof deps.latestInbound === "function" ? await deps.latestInbound(f.contactId).catch(() => null) : null;
         const why = await redraftIsYours(f, latest);
         if (why) { handToMatt(f, row, why); continue; }
+        // Read the text BEFORE anything is claimed. A tapback ("👍 to 'Sounds
+        // good…'") or a closer ("Ok thank you") is them ending the thread, not
+        // asking anything: not a finding. Until 2026-09-22 the claim went
+        // first, so the next night reported "drafting was tried … nothing
+        // came of it" for a thumbs-up.
+        if (!latest?.body) { row.status = "skipped"; row.reason = "no inbound text to answer"; continue; }
+        if (isReaction(latest.body)) { drop(f, row, "a reaction, not a text"); continue; }
+        if (isCloser(latest.body)) { drop(f, row, "a closer, not a question"); continue; }
+        // An earlier night already tried this text. If the bot stood down for
+        // a reason (a bot-off tag, a live deal, "you have the thread"), that
+        // reason is the row — not "nothing came of it". Otherwise try again,
+        // up to MAX_REDRAFT_TRIES: the per-contact cap that stopped it resets
+        // by the next night.
+        const h = redraftHistory(f);
+        if (h.tries > 0) {
+          if (now - h.lastClaimAt < REDRAFT_RETRY_AFTER_MS && !h.outcome) { handToMatt(f, row, "a reply was started on an earlier run tonight"); continue; }
+          if (h.held) { handToMatt(f, row, `the bot stood down: ${String(h.held.data?.reason || "held").slice(0, 160)}`); continue; }
+          if (h.tries >= MAX_REDRAFT_TRIES) {
+            handToMatt(f, row, `drafting was tried ${h.tries} nights running and produced no reply${h.outcome?.data?.reason ? ` (last: ${String(h.outcome.data.reason).slice(0, 120)})` : ""}`);
+            continue;
+          }
+        }
+        redraftKey = h.tries > 0 ? `${h.key}:try${h.tries + 1}` : h.key;
       }
       // Everything that ends in a text is claimed first, so a second audit
       // the same night — or the morning sweep — starts nothing twice.
-      const c = await claim(f, "audit_action", { dedupeKey: auditDedupeKey(f), data: { kind: f.kind, action: a.type, why: f.why } });
+      const c = await claim(f, "audit_action", { dedupeKey: redraftKey || auditDedupeKey(f), data: { kind: f.kind, action: a.type, why: f.why } });
       if (!c.inserted) {
-        // Tried on an earlier run and the text is still unanswered: whatever
-        // that attempt came to, it wasn't a reply.
-        if (a.type === "redraft") handToMatt(f, row, "drafting was tried on an earlier run and nothing came of it");
+        // Claimed earlier tonight (a second run, or the daytime pass): it is
+        // in hand, and a retry is tomorrow's decision.
+        if (a.type === "redraft") handToMatt(f, row, "a reply was started on an earlier run tonight");
         else row.status = "claimed";
         continue;
       }
       if (a.type === "redraft") {
-        if (!latest?.body) { row.status = "skipped"; row.reason = "no inbound text to answer"; continue; }
-        // A tapback ("👍 to 'Sounds good…'") is them closing the thread, not
-        // asking anything — two of seven on the first dry run, 2026-09-16.
-        if (isReaction(latest.body)) { row.status = "skipped"; row.reason = "a reaction, not a text"; continue; }
         const r = await startReply({
           client, locationId, saved, store, contactId: f.contactId, message: String(latest.body).slice(0, 4000),
           channel: /email/i.test(latest.type || "") ? "email" : "sms", attachments: latest.attachments, sendsEnabled, deps: runDeps,
         });
-        if (r?.skipped) { row.status = "skipped"; row.reason = r.skipped; } else row.jobId = r?.job?.id || null;
+        if (r?.skipped) {
+          // Nothing was drafted, and the text is still theirs to see answered:
+          // the row says exactly why, and the outcome is on the record so
+          // tomorrow's try can read it.
+          row.status = "skipped"; row.reason = r.skipped;
+          await claim(f, "audit_outcome", { dedupeKey: `audit_outcome:${redraftKey}`, data: { key: auditDedupeKey(f), outcome: "skipped", reason: String(r.skipped).slice(0, 200) } });
+          handToMatt(f, row, `not drafted: ${String(r.skipped).slice(0, 160)}`);
+        } else row.jobId = r?.job?.id || null;
       } else if (a.type === "queue_offer_send") {
         if (typeof deps.queueOfferSend !== "function") { row.status = "skipped"; row.reason = "offer sends are not wired"; continue; }
         await deps.queueOfferSend({ offerId: f.offerId, reason: "the agent said the number works and nothing went (nightly audit)" });
@@ -257,6 +307,7 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
     }
     if (pace > 0) await wait(pace);
   }
+  if (dropped.size) result.findings = result.findings.filter((f) => !dropped.has(f));
 
   // The timers ride the daytime pass (today-timers.js): a priced offer nobody
   // floated, a thread gone quiet, a failed underwrite worth one more try.

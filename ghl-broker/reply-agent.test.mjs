@@ -3277,6 +3277,31 @@ test("a scheduled text to someone who unsubscribed since is dismissed, not sent 
   assert.ok(tags.some(([, t]) => t.includes("unsubscribed")));
 });
 
+/* ---------- a hold before any draft is on the record (2026-09-22) ---------- */
+
+test("a reply the bot-off tag holds before drafting leaves a reply_held row the audit can read", async () => {
+  _resetJobs();
+  const client = { call: async (path) => {
+    if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Michael", tags: ["agent", "stop bot"] } };
+    if (path.startsWith("/conversations/search")) return { conversations: [] };
+    return {};
+  } };
+  const store = fakeStore();
+  let modelCalls = 0;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "we received an offer late this morning",
+    deps: { draft: async () => { modelCalls++; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(job.status, "held");
+  assert.match(job.heldReason, /bot is off for this contact/);
+  assert.equal(modelCalls, 0);
+  const rows = await store.listContactEvents("LOC", "c1", { types: ["reply_held"] });
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].data.reason, /tag: stop bot/);
+});
+
 /* ---------- the nightly audit's release (2026-09-16) ---------- */
 
 test("a draft held only as a person's call is released when the audit asks; one the gates caught never is", async () => {

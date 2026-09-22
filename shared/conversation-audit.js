@@ -54,8 +54,32 @@ export const AUDIT_ACTION_KINDS = [{ key: "audit_owed", label: "From last night"
 export const AUDIT_EVENT_TYPES = [
   "text_summary", "call_summary", "promise_owed", "promise_kept", "checkin_requested", "checkin_sent",
   "address_pending", "address_pending_closed", "address_chase_sent", "subject_property_set",
-  "follow_up_sent", "offer_sent", "agent_estimate", "unsubscribed", "audit_action",
+  "follow_up_sent", "offer_sent", "agent_estimate", "unsubscribed", "audit_action", "audit_outcome", "reply_held",
 ];
+
+// How many nights the audit will try to draft an answer to one text before it
+// is Matt's. One try used to be it: Melissa Willet's closing-costs question
+// (2026-09-21) hit the per-contact cap, the one retry hit the same cap the
+// same day, and the next night said "nothing came of it" and stopped.
+export const MAX_REDRAFT_TRIES = 3;
+// How long a tried-and-unanswered text stays on the audit's list.
+export const REDRAFT_FOLLOW_DAYS = 3;
+// A claim younger than this is tonight's (the daytime pass, a second run):
+// still in hand, not retried.
+export const REDRAFT_RETRY_AFTER_MS = 20 * 3600000;
+
+// A text that closes the thread rather than asking anything: "Ok thank you",
+// "Sound good.", "Will do, thank you", "Thanks!". Five of last night's seven
+// "nothing came of it" rows (2026-09-22) were these or tapbacks. Short and
+// made only of those words; "Thanks, what about the roof?" is not one.
+const CLOSER_WORDS = "ok|okay|k|kk|sounds? good|sounds? great|good|great|perfect|awesome|cool|nice|got it|will do|noted|thanks?|thank you|thx|ty|no problem|np|you too|same to you|have a good (?:one|day|night|weekend)|talk soon|later|sure|yes|yep|yup|👍|🙏|❤️";
+// Built from a plain string, not a template literal: in a template `\s` is just "s".
+const CLOSER_RX = new RegExp("^(?:(?:" + CLOSER_WORDS + ")[\\s!.,]*){1,4}(?:matt|matthew|man|sir|bud|buddy)?[\\s!.,]*$", "i");
+export function isCloser(body = "") {
+  const t = String(body || "").replace(/[\u200B\uFEFF]/g, "").trim();
+  if (!t || t.length > 48 || /\?/.test(t)) return false;
+  return CLOSER_RX.test(t);
+}
 
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 const iso = (t) => new Date(t).toISOString();
@@ -172,6 +196,12 @@ export function auditConversations({
   // than the window is exactly the one nobody is looking at any more.
   const candidates = new Set(touched);
   for (const [c, list] of draftsBy) if (list.some((d) => d.status === "draft" || d.status === "handled")) candidates.add(c);
+  // …and anyone the audit tried to answer in the last few nights: a text the
+  // redraft could not answer (the per-contact cap) is still unanswered the
+  // next night even though nobody spoke today, and the retry has to find it.
+  for (const [c, list] of eventsBy) {
+    if (list.some((e) => e.type === "audit_action" && e.data?.action === "redraft" && now - (ms(e.at) ?? 0) <= REDRAFT_FOLLOW_DAYS * 86400000)) candidates.add(c);
+  }
   let redrafts = 0;
   for (const c of candidates) {
     if (excluded(c) || humanOwns(c)) continue;

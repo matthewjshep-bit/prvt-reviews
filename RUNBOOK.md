@@ -959,6 +959,26 @@ that day; the bot had already promised it twice. That handoff is on Today.
 
 ### The nightly audit (2026-09-16)
 
+**The audit answers what it finds (2026-09-22).** "From last night" had 18
+rows and the bot had touched none; seven read "drafting was tried on an
+earlier run and nothing came of it". Read against the threads: five were
+tapbacks or closers ("Ok thank you", "Sound good.", a thumbs-up on Matt's own
+text), one was the bot-off tag (Michael Lindekugel), one was the per-contact
+cap (Melissa Willet, 12/12 after an eight-address afternoon; the same-day
+retry hit the same cap). Now:
+- a tapback or a closer (`isCloser`, shared) is read BEFORE the claim and is
+  not a finding at all — not started, not on Today;
+- a redraft that was skipped (a cap) says why on Today ("not drafted: this
+  contact's daily cap reached (12/12)"), records an `audit_outcome`, and is
+  tried again the next night, up to `MAX_REDRAFT_TRIES` (3) — the claim key
+  carries `:tryN`;
+- a hold before any draft (bot-off tag, live deal, "you have the thread",
+  no party tag) writes a `reply_held` timeline row from the reply agent, and
+  the next night's row says "the bot stood down: bot is off for this contact
+  (tag: stop bot)" instead of "nothing came of it".
+What stays a person's by design: scheduling / wants a call (NEVER_AUTO, or
+turn booking on), a counter with no number read, "other", a live deal.
+
 Fifteen ticks push pieces of the loop. None of them stood back at the end of
 the day and asked, per thread: did we answer? do we owe them something, and is
 it on a clock? is the next move queued? Three threads went quiet on 2026-09-16
