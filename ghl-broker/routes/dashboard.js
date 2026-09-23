@@ -46,7 +46,7 @@ import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
 import { conversationConfig } from "../reply-agent.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, summarize as summarizeAudit } from "../shared/conversation-audit.js";
-import { startCoach, coachReport, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
+import { startCoach, coachReport, coachForContact, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
 
 // Same expression routes/offers.js reads: the broker's one send gate. The
 // pipeline only REPORTS it, so the console can say whether a draft's Send
@@ -62,7 +62,7 @@ const PIPELINE_EVENT_TYPES = [
   "follow_up_sent", "text_summary", "call_summary",
   "outreach_sent",
   "promise_made", "promise_owed", "promise_kept",
-  "drive_stopped", "drive_resumed",
+  "drive_stopped", "drive_resumed", "hand_reply",
 ];
 
 const DAY_MS = 86400000;
@@ -538,6 +538,15 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const { locationId } = resolveLocation(req);
       const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
       res.json({ ok: true, tz: "America/Los_Angeles", ...(await coachReport({ store, locationId, saved })) });
+    } catch (err) { fail(res, err); }
+  });
+  // One person's lessons, for Today's work pane (reads only).
+  router.get("/coach/contact/:contactId", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+      const canFile = Boolean(String(saved.githubRepo || "").trim() && String(saved.githubToken || "").trim());
+      res.json({ ok: true, canFile, ...(await coachForContact({ store, locationId, contactId: String(req.params.contactId) })) });
     } catch (err) { fail(res, err); }
   });
   router.post("/coach/run", async (req, res) => {

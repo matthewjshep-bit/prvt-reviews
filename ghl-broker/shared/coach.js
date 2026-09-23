@@ -409,6 +409,21 @@ export function revertProposal(config = {}, undo = {}) {
  * It reports; it never reverts. "worse" is a reason to look, not a finding —
  * two weeks of one intent is a small sample and the deals changed too.
  */
+/**
+ * proposalsForContact(proposals, { draftIds, feedbackIds }) → proposals
+ *
+ * The open and applied lessons that came from one person's thread: a
+ * proposal citing one of their drafts, or feedback given on their row
+ * (`fb:<eventId>`). Today's work pane shows these beside the thread.
+ * Settled ones (rejected, reverted, filed) are left on the coach card.
+ */
+export function proposalsForContact(proposals = [], { draftIds = [], feedbackIds = [] } = {}) {
+  const cites = new Set([...draftIds.map(String), ...feedbackIds.map((id) => `fb:${id}`)]);
+  if (!cites.size) return [];
+  return (proposals || []).filter((p) => (p?.status === "open" || p?.status === "applied")
+    && (p.evidence || []).some((id) => cites.has(String(id))));
+}
+
 export function coachScorecard({ proposal, drafts = [], now = Date.now(), rule = SCORECARD } = {}) {
   const at = ms(proposal?.appliedAt);
   if (!at) return null;

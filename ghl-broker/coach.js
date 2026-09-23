@@ -12,9 +12,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { store as defaultStore } from "./store.js";
 import {
-  gatherSignals, screenProposals, buildCoachContext, applyProposal, revertProposal, coachScorecard, issueFor,
+  gatherSignals, screenProposals, buildCoachContext, applyProposal, revertProposal, coachScorecard, issueFor, proposalsForContact,
   COACH_SYSTEM, COACH_SCHEMA, SCORECARD,
 } from "./shared/coach.js";
+import { ROW_FEEDBACK_EVENT, publicRowFeedback } from "./shared/row-feedback.js";
 import { draftStats } from "./shared/conversation-ai.js";
 import { GRADUATION } from "./shared/graduation.js";
 import { conversationConfig, saveConversationConfig, previewConversation } from "./reply-agent.js";
@@ -262,6 +263,36 @@ export async function fileCoachProposal({ store = defaultStore, locationId, id, 
 }
 
 /** coachReport — what GET /api/dashboard/coach returns: the run, the open ones, and the applied ones scored. */
+/**
+ * coachForContact({ store, locationId, contactId, now }) → { proposals, taught }
+ *
+ * One person's lessons, for Today's work pane: the open and applied
+ * proposals whose evidence is their drafts or feedback on their rows (applied
+ * ones carry their scorecard), and what a person has taught on their rows,
+ * newest first. Reads only.
+ */
+export async function coachForContact({ store = defaultStore, locationId, contactId, now = Date.now() }) {
+  const who = String(contactId || "").trim().slice(0, 64);
+  if (!who) throw Object.assign(new Error("contactId is required"), { http: 400 });
+  const [proposals, theirDrafts, taughtEvents] = await Promise.all([
+    store.listCoachProposals(locationId, { since: iso(now - 90 * 86400000), limit: 300 }).catch(() => []),
+    store.listReplyDrafts(locationId, { contactId: who, limit: 500 }).catch(() => []),
+    store.listContactEvents(locationId, who, { types: [ROW_FEEDBACK_EVENT], limit: 50 }).catch(() => []),
+  ]);
+  const mine = proposalsForContact(proposals, { draftIds: theirDrafts.map((d) => d.id), feedbackIds: taughtEvents.map((e) => e.id) });
+  const applied = mine.filter((p) => p.status === "applied");
+  let scored = [];
+  if (applied.length) {
+    const oldest = Math.min(...applied.map((p) => Date.parse(p.appliedAt) || now));
+    scored = await store.listReplyDrafts(locationId, { since: iso(oldest - SCORECARD.windowDays * 86400000), limit: 5000 }).catch(() => []);
+  }
+  return {
+    proposals: mine.map((p) => (p.status === "applied" ? { ...p, scorecard: coachScorecard({ proposal: p, drafts: scored, now }) } : p)),
+    taught: taughtEvents.slice().sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 10)
+      .map((e) => ({ ...publicRowFeedback(e), rowKind: e.data?.rowKind || "" })),
+  };
+}
+
 export async function coachReport({ store = defaultStore, locationId, saved = {}, now = Date.now() }) {
   const config = conversationConfig(saved);
   const [cursor, proposals] = await Promise.all([

@@ -601,3 +601,16 @@ test("a price the machine agreed with a buyer is your call to follow up: the dat
   assert.equal(build({ offers: [dealOffer({ status: "committed" })] }).actions.some((a) => a.kind === "investor_price_agreed"), false, "once they're committed it is the deal's business");
   assert.equal(build({ offers: [dealOffer({ status: "passed" })] }).actions.some((a) => a.kind === "investor_price_agreed"), false);
 });
+
+test("an owed number is named after the agent, from their offer or their thread", () => {
+  const now = Date.parse("2026-09-20T17:00:00Z");
+  const owed = (contactId) => ({ contactId, type: "promise_owed", at: "2026-09-20T13:00:00Z", address: "12 Elm St, Renton, WA", data: { what: "number", text: "I'll get back to you with a number." } });
+  const offers = [{ id: "o1", contactId: "c1", contactName: "Dana Whitfield", address: "12 Elm St, Renton, WA", cashAmount: 410000, status: "new", createdAt: "2026-09-20T12:00:00Z", sends: [] }];
+  const sentDrafts = [{ id: "d0", contactId: "c2", contactName: "Sara Kim", status: "sent", inbound: "Any word?", reply: "I'll get back to you with a number.", createdAt: "2026-09-20T09:00:00Z" }];
+  const r = buildPipeline({ offers, events: [owed("c1"), owed("c2"), owed("c3")], sentDrafts, now });
+  const row = (c) => r.actions.find((a) => a.kind === "promise_owed" && a.contactId === c);
+  assert.equal(row("c1").contactName, "Dana Whitfield");
+  assert.match(row("c1").title, /^Dana Whitfield: we owe them a number/);
+  assert.equal(row("c2").contactName, "Sara Kim");
+  assert.match(row("c3").title, /^An agent:/);
+});

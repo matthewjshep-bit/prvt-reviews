@@ -501,7 +501,11 @@ export function buildPipeline({
       heldTriageByOffer, now,
     });
     if (v.move === "not_owed") continue;
-    const who = contactNames[p.contactId] || "An agent";
+    // The investor book only knows buyers; an agent's name is on their
+    // offers and on the drafts in their thread.
+    const named = contactNames[p.contactId] || mine.find((o) => o?.contactName)?.contactName
+      || [...sentDrafts, ...drafts].find((d) => d?.contactId === p.contactId && d.contactName)?.contactName || "";
+    const who = named || "An agent";
     const heldReason = v.offerId && ["rerun", "ask_numbers", "yours", "wait"].includes(v.move) && mine.some((o) => o.id === v.offerId && aiHoldReasons(o).length)
       ? String(aiHoldReasons(mine.find((o) => o.id === v.offerId))[0]).split(" — ")[0].slice(0, 120) : "";
     // A question the bot couldn't answer: the row is the question, with a
@@ -523,7 +527,7 @@ export function buildPipeline({
     const ops = [...moveOps,
       ...(stopped ? [{ key: "resume_drive", label: "Resume", intent: "secondary" }] : []),
       ...(group === "machine" && driving ? [{ key: "stop_drive", label: "Stop", intent: "secondary" }] : [])];
-    push({ id: `promise_owed:${p.contactId}:${p.owedAt}`, kind: "promise_owed", severity: "now", contactId: p.contactId, contactName: contactNames[p.contactId] || "",
+    push({ id: `promise_owed:${p.contactId}:${p.owedAt}`, kind: "promise_owed", severity: "now", contactId: p.contactId, contactName: named,
       address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0,
       draftId: null, fromDraftId: p.draftId || null, ...(question ? { question } : {}), group, ...(next ? { next } : {}),
       title: `${who}: we owe them ${p.what === "number" ? "a number" : "an answer"}${p.address ? ` on ${String(p.address).split(",")[0]}` : ""}`,

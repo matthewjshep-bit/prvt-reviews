@@ -12,7 +12,7 @@ delete process.env.DATABASE_URL;
 
 const { store } = await import("./store.js");
 const {
-  runCoach, startCoach, maybeRunCoach, previewCoachProposal, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, coachReport,
+  runCoach, startCoach, maybeRunCoach, previewCoachProposal, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, coachReport, coachForContact,
   _resetJobs, CURSOR_NAME, RETRY_GAP_MS, MAX_DAILY_TRIES, STALE_RUN_MS,
 } = await import("./coach.js");
 const { conversationConfig } = await import("./reply-agent.js");
@@ -214,4 +214,20 @@ test("the report Today reads: the open ones, the applied ones with a scorecard, 
   assert.equal(report.settled[0].status, "reverted");
   const gh = await coachReport({ store, locationId: "GH", saved: await store.getOfferSettings("GH"), now: NOW });
   assert.equal(gh.canFile, true);
+});
+
+test("the work pane sees the lessons from one person's thread, and what was taught on their rows", async () => {
+  await settings("PANE");
+  const draftId = await seedEdit("PANE");
+  await runCoach({ locationId: "PANE", saved: await store.getOfferSettings("PANE"), store, now: NOW, deps: { propose: proposeRule() } });
+  await store.appendContactEvents("PANE", "c1", [{ id: "e-taught", type: "row_feedback", at: new Date(NOW - 3600000).toISOString(), source: "operator",
+    dedupeKey: "row_feedback:x", data: { rowId: `draft:${draftId}`, rowKind: "draft_waiting", category: "wrong_read", note: "they meant the other house" } }]);
+  const theirs = await coachForContact({ store, locationId: "PANE", contactId: "c1", now: NOW });
+  assert.equal(theirs.proposals.length, 1);
+  assert.deepEqual(theirs.proposals[0].evidence, [draftId]);
+  assert.equal(theirs.taught.length, 1);
+  assert.equal(theirs.taught[0].label, "Wrong read of the message");
+  assert.equal(theirs.taught[0].note, "they meant the other house");
+  const someoneElse = await coachForContact({ store, locationId: "PANE", contactId: "c2", now: NOW });
+  assert.deepEqual(someoneElse, { proposals: [], taught: [] });
 });

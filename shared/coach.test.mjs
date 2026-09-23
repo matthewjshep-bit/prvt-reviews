@@ -262,3 +262,20 @@ test("a rule that names the gates or never-auto is dropped — that is a code ga
   const ok = validateProposal({ kind: "rule", text: "When they name a weekday, answer the day before anything else.", why: "x", evidence: ["d1"] }, { config: {}, knownIds: ["d1"] });
   assert.equal(ok.ok, true, ok.reason);
 });
+
+/* ---------- one contact's lessons (Today's work pane) ---------- */
+
+test("a proposal shows on the contact whose drafts it cites", async () => {
+  const { proposalsForContact } = await import("./coach.js");
+  const proposals = [
+    { id: "p1", status: "open", evidence: ["d1", "d9"] },          // cites one of theirs
+    { id: "p2", status: "open", evidence: ["fb:e7"] },              // cites feedback given on their row
+    { id: "p3", status: "applied", evidence: ["d5"] },              // someone else's thread
+    { id: "p4", status: "rejected", evidence: ["d1"] },             // settled: not shown
+    { id: "p5", status: "open" },                                   // cites nothing it can be tied to
+  ];
+  const mine = proposalsForContact(proposals, { draftIds: ["d1", "d2"], feedbackIds: ["e7"] });
+  assert.deepEqual(mine.map((p) => p.id), ["p1", "p2"]);
+  assert.deepEqual(proposalsForContact(proposals, { draftIds: ["d5"] }).map((p) => p.id), ["p3"], "an applied lesson stays visible with its scorecard");
+  assert.deepEqual(proposalsForContact(proposals, {}), []);
+});

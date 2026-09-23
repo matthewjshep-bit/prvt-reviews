@@ -37,6 +37,9 @@ export const STOP_LABEL = {
 export const UNANSWERED_LIMIT = 2;
 // A thread a person answered by hand is theirs for this long.
 export const PERSON_HAS_IT_DAYS = 3;
+// The timeline event a text typed on Today's work pane writes
+// (ghl-broker/hand-reply.js).
+export const HAND_REPLY_EVENT = "hand_reply";
 // Only their newest few messages: an agent who snapped last month and has
 // since sent the contract is not annoyed.
 const RECENT_INBOUNDS = 3;
@@ -104,6 +107,10 @@ export function threadHealth({ offer = null, drafts = [], events = [], now = Dat
 
   const byHand = (drafts || []).find((d) => d?.answeredBy === "you" && now - (ms(d.updatedAt || d.createdAt) ?? 0) <= PERSON_HAS_IT_DAYS * DAY_MS);
   if (byHand) return stop("person_has_it", "", byHand.createdAt);
+  // A text typed on Today's work pane with no draft open leaves no draft to
+  // carry answeredBy; its timeline event says the same thing.
+  const typed = (events || []).find((e) => e?.type === HAND_REPLY_EVENT && now - (ms(e.at) ?? 0) <= PERSON_HAS_IT_DAYS * DAY_MS);
+  if (typed) return stop("person_has_it", "", typed.at);
 
   const n = unansweredMachineTexts(drafts, events);
   if (n >= UNANSWERED_LIMIT) return stop("two_unanswered", `${n} texts from us since they last wrote, nothing back`);

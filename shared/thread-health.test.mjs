@@ -101,3 +101,13 @@ test("no offer at all: the thread alone is judged", () => {
   assert.equal(threadHealth({ drafts: [theirs("hi", 1)], now: NOW }).drive, true);
   assert.equal(threadHealth({ drafts: [nudge(5, "outreach_nudge"), nudge(2, "outreach_nudge")], now: NOW }).reason, "two_unanswered");
 });
+
+test("a hand reply keeps the machine off the thread for three days", () => {
+  // Typed on Today's work pane with no bot draft open, so no draft carries
+  // answeredBy: the timeline event is the only record a person has it.
+  const typed = (d) => ({ type: "hand_reply", at: ago(d), offerId: "o1", source: "operator", data: {} });
+  const h = health({ drafts: [theirs("what's your timeline?", 1)], events: [typed(0.2)] });
+  assert.equal(h.drive, false);
+  assert.equal(h.reason, "person_has_it");
+  assert.equal(health({ drafts: [theirs("what's your timeline?", 6)], events: [typed(4)] }).drive, true, "three days on, it is the machine's again");
+});
