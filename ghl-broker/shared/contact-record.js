@@ -63,6 +63,9 @@ export const EVENT_TYPES = [
   // The bot (or a person) put a call or a visit on the calendar.
   "call_booked",
   "call_summary", "text_summary", "note",
+  // A text a person typed on Today's work pane (ghl-broker/hand-reply.js).
+  // The words are in GHL's thread, not here.
+  "hand_reply",
   // A deal post-mortem was written to the record (by the machine or by hand).
   "post_mortem_built",
   // A loan recorded on a property they bought — from a borrower list. What the
@@ -90,6 +93,7 @@ export const EVENT_LABEL = {
   outreach_left: "taken out of the outreach workflow (they replied)",
   pulse_sent: "checked in between deals",
   call_booked: "call booked",
+  hand_reply: "you texted them",
   post_mortem_built: "post-mortem written",
   property_financed: "financed a property",
 };
@@ -112,6 +116,7 @@ export const EVENT_ICON = {
   outreach_left: "LogOut",
   pulse_sent: "BellRing",
   call_booked: "CalendarCheck",
+  hand_reply: "MessageSquare",
   post_mortem_built: "ClipboardCheck",
 };
 

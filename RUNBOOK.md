@@ -1482,6 +1482,92 @@ reads "noted · <category>"; a second save is a newer verdict.
   scrubbed `why`); the row's title (a name and a street) is kept in `data`
   and not shown to the model.
 
+### Today's work pane (2026-09-23)
+
+Today used to be a long list with a different look per row kind: drafts had
+the outbox row, promises had op buttons, questions had the answer box,
+"Teach it" hid behind a link, and the offer, the thread and the coach's
+lessons were each somewhere else. Matt asked for one surface per row with
+all of that visible at once, and an easy way to go to the next row.
+
+**The layout** (`messaging-app/src/WorkView.jsx`, an inbox split):
+
+- **The rail** (left, `WorkRail.jsx`): the queue in work order, which is Your call,
+  Stuck, then The machine is on it (folded unless you are in it), and kind by
+  kind inside each (`orderRows`, `messaging-app/src/work-queue.js`). It has a
+  filter box. A tick marks a row you've taught.
+- **The header**: what the row is, why it's here (`detail`, "Stuck because",
+  "Next:"), and its own buttons. These are the same ops, confirms and toasts as
+  before, now in `RowOps.jsx`.
+- **Offer** (left, `OfferPanel.jsx`):
+  - Our offer, asking, their counter, the agreed price, ARV and repairs.
+  - The **all-in % of ARV**: (price + repairs) / ARV, green up to 70, amber up
+    to 74, red above. That is the buyer ceiling from the 2026-09-10 post-mortem.
+    It is shown at our number and at their counter.
+  - What happened (sends, status changes), the offer PDF, how the machine
+    priced it, the rehab scope, and their other offers.
+  - A row with no offer says so and offers **Start one**.
+- **Conversation** (right, `ConversationPanel.jsx`): the whole GHL thread
+  (100 messages), refreshed every 30s. Under it is the reply box:
+  - When the bot has an open draft for this person, the box is that draft
+    (`DraftRow embedded`). Edits, reasons, Dismiss and Hold work as they do
+    everywhere, so the coach still sees them.
+  - A question the bot couldn't answer gets the answer box instead.
+  - Otherwise it is a plain box (the hand reply, below).
+- **Coach** (bottom, `CoachPanel.jsx`):
+  - Teach it, always open.
+  - What you taught on this person's rows before.
+  - The nightly coach's open and applied proposals whose evidence is this
+    person's drafts or feedback on their rows. Apply and Reject work as on
+    the Learned card; nothing applies itself.
+
+**Keys:**
+
+| Key | Does |
+|---|---|
+| J / ↓ | next row |
+| K / ↑ | previous row |
+| R | the reply box |
+| T | the Teach note |
+| O | open the offer in the editor |
+| ⌘↵ | send (in the reply box) or save (in the Teach note) |
+| ? | show the list |
+
+Keys are ignored while typing, in a menu, or while the contact record is open.
+The open row is kept in `?row=<id>`. When the row you're on is resolved, the
+pane moves to the one after it ("Done — next: …"). The next row's offer,
+thread and lessons are read ahead (`work-data.js`).
+
+**Below laptop width:**
+
+- The rail becomes a picker in the header.
+- Offer and Conversation become two tabs.
+- The KPI tiles are now a one-line strip; the group counts are on the rail.
+
+**The hand reply** (`POST /api/contacts/:id/reply`, `ghl-broker/hand-reply.js`).
+This is the one new send, for a person typing when the bot has nothing open.
+
+- **Dry run unless `CARD_SENDS_ENABLED`**, like every send. SMS only, 1600
+  characters at most.
+- **The bot stands aside.** It dismisses the person's open drafts
+  (`answeredBy: "you"`, "you answered it yourself") and writes a `hand_reply`
+  event.
+- **The brake.** `threadHealth` reads that event as `person_has_it` for three
+  days, so the drivers, timers and audit leave the thread alone.
+  `humanHasThread` already read a text that matches no sent draft as a person.
+- **No words stored.** The event carries the GHL message id and a character
+  count, never the words; nothing about the contact is logged. A failed GHL
+  send writes nothing.
+
+**Per-contact lessons.** `GET /api/dashboard/coach/contact/:contactId` returns
+`{ canFile, proposals, taught }`. It uses `proposalsForContact` (shared/coach.js),
+which matches draft ids and `fb:<eventId>`; only open and applied proposals
+are returned, and applied ones carry their scorecard.
+
+Also: a promise row is named after the agent (from their offer or their
+drafts). It used to fall back to "An agent", because the name lookup only
+knew buyers.
+
 ### Durable errors (2026-09-17)
 
 Failures in the reply agent, proactive drafts, the underwriter, the 15-minute sweep and the coach used to live in Render's log or on an in-memory job a redeploy forgets. `recordError` (`ghl-broker/app-errors.js`) keeps them in `app_errors`, one row per distinct failure (fingerprint of area + message with ids and numbers flattened), counted. The message has phones and emails knocked out and the context is ids only. It never throws. The coach reads the night's rows; a repeated one becomes a `code_gap`.
@@ -1804,7 +1890,7 @@ Custom Menu Links, each one job, each component in exactly one place:
 
 | Menu link | URL | Tabs |
 |---|---|---|
-| Today (the old Overview link — rename it) | `https://<site>/dashboard?location_id={{location.id}}` | Needs you (autopilot status line, counts, the queue in three groups: your call · stuck · the machine is on it) · Board |
+| Today (the old Overview link — rename it) | `https://<site>/dashboard?location_id={{location.id}}` | Needs you (the work pane: the queue down the left in three groups — your call · stuck · the machine is on it — and one row at a time as offer · conversation · coach; `&row=<id>` opens a row) · Board |
 | Autopilot | `https://<site>/autopilot?location_id={{location.id}}` | Controls (the dial + every switch) · Conversation AI |
 | Reports | `https://<site>/reports?location_id={{location.id}}` | Flow · Activity (charts) · Lessons (outcomes + fell-through lessons) |
 

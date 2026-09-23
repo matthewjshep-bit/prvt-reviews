@@ -2,6 +2,7 @@
 //
 //   GET  /api/contacts/:id/record         everything the app knows about one person
 //   GET  /api/contacts/:id/thread         the latest texts/calls/emails with them, from GHL
+//   POST /api/contacts/:id/reply          a text typed on Today's work pane (no bot draft); dry-run unless CARD_SENDS_ENABLED
 //   POST /api/contacts/:id/facts          an operator adds or removes facts; GHL is re-projected
 //   POST /api/contacts/:id/events         an operator adds a note or a call summary
 //   POST /api/contacts/backfill           fill the record from existing offers, deals, drafts, invites and GHL fields
@@ -16,6 +17,10 @@ import { getContactRecord, learnFacts, forgetFact, recordEvent, projectToGhl, re
 import { startContactBackfill, getBackfillJob, publicBackfillJob, cancelBackfill } from "../contact-backfill.js";
 import { FACT_KEYS } from "../shared/contact-record.js";
 import { searchConversations, listConversationMessages } from "../ghl.js";
+import { sendHandReply } from "../hand-reply.js";
+
+// The same switch every other send reads (routes/offers.js).
+const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
 
 const str = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
 
@@ -83,6 +88,20 @@ export default function createContactsRouter({ resolveLocation }) {
       }
       messages.sort((a, b) => String(a.at).localeCompare(String(b.at)));
       res.json({ ok: true, messages: messages.slice(-limit), more: messages.length > limit });
+    } catch (err) { fail(res, err); }
+  });
+
+  // A person answering by hand when the bot has no draft open. The open
+  // drafts stand aside and the drivers leave the thread for three days
+  // (hand-reply.js). The words are never logged.
+  router.post("/:id/reply", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const r = await sendHandReply({
+        client, store, locationId, contactId: str(req.params.id, 64), text: req.body?.text,
+        offerId: str(req.body?.offerId, 64) || null, live: CARD_SENDS_ENABLED,
+      });
+      res.json(r);
     } catch (err) { fail(res, err); }
   });
 

@@ -58,6 +58,7 @@ export const AUDIT_EVENT_TYPES = [
   "text_summary", "call_summary", "promise_owed", "promise_kept", "checkin_requested", "checkin_sent",
   "address_pending", "address_pending_closed", "address_chase_sent", "subject_property_set",
   "follow_up_sent", "offer_sent", "agent_estimate", "unsubscribed", "audit_action", "audit_outcome", "reply_held",
+  "drive_stopped", "drive_resumed", "hand_reply",
 ];
 
 // How many nights the audit will try to draft an answer to one text before it

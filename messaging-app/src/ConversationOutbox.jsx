@@ -14,6 +14,7 @@ import { applyDraftAction, dismissReplyDraft, getContactThread, offerEditorUrl, 
 import ContactLink from "./ContactLink.jsx";
 import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
 import RowFeedback from "./RowFeedback.jsx";
+import ThreadView from "./ThreadView.jsx";
 
 export const LIVE = new Set(["queued", "running"]);
 
@@ -131,24 +132,8 @@ function ThreadPeek({ contactId }) {
   if (state.error) return <div className="mt-2 text-xs text-red-700">{state.error}</div>;
   if (!state.messages.length) return <div className="mt-2 text-xs text-slate-500">No messages with them in GHL yet.</div>;
   return (
-    <div className="mt-2 max-h-80 space-y-1.5 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-      {state.more && <div className="text-center text-[11px] text-slate-500">Showing the latest {state.messages.length} — open the contact for the rest.</div>}
-      {state.messages.map((m, i) => {
-        const ours = m.dir === "out";
-        const call = m.channel === "call" || m.channel === "voicemail";
-        return (
-          <div key={m.id || i} className={`flex ${ours ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[80%] rounded-lg px-2.5 py-1.5 text-sm ${ours ? "bg-blue-600 text-white" : "border border-slate-200 bg-white text-slate-900"}`}>
-              {call
-                ? <span className="italic">{ours ? "We called" : "They called"}{m.channel === "voicemail" ? " · voicemail" : ""}{m.body ? ` — ${m.body}` : ""}</span>
-                : <span className="whitespace-pre-wrap">{m.body}</span>}
-              <div className={`mt-0.5 text-[10px] ${ours ? "text-blue-100" : "text-slate-500"}`}>
-                {m.channel !== "sms" ? `${m.channel} · ` : ""}{m.at ? new Date(m.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}
-              </div>
-            </div>
-          </div>
-        );
-      })}
+    <div className="mt-2 max-h-80 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+      <ThreadView messages={state.messages} more={state.more} />
       <div ref={bottom} />
     </div>
   );
@@ -157,7 +142,11 @@ function ThreadPeek({ contactId }) {
 // `rowKind` / `feedback`: the Today row this draft sits in and what you have
 // already taught it about this row (shared/row-feedback.js). The control
 // renders on every draft, here and in the outbox.
-export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, offerId = null, rowKind = "draft", feedback = null }) {
+// `embedded`: the draft is the reply box of Today's work pane, which already
+// shows who, the whole thread and the Teach control — so the row leaves out
+// its own copies of those, its textarea answers to the pane's R key
+// (`textareaId`), and ⌘/Ctrl+Enter sends.
+export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, offerId = null, rowKind = "draft", feedback = null, embedded = false, textareaId }) {
   // The offer this draft is about, when the caller knows it (Today's queue does).
   const offerHref = (offerId || d.outbound?.offerId) ? offerEditorUrl(offerId || d.outbound.offerId) : null;
   const [showThread, setShowThread] = useState(false);
@@ -210,16 +199,17 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, o
           : d.autoSendable
           ? <Check size={14} className="shrink-0 text-emerald-600" />
           : <AlertTriangle size={14} className="shrink-0 text-amber-600" />}
+        {embedded && <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">The bot's draft</span>}
         {/* Straight through to the contact in GHL: the row tells you what was
             said, the record tells you everything else. */}
-        {d.contactId ? (
+        {embedded ? null : d.contactId ? (
           <ContactLink contactId={d.contactId} name={d.contactName || "Unknown contact"} party={d.party} className="font-semibold text-slate-900" />
         ) : (
           <span className="font-semibold text-slate-900">{d.contactName || "Unknown contact"}</span>
         )}
-        <PartyPill party={d.party} />
-        {d.propertyAddress && !offerHref && <span className="text-xs text-slate-500">{d.propertyAddress}</span>}
-        {offerHref && (
+        {!embedded && <PartyPill party={d.party} />}
+        {!embedded && d.propertyAddress && !offerHref && <span className="text-xs text-slate-500">{d.propertyAddress}</span>}
+        {!embedded && offerHref && (
           <a href={offerHref} target="_blank" rel="noreferrer" title="Open the offer"
             className="inline-flex items-center gap-1 text-xs text-blue-700 hover:underline">
             {d.propertyAddress || "Open the offer"} <ExternalLink size={11} />
@@ -372,16 +362,18 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, o
         </div>
       )}
 
-      {d.contactId && (
+      {d.contactId && !embedded && (
         <button type="button" onClick={() => setShowThread((v) => !v)} aria-expanded={showThread}
           className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:underline">
           {showThread ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <MessageSquare size={12} /> {showThread ? "Hide conversation" : "Show conversation"}
         </button>
       )}
-      {showThread && d.contactId && <ThreadPeek contactId={d.contactId} />}
+      {showThread && d.contactId && !embedded && <ThreadPeek contactId={d.contactId} />}
 
       <textarea
+        id={textareaId}
+        onKeyDown={embedded ? (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !busy && text.trim()) { e.preventDefault(); send(); } } : undefined}
         className="mt-2 w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
         rows={Math.min(6, Math.max(2, Math.ceil(text.length / 90)))}
         value={text}
@@ -422,10 +414,10 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, o
           </button>
         </div>
       </div>
-      <div className="mt-1.5">
+      {!embedded && <div className="mt-1.5">
         <RowFeedback rowId={`draft:${d.id}`} rowKind={rowKind} feedback={feedback}
           item={{ contactId: d.contactId, draftId: d.id, offerId: offerId || d.outbound?.offerId || null, address: d.propertyAddress || "", detail: d.autoSend?.reason || (d.flags || [])[0] || "" }} />
-      </div>
+      </div>}
     </li>
   );
 }

@@ -131,7 +131,7 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
-      <div className="flex h-full w-[600px] max-w-full flex-col overflow-y-auto bg-slate-50 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label="Contact record" className="flex h-full w-[600px] max-w-full flex-col overflow-y-auto bg-slate-50 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
