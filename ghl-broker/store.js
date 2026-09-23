@@ -729,10 +729,15 @@ const pgStore = {
     return rowCount > 0;
   },
   // Write back a locally-edited buy box (the GHL write already succeeded).
-  async updateInvestorDoc(locationId, contactId, doc, buyboxText) {
+  // `synced: false` is a re-render from the record (investor-row.js): it
+  // leaves synced_at alone, so "last synced" still means the last GHL read.
+  async updateInvestorDoc(locationId, contactId, doc, buyboxText, { synced = true } = {}) {
     const { rowCount } = await query(
-      `update investors set doc = $3, buybox_text = $4, synced_at = now()
-       where location_id = $1 and contact_id = $2`,
+      synced
+        ? `update investors set doc = $3, buybox_text = $4, synced_at = now()
+           where location_id = $1 and contact_id = $2`
+        : `update investors set doc = $3, buybox_text = $4
+           where location_id = $1 and contact_id = $2`,
       [locationId, contactId, doc, buyboxText || null]
     );
     return rowCount > 0;
@@ -1800,13 +1805,13 @@ const fileStore = (() => {
       persist();
       return true;
     },
-    async updateInvestorDoc(locationId, contactId, doc, buyboxText) {
+    async updateInvestorDoc(locationId, contactId, doc, buyboxText, { synced = true } = {}) {
       ensure();
       const row = data.investors[`${locationId}|${contactId}`];
       if (!row) return false;
       row.doc = doc;
       row.buyboxText = buyboxText || null;
-      row.syncedAt = nowIso();
+      if (synced) row.syncedAt = nowIso();
       persist();
       return true;
     },

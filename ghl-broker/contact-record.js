@@ -22,6 +22,7 @@ import {
   eventDedupeKey, eventFromLedgerLine, ledgerEvents, renderLedger, factsFromCustom,
 } from "./shared/contact-record.js";
 import { investorStatus } from "./shared/offer-status.js";
+import { refreshInvestorRow } from "./investor-row.js";
 
 const log = (what, e) => console.error(`contact-record: ${what}:`, e?.message || e);
 const nowIso = () => new Date().toISOString();
@@ -107,6 +108,9 @@ export async function learnFacts({ store, locationId, contactId, party = null, f
       const ev = { party: party || prev?.party || null, type: "fact_learned", at: a.at, source: a.source, ref: a.ref, data: { key: a.key, value: a.value } };
       return { ...ev, dedupeKey: eventDedupeKey(ev) };
     }));
+    // A buyer's row in the Dispositions book, so search sees it now and not
+    // at the next sync.
+    if ((party || prev?.party) !== "agent") await refreshInvestorRow({ store, locationId, contactId, facts: doc });
     return { profile, added };
   } catch (e) { log(`facts ${contactId}`, e); return { profile: null, added: [] }; }
 }
@@ -123,6 +127,7 @@ export async function forgetFact({ store, locationId, contactId, party = null, k
     if (!r.removed) return { profile, removed: false };
     const ev = { party: party || prev?.party || null, type: "fact_removed", at: nowIso(), source, ref, data: { key, value } };
     await store.appendContactEvents(locationId, contactId, [{ ...ev, dedupeKey: eventDedupeKey(ev) }]);
+    if ((party || prev?.party) !== "agent") await refreshInvestorRow({ store, locationId, contactId, facts: r.facts });
     return { profile, removed: true };
   } catch (e) { log(`forget ${contactId}`, e); return { profile: null, removed: false }; }
 }

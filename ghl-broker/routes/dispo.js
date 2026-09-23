@@ -25,6 +25,8 @@ import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
 import { purchaseEvents } from "../buyer-import.js";
 import { DISPO_IMPORTS_ENABLED, previewCsv, startImport, getImportJob, publicImportJob, cancelImport } from "../dispo-import.js";
 import { FACT_KEYS, factsAsCustom, factsEmpty } from "../shared/contact-record.js";
+import { buyboxCustom, investorProfileText, refreshInvestorRow } from "../investor-row.js";
+import { CURSOR_NAME as BOOK_SYNC_CURSOR } from "../investor-sync.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
 import { queueBlastDrafts, normalizeDispoAutopilot } from "../dispo-autopilot.js";
@@ -37,7 +39,7 @@ import {
 } from "../ghl.js";
 import { anthropicErrorToHttp } from "../rehab-scan.js";
 import {
-  BUYBOX_FIELDS, INVESTOR_FIELD_DEFS, RANK_LIMIT, buildBuyboxProfile, dealToQuery, addressAreas,
+  BUYBOX_FIELDS, INVESTOR_FIELD_DEFS, RANK_LIMIT, dealToQuery, addressAreas,
   parseBuyboxQuery, rankInvestors,
 } from "../dispo.js";
 import {
@@ -176,7 +178,9 @@ export default function createDispoRouter({ resolveLocation }) {
     syncedAt: row.syncedAt,
     lastBlastAt: row.lastBlastAt,
     ...row.doc,
-    buybox: normalizeBuybox(row.doc?.custom || {}),
+    // The record first, GHL's fields under it: what they told us last week
+    // beats a field written last month (investor-row.js).
+    buybox: normalizeBuybox(buyboxCustom(row.doc)),
   });
 
   // What the table needs, and nothing else. The full doc carries the flattened
@@ -340,6 +344,8 @@ export default function createDispoRouter({ resolveLocation }) {
           null
         ),
         tags: dispoTagPatterns(await getSettings(locationId)),
+        // The nightly re-read (investor-sync.js): when it last ran and what it found.
+        nightlySync: (await store.getJobCursor?.(locationId, BOOK_SYNC_CURSOR).catch(() => null))?.doc?.last || null,
       });
     } catch (err) { fail(res, err); }
   });
@@ -362,166 +368,173 @@ export default function createDispoRouter({ resolveLocation }) {
   /* ---------- sync ---------- */
 
   // Pull every contact carrying one of the configured tags and rebuild the
-  // local index. Read-only against GHL, so no dry-run gate.
+  // local index. Read-only against GHL, so no dry-run gate. The Sync button
+  // and the nightly run (investor-sync.js) both come through here.
+  async function syncBook({ locationId, client }) {
+    const saved = await getSettings(locationId);
+    const { tags, patterns, expanded, warning } = await resolveTags(client, locationId, saved);
+    const warnings = warning ? [warning] : [];
+    if (!tags.length) {
+      throw Object.assign(
+        new Error(`No investor tags matched. Configured: ${patterns.join(", ")}. Check Settings → Dispositions.`),
+        { http: 400 }
+      );
+    }
+
+    const { contacts, truncated } = await searchAllContactsByTags(client, locationId, tags);
+
+    // Resolved before the conversation scans on purpose: those issue
+    // thousands of requests, and when GHL throttles, whatever runs after
+    // them pays for it. The field map is load-bearing for every row.
+    const idKeyMap = await customFieldIdKeyMapForDefs(client, locationId, INVESTOR_FIELD_DEFS);
+
+    // Reply state we already know. Scanning a contact's messages is the most
+    // expensive thing this endpoint does, so it is only done for contacts
+    // whose conversation actually moved since the last sync.
+    const known = new Map(
+      (await store.listInvestors(locationId)).map((r) => [
+        r.contactId,
+        {
+          lastMessageAt: r.doc?.lastMessageAt || "",
+          lastRepliedAt: r.doc?.lastRepliedAt || "",
+          // When we last established the answer. Without this an empty
+          // lastRepliedAt is ambiguous — "we looked and they never replied"
+          // and "we have never looked" are the same blank — and reusing it
+          // means the cache can never warm up.
+          scannedAt: r.doc?.inboundScannedAt || "",
+        },
+      ])
+    );
+
+    // Who has actually answered us. Best-effort: without the
+    // conversations.readonly scope the book still syncs, it just can't tell
+    // "replied" from "we spoke last".
+    let replies = new Map();
+    let inbound = new Map();
+    let scannedConversations = 0;
+    // Contacts whose reply state is authoritative after this run.
+    const settled = new Set();
+    try {
+      const scan = await scanConversationsByContact(client, locationId);
+      replies = scan.byContact;
+
+      // Who has ever ANSWERED, which is the question people actually ask of
+      // a buyer list. Scoped to the investors being synced — scanning every
+      // conversation in the location would multiply the cost for contacts
+      // this page will never show.
+      const mine = new Map();
+      for (const c of contacts) {
+        const hit = replies.get(c.id);
+        if (!hit) continue;
+        const prev = known.get(c.id);
+        // Their last message is inbound — they replied, and we know exactly
+        // when, without opening the conversation at all.
+        if (String(hit.direction || "").toLowerCase() === "inbound") {
+          inbound.set(c.id, hit.at);
+          settled.add(c.id);
+          continue;
+        }
+        // Established before, and nothing has happened since — the stored
+        // answer still stands, including a stored "no, never replied".
+        if (prev?.scannedAt && prev.lastMessageAt === hit.at) {
+          if (prev.lastRepliedAt) inbound.set(c.id, prev.lastRepliedAt);
+          settled.add(c.id);
+          continue;
+        }
+        mine.set(c.id, hit);
+      }
+      const inb = await lastInboundByContact(client, mine);
+      for (const [cid, at] of inb.lastInbound) inbound.set(cid, at);
+      for (const cid of mine.keys()) settled.add(cid);
+      scannedConversations = inb.scanned;
+      if (inb.failures) {
+        warnings.push(`${inb.failures} conversation${inb.failures === 1 ? "" : "s"} couldn't be read — a few reply dates may be missing.`);
+      }
+
+      if (scan.truncated) {
+        warnings.push(
+          `Only the ${scan.scanned.toLocaleString()} most recent conversations of ${scan.total.toLocaleString()} ` +
+          `were scanned — "never contacted" may include people whose last message is older than that.`
+        );
+      }
+    } catch (e) {
+      warnings.push(
+        e.status === 401 || e.status === 403
+          ? "Reply status needs the conversations.readonly scope on the GHL private integration."
+          : `Couldn't read conversation history (${e.message}) — reply status not updated.`
+      );
+    }
+    const rows = contacts.map((c) => {
+      const custom = contactCustomRecord(c, idKeyMap);
+      const reply = replies.get(c.id) || null;
+      const repliedAt = inbound.get(c.id) || "";
+      const doc = {
+        name: contactName(c),
+        email: c.email || "",
+        phone: c.phone || "",
+        tags: Array.isArray(c.tags) ? c.tags : [],
+        custom,
+        lastMessageAt: reply?.at || "",
+        lastMessageDirection: reply?.direction || "",
+        lastMessageType: reply?.type || "",
+        lastRepliedAt: repliedAt,
+        inboundScannedAt: settled.has(c.id) ? new Date().toISOString() : "",
+        lastConvoSummary: custom.last_convo_summary || "",
+        lastConvoDate: custom.last_convo_date || "",
+        dealHistory: custom.investor_deal_history || "",
+        enrichLastRun: custom.enrich_last_run || "",
+      };
+      return {
+        contactId: c.id,
+        name: doc.name,
+        doc,
+        buyboxText: investorProfileText(doc),
+      };
+    });
+
+    // The record: every synced contact's fields fill whatever the record
+    // lacks (zero extra GHL calls — the contact is in hand), and the row
+    // then carries the record beside GHL's fields, so search and ranking
+    // both read it record-first: a fact filed from a conversation an hour
+    // ago outranks a GHL field written last month.
+    const byId = new Map(contacts.map((c) => [c.id, c]));
+    for (const r of rows) {
+      try {
+        await reconcileFromGhl({ store, locationId, contactId: r.contactId, party: "investor", contact: byId.get(r.contactId), custom: r.doc.custom });
+        const facts = (await store.getContactProfile(locationId, r.contactId))?.facts || null;
+        if (facts && !factsEmpty(facts)) {
+          r.doc.record = factsAsCustom(facts);
+          r.buyboxText = investorProfileText(r.doc);
+        }
+      } catch (e) { console.error(`dispo: record reconcile failed contact=${r.contactId}:`, e?.message); }
+    }
+
+    const { created, updated } = await store.upsertInvestors(locationId, rows);
+
+    // Prune only after a COMPLETE walk. On a truncated sync the contacts we
+    // never saw are indistinguishable from the ones who lost their tag, and
+    // pruning would delete the tail of the book.
+    let removed = 0;
+    if (truncated) {
+      warnings.push(
+        `Only the first ${rows.length} investors were read — untagged contacts were not pruned. ` +
+        `Narrow the tag list in Settings if this repeats.`
+      );
+    } else {
+      removed = await store.deleteMissingInvestors(locationId, rows.map((r) => r.contactId));
+    }
+
+    return {
+      synced: rows.length, created, updated, removed, truncated,
+      tags, patterns, expanded, scannedConversations, warnings,
+    };
+  }
+  router.syncBook = syncBook;
+
   router.post("/sync", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
-      const saved = await getSettings(locationId);
-      const { tags, patterns, expanded, warning } = await resolveTags(client, locationId, saved);
-      const warnings = warning ? [warning] : [];
-      if (!tags.length) {
-        return res.status(400).json({
-          error: `No investor tags matched. Configured: ${patterns.join(", ")}. Check Settings → Dispositions.`,
-        });
-      }
-
-      const { contacts, truncated } = await searchAllContactsByTags(client, locationId, tags);
-
-      // Resolved before the conversation scans on purpose: those issue
-      // thousands of requests, and when GHL throttles, whatever runs after
-      // them pays for it. The field map is load-bearing for every row.
-      const idKeyMap = await customFieldIdKeyMapForDefs(client, locationId, INVESTOR_FIELD_DEFS);
-
-      // Reply state we already know. Scanning a contact's messages is the most
-      // expensive thing this endpoint does, so it is only done for contacts
-      // whose conversation actually moved since the last sync.
-      const known = new Map(
-        (await store.listInvestors(locationId)).map((r) => [
-          r.contactId,
-          {
-            lastMessageAt: r.doc?.lastMessageAt || "",
-            lastRepliedAt: r.doc?.lastRepliedAt || "",
-            // When we last established the answer. Without this an empty
-            // lastRepliedAt is ambiguous — "we looked and they never replied"
-            // and "we have never looked" are the same blank — and reusing it
-            // means the cache can never warm up.
-            scannedAt: r.doc?.inboundScannedAt || "",
-          },
-        ])
-      );
-
-      // Who has actually answered us. Best-effort: without the
-      // conversations.readonly scope the book still syncs, it just can't tell
-      // "replied" from "we spoke last".
-      let replies = new Map();
-      let inbound = new Map();
-      let scannedConversations = 0;
-      // Contacts whose reply state is authoritative after this run.
-      const settled = new Set();
-      try {
-        const scan = await scanConversationsByContact(client, locationId);
-        replies = scan.byContact;
-
-        // Who has ever ANSWERED, which is the question people actually ask of
-        // a buyer list. Scoped to the investors being synced — scanning every
-        // conversation in the location would multiply the cost for contacts
-        // this page will never show.
-        const mine = new Map();
-        for (const c of contacts) {
-          const hit = replies.get(c.id);
-          if (!hit) continue;
-          const prev = known.get(c.id);
-          // Their last message is inbound — they replied, and we know exactly
-          // when, without opening the conversation at all.
-          if (String(hit.direction || "").toLowerCase() === "inbound") {
-            inbound.set(c.id, hit.at);
-            settled.add(c.id);
-            continue;
-          }
-          // Established before, and nothing has happened since — the stored
-          // answer still stands, including a stored "no, never replied".
-          if (prev?.scannedAt && prev.lastMessageAt === hit.at) {
-            if (prev.lastRepliedAt) inbound.set(c.id, prev.lastRepliedAt);
-            settled.add(c.id);
-            continue;
-          }
-          mine.set(c.id, hit);
-        }
-        const inb = await lastInboundByContact(client, mine);
-        for (const [cid, at] of inb.lastInbound) inbound.set(cid, at);
-        for (const cid of mine.keys()) settled.add(cid);
-        scannedConversations = inb.scanned;
-        if (inb.failures) {
-          warnings.push(`${inb.failures} conversation${inb.failures === 1 ? "" : "s"} couldn't be read — a few reply dates may be missing.`);
-        }
-
-        if (scan.truncated) {
-          warnings.push(
-            `Only the ${scan.scanned.toLocaleString()} most recent conversations of ${scan.total.toLocaleString()} ` +
-            `were scanned — "never contacted" may include people whose last message is older than that.`
-          );
-        }
-      } catch (e) {
-        warnings.push(
-          e.status === 401 || e.status === 403
-            ? "Reply status needs the conversations.readonly scope on the GHL private integration."
-            : `Couldn't read conversation history (${e.message}) — reply status not updated.`
-        );
-      }
-      const rows = contacts.map((c) => {
-        const custom = contactCustomRecord(c, idKeyMap);
-        const reply = replies.get(c.id) || null;
-        const repliedAt = inbound.get(c.id) || "";
-        const doc = {
-          name: contactName(c),
-          email: c.email || "",
-          phone: c.phone || "",
-          tags: Array.isArray(c.tags) ? c.tags : [],
-          custom,
-          lastMessageAt: reply?.at || "",
-          lastMessageDirection: reply?.direction || "",
-          lastMessageType: reply?.type || "",
-          lastRepliedAt: repliedAt,
-          inboundScannedAt: settled.has(c.id) ? new Date().toISOString() : "",
-          lastConvoSummary: custom.last_convo_summary || "",
-          lastConvoDate: custom.last_convo_date || "",
-          dealHistory: custom.investor_deal_history || "",
-          enrichLastRun: custom.enrich_last_run || "",
-        };
-        const buybox = normalizeBuybox(custom);
-        return {
-          contactId: c.id,
-          name: doc.name,
-          doc,
-          buyboxText: buildBuyboxProfile({ ...doc, buybox }),
-        };
-      });
-
-      // The record: every synced contact's fields fill whatever the record
-      // lacks (zero extra GHL calls — the contact is in hand), and the cache's
-      // buy box is then rendered record-first, so a fact filed from a
-      // conversation an hour ago outranks a GHL field written last month.
-      const byId = new Map(contacts.map((c) => [c.id, c]));
-      for (const r of rows) {
-        try {
-          await reconcileFromGhl({ store, locationId, contactId: r.contactId, party: "investor", contact: byId.get(r.contactId), custom: r.doc.custom });
-          const facts = (await store.getContactProfile(locationId, r.contactId))?.facts || null;
-          if (facts && !factsEmpty(facts)) {
-            const merged = { ...r.doc.custom, ...factsAsCustom(facts) };
-            r.buyboxText = buildBuyboxProfile({ ...r.doc, custom: merged, buybox: normalizeBuybox(merged) });
-          }
-        } catch (e) { console.error(`dispo: record reconcile failed contact=${r.contactId}:`, e?.message); }
-      }
-
-      const { created, updated } = await store.upsertInvestors(locationId, rows);
-
-      // Prune only after a COMPLETE walk. On a truncated sync the contacts we
-      // never saw are indistinguishable from the ones who lost their tag, and
-      // pruning would delete the tail of the book.
-      let removed = 0;
-      if (truncated) {
-        warnings.push(
-          `Only the first ${rows.length} investors were read — untagged contacts were not pruned. ` +
-          `Narrow the tag list in Settings if this repeats.`
-        );
-      } else {
-        removed = await store.deleteMissingInvestors(locationId, rows.map((r) => r.contactId));
-      }
-
-      res.json({
-        ok: true, synced: rows.length, created, updated, removed, truncated,
-        tags, patterns, expanded, scannedConversations, warnings,
-      });
+      res.json({ ok: true, ...(await syncBook({ locationId, client })) });
     } catch (err) { fail(res, err); }
   });
 
@@ -567,7 +580,8 @@ export default function createDispoRouter({ resolveLocation }) {
       if (!row) return res.status(404).json({ error: "investor not found — run a sync first" });
 
       const submitted = req.body?.buybox || {};
-      const existing = row.doc?.custom || {};
+      // What the editor showed: the record first, GHL under it.
+      const existing = buyboxCustom(row.doc);
 
       // Only fields the operator actually CHANGED are written. A blind write
       // of the whole buy box would stamp the AI's last extraction back over
@@ -593,17 +607,15 @@ export default function createDispoRouter({ resolveLocation }) {
       await withRetry(() => updateContact(client, contactId, { customFields }));
 
       // Mirror the write locally so the UI and the next search see it without
-      // waiting for a full re-sync.
-      const custom = { ...existing, ...changed };
+      // waiting for a full re-sync. The record half is re-rendered below,
+      // once the edit has been filed on it.
+      const custom = { ...(row.doc?.custom || {}), ...changed };
       const doc = {
         ...row.doc,
         custom,
         dealHistory: custom.investor_deal_history || row.doc?.dealHistory || "",
       };
-      const buybox = normalizeBuybox(custom);
-      await store.updateInvestorDoc(
-        locationId, contactId, doc, buildBuyboxProfile({ ...doc, buybox })
-      );
+      await store.updateInvestorDoc(locationId, contactId, doc, investorProfileText(doc));
 
       // The record: an operator's edit. A list value that was there and is
       // gone from what they submitted is forgotten with a tombstone, so the
@@ -626,6 +638,9 @@ export default function createDispoRouter({ resolveLocation }) {
         }
         if (facts.length) await learnFacts({ store, locationId, contactId, party: "investor", facts });
       } catch (e) { console.error(`dispo: buy-box record failed contact=${contactId}:`, e?.message); }
+      // learnFacts and forgetFact re-render the row as they go; this covers an
+      // edit that only confirmed what the record already held.
+      await refreshInvestorRow({ store, locationId, contactId });
 
       const fresh = await store.getInvestor(locationId, contactId);
       res.json({ ok: true, changed: Object.keys(changed), investor: hydrate(fresh) });
