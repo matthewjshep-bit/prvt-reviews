@@ -30,6 +30,7 @@ import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation
 import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeRunTierCheck } from "./tier-check.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
+import { maybeRunBookSync } from "./investor-sync.js";
 import { maybeRunBuyerPulse } from "./buyer-pulse.js";
 import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
@@ -278,6 +279,11 @@ setInterval(async () => {
         deps: { matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp },
       });
       if (waved) console.log(`dispo second wave started for ${locationId}`);
+      // The buyer book re-read from GHL once a night, ahead of the pulse that
+      // picks from it. Read-only; off until dispoAutopilot.bookSync.enabled.
+      if (await maybeRunBookSync({ client: makeClient(token), locationId, saved, store, deps: { syncBook: dispoRouter.syncBook } })) {
+        console.log(`investor book sync started for ${locationId}`);
+      }
       // The check-in between deals: a few buyers a workday, never blasted.
       // Off until dispoAutopilot.pulse.enabled; drafts until pulse.autoSend.
       const pulsed = await maybeRunBuyerPulse({

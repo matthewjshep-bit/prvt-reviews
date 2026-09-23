@@ -21,6 +21,7 @@
 
 import { store as defaultStore } from "./store.js";
 import { blastMessage, dealFacts } from "./shared/blast-text.js";
+import { normalizeBookSync } from "./investor-sync.js";
 import { normalizeBuyerPulse } from "./shared/buyer-pulse.js";
 import { dealNumbers } from "./dataroom.js";
 import { dealOutreachPaused } from "./shared/offer-status.js";
@@ -50,6 +51,8 @@ export function normalizeDispoAutopilot(v = {}) {
     paperworkOnCommit: o.paperworkOnCommit === true,
     // The check-in between deals (buyer-pulse.js). Off, and draft-only when on.
     pulse: normalizeBuyerPulse(o.pulse),
+    // The buyer book re-read from GHL once a night (investor-sync.js). Off.
+    bookSync: normalizeBookSync(o.bookSync),
   };
 }
 

@@ -2079,9 +2079,19 @@ them by **buy box**, and hands a shortlist to a GHL workflow.
 1. **Sync** pulls every contact carrying an investor tag (default `investor`,
    `investor-active`, `investor-stale`, `on-deal`; override in Settings →
    "Dispositions"). Read-only against GHL, safe to run any time; it prunes
-   contacts that lost their tag. Re-run it after tagging new buyers.
-2. **Buy box** = the `buybox_*` / `rehab_appetite` contact custom fields the AI
-   enrichment sweep already writes from your conversations. Edit one inline on
+   contacts that lost their tag. Re-run it after tagging new buyers, or tick
+   Settings → Dispositions → "Sync the investor list from GHL every night"
+   (`dispoAutopilot.bookSync`, off by default, 4am Pacific, audit-style
+   retries on the `investorBookSync` cursor; `GET /api/dispo/investors`
+   returns its last run as `nightlySync`).
+2. **Buy box** = the contact record's buy-box facts first, then the `buybox_*` /
+   `rehab_appetite` GHL fields under them. The reply agent files what an
+   investor texts as facts, and every fact learned or forgotten re-renders that
+   investor's row at once (`ghl-broker/investor-row.js`), so search, the table
+   and the AI ranking see it without a Sync. Rows keep GHL's fields in
+   `doc.custom` and the record in `doc.record`; a re-render leaves `synced_at`
+   alone, so "last synced" still means the last GHL read. A contact who isn't
+   in the book (no buyer tag) is never added by a text. Edit a buy box inline on
    the Investors page and only the fields you changed are written back to GHL —
    the sweep's other findings are never clobbered.
 3. **Search** takes plain English ("cash buyers for a gut-job duplex in Tacoma

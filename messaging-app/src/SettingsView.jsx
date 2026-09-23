@@ -992,6 +992,10 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
 
         {/* Between deals. The pool only ever hears from us when we're selling;
             this asks a few of them a day whether they're buying and what. */}
+        <label className="mt-4 flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.bookSync?.enabled)} onChange={(e) => setDispoAuto("bookSync")({ ...(form.dispoAutopilot?.bookSync || {}), enabled: e.target.checked })} />
+          <span><span className="font-semibold">Sync the investor list from GHL every night at 4am</span><span className="block text-xs text-slate-500">Brings in new buyers, tag changes and fields edited in GHL, the same as pressing Sync on Dispositions. What investors text us reaches the list straight away either way. Reads GHL only; nothing is sent.</span></span>
+        </label>
         <div className="mt-4 space-y-3 rounded-lg border border-slate-200 p-3">
           <div className="text-sm font-semibold">Pulse check between deals</div>
           <p className="text-xs text-slate-500">
