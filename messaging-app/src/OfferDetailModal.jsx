@@ -49,7 +49,7 @@ function Row({ label, value }) {
 // input it chose is shown, so the review is "do I agree with these four comps"
 // rather than "do I trust the machine". A held run leads with why it stopped —
 // that's the sentence the operator actually needs.
-function AiProvenance({ offer }) {
+export function AiProvenance({ offer }) {
   const uw = offer.autoUnderwrite;
   if (!uw) return null;
   const held = aiHoldReasons(offer);
@@ -169,7 +169,7 @@ function AgentTake({ offer }) {
 // The scope is the longest thing in here by far — 30+ lines on a full gut,
 // which used to push the offer numbers and every action off the screen. Show
 // the top of it (sorted by cost, so the top IS the story) and let it open.
-function RehabScope({ scope }) {
+export function RehabScope({ scope }) {
   const [open, setOpen] = useState(false);
   const lines = [...scope].sort((a, b) => (Number(b.cost) || 0) - (Number(a.cost) || 0));
   const total = lines.reduce((s, l) => s + (Number(l.cost) || 0), 0);

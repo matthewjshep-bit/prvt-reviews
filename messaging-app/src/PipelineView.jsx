@@ -1,6 +1,6 @@
 // PipelineView.jsx — the Today app (/dashboard): where everything stands,
 // and the queue of what needs a person. Two tabs share it: section="queue"
-// (Needs you) and section="board" (The board).
+// (Needs you — the work pane, WorkView.jsx) and section="board" (The board).
 //
 // One endpoint, polled every fifteen seconds (paused while the tab is
 // hidden). Anything a button does bumps the refresh, so the board and the
@@ -12,25 +12,37 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { getDashboardPipeline } from "./api.js";
 import { appHref } from "./links.js";
-import { BTN, ErrorBar, FilterChips, KpiRow, SearchInput, SkeletonRows } from "./ui.jsx";
-import ActionQueue from "./ActionQueue.jsx";
+import { BTN, ErrorBar, FilterChips, SearchInput, SkeletonRows } from "./ui.jsx";
+import WorkView from "./WorkView.jsx";
 import PipelineBoard from "./PipelineBoard.jsx";
 
 const POLL_MS = 15000;
 const SIDES = [{ key: "all", label: "Everything" }, { key: "agent", label: "Acquisition" }, { key: "dispo", label: "Disposition" }];
 
-function AutopilotStatus({ autopilot }) {
-  if (!autopilot) return null;
-  const c = autopilot.counts || {};
+// One line above the work pane: the autopilot (links to its controls), the
+// two numbers that were tiles, and when the daytime pass last ran. The group
+// counts live on the rail's headings now, so the pane gets the height.
+function StatusStrip({ autopilot, working, liveDeals, daytime, refreshBtn }) {
+  const c = autopilot?.counts || {};
   return (
-    <a href={appHref("/autopilot", "controls")}
-      className="flex flex-wrap items-center gap-x-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs text-slate-500 hover:border-blue-300">
-      <span className="font-semibold text-slate-700">Autopilot:</span>
-      <b className="text-slate-900">{autopilot.modeLabel || autopilot.mode || "Custom"}</b>
-      <span>· <b className="text-emerald-700">{c.on || 0}</b> sending itself · <b className="text-amber-700">{c.drafting || 0}</b> drafting · <b>{c.off || 0}</b> off</span>
-      {autopilot.readyToGraduate > 0 && <span className="text-blue-700">· {autopilot.readyToGraduate} ready to promote</span>}
-      <span className="ml-auto text-blue-700">Controls →</span>
-    </a>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+      {autopilot && (
+        <a href={appHref("/autopilot", "controls")} className="rounded-md hover:text-blue-700" title="Autopilot controls">
+          <span className="font-semibold text-slate-700">Autopilot</span> <b className="text-slate-900">{autopilot.modeLabel || autopilot.mode || "Custom"}</b>
+          {" "}· <b className="text-emerald-700">{c.on || 0}</b> sending itself · <b className="text-amber-700">{c.drafting || 0}</b> drafting · <b className="text-slate-700">{c.off || 0}</b> off
+          {autopilot.readyToGraduate > 0 && <span className="text-blue-700"> · {autopilot.readyToGraduate} ready to promote</span>}
+        </a>
+      )}
+      <span><b className="tabular-nums text-slate-700">{working}</b> working offers</span>
+      <span><b className="tabular-nums text-slate-700">{liveDeals}</b> live deals</span>
+      {daytime && (
+        <span>
+          Daytime pass {new Date(daytime.finishedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: {daytime.started} started
+          {daytime.stopped ? `, ${daytime.stopped} left alone by the brake` : ""}{daytime.error ? <span className="text-red-700"> — it failed: {daytime.error}</span> : ""}
+        </span>
+      )}
+      <span className="ml-auto">{refreshBtn}</span>
+    </div>
   );
 }
 
@@ -43,7 +55,6 @@ export default function PipelineView({ section = "queue" }) {
   const [side, setSide] = useState("all");
   const [showHidden, setShowHidden] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
-  const [highlightDraftId, setHighlightDraftId] = useState(null);
   const offsetRef = useRef(0);
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
@@ -70,19 +81,12 @@ export default function PipelineView({ section = "queue" }) {
     return () => { live = false; clearTimeout(timer); };
   }, [refreshKey]);
 
-  function showDraft(draftId) {
-    setHighlightDraftId(draftId);
-    const el = document.getElementById(`draft-${draftId}`);
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
-
   if (!data && !error) return <SkeletonRows rows={5} />;
 
   const cards = data?.cards || [];
   const actions = data?.actions || [];
   const drafts = data?.drafts || [];
   const counts = data?.counts || { actions: {}, lanes: {}, hidden: {} };
-  const draftsById = Object.fromEntries(drafts.map((d) => [d.id, d]));
 
   const needle = search.trim().toLowerCase();
   const visible = cards.filter((c) =>
@@ -109,28 +113,9 @@ export default function PipelineView({ section = "queue" }) {
 
       {section === "queue" && (
         <>
-          <AutopilotStatus autopilot={data?.autopilot} />
-          <KpiRow cols="sm:grid-cols-5" items={[
-            { label: "Your call", value: counts.actions?.byGroup?.yours ?? ((counts.actions?.now ?? 0) + (counts.actions?.soon ?? 0)), hint: `${counts.actions?.now ?? 0} of them now` },
-            { label: "Stuck", value: counts.actions?.byGroup?.stuck ?? 0, hint: "the machine tried and couldn't" },
-            { label: "Machine is on it", value: counts.actions?.byGroup?.machine ?? 0, hint: "already moving" },
-            { label: "Working offers", value: working, hint: "priced, floated, sent or countered" },
-            { label: "Live deals", value: liveDeals },
-          ]} />
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-sm font-bold">Today</h2>
-              {refreshBtn}
-            </div>
-            {data?.daytime && (
-              <p className="mb-2 text-xs text-slate-500">
-                Daytime pass last ran {new Date(data.daytime.finishedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: {data.daytime.started} started
-                {data.daytime.stopped ? `, ${data.daytime.stopped} left alone by the brake` : ""}{data.daytime.error ? `. It failed: ${data.daytime.error}` : "."}
-              </p>
-            )}
-            <ActionQueue actions={actions} draftsById={draftsById} sendsEnabled={data?.sendsEnabled} rowFeedback={data?.rowFeedback || {}}
-              serverOffsetMs={offsetRef.current} onDone={refresh} highlightDraftId={highlightDraftId} onShowDraft={showDraft} />
-          </div>
+          <StatusStrip autopilot={data?.autopilot} working={working} liveDeals={liveDeals} daytime={data?.daytime} refreshBtn={refreshBtn} />
+          <WorkView actions={actions} drafts={drafts} rowFeedback={data?.rowFeedback || {}} sendsEnabled={data?.sendsEnabled}
+            serverOffsetMs={offsetRef.current} onDone={refresh} />
         </>
       )}
 

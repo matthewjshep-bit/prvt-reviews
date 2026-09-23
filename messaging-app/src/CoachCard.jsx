@@ -45,7 +45,7 @@ const SCORE = {
   too_early: ["bg-slate-100 text-slate-500", "too early to say"],
 };
 
-function Row({ p, canFile, onDone }) {
+export function ProposalRow({ p, canFile, onDone }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const act = async (verb) => {
@@ -167,7 +167,7 @@ export function CoachBody({ coach, error = "", running = false, onRun, onDone: l
       )}
 
       {coach.open.length
-        ? <ul className="divide-y divide-slate-100">{coach.open.map((p) => <Row key={p.id} p={p} canFile={coach.canFile} onDone={load} />)}</ul>
+        ? <ul className="divide-y divide-slate-100">{coach.open.map((p) => <ProposalRow key={p.id} p={p} canFile={coach.canFile} onDone={load} />)}</ul>
         : <div className="text-sm text-slate-400">Nothing waiting on you.</div>}
 
       {coach.applied.length > 0 && (
@@ -175,7 +175,7 @@ export function CoachBody({ coach, error = "", running = false, onRun, onDone: l
           <button type="button" onClick={() => setShowApplied((v) => !v)} aria-expanded={showApplied} className="text-xs font-medium text-blue-700 hover:underline">
             {showApplied ? "Hide" : "Show"} what you've applied ({coach.applied.length})
           </button>
-          {showApplied && <ul className="divide-y divide-slate-100">{coach.applied.map((p) => <Row key={p.id} p={p} canFile={coach.canFile} onDone={load} />)}</ul>}
+          {showApplied && <ul className="divide-y divide-slate-100">{coach.applied.map((p) => <ProposalRow key={p.id} p={p} canFile={coach.canFile} onDone={load} />)}</ul>}
         </div>
       )}
     </section>

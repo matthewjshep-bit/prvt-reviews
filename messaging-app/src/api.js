@@ -109,6 +109,10 @@ export const saveContactFacts = (id, { party, add = [], remove = [] }) =>
   post(`/api/contacts/${encodeURIComponent(id)}/facts`, { party, add, remove });
 export const addContactEvent = (id, body) =>
   post(`/api/contacts/${encodeURIComponent(id)}/events`, body);
+// A text typed on Today's work pane when the bot has no draft open. Dry run
+// unless CARD_SENDS_ENABLED; the bot then leaves the thread to you for three days.
+export const sendHandReply = (id, { text, offerId = null }) =>
+  post(`/api/contacts/${encodeURIComponent(id)}/reply`, { text, offerId });
 export const runContactBackfill = (opts = {}) =>
   post(`/api/contacts/backfill`, opts).then((r) => r.job);
 export const cancelContactBackfill = () => post(`/api/contacts/backfill/cancel`, {});
@@ -521,6 +525,8 @@ export const resumeDrive = ({ contactId, offerId = null, address = "" }) => post
 export const runDashboardAudit = ({ dryRun = true } = {}) => post(`/api/dashboard/audit/run`, { dryRun });
 // The nightly coach: what it proposed from the day's edits and dismissals.
 export const getCoach = () => fetch(`${API_BASE}/api/dashboard/coach?${locq()}`).then(j);
+// One person's lessons, for Today's work pane: proposals from their drafts and what was taught on their rows.
+export const getCoachForContact = (contactId) => fetch(`${API_BASE}/api/dashboard/coach/contact/${encodeURIComponent(contactId)}?${locq()}`).then(j);
 export const runCoach = ({ dryRun = true } = {}) => post(`/api/dashboard/coach/run`, { dryRun });
 // verb: apply | reject | revert | file
 // Before/after drafts for an open proposal — saves and sends nothing; a few model calls.
