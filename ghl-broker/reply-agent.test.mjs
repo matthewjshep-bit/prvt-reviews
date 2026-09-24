@@ -3802,3 +3802,26 @@ test("'No, it's not turnkey, but it's all cosmetic' is a house that needs work, 
   assert.equal(isTurnkeyReply("Its turnkey, no work needed"), true);
   assert.equal(isTurnkeyReply("Not much to do, it was fully renovated last year"), true, "a 'not' about something else doesn't undo it");
 });
+
+test("a price drop text names the offer the agent holds from us, not a newer one that never went out", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const sent = { ...LANDED, id: "o-sent", cashAmount: 571061, status: "passed", sends: [{ ts: iso(500), channels: ["sms"] }] };
+  const unsent = { ...LANDED, id: "o-requote", cashAmount: 522401, status: "passed", createdAt: iso(1500) };
+  store.listOffers = async () => [unsent, sent];
+  const saved = structuredClone(STARTER_SAVED);
+  saved.conversationAi.parties.agent.followUp = { ...(saved.conversationAi.parties.agent.followUp || {}), enabled: true };
+  let seen;
+  const { job, skipped } = await startProactive({
+    client, locationId: "LOC", saved, store, contactId: "c1", kind: "price_drop", offer: unsent, sendsEnabled: true,
+    subject: { address: LANDED.address, from: 624975, to: 599950, ours: 571061, status: "passed" },
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "price_drop", reply: "Saw 12 Elm came down to 600k. Any chance the seller would look at cash as-is nearer our 571k now?", summary: "price drop" }; } },
+  });
+  assert.equal(skipped, null, skipped);
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(seen.outbound.ourK, "571K");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.ok(!d.flags.some((f) => /571/.test(f)), d.flags.join(" · "));
+});

@@ -1656,8 +1656,8 @@ export const OUTBOUND_KINDS = {
     forbids: () => [],
   },
   // The list price came down on a house we priced (price-watch.js). Their new
-  // price and the old one may be said, and our number from the book; ours is
-  // never raised here.
+  // price and the old one may be said, and ours — the number they hold in
+  // writing, not a newer one that never went out; ours is never raised here.
   price_drop: {
     party: "agent",
     enabled: (pb) => pb?.followUp?.enabled,
@@ -1666,7 +1666,7 @@ export const OUTBOUND_KINDS = {
       if (offer.deal) return "it became a deal";
       return subject?.to ? true : "no new price to mention";
     },
-    floats: ({ subject }) => [subject?.to, subject?.from].map((n) => Math.round(Number(n) || 0)).filter(Boolean),
+    floats: ({ subject }) => [subject?.to, subject?.from, subject?.ours].map((n) => Math.round(Number(n) || 0)).filter(Boolean),
     forbids: () => [],
   },
   // They told us when to check back ("this Wednesday"), or offered to send us
@@ -1904,7 +1904,8 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     ...(kind === "promise_due" ? { what: subject?.what || "answer", heldReason: subject?.heldReason || "", promisedText: subject?.promisedText || "", running: Boolean(subject?.running) } : {}),
     ...(kind === "price_drop" ? { from: Math.round(Number(subject?.from) || 0), to: Math.round(Number(subject?.to) || 0),
       fromK: Number(subject?.from) > 0 ? kText(Number(subject.from)) : "", toK: Number(subject?.to) > 0 ? kText(Number(subject.to)) : "",
-      offerStatus: subject?.status || "", ourK: Number(offer?.cashAmount) > 0 ? kText(Number(offer.cashAmount)) : "" } : {}),
+      offerStatus: subject?.status || "", ours: Math.round(Number(subject?.ours || offer?.cashAmount) || 0),
+      ourK: Number(subject?.ours || offer?.cashAmount) > 0 ? kText(Number(subject?.ours || offer.cashAmount)) : "" } : {}),
     ...(kind === "checkin_due" ? { phrase: subject?.phrase || "", sourceKind: subject?.sourceKind || "date" } : {}),
     ...(kind === "address_chase" ? { hint: String(subject?.hint || "").slice(0, 160), phrase: subject?.phrase || "",
       rung: Number(subject?.rung) || 1, rungs: Number(subject?.rungs) || 1 } : {}) };

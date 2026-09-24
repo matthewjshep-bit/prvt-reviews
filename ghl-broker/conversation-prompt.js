@@ -625,7 +625,8 @@ export function outboundOpening(outbound) {
           ? `They passed on our offer${o.ourK ? ` of ${o.ourK}` : ""} earlier. `
           : `Our offer${o.ourK ? ` of ${o.ourK}` : ""} is still out to them. `) +
         `One or two lines: say you saw the price move, and ask whether the seller would look at a cash, as-is offer ` +
-        `closer to ours now. You may say their new list price and restate our number exactly as it is in the offer book; ` +
+        `closer to ours now. You may say their new list price and restate our number exactly as given here — it is the ` +
+        `one they have from us, even where the offer book shows a lower one that never went out; ` +
         `do NOT raise ours, hint that we'd go higher, or name any other number. Write it like a text: no dollar signs. ` +
         `${CONTINUE} Set intent to price_drop.`;
 

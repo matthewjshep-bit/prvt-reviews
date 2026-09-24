@@ -111,3 +111,57 @@ test("the watch runs once a day, in the morning, and not without an Apify token"
   const noKey = await runPriceWatch({ locationId: "LOC", saved: { ...SAVED, apifyToken: "" }, store, now: NOW, deps });
   assert.equal(noKey.skipped, "no Apify token");
 });
+
+// 521 Avenue C, 2026-09-24. We sent 571k in August; a re-underwrite in
+// September priced it at 522k and never went out. The seller's agent had
+// turned down 571 three times and, the day before, asked us for 580. The
+// list came down to 599,950 and the bot asked about "our 522k".
+const HOUSE = "521 Avenue C, Snohomish, WA 98290";
+const erinBook = (over = {}) => [
+  lisa({ id: "sent571", contactId: "c9", address: HOUSE, cashAmount: 571061, status: "passed",
+    statusAt: new Date(NOW - 30 * DAY).toISOString(), createdAt: new Date(NOW - 36 * DAY).toISOString(),
+    sends: [{ ts: new Date(NOW - 36 * DAY).toISOString(), channels: ["sms", "email"], results: { sms: { ok: true } } }],
+    priceWatch: { listPrice: 624975, status: "forSale", checkedAt: new Date(NOW - DAY).toISOString() } }),
+  lisa({ id: "requote522", contactId: "c9", address: HOUSE, cashAmount: 522401, status: "passed", askingPrice: 649000,
+    statusAt: new Date(NOW - DAY / 2).toISOString(), createdAt: new Date(NOW - 10 * DAY).toISOString(),
+    statusHistory: over.history || [{ ts: new Date(NOW - DAY / 2).toISOString(), status: "passed" }] }),
+];
+const withContactList = (store) => ({ ...store,
+  async listOffers(_loc, { contactId } = {}) { return [...store.map.values()].filter((o) => !contactId || o.contactId === contactId); } });
+
+test("a price drop quotes the offer we sent them, not a newer number that never went out", async () => {
+  const store = withContactList(fakeStore(erinBook()));
+  const s = starter();
+  const r = await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW,
+    deps: { ...s, fetchListings: listings([[HOUSE, { listPrice: 599950, status: "FOR_SALE" }]]) } });
+  assert.equal(r.dropped, 1);
+  assert.equal(s.calls.length, 1);
+  assert.equal(s.calls[0].subject.ours, 571061, "they have 571 in writing; 522 was never sent");
+  assert.equal(s.calls[0].subject.from, 624975, "the last price we saw on the house, whichever offer saw it");
+});
+
+test("a price drop that still sits above what their agent asked us for isn't news, so no text goes", async () => {
+  const history = [
+    { ts: new Date(NOW - DAY).toISOString(), status: "countered", amount: 580000, note: "countered at $580,000" },
+    { ts: new Date(NOW - DAY / 2).toISOString(), status: "passed" },
+  ];
+  const store = withContactList(fakeStore(erinBook({ history })));
+  const s = starter();
+  const r = await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW,
+    deps: { ...s, fetchListings: listings([[HOUSE, { listPrice: 599950, status: "FOR_SALE" }]]) } });
+  assert.equal(r.dropped, 1);
+  assert.equal(s.calls.length, 0, "she asked 580 yesterday; the seller at 599,950 hasn't moved toward us");
+  const ev = store.events.find((e) => e.type === "price_dropped");
+  assert.ok(ev, "the drop is still on the record");
+  assert.equal(ev.data.theirAsk, 580000);
+  assert.match(r.results[0].reason, /asked/);
+});
+
+test("a price drop below what their agent asked is worth a text", async () => {
+  const history = [{ ts: new Date(NOW - 5 * DAY).toISOString(), status: "countered", amount: 615000 }];
+  const store = withContactList(fakeStore(erinBook({ history })));
+  const s = starter();
+  await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW,
+    deps: { ...s, fetchListings: listings([[HOUSE, { listPrice: 599950, status: "FOR_SALE" }]]) } });
+  assert.equal(s.calls.length, 1);
+});
