@@ -288,7 +288,8 @@ test("distance tapers from a quarter mile to the ring edge, not as a one-mile bo
   const at = (d) => similarity(SUBJECT, twin({ distance: d }), { radiusMiles: 0.5, now: NOW }).score;
   assert.equal(at(0.2), 100, "inside a quarter mile is full");
   assert.ok(at(0.3) < at(0.2) && at(0.45) < at(0.3), "and it slides from there");
-  assert.equal(at(0.5), 75, "the ring edge is worth nothing on distance — the other 75 points remain");
+  const total = Object.values(SIM_WEIGHTS).reduce((a, b) => a + b, 0);
+  assert.equal(at(0.5), Math.round(100 * (total - SIM_WEIGHTS.distance) / total), "the ring edge is worth nothing on distance — every other point remains");
   assert.equal(similarity(SUBJECT, twin({ distance: 0.9 }), { radiusMiles: 1.5, now: NOW }).score > at(0.5), true, "a wider ring is a longer slope");
 });
 
@@ -302,8 +303,26 @@ test("±300 sqft is a full size match even past ten percent", () => {
 test("a factor nobody knows drops out of the denominator instead of scoring zero", () => {
   const s = similarity(SUBJECT, twin({ yearBuilt: null, lotSqft: null }), { radiusMiles: 0.5, now: NOW });
   assert.equal(s.score, 100, "unknown era and lot leave a perfect match perfect");
-  assert.equal(s.known, 100 - SIM_WEIGHTS.yearBuilt - SIM_WEIGHTS.lot);
+  assert.equal(s.known, Object.values(SIM_WEIGHTS).reduce((a, b) => a + b, 0) - SIM_WEIGHTS.yearBuilt - SIM_WEIGHTS.lot);
   assert.equal(similarity({}, {}, { now: NOW }).score, null, "nothing knowable is no score, not zero");
+});
+
+// 2026-09-24, Matt: comps should be as close in age as they can be. Live ARV
+// sets were landing at "built ±9–15 yrs" because a 12-years-apart comp still
+// kept most of its year credit and year was worth less than beds.
+test("a comp built 15 years apart gets no credit for its age, and 10 apart gets half", () => {
+  const yearValue = (yearBuilt) => similarity(SUBJECT, twin({ yearBuilt }), { radiusMiles: 0.5, now: NOW })
+    .factors.find((f) => f.key === "yearBuilt").value;
+  assert.equal(yearValue(1968 + 5), 1, "inside five years is the same era");
+  assert.equal(yearValue(1968 + 10), 0.5);
+  assert.equal(yearValue(1968 - 15), 0);
+  assert.ok(SIM_WEIGHTS.yearBuilt > SIM_WEIGHTS.beds, "age outranks a bedroom count the pool already holds to ±1");
+});
+
+test("between two otherwise equal comps, the one closer in age ranks first", () => {
+  const near = similarity(SUBJECT, twin({ yearBuilt: 1972, distance: 0.3 }), { radiusMiles: 0.5, now: NOW }).score;
+  const far = similarity(SUBJECT, twin({ yearBuilt: 1981, distance: 0.1 }), { radiusMiles: 0.5, now: NOW }).score;
+  assert.ok(near > far, `4 yrs apart at 0.3 mi (${near}) should beat 13 yrs apart next door (${far})`);
 });
 
 test("year built counts once a comp carries it, and not before", () => {

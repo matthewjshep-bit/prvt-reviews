@@ -394,7 +394,8 @@ Every comp in the ring is scored by `similarity` in `shared/comp-match.js` — a
 0–100 closeness, not a vote count. Distance leads (full marks inside a quarter
 mile, nothing at the ring edge), then size (±10% or ±300 sqft is a full match,
 nothing at ±30%), beds (exact, or 40% for one off), baths, year built (full
-inside five years, nothing at 25), sale recency, and lot when both are known.
+inside five years, nothing at 15, and weighted above beds since 2026-09-24),
+sale recency, and lot when both are known.
 A fact nobody has leaves the denominator, as the old scorecard's did. The
 scorecard itself stays for the ✓/✗ lines in the pane's tooltip.
 
