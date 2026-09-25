@@ -79,3 +79,10 @@ test("all-in reads against the 70% a buyer pays", () => {
   expect(allInTone(68.5)).toBe("good");
   expect(allInPct({ price: 0, arv: 500000 })).toBe(null);
 });
+
+// 13041 SE 208th St (2026-09-25): a draft whose paper was held opens on the
+// offer it would have sent, so the re-quote is one tap away.
+test("a held-paper draft opens on the offer it would have sent", () => {
+  const drafts = [{ id: "h1", contactId: "c1", status: "draft", paperHold: { offerId: "aug", amount: 400000 } }];
+  expect(rowTargets({ id: "r", kind: "draft_waiting", group: "yours", contactId: "c1", draftId: "h1" }, drafts).offerId).toBe("aug");
+});

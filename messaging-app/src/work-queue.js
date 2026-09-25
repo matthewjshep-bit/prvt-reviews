@@ -79,7 +79,8 @@ export function rowTargets(item, drafts = []) {
   return {
     contactId: item.contactId || draft?.contactId || null,
     party,
-    offerId: item.offerId || draft?.outbound?.offerId || null,
+    // A draft whose paper was held names the offer it would have sent.
+    offerId: item.offerId || draft?.paperHold?.offerId || draft?.outbound?.offerId || null,
     draftId: draft?.id || null,
     draft,
   };

@@ -22,7 +22,7 @@ import { summarizeFeedback } from "@shared/conversation-ai.js";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { INVESTOR_STATUS_LABEL } from "@shared/offer-status.js";
 import { getContactProfile, saveContactFacts, addContactEvent, ghlContactUrl } from "./api.js";
-import { BTN, BTN_PRIMARY, Pill, StatusPill, StagePill } from "./ui.jsx";
+import { BTN, BTN_PRIMARY, CurrentPill, Pill, StatusPill, StagePill } from "./ui.jsx";
 import { PartyPill, DraftRow } from "./ConversationOutbox.jsx";
 
 const INPUT = "rounded-lg border border-slate-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none";
@@ -160,9 +160,9 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
               <Section title={party === "investor" ? "Deals they've been on" : "Offers and deals"}>
                 <ul className="space-y-1">
                   {rec.offers.map((o) => (
-                    <li key={o.id} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm">
+                    <li key={o.id} className={`flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm ${o.supersededBy ? "opacity-60" : ""}`}>
                       <span className="min-w-0 truncate">{o.address}</span>
-                      <span className="flex shrink-0 items-center gap-2 text-xs text-slate-500">{o.cashAmount ? fmtMoney(o.cashAmount) : ""}<StatusPill offer={o} small /></span>
+                      <span className="flex shrink-0 items-center gap-2 text-xs text-slate-500">{o.cashAmount ? fmtMoney(o.cashAmount) : ""}<StatusPill offer={o} small /><CurrentPill offer={o} /></span>
                     </li>
                   ))}
                   {rec.deals.map((d) => (

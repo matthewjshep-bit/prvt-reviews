@@ -10,6 +10,7 @@ import {
   ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, runUnderwrite, saveDraft,
   saveOfferWorkspace, saveSettings, searchContacts, setOfferStatus, suggestAddresses, updateDataroom,
   updateOffer, zillowUrl,
+  requoteOffer, MAKE_CURRENT,
 } from "./api.js";
 import { LIVE as UW_LIVE, PHASE as UW_PHASE } from "./UnderwriteStrip.jsx";
 import CompsPane from "./CompsPane.jsx";
@@ -23,7 +24,8 @@ import NetSheetModal from "./NetSheetModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
-import { StatusMenu, StatusPill } from "./ui.jsx";
+import { CurrentPill, PaperHeldBanner, StatusMenu, StatusPill } from "./ui.jsx";
+import { annotateCurrent, houseKey } from "@shared/current-offer.js";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -263,6 +265,7 @@ function AgentOfferTabs({ offers, currentId, contactName, onOpen }) {
               </span>
               <span className="tabular-nums text-slate-400">{(o.createdAt || "").slice(5, 10)}</span>
               <StatusPill offer={o} small />
+              <CurrentPill offer={o} />
             </button>
           );
         })}
@@ -930,6 +933,11 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     setError("");
     try {
       const r = await setOfferStatus(o.id, status);
+      // A pin moves: the server cleared it on this row's siblings.
+      if (status === MAKE_CURRENT && r.offer) {
+        const k = houseKey(r.offer.address || "");
+        setAgentOffers((list) => list.map((x) => (x.id !== r.offer.id && x.pin && houseKey(x.address || "") === k ? { ...x, pin: undefined } : x)));
+      }
       patchPeek(r.offer);
       onOfferSaved?.(r.offer); // the shell holds the offer being edited
       if (r.promoted) { setPeek(null); onDeal?.(); }
@@ -945,15 +953,39 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     setAgentOffers((list) => list.map((o) => (o.id === updated.id ? updated : o)));
   };
 
+  // The agent's rows, each told whether it's its house's current offer
+  // (shared/current-offer.js). Derived, so a status or pin patched into
+  // agentOffers re-reads.
+  const agentBook = annotateCurrent(agentOffers);
+  const verdictOf = (o) => {
+    const v = o?.id ? agentBook.find((x) => x.id === o.id) : null;
+    return v ? { ...o, isCurrent: v.isCurrent, supersededBy: v.supersededBy, currentPinned: v.currentPinned, houseOffers: v.houseOffers } : o;
+  };
   // The offer being edited, as freshly as we know it. `restore` is a prop and
   // can lag a status recorded here by a render; the agent strip is refetched
   // and patched, so prefer its copy.
   const liveOffer = fromOffer
-    ? agentOffers.find((o) => o.id === fromOffer.id) || fromOffer
+    ? verdictOf(agentOffers.find((o) => o.id === fromOffer.id) || fromOffer)
     : null;
   // The status control also shows on a draft: a held underwrite you answered
   // yourself, or a house you're walking from, is closed out right here.
-  const statusOffer = liveOffer || (restore?.id ? agentOffers.find((o) => o.id === restore.id) || restore : null);
+  const statusOffer = liveOffer || (restore?.id ? verdictOf(agentOffers.find((o) => o.id === restore.id) || restore) : null);
+  const currentOfHouse = liveOffer?.supersededBy ? agentBook.find((o) => o.id === liveOffer.supersededBy.id) : null;
+
+  // "Re-quote at 400K" from the held-paper banner: re-priced in place, sent
+  // by nobody — Send is the next press.
+  const [requoting, setRequoting] = useState(false);
+  async function requote(o, amount) {
+    if (!o?.id || requoting) return;
+    setRequoting(true);
+    setError("");
+    try {
+      const r = await requoteOffer(o.id, amount);
+      patchPeek(r.offer);
+      onOfferSaved?.(r.offer);
+    } catch (e) { setError(e.message); }
+    setRequoting(false);
+  }
 
   // Money fields format with thousands separators as you type; the calc
   // engine strips $ , and spaces, so the formatted string feeds it directly.
@@ -1481,8 +1513,27 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         </div>
       </div>
 
-      <AgentOfferTabs offers={agentOffers} currentId={fromOffer?.id}
+      <AgentOfferTabs offers={agentBook} currentId={fromOffer?.id}
         contactName={contact?.name} onOpen={setPeek} />
+
+      {/* You're editing a row the house has moved past. Saving re-prices it
+          and makes it current again; say so before that happens by accident. */}
+      {liveOffer?.supersededBy && (
+        <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          <span className="min-w-0 flex-1">
+            <strong>Superseded.</strong> The current offer on this house is {fmtMoney(liveOffer.supersededBy.cashAmount)} — the bot, the
+            nudges and the counters all work from that one. Saving a new number here makes this one current again.
+          </span>
+          {currentOfHouse && (
+            <button type="button" onClick={() => setPeek(currentOfHouse)} className="font-semibold text-blue-700 underline">Open the current one</button>
+          )}
+          <button type="button" disabled={statusBusy} onClick={() => changeOfferStatus(liveOffer, MAKE_CURRENT)}
+            className="rounded-md border border-slate-300 bg-white px-2.5 py-1 font-semibold hover:bg-slate-100 disabled:opacity-60">
+            Make this the current offer
+          </button>
+        </div>
+      )}
+      {liveOffer && <PaperHeldBanner offer={liveOffer} busy={requoting} onRequote={(amount) => requote(liveOffer, amount)} />}
 
       <ContactPicker
         selected={contact} onSelect={selectContact}
@@ -1797,7 +1848,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     {peek && (
       <OfferDetailModal
         offer={peek}
-        siblings={agentOffers}
+        siblings={agentBook}
         contactName={contact?.name}
         onSelect={setPeek}
         onClose={() => setPeek(null)}
@@ -1810,6 +1861,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         onOfferPage={(o) => setPeekSub({ kind: "page", offer: o })}
         onPromote={onDeal ? promoteFromPeek : undefined}
         onStatus={changeOfferStatus}
+        onRequote={requote} requoting={requoting}
         statusBusy={statusBusy}
         onDealNav={onDeal} />
     )}

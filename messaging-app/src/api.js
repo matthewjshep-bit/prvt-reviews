@@ -345,10 +345,20 @@ export const deleteOffer = (id) =>
 // caller patches its copy exactly as it does for a status.
 export const HOT_ON = "__hot_on";
 export const HOT_OFF = "__hot_off";
+// "Current" is the third axis: which row on a house is the number we're
+// working from (shared/current-offer.js). Same menu, same { offer } back.
+export const MAKE_CURRENT = "__make_current";
+export const UNPIN_CURRENT = "__unpin_current";
 export const setOfferStatus = (id, status, note = "") =>
   status === HOT_ON || status === HOT_OFF
     ? post(`/api/offers/${encodeURIComponent(id)}/hot`, { hot: status === HOT_ON, note }, "PATCH")
-    : post(`/api/offers/${encodeURIComponent(id)}/status`, { status, note }, "PATCH");
+    : status === MAKE_CURRENT || status === UNPIN_CURRENT
+      ? post(`/api/offers/${encodeURIComponent(id)}/current`, { pin: status === MAKE_CURRENT, note }, "PATCH")
+      : post(`/api/offers/${encodeURIComponent(id)}/status`, { status, note }, "PATCH");
+// Re-price an offer in place at `amount` — the held-paper banner's one tap.
+// Sends nothing. Returns { offer }.
+export const requoteOffer = (id, amount) =>
+  post(`/api/offers/${encodeURIComponent(id)}/requote`, { amount });
 // Bulk outcome for the history selection bar. Returns { results, offers } —
 // per-id so one failure doesn't hide the rest.
 export const setOfferStatusBulk = (ids, status, note = "") =>

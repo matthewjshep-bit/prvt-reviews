@@ -121,3 +121,17 @@ test("a held paper stays held until the offer is re-priced or sent", async () =>
   assert.equal(paperHeldNow({ ...held, revisions: [{ ts: "2026-09-25T03:00:00Z", from: 421556, to: 400000 }] }), null);
   assert.equal(paperHeldNow(KENT[3]), null);
 });
+
+// The first dry run against the live book (2026-09-25) held two houses it
+// shouldn't have: "227K" for an offer of 227,552 is that offer said the way
+// people text it, and "$507K ARV, $110K in rehab" is the math, not a price.
+test("an offer's number said short, or the ARV and rehab behind it, is not a come-down", () => {
+  const o = { cashAmount: 227552, createdAt: "2026-08-24T00:00:00Z" };
+  assert.equal(ourComeDown(o, "[2026-08-25 10:00] US sms: We can do 227K cash, close in 14"), null);
+  const p = { cashAmount: 259600, createdAt: "2026-08-24T00:00:00Z" };
+  assert.equal(ourComeDown(p, "[2026-08-31 10:00] US sms: $507K ARV, $110K in rehab. Theres no margin"), null);
+  assert.equal(ourComeDown(p, "[2026-08-31 10:00] US sms: ARV is 507K and repairs 110K"), null);
+  assert.equal(ourComeDown(p, "[2026-08-31 10:00] US sms: with $110K of work we can do $235K").amount, 235000, "the price in the same line still counts");
+  // The real ones still hold.
+  assert.equal(ourComeDown({ cashAmount: 250562, createdAt: "2026-09-14T00:00:00Z" }, "[2026-09-16 10:00] US sms: im down to make an offer at $230K").amount, 230000);
+});

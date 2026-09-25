@@ -165,6 +165,8 @@ export function currentOfferFor(offers = [], { contactId = "", address = "" } = 
  *   isCurrent      true on the one live row per contact and house
  *   supersededBy   { id, cashAmount, at } on the others (drafts get neither)
  *   currentPinned  true on a current row a person pinned
+ *   houseOffers    how many non-draft rows share the house — "current" is
+ *                  only worth saying when there is more than one
  *
  * New objects; the inputs are not touched.
  */
@@ -173,9 +175,10 @@ export function annotateCurrent(offers = []) {
   for (const rows of groupHouses(offers).values()) {
     const { current, superseded, pinned } = resolveHouse(rows);
     if (!current) continue;
-    verdict.set(current, { isCurrent: true, ...(pinned ? { currentPinned: true } : {}) });
+    const houseOffers = 1 + superseded.length + rows.filter((o) => o.deal && o !== current).length;
+    verdict.set(current, { isCurrent: true, houseOffers, ...(pinned ? { currentPinned: true } : {}) });
     const by = { id: current.id, cashAmount: Number(current.cashAmount) || 0, at: new Date(pricedAt(current) || Date.now()).toISOString() };
-    for (const o of superseded) verdict.set(o, { isCurrent: false, supersededBy: by });
+    for (const o of superseded) verdict.set(o, { isCurrent: false, supersededBy: by, houseOffers });
   }
   return offers.map((o) => (o && verdict.has(o) ? { ...o, ...verdict.get(o) } : o && !isDraftOffer(o) ? { ...o, isCurrent: false } : o));
 }
@@ -193,12 +196,23 @@ export function isSuperseded(offer, siblings = []) {
 
 // Money the way we text it, off one line.
 const LINE_MONEY_RX = /\$\s?\d[\d,]*(?:\.\d+)?\s?[kK]?\b|\b\d+(?:\.\d+)?\s?[kK]\b|\b\d{1,3}(?:,\d{3})+\b/g;
-export const lineMoney = (text) => [...String(text || "").matchAll(LINE_MONEY_RX)].map((m) => {
-  const raw = m[0].replace(/[$,\s]/g, "");
+const toDollars = (m) => {
+  const raw = m.replace(/[$,\s]/g, "");
   const k = /k$/i.test(raw);
   const n = Number(k ? raw.slice(0, -1) : raw);
   return Number.isFinite(n) ? Math.round(k ? n * 1000 : n) : 0;
-}).filter((n) => n > 0);
+};
+export const lineMoney = (text) => [...String(text || "").matchAll(LINE_MONEY_RX)].map((m) => toDollars(m[0])).filter((n) => n > 0);
+
+// The figures behind a price, said beside it: "$507K ARV, $110K in rehab".
+// A number named as the ARV, the rehab, the repairs or the work is the math,
+// not what we'd pay.
+const MATH_AFTER = /^\s*(?:arv\b|after[- ]repair|(?:in|of|for)\s+(?:rehab|repairs?|work)\b|rehab\b|repairs?\b|(?:worth\s+)?of\s+work\b)/i;
+const MATH_BEFORE = /(?:\barv|after[- ]repair value|\brehab|\brepairs?|\bwork)\s*(?:is|of|at|=|:|around|about|~)?\s*$/i;
+const priceMoney = (text) => [...String(text || "").matchAll(LINE_MONEY_RX)]
+  .filter((m) => !MATH_AFTER.test(text.slice(m.index + m[0].length, m.index + m[0].length + 24))
+    && !MATH_BEFORE.test(text.slice(Math.max(0, m.index - 24), m.index)))
+  .map((m) => toDollars(m[0])).filter((n) => n > 0);
 
 /**
  * ourComeDown(offer, transcript) → { amount, ts, text } | null
@@ -227,12 +241,14 @@ export function ourComeDown(o, transcript = "") {
     if (/\bhere's our (revised )?(written cash offer|letter of intent)\b/i.test(text)) continue;
     // Under the book's number, not absurdly under it, and not the book's
     // own number said the way people text it ("71k" for 71,075).
+    // Rounded ("71k" for 71,075) or cut short ("227K" for 227,552) — within
+    // one unit of the number as said, and within 1% of it.
     const restated = (n) => {
       let unit = 1000;
       while (n % (unit * 10) === 0 && unit < 1e9) unit *= 10;
-      return n % 1000 === 0 && Math.abs(n - amount) <= unit / 2 && Math.abs(n - amount) <= amount * 0.01;
+      return n % 1000 === 0 && Math.abs(n - amount) < unit && Math.abs(n - amount) <= amount * 0.01;
     };
-    const lower = lineMoney(text).filter((n) => n < amount && n >= amount * 0.4 && !restated(n));
+    const lower = priceMoney(text).filter((n) => n < amount && n >= amount * 0.4 && !restated(n));
     if (!lower.length) continue;
     const n = Math.min(...lower);
     if (!best || n < best.amount) best = { amount: n, ts, text: text.slice(0, 120) };

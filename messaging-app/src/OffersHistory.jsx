@@ -15,13 +15,14 @@
 import React, { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
+import { annotateCurrent, houseKey } from "@shared/current-offer.js";
 import {
   DEAD_STATUSES, OFFER_STATUS, OFFER_STATUS_KEYS, effectiveStatus, isAiGenerated, isHot, needsAiReview,
   toListOffer,
 } from "@shared/offer-status.js";
 import {
   deleteOffer, getOffer, getSettings, ghlContactUrl, listOffers, promoteDeal,
-  setOfferStatus, setOfferStatusBulk,
+  setOfferStatus, setOfferStatusBulk, MAKE_CURRENT, requoteOffer,
 } from "./api.js";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContactLink from "./ContactLink.jsx";
@@ -75,10 +76,12 @@ const FILTERS = [
   { key: "all", label: "All", test: () => true },
   // Close to a contract: the price is agreed, or you flagged it. First after
   // All because it is the list you open the page for.
-  { key: "hot", label: "🔥 Hot", title: "Close to a contract — the price is agreed, or you flagged it", test: (o) => isHot(o) },
-  { key: "unsent", label: "Not sent", test: (o) => !o.deal && effectiveStatus(o) === "new" && o.status !== "draft" },
-  { key: "waiting", label: "Awaiting reply", test: (o) => !o.deal && effectiveStatus(o) === "sent" },
-  { key: "countered", label: "Countered", test: (o) => !o.deal && effectiveStatus(o) === "countered" },
+  // The funnel chips count each house once, by its current offer (shared/
+  // current-offer.js): a superseded row is history, and "All" still has it.
+  { key: "hot", label: "🔥 Hot", title: "Close to a contract — the price is agreed, or you flagged it", test: (o) => !o.supersededBy && isHot(o) },
+  { key: "unsent", label: "Not sent", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "new" && o.status !== "draft" },
+  { key: "waiting", label: "Awaiting reply", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "sent" },
+  { key: "countered", label: "Countered", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "countered" },
   { key: "dead", label: "Passed / no reply", test: (o) => !o.deal && DEAD_STATUSES.has(effectiveStatus(o)) },
   { key: "deals", label: "Deals", test: (o) => Boolean(o.deal) },
   { key: "drafts", label: "Drafts", test: (o) => o.status === "draft" },
@@ -125,6 +128,20 @@ const SORTS = {
 const groupKeyOf = (o) => o.contactId || (o.contactName ? `name:${o.contactName}` : "none");
 
 const LIVE_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
+
+// An agent's rows, one house at a time: houses in the order the sort put
+// them, and inside each the current offer first, then what it superseded,
+// then drafts. A house's history reads top-down from the number that's live.
+function byHouse(list) {
+  const houses = new Map();
+  for (const o of list) {
+    const k = houseKey(o.address || "") || o.id;
+    if (!houses.has(k)) houses.set(k, []);
+    houses.get(k).push(o);
+  }
+  const rank = (o) => (o.status === "draft" ? 2 : o.supersededBy ? 1 : 0);
+  return [...houses.values()].flatMap((rows) => rows.map((o, i) => [o, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([o]) => o));
+}
 
 export default function OffersHistory({ onEdit, onDeal }) {
   const [offers, setOffers] = useState(null);
@@ -253,12 +270,29 @@ export default function OffersHistory({ onEdit, onDeal }) {
     setError("");
     try {
       const r = await setOfferStatus(o.id, status);
+      // A pin moves: the server cleared it on this row's siblings, so do the
+      // same to our copies before the row itself lands.
+      if (status === MAKE_CURRENT && r.offer) {
+        const k = `${r.offer.contactId}|${houseKey(r.offer.address || "")}`;
+        setOffers((list) => (list || []).map((x) => (x.id !== r.offer.id && x.pin && `${x.contactId}|${houseKey(x.address || "")}` === k ? { ...x, pin: undefined } : x)));
+      }
       patchOffer(r.offer);
       // Promotion navigates to the Deals tab — leaving the popout open over it
       // would strand you on top of the thing you just landed on.
       if (r.promoted) { closeDetail(); onDeal?.(); }
     } catch (e) { setError(e.message); }
     setStatusBusy(null);
+  }
+
+  // "Re-quote at 400K" from the held-paper banner: re-priced in place, sent
+  // by nobody — Send is the next press.
+  const [requoting, setRequoting] = useState(false);
+  async function requote(o, amount) {
+    if (!o?.id || requoting) return;
+    setRequoting(true);
+    setError("");
+    try { patchOffer((await requoteOffer(o.id, amount)).offer); } catch (e) { setError(e.message); }
+    setRequoting(false);
   }
 
   async function bulkStatus(status) {
@@ -326,10 +360,13 @@ export default function OffersHistory({ onEdit, onDeal }) {
 
   /* ---------- derive: search → filter → group ---------- */
 
+  // Every row told whether it is its house's current offer. Derived here, not
+  // stored, so a status change or a pin patched into `offers` re-reads.
+  const book = annotateCurrent(offers);
   const needle = q.trim().toLowerCase();
   const searched = !needle
-    ? offers
-    : offers.filter((o) =>
+    ? book
+    : book.filter((o) =>
         [
           o.contactName,
           o.address,
@@ -341,7 +378,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
           isAiGenerated(o) ? `ai auto-underwrite ${(o.autoUnderwrite.held || []).length ? "held review" : ""}` : "",
         ].some((v) => (v || "").toLowerCase().includes(needle)));
 
-  const usesAi = offers.some(isAiGenerated);
+  const usesAi = book.some(isAiGenerated);
   const chips = FILTERS
     .filter((f) => !f.onlyWhenUsed || usesAi)
     .map((f) => ({
@@ -359,7 +396,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
 
   // KPIs run over every offer for the location, not the filtered view — they're
   // the state of the business, not of the current query.
-  const real = offers.filter((o) => o.status !== "draft");
+  const real = book.filter((o) => o.status !== "draft" && !o.supersededBy);
   const monthAgo = Date.now() - 30 * 86400000;
   const recent = real.filter((o) => new Date(o.createdAt || 0).getTime() >= monthAgo).length;
   const waiting = real.filter((o) => !o.deal && effectiveStatus(o) === "sent").length;
@@ -550,15 +587,16 @@ export default function OffersHistory({ onEdit, onDeal }) {
                       )}
                     </td>
                   </tr>
-                  {isOpen && g.offers.map((o) => {
+                  {isOpen && byHouse(g.offers).map((o) => {
                     const draft = o.status === "draft";
+                    const old = Boolean(o.supersededBy);
                     return (
               <tr key={o.id}
                 {...rowActivation(() => (draft ? openEdit(o) : openRow(o)))}
                 aria-label={`${o.address || "Offer"} — ${OFFER_STATUS[effectiveStatus(o)]?.label || ""}`}
                 aria-busy={opening === o.id || undefined}
                 className={`group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 ${
-                  picked.has(o.id) ? "bg-blue-50/60" : ""} ${opening === o.id ? "opacity-60" : ""}`}>
+                  picked.has(o.id) ? "bg-blue-50/60" : ""} ${opening === o.id || old ? "opacity-60" : ""}`}>
                 <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                   {!draft && !o.deal && (
                     <input type="checkbox" checked={picked.has(o.id)} onChange={() => togglePick(o.id)}
@@ -578,6 +616,11 @@ export default function OffersHistory({ onEdit, onDeal }) {
                     <span className="truncate" title={o.address || undefined}>{o.address || "—"}</span>
                     <AiPill offer={o} />
                   </span>
+                  {old && (
+                    <span className="block text-[11px] text-slate-400">
+                      superseded by {fmtMoney(o.supersededBy.cashAmount)} · {(o.supersededBy.at || "").slice(5, 10)}
+                    </span>
+                  )}
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
                   {o.cashAmount != null ? fmtMoney(o.cashAmount) : "—"}
@@ -655,7 +698,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
         // These are lean rows: the rail only shows address, date and status,
         // and picking one re-enters through openDetail, which hydrates it.
         const key = groupKeyOf(selected);
-        const siblings = offers.filter((o) => groupKeyOf(o) === key);
+        const siblings = annotateCurrent(offers).filter((o) => groupKeyOf(o) === key);
         // The frozen queue, re-read off the live list so a status recorded in
         // the popout shows on the row you'll arrow back to. A deleted offer
         // simply falls out.
@@ -676,6 +719,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
             onOfferPage={(o) => setOfferPaging(o)}
             onPromote={(o) => { closeDetail(); promote(o); }}
             onStatus={changeStatus}
+            onRequote={requote} requoting={requoting}
             statusBusy={statusBusy === selected.id}
             onDealNav={onDeal} />
         );
