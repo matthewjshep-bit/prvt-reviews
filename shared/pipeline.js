@@ -25,6 +25,7 @@ import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js
 import { addressKey } from "./contact-record.js";
 import { openPromises, resolvePromise } from "./promise-resolver.js";
 import { UNANSWERED_LIMIT } from "./thread-health.js";
+import { groupHouses, resolveHouse } from "./current-offer.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -168,7 +169,7 @@ export function buildPipeline({
   const counts = {
     lanes: Object.fromEntries(ALL_LANES.map((l) => [l.key, 0])),
     actions: { now: 0, soon: 0, fyi: 0, byGroup: { yours: 0, machine: 0, stuck: 0 } },
-    hidden: { dead: 0, closed: 0, drafts: 0 },
+    hidden: { dead: 0, closed: 0, drafts: 0, superseded: 0 },
     coldNoReply: 0,
     eventsTruncated: eventsLimit > 0 && events.length >= eventsLimit,
   };
@@ -188,11 +189,21 @@ export function buildPipeline({
     if (!byContact.has(o.contactId)) byContact.set(o.contactId, []);
     byContact.get(o.contactId).push(o);
   }
+  // One card per house: its current offer (current-offer.js). A row the
+  // house moved past gets no card, and a draft attached to one moves to the
+  // current row, so nothing it asks about is lost.
+  const currentIdOf = new Map();
+  for (const rows of groupHouses(offers).values()) {
+    const { current, superseded } = resolveHouse(rows);
+    if (current) for (const o of superseded) currentIdOf.set(o.id, current.id);
+  }
+
   // Drafts by offer, resolved once.
   const draftsByOffer = new Map();
   const unattached = [];
   for (const d of openDrafts) {
-    const oid = draftOfferId(d, byContact, offers);
+    const named = draftOfferId(d, byContact, offers);
+    const oid = currentIdOf.get(named) || named;
     if (oid) { if (!draftsByOffer.has(oid)) draftsByOffer.set(oid, []); draftsByOffer.get(oid).push(d); }
     else unattached.push(d);
   }
@@ -200,6 +211,7 @@ export function buildPipeline({
   /* --- one card per offer --- */
   for (const o of offers) {
     if (!o?.id) continue;
+    if (currentIdOf.has(o.id)) { counts.hidden.superseded++; continue; }
     const status = effectiveStatus(o);
     const held = aiHoldReasons(o);
     // Only a DRAFT is a look nobody took. A held draft a person opened and

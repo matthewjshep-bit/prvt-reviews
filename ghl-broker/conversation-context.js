@@ -20,6 +20,7 @@ import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
+import { ourComeDown, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor } from "./shared/current-offer.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
@@ -99,77 +100,31 @@ const statusWord = (s) => ({
 // The offer book, newest first, capped, and every number here is a number the
 // reply is ALLOWED to say. Unchanged from the first version except that the
 // asking price now actually arrives (see toListOffer in shared/offer-status.js).
-// The last time the offer's own number moved: the newest send, re-quote or
-// status row. A number we floated after that is the number.
-function lastPriceMoveTs(o) {
-  const ts = [
-    ...(o.requotes || []).map((r) => r?.ts),
-    ...(o.sends || []).map((x) => x?.ts),
-    ...(o.statusHistory || []).filter((h) => h?.status === "sent").map((h) => h?.ts),
-    o.createdAt,
-  ].map((t) => Date.parse(t || "")).filter(Number.isFinite);
-  return ts.length ? Math.max(...ts) : 0;
-}
-
-// Money the way we text it, off one line. Kept small: the reply agent's
-// fuller parser lives beside the gates; the book only needs to notice a
-// number of ours.
-const LINE_MONEY_RX = /\$\s?\d[\d,]*(?:\.\d+)?\s?[kK]?\b|\b\d+(?:\.\d+)?\s?[kK]\b|\b\d{1,3}(?:,\d{3})+\b/g;
-const lineMoney = (text) => [...String(text || "").matchAll(LINE_MONEY_RX)].map((m) => {
-  const raw = m[0].replace(/[$,\s]/g, "");
-  const k = /k$/i.test(raw);
-  const n = Number(k ? raw.slice(0, -1) : raw);
-  return Number.isFinite(n) ? Math.round(k ? n * 1000 : n) : 0;
-}).filter((n) => n > 0);
-
-/**
- * ourComeDown(offer, transcript) → { amount, ts, text } | null
- *
- * The lower number WE put to the agent after the offer's number last moved
- * — "Can we do $65k actually" (Kimberly Pettie, 1510 Maple Lane: the book
- * said 71,075, Matt texted 65k by hand, and three days later the bot told
- * her the offer was "still good, 71k"). Ours only (US lines), after the
- * last send/re-quote, under the book's number and not absurdly under it.
- * The lowest such number wins: it is the one the seller is deciding on.
- */
-export function ourComeDown(o, transcript = "") {
-  const amount = Number(o?.cashAmount) || 0;
-  if (!amount || !transcript) return null;
-  const since = lastPriceMoveTs(o);
-  let best = null;
-  for (const line of String(transcript).split(/\r?\n/)) {
-    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US \w+: (.*)$/.exec(line);
-    if (!m) continue;
-    const ts = Date.parse(`${m[1]}T${m[2]}:00Z`);
-    if (!Number.isFinite(ts) || ts < since) continue;
-    const text = m[3].trim();
-    // A message that carries the offer documents restates the book, not a
-    // new number.
-    if (/\bhere's our (written cash offer|letter of intent)\b/i.test(text)) continue;
-    // Under the book's number, not absurdly under it, and not the book's
-    // own number said the way people text it ("71k" for 71,075).
-    const restated = (n) => {
-      let unit = 1000;
-      while (n % (unit * 10) === 0 && unit < 1e9) unit *= 10;
-      return n % 1000 === 0 && Math.abs(n - amount) <= unit / 2 && Math.abs(n - amount) <= amount * 0.01;
-    };
-    const lower = lineMoney(text).filter((n) => n < amount && n >= amount * 0.4 && !restated(n));
-    if (!lower.length) continue;
-    const n = Math.min(...lower);
-    if (!best || n < best.amount) best = { amount: n, ts, text: text.slice(0, 120) };
-  }
-  return best;
-}
+// The come-down reader lives with the current-offer rule (shared/
+// current-offer.js), where the paper check reads it too.
+export { ourComeDown };
 
 export function summarizeOffers(offers = [], { now = Date.now(), showMath = false, transcript = "" } = {}) {
   const stale = new Set();
-  const rows = [...offers]
-    .filter((o) => o && o.address)
-    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+  // One line per house: its current offer (shared/current-offer.js), or its
+  // newest draft when nothing on it is priced yet. The rows it superseded are
+  // never quoted — their numbers are stale, so a draft that says one is held.
+  // Before this the book listed every row on a house, each with its own
+  // number, and all of them were allowed (13041 SE 208th St: five rows, and
+  // the bot sent paper at a July number the thread had long left behind).
+  const houses = [...groupHouses(offers.filter((o) => o && o.address)).values()].map((list) => {
+    const { current, superseded } = resolveHouse(list);
+    const draft = list.filter(isDraftOffer).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+    return { row: current || draft, superseded };
+  }).filter((h) => h.row)
+    .sort((a, b) => pricedAt(b.row) - pricedAt(a.row))
     .slice(0, RA_OFFERS_IN_CONTEXT);
+  const rows = houses.map((h) => h.row);
+  const older = new Set();
   const lines = [];
   const amounts = new Set();
-  for (const o of rows) {
+  for (const { row: o, superseded } of houses) {
+    for (const s of superseded) if (Number(s.cashAmount) > 0) older.add(Math.round(Number(s.cashAmount)));
     const status = effectiveStatus(o);
     const amount = Number(o.cashAmount) || 0;
     const down = amount && !["passed", "expired", "withdrawn", "accepted", "agreed"].includes(status) ? ourComeDown(o, transcript) : null;
@@ -234,9 +189,12 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       // Step 4 of the goal is reached: what's left is getting it written up.
       heat ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on NWMLS forms for us to sign` : "",
       o.statusNote ? `note: ${String(o.statusNote).slice(0, 120)}` : "",
+      superseded.length ? `(${superseded.length} older offer${superseded.length === 1 ? "" : "s"} on this house superseded — this is the only number on it; never quote an older one)` : "",
     ].filter(Boolean);
     lines.push(`- ${parts.join(" ")}`);
   }
+  // An older row's number is stale unless the live book says it too.
+  for (const n of older) if (!amounts.has(n)) stale.add(n);
   for (const n of stale) amounts.delete(n);
   return { text: lines.join("\n"), amounts: [...amounts], stale: [...stale], count: rows.length };
 }
@@ -324,7 +282,12 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
   // The two figures are allowed in the reply for exactly this; they are
   // never an offer.
   if (subject && dossier && !dossier.have.arv && !dossier.have.rehab) {
-    const mine = (offers || []).find((o) => o?.address && propertyKey(o.address) === propertyKey(subject) && (Number(o.arv) > 0 || Number(o.repairs) > 0));
+    // The current offer's figures when it carries them; a draft (a held
+    // underwrite) on the same house otherwise.
+    const figures = (o) => Number(o?.arv) > 0 || Number(o?.repairs) > 0;
+    const cur = currentOfferFor(offers || [], { address: subject });
+    const mine = (figures(cur) ? cur : null) ||
+      (offers || []).find((o) => o?.address && propertyKey(o.address) === propertyKey(subject) && figures(o));
     if (mine) {
       const arv = Math.round(Number(mine.arv) || 0);
       const rehab = Math.round(Number(mine.repairs) || 0);

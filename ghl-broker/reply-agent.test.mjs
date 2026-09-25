@@ -3802,3 +3802,76 @@ test("'No, it's not turnkey, but it's all cosmetic' is a house that needs work, 
   assert.equal(isTurnkeyReply("Its turnkey, no work needed"), true);
   assert.equal(isTurnkeyReply("Not much to do, it was fully renovated last year"), true, "a 'not' about something else doesn't undo it");
 });
+
+/* ---------- the current offer and the paper (2026-09-25) ---------- */
+
+// 13041 SE 208th St, Kent: five offer rows on one house, the thread at 400K
+// since August. "Draw it up" was read as realm_yes, and the rule's
+// send_offer went out on its own at 416,500 — a July row — with "let's do it".
+test("the LOI is held when we texted 400K after the offer said 416,500", async () => {
+  _resetJobs();
+  const DAY = 86400000;
+  const ago = (d) => new Date(Date.now() - d * DAY).toISOString();
+  const A = "13041 Southeast 208th Street, Kent, Washington 98031";
+  const offers = [
+    { id: "july", locationId: "LOC", contactId: "c1", address: A, cashAmount: 416500, status: "countered", createdAt: ago(60), sends: [{ ts: ago(60) }] },
+    { id: "aug", locationId: "LOC", contactId: "c1", address: A, cashAmount: 421556, status: "passed", createdAt: ago(50), sends: [{ ts: ago(50) }] },
+    { id: "draft", locationId: "LOC", contactId: "c1", address: A, cashAmount: 402687, status: "draft", createdAt: ago(35) },
+  ];
+  const store = fakeStore();
+  store.listOffers = async () => offers;
+  store.getOffer = async (id) => offers.find((o) => o.id === id) || null;
+  const client = {
+    call: async (path, opts = {}) => {
+      if (/^\/contacts\/c1$/.test(path) && !opts.method) return { contact: { id: "c1", firstName: "Sam", lastName: "Lee", tags: ["agent"] } };
+      if (/^\/contacts\/c1$/.test(path)) return { contact: {} };
+      if (path.endsWith("/customFields")) return { customFields: [] };
+      if (path.endsWith("/notes") || path.endsWith("/tags")) return {};
+      if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+      if (/^\/conversations\/cv1\/messages/.test(path)) {
+        return { messages: [
+          { id: "m1", dateAdded: ago(20), direction: "outbound", messageType: "TYPE_SMS", body: "Checking in, is the seller open to an offer at $400K" },
+          { id: "m2", dateAdded: ago(1), direction: "outbound", messageType: "TYPE_SMS", body: "We're still at 400 as-is, cash, quick close." },
+        ] };
+      }
+      if (path === "/conversations/messages") return { messageId: "m9" };
+      if (path.includes("/workflow/")) return { succeeded: true };
+      throw new Error(`unexpected ${path}`);
+    },
+  };
+  const ai = STARTER_SAVED.conversationAi;
+  const saved = { ...STARTER_SAVED, conversationAi: { ...ai, parties: { ...ai.parties, agent: { ...ai.parties.agent,
+    autoSend: { enabled: true, intents: ["realm_yes"] },
+    intentRules: { ...ai.parties.agent.intentRules,
+      realm_yes: { mode: "auto", actions: [{ type: "mark_offer_realm_yes" }, { type: "send_offer" }] } } } } } };
+  const sends = [];
+  const held = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "We should draw it up; she might sign it.", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "realm_yes", reply: "Let's do it. Can you write it up on NWMLS forms for me to sign?", propertyAddress: "13041 SE 208th St" }),
+      sendOfferDocs: async (args) => { sends.push(args); return { ok: true, address: A, channels: ["sms"] }; },
+      setOfferRealm: async () => ({ ok: true, address: A, answer: "yes" }),
+      markPaperHeld: async (args) => { held.push(args); return { ok: true }; },
+      raiseOfferHeat: async () => { throw new Error("no heat while the paper is held"); },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(sends.length, 0, "no paper went");
+  assert.equal(d.autoSend.decided, false);
+  assert.match(d.autoSend.reason, /we texted 400K .* after this offer's \$421,556/);
+  assert.equal(d.paperHold.offerId, "aug", "the current offer is the one we last sent, not the July row");
+  assert.equal(d.paperHold.amount, 400000);
+  assert.deepEqual(d.actions.filter((x) => ["send_offer", "mark_offer_realm_yes"].includes(x.type)).map((x) => [x.type, x.mode, x.status]).sort(),
+    [["mark_offer_realm_yes", "ask", "pending"], ["send_offer", "ask", "pending"]]);
+  assert.equal(held[0].offerId, "aug");
+});
+
+test("the audit never releases a paper hold as a holding reply", async () => {
+  const { releaseForAudit } = await import("./reply-agent.js");
+  const auto = { send: false, code: "stale_number", reason: "needs a person: we texted 400K" };
+  const out = releaseForAudit({ auto, gate: { ok: true }, draft: { intent: "realm_yes", reply: "Let's do it." }, deps: { releaseHeld: true } });
+  assert.equal(out.send, false);
+});

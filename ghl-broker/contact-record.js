@@ -23,6 +23,7 @@ import {
 } from "./shared/contact-record.js";
 import { investorStatus } from "./shared/offer-status.js";
 import { refreshInvestorRow } from "./investor-row.js";
+import { annotateCurrent } from "./shared/current-offer.js";
 
 const log = (what, e) => console.error(`contact-record: ${what}:`, e?.message || e);
 const nowIso = () => new Date().toISOString();
@@ -253,7 +254,8 @@ export async function getContactRecord({ store, locationId, contactId, party = n
   const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
   const profile = await safe(() => store.getContactProfile(locationId, contactId), null);
   const events = await safe(() => store.listContactEvents(locationId, contactId, { limit: 500 }), []);
-  const offers = (await safe(() => store.listOffers(locationId, { contactId, limit: 100, lean: true }), [])).map(toListOffer);
+  // Each row says whether it's its house's current offer (current-offer.js).
+  const offers = annotateCurrent((await safe(() => store.listOffers(locationId, { contactId, limit: 100, lean: true }), [])).map(toListOffer));
   const allDeals = await safe(() => store.listDeals(locationId), []);
   const deals = [];
   const feedback = [];

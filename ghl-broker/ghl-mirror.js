@@ -11,6 +11,7 @@ import { store as defaultStore } from "./store.js";
 import { mirrorPlan, mirrorDiff, normalizeMirror, tierFrom, agentPlan } from "./shared/ghl-mirror.js";
 import { searchOpportunities, createOpportunity, updateOpportunity, getContact, listPipelines } from "./ghl.js";
 import { LIVE_DEAL_STAGES, OPEN_STATUSES, effectiveStatus } from "./shared/offer-status.js";
+import { currentOffers } from "./shared/current-offer.js";
 
 export const CURSOR_NAME = "ghlMirror";
 export const MAX_WRITES_PER_TICK = 60;
@@ -91,7 +92,9 @@ async function agentTruth({ store, locationId, contactId, profile, events = [], 
   }
   const mine = offers.filter((o) => o.contactId === contactId);
   const hasLiveDeal = mine.some((o) => o.deal && LIVE_DEAL_STAGES.has(o.deal.stage));
-  const openOffers = mine.filter((o) => !o.deal && OPEN_STATUSES.has(effectiveStatus(o)));
+  // Current offers only (shared/current-offer.js): the opportunity's value is
+  // the number we're working from, not a row the house moved past.
+  const openOffers = currentOffers(mine).filter((o) => !o.deal && OPEN_STATUSES.has(effectiveStatus(o)));
   if (!name) name = mine.find((o) => o.contactName)?.contactName || "";
   return { tier: tierFrom({ tags, events, ghlSeenAt, hasLiveDeal }), name, openOffers, hasLiveDeal };
 }

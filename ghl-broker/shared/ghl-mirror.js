@@ -14,6 +14,7 @@
 // does the reading and the writing.
 
 import { laneFor } from "./pipeline.js";
+import { pricedAt } from "./current-offer.js";
 
 export const ACQ_LANES = ["ready", "floated", "sent", "countered", "needs_review"];
 export const DISPO_STAGES = ["under_contract", "buyer_found", "assigned", "closed", "fell_through"];
@@ -154,7 +155,7 @@ export function tierFrom({ tags = [], events = [], ghlSeenAt = null, hasLiveDeal
  * The agent-level acquisitions opportunity in tiers mode. Stage = the tier's
  * mapped stage ("none" may map too, for agents we're working with no tier
  * yet); an unmapped tier plans nothing. Status is open — won and lost live
- * on the deal side. Value: the newest open offer's cash number, so the
+ * on the deal side. Value: the open current offer whose number moved last, so the
  * board's dollar column means something.
  */
 export function agentPlan({ contactId, name = "", tier = "none", openOffers = [], config } = {}) {
@@ -163,7 +164,7 @@ export function agentPlan({ contactId, name = "", tier = "none", openOffers = []
   if (!c.enabled || acq.mode !== "tiers" || !acq.pipelineId || !contactId) return null;
   const stageId = acq.stages[tier] || null;
   if (!stageId) return null;
-  const newest = [...openOffers].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  const newest = [...openOffers].sort((a, b) => pricedAt(b) - pricedAt(a))[0];
   const value = c.valueField === "none" ? 0 : Math.round(Number(newest?.cashAmount) || 0);
   const label = String(name || contactId).slice(0, 120);
   return { pipelineId: acq.pipelineId, stageId, status: "open", name: label, value, tier };

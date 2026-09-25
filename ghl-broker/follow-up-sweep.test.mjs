@@ -538,3 +538,14 @@ test("the hot push ignores the weekly cap, but never goes twice inside twenty ho
   await settle();
   assert.equal(again.started.length, 0, "we texted them five hours ago");
 });
+
+// 13041 SE 208th St (2026-09-25): the July row was flagged hot ("writing it
+// up") while the house's number had long since moved to a later row.
+test("a hot flag on a superseded row doesn't push a write-up at its number", async () => {
+  const now = T0 + 2 * DAY;
+  const july = hotOffer({ id: "july", createdAt: at(-60), sends: [{ ts: at(-60) }] });
+  const later = anOffer({ id: "aug", status: "passed", statusAt: at(-10), createdAt: at(-50), sends: [{ ts: at(-50) }] });
+  const store = fakeStore({ offers: [july, later] });
+  assert.deepEqual(await hotCandidates({ store, locationId: "LOC", config: HOT_SAVED.conversationAi, now }), []);
+  assert.equal((await hotCandidates({ store: fakeStore({ offers: [july] }), locationId: "LOC", config: HOT_SAVED.conversationAi, now })).length, 1, "alone on the house it is the current row");
+});

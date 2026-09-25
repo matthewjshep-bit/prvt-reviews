@@ -24,6 +24,7 @@
 import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreachPausedReason, isHot, offerHeat } from "./shared/offer-status.js";
 import { addressKey } from "./shared/us-address.js";
 import { sameStreet } from "./shared/us-address.js";
+import { supersededIds } from "./shared/current-offer.js";
 import { dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor, HOT_MIN_HOURS } from "./shared/follow-up.js";
 import { threadHealth } from "./shared/thread-health.js";
 import { recordEvent } from "./contact-record.js";
@@ -100,9 +101,13 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     byProperty.get(k).push(o);
   }
 
+  // Only an agent's current offer on a house is asked about (shared/
+  // current-offer.js) — an older row's number is one the house moved past.
+  const replaced = supersededIds(everyOffer || rows);
   const out = [];
   for (const o of rows) {
     if (!o?.contactId || !o.address) continue;
+    if (replaced.has(o.id)) continue;
     if (o.deal) continue;                                  // it became a deal; not our business
     if (!OPEN_STATUSES.has(effectiveStatus(o))) continue;  // the mirror was stale
     if (!isTheOfferToAskAbout(o, byProperty.get(propertyKeyOf(o)) || [])) continue;
@@ -126,6 +131,14 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
 }
 
 const propertyKeyOf = (o) => (o?.address ? addressKey(o.address) : "");
+
+// The ids some newer row on the same house replaced, off the whole book. A
+// book that can't be read replaces nothing — the sweep behaves as before.
+async function replacedOffers(store, locationId) {
+  if (typeof store.listOffers !== "function") return new Set();
+  const all = await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => null);
+  return all ? supersededIds(all) : new Set();
+}
 
 // When we last put this offer in front of anyone — the thing "newer" means.
 const lastActivityOf = (o) => {
@@ -169,9 +182,11 @@ export async function passedCandidates({ store, locationId, config, now = Date.n
   const rows = await store.listOffersForFollowUp(locationId, {
     statuses: ["passed"], before: iso(now - earliest * DAY_MS), limit: 200,
   }).catch(() => []);
+  const replaced = await replacedOffers(store, locationId);
   const out = [];
   for (const o of rows) {
     if (!o?.contactId || !o.address || o.deal) continue;
+    if (replaced.has(o.id)) continue;       // a row the house moved past
     if (effectiveStatus(o) !== "passed") continue;
     const passedAt = (o.statusHistory || []).filter((h) => h?.status === "passed").map((h) => h.ts).filter(Boolean).sort().at(-1)
       || o.statusAt || o.createdAt;
@@ -200,9 +215,13 @@ export async function hotCandidates({ store, locationId, config, now = Date.now(
   const ladder = pb?.followUp?.ladders?.hot_push;
   if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
   const rows = await store.listOffersForFollowUp(locationId, { statuses: [...OPEN_STATUSES], before: iso(now), limit: 200 }).catch(() => []);
+  const replaced = await replacedOffers(store, locationId);
   const out = [];
   for (const o of rows) {
     if (!o?.contactId || !o.address || o.deal) continue;
+    // A hot flag on a superseded row (13041 SE 208th St's July row was
+    // flagged "writing it up") must not push a write-up at its number.
+    if (replaced.has(o.id)) continue;
     if (!OPEN_STATUSES.has(effectiveStatus(o)) || !isHot(o)) continue;
     const heat = offerHeat(o);
     const hotAt = heat?.at || o.counterBand?.acceptedAt || o.realm?.ts || o.statusAt || o.createdAt;

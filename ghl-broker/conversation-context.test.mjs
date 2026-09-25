@@ -406,3 +406,21 @@ test("the soft-commit buyer themselves, and a buyer it was already sent to, stil
   const theirs = deal({ deal: { stage: "under_contract", contractPrice: 420000, assignmentFee: 25000, investors: [{ contactId: "other", status: "soft_commit" }, { contactId: "c1", status: "evaluating" }] } });
   assert.match(buildInvestorContext({ investor: INVESTOR, deals: [{ offer: theirs }], contactId: "c1", now: NOW }).text, /DEALS THEY ARE ALREADY ON[^]*2010 NE 54th St/, "a soft commit is a maybe — nobody already looking is told it's gone");
 });
+
+// 13041 SE 208th St, Kent (2026-09-25): the book listed all five rows on the
+// house, each with its own number, and every one of them was allowed.
+test("the offer book quotes one number per house and holds a superseded one", () => {
+  const A = "13041 Southeast 208th Street, Kent, Washington 98031";
+  const offers = [
+    { id: "july", contactId: "c", address: A, cashAmount: 416500, status: "countered", createdAt: "2026-07-27T22:35:00Z", sends: [{ ts: "2026-07-27T22:44:00Z" }] },
+    { id: "aug", contactId: "c", address: A, cashAmount: 421556, status: "passed", createdAt: "2026-08-05T16:31:00Z", sends: [{ ts: "2026-08-05T16:31:42Z" }] },
+    { id: "d", contactId: "c", address: A, cashAmount: 402687, status: "draft", createdAt: "2026-08-21T16:28:00Z" },
+  ];
+  const book = summarizeOffers(offers, { now: Date.parse("2026-09-22T00:00:00Z") });
+  assert.equal(book.count, 1, "one house, one line");
+  assert.match(book.text, /\$421,556/);
+  assert.doesNotMatch(book.text, /416,500/);
+  assert.match(book.text, /1 older offer on this house superseded/);
+  assert.ok(book.stale.includes(416500), "the July number is stale — a draft that says it is held");
+  assert.ok(!book.amounts.includes(416500));
+});
