@@ -55,6 +55,21 @@ export const STRUCTURAL_HOLD = /foundation or structural/i;
 export const ERROR_HOLD = /^stopped early/i;
 
 /**
+ * heldInPlainWords(reason) → what we tell an agent held our numbers
+ *
+ * The ask used to say "the comps came back thin" whatever the hold was. Clyde
+ * Hill (2026-09-24) held on no square footage and no photos with four comps at
+ * match 98, and the agent was told our comps were thin. Say what's missing.
+ */
+export function heldInPlainWords(reason = "") {
+  const s = String(reason || "");
+  if (/square footage is unknown/i.test(s)) return "we couldn't pull the square footage on it";
+  if (WORK_HOLD.test(s)) return /photo/i.test(s) ? "there aren't enough listing photos to see what it needs" : "the work looks heavy and you want to pin it down";
+  if (VALUE_HOLD.test(s)) return "the comps came back thin";
+  return "you're missing a piece you need to finish it";
+}
+
+/**
  * classifyHolds(held) → { value, work, junk, address, structural, error, other, rescuable }
  *
  * `rescuable`: every hold is one the agent's numbers answer.

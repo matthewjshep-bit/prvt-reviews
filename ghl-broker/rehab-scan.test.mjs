@@ -90,6 +90,59 @@ test("the actor's miss sentinel is still an error, not an empty house", async ()
   } finally { restore(); }
 });
 
+// 8811 NE 15th Pl, Clyde Hill held 2026-09-24 on "square footage unknown" and
+// "0 listing photos" with four comps at match 98 — the actor said "no data for
+// this address" because Zillow files the house under Bellevue — and the bot
+// told the listing agent our comps were thin. A miss now asks again by street + ZIP.
+function stubApifyBy(answer) {
+  const real = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (_url, init) => {
+    const [address] = JSON.parse(init.body).addresses;
+    asked.push(address);
+    return { ok: true, json: async () => [answer(address)] };
+  };
+  return { asked, restore: () => { globalThis.fetch = real; } };
+}
+const MISS = (a) => ({ addressOrUrlFromInput: a, isValid: false, invalidReason: "Invalid address or Zillow has no data for this address" });
+
+test("a house Zillow files under its postal city is still found, with its square footage and photos", async () => {
+  const s = stubApifyBy((a) => (a === "8811 NE 15th Pl, WA 98004"
+    ? { ...NEW_SHAPE, address: { streetAddress: "8811 NE 15th Pl", city: "Bellevue", zipcode: "98004" }, livingArea: 3480 }
+    : MISS(a)));
+  try {
+    const r = await fetchZillowPhotos("8811 NE 15th Pl, Clyde Hill, WA 98004", "token");
+    assert.deepEqual(s.asked, ["8811 NE 15th Pl, Clyde Hill, WA 98004", "8811 NE 15th Pl, WA 98004"]);
+    assert.equal(r.facts.sqft, 3480);
+    assert.equal(r.photos.length, 2);
+    assert.equal(r.foundAs, "8811 NE 15th Pl, WA 98004");
+  } finally { s.restore(); }
+});
+
+test("the geocoder's spelling is tried last, and a house found the first time is asked once", async () => {
+  const s = stubApifyBy((a) => (a.includes("Seattle") ? { ...NEW_SHAPE } : MISS(a)));
+  try {
+    const r = await fetchZillowPhotos("13025 Ambaum Blvd SW, Burien, WA 98146", "token", { matched: "13025 Ambaum Blvd SW, Seattle, WA 98146" });
+    assert.equal(s.asked.length, 3);
+    assert.equal(r.foundAs, "13025 Ambaum Blvd SW, Seattle, WA 98146");
+  } finally { s.restore(); }
+  const once = stubApifyBy(() => ({ ...NEW_SHAPE }));
+  try {
+    const r = await fetchZillowPhotos("2614 S 54th St, Tacoma, WA 98409", "token", { matched: "2614 S 54th St, Tacoma, WA 98409" });
+    assert.equal(once.asked.length, 1);
+    assert.equal(r.foundAs, undefined);
+  } finally { once.restore(); }
+});
+
+test("a retry that lands on a different house number is still a miss", async () => {
+  const s = stubApifyBy((a) => (a.endsWith("WA 98004") && !a.includes("Clyde")
+    ? { ...NEW_SHAPE, address: { streetAddress: "8801 NE 15th Pl" } }
+    : MISS(a)));
+  try {
+    await assert.rejects(() => fetchZillowPhotos("8811 NE 15th Pl, Clyde Hill, WA 98004", "token"), /no data for this address/);
+  } finally { s.restore(); }
+});
+
 /* ---------- the photos go over as bytes, not links ---------- */
 
 // Anthropic fetches a `url` image source itself and honours robots.txt when

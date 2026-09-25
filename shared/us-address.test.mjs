@@ -139,3 +139,32 @@ test("sameHouse: Court vs Ct and a missing ZIP are one house; the next town's na
   assert.equal(sameHouse("10702 161st Ct NE, Bellevue, WA", "10702 161st Ct NE, Redmond, WA 98052"), false);
   assert.equal(sameHouse("10703 161st Ct NE, Redmond, WA", "10702 161st Ct NE, Redmond, WA 98052"), false);
 });
+
+// 2026-09-24/25: 8811 NE 15th Pl, Clyde Hill, 12503 SE 73rd St,
+// Newcastle and 419 S 150th St, Burien all came back "Zillow has no data for
+// this address" — no square footage, no photos — and the bot told the agents
+// our comps were thin (Clyde Hill had four at match 98). Zillow files those
+// houses under the USPS city: Bellevue, Seattle. Street + ZIP found both that
+// were tried live; so did Ambaum Blvd SW under "Seattle".
+test("a house Zillow files under its postal city is also asked for by street and ZIP", async () => {
+  const { zillowLookupForms } = await import("./us-address.js");
+  assert.deepEqual(zillowLookupForms("8811 NE 15th Pl, Clyde Hill, WA 98004"),
+    ["8811 NE 15th Pl, Clyde Hill, WA 98004", "8811 NE 15th Pl, WA 98004"]);
+  assert.deepEqual(zillowLookupForms("419 S 150th Street, Burien, WA 98148"),
+    ["419 S 150th Street, Burien, WA 98148", "419 S 150th St, WA 98148"]);
+  // The geocoder's spelling carries the postal city; it goes last, and only
+  // when it is the same street.
+  assert.deepEqual(zillowLookupForms("13025 Ambaum Blvd SW, Burien, WA 98146", { matched: "13025 Ambaum Blvd SW, Seattle, WA 98146" }),
+    ["13025 Ambaum Blvd SW, Burien, WA 98146", "13025 Ambaum Blvd SW, WA 98146", "13025 Ambaum Blvd SW, Seattle, WA 98146"]);
+  assert.deepEqual(zillowLookupForms("13025 Ambaum Blvd SW, Burien, WA 98146", { matched: "99 Other St, Seattle, WA 98146" }),
+    ["13025 Ambaum Blvd SW, Burien, WA 98146", "13025 Ambaum Blvd SW, WA 98146"]);
+  // No ZIP typed: the geocoder's ZIP stands in.
+  assert.deepEqual(zillowLookupForms("12503 SE 73rd St, Newcastle, WA", { matched: "12503 SE 73rd St, Newcastle, WA 98056" }),
+    ["12503 SE 73rd St, Newcastle, WA", "12503 SE 73rd St, WA 98056", "12503 SE 73rd St, Newcastle, WA 98056"]);
+  // A unit stays on the street line.
+  assert.deepEqual(zillowLookupForms("202 Mt Park Blvd SW Unit B303, Issaquah, WA 98027")[1], "202 Mt Park Blvd SW Unit B303, WA 98027");
+  // Nothing to add: no house number, or no ZIP from anywhere.
+  assert.deepEqual(zillowLookupForms("Poulsbo, WA"), ["Poulsbo, WA"]);
+  assert.deepEqual(zillowLookupForms("34418 54th Ave S"), ["34418 54th Ave S"]);
+  assert.deepEqual(zillowLookupForms(""), []);
+});

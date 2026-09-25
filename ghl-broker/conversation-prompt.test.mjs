@@ -189,3 +189,23 @@ test("the model is told today's date, so the 18th is never 'past month end'", ()
   const late = buildUserContext({ party: "agent", contact: { name: "Nate Wright" }, signer: "Matt", message: "hi", now: Date.parse("2026-09-19T02:00:00Z") });
   assert.match(late, /TODAY: Friday, September 18, 2026/);
 });
+
+// 8811 NE 15th Pl, Clyde Hill (2026-09-25): the underwrite held on
+// "square footage unknown" and "0 listing photos" with four comps at match 98,
+// and the text said "Comps on Clyde Hill came back thinner than I'd like".
+// The reason given is the one that held it.
+test("an underwrite held on something other than comps doesn't tell the agent the comps are thin", () => {
+  const sqft = "the subject's square footage is unknown";
+  for (const kind of ["take_ask", "promise_due"]) {
+    const o = { kind, address: "8811 NE 15th Pl", heldReason: sqft, needs: ["value", "work"], needValue: true, needWork: true, what: "number" };
+    const p = outboundOpening(o);
+    assert.doesNotMatch(p, /comps/i, kind);
+    assert.match(p, /square footage/, kind);
+  }
+  const photos = outboundOpening({ kind: "take_ask", address: "x", heldReason: "only 0 listing photos to scan", needWork: true });
+  assert.doesNotMatch(photos, /comps/i);
+  assert.match(photos, /photos/);
+  // Real thin comps still say so.
+  const thin = outboundOpening({ kind: "take_ask", address: "x", heldReason: "only 1 priced comps", needValue: true });
+  assert.match(thin, /comps came back thin/);
+});

@@ -7,7 +7,7 @@
 import { unitsFromDetail, streetKey } from "./comps-zillow.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { ALL_REHAB_ITEMS, BATH_TIERS, BED_TIERS, lineCost, rehabBand } from "./shared/rehab-catalog.js";
-import { addressQueryVariants } from "./shared/us-address.js";
+import { addressQueryVariants, parseUsAddress, zillowLookupForms } from "./shared/us-address.js";
 import { mapPool } from "./map-pool.js";
 
 const MAX_PHOTOS = 40;
@@ -109,7 +109,32 @@ function bestPhotoUrl(photo) {
   return photo?.url || null;
 }
 
-export async function fetchZillowPhotos(address, apifyToken) {
+// Zillow files a house under its USPS postal city, which is often not the town
+// the agent (or the geocoder) names — Clyde Hill is Bellevue to Zillow, most of
+// Burien is Seattle. A miss is asked again by street + ZIP, then in the
+// geocoder's spelling (`matched`), before the run is told there's no listing;
+// see zillowLookupForms. A house found the first time costs one lookup, as it
+// always did. `foundAs` says which spelling found it, when it wasn't the first.
+export async function fetchZillowPhotos(address, apifyToken, { matched = "" } = {}) {
+  const forms = zillowLookupForms(address, { matched });
+  if (!forms.length) forms.push(String(address || ""));
+  const houseNo = parseUsAddress(address).houseNo;
+  let miss = null;
+  for (const [i, form] of forms.entries()) {
+    try {
+      const got = await fetchZillowDetail(form, apifyToken, { houseNo: i ? houseNo : "" });
+      return i ? { ...got, foundAs: form } : got;
+    } catch (e) {
+      if (e.http !== 404) throw e;
+      miss ??= e;
+    }
+  }
+  throw miss;
+}
+
+// One detail-actor lookup. `houseNo`: a retry by another spelling must land on
+// the same house number, or it found a neighbour.
+async function fetchZillowDetail(address, apifyToken, { houseNo = "" } = {}) {
   const r = await fetch(
     `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}&timeout=180`,
     {
@@ -142,6 +167,10 @@ export async function fetchZillowPhotos(address, apifyToken) {
       new Error(item.invalidReason || "Zillow has no data for this address"),
       { http: 404 }
     );
+  }
+  const foundNo = parseUsAddress(item.address?.streetAddress || "").houseNo;
+  if (houseNo && foundNo && foundNo !== houseNo) {
+    throw Object.assign(new Error(`Zillow matched ${item.address.streetAddress}, not this house`), { http: 404 });
   }
   // The detail actor was rebuilt on 2026-09-02 alongside the search one, with
   // the same rename: the carousel is `listingPhotos` ([{url, caption}]), the
