@@ -532,6 +532,15 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // 2026-09-18, after "Earnest? Inspection?" got "let me confirm with my
   // partner"): the bot gives these in the same message, no checking.
   writeUp: { earnestMoney: 1000, earnestDue: "after inspection", inspectionDays: 14, buyer: "Matthew Shepherd and/or assigns" },
+  // What the drafts run on and how they're paid for (2026-09-25).
+  //   shadowModel / shadowUntil  a second model drafts every reply beside the
+  //                              real one, stored and never sent, until the
+  //                              date — how a cheaper model is judged on live
+  //                              traffic before it replaces the real one
+  //   batchMachineDrafts         texts the machine starts (nudges, check-ins,
+  //                              the sweeps) go through the Batch API at half
+  //                              price; a reply to a person never waits on it
+  ai: { shadowModel: "claude-sonnet-5", shadowUntil: "2026-09-30", batchMachineDrafts: true },
   routing: {
     agentTags: ["agent", "agent-*"],
     investorTags: ["investor", "investor-*", "on-deal"],
@@ -808,6 +817,16 @@ function normalizeFollowUp(src = {}, party = "agent") {
  *
  * Idempotent: normalize(normalize(x)) deep-equals normalize(x).
  */
+// Models a shadow may run on. The real drafter's model is code, not config.
+export const SHADOW_MODELS = ["claude-sonnet-5", "claude-haiku-4-5", "claude-opus-5"];
+
+// Is the shadow drafting right now? A model, and a date not yet passed (the
+// last day included, in UTC).
+export function shadowModelFor(ai, now = Date.now()) {
+  if (!ai?.shadowModel || !ai.shadowUntil) return "";
+  return new Date(now).toISOString().slice(0, 10) <= ai.shadowUntil ? ai.shadowModel : "";
+}
+
 export function normalizeConversationAi(doc, seed = {}) {
   const fresh = doc == null || typeof doc !== "object";
   const d = fresh ? {} : doc;
@@ -924,6 +943,16 @@ export function normalizeConversationAi(doc, seed = {}) {
     rules: list(d.rules, { max: 40, each: 300 }),
     examples,
     answers,
+    ai: (() => {
+      const a = d.ai && typeof d.ai === "object" ? d.ai : {};
+      const A = D.ai;
+      const until = str(a.shadowUntil ?? A.shadowUntil, 10);
+      return {
+        shadowModel: a.shadowModel === "" ? "" : oneOf(a.shadowModel, SHADOW_MODELS, A.shadowModel),
+        shadowUntil: /^\d{4}-\d{2}-\d{2}$/.test(until) ? until : "",
+        batchMachineDrafts: bool(a.batchMachineDrafts, A.batchMachineDrafts),
+      };
+    })(),
     writeUp: (() => {
       const w = d.writeUp && typeof d.writeUp === "object" ? d.writeUp : {};
       const W = D.writeUp;

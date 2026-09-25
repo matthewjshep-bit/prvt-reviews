@@ -5226,7 +5226,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   const LEAN_DRAFT_KEYS = [
     "id", "contactId", "contactName", "status", "channel", "party", "partySource", "intent", "confidence",
     "inbound", "reply", "sentText", "summary", "propertyAddress", "autoSendable", "flags", "autoSend", "actions",
-    "autoSent", "edited", "heldAt", "sendAt", "sentAt", "createdAt", "updatedAt",
+    "autoSent", "edited", "heldAt", "sendAt", "sentAt", "createdAt", "updatedAt", "usage", "shadow", "outbound",
   ];
   router.get("/automations/conversation/history", async (req, res) => {
     try {

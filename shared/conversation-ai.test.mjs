@@ -508,3 +508,17 @@ test("an opt-out they sent before is found in the thread, with its date, and onl
   assert.deepEqual(optOutInTranscript("[2026-08-18 17:05] THEM sms: STOP"), { at: "2026-08-18", text: "STOP" });
   assert.equal(optOutInTranscript("[2026-08-18 17:05] THEM sms: remove me", { enabled: false, keywords: ["remove"] }), null);
 });
+
+test("the ai block survives a save: shadow model and end date, and the batch switch", async () => {
+  const { normalizeConversationAi, shadowModelFor } = await import("./conversation-ai.js");
+  const d = normalizeConversationAi({});
+  assert.deepEqual(d.ai, { shadowModel: "claude-sonnet-5", shadowUntil: "2026-09-30", batchMachineDrafts: true });
+  const off = normalizeConversationAi({ ai: { shadowModel: "", batchMachineDrafts: false } });
+  assert.equal(off.ai.shadowModel, "");
+  assert.equal(off.ai.batchMachineDrafts, false);
+  assert.equal(normalizeConversationAi({ ai: { shadowModel: "gpt-9" } }).ai.shadowModel, "claude-sonnet-5", "only a listed model");
+  assert.equal(normalizeConversationAi({ ai: { shadowUntil: "soon" } }).ai.shadowUntil, "");
+  assert.equal(shadowModelFor(d.ai, Date.parse("2026-09-30T23:00:00Z")), "claude-sonnet-5", "the last day counts");
+  assert.equal(shadowModelFor(d.ai, Date.parse("2026-10-01T00:00:01Z")), "");
+  assert.equal(shadowModelFor(off.ai), "");
+});
