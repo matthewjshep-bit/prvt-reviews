@@ -22,7 +22,8 @@ import { OFFER_STATUS, aiHoldReasons } from "@shared/offer-status.js";
 import { PROPERTY_DETAIL_FIELDS, propertyDossier, addressKey } from "@shared/contact-record.js";
 import { getContactProfile, ghlContactUrl, zillowUrl } from "./api.js";
 import { CHANNEL_LABELS } from "./SendModal.jsx";
-import { AttachWarning, StagePill, StatusMenu, StatusPill } from "./ui.jsx";
+import { AttachWarning, CurrentPill, PaperHeldBanner, StagePill, StatusMenu, StatusPill } from "./ui.jsx";
+import { annotateCurrent } from "@shared/current-offer.js";
 
 const CARD = "rounded-xl border border-slate-200 bg-white p-3.5";
 const CARD_LABEL = "text-[11px] font-bold uppercase tracking-wider text-slate-500";
@@ -241,7 +242,7 @@ function AgentRail({ offers, currentId, contactName, onSelect }) {
                   {o.cashAmount != null ? fmtMoney(o.cashAmount) : "—"}
                 </span>
               </span>
-              <span className="mt-1 block"><StatusPill offer={o} small /></span>
+              <span className="mt-1 flex items-center gap-1"><StatusPill offer={o} small /><CurrentPill offer={o} /></span>
             </button>
           );
         })}
@@ -254,6 +255,7 @@ export default function OfferDetailModal({
   offer, siblings = [], contactName, queue = null, queueLabel = "",
   onClose, onSelect, onEdit, onSend, onPsa, onContract, onAssignment, onNetSheet,
   onPromote, onDealNav, onOfferPage, onStatus, statusBusy = false,
+  onRequote = null, requoting = false,
 }) {
   const { cash, sellerFinance: sf, leaseOption: lo } = offer.calc?.offers || {};
   const history = offer.statusHistory || [];
@@ -263,7 +265,12 @@ export default function OfferDetailModal({
 
   // The agent's offers, newest first, with this one guaranteed present even if
   // the caller's list hasn't caught up with a just-created offer.
-  const rail = siblings.some((o) => o.id === offer.id) ? siblings : [offer, ...siblings];
+  // Each told whether it's its house's current offer (shared/current-offer.js);
+  // `me` is the open offer's verdict, carried onto the full document so the
+  // status menu can offer "make this the current offer".
+  const rail = annotateCurrent(siblings.some((o) => o.id === offer.id) ? siblings : [offer, ...siblings]);
+  const me = rail.find((o) => o.id === offer.id) || {};
+  const menuOffer = { ...offer, isCurrent: me.isCurrent, supersededBy: me.supersededBy, currentPinned: me.currentPinned, houseOffers: me.houseOffers };
 
   // What the arrows walk. The QUEUE — the rows of the list you opened this
   // from, in the order that list shows them — when the open offer is in it,
@@ -349,7 +356,7 @@ export default function OfferDetailModal({
                     no outcome to set (the server rejects one), so it stays a
                     label until the offer is created. */}
                 {onStatus && !draft
-                  ? <StatusMenu offer={offer} busy={statusBusy} onDealNav={onDealNav}
+                  ? <StatusMenu offer={menuOffer} busy={statusBusy} onDealNav={onDealNav}
                       onSelect={(status) => onStatus(offer, status)} />
                   : <StatusPill offer={offer} small />}
                 <AttachWarning offer={offer} />
@@ -362,6 +369,19 @@ export default function OfferDetailModal({
                   </>
                 )}
               </div>
+              {me.supersededBy && (
+                <p className="mt-1.5 text-xs text-slate-500">
+                  Superseded — the current offer on this house is {fmtMoney(me.supersededBy.cashAmount)}.
+                  Nothing automatic acts on this one.
+                  {onSelect && rail.find((o) => o.id === me.supersededBy.id) && (
+                    <button type="button" onClick={() => onSelect(rail.find((o) => o.id === me.supersededBy.id))}
+                      className="ml-1 font-semibold text-blue-700 underline">Open the current one</button>
+                  )}
+                </p>
+              )}
+              {onRequote && (
+                <div className="mt-2"><PaperHeldBanner offer={offer} busy={requoting} onRequote={(amount) => onRequote(offer, amount)} /></div>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">

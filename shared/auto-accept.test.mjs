@@ -390,3 +390,20 @@ test("at or over asking is not a pushback, the daily cap holds, and the switch h
   assert.equal(ib({ band: { ...IBAND, enabled: false } }).passed, false);
   assert.equal(failed(ib({ asking: 0 })), "below_asking", "no asking price, no arithmetic");
 });
+
+// 13041 SE 208th St (2026-09-25): "I'll draw it up in the morning" released as
+// an acceptance of the offer row's 416,500 while the thread was at 400K.
+test("the acceptance band won't release on an offer whose number we've since come down from", () => {
+  const comeDown = { amount: 225000, ts: Date.now(), text: "can we do 225k" };
+  const v = acc({ comeDown });
+  assert.equal(v.passed, false);
+  assert.equal(failed(v), "current_number");
+  assert.match(v.reason, /we texted \$225,000 after this offer's \$240,000/);
+  assert.equal(acc().passed, true, "no come-down, no change");
+});
+
+test("the counter band won't measure a counter from a number we've left", () => {
+  const v = band({ comeDown: { amount: 225000, ts: Date.now(), text: "225k" } });
+  assert.equal(v.passed, false);
+  assert.equal(failed(v), "current_number");
+});

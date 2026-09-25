@@ -47,6 +47,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
+import { currentOffers, currentOfferFor, paperCheck, ourComeDown } from "./shared/current-offer.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
 import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, isHot, isNegotiable } from "./shared/offer-status.js";
 import { sameStreet } from "./shared/us-address.js";
@@ -696,7 +697,7 @@ export function decideAutoSend({ gate, party = "agent", intent = "other", channe
 // operator is working the outbox by hand, and a clock we set would be a text
 // they never asked us to send. `human_active` is the clearest of all: a person
 // has the thread right now.
-export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed", "not_allowlisted"]);
+export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed", "not_allowlisted", "stale_number"]);
 
 // The nightly audit's loosening (Matt, 2026-09-16: "fire where it can"). A
 // draft the money guard passed, that the model didn't flag for a person,
@@ -709,7 +710,9 @@ export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed",
 export const RELEASE_QUIET = new Set(["opt_out", "small_talk", "media", "partner_answer"]);
 export function releaseForAudit({ auto, gate, draft, deps }) {
   if (!deps?.releaseHeld || auto?.send) return auto;
-  if (!HELD_FOR_A_PERSON.has(auto?.code) || auto.code === "gates") return auto;
+  // A paper hold (stale_number) is a number question, like the gates: never
+  // released as "a holding reply".
+  if (!HELD_FOR_A_PERSON.has(auto?.code) || auto.code === "gates" || auto.code === "stale_number") return auto;
   // "Locked but clean" is how the gates report a never-auto intent whose
   // reply passed every money check — the shape decideAutoSend itself accepts.
   const clean = Boolean(gate?.ok || (gate?.locked && gate?.clean));
@@ -760,6 +763,8 @@ export function releaseUnderGuard({ base, party = "agent", intent = "other", con
     send: true, code: "released",
     reason: family === "booking"
       ? `released under the calendar — ${guard.reason}`
+      : guard.kind === "acceptance_band"
+        ? "released under the acceptance band — they took our number and named no new one"
       : guard.counterBack
         ? `released under the counter band — ${fmtMoney(guard.theirAmount)} is just over the ${fmtMoney(guard.ceiling)} ceiling, countering back at it`
         : `released under the counter band — ${fmtMoney(guard.theirAmount)} is at or under the ${fmtMoney(guard.ceiling)} ceiling`,
@@ -871,7 +876,7 @@ export async function evaluateInvestorBandFor({ store, locationId, draft, config
  * Returns null when the band is off or the intent isn't guardable, so nothing
  * is computed (and no store reads happen) on the ordinary path.
  */
-export async function evaluateBandFor({ store, locationId, party, draft, config, saved, job, now = Date.now() }) {
+export async function evaluateBandFor({ store, locationId, party, draft, config, saved, job, now = Date.now(), transcript = "" }) {
   if (party === "investor" && draft?.intent === "price_pushback") return evaluateInvestorBandFor({ store, locationId, draft, config, saved, job, now });
   const band = config?.parties?.[party]?.counterBand;
   if (!band?.enabled) return null;
@@ -881,7 +886,9 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
   // Open, or dead on their side and revived by this counter (isNegotiable):
   // the passed-offer check-in asked for exactly this answer. An offer we
   // walked from stays closed.
-  const open = rows.filter(isNegotiable);
+  // The current offer on each house only (shared/current-offer.js): a band
+  // measured from a row the house has moved past answers the wrong number.
+  const open = currentOffers(rows).filter(isNegotiable);
   if (!open.length) {
     return { kind: draft.intent === "acceptance" ? "acceptance_band" : "counter_band", passed: false,
              checks: [{ name: "offer_live", ok: false, detail: "no open offer" }],
@@ -904,7 +911,8 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
     return shorthand > 0 && !out.includes(shorthand) ? [...out, shorthand] : out;
   };
   const args = { offer: full, draft, inboundMessage: job.message || "", settings: saved || {},
-                 band, openOffers: open, releasedToday, now, moneyIn: saidMoney };
+                 band, openOffers: open, releasedToday, now, moneyIn: saidMoney,
+                 comeDown: full ? ourComeDown(full, transcript) : null };
   return draft.intent === "acceptance" ? evaluateAcceptance(args) : evaluateCounterBand(args);
 }
 
@@ -2232,7 +2240,7 @@ async function runReply(job, ctx) {
   }
   if (party === "agent" && draft.intent === "counter") {
     const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
-    const open = book.filter(isNegotiable);
+    const open = currentOffers(book).filter(isNegotiable);   // the number we're working from, per house
     const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
     const full = picked && typeof store.getOffer === "function" ? (await store.getOffer(picked.id).catch(() => null)) || picked : picked;
     if (full) {
@@ -2409,7 +2417,7 @@ async function runReply(job, ctx) {
   const bookingApplies = Boolean(booking) && ((BOOKING_INTENTS[party] || []).includes(draft.intent) || (draft.chosenSlot && booking.previouslyOffered.length));
   const guard = bookingApplies
     ? evaluateBookingGuard({ draft, offered: booking.offered, previouslyOffered: booking.previouslyOffered, freeSlots: booking.freeSlots, config: config.booking, now })
-    : await evaluateBandFor({ store, locationId, party, draft, config, saved, job, now });
+    : await evaluateBandFor({ store, locationId, party, draft, config, saved, job, now, transcript: a.transcript });
   // A booking guard on an intent that is not itself locked (a "question"
   // that picks a time) has nothing to release; the pass still books.
   let auto = releaseUnderGuard({ base, party, intent: draft.intent, config, guard });
@@ -2576,7 +2584,7 @@ async function runReply(job, ctx) {
   // second no (or the offer ladder running out) closes it the usual way.
   if (party === "agent" && draft.intent === "rejection") {
     const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
-    const open = rows.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
+    const open = currentOffers(rows).filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
     const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
     const full = picked && typeof store.getOffer === "function" ? (await store.getOffer(picked.id).catch(() => null)) || picked : picked;
     // A no after we've already come back to them is an answer, not an
@@ -2596,6 +2604,33 @@ async function runReply(job, ctx) {
       plan.suggested = plan.suggested.filter((x) => !closes(x));
       plan.auto.push({ id: `a-no1-${job.id}`, type: "note_first_decline", mode: "auto", status: "pending", party, offerId: full.id,
         why: "first no on a live offer — asking for their number before it's filed dead" });
+    }
+  }
+
+  // Paper and the number on it (shared/current-offer.js). A draft that would
+  // put our offer in front of them — send it, or call it in the realm — waits
+  // for a person when the house's current offer isn't the number in the
+  // thread. 13041 SE 208th St (2026-09-25): the thread was at 400K, the row
+  // said 416,500, and the letter went out with "let's do it". The text and
+  // the paper wait together; the paper moves to "ask" so nothing sends it on
+  // the side, and the offer is stamped so its pane offers the re-quote.
+  let paperHold = null;
+  const PAPER_ACTIONS = new Set(["send_offer", "mark_offer_realm_yes"]);
+  if (party === "agent" && (plan.auto.some((x) => PAPER_ACTIONS.has(x.type)) || ["realm_yes", "acceptance"].includes(draft.intent))
+      && !plan.auto.some((x) => x.type === "revise_offer_to_counter")) {
+    const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50 }).catch(() => []);
+    const cur = currentOfferFor(rows, { address: draft.propertyAddress || "" }) || (draft.propertyAddress ? null : currentOfferFor(rows, {}));
+    if (cur) {
+      const check = paperCheck({ offer: cur, transcript: a.transcript });
+      if (!check.ok) {
+        paperHold = { offerId: cur.id, ...check };
+        auto = { send: false, code: "stale_number", reason: `needs a person: ${check.reason}` };
+        const moved = plan.auto.filter((x) => PAPER_ACTIONS.has(x.type)).map((x) => ({ ...x, mode: "ask", why: `${x.why ? `${x.why} — ` : ""}held: ${check.reason}` }));
+        plan.auto = plan.auto.filter((x) => !PAPER_ACTIONS.has(x.type));
+        plan.suggested.push(...moved);
+        if (typeof deps.markPaperHeld === "function") await deps.markPaperHeld({ offerId: cur.id, check, draftId: job.id }).catch(() => {});
+        warnings.push(`paper held: ${check.reason}`);
+      }
     }
   }
 
@@ -2684,6 +2719,9 @@ async function runReply(job, ctx) {
     // fail. A failed one is the row that says how far off the counter was and
     // therefore whether the ceiling is in the right place.
     exception: autoWithVerdict.exception || null,
+    // The paper this draft would have sent, held because the thread's number
+    // isn't the offer's (the Today row offers the re-quote).
+    paperHold: paperHold ? { offerId: paperHold.offerId, reason: paperHold.reason, amount: Math.round(Number(paperHold.comeDown?.amount) || 0) } : null,
     // The calendar: what this reply offers (so the next message can pick
     // one) and what it booked.
     booking: bookingVerdict ? { offered: bookingVerdict.passed ? bookingVerdict.offered : [], chosen: bookingVerdict.chosen || null } : null,
@@ -2747,7 +2785,9 @@ async function runReply(job, ctx) {
   // number. The model's read first, the plain words second; never on a no or
   // a counter, which say the opposite. The broker decides whether there is
   // an offer of ours, with its number already out, for this to be about.
-  if (party === "agent" && !isCall && typeof deps.raiseOfferHeat === "function" && !["rejection", "opt_out", "we_passed"].includes(draft.intent)) {
+  // Not while the paper is held: "hot" means the number is settled, and the
+  // number on that row is the one in question.
+  if (party === "agent" && !isCall && !paperHold && typeof deps.raiseOfferHeat === "function" && !["rejection", "opt_out", "we_passed"].includes(draft.intent)) {
     const signal = draft.dealSignal
       || (draft.intent === "counter" ? "" : dealSignalFromText(job.originalMessage || job.message))
       || (["realm_yes", "acceptance"].includes(draft.intent) ? "warm" : "");

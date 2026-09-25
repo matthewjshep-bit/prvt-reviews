@@ -241,7 +241,7 @@ test("the CRM hears about a new number, and nothing else", async () => {
 test("revising an older offer doesn't drag the agent's last-offer fields backwards", async () => {
   const older = await seedOffer();
   // A newer offer for the same agent, on another property.
-  await seedOffer();
+  await seedOffer({ address: "4410 S 180th St, SeaTac, WA 98188" });
 
   calls = [];
   const r = await save(older.id, { inputs: { ...INPUTS, arv: 500000 } });
@@ -251,6 +251,18 @@ test("revising an older offer doesn't drag the agent's last-offer fields backwar
     "the newer offer keeps the fields");
   assert.ok(calls.some((c) => JSON.stringify(c.body || {}).includes("we revised our offer to")),
     "the ledger still records the new number — it is per-property, not per-contact");
+});
+
+// 13041 SE 208th St (2026-09-25): on ONE house, the row you re-price is the
+// current offer from then on, so the agent's last-offer fields follow it.
+test("revising an older offer on the same house does update the last-offer fields — it is the current offer now", async () => {
+  const older = await seedOffer({ address: "88 Same House Rd, Kent, WA 98031" });
+  await seedOffer({ address: "88 Same House Rd, Kent, WA 98031" });
+  calls = [];
+  const r = await save(older.id, { inputs: { ...INPUTS, address: "88 Same House Rd, Kent, WA 98031", arv: 500000 } });
+  assert.equal(r.status, 200);
+  assert.ok(!r.json.warnings.some((w) => /newer offer for this agent/.test(w)), JSON.stringify(r.json.warnings));
+  assert.ok(calls.some((c) => JSON.stringify(c.body || {}).includes("cf-last-offer-amount")), "the fields follow the current offer");
 });
 
 test("a workspace that didn't fit never eats the one already saved", async () => {

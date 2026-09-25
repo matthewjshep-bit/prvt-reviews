@@ -964,6 +964,79 @@ What a person still owns: the PSA after a yes. "14 days works on the 800k"
 was held as "an acceptance is a person's call" and nobody sent the contract
 that day; the bot had already promised it twice. That handoff is on Today.
 
+### The current offer — one live row per house (2026-09-25)
+
+13041 SE 208th St, Kent. Five offer rows on one house: a July offer, two
+August revisions, an August draft, an unsent first pass. From 8/7 on, the
+thread said "~400K". On 9/22 "She's at $420k" landed as a counter on the July
+row (416,500), the only one not marked passed. On 9/25 "draw it up" was read
+as realm_yes, and the rule's `send_offer` auto-sent a letter of intent at
+416,500. It was off that July row, and the draft's own summary said "400k".
+The acceptance band then released "I'll draw it up in the morning" as the
+seller taking our number. The deal died on it. About 20 selectors each
+picked "the" offer their own way, mostly newest-`createdAt`. A revision keeps
+its `createdAt`, so a re-priced row sorted *below* the stale one it replaced.
+
+**The rule** (`shared/current-offer.js`, derived on read, nothing to migrate):
+1. A draft is never current.
+2. A deal on the house is current. A deal is never superseded.
+3. A row a person pinned is current, until a sibling is **sent** after the pin.
+4. Otherwise it's the row whose number moved last: sent, revised, re-quoted,
+   or created. A status change is not a price move.
+
+Status never disqualifies. A passed current offer is still our number on that
+house. Every other row on the house is **superseded**.
+
+**Every machine path acts on current offers only:**
+- the conversational deps in `routes/offers.js` (via `currentOffersFor`):
+  status, heat, realm, re-quote, counter revise, promote, `sendOfferDocs`
+- the counter band and the acceptance band
+- the follow-up ladders (offer nudge, hot push, passed check-in)
+- the price watch, the nightly audit, the promise resolver
+- the board (one card per house; a draft on an older row moves to the current card)
+- the GHL mirror's value and the agent's offer-status tag
+
+A selector finds the current row of the named house, then applies its own
+status filter to that row. If the row fails the filter, the selector refuses.
+It never falls back to a superseded sibling.
+
+**Paper holds.** `paperCheck` / `ourComeDown` look for a lower number we
+texted after the current row last moved.
+- A reply whose actions would send the offer or call it in the realm is held
+  as `stale_number`. Its paper actions move to "ask", the offer is stamped
+  `paperHeld`, and the draft carries `paperHold`.
+- The nightly audit never releases a `stale_number` hold.
+- `sendOfferDocs` runs the same check for every machine caller:
+  `onOfferCreated`, the retry tick, the audit's queued send. If it can't read
+  the thread, it holds.
+- Both bands gained a `current_number` check.
+
+`ourComeDown` doesn't count the offer's own number said short ("227K" for
+227,552), or figures named as ARV, rehab, repairs or work.
+
+**The bot's offer book** lists one line per house: the current row, plus a
+count of superseded rows. Superseded amounts are stale, so a draft that says
+one is held.
+
+**Where you see it:**
+- **Offers tab:** a green *current* pill when the house has more than one row.
+  Superseded rows are greyed with "superseded by $X". The funnel chips count
+  current rows only.
+- **Status menu:** "Make this the current offer" (`PATCH /:id/current`) and
+  "Unpin".
+- **Editor:** a superseded banner.
+- **Held-paper banner** (editor, offer window, Today's pane): **Re-quote at N**
+  (`POST /:id/requote`) re-prices the row in place. Nothing is sent; Send is
+  your next press.
+- **Today's pane:** shows the house's current offer, even when the row
+  pointed at an older one.
+
+**Before and after deploy:** run `node scripts/current-offer-report.mjs`
+(read-only). It lists every house with more than one offer, the current row,
+the row the old send path would have picked, and any paper that would be
+held. First run, 2026-09-25: 207 houses; 57 with more than one offer; on 36
+of those the old path picked a different row; 2 held.
+
 ### The nightly audit (2026-09-16)
 
 **The audit answers what it finds (2026-09-22).** "From last night" had 18

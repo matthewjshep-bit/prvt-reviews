@@ -140,12 +140,18 @@ const fmtK = (n) => `$${Math.round(n / 1000)}k`;
  */
 export function evaluateCounterBand({
   offer, draft = {}, inboundMessage = "", settings = {}, band = {},
-  openOffers = [], releasedToday = 0, now = Date.now(), moneyIn = defaultMoneyIn,
+  openOffers = [], releasedToday = 0, now = Date.now(), moneyIn = defaultMoneyIn, comeDown = null,
 } = {}) {
   const checks = [];
   const check = (name, ok, detail) => { checks.push({ name, ok: Boolean(ok), detail }); return Boolean(ok); };
   const theirAmount = round(draft.counterAmount);
   const ceiling = autoAcceptCeiling({ offer, settings });
+  // 0. The offer's number is the thread's number. `comeDown` is a lower one
+  //    WE texted after the offer last moved (ourComeDown, current-offer.js):
+  //    the ceiling and "above ours" would be measured from a number we've
+  //    already left, so the band stays shut until someone re-quotes.
+  check("current_number", !comeDown,
+    comeDown ? `we texted ${money(comeDown.amount)} after this offer's ${money(round(offer?.cashAmount))} — re-quote first` : "");
   const cap = round(band.maxAmount);
   const limit = cap > 0 ? Math.min(ceiling.ceiling, cap) : ceiling.ceiling;
 
@@ -262,11 +268,16 @@ function defaultMoneyIn(text = "") {
  */
 export function evaluateAcceptance({
   offer, draft = {}, inboundMessage = "", band = {}, openOffers = [],
-  releasedToday = 0, now = Date.now(), moneyIn = defaultMoneyIn,
+  releasedToday = 0, now = Date.now(), moneyIn = defaultMoneyIn, comeDown = null,
 } = {}) {
   const checks = [];
   const check = (name, ok, detail) => { checks.push({ name, ok: Boolean(ok), detail }); return Boolean(ok); };
   const ours = round(offer?.cashAmount);
+  // "They accepted our number" — only if the offer's number IS our number.
+  // 13041 SE 208th St (2026-09-25): the thread was at 400K, the row said
+  // 416,500, and "I'll draw it up" was released as an acceptance of it.
+  check("current_number", !comeDown,
+    comeDown ? `we texted ${money(comeDown.amount)} after this offer's ${money(ours)} — re-quote first` : "");
   const said = moneyIn(inboundMessage).map(round);
   // "They agreed to accept 825,000" on our $825,240.29 is our number, rounded
   // the way people say it — Heather Vandyken's seller accepted (2026-09-14) and

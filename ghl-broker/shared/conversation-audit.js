@@ -18,6 +18,7 @@
 // file to read to know what the nightly sweep would and wouldn't do.
 
 import { OPEN_STATUSES, DEAD_STATUSES, effectiveStatus, dealIsOver } from "./offer-status.js";
+import { currentOffers } from "./current-offer.js";
 import { unansweredCheckIn, nextMorning } from "./follow-up.js";
 import { NEVER_AUTO } from "./conversation-ai.js";
 
@@ -284,18 +285,12 @@ export function auditConversations({
   /* --- 3. the offer book --- */
   let sweepAsked = false;
   const askSweep = () => { if (sweepAsked || !ladderOn || !followUpStale) return null; sweepAsked = true; return { type: "run_follow_up_sweep" }; };
-  // One row per property: the newest open offer on it speaks for the rest
-  // (revisions and re-quotes sit beside it in the book). Same rule as the
-  // follow-up sweep's isTheOfferToAskAbout — Allan Ponio's Vashon house was
-  // seven rows on the first dry run, 2026-09-16.
-  const newestByProperty = new Map();
-  for (const o of offers) {
-    if (!o?.contactId || !o.address || o.deal) continue;
-    const key = `${o.contactId}|${street(o.address).toLowerCase()}`;
-    const cur = newestByProperty.get(key);
-    if (!cur || String(o.createdAt || "") > String(cur.createdAt || "")) newestByProperty.set(key, o);
-  }
-  for (const o of newestByProperty.values()) {
+  // One row per property: its current offer speaks for the rest (shared/
+  // current-offer.js — the row whose number moved last, or the one a person
+  // pinned). A Vashon house was seven rows on the first dry run (2026-09-16);
+  // newest-created used to decide, and a re-priced row keeps its old
+  // createdAt, so a stale sibling spoke for the house.
+  for (const o of currentOffers(offers)) {
     if (!o?.contactId || !o.address || o.deal || excluded(o.contactId) || humanOwns(o.contactId)) continue;
     const status = effectiveStatus(o);
     if (DEAD_STATUSES.has(status) || status === "draft" || status === "accepted") continue;

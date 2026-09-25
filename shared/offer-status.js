@@ -353,7 +353,7 @@ export const OFFER_LIST_FIELDS = [
   // is the one thing the Conversation AI needs from it, and it's small.
   "statusHistory", "realm",
   // Heat (offerHeat): the hand-set flag and the agreed price it is derived from.
-  "hot", "agreed",
+  "hot", "agreed", "pin", "paperHeld",
   // What the GHL Opportunities mirror last wrote ({ acquisitions, dispositions }),
   // so the reconcile can tell "unchanged" from a lean row.
   "mirror",
@@ -369,7 +369,10 @@ export const OFFER_LIST_FIELDS = [
   //               (the dedupe key made that harmless, but never "step 2 of 3").
   //   counterBand {acceptedAt, amount, draftId} — the band's one exception used
   //   requotes    a few {ts, from, to, ...} — re-runs on the agent's numbers
-  "proactive", "followUps", "counterBand", "requotes",
+  //   revisions   ≤20 {ts, from, to} — hand re-prices; with sends/requotes
+  //               they say which row on a house is current (current-offer.js)
+  //   pin         {at, by, note} — a person chose this row as current
+  "proactive", "followUps", "counterBand", "requotes", "revisions",
   "createdAt", "updatedAt", "dateLabel", "validLabel",
   "pdfUrl", "imageUrl", "scopePdfUrl", "compsPdfUrl",
   "psaPdfUrl", "contractPdfUrl", "assignmentPdfUrl", "netSheetPdfUrl",

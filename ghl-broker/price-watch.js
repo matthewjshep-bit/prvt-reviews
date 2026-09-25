@@ -23,6 +23,7 @@ import { fetchZillowListings } from "./rehab-scan.js";
 import { streetKey } from "./comps-zillow.js";
 import { addressKey } from "./shared/us-address.js";
 import { effectiveStatus } from "./shared/offer-status.js";
+import { supersededIds, pricedAt } from "./shared/current-offer.js";
 import { localHour } from "./promise-sweep.js";
 
 const DAY_MS = 86400000;
@@ -59,15 +60,20 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
   if (!config.enabled) return { ...out, skipped: "Conversation AI is off" };
 
   const rows = await store.listOffersForFollowUp(locationId, { statuses: WATCH_STATUSES, limit: 300 }).catch(() => []);
-  // The newest offer per house: two copies of one listing are one watch.
+  // One watch per house, on the agent's current offer there (shared/
+  // current-offer.js): the price-drop text quotes its number, and a row the
+  // house moved past would quote one we've left. Across agents, the row whose
+  // number moved last.
+  const book = typeof store.listOffers === "function" ? await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => null) : null;
+  const replaced = book ? supersededIds(book) : new Set();
   const byHouse = new Map();
   for (const o of rows) {
-    if (!o?.id || !o.address || !o.contactId || o.deal) continue;
+    if (!o?.id || !o.address || !o.contactId || o.deal || replaced.has(o.id)) continue;
     const t = Date.parse(o.statusAt || o.createdAt || "");
     if (!(t >= now - WATCH_DAYS * DAY_MS)) continue;
     const k = addressKey(o.address);
     const prev = byHouse.get(k);
-    if (!prev || t > Date.parse(prev.statusAt || prev.createdAt || "")) byHouse.set(k, o);
+    if (!prev || pricedAt(o) > pricedAt(prev)) byHouse.set(k, o);
   }
   const watch = [...byHouse.values()]
     .sort((a, b) => String(a.priceWatch?.checkedAt || "").localeCompare(String(b.priceWatch?.checkedAt || "")))

@@ -614,3 +614,17 @@ test("an owed number is named after the agent, from their offer or their thread"
   assert.equal(row("c2").contactName, "Sara Kim");
   assert.match(row("c3").title, /^An agent:/);
 });
+
+// 13041 SE 208th St (2026-09-25): five rows on one house, five cards, and the
+// July one sat in the hot lane.
+test("the board shows one card per house — the current offer — and moves a draft on an older row to it", () => {
+  const r = build({
+    offers: [
+      offer({ id: "july", status: "countered", createdAt: D(60), sends: [{ ts: D(60) }], hot: { at: D(1), by: "conversation" } }),
+      offer({ id: "aug", status: "passed", createdAt: D(50), sends: [{ ts: D(50) }] }),
+    ],
+    drafts: [draft({ outbound: { offerId: "july" } })],
+  });
+  assert.deepEqual(r.cards.map((c) => c.offerId || c.id), ["aug"]);
+  assert.equal(r.counts.hidden.superseded, 1);
+});

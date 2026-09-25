@@ -16,6 +16,7 @@
 import { sameStreet } from "./us-address.js";
 import { aiHoldReasons, effectiveStatus, OPEN_STATUSES } from "./offer-status.js";
 import { detectPromise } from "./follow-up.js";
+import { currentOffers } from "./current-offer.js";
 
 const HOUR_MS = 3600000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -130,7 +131,9 @@ export function resolvePromise({ promise, offers = [], drafts = [], jobs = [], h
 
   // 3. The number exists and nobody floated it.
   const floated = (o) => Math.max(ms(o.proactive?.takeCheckAt) ?? 0, ms(o.proactive?.realmCheckAt) ?? 0) > (ms(p.since) ?? 0);
-  const priced = mine.find((o) => OPEN_STATUSES.has(effectiveStatus(o)) && Number(o.cashAmount) > 0 && !(o.sends || []).length && !floated(o));
+  // The house's current offer only (current-offer.js): an older row's number
+  // is one the house moved past, and floating it is a promise kept wrong.
+  const priced = currentOffers(mine).find((o) => OPEN_STATUSES.has(effectiveStatus(o)) && Number(o.cashAmount) > 0 && !(o.sends || []).length && !floated(o));
   if (priced) return { move: "send_number", offerId: priced.id, reason: "the offer is priced and nothing has gone out" };
 
   // 4. It is on its way.

@@ -6,14 +6,15 @@
 // what happened, then the agent's other offers. The documents and the full
 // editor are a click away, not repeated here.
 
-import React from "react";
+import React, { useState } from "react";
 import { ExternalLink, FileText, Pencil } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { OFFER_STATUS, offerHeat, priceAgreed } from "@shared/offer-status.js";
-import { getOffer, listOffers, offerEditorUrl, zillowUrl } from "./api.js";
-import { HotPill, StagePill, StatusPill } from "./ui.jsx";
+import { getOffer, listOffers, offerEditorUrl, requoteOffer, zillowUrl } from "./api.js";
+import { annotateCurrent } from "@shared/current-offer.js";
+import { CurrentPill, HotPill, PaperHeldBanner, StagePill, StatusPill } from "./ui.jsx";
 import { AiProvenance, RehabScope } from "./OfferDetailModal.jsx";
-import { useLoad } from "./work-data.js";
+import { forget, useLoad } from "./work-data.js";
 import { allInPct, allInTone } from "./work-queue.js";
 
 const LABEL = "text-xs font-semibold uppercase tracking-wide text-slate-500";
@@ -61,7 +62,7 @@ function Figure({ label, value, strong = false, tone = "" }) {
  * <OfferPanelBody offer siblings item loading error />
  * What the tests render; OfferPanel below loads it.
  */
-export function OfferPanelBody({ offer, siblings = [], item = {}, loading = false, error = "" }) {
+export function OfferPanelBody({ offer, siblings = [], item = {}, loading = false, error = "", replaced = null, onRequote = null, requoting = false }) {
   if (!item.offerId && !offer) {
     const startHref = item.contactId ? `${offerEditorUrl(null, { view: "new" })}&contact_id=${encodeURIComponent(item.contactId)}` : offerEditorUrl(null, { view: "new" });
     return (
@@ -97,7 +98,11 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
   const ours = Number(offer.cashAmount) || 0;
   const history = [...(offer.statusHistory || [])].filter((h) => h?.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts))).slice(0, 4);
   const lastSend = (offer.sends || []).at(-1);
-  const others = siblings.filter((o) => o.id !== offer.id).slice(0, 6);
+  // Which row on each house is current (shared/current-offer.js), so the
+  // header and the list below can say it.
+  const book = annotateCurrent([offer, ...siblings.filter((o) => o.id !== offer.id)]);
+  const me = book[0];
+  const others = book.slice(1, 7);
 
   return (
     <div className="space-y-4 p-4">
@@ -113,6 +118,7 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           <StatusPill offer={offer} small />
           <HotPill heat={heat} />
+          <CurrentPill offer={me} />
           {offer.deal && <StagePill stage={offer.deal.stage} small />}
           {offer.address && (
             <a href={zillowUrl(offer.address)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-xs text-slate-500 hover:text-slate-800">
@@ -121,6 +127,13 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
           )}
         </div>
       </div>
+
+      {replaced && (
+        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          This row pointed at an older offer ({money(replaced.cashAmount)}, superseded). Showing the current one — it's the number the bot works from.
+        </div>
+      )}
+      <PaperHeldBanner offer={offer} busy={requoting} onRequote={onRequote ? (amount) => onRequote(offer, amount) : null} />
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-3">
         <Figure label="Our offer" value={money(ours)} strong />
@@ -184,6 +197,7 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
                   <span className="min-w-0 flex-1 truncate text-slate-800" title={o.address}>{String(o.address || "Untitled").split(",")[0]}</span>
                   <span className="tabular-nums font-semibold text-slate-700">{money(o.cashAmount)}</span>
                   <StatusPill offer={o} small />
+                  <CurrentPill offer={o} />
                 </a>
               </li>
             ))}
@@ -204,5 +218,27 @@ export default function OfferPanel({ item, offerId }) {
   // An investor row's contact is the buyer; the other offers are the agent's.
   const agent = one.data?.contactId || null;
   const rest = useLoad(siblingsKey(agent), loadSiblings(agent));
-  return <OfferPanelBody offer={one.data} siblings={rest.data || []} item={{ ...item, offerId }} loading={one.loading} error={one.error} />;
+  // A row that points at a superseded offer shows its house's current one
+  // instead — that's the number the bot, the nudges and the paper work from.
+  const replacedBy = one.data && rest.data ? annotateCurrent([one.data, ...rest.data.filter((o) => o.id !== one.data.id)])[0]?.supersededBy : null;
+  const cur = useLoad(replacedBy ? offerKey(replacedBy.id) : null, loadOffer(replacedBy?.id));
+  const shown = replacedBy ? cur.data : one.data;
+  const [requoting, setRequoting] = useState(false);
+  const [requoteError, setRequoteError] = useState("");
+  async function onRequote(o, amount) {
+    if (requoting) return;
+    setRequoting(true);
+    setRequoteError("");
+    try {
+      await requoteOffer(o.id, amount);
+      forget(offerKey(o.id), siblingsKey(agent));
+      one.reload(); rest.reload(); cur.reload();
+    } catch (e) { setRequoteError(e.message); }
+    setRequoting(false);
+  }
+  return (
+    <OfferPanelBody offer={shown} siblings={rest.data || []} item={{ ...item, offerId }}
+      loading={one.loading || (Boolean(replacedBy) && cur.loading)} error={one.error || cur.error || requoteError}
+      replaced={replacedBy ? one.data : null} onRequote={onRequote} requoting={requoting} />
+  );
 }

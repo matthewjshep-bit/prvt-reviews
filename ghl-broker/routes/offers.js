@@ -68,6 +68,7 @@ import {
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked,
 } from "../shared/offer-status.js";
+import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt } from "../shared/current-offer.js";
 import { planRequote } from "../shared/requote.js";
 import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
@@ -2011,17 +2012,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
-  // Is this offer the newest thing we've sent this agent? Drafts don't count —
-  // they were never offered. Used to decide whether a revision may rewrite the
-  // contact's last_offer_* fields. Fails open: if the lookup breaks, the write
+  // Is this offer on the newest house we've offered this agent? Drafts don't
+  // count — they were never offered. Used to decide whether a revision may
+  // rewrite the contact's last_offer_* fields, which belong to the agent's
+  // newest house: revising an old offer on another house must not drag them
+  // backwards. Rows on the SAME house never block — a revision makes its row
+  // the house's current offer (shared/current-offer.js), so its number is the
+  // one the fields should carry. Fails open: if the lookup breaks, the write
   // goes ahead, which is the behaviour every offer had before revisions existed.
   async function isNewestOfferForContact(locationId, contactId, offer) {
     if (!contactId) return true;
     try {
-      const rows = await store.listOffers(locationId, { contactId, limit: 200, lean: true });
-      const mine = Date.parse(offer.createdAt || "") || 0;
-      return !rows.some((o) =>
-        o.id !== offer.id && o.status !== "draft" && (Date.parse(o.createdAt || "") || 0) > mine);
+      const rows = (await store.listOffers(locationId, { contactId, limit: 200, lean: true })).filter((o) => o.status !== "draft");
+      const at = (o) => Date.parse(o?.createdAt || "") || 0;
+      const house = houseKey(offer.address || "");
+      const houseAt = Math.max(at(offer), ...rows.filter((o) => houseKey(o.address || "") === house).map(at));
+      return !rows.some((o) => o.id !== offer.id && houseKey(o.address || "") !== house && at(o) > houseAt);
     } catch { return true; }
   }
 
@@ -2432,7 +2438,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // only its newest 100 offers, and nothing should hit it by accident again.
       const lean = req.query.lean === "1" || req.query.lean === "true";
       const limit = Math.min(lean ? 2000 : 200, parseInt(req.query.limit, 10) || 50);
-      const offers = await store.listOffers(locationId, { contactId, limit, lean });
+      // Each row says whether it is its house's current offer, and what
+      // replaced it when it isn't (shared/current-offer.js). Annotated over
+      // the page as read — a house split across a page boundary is rare, and
+      // the rows it sees are still told the truth about each other.
+      const offers = annotateCurrent(await store.listOffers(locationId, { contactId, limit, lean }));
       // How warm each agent is, opt-in because only the history table wants
       // it. Two indexed reads for the whole location, folded into one Map by
       // contact — never a lookup per row. Attached HERE rather than in the
@@ -3013,7 +3023,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   async function syncAgentOfferTag(client, locationId, contactId) {
     if (!contactId) return;
     try {
-      const offers = await store.listOffers(locationId, { contactId, limit: 200 });
+      // Current offers only: a superseded row's status (a July "countered")
+      // is not where this agent stands.
+      const offers = currentOffers(await store.listOffers(locationId, { contactId, limit: 200 }));
       let best = null;
       for (const o of offers) {
         if (o.status === "draft") continue; // not an offer yet
@@ -3235,6 +3247,77 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           { offerId: offer.id, source: "operator", at: ts }).catch(() => {});
       }
       res.json({ ok: true, offer, heat: offerHeat(offer) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Make this row the current offer on its house (shared/current-offer.js),
+  // or hand the choice back to the rule. Body: { pin: true|false, note? }.
+  // Pinning clears any pin on the agent's other rows on that house; a sibling
+  // SENT after the pin takes over again on its own, because what went out
+  // last is what the agent is looking at.
+  router.patch("/:id/current", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { locationId, client, offer } = ctx;
+      if (offer.status === "draft") return res.status(409).json({ error: "a draft can't be the current offer — publish it first" });
+      const ts = new Date().toISOString();
+      const want = req.body?.pin !== false;
+      const house = houseKey(offer.address || "");
+      const siblings = offer.contactId
+        ? (await store.listOffers(locationId, { contactId: offer.contactId, limit: 200 })).filter((o) => o.id !== offer.id && houseKey(o.address || "") === house)
+        : [];
+      if (want) {
+        for (const sib of siblings) {
+          if (!sib.pin?.at) continue;
+          const full = sib.listOnly ? await store.getOffer(sib.id) : sib;
+          if (!full) continue;
+          delete full.pin;
+          full.updatedAt = ts;
+          await store.updateOffer(full.id, full);
+        }
+        offer.pin = { at: ts, by: "operator", note: dealStr(req.body?.note, 200) };
+      } else {
+        delete offer.pin;
+      }
+      offer.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      const { current } = resolveHouse([offer, ...siblings.map((x) => ({ ...x, pin: want ? undefined : x.pin }))]);
+      if (offer.contactId) {
+        await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
+          historyLine(ts, offer.address, want ? `made the current offer (${fmtMoney(offer.cashAmount || 0)})` : "current offer back to the latest sent", dealStr(req.body?.note, 120)),
+          { offerId: offer.id, source: "operator", at: ts }).catch(() => {});
+      }
+      res.json({ ok: true, offer, currentId: current?.id || null });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Re-quote this offer at a number — the held-paper banner's "Re-quote at
+  // 400K" (paperHeldNow). The same in-place revision a hand edit makes, so
+  // the letter, links, revision ledger and expiry all follow, and the row is
+  // current from here (a revision is a price move). Nothing is sent: that is
+  // the person's next press. Body: { amount }.
+  router.post("/:id/requote", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { locationId, client, offer } = ctx;
+      const price = Math.round(Number(req.body?.amount) || 0);
+      if (!(price > 0)) return res.status(400).json({ error: "amount required" });
+      if (offer.status === "draft") return res.status(409).json({ error: "publish the draft first" });
+      if (offer.deal) return res.status(409).json({ error: "it's a deal — change the contract price on the deal" });
+      const agreed = priceLocked(offer) ? priceAgreed(offer) : null;
+      if (agreed && agreed.amount !== price) {
+        return res.status(409).json({ error: `the price is agreed at ${fmtMoney(agreed.amount)} — clear that first` });
+      }
+      const out = await createOfferFromRequest({
+        locationId, client, existing: offer,
+        body: { contactId: offer.contactId, scope: offer.scope,
+                inputs: { ...(offer.calc?.inputs || {}), priceOverride: price },
+                settings: offer.calc?.settings },
+      });
+      const revised = out?.offer || (await store.getOffer(offer.id));
+      res.json({ ok: true, offer: revised });
     } catch (err) { fail(res, err); }
   });
 
@@ -4038,6 +4121,24 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (e) { console.error(`offers: could not mark ${kind} on ${offerId}:`, e?.message); }
   }
 
+  // One contact's offers, one row per house: the current one
+  // (shared/current-offer.js). Every conversational action reads through
+  // this, so none of them can act on a row its house has moved past — the
+  // counter, the heat, the realm yes and the paper all land on the same row.
+  const currentOffersFor = async (locationId, contactId) =>
+    currentOffers(await store.listOffers(locationId, { contactId, limit: 50 }));
+
+  // Paper the machine held because the thread's number disagrees. Stamped on
+  // the offer so the offer pane can say why and offer the re-quote
+  // (paperHeldNow in shared/current-offer.js); a re-price or a send after it
+  // makes it moot, so nothing has to clear it.
+  const markPaperHeld = async (offer, check, draftId = null) => {
+    try {
+      offer.paperHeld = { at: new Date().toISOString(), reason: String(check.reason || "").slice(0, 240), amount: Math.round(Number(check.comeDown?.amount) || 0), draftId };
+      await store.updateOffer(offer.id, offer);
+    } catch (e) { console.log(`paper hold stamp failed for ${offer.id}: ${e.message}`); }
+  };
+
   const conversationDeps = ({ client, locationId, saved }) => ({
     // For the nightly audit (conversation-audit.js): the one GHL read it
     // makes, the text it re-answers, and the offer send it queues for the
@@ -4068,7 +4169,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // The agent's read just came in. If an offer on that address had our
     // read floated and the price is still unsaid, the realm check goes now.
     afterAgentTake: async ({ contactId, address }) => {
-      const mine = (await store.listOffers(locationId, { contactId, limit: 50 })).filter((o) => !o.deal && o.cashAmount > 0);
+      const mine = (await currentOffersFor(locationId, contactId)).filter((o) => !o.deal && o.cashAmount > 0);
       const offer = pickDealByAddress(mine, address);
       if (!offer?.proactive?.takeCheckAt || offer.proactive?.realmCheckAt) return { started: false };
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
@@ -4102,7 +4203,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     requoteFromAgentNumbers: async ({ contactId, addressHint, draftId = null }) => {
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
       const band = conversationConfig(fresh).parties.agent.requote;
-      const mine = (await store.listOffers(locationId, { contactId, limit: 50 }))
+      const mine = (await currentOffersFor(locationId, contactId))
         .filter((o) => !o.deal && o.cashAmount > 0 && OPEN_STATUSES.has(effectiveStatus(o)));
       if (!mine.length) return { ok: false, reason: "no open offer to re-quote" };
       const picked = pickDealByAddress(mine, addressHint);
@@ -4167,7 +4268,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // mints a deal, exactly as it was before the band existed — the band only
     // ever put the suggestion on the row.
     promoteToDeal: async ({ contactId, addressHint }) => {
-      const open = (await store.listOffers(locationId, { contactId, limit: 50 }))
+      const open = (await currentOffersFor(locationId, contactId))
         .filter((o) => !o.deal && OPEN_STATUSES.has(effectiveStatus(o)));
       if (!open.length) return { ok: false, reason: "no open offer to promote" };
       const offer = pickDealByAddress(open, addressHint) || (open.length === 1 ? open[0] : null);
@@ -4186,7 +4287,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!price) return { ok: false, reason: "no number to re-issue at" };
       // Open, or dead on their side and revived by this counter — the same
       // set the band judged (isNegotiable). Never one we walked from.
-      const open = (await store.listOffers(locationId, { contactId, limit: 50 })).filter(isNegotiable);
+      const open = (await currentOffersFor(locationId, contactId)).filter(isNegotiable);
       if (!open.length) return { ok: false, reason: "no open offer to re-issue" };
       const offer = pickDealByAddress(open, addressHint) || (open.length === 1 ? open[0] : null);
       if (!offer) return { ok: false, reason: "more than one open offer and no address named" };
@@ -4230,7 +4331,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // actually out — sent, countered, or floated — can be warmed to; a flag
     // you set or cleared by hand is yours and is never overwritten.
     raiseOfferHeat: async ({ contactId, addressHint, signal, note = "", draftId = null }) => {
-      const offer = pickOfferForStatus(await store.listOffers(locationId, { contactId, limit: 50 }), addressHint, "hot");
+      const offer = pickOfferForStatus(await currentOffersFor(locationId, contactId), addressHint, "hot");
       if (!offer?.id) return { ok: false, reason: offer?.reason || "no open offer to flag" };
       const full = await store.getOffer(offer.id);
       if (!full || !(Number(full.cashAmount) > 0)) return { ok: false, reason: "no number on that offer yet" };
@@ -4255,7 +4356,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // "In the realm": remembered on the offer, so the book says so next time
     // and History can show which offers are cleared to send.
     setOfferRealm: async ({ contactId, addressHint, answer, note = "" }) => {
-      const offer = pickOfferForStatus(await store.listOffers(locationId, { contactId, limit: 50 }), addressHint, "realm");
+      const offer = pickOfferForStatus(await currentOffersFor(locationId, contactId), addressHint, "realm");
       if (!offer?.id) return { ok: false, reason: offer?.reason || "no open offer to note" };
       const full = await store.getOffer(offer.id);
       if (!full) return { ok: false, reason: "offer vanished" };
@@ -4381,10 +4482,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // `afterCounter`: the counter band just re-issued this offer at their
     // number — only a send AFTER that counts as already sent, and an offer
     // that was not re-issued is refused rather than sent at the old price.
-    sendOfferDocs: async ({ contactId, addressHint = "", channels = null, docs = null, draftId = null, afterCounter = false, emailTo = "", emailCc = [] }) => {
+    //
+    // `transcript`: the thread, when the caller has it. The number on the
+    // paper has to be the number in the thread — a lower one we texted since
+    // the offer last moved holds the paper for a person (paperCheck). Read
+    // here when not handed in; a thread that can't be read holds too.
+    // The reply agent held a draft's paper on this offer (stale_number).
+    markPaperHeld: async ({ offerId, check, draftId = null }) => {
+      const offer = offerId ? await store.getOffer(offerId) : null;
+      if (!offer || offer.locationId !== locationId) return { ok: false };
+      await markPaperHeld(offer, check, draftId);
+      return { ok: true };
+    },
+    sendOfferDocs: async ({ contactId, addressHint = "", channels = null, docs = null, draftId = null, afterCounter = false, emailTo = "", emailCc = [], transcript = null }) => {
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
       const so = conversationConfig(fresh).parties.agent.sendOffer;
-      const open = (await store.listOffers(locationId, { contactId, limit: 50 }))
+      const open = (await currentOffersFor(locationId, contactId))
         .filter((o) => o.status !== "draft" && !o.deal && o.cashAmount > 0 && OPEN_STATUSES.has(effectiveStatus(o)));
       if (!open.length) return { ok: false, reason: "no open offer to send" };
       const picked = pickDealByAddress(open, addressHint);
@@ -4392,6 +4505,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const lean = picked || open[0];
       const offer = await store.getOffer(lean.id);
       if (!offer) return { ok: false, reason: "offer vanished" };
+      let thread = transcript;
+      if (thread == null) {
+        try { thread = (await buildTranscript(client, locationId, contactId, { maxCallTranscripts: 0 })).text || ""; }
+        catch (e) { return { ok: false, held: true, address: offer.address, reason: `couldn't read the thread to check the number (${String(e.message || e).slice(0, 80)}) — held` }; }
+      }
+      const check = paperCheck({ offer, transcript: thread });
+      if (!check.ok) {
+        await markPaperHeld(offer, check, draftId);
+        return { ok: false, held: true, address: offer.address, reason: check.reason };
+      }
       const since = afterCounter ? offer.counterBand?.acceptedAt : null;
       if (afterCounter && !since) return { ok: false, reason: "the offer was not re-issued at their number" };
       // Already out — per CHANNEL. A text that went is not an email that went
@@ -4428,7 +4551,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // "we_passed" is deliberately absent: walking away from a property is
       // an operator's decision, never something a reply can trigger.
       if (!["countered", "passed", "no_response"].includes(status)) return { ok: false, reason: `not a status this can set: ${status}` };
-      const offer = pickOfferForStatus(await store.listOffers(locationId, { contactId, limit: 50 }), addressHint, status);
+      const offer = pickOfferForStatus(await currentOffersFor(locationId, contactId), addressHint, status);
       if (!offer?.id) return { ok: false, reason: offer?.reason || "no open offer to mark" };
       if (effectiveStatus(offer) === status) return { ok: true, unchanged: true, address: offer.address, status };
       const ts = new Date().toISOString();

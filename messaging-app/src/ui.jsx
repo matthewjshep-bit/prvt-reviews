@@ -13,8 +13,9 @@
 
 import React, { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, Flame, Loader2, Search, X } from "lucide-react";
-import { HOT_ON, HOT_OFF } from "./api.js";
+import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, Flame, Loader2, Pin, Search, X } from "lucide-react";
+import { HOT_ON, HOT_OFF, MAKE_CURRENT, UNPIN_CURRENT } from "./api.js";
+import { paperHeldNow } from "@shared/current-offer.js";
 import {
   OFFER_STATUS, OFFER_STATUS_KEYS, SETTABLE_STATUSES, DEAD_STATUSES, effectiveStatus, offerHeat,
 } from "@shared/offer-status.js";
@@ -139,6 +140,52 @@ export function HotPill({ heat }) {
   );
 }
 
+// Which row on a house is the number we're working from (shared/
+// current-offer.js). Said only when the house has more than one row: an
+// agent's only offer is current by definition, and a pill on every row is
+// noise. A superseded row says what replaced it.
+const money0 = (n) => `$${Math.round(Number(n) || 0).toLocaleString("en-US")}`;
+export function CurrentPill({ offer }) {
+  if (!offer || offer.status === "draft" || offer.deal) return null;
+  if (offer.isCurrent && (offer.houseOffers || 1) > 1) {
+    return (
+      <span title={offer.currentPinned ? "The current offer on this house — you chose it" : "The current offer on this house — the one whose number moved last"}
+        className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+        {offer.currentPinned && <Pin size={9} aria-hidden="true" />} current
+      </span>
+    );
+  }
+  if (offer.supersededBy) {
+    return (
+      <span title={`Superseded — the current offer on this house is ${money0(offer.supersededBy.cashAmount)}. Nothing automatic acts on this one.`}
+        className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        superseded
+      </span>
+    );
+  }
+  return null;
+}
+
+// The machine held this offer's paper: we texted a lower number after it last
+// moved. One tap re-prices it at that number (nothing is sent); the person
+// sends it from there.
+export function PaperHeldBanner({ offer, onRequote, busy = false }) {
+  const h = paperHeldNow(offer);
+  if (!h) return null;
+  const k = h.amount ? `${Math.round(h.amount / 1000)}K` : "";
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+      <span className="min-w-0 flex-1"><strong>Paper held.</strong> {h.reason}</span>
+      {h.amount > 0 && onRequote && (
+        <button type="button" disabled={busy} onClick={() => onRequote(h.amount)}
+          className="rounded-md bg-amber-600 px-2.5 py-1 font-semibold text-white hover:bg-amber-700 disabled:opacity-60">
+          {busy ? "Re-quoting…" : `Re-quote at ${k}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function StatusMenu({ offer, onSelect, busy, onDealNav }) {
   // A promoted offer's outcome is settled; the pill becomes a link to the deal.
   if (offer.deal) {
@@ -165,6 +212,12 @@ export function StatusMenu({ offer, onSelect, busy, onDealNav }) {
       ? { key: HOT_OFF, label: "Not hot anymore", onSelect: () => onSelect?.(HOT_OFF) }
       : { key: HOT_ON, label: "🔥 Hot — close to a contract", onSelect: () => onSelect?.(HOT_ON) });
   }
+  // Current: the row automation works from on this house. Only offered when
+  // there's a choice to make (another row on the house), and never on a draft.
+  if (offer.status !== "draft" && (offer.houseOffers || 1) > 1) {
+    if (offer.supersededBy) items.push({ key: MAKE_CURRENT, label: "Make this the current offer", onSelect: () => onSelect?.(MAKE_CURRENT) });
+    else if (offer.currentPinned) items.push({ key: UNPIN_CURRENT, label: "Unpin — current goes back to the latest sent", onSelect: () => onSelect?.(UNPIN_CURRENT) });
+  }
   return (
     <Menu align="left" label={`Change status (currently ${OFFER_STATUS[current]?.label || current})`}
       items={items}
@@ -172,6 +225,7 @@ export function StatusMenu({ offer, onSelect, busy, onDealNav }) {
         <span className="inline-flex items-center gap-0.5">
           {busy ? <Pill label="…" small /> : <StatusPill offer={offer} small />}
           {heat && !busy && <HotPill heat={heat} />}
+          {!busy && <CurrentPill offer={offer} />}
           <ChevronDown size={12} className="text-slate-400" aria-hidden="true" />
         </span>
       } />
