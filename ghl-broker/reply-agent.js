@@ -48,6 +48,8 @@ import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown } from "./shared/current-offer.js";
+import { usageOf } from "./shared/ai-cost.js";
+import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
 import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, isHot, isNegotiable } from "./shared/offer-status.js";
 import { sameStreet } from "./shared/us-address.js";
@@ -59,7 +61,7 @@ import { expandListingLinks } from "./listing-links.js";
 import { fmtMoney } from "./shared/offer-calc.js";
 import { parseUsAddress, addressKey, lastMention } from "./shared/us-address.js";
 import {
-  normalizeConversationAi, INTENTS, NEVER_AUTO, GUARDED_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
+  normalizeConversationAi, shadowModelFor, INTENTS, NEVER_AUTO, GUARDED_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
   SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutInTranscript, optOutActions, normalizePassReason, normalizeDraftFeedback,
 } from "./shared/conversation-ai.js";
 import {
@@ -101,6 +103,10 @@ export { summarizeOffers, RA_OFFERS_IN_CONTEXT };
 export const RA_DEFAULT_DAILY_CAP = 60;   // drafts per location per day (the page can change it)
 export const RA_MAX_SMS_CHARS = 480;      // three segments; longer than that is an email
 export const RA_MAX_CONCURRENT = 2;
+// Sweep-started texts that may wait on a batch (BATCHABLE_KINDS) run on their
+// own lane this wide: enough for a sweep to fill one batch, few enough that
+// the GHL reads around each draft stay under its rate limit.
+export const RA_MACHINE_CONCURRENT = 8;
 
 export const RA_TAGS = {
   draft: process.env.REPLY_DRAFT_TAG || "reply-draft",
@@ -198,6 +204,7 @@ export async function draftReply({
   message, transcript = "", offers = { text: "", amounts: [], count: 0 }, contact = {},
   underwriting = [], instructions = "", signer = "", aiApiKey, companyContact = {},
   party = "agent", config = null, context = null, channel = "sms", outbound = null, booking = false, inboundKind = "text", call = null,
+  batch = null, shadowModel = null, now = Date.now(),
 }) {
   const client = new Anthropic({ apiKey: aiApiKey, timeout: 120_000 });
   const cfg = config || normalizeConversationAi(null);
@@ -209,33 +216,106 @@ export async function draftReply({
   const system = buildSystemPrompt({ config: cfg, party, channel });
   const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound, inboundKind, call, companyContact });
   const intents = outbound ? [outbound.kind] : (INTENTS[party] || INTENTS.agent);
+  const params = draftParams({ model: REPLY_MODEL, system, user, schema: schemaFor(party, { outbound, booking: Boolean(booking) }), effort: draftEffort(outbound) });
+
+  // The shadow: the same request on another model, stored beside the real
+  // draft and never sent (config.ai.shadowModel until config.ai.shadowUntil).
+  // It never delays or fails the real draft.
+  const shadowOn = shadowModel ?? shadowModelFor(cfg.ai, now);
+  const shadowRun = shadowOn && shadowOn !== REPLY_MODEL
+    ? callDraftModel(client, { ...params, model: shadowOn })
+      .then(({ response, batched }) => ({ model: shadowOn, ...parseDraft(response, intents, cfg), usage: usageOf(response, { model: shadowOn, batched }) }))
+      .catch((e) => ({ model: shadowOn, error: String(e?.message || e).slice(0, 160) }))
+    : null;
 
   let response;
+  let batched = false;
   try {
-    response = await client.beta.messages.create({
-      model: "claude-opus-5",
-      max_tokens: 4000,
-      thinking: { type: "adaptive" },
-      // Unattended: a refusal on "answer a text about a house" is near
-      // impossible, and the server-side fallback removes the failure mode.
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      // The system prompt is the same bytes for every draft this location
-      // sends to this party on this channel, so it caches. Replies to a blast
-      // arrive in a wave; each one after the first reads the persona, the
-      // playbook, the house rules and the examples at a tenth of the price.
-      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-      // Answering a text is not a reasoning problem. The default (high) buys
-      // thinking this job has no use for and bills it as output.
-      output_config: {
-        effort: "medium",
-        format: { type: "json_schema", schema: schemaFor(party, { outbound, booking: Boolean(booking) }) },
-      },
-      messages: [{ role: "user", content: [{ type: "text", text: user }] }],
-    });
+    ({ response, batched } = await callDraftModel(client, params, { batch }));
   } catch (e) {
     throw anthropicErrorToHttp(e);
   }
+  // The real draft waits for the shadow a little while at most; a slow shadow
+  // is recorded as late, never a slow reply.
+  let graceTimer = null;
+  const shadow = shadowRun
+    ? await Promise.race([shadowRun, new Promise((r) => { graceTimer = setTimeout(() => r({ model: shadowOn, error: "shadow still running when the real draft was done" }), SHADOW_GRACE_MS); })])
+    : null;
+  clearTimeout(graceTimer);
+  return { ...parseDraft(response, intents, cfg), usage: usageOf(response, { model: REPLY_MODEL, batched }), ...(shadow ? { shadow } : {}) };
+}
+
+// The shadow's draft as the row keeps it, judged by the same gates as the
+// real one so the two can be compared on what would actually have happened.
+// Never sent, never acted on.
+export function shadowRow(shadow, gateFor) {
+  if (!shadow) return null;
+  if (shadow.error) return { model: shadow.model, error: shadow.error };
+  const g = gateFor(shadow);
+  return {
+    model: shadow.model, intent: shadow.intent, confidence: shadow.confidence, needsHuman: shadow.needsHuman,
+    humanReason: shadow.humanReason, reply: shadow.reply, counterAmount: shadow.counterAmount || 0,
+    gateOk: Boolean(g.ok), flags: (g.flags || []).slice(0, 6), usage: shadow.usage || null,
+  };
+}
+
+// The model every real draft runs on. The shadow (config.ai) is how a cheaper
+// one earns this spot: on live traffic, beside it, before it replaces it.
+export const REPLY_MODEL = "claude-opus-5";
+export const SHADOW_GRACE_MS = 20_000;
+
+// Plain check-ins with no number, no negotiation and no terms in them — the
+// texts where thinking harder buys nothing (2026-09-25). Everything else,
+// replies included, stays at medium.
+export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "blast_nudge", "dataroom_nudge"]);
+export const draftEffort = (outbound) => (outbound && LOW_EFFORT_KINDS.has(outbound.kind) ? "low" : "medium");
+
+// Texts a sweep starts that nobody is waiting on: these may go through the
+// Batch API at half price (draft-batch.js). A float after an underwrite, a
+// partner's answer, an address chase and every reply to a person may not.
+export const BATCHABLE_KINDS = new Set([
+  "outreach_open", "outreach_nudge", "counter_nudge", "take_ask", "offer_nudge", "hot_push", "passed_checkin",
+  "buyer_pulse", "blast_nudge", "dataroom_nudge", "promise_due", "price_drop", "checkin_due",
+]);
+
+export function draftParams({ model, system, user, schema, effort = "medium" }) {
+  return {
+    model,
+    max_tokens: 4000,
+    thinking: { type: "adaptive" },
+    // The system prompt is the same bytes for every draft this location sends
+    // to this party on this channel, so it caches. Drafts arrive every few
+    // minutes through the day, which the 5-minute cache missed about half the
+    // time (each miss re-writes ~5K tokens at 1.25x); the hour holds it from
+    // one draft to the next.
+    system: [{ type: "text", text: system, cache_control: { type: "ephemeral", ttl: "1h" } }],
+    // Answering a text is not a reasoning problem. The default (high) buys
+    // thinking this job has no use for and bills it as output.
+    output_config: { effort, format: { type: "json_schema", schema } },
+    messages: [{ role: "user", content: [{ type: "text", text: user }] }],
+  };
+}
+
+// The Opus and Fable tiers carry the server-side refusal fallback; a batch
+// request is sent without it and falls back to this direct call on anything
+// but a clean result, a refusal included.
+const withFallbacks = (model) => /^claude-(opus-5|fable)/.test(model);
+export async function callDraftModel(client, params, { batch = null } = {}) {
+  if (batch) {
+    try {
+      const response = await batch.enqueue(params);
+      if (response?.stop_reason !== "refusal") return { response, batched: true };
+    } catch (e) {
+      console.log(`draft batch fell back to a direct call: ${String(e?.message || e).slice(0, 120)}`);
+    }
+  }
+  const response = withFallbacks(params.model)
+    ? await client.beta.messages.create({ ...params, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" })
+    : await client.messages.create(params);
+  return { response, batched: false };
+}
+
+function parseDraft(response, intents, cfg) {
   if (response.stop_reason === "max_tokens") {
     throw Object.assign(new Error("reply drafting was truncated"), { http: 502 });
   }
@@ -1776,7 +1856,11 @@ export async function startProactive({
     warnings: [], error: null, startedAt: new Date().toISOString(), finishedAt: null,
   };
   jobs.set(job.id, job);
-  runOnLane(locationId, () =>
+  // A text that may wait on a batch runs on its own lane, wide enough for a
+  // sweep's worth to land in one batch, so it never holds up a reply to a
+  // person on the location's lane.
+  const batched = Boolean(config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind));
+  runOnLane(batched ? `${locationId}:machine` : locationId, () =>
     runProactive(job, { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, subject, spec, config, dossier, deps: { ...deps, draft: deps.draft || draftReply } })
       .catch(async (e) => {
         job.status = "error";
@@ -1784,7 +1868,8 @@ export async function startProactive({
         job.finishedAt = new Date().toISOString();
         await recordError(store, { locationId, area: "proactive", err: e, context: { contactId, jobId: job.id, kind } });
         await note(client, contactId, `AI ${outboundLabel(kind)} could not be drafted — ${job.error}. Pick it up by hand if you like.`, job.warnings);
-      })
+      }),
+    batched ? RA_MACHINE_CONCURRENT : RA_MAX_CONCURRENT,
   );
   return { skipped: null, job };
 }
@@ -1988,8 +2073,12 @@ async function runProactive(job, ctx) {
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
     contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
     aiApiKey, party, config, context, channel: "sms", outbound,
+    // Nobody is waiting on a sweep's text: half price through the Batch API,
+    // falling back to a direct call (draft-batch.js).
+    batch: config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind) ? batcherFor(aiApiKey) : null,
   });
   draft.intent = kind;
+  if (draft.shadow && !draft.shadow.error) draft.shadow.intent = kind;
   job.summary = draft.summary;
   // What this kind floats is what it may say, on top of the record book — and
   // what it forbids is subtracted even though the book has it. A nudge floats
@@ -2000,7 +2089,8 @@ async function runProactive(job, ctx) {
   const forbiddenAmounts = extraForbidden.length
     ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]
     : context.forbiddenAmounts;
-  const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff });
+  const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff });
+  const gate = gateFor(draft);
   let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
   auto = releaseForAudit({ auto, gate, draft, deps });
 
@@ -2026,6 +2116,7 @@ async function runProactive(job, ctx) {
       ...(outbound.step != null ? { step: outbound.step, steps: subject?.steps || [], stepLabel: outbound.stepLabel } : {}),
     },
     reply: draft.reply, intent: kind, confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
+    usage: draft.usage || null, shadow: shadowRow(draft.shadow, gateFor),
     summary: draft.summary || outboundSummary({ kind, offer, outbound }),
     propertyAddress: outbound.address || draft.propertyAddress || "", counterAmount: null,
     autoSendable: gate.ok, gateClean: Boolean(gate.ok || (gate.locked && gate.clean)), flags: gate.flags, party, partySource: "offer", matchedTags: a.matchedTags,
@@ -2050,7 +2141,7 @@ async function runProactive(job, ctx) {
   job.finishedAt = new Date().toISOString();
 }
 
-function runOnLane(locationId, fn) {
+function runOnLane(locationId, fn, max = RA_MAX_CONCURRENT) {
   const lane = lanes.get(locationId) || { running: 0, waiting: [] };
   lanes.set(locationId, lane);
   const next = () => {
@@ -2061,7 +2152,7 @@ function runOnLane(locationId, fn) {
       queued().then(next, next);
     }
   };
-  if (lane.running < RA_MAX_CONCURRENT) {
+  if (lane.running < max) {
     lane.running++;
     fn().then(next, next);
   } else {
@@ -2396,11 +2487,12 @@ async function runReply(job, ctx) {
     return;
   }
 
-  const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
-    draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
+  const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
+    draft: d, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
     inboundMessage: inboundText, channel: job.channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
   });
+  const gate = gateFor(draft);
   let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive });
   // The text after a call is its own allowlist slot on top of the intent's:
   // a question asked on the phone still needs "text after a call" ticked.
@@ -2719,6 +2811,10 @@ async function runReply(job, ctx) {
     // fail. A failed one is the row that says how far off the counter was and
     // therefore whether the ceiling is in the right place.
     exception: autoWithVerdict.exception || null,
+    // What the draft cost, and the shadow model's draft of the same message
+    // beside it (config.ai) — judged by the same gates, never sent.
+    usage: draft.usage || null,
+    shadow: shadowRow(draft.shadow, gateFor),
     // The paper this draft would have sent, held because the thread's number
     // isn't the offer's (the Today row offers the re-quote).
     paperHold: paperHold ? { offerId: paperHold.offerId, reason: paperHold.reason, amount: Math.round(Number(paperHold.comeDown?.amount) || 0) } : null,

@@ -710,7 +710,7 @@ export function buildUserContext({
       ? `IN PROGRESS RIGHT NOW: we are working up numbers on ${underwriting.join("; ")} — you may say an offer is coming shortly, without a number.`
       : "",
     transcript
-      ? `THE THREAD SO FAR (US = our team, THEM = ${them}):\n${String(transcript).slice(0, 14000)}`
+      ? `THE THREAD SO FAR (US = our team, THEM = ${them}):\n${String(transcript).slice(-14000)}`
       : "THE THREAD SO FAR: (no earlier messages available)",
     opening || `NEWEST INBOUND MESSAGE FROM ${label === "CONTACT" ? "THEM" : `THE ${label}`} (this is what you are replying to):\n"${String(message || "").slice(0, 2000)}"`,
     opening ? (isCall ? "Write the text that follows the call." : "Write the message.") : "Write the reply.",
@@ -840,7 +840,7 @@ export const CLASSIFY_SCHEMA = {
 export function buildClassifyContext({ contact = {}, transcript = "", message = "" } = {}) {
   return [
     `CONTACT: ${contact.name || "unknown name"}${contact.tags?.length ? ` (tags: ${contact.tags.slice(0, 8).join(", ")})` : ""}`,
-    transcript ? `THE THREAD SO FAR (US = our team, THEM = the sender):\n${String(transcript).slice(0, 8000)}` : "THE THREAD SO FAR: (none)",
+    transcript ? `THE THREAD SO FAR (US = our team, THEM = the sender):\n${String(transcript).slice(-8000)}` : "THE THREAD SO FAR: (none)",
     `NEWEST INBOUND MESSAGE:\n"${String(message || "").slice(0, 2000)}"`,
     "Which side are they on?",
   ].join("\n\n");

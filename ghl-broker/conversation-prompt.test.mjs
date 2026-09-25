@@ -209,3 +209,14 @@ test("an underwrite held on something other than comps doesn't tell the agent th
   const thin = outboundOpening({ kind: "take_ask", address: "x", heldReason: "only 1 priced comps", needValue: true });
   assert.match(thin, /comps came back thin/);
 });
+
+// The thread is read keeping its newest 16K characters, and the prompt then
+// kept its FIRST 14K — so on a long thread the newest messages, the ones the
+// reply is about, were the part cut (found 2026-09-25).
+test("on a long thread the newest messages reach the drafter, not the oldest", () => {
+  const old = Array.from({ length: 300 }, (_, i) => `[2026-08-01 10:00] THEM sms: old line ${i} ${"x".repeat(40)}`).join("\n");
+  const transcript = `${old}\n[2026-09-25 02:06] THEM sms: We should draw it up; she might sign it.`;
+  const ctx = buildUserContext({ party: "agent", transcript, message: "We should draw it up", context: { text: "" } });
+  assert.match(ctx, /We should draw it up; she might sign it\./);
+  assert.doesNotMatch(ctx, /old line 0 /, "the oldest lines are the ones dropped");
+});

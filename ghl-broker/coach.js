@@ -23,6 +23,7 @@ import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { workHour } from "./outreach-sweep.js";
 import { CURSOR_NAME as AUDIT_CURSOR } from "./conversation-audit.js";
 import { recordError } from "./app-errors.js";
+import { usageOf } from "./shared/ai-cost.js";
 
 export const CURSOR_NAME = "coach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -50,9 +51,13 @@ export async function proposeWithModel({ signals, config, aiApiKey }) {
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       system: [{ type: "text", text: COACH_SYSTEM }],
-      output_config: { effort: "high", format: { type: "json_schema", schema: COACH_SCHEMA } },
+      // Medium, not high: the coach reads a day of edits and proposes a few
+      // rule changes a person approves one by one (2026-09-25).
+      output_config: { effort: "medium", format: { type: "json_schema", schema: COACH_SCHEMA } },
       messages: [{ role: "user", content: [{ type: "text", text: buildCoachContext({ signals, config }) }] }],
     });
+    const u = usageOf(response, { model: "claude-opus-5" });
+    console.log(`ai usage: nightly coach ${u.model} in=${u.input} out=${u.output} $${u.costUsd}`);
   } catch (e) {
     throw anthropicErrorToHttp(e);
   }

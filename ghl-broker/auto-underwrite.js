@@ -52,6 +52,7 @@ import { currentFacts } from "./shared/contact-record.js";
 import { propertyDossier } from "./shared/contact-record.js";
 import { VALUE_HOLD, WORK_HOLD } from "./shared/held-underwrites.js";
 import { mostRecentlyMentioned } from "./shared/us-address.js";
+import { usageOf } from "./shared/ai-cost.js";
 
 /* ---------- the dials ---------- */
 
@@ -447,30 +448,31 @@ const EXTRACT_SCHEMA = {
   },
 };
 
+export const EXTRACT_MODEL = "claude-sonnet-5";
 export async function extractRequest({ message, transcript, aiApiKey }) {
   const client = new Anthropic({ apiKey: aiApiKey, timeout: 120_000 });
   const text =
     `NEWEST INBOUND MESSAGE (this is the one to act on):\n"${String(message || "").slice(0, 2000)}"\n\n` +
     (transcript
-      ? `EARLIER THREAD (US = our team, THEM = the agent) — context only:\n${String(transcript).slice(0, 12000)}\n\n`
+      ? `EARLIER THREAD (US = our team, THEM = the agent) — context only:\n${String(transcript).slice(-12000)}\n\n`
       : "") +
     "Which property does the agent want an offer on?";
 
   let response;
   try {
-    response = await client.beta.messages.create({
-      model: "claude-opus-5",
+    // Reading an address and a price out of a text is extraction, not
+    // judgment: Sonnet at low effort, a fraction of what Opus at the default
+    // (high) cost for the same four fields (2026-09-25).
+    response = await client.messages.create({
+      model: EXTRACT_MODEL,
       max_tokens: 4000,
       thinking: { type: "adaptive" },
-      // A safety refusal on "read an address out of a text" is close to
-      // impossible, but an unattended pipeline has nobody to retry it, so the
-      // server-side fallback costs nothing and removes the failure mode.
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
       system: EXTRACT_SYSTEM,
-      output_config: { format: { type: "json_schema", schema: EXTRACT_SCHEMA } },
+      output_config: { effort: "low", format: { type: "json_schema", schema: EXTRACT_SCHEMA } },
       messages: [{ role: "user", content: [{ type: "text", text }] }],
     });
+    const u = usageOf(response, { model: EXTRACT_MODEL });
+    console.log(`ai usage: address extraction ${u.model} in=${u.input} out=${u.output} $${u.costUsd}`);
   } catch (e) {
     throw anthropicErrorToHttp(e);
   }

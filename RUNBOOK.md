@@ -1037,6 +1037,52 @@ the row the old send path would have picked, and any paper that would be
 held. First run, 2026-09-25: 207 houses; 57 with more than one offer; on 36
 of those the old path picked a different row; 2 held.
 
+### What the drafts cost (2026-09-25)
+
+September's bill was about $7 a day, and 85–90% of it was the reply drafter
+on Opus 5, at ~100–130 drafts a day and ~5–8¢ each. What changed:
+
+- **Every draft records its cost.** `usage` sits on each reply-draft row:
+  tokens by kind (cache read, 5-minute and 1-hour writes, output), whether it
+  was batched, and dollars (`shared/ai-cost.js`, prices from the pricing
+  page). Address extraction and the coach log a line with the same numbers.
+  Read it with `node scripts/ai-usage-report.mjs [--days N] [--pairs file.md]`.
+- **The system prompt caches for an hour.** Drafts arrive every few minutes.
+  The 5-minute cache missed about half of them, and each miss re-wrote ~5K
+  tokens at 1.25x.
+- **Sweep texts go through the Batch API at half price.** These are the
+  `BATCHABLE_KINDS` in `reply-agent.js`: nudges, check-ins, pulse, hot push,
+  promise and price-drop texts, first outreach.
+  - They run on their own lane (`<location>:machine`, 8 wide), so they never
+    queue in front of a reply to a person.
+  - `draft-batch.js` collects them for 20 seconds and sends one batch.
+  - Any error or refusal, or a batch not finished in 15 minutes, falls back
+    to the ordinary direct call.
+  - A redeploy while a batch is out loses those drafts, the same way it loses
+    any in-flight job.
+  - Switch: `conversationAi.ai.batchMachineDrafts`.
+  - Never batched: realm/take floats, partner answers, address chases, and
+    every reply.
+- **Plain check-ins draft at low effort** (`LOW_EFFORT_KINDS`). Replies, and
+  anything with a number, a counter or terms, stay at medium.
+- **Address extraction runs on Sonnet 5 at low effort.** The coach runs at
+  medium.
+- **The thread reaches the model newest-first.** The prompt used to keep the
+  first 14K characters of a 16K thread, which dropped the newest messages on
+  long threads. It now keeps the last 14K. The classifier and extraction had
+  the same cut.
+
+**The shadow.** `conversationAi.ai.shadowModel` (Sonnet 5) drafts every
+message beside the real Opus draft, until `shadowUntil` (2026-09-30).
+- The shadow draft is stored on the row as `shadow`: its reply, intent and
+  needs-a-person flag, the same gates' verdict, and its own cost.
+- It is never sent or acted on.
+- The real draft waits for it 20 seconds at most.
+- Judge it with the report's `--pairs` file. If intent and gate agreement
+  hold and the replies read right, change `REPLY_MODEL` to `claude-sonnet-5`.
+  That's about 60% off the drafter.
+- Set `shadowModel: ""` to stop it early.
+
 ### The nightly audit (2026-09-16)
 
 **The audit answers what it finds (2026-09-22).** "From last night" had 18
