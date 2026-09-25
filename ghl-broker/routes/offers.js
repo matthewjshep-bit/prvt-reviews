@@ -87,7 +87,7 @@ import {
   DEFAULT_CONTRACT_CLAUSES, DEFAULT_ASSIGNMENT_CLAUSES, ASSIGNMENT_TOKENS, ASSIGNMENT_PREAMBLE,
 } from "../shared/contract-template.js";
 import { fetchListingPhotos, fetchZillowPhotos, fetchZillowFacts, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
-import { addressKey, addressQueryVariants, zillowUrl } from "../shared/us-address.js";
+import { addressKey, addressQueryVariants, zillowUrl, zillowLookupForms } from "../shared/us-address.js";
 import { pullComps } from "../comps-pull.js";
 import { geocodeAddress } from "../geocode.js";
 import { pullZillowComps, mergeFacts, streetKey } from "../comps-zillow.js";
@@ -1549,7 +1549,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             .map((c) => ({ c, s: similarity(rough, { ...c, distance: c.distance ?? milesBetween(geo, c) }, { radiusMiles }).score ?? -1 }))
             .sort((a, b) => b.s - a.s).slice(0, UW_ENRICH_CANDIDATES).map((x) => x.c);
           try {
-            const facts = await fetchZillowFacts([address, ...ranked.map((c) => c.address)], apifyToken);
+            // Every spelling Zillow might file the subject under (Clyde Hill is
+            // Bellevue to it); they share a street line, so one answer serves.
+            const facts = await fetchZillowFacts([...zillowLookupForms(address, { matched: geo.matched }), ...ranked.map((c) => c.address)], apifyToken);
             const mine = facts.get(streetKey(address));
             data = {
               ...data,

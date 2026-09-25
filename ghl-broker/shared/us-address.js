@@ -262,6 +262,35 @@ export function zillowUrl(address) {
 }
 
 /**
+ * zillowLookupForms(address, { matched }) → [address, …]
+ *
+ * The spellings to ask Zillow's detail lookup for, in order, until one finds
+ * the house. Zillow files a house under its USPS postal city, and agents (and
+ * often the geocoder) name the town: "8811 NE 15th Pl, Clyde Hill, WA 98004"
+ * is "no data for this address", and "8811 NE 15th Pl, WA 98004" is the house,
+ * which Zillow calls Bellevue (2026-09-25; Burien houses it calls Seattle).
+ *
+ *   1. as given — every house that already resolves costs nothing new
+ *   2. street line and ZIP, no city (the ZIP from `matched` when none was typed)
+ *   3. `matched`, the geocoder's own spelling, when it is the same street
+ */
+export function zillowLookupForms(address, { matched = "" } = {}) {
+  const given = String(address || "").trim();
+  if (!given) return [];
+  const p = parseUsAddress(given);
+  const geo = matched && sameStreet(matched, given) ? String(matched).trim() : "";
+  const zip = p.zip || (geo ? parseUsAddress(geo).zip : "");
+  const forms = [given];
+  if (p.houseNo && zip) {
+    const line = normalizeUsAddress([p.houseNo, p.street, p.unit].filter(Boolean).join(" "));
+    forms.push(`${line}, ${[p.state, zip].filter(Boolean).join(" ")}`);
+  }
+  if (geo) forms.push(geo);
+  const seen = new Set();
+  return forms.filter((f) => { const k = addressKey(f); return !seen.has(k) && seen.add(k); });
+}
+
+/**
  * completeAddress(raw, { candidates, city, state, county }) → [address, …]
  *
  * The ways to finish a street-only address, best first. An agent texts

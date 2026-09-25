@@ -1847,7 +1847,7 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
   }
   if (kind === "take_ask") {
     const needs = Array.isArray(subject?.needs) && subject.needs.length ? subject.needs : ["value", "work"];
-    return { ...base, heldReason: String(subject?.heldReason || "our comps came back thin"), needs,
+    return { ...base, heldReason: String(subject?.heldReason || ""), needs,
       needValue: needs.includes("value"), needWork: needs.includes("work") };
   }
   if (kind === "partner_answer") {
@@ -1927,7 +1927,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "counter_nudge": return `Their ${outbound.theirsK || "counter"} on ${where} sat ${outbound.days}d — asks if the seller has any room, names no number of ours.`;
     case "partner_answer": return "Your answer to a question the bot couldn't answer, in its voice.";
     case "hot_push": return `Pushes the agreed price on ${where} toward paper: asks them to write it up on NWMLS forms for us to sign${rung}.`;
-    case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held (${outbound.heldReason}).`;
+    case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held${outbound.heldReason ? ` (${outbound.heldReason})` : ""}.`;
     case "passed_checkin": return `Checks back in on ${where} — they passed; asks if the seller would come closer to our number${rung}.`;
     case "outreach_open": return `First text: saw their listing at ${where}, asks if they have anything distressed.`;
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;

@@ -1366,7 +1366,9 @@ async function runUnderwrite(job, ctx) {
   let listing = null;
   let facts = null;
   try {
-    ({ photos, photosCount, listing, facts } = await fetchZillowPhotos(extraction.address, apifyToken));
+    let foundAs;
+    ({ photos, photosCount, listing, facts, foundAs } = await fetchZillowPhotos(extraction.address, apifyToken, { matched: resolved?.matched }));
+    if (foundAs) warnings.push(`Zillow listing found as "${foundAs}"`);
     // The list price rides along on the listing; the offer is capped against it.
     const listed = moneyFromListing(listing?.listPrice);
     if (listed) job.listPrice = listed;

@@ -7,6 +7,7 @@
 // who knows they are an investor. Pure.
 
 import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS, DEAL_SIGNALS, writeUpTermsText } from "./shared/conversation-ai.js";
+import { heldInPlainWords } from "./shared/held-underwrites.js";
 
 const LENGTH_RULE = {
   short: "One to three sentences.",
@@ -507,8 +508,8 @@ export function outboundOpening(outbound) {
     // the missing piece — never both when one is known — and nothing of ours.
     case "take_ask": {
       const asks = [o.needValue ? "what they figure it's worth once it's fixed up" : "", o.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ");
-      return `${START} We're running numbers on ${o.address} for this agent and they're stuck (${o.heldReason}). ` +
-        `In one or two lines say the comps came back thin and you want to get it right, then ask ${asks || "what they figure it's worth fixed up and what the work would run"} ` +
+      return `${START} We're running numbers on ${o.address} for this agent and they're stuck${o.heldReason ? ` (${o.heldReason})` : ""}. ` +
+        `In one or two lines say ${heldInPlainWords(o.heldReason)} and you want to get it right, then ask ${asks || "what they figure it's worth fixed up and what the work would run"} ` +
         `— their read lets us finish it. Ask for nothing else. Do NOT name any number, range or percentage of ours, ` +
         `do NOT promise a time, and do NOT apologise. ${CONTINUE} Set intent to take_ask.`;
     }
@@ -610,7 +611,7 @@ export function outboundOpening(outbound) {
         `on ${o.address}${o.promisedText ? ` ("${o.promisedText}")` : ""}, and nothing has gone out yet. Keep our word in one or two ` +
         `lines, owning the delay plainly without making excuses. ` +
         (o.heldReason
-          ? `Our numbers are stuck (${o.heldReason}), so say the comps are thin and you want to get it right, and ask what they ` +
+          ? `Our numbers are stuck (${o.heldReason}), so say ${heldInPlainWords(o.heldReason)} and you want to get it right, and ask what they ` +
             `figure it's worth once it's done and what the work would run — their read lets us finish it. `
           : o.running
             ? `The numbers are still running; say you'll have them shortly. `
