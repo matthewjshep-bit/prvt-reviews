@@ -54,4 +54,25 @@ test("the pipeline carries what you said about each row, newest first, for draft
   assert.equal(row.feedback.category, "should_have_replied");
 });
 
+// 1415 2nd St, 2026-09-28: some rows had no Dismiss at all.
+test("a dismissed row leaves Today and stays off after a refresh, and Undo brings it back", async () => {
+  const before = await req("GET", "/api/dashboard/pipeline");
+  const row = before.json.actions.find((x) => x.kind === "audit_owed" && x.contactId === "c1");
+  assert.ok(row);
+  const yours = before.json.counts.actions.byGroup.yours;
+
+  assert.equal((await req("POST", "/api/dashboard/rows/dismiss", {})).status, 400);
+  const d = await req("POST", "/api/dashboard/rows/dismiss", { rowId: row.id, kind: row.kind, severity: row.severity, title: row.title, detail: row.detail });
+  assert.equal(d.status, 200, JSON.stringify(d.json));
+
+  const after = await req("GET", "/api/dashboard/pipeline");
+  assert.equal(after.json.actions.some((x) => x.id === row.id), false, "off the queue");
+  assert.equal(after.json.counts.actions.byGroup.yours, yours - 1);
+  assert.equal(after.json.dismissedCount, 1);
+
+  await req("POST", "/api/dashboard/rows/restore", { rowId: row.id });
+  const back = await req("GET", "/api/dashboard/pipeline");
+  assert.ok(back.json.actions.some((x) => x.id === row.id), "Undo puts it back");
+});
+
 test.after(() => server.close());

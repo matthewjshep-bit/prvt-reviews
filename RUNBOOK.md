@@ -1728,6 +1728,24 @@ Also: a promise row is named after the agent (from their offer or their
 drafts). It used to fall back to "An agent", because the name lookup only
 knew buyers.
 
+### Dismiss on any Today row (2026-09-28)
+
+Matt, on the 1415 2nd St closing row: some panes had nowhere to dismiss. Every
+row's header now has **Dismiss** (key **D**), except drafts (the composer's
+Dismiss bins the draft) and owed promises (their Dismiss asks why, for the coach).
+
+- The row leaves the queue at once and the pane moves to the next row. The toast says
+  "Dismissed — next: …" and has **Undo** for six seconds.
+- The broker remembers it on the `todayDismissed` job cursor, keyed by row id with a
+  fingerprint of kind, severity, title and detail, digits dropped
+  (`shared/today-dismiss.js`). A row stays off Today until it says something new:
+  "closes in 2d" becoming "in 1d" stays hidden, but "was due to close" or a new stage
+  brings it back. Entries are forgotten after 30 days.
+- Routes: `POST /api/dashboard/rows/dismiss { rowId, kind, severity, title, detail }`
+  and `POST /api/dashboard/rows/restore { rowId }`. `/pipeline` drops dismissed rows,
+  lowers the counts, and returns `dismissedCount`.
+- Dismiss changes nothing about the deal, the offer or the thread. It only hides the row.
+
 ### Durable errors (2026-09-17)
 
 Failures in the reply agent, proactive drafts, the underwriter, the 15-minute sweep and the coach used to live in Render's log or on an in-memory job a redeploy forgets. `recordError` (`ghl-broker/app-errors.js`) keeps them in `app_errors`, one row per distinct failure (fingerprint of area + message with ids and numbers flattened), counted. The message has phones and emails knocked out and the context is ids only. It never throws. The coach reads the night's rows; a repeated one becomes a `code_gap`.

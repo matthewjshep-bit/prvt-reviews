@@ -15,7 +15,7 @@
 import React, { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, Keyboard, Pencil, UserRound } from "lucide-react";
 import { annotateCurrent } from "@shared/current-offer.js";
-import { Pill, StatusMenu } from "./ui.jsx";
+import { BTN, Pill, StatusMenu } from "./ui.jsx";
 import { RowOpsBar, SEV, feedbackItemOf, whenLabel } from "./RowOps.jsx";
 import { useOpenContact } from "./ContactLink.jsx";
 import { ghlContactUrl, setOfferStatus } from "./api.js";
@@ -27,7 +27,7 @@ import CallButton from "./CallButton.jsx";
 import OfferEditorSheet from "./OfferEditorSheet.jsx";
 import { useRowFeedback } from "./RowFeedback.jsx";
 import { useLoad } from "./work-data.js";
-import { GROUP_LABEL, KEYS_HELP, KIND_LABEL, groupOf, railLabel, teachRowId } from "./work-queue.js";
+import { GROUP_LABEL, KEYS_HELP, KIND_LABEL, canDismissRow, groupOf, railLabel, teachRowId } from "./work-queue.js";
 
 const GROUP_CLS = { yours: "bg-blue-50 text-blue-800", stuck: "bg-amber-100 text-amber-800", machine: "bg-violet-100 text-violet-800" };
 const NAV = "rounded-lg border border-slate-300 bg-white p-1.5 text-slate-600 hover:bg-slate-50 disabled:cursor-default disabled:opacity-40";
@@ -100,7 +100,7 @@ function RowActions({ offer, siblings, offerId, rowOfferId, contactId, name, par
 }
 
 /** The row's own header: who, which house, why it's here, and its buttons. */
-export function RowHeader({ item, targets, index, total, onPrev, onNext, picker, onDone, showKeys, onToggleKeys, offer = null, actions = null }) {
+export function RowHeader({ item, targets, index, total, onPrev, onNext, picker, onDone, onDismiss = null, showKeys, onToggleKeys, offer = null, actions = null }) {
   const sev = SEV[item.severity] || SEV.fyi;
   const g = groupOf(item);
   const intent = targets.draft?.intent;
@@ -139,6 +139,9 @@ export function RowHeader({ item, targets, index, total, onPrev, onNext, picker,
       </div>
       <div className="flex flex-wrap items-start gap-1.5">
         <RowOpsBar item={item} onDone={onDone} onOpenContact={actions?.openContact} hasDraft={Boolean(targets.draft)} hasRecord={Boolean(targets.contactId)} />
+        {onDismiss && canDismissRow(item) && (
+          <button type="button" className={BTN} onClick={() => onDismiss(item)} title="Take it off Today and go to the next row (D). It comes back if it changes.">Dismiss</button>
+        )}
         {actions?.node}
       </div>
     </div>
@@ -151,7 +154,7 @@ export function RowHeader({ item, targets, index, total, onPrev, onNext, picker,
  * presentational halves with this data instead of loading it.
  * `settings`: the app's saved settings, for the offer editor.
  */
-export default function WorkPane({ item, targets, index, total, onPrev, onNext, picker, onDone, sendsEnabled, serverOffsetMs, feedback, showKeys, onToggleKeys, settings = null, bodies = null }) {
+export default function WorkPane({ item, targets, index, total, onPrev, onNext, picker, onDone, onDismiss = null, sendsEnabled, serverOffsetMs, feedback, showKeys, onToggleKeys, settings = null, bodies = null }) {
   const [tab, setTab] = useState("conversation");   // below lg the two sides are tabs
   // Which of their offers the left side shows; the row's own to start.
   const [offerId, setOfferId] = useState(targets.offerId || null);
@@ -202,7 +205,7 @@ export default function WorkPane({ item, targets, index, total, onPrev, onNext, 
   return (
     <section aria-label="The row you're working" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
       <RowHeader item={item} targets={targets} index={index} total={total} onPrev={onPrev} onNext={onNext} picker={picker}
-        onDone={onDone} showKeys={showKeys} onToggleKeys={onToggleKeys} offer={side.offer} actions={actions} />
+        onDone={onDone} onDismiss={onDismiss} showKeys={showKeys} onToggleKeys={onToggleKeys} offer={side.offer} actions={actions} />
 
       <div role="tablist" className="flex shrink-0 border-b border-slate-200 lg:hidden">
         {tabBtn("conversation", "Conversation")}

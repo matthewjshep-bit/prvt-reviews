@@ -211,3 +211,19 @@ test("the rail and the pane agree on where you are", () => {
   expect(html).toContain('aria-current="true"');
   expect(html).toContain("Stuck");
 });
+
+// 1415 2nd St, 2026-09-28: a closing row had Mark closed, Open the deal and
+// Fell through, and no way to say "seen it, next".
+test("every row can be dismissed from its header, and a row with its own Dismiss doesn't get a second", () => {
+  const closing = { id: "closing_soon:o9", kind: "closing_soon", severity: "soon", group: "yours", offerId: "o9", contactId: "c9", contactName: "Christian S",
+    address: "1415 2nd St, Snohomish, WA 98290", title: "1415 2nd St, Snohomish, WA 98290 closes in 2d", detail: "buyer found",
+    ops: [{ key: "mark_closed", label: "Mark closed", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }, { key: "fell_through", label: "Fell through", intent: "danger" }] };
+  const html = render({ actions: [closing] });
+  expect(html).toContain("Mark closed");
+  expect(html.match(/>Dismiss</g)?.length).toBe(1);
+  expect(html).toContain("go to the next row (D)");
+
+  const owed = render({ actions: owedNumber().actions });
+  expect(owed.match(/>Dismiss</g)?.length).toBe(1);   // the promise's own, which asks why
+  expect(owed).not.toContain("go to the next row (D)");
+});
