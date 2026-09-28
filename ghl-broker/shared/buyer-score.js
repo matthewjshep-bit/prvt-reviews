@@ -140,6 +140,25 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   };
 }
 
+/**
+ * pickWave(ranked, { wave, floor, exclude }) → the buyers an automatic wave texts
+ *
+ * `ranked` rows carry rank, rankParts, tier, phone, onLiveDeal, alreadyBlasted.
+ * A buyer must buy where the deal is (city or region): tier and price alone
+ * clear the floor, and 7034 S K St, Tacoma went to fifteen Snohomish and
+ * Eastside VIPs that way (2026-09-28). Wave 1 is VIP and Active, VIPs first;
+ * later waves take anyone at the floor, best fit first.
+ */
+export function pickWave(ranked = [], { wave = 1, floor = 0, exclude = "blasted" } = {}) {
+  const tierOrder = { vip: 0, active: 1, cold: 2 };
+  return ranked
+    .filter((i) => i.phone && !i.onLiveDeal && i.rank >= floor)
+    .filter((i) => (i.rankParts?.location || 0) > 0)
+    .filter((i) => exclude !== "blasted" || !i.alreadyBlasted)
+    .filter((i) => wave !== 1 || i.tier === "vip" || i.tier === "active")
+    .sort((a, b) => wave === 1 ? ((tierOrder[a.tier] ?? 3) - (tierOrder[b.tier] ?? 3)) || (b.rank - a.rank) : b.rank - a.rank);
+}
+
 /** engagementFromEvents(events) → Map(contactId → { blasts, viewed, evaluating, committed, passed, talks, lastEngagedAt }) */
 export function engagementFromEvents(events = []) {
   const out = new Map();

@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents } from "./buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, pickWave } from "./buyer-score.js";
 
 const NOW = Date.parse("2026-09-13T12:00:00Z");
 const monthsBack = (n) => new Date(NOW - n * 30.44 * 86400000).toISOString();
@@ -57,4 +57,28 @@ test("a logged call or a fact learned from them counts as a talk, and never move
   ]);
   assert.equal(m.get("a").talks, 2);
   assert.equal(m.get("a").lastEngagedAt, "");
+});
+
+test("a deal goes only to buyers who buy where it is: a VIP who works Snohomish is not sent a Tacoma house", () => {
+  // 7034 S K St, Tacoma, 2026-09-28: wave 1 sorted VIPs first against a floor
+  // of 50, and a VIP flipper in the price range scores 65 with no location at
+  // all. Fifteen of twenty-five texts went to Snohomish and Eastside buyers;
+  // one of them had told us the week before that he only buys in Snohomish.
+  const t = dealTarget({ city: "Tacoma", priceMin: 329000, priceMax: 329000 });
+  const buyer = (contactId, tier, cities, regions) => {
+    const i = { contactId, name: contactId, phone: "+1", tier, markets: { cities, regions, types: ["flip"] }, flips: { largest: 330000, lastAt: new Date().toISOString() } };
+    const r = rankForDeal(i, t);
+    return { ...i, rank: r.score, rankParts: r.parts };
+  };
+  const ranked = [
+    buyer("snohomish-vip", "vip", ["arlington"], ["snohomish"]),
+    buyer("tacoma-active", "active", ["tacoma"], ["pierce"]),
+    buyer("pierce-vip", "vip", ["orting"], ["pierce"]),
+    buyer("eastside-vip", "vip", ["redmond"], ["eastside"]),
+  ];
+  assert.ok(ranked[0].rank >= 50, "the Snohomish VIP clears the old floor on tier and price alone");
+  const w1 = pickWave(ranked, { wave: 1, floor: 50 }).map((i) => i.contactId);
+  assert.deepEqual(w1, ["pierce-vip", "tacoma-active"]);
+  const w2 = pickWave(ranked, { wave: 2, floor: 35 }).map((i) => i.contactId);
+  assert.ok(!w2.includes("snohomish-vip") && !w2.includes("eastside-vip"));
 });
