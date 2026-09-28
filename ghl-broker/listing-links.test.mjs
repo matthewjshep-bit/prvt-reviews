@@ -129,3 +129,47 @@ test("a link that resolves to nothing leaves the message as it was", async () =>
   const x = await expandListingLinks("look https://example.com/x", { resolve: async () => null });
   assert.deepEqual(x, { text: "look https://example.com/x", links: [] });
 });
+
+/* ---------- HomeSpotter (NWMLS agents' share links) ---------- */
+
+// An agent's l.hms.pt link (2026-09-26): six redirects to an idx.homespotter.com
+// page whose URL is only the MLS number, whose title is "Listing #2565463" and
+// whose og:title is "5 beds, 3 baths for $577,500 in Auburn, WA". The bot
+// answered "Link isn't opening on my end" twice.
+const HOMESPOTTER_PAGE = `<html><head><title>Listing #2565463</title>
+<meta property="og:title"  content="5 beds, 3 baths for $577,500 in Auburn, WA | HomeSpotter" /></head><body>
+<div class="summary_wrapper">
+  <div class="summary_price one">$577,500</div>
+  <div class="summary_address">
+    34418 54th Avenue S<br />Auburn, WA 98001  </div>
+</div></body></html>`;
+
+test("a HomeSpotter listing page is read from its address block", () => {
+  assert.equal(addressFromHtml(HOMESPOTTER_PAGE), "34418 54th Avenue S, Auburn, WA 98001");
+});
+
+test("an agent's l.hms.pt link is followed through all six redirects to the address", async () => {
+  const hops = {
+    "https://l.hms.pt/1125/14/2565463/255944/81337/B8": "http://hms.pt/JgEV",
+    "http://hms.pt/JgEV": "https://hms.pt/JgEV",
+    "https://hms.pt/JgEV": "https://app.homespotter.com/JgEV",
+    "https://app.homespotter.com/JgEV": "https://app.homespotter.com/customer_listing/hs_northwest/14/2565463?agent_id=255944",
+    "https://app.homespotter.com/customer_listing/hs_northwest/14/2565463?agent_id=255944": "http://idx.homespotter.com/hs_northwest/nwmls/2565463?agent_id=255944",
+    "http://idx.homespotter.com/hs_northwest/nwmls/2565463?agent_id=255944": "https://idx.homespotter.com/hs_northwest/nwmls/2565463?agent_id=255944",
+  };
+  const fetchImpl = async (url) => {
+    if (hops[url]) return { status: 302, ok: false, headers: new Headers({ location: hops[url] }) };
+    if (url === "https://idx.homespotter.com/hs_northwest/nwmls/2565463?agent_id=255944") {
+      return { status: 200, ok: true, headers: new Headers({ "content-type": "text/html; charset=utf-8" }), text: async () => HOMESPOTTER_PAGE };
+    }
+    throw new Error(`unexpected ${url}`);
+  };
+  const r = await resolveListingLink("https://l.hms.pt/1125/14/2565463/255944/81337/B8", { fetchImpl });
+  assert.equal(r?.address, "34418 54th Avenue S, Auburn, WA 98001");
+  const { text } = await expandListingLinks("Check out this home I found https://l.hms.pt/1125/14/2565463/255944/81337/B8", { fetchImpl });
+  assert.match(text, /\[listing link → 34418 54th Avenue S, Auburn, WA 98001\]/);
+});
+
+test("an address block that isn't an address is not turned into one", () => {
+  assert.equal(addressFromHtml(`<div class="summary_address">Address withheld<br />Auburn, WA</div>`), "");
+});

@@ -20,7 +20,9 @@ const UA =
 
 export const MAX_LINKS = 3;
 const HOP_TIMEOUT_MS = 8000;
-const MAX_HOPS = 5;
+// HomeSpotter's share link (l.hms.pt, what NWMLS agents text) takes six
+// redirects to reach its listing page.
+const MAX_HOPS = 8;
 const MAX_HTML = 400_000;
 
 // Bare hosts too: "zillow.com/homedetails/…" pasted without the scheme is how
@@ -133,6 +135,7 @@ const site = (host) => {
   if (h.endsWith("realtor.com")) return "realtor.com";
   if (h.endsWith("trulia.com")) return "trulia";
   if (h.endsWith("homes.com")) return "homes.com";
+  if (h.endsWith("hms.pt") || h.endsWith("homespotter.com")) return "homespotter";
   return h;
 };
 
@@ -170,6 +173,14 @@ export function addressFromHtml(html) {
   const og = (s.match(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)["']/i) || [])[1] || "";
   const m = og.match(/(\d+[A-Za-z]?\s[^,|]{3,60}),\s*([A-Za-z .'-]{2,40}),\s*([A-Za-z]{2})\b\s*(\d{5})?/);
   if (m && stateAbbr(m[3])) return `${m[1].trim()}, ${m[2].trim()}, ${stateAbbr(m[3])}${m[4] ? ` ${m[4]}` : ""}`;
+  // A page's own address block — HomeSpotter's IDX page (l.hms.pt, NWMLS)
+  // has no schema.org address, a "Listing #2565463" title and an og:title
+  // of beds and baths; the address is only in <div class="summary_address">
+  // "34418 54th Avenue S<br />Auburn, WA 98001".
+  const block = (s.match(/<(div|span|p|h1|h2)[^>]+class=["'][^"']*\b(?:summary_address|listing[-_]address|property[-_]address)\b[^"']*["'][^>]*>([\s\S]{5,300}?)<\/\1>/i) || [])[2] || "";
+  const flat = block.replace(/<br\s*\/?>/gi, ", ").replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").replace(/\s+,/g, ",").trim();
+  const b = flat.match(/^(\d+[A-Za-z]?\s[^,]{3,60}),\s*([A-Za-z .'-]{2,40}),\s*([A-Za-z]{2})\b\s*(\d{5})?/);
+  if (b && stateAbbr(b[3])) return `${b[1].trim()}, ${b[2].trim()}, ${stateAbbr(b[3])}${b[4] ? ` ${b[4]}` : ""}`;
   return "";
 }
 
