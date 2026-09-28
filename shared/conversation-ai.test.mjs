@@ -489,27 +489,28 @@ test("the driver's switches default off, survive a save, and normalizing twice c
 
 /* ---------- the terms we always write ---------- */
 
-test("the write-up terms default to 1k earnest after inspection, a 7 to 14 day inspection, a hard money loan, about 21 days to close, Matthew Shepherd and/or assigns, and survive a save", () => {
+test("the write-up terms default to 1k earnest after inspection, a 10 to 14 day inspection, a hard money loan, roughly 10 to 21 days to close, Matthew Shepherd and/or assigns, and survive a save", () => {
   const a = normalizeConversationAi(null);
   assert.deepEqual(a.writeUp, {
-    earnestMoney: 1000, earnestDue: "after inspection", inspectionDaysMin: 7, inspectionDays: 14,
-    funding: "a hard money loan", closeDays: 21, buyer: "Matthew Shepherd and/or assigns",
+    earnestMoney: 1000, earnestDue: "after inspection", inspectionDaysMin: 10, inspectionDays: 14,
+    funding: "a hard money loan", closeDaysMin: 10, closeDays: 21, buyer: "Matthew Shepherd and/or assigns",
   });
-  const b = normalizeConversationAi({ writeUp: { earnestMoney: "2500", earnestDue: "mutual acceptance", inspectionDaysMin: 5, inspectionDays: 10, funding: " cash ", closeDays: "30", buyer: " Shep Flips LLC " } });
-  assert.deepEqual(b.writeUp, { earnestMoney: 2500, earnestDue: "mutual acceptance", inspectionDaysMin: 5, inspectionDays: 10, funding: "cash", closeDays: 30, buyer: "Shep Flips LLC" });
+  const b = normalizeConversationAi({ writeUp: { earnestMoney: "2500", earnestDue: "mutual acceptance", inspectionDaysMin: 5, inspectionDays: 10, funding: " cash ", closeDaysMin: 14, closeDays: "30", buyer: " Shep Flips LLC " } });
+  assert.deepEqual(b.writeUp, { earnestMoney: 2500, earnestDue: "mutual acceptance", inspectionDaysMin: 5, inspectionDays: 10, funding: "cash", closeDaysMin: 14, closeDays: 30, buyer: "Shep Flips LLC" });
   const c = normalizeConversationAi({ writeUp: { earnestMoney: "abc", inspectionDays: 90, buyer: "" } });
   assert.deepEqual(c.writeUp, { ...a.writeUp, inspectionDays: 45 });
-  // A saved window from before the range (14 alone) still reads 7 to 14.
+  // A saved window from before the range (14 alone) still reads 10 to 14.
   const d = normalizeConversationAi({ writeUp: { earnestMoney: 1000, earnestDue: "after inspection", inspectionDays: 14, buyer: "Matthew Shepherd and/or assigns" } });
   assert.deepEqual(d.writeUp, a.writeUp);
   // A minimum above the maximum is dropped to it.
   assert.equal(normalizeConversationAi({ writeUp: { inspectionDaysMin: 20, inspectionDays: 10 } }).writeUp.inspectionDaysMin, 10);
   assert.equal(
     writeUpTermsText(a.writeUp),
-    "$1,000 earnest money, preferably due after the inspection period; 7 to 14 day inspection; funded with a hard money loan; " +
-      "close about 21 days from mutual acceptance, inspection included; buyer written as Matthew Shepherd and/or assigns"
+    "$1,000 earnest money, preferably due after the inspection period; 10 to 14 day inspection; funded with a hard money loan; " +
+      "close in roughly 10 to 21 days from mutual acceptance, inspection included, depending on the lender; buyer written as Matthew Shepherd and/or assigns"
   );
   assert.match(writeUpTermsText({ ...a.writeUp, inspectionDaysMin: 14 }), /; 14-day inspection;/);
+  assert.match(writeUpTermsText({ ...a.writeUp, closeDaysMin: 21 }), /close in about 21 days/);
 });
 
 test("an opt-out they sent before is found in the thread, with its date, and only in their own words", async () => {

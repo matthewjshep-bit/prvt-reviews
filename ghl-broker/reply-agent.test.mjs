@@ -3696,7 +3696,7 @@ test("telling a listing agent we pay cash with no lender is held — we buy with
     assert.match(g.flags.join(" · "), /hard money/i, reply);
   }
   const ok = gate(
-    { reply: "It's funded with a hard money loan, as-is. 7 to 14 day inspection and we close about 3 weeks from acceptance." },
+    { reply: "It's funded with a hard money loan, as-is. 10 to 14 day inspection and we close in roughly 10 to 21 days from acceptance." },
     { inboundMessage: "Just confused about the no lender comment if you're paying cash." }
   );
   assert.deepEqual(ok.flags, []);

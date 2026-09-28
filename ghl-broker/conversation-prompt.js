@@ -6,7 +6,7 @@
 // me" is a textarea, not a redeploy, and an investor is answered by someone
 // who knows they are an investor. Pure.
 
-import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS, DEAL_SIGNALS, writeUpTermsText } from "./shared/conversation-ai.js";
+import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS, DEAL_SIGNALS, writeUpTermsText, CONVERSATION_AI_DEFAULTS } from "./shared/conversation-ai.js";
 import { heldInPlainWords } from "./shared/held-underwrites.js";
 
 const LENGTH_RULE = {
@@ -254,16 +254,19 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     // inspection contingency is a killer") and asked us to pre-inspect
     // instead. The bot had nothing to say to either, so it promised to run it
     // by a partner twice and the thread went two days without an answer.
+    // 2026-09-27 (10917 48th St E): this block used to say "close fast,
+    // cash, with no lender", and the bot said it to an agent who knew
+    // better. We fund with a hard money loan; the window comes from the
+    // write-up terms so the two never disagree.
+    const w = { ...CONVERSATION_AI_DEFAULTS.writeUp, ...(config?.writeUp || {}) };
+    const floor = Math.min(Number(w.inspectionDaysMin) || w.inspectionDays, w.inspectionDays);
     parts.push(
-      // 2026-09-27 (10917 48th St E): this block used to say "close fast,
-      // cash, with no lender", and the bot said it to an agent who knew
-      // better. We fund with a hard money loan; the window is 7 to 14 days.
       "THE INSPECTION PERIOD: our diligence happens inside the inspection (feasibility) period after mutual " +
       "acceptance — that window is what lets us buy as-is, and it is not the thing we give up to win a deal. " +
-      "We write 7 to 14 days and never under 7. When an agent pushes to shorten it, say plainly that we need the " +
+      `We write ${floor} to ${w.inspectionDays} days and never under ${floor}. When an agent pushes to shorten it, say plainly that we need the ` +
       "window to buy as-is, ask what the seller actually needs, and leave the number " +
       "to a person: never agree to a specific window, never name a shorter one, and set needsHuman with the " +
-      "reason. Under 7 days is not ours to discuss at all.\n" +
+      `reason. Under ${floor} days is not ours to discuss at all.\n` +
       "PRE-INSPECTION: we do NOT pre-inspect — no inspector and no contractor sent out, and no inspection " +
       "scheduled, before we are under contract, whatever the seller has asked for and whoever offers to pay for " +
       "it. (This is about an INSPECTION in front of a contract, and does not change what is said above about " +

@@ -110,7 +110,7 @@ test("an agent who really is called Matt gets no confusing note", () => {
 test("the inspection period and the no-pre-inspection rule reach the agent prompt", () => {
   const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
   assert.match(sys, /THE INSPECTION PERIOD/);
-  assert.match(sys, /We write 7 to 14 days and never under 7/);
+  assert.match(sys, /We write 10 to 14 days and never under 10/);
   assert.match(sys, /never agree to a specific window/);
   assert.match(sys, /PRE-INSPECTION: we do NOT pre-inspect/);
   assert.match(sys, /once we are under contract/);
@@ -168,7 +168,7 @@ test("the agent prompt carries the write-up terms and says to give them in the s
   assert.match(sys, /WRITE-UP TERMS/);
   assert.match(sys, /\$1,000 earnest money/);
   assert.match(sys, /after the inspection period/);
-  assert.match(sys, /7 to 14 day inspection/);
+  assert.match(sys, /10 to 14 day inspection/);
   assert.match(sys, /Matthew Shepherd and\/or assigns/);
   assert.match(sys, /in the same message/);
   assert.match(sys, /Commission[^.]*not yours to settle/i);
@@ -176,11 +176,11 @@ test("the agent prompt carries the write-up terms and says to give them in the s
 
 // 10917 48th St E, 2026-09-27: the prompt itself said "close fast, cash,
 // with no lender" and "a 10 to 14 day target close", and the bot said both.
-test("the agent prompt says we buy with a hard money loan, a 7 to 14 day inspection and about three weeks to close, never cash with no lender", () => {
+test("the agent prompt says we buy with a hard money loan, a 10 to 14 day inspection and roughly 10 to 21 days to close, never cash with no lender", () => {
   const sys = buildSystemPrompt({ config: normalizeConversationAi(null), party: "agent", channel: "sms" });
   assert.match(sys, /hard money loan/);
-  assert.match(sys, /7 to 14 day inspection/);
-  assert.match(sys, /close about 21 days from mutual acceptance, inspection included/);
+  assert.match(sys, /10 to 14 day inspection/);
+  assert.match(sys, /close in roughly 10 to 21 days from mutual acceptance, inspection included, depending on the lender/);
   assert.doesNotMatch(sys, /cash, with no lender/);
   assert.doesNotMatch(sys, /10 to 14 day target close/);
   assert.doesNotMatch(sys, /14 is what we normally write/);

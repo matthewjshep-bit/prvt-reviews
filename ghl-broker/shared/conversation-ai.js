@@ -536,12 +536,12 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // What we always write when a listing agent drafts the offer (Matt,
   // 2026-09-18, after "Earnest? Inspection?" got "let me confirm with my
   // partner"): the bot gives these in the same message, no checking.
-  // 2026-09-28 (10917 48th St E): the inspection is a 7 to 14 day range, we
-  // fund with a hard money loan (never "cash, no lender"), and close about
-  // three weeks from mutual acceptance with the inspection inside that.
+  // 2026-09-28 (10917 48th St E): the inspection is a 10 to 14 day range, we
+  // fund with a hard money loan (never "cash, no lender"), and the lender
+  // closes after it: roughly 10 to 21 days from mutual acceptance in all.
   writeUp: {
-    earnestMoney: 1000, earnestDue: "after inspection", inspectionDaysMin: 7, inspectionDays: 14,
-    funding: "a hard money loan", closeDays: 21, buyer: "Matthew Shepherd and/or assigns",
+    earnestMoney: 1000, earnestDue: "after inspection", inspectionDaysMin: 10, inspectionDays: 14,
+    funding: "a hard money loan", closeDaysMin: 10, closeDays: 21, buyer: "Matthew Shepherd and/or assigns",
   },
   // What the drafts run on and how they're paid for (2026-09-25).
   //   shadowModel / shadowUntil  a second model drafts every reply beside the
@@ -968,13 +968,15 @@ export function normalizeConversationAi(doc, seed = {}) {
       const w = d.writeUp && typeof d.writeUp === "object" ? d.writeUp : {};
       const W = D.writeUp;
       const inspectionDays = int(w.inspectionDays, W.inspectionDays, 1, 45);
+      const closeDays = int(w.closeDays, W.closeDays, 1, 120);
       return {
         earnestMoney: int(w.earnestMoney, W.earnestMoney, 1, 100000),
         earnestDue: str(w.earnestDue, 80) || W.earnestDue,
         inspectionDaysMin: Math.min(int(w.inspectionDaysMin, W.inspectionDaysMin, 1, 45), inspectionDays),
         inspectionDays,
         funding: str(w.funding, 80) || W.funding,
-        closeDays: int(w.closeDays, W.closeDays, 1, 120),
+        closeDaysMin: Math.min(int(w.closeDaysMin, W.closeDaysMin, 1, 120), closeDays),
+        closeDays,
         buyer: str(w.buyer, 120) || W.buyer,
       };
     })(),
@@ -1326,7 +1328,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "acknowledge it and say you'll run it by your partner — never move on your own.\n" +
           `IF ASKED IF YOU'RE A BOT: give the standard line, then ask if they have any stale or pocket listings right now.`,
         mayCommit:
-          "Confirm we buy as-is, funded with a hard money loan, and close about three weeks from mutual acceptance with the inspection included. Say we'll run an address by underwriting " +
+          "Confirm we buy as-is, funded with a hard money loan, and close in roughly 10 to 21 days from mutual acceptance, inspection included, depending on the lender. Say we'll run an address by underwriting " +
           "today. Ask for an address, price expectations and seller timeline. Ask what they think it's worth fixed " +
           "up and what they'd budget for the work. Ask if it's cool to stay in touch.",
         mayNotCommit:
@@ -1426,8 +1428,10 @@ export function writeUpTermsText(w = CONVERSATION_AI_DEFAULTS.writeUp) {
   const due = /^after inspection$/i.test(t.earnestDue) ? "preferably due after the inspection period" : `due ${t.earnestDue}`;
   const lo = Math.min(Number(t.inspectionDaysMin) || t.inspectionDays, t.inspectionDays);
   const window = lo < t.inspectionDays ? `${lo} to ${t.inspectionDays} day inspection` : `${t.inspectionDays}-day inspection`;
+  const cLo = Math.min(Number(t.closeDaysMin) || t.closeDays, t.closeDays);
+  const close = cLo < t.closeDays ? `roughly ${cLo} to ${t.closeDays} days` : `about ${t.closeDays} days`;
   return `$${Number(t.earnestMoney).toLocaleString("en-US")} earnest money, ${due}; ${window}; funded with ${t.funding}; ` +
-    `close about ${t.closeDays} days from mutual acceptance, inspection included; buyer written as ${t.buyer}`;
+    `close in ${close} from mutual acceptance, inspection included, depending on the lender; buyer written as ${t.buyer}`;
 }
 
 // A draft that tells an agent we pay all cash, or that there is no lender
