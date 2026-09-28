@@ -336,3 +336,19 @@ test("heat is its own axis: an agreed price or your flag makes an offer hot; dea
   assert.equal(isHot({ id: "a", status: "passed", hot: { at: ts } }), false);
   assert.equal(isHot({ id: "a", status: "sent", hot: { at: ts }, deal: { stage: "under_contract" } }), false, "a deal is past hot");
 });
+
+test("on a deal means committed, or evaluating while nobody has committed yet — not pitched, passed or a backup", async () => {
+  const { buyersInPlay } = await import("./offer-status.js");
+  const open = [
+    { contactId: "a", status: "evaluating" },
+    { contactId: "b", status: "sent" },
+    { contactId: "c", status: "passed" },
+  ];
+  assert.deepEqual([...buyersInPlay(open)], ["a"]);
+  assert.deepEqual([...buyersInPlay([...open, { contactId: "d", status: "soft_commit" }])], ["d"], "a soft commit holds the deal too");
+  const taken = [
+    { contactId: "a", status: "evaluating" },
+    { contactId: "e", status: "committed" },
+  ];
+  assert.deepEqual([...buyersInPlay(taken)], ["e"], "once a buyer commits, the others aren't evaluating any more");
+});
