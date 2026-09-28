@@ -489,11 +489,15 @@ export function WriteUpTermsEditor({ config, patch }) {
   const set = (k) => (v) => patch({ writeUp: { ...w, [k]: v } });
   return (
     <Section title="Write-up terms"
-      intro="What the bot tells a listing agent who asks how to write it up. Earnest and the inspection window it may say on its own; shortening the window, commission and the closing date still wait for you.">
+      intro="What the bot tells a listing agent who asks how to write it up. Earnest, the inspection range, how we pay and the target close it may say on its own; picking a window, a closing date and commission still wait for you.">
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Earnest money ($)" hint="Said as text, e.g. 1k."><Text type="number" value={w.earnestMoney} onChange={(v) => set("earnestMoney")(Number(v))} /></Field>
         <Field label="Earnest due" hint='"after inspection" reads as "preferably due after the inspection period".'><Text value={w.earnestDue} onChange={set("earnestDue")} placeholder="after inspection" /></Field>
-        <Field label="Inspection window (days)"><Text type="number" value={w.inspectionDays} onChange={(v) => set("inspectionDays")(Number(v))} /></Field>
+        <Field label="Inspection window, shortest (days)"><Text type="number" value={w.inspectionDaysMin} onChange={(v) => set("inspectionDaysMin")(Number(v))} /></Field>
+        <Field label="Inspection window, longest (days)"><Text type="number" value={w.inspectionDays} onChange={(v) => set("inspectionDays")(Number(v))} /></Field>
+        <Field label="How we pay" hint='Said as "funded with …". Never "cash, no lender".'><Text value={w.funding} onChange={set("funding")} placeholder="a hard money loan" /></Field>
+        <Field label="Close, soonest (days from mutual acceptance)" hint="Inspection included."><Text type="number" value={w.closeDaysMin} onChange={(v) => set("closeDaysMin")(Number(v))} /></Field>
+        <Field label="Close, latest (days from mutual acceptance)" hint="Inspection included."><Text type="number" value={w.closeDays} onChange={(v) => set("closeDays")(Number(v))} /></Field>
         <Field label="Buyer on the contract"><Text value={w.buyer} onChange={set("buyer")} placeholder="Matthew Shepherd and/or assigns" /></Field>
       </div>
     </Section>
@@ -779,13 +783,13 @@ export function PartyPlaybooks({ config, patch, workflows }) {
         <Field label="Standing instructions" hint="Your rules for this party, in plain English. Add a line each time a draft gets something wrong.">
           <Area rows={4} value={pb.instructions} onChange={(v) => setPb({ instructions: v })}
             placeholder={party === "agent"
-              ? "We buy as-is, cash, close in 14–21 days, no financing or inspection contingency. If they ask for proof of funds, say we'll send it with the contract. Never discuss our assignment fee or who the end buyer is."
+              ? "We buy as-is with a hard money loan, 10–14 day inspection, close in roughly 10–21 days. If they ask for proof of funds, say we'll send it with the contract. Never discuss our assignment fee or who the end buyer is."
               : "We assign contracts; the buyer price is the price. Deals go out with a dataroom link, never photos by text. If they want to walk it, say we'll set a time today."} />
         </Field>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="It may, on its own" hint="Things it can say yes to without asking you.">
             <Area rows={2} value={pb.mayCommit} onChange={(v) => setPb({ mayCommit: v })}
-              placeholder={party === "agent" ? "Confirm an offer is still open. Say we can close in 14 days." : "Say a deal is still available. Offer to send the dataroom link."} />
+              placeholder={party === "agent" ? "Confirm an offer is still open. Say we close in roughly 10–21 days." : "Say a deal is still available. Offer to send the dataroom link."} />
           </Field>
           <Field label="It may not, ever" hint="On top of the built-in rule that it never commits to a number, a time or a document.">
             <Area rows={2} value={pb.mayNotCommit} onChange={(v) => setPb({ mayNotCommit: v })}

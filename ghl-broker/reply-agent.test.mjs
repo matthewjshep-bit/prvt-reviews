@@ -3679,6 +3679,31 @@ test("a buyer on two live deals who names no address is a person's call", async 
   assert.equal(v.checks.find((c) => !c.ok && c.name === "one_deal")?.name, "one_deal");
 });
 
+/* ---------- we buy with a hard money loan, not all cash (10917 48th St E, 2026-09-27) ---------- */
+
+// The bot told a listing agent "We can close 10 to 14 days, cash" and "cash
+// means no lender and no appraisal contingency at all". We fund with a hard
+// money loan; the agent caught it and asked on a call whether we were real.
+test("telling a listing agent we pay cash with no lender is held — we buy with a hard money loan", () => {
+  for (const reply of [
+    "We can close 10 to 14 days, cash. The inspection window is what lets us buy as-is with no lender or appraisal contingency.",
+    "Right, cash means no lender and no appraisal contingency at all.",
+    "It's an all cash purchase, as-is.",
+    "We're paying cash so it's a quick close.",
+  ]) {
+    const g = gate({ reply }, { inboundMessage: "How long for closing?" });
+    assert.equal(g.ok, false, reply);
+    assert.match(g.flags.join(" · "), /hard money/i, reply);
+  }
+  const ok = gate(
+    { reply: "It's funded with a hard money loan, as-is. 10 to 14 day inspection and we close in roughly 10 to 21 days from acceptance." },
+    { inboundMessage: "Just confused about the no lender comment if you're paying cash." }
+  );
+  assert.deepEqual(ok.flags, []);
+  // How we describe ourselves in an opener is not a funding claim.
+  assert.deepEqual(gate({ reply: "Saw your listing on Main St. We buy houses as-is for cash and close fast. Got anything that needs work?" }, {}).flags, []);
+});
+
 /* ---------- the number we came down to, and the terms we always write (Kimberly Pettie, 2026-09-18) ---------- */
 
 test("restating the offer-book number after we came down to a lower one is held", () => {

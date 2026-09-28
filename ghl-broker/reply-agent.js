@@ -43,7 +43,7 @@ import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
 import { getFreeSlots } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
@@ -706,6 +706,9 @@ export function evaluateReplyGates({
     if (asksWriteUpTerms(inboundMessage) && defersWriteUpTerms(draft.reply)) {
       flags.push("the draft puts off earnest, inspection or the buyer name — the write-up terms answer those in the same message");
     }
+    // 10917 48th St E, 2026-09-27: "cash means no lender". We use hard money.
+    const cash = claimsAllCash(draft.reply);
+    if (cash) flags.push(`the draft says "${cash}" — we buy with a hard money loan, not all cash`);
   }
   // The two rules that are not judgment calls. A number the other side must
   // never hear — our contract price, our fee — is flagged even if they said
