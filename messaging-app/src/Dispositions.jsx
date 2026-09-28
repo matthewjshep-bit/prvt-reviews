@@ -1,26 +1,24 @@
 // Dispositions.jsx — the cash-buyer book. Mirrors the investor contacts out of
-// GHL, searches them in plain English against their buy box, lets you fix a buy
-// box in place (writing back to GHL), and tags a shortlist so a GHL workflow
-// blasts them the deal.
-//
-// One idea holds the page together: there is a single query object. Typing a
-// question fills it in via the AI; the filter controls and the chips edit the
-// same object directly and re-filter with no AI call. So the model is never a
-// black box — you can always see what it understood and correct it.
+// GHL, and puts the people we've actually talked with first: the tabs split
+// the book by relationship (shared/talked-to.js), a plain search box and a few
+// dropdowns narrow it, a live deal can rank it, and a shortlist gets tagged so
+// a GHL workflow blasts them the deal. The buy box is edited in place and
+// written back to GHL.
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  AlertCircle, ChevronDown, ChevronUp, ExternalLink, Loader2, Megaphone,
+  AlertCircle, ChevronDown, ChevronUp, Loader2, Map as MapIcon, Megaphone,
   Pencil, RefreshCw, Search, X, Eye } from "lucide-react";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_LABELS, REHAB_APPETITES, REHAB_APPETITE_LABELS,
-  buyboxIsEmpty, normalizeQuery, priceBandText, queryChips, queryIsEmpty, removeChip,
+  buyboxIsEmpty, priceBandText,
 } from "@shared/buybox.js";
 import {
-  blastInvestors, getInvestor, getInvestors, ghlContactUrl, saveBuybox,
-  searchInvestors, setInvestorStatus, syncInvestors,
+  blastInvestors, getInvestor, getInvestors, saveBuybox,
+  setInvestorStatus, syncInvestors,
 } from "./api.js";
-import { EmptyState, ErrorBar, Spinner, TableCard } from "./ui.jsx";
+import { BTN, EmptyState, ErrorBar, Spinner, TableCard } from "./ui.jsx";
+import { RELATIONSHIPS, matchesText, relationshipOf } from "@shared/talked-to.js";
 import { REGIONS, REGION_KEYS, STRATEGIES, cityLabel, regionFor } from "@shared/dispo-regions.js";
 import { TIERS } from "@shared/buyer-score.js";
 import { getDispoInsights, listDeals, rankBuyersForDeal } from "./api.js";
@@ -94,53 +92,39 @@ const fmtAgo = (iso) => {
   return `${Math.floor(hrs / 24)}d ago`;
 };
 
-// Mirrors the server's replyState(): has this person EVER answered us, not who
-// happened to send the last message. One bulk send makes "we spoke last" true
-// for the entire book on the same day, which says nothing about who is engaged.
-const replyState = (i) => {
-  if (i?.lastRepliedAt) return "replied";
-  return i?.lastMessageAt ? "awaiting" : "never";
+const fmtPhone = (p) => {
+  const d = String(p || "").replace(/\D/g, "").slice(-10);
+  return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : p || "";
 };
 
-const REPLY_META = {
-  replied: { label: "Replied", cls: "bg-emerald-100 text-emerald-800" },
-  awaiting: { label: "No reply", cls: "bg-amber-100 text-amber-800" },
-  never: { label: "Never contacted", cls: "bg-slate-100 text-slate-600" },
+const REL_CLS = {
+  talking: "bg-emerald-100 text-emerald-800",
+  replied: "bg-sky-100 text-sky-800",
+  no_reply: "bg-amber-50 text-amber-800",
+  never: "bg-slate-100 text-slate-500",
+  opted_out: "bg-red-50 text-red-700",
 };
 
-// The badge answers "have they engaged"; the timestamp answers "when", and the
-// two are different clocks — last reply for someone who has answered, last
-// touch for someone who hasn't.
-function ReplyBadge({ investor }) {
-  const state = replyState(investor);
-  const m = REPLY_META[state];
-  const stamp = state === "replied" ? investor.lastRepliedAt : investor.lastMessageAt;
-  const hint = state === "replied"
-    ? `Last replied ${fmtAgo(investor.lastRepliedAt)}` +
-      (investor.lastMessageAt ? ` · you messaged ${fmtAgo(investor.lastMessageAt)}` : "")
-    : state === "awaiting"
-      ? `You messaged ${fmtAgo(investor.lastMessageAt)} — never answered`
-      : "No conversation on record";
+// When they last wrote to us, and how much talking there's been — the second
+// line is what separates a relationship from one "who is this?".
+function RelationshipCell({ inv }) {
+  const r = inv.relationship || relationshipOf(inv);
+  const t = inv.talk;
+  const bits = [];
+  if (t?.replies) bits.push(`${t.replies} repl${t.replies === 1 ? "y" : "ies"}`);
+  if (t?.calls) bits.push(`${t.calls} call${t.calls === 1 ? "" : "s"}`);
+  if (inv.engagement?.talks) bits.push(`${inv.engagement.talks} logged`);
+  const when = inv.lastRepliedAt ? fmtAgo(inv.lastRepliedAt) : inv.lastMessageAt ? `messaged ${fmtAgo(inv.lastMessageAt)}` : "";
   return (
-    <span className="inline-flex items-center gap-1.5" title={hint}>
-      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${m.cls}`}>{m.label}</span>
-      {stamp && <span className="text-xs text-slate-500">{fmtAgo(stamp)}</span>}
-    </span>
-  );
-}
-
-const FIT_CLS = {
-  strong: "bg-emerald-100 text-emerald-800",
-  possible: "bg-slate-100 text-slate-700",
-  weak: "bg-slate-50 text-slate-500",
-};
-
-function FitBadge({ fit, score }) {
-  return (
-    <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${FIT_CLS[fit] || FIT_CLS.possible}`}
-      title={`Match score ${score}/100`}>
-      {fit}
-    </span>
+    <div title={RELATIONSHIPS[r]?.hint}>
+      <div className="flex items-center gap-1.5">
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${REL_CLS[r]}`}>{RELATIONSHIPS[r]?.label}</span>
+        {inv.lastRepliedAt && <span className="text-xs text-slate-600">{when}</span>}
+      </div>
+      {(bits.length > 0 || (!inv.lastRepliedAt && when)) && (
+        <div className="mt-0.5 text-[11px] text-slate-500">{bits.length ? bits.join(" · ") : when}</div>
+      )}
+    </div>
   );
 }
 
@@ -391,43 +375,46 @@ function InvestorDetail({ investor, onSaved }) {
 
 /* ---------------- page ---------------- */
 
+// Who the page opens on. The book is a few thousand names off borrower lists;
+// the people worth a text today are the few we've actually talked with.
+const WHO_KEYS = ["talking", "replied", "no_reply", "never", "all", "opted_out"];
+const readWho = () => {
+  try {
+    const w = new URLSearchParams(window.location.search).get("who");
+    return WHO_KEYS.includes(w) ? w : "talking";
+  } catch { return "talking"; }
+};
+const setParam = (k, v) => {
+  try { const u = new URL(window.location.href); v ? u.searchParams.set(k, v) : u.searchParams.delete(k); window.history.replaceState(window.history.state, "", u.pathname + u.search); } catch { /* the filter still works */ }
+};
+
+const SELECT_CLS = "rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-700 focus:border-blue-500 focus:outline-none";
+
 export default function Dispositions() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
 
-  // The one query object. `null` = browsing the whole book.
-  const [query, setQuery] = useState(null);
-  const [question, setQuestion] = useState("");
-  const [strict, setStrict] = useState(false);
-  const [search, setSearch] = useState(null); // null | {busy} | search response
-  const [nameFilter, setNameFilter] = useState("");
-
-  // Book-level filters: WHO to consider at all. Distinct from the buy-box
-  // criteria in `query`, which decide whether their buy box fits.
-  const [excludeOnDeal, setExcludeOnDeal] = useState(false);
-  const [buyboxStatus, setBuyboxStatus] = useState("all"); // all | documented | missing
-  const [replyStatus, setReplyStatus] = useState("all");   // all | replied | awaiting | never
-  const [areaText, setAreaText] = useState("");
-  const [priceText, setPriceText] = useState("");
-  // Where they buy and how — from the dispo-region/city/type tags.
+  const [who, setWho] = useState(readWho);
+  const [text, setText] = useState("");
   const [region, setRegion] = useState("");
   const [city, setCity] = useState("");
   const [type, setType] = useState("");
   const [tier, setTier] = useState("");
-  // Matching the book against one live deal: ranked buyers replace the table.
+  const [buyboxStatus, setBuyboxStatus] = useState(""); // "" | documented | missing
+  const [excludeOnDeal, setExcludeOnDeal] = useState(false);
+  // Matching the book against one live deal: ranked buyers replace the order.
   const [deals, setDeals] = useState([]);
   const [dealId, setDealId] = useState("");
   const [ranking, setRanking] = useState(null); // null | {busy} | {error} | rank response
-  // Map + charts, fetched when opened and whenever the market filters move.
   const [showInsights, setShowInsights] = useState(false);
   const [insights, setInsights] = useState(null);
   const [sort, setSort] = useState(readSort);
   const onSort = (key) => {
     const next = sort?.key === key ? { key, dir: sort.dir === "desc" ? "asc" : "desc" } : { key, dir: key === "name" || key === "region" ? "asc" : "desc" };
     setSort(next);
-    try { const u = new URL(window.location.href); u.searchParams.set("sort", `${next.key}:${next.dir}`); window.history.replaceState(window.history.state, "", u.pathname + u.search); } catch { /* sort still works */ }
+    setParam("sort", `${next.key}:${next.dir}`);
   };
 
   const [selected, setSelected] = useState(() => new Set());
@@ -487,7 +474,6 @@ export default function Dispositions() {
         warnings: r.warnings || [],
       });
       await refresh();
-      if (query) await runSearch({ parsed: query });
     } catch (e) {
       setSyncMsg({ ok: false, text: e.message });
     } finally {
@@ -495,123 +481,72 @@ export default function Dispositions() {
     }
   };
 
-  // One entry point for every search: free text parses first, a parsed query
-  // re-filters locally. Both land in the same place.
-  const runSearch = async ({ text, parsed, over = {} }) => {
-    setSearch({ busy: true });
-    setSelected(new Set());
-    const filters = {
-      excludeOnDeal, buyboxStatus, replyStatus, region, city, type,
-      ...over, // a control that just changed hasn't re-rendered its state yet
-    };
-    try {
-      const r = await searchInvestors({ query: text, parsed, strict, filters });
-      setSearch(r);
-      setQuery(r.parsed);
-    } catch (e) {
-      setSearch({ error: e.message });
-    }
-  };
-
-  const clearSearch = () => {
-    setSearch(null);
-    setQuery(null);
-    setQuestion("");
-    setAreaText("");
-    setPriceText("");
+  const pickWho = (k) => { setWho(k); setSelected(new Set()); setParam("who", k === "talking" ? "" : k); };
+  const clearFilters = () => {
+    setText(""); setRegion(""); setCity(""); setType(""); setTier(""); setBuyboxStatus(""); setExcludeOnDeal(false);
     setSelected(new Set());
   };
+  const filtersOn = !!(text || region || city || type || tier || buyboxStatus || excludeOnDeal);
 
-  // Book-level filters apply in browse mode too, so flipping one re-runs an
-  // active search and otherwise just re-filters the table client-side.
-  const setBookFilter = (over) => {
-    if (over.excludeOnDeal !== undefined) setExcludeOnDeal(over.excludeOnDeal);
-    if (over.buyboxStatus !== undefined) setBuyboxStatus(over.buyboxStatus);
-    if (over.replyStatus !== undefined) setReplyStatus(over.replyStatus);
-    if (over.region !== undefined) setRegion(over.region);
-    if (over.city !== undefined) setCity(over.city);
-    if (over.type !== undefined) setType(over.type);
-    if (over.tier !== undefined) setTier(over.tier);
-    setSelected(new Set());
-    if (query) runSearch({ parsed: query, over });
-  };
-
-  // Areas and price are buy-box CRITERIA, so they edit the query itself —
-  // same object the AI fills in and the chips display.
-  const applyAreas = (text) => {
-    const areas = text.split(",").map((a) => a.trim()).filter(Boolean);
-    editQuery({ ...(query || {}), areas });
-  };
-  const applyPrice = (text) => {
-    // "400k" / "250-400k" / "400000" — one box instead of two, because a deal
-    // is a price point far more often than a range.
-    const nums = text.match(/[\d.]+\s*[kKmM]?/g) || [];
-    const parse = (t) => {
-      const n = parseFloat(t);
-      if (!Number.isFinite(n)) return null;
-      return /[kK]/.test(t) ? n * 1e3 : /[mM]/.test(t) ? n * 1e6 : n;
-    };
-    const vals = nums.map(parse).filter((n) => n != null);
-    if (!vals.length) return editQuery({ ...(query || {}), priceMin: null, priceMax: null });
-    if (vals.length === 1) return editQuery({ ...(query || {}), priceMin: null, priceMax: vals[0] });
-    editQuery({ ...(query || {}), priceMin: Math.min(...vals), priceMax: Math.max(...vals) });
-  };
-
-  // Editing a chip or a filter control mutates the query and re-filters —
-  // never a second AI call.
-  const editQuery = (next) => {
-    const q = normalizeQuery(next);
-    if (queryIsEmpty(q)) return clearSearch();
-    runSearch({ parsed: q });
-  };
-
-  const investors = data?.investors || [];
-  const byId = useMemo(
-    () => new Map(investors.map((i) => [i.contactId, i])),
-    [investors]
+  // Every row carries its relationship from the server; a row from before the
+  // server learned to send it is worked out here the same way.
+  const investors = useMemo(
+    () => (data?.investors || []).map((i) => ({ ...i, relationship: i.relationship || relationshipOf(i) })),
+    [data]
   );
+  const byId = useMemo(() => new Map(investors.map((i) => [i.contactId, i])), [investors]);
 
-  // What the table shows: search results when a search is live, else the book.
-  // The book-level filters are applied server-side during a search and here
-  // when browsing, so the two views agree about who's in scope.
-  const rows = useMemo(() => {
-    let base;
-    if (ranking?.results) {
-      // Ranked for a deal: the rank order is the point, filters still narrow it.
-      base = ranking.results.map((r) => ({ ...byId.get(r.contactId), ...r })).filter((i) => i.name !== undefined && i.status !== "archived");
-      if (excludeOnDeal) base = base.filter((i) => !i.onLiveDeal);
-      if (region) base = base.filter((i) => i.markets?.regions?.includes(region));
-      if (city) base = base.filter((i) => i.markets?.cities?.includes(city));
-      if (type) base = base.filter((i) => i.markets?.types?.includes(type));
-    } else if (search?.results) {
-      base = search.results.map((r) => ({ ...byId.get(r.contactId), ...r }));
-    } else {
-      base = investors.filter((i) => i.status !== "archived");
-      if (excludeOnDeal) base = base.filter((i) => !i.onLiveDeal);
-      if (buyboxStatus === "documented") base = base.filter((i) => !buyboxIsEmpty(i.buybox));
-      if (buyboxStatus === "missing") base = base.filter((i) => buyboxIsEmpty(i.buybox));
-      if (replyStatus !== "all") base = base.filter((i) => replyState(i) === replyStatus);
-      if (region) base = base.filter((i) => i.markets?.regions?.includes(region));
-      if (city) base = base.filter((i) => i.markets?.cities?.includes(city));
-      if (type) base = base.filter((i) => i.markets?.types?.includes(type));
+  const whoCounts = useMemo(() => {
+    const c = { all: 0 };
+    for (const i of investors) {
+      if (i.status === "archived") continue;
+      c[i.relationship] = (c[i.relationship] || 0) + 1;
+      if (i.relationship !== "opted_out") c.all++;
     }
+    return c;
+  }, [investors]);
+
+  // Everything but the relationship filter, so each tab's count can say what
+  // it would show with the other filters as they are.
+  const filtered = useMemo(() => {
+    let base = ranking?.results
+      ? ranking.results.map((r) => ({ ...byId.get(r.contactId), ...r })).filter((i) => i.name !== undefined)
+      : investors;
+    base = base.filter((i) => i.status !== "archived");
+    if (excludeOnDeal) base = base.filter((i) => !i.onLiveDeal);
+    if (buyboxStatus === "documented") base = base.filter((i) => !buyboxIsEmpty(i.buybox));
+    if (buyboxStatus === "missing") base = base.filter((i) => buyboxIsEmpty(i.buybox));
+    if (region) base = base.filter((i) => i.markets?.regions?.includes(region));
+    if (city) base = base.filter((i) => i.markets?.cities?.includes(city));
+    if (type) base = base.filter((i) => i.markets?.types?.includes(type));
     if (tier) base = base.filter((i) => i.tier === tier);
-    const needle = nameFilter.trim().toLowerCase();
-    if (needle) {
-      base = base.filter((i) =>
-        `${i.name || ""} ${i.buybox?.areasRaw || ""} ${(i.markets?.cities || []).join(" ")}`.toLowerCase().includes(needle)
-      );
+    if (text.trim()) base = base.filter((i) => matchesText(i, text));
+    return base;
+  }, [ranking, investors, byId, excludeOnDeal, buyboxStatus, region, city, type, tier, text]);
+
+  const shownCounts = useMemo(() => {
+    const c = { all: 0 };
+    for (const i of filtered) {
+      c[i.relationship] = (c[i.relationship] || 0) + 1;
+      if (i.relationship !== "opted_out") c.all++;
     }
-    if (!sort) return base;
-    const val = SORTS[sort.key];
-    const dir = sort.dir === "asc" ? 1 : -1;
+    return c;
+  }, [filtered]);
+
+  const rows = useMemo(() => {
+    const base = who === "all" ? filtered.filter((i) => i.relationship !== "opted_out") : filtered.filter((i) => i.relationship === who);
+    // Ranked for a deal: the rank order is the point unless you pick a column.
+    const s = sort || (ranking?.results ? null : { key: "reply", dir: "desc" });
+    if (!s) return base;
+    const val = SORTS[s.key];
+    const dir = s.dir === "asc" ? 1 : -1;
     return [...base].sort((a, b) => {
       const va = val(a), vb = val(b);
       const ea = va === "" || va === 0, eb = vb === "" || vb === 0;
       if (ea !== eb) return ea ? 1 : -1; // empties last either way
       return (va < vb ? -1 : va > vb ? 1 : 0) * dir;
     });
-  }, [search, ranking, investors, byId, nameFilter, excludeOnDeal, buyboxStatus, replyStatus, region, city, type, tier, sort]);
+  }, [filtered, who, sort, ranking]);
 
   // Cities under the chosen region, with how many investors bought there.
   const regionCities = useMemo(() => {
@@ -621,7 +556,6 @@ export default function Dispositions() {
       .sort((a, b) => b[1] - a[1]);
   }, [region, data]);
 
-  const chips = query ? queryChips(query) : [];
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.contactId));
   const toggleAll = () =>
     setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.contactId)));
@@ -686,35 +620,33 @@ export default function Dispositions() {
   const onBuyboxSaved = async (next, changed) => {
     setSyncMsg({ ok: true, text: `Updated ${changed.length} field${changed.length === 1 ? "" : "s"} on ${next.name || "this investor"} in GoHighLevel.` });
     await refresh();
-    if (query) await runSearch({ parsed: query });
   };
 
   if (error) return <ErrorBar>{error}</ErrorBar>;
   if (!data) return <Spinner />;
 
+  const cols = 8 + (ranking?.results ? 1 : 0);
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* ---- header ---- */}
       <div className="flex flex-wrap items-center gap-3">
         <div>
-          <h2 className="text-sm font-bold text-slate-900">
-            {data.counts.active} investor{data.counts.active === 1 ? "" : "s"}
-            {data.counts.total > data.counts.active && (
-              <span className="font-normal text-slate-500"> · {data.counts.total - data.counts.active} archived</span>
-            )}
-          </h2>
+          <h2 className="text-base font-bold text-slate-900">Buyers</h2>
           <p className="text-xs text-slate-500">
-            Synced {fmtAgo(data.syncedAt)} from tags {data.tags.map((t) => `"${t}"`).join(", ")}
-            {data.counts.needsBuybox > 0 && (
-              <> · <span className="font-semibold text-amber-700">{data.counts.needsBuybox} with no buy box</span></>
-            )}
+            {data.counts.active.toLocaleString()} in the book · synced {fmtAgo(data.syncedAt)}
+            {data.counts.total > data.counts.active && <> · {data.counts.total - data.counts.active} archived</>}
           </p>
         </div>
-        <button type="button" onClick={doSync} disabled={syncing}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">
-          {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-          Sync from GoHighLevel
-        </button>
+        <div className="ml-auto flex gap-2">
+          <button type="button" onClick={() => setShowInsights((v) => !v)} aria-expanded={showInsights} className={BTN}>
+            <MapIcon size={13} /> {showInsights ? "Hide map" : "Map & charts"}
+          </button>
+          <button type="button" onClick={doSync} disabled={syncing} className={BTN}
+            title="Re-read every investor-tagged contact from GoHighLevel, with how much each has talked to us. Runs nightly too.">
+            {syncing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Sync
+          </button>
+        </div>
       </div>
 
       {syncMsg && (
@@ -728,187 +660,101 @@ export default function Dispositions() {
         </div>
       )}
 
-      {/* ---- search ---- */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4">
-        <form onSubmit={(e) => { e.preventDefault(); if (question.trim()) runSearch({ text: question.trim() }); }}>
-          <label className={LABEL_CLS}>Find a buyer</label>
-          <div className="flex flex-wrap gap-2">
-            <div className="flex min-w-[18rem] flex-1 items-center gap-2 rounded-lg border border-slate-300 px-3 py-2">
-              <Search size={14} className="shrink-0 text-slate-400" />
-              <input value={question} onChange={(e) => setQuestion(e.target.value)}
-                placeholder="cash buyers for a gut-job duplex in Tacoma under 400k"
-                className="w-full text-sm focus:outline-none" />
-              {question && (
-                <button type="button" onClick={clearSearch} className="rounded p-0.5 text-slate-400 hover:bg-slate-100">
-                  <X size={13} />
-                </button>
-              )}
-            </div>
-            <button type="submit" disabled={!question.trim() || search?.busy}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40">
-              {search?.busy ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />} Search
+      {/* ---- who: the relationship tabs ---- */}
+      <div role="tablist" aria-label="Relationship" className="flex flex-wrap gap-1 border-b border-slate-200">
+        {WHO_KEYS.map((k) => {
+          const on = who === k;
+          const n = shownCounts[k] || 0;
+          if (k === "opted_out" && !whoCounts.opted_out) return null;
+          return (
+            <button key={k} type="button" role="tab" aria-selected={on} onClick={() => pickWho(k)}
+              title={RELATIONSHIPS[k]?.hint || "Everyone who hasn't opted out"}
+              className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold transition-colors ${
+                on ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-800"} ${k === "opted_out" ? "ml-auto font-normal" : ""}`}>
+              {k === "all" ? "Everyone" : RELATIONSHIPS[k].label}
+              <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[11px] tabular-nums ${on ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-500"}`}>
+                {n.toLocaleString()}
+              </span>
             </button>
-          </div>
-        </form>
+          );
+        })}
+      </div>
 
-        {/* what the AI understood — every chip removable, no re-parse */}
-        {chips.length > 0 && (
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            <span className="text-xs text-slate-500">Matching on</span>
-            {chips.map((chip) => (
-              <button key={`${chip.field}:${chip.value}`} type="button"
-                onClick={() => editQuery(removeChip(query, chip))}
-                title="Remove this criterion"
-                className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800 hover:bg-blue-100">
-                {chip.label} <X size={11} />
-              </button>
-            ))}
-            <button type="button" onClick={clearSearch}
-              className="ml-1 text-xs font-semibold text-slate-500 hover:text-slate-700">Clear</button>
-          </div>
+      {/* ---- search + filters ---- */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex min-w-[16rem] flex-1 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 focus-within:border-blue-500">
+          <Search size={14} className="shrink-0 text-slate-400" />
+          <input value={text} onChange={(e) => { setText(e.target.value); setSelected(new Set()); }}
+            placeholder="Search name, email, phone, city, tag…" aria-label="Search buyers"
+            className="w-full text-sm focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0" />
+          {text && (
+            <button type="button" onClick={() => setText("")} aria-label="Clear search" className="rounded p-0.5 text-slate-400 hover:bg-slate-100">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        <select value={region} onChange={(e) => { setRegion(e.target.value); setCity(""); setSelected(new Set()); }} className={SELECT_CLS} aria-label="Region">
+          <option value="">Any region</option>
+          {REGION_KEYS.filter((k) => data.counts.regions?.[k]).map((k) => (
+            <option key={k} value={k}>{REGIONS[k].label} ({data.counts.regions[k]})</option>
+          ))}
+        </select>
+        {regionCities.length > 1 && (
+          <select value={city} onChange={(e) => { setCity(e.target.value); setSelected(new Set()); }} className={SELECT_CLS} aria-label="City">
+            <option value="">Any city</option>
+            {regionCities.map(([c, n]) => <option key={c} value={c}>{cityLabel(c)} ({n})</option>)}
+          </select>
         )}
-
-        {/* buy-box criteria you can set by hand — no AI key needed */}
-        <div className="mt-3 grid gap-2 border-t border-slate-100 pt-3 sm:grid-cols-2">
-          <div>
-            <label className={LABEL_CLS}>Areas they buy in</label>
-            <input className={INPUT_CLS} value={areaText}
-              onChange={(e) => setAreaText(e.target.value)}
-              onBlur={(e) => applyAreas(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyAreas(e.target.value); } }}
-              placeholder="Tacoma, 98444 — matches their buy box areas" />
-          </div>
-          <div>
-            <label className={LABEL_CLS}>Deal price</label>
-            <input className={INPUT_CLS} value={priceText}
-              onChange={(e) => setPriceText(e.target.value)}
-              onBlur={(e) => applyPrice(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyPrice(e.target.value); } }}
-              placeholder="400k, or 250-400k — overlaps their price band" />
-          </div>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-slate-500">Or filter:</span>
-          {PROPERTY_TYPES.map((t) => {
-            const on = query?.propertyTypes?.includes(t);
-            return (
-              <button key={t} type="button"
-                onClick={() => editQuery({
-                  ...(query || {}),
-                  propertyTypes: on
-                    ? query.propertyTypes.filter((x) => x !== t)
-                    : [...(query?.propertyTypes || []), t],
-                })}
-                className={`${PILL_CLS} ${on ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
-                {PROPERTY_TYPE_LABELS[t]}
-              </button>
-            );
-          })}
-          <span className="mx-1 h-4 w-px bg-slate-200" />
-          {REHAB_APPETITES.map((r) => {
-            const on = query?.rehabAppetite === r;
-            return (
-              <button key={r} type="button"
-                onClick={() => editQuery({ ...(query || {}), rehabAppetite: on ? null : r })}
-                className={`${PILL_CLS} ${on ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
-                {REHAB_APPETITE_LABELS[r]}
-              </button>
-            );
-          })}
-          <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-600"
-            title="Strict drops investors whose buy box is silent on something you asked for. Loose (the default) keeps them — a blank field means nobody has asked them yet, not that they said no.">
-            <input type="checkbox" checked={strict}
-              onChange={(e) => { setStrict(e.target.checked); if (query) runSearch({ parsed: query }); }} />
-            Only documented fits
-          </label>
-        </div>
-
-        {/* who to consider at all — separate from whether their buy box fits */}
-        <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3">
-          <span className="text-xs text-slate-500">Who to include:</span>
-          <div className="flex overflow-hidden rounded-lg border border-slate-300">
-            {[
-              ["all", `Everyone${data ? ` (${data.counts.active})` : ""}`],
-              ["documented", `Has a buy box${data ? ` (${data.counts.documented ?? 0})` : ""}`],
-              ["missing", `Needs one${data ? ` (${data.counts.needsBuybox})` : ""}`],
-            ].map(([key, label]) => (
-              <button key={key} type="button" onClick={() => setBookFilter({ buyboxStatus: key })}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  buyboxStatus === key ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="flex overflow-hidden rounded-lg border border-slate-300">
-            {[
-              ["all", "Any reply state"],
-              ["replied", `Ever replied${data?.counts.replied != null ? ` (${data.counts.replied})` : ""}`],
-              ["awaiting", `Never replied${data?.counts.awaiting != null ? ` (${data.counts.awaiting})` : ""}`],
-              ["never", `Never contacted${data?.counts.neverContacted != null ? ` (${data.counts.neverContacted})` : ""}`],
-            ].map(([key, label]) => (
-              <button key={key} type="button" onClick={() => setBookFilter({ replyStatus: key })}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  replyStatus === key ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
-                {label}
-              </button>
-            ))}
-          </div>
-          <label className="flex items-center gap-1.5 text-xs text-slate-600"
-            title="Hides investors already linked to a deal that is still live. Someone who passed on a deal stays in — they're free for the next one.">
-            <input type="checkbox" checked={excludeOnDeal}
-              onChange={(e) => setBookFilter({ excludeOnDeal: e.target.checked })} />
-            Not already on a live deal{data?.counts.onLiveDeal ? ` (${data.counts.onLiveDeal} are)` : ""}
-          </label>
-        </div>
-
-        {search?.error && (
-          <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{search.error}</div>
-        )}
-        {search?.results && (
-          <p className="mt-3 text-xs text-slate-500">
-            <span className="font-semibold text-slate-700">{search.documented}</span> documented fit
-            {search.documented === 1 ? "" : "s"} out of {search.scanned} considered
-            {search.rankedByAi > 0
-              ? " — ranked by AI."
-              : " — ordered by how many criteria matched (add an Anthropic key in Settings for AI ranking and reasons)."}
-            {search.truncated && ` Showing the top ${search.shortlisted}.`}
-            {search.undocumented > 0 && (
-              <> {search.undocumented} more have no buy box on file and sit at the bottom —
-                they aren't ruled out, nobody has asked them yet.</>
-            )}
-            {(search.warnings || []).map((w, i) => (
-              <span key={i} className="ml-1 text-amber-800">{w}</span>
-            ))}
-          </p>
+        <select value={type} onChange={(e) => { setType(e.target.value); setSelected(new Set()); }} className={SELECT_CLS} aria-label="What they buy">
+          <option value="">Any strategy</option>
+          {Object.entries(STRATEGIES).map(([k, label]) => (
+            <option key={k} value={k}>{label} ({data.counts.types?.[k] || 0})</option>
+          ))}
+        </select>
+        <select value={tier} onChange={(e) => { setTier(e.target.value); setSelected(new Set()); }} className={SELECT_CLS} aria-label="Tier">
+          <option value="">Any tier</option>
+          {["vip", "active", "cold"].map((k) => <option key={k} value={k}>{TIERS[k]} ({data.counts.tiers?.[k] || 0})</option>)}
+        </select>
+        <select value={buyboxStatus} onChange={(e) => { setBuyboxStatus(e.target.value); setSelected(new Set()); }} className={SELECT_CLS} aria-label="Buy box">
+          <option value="">Buy box: any</option>
+          <option value="documented">Has a buy box</option>
+          <option value="missing">No buy box yet</option>
+        </select>
+        <label className="flex items-center gap-1.5 text-xs text-slate-600"
+          title="Hides investors already linked to a deal that is still live. Someone who passed on a deal stays in — they're free for the next one.">
+          <input type="checkbox" checked={excludeOnDeal} onChange={(e) => { setExcludeOnDeal(e.target.checked); setSelected(new Set()); }} />
+          Not on a live deal
+        </label>
+        {filtersOn && (
+          <button type="button" onClick={clearFilters} className="text-xs font-semibold text-slate-500 hover:text-slate-800">Clear filters</button>
         )}
       </div>
 
-      {/* ---- match a deal: every buyer ranked against one live deal ---- */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className={LABEL_CLS + " mb-0 mr-1"}>Rank buyers for a deal</span>
-          <select value={dealId} onChange={(e) => pickDeal(e.target.value)}
-            className="min-w-[16rem] rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm">
+      {/* ---- rank for a deal ---- */}
+      {deals.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
+          <span className="text-xs font-semibold text-slate-600">Rank for a deal</span>
+          <select value={dealId} onChange={(e) => pickDeal(e.target.value)} className={SELECT_CLS + " py-1.5"} aria-label="Rank for a deal">
             <option value="">— pick a live deal —</option>
             {deals.map((o) => (
               <option key={o.id} value={o.id}>{(o.address || "").split(",").slice(0, 2).join(",")} · {String(o.deal?.stage || "").replace(/_/g, " ")}</option>
             ))}
           </select>
           {ranking?.busy && <Loader2 size={14} className="animate-spin text-slate-400" />}
+          {ranking?.error && <span className="text-xs text-red-700">{ranking.error}</span>}
           {ranking?.results && (
             <>
               <span className="text-xs text-slate-500">
                 {ranking.deal.city ? cityLabel(ranking.deal.city) : "no city"}{ranking.deal.region ? ` · ${REGIONS[ranking.deal.region]?.label}` : ""}
-                {ranking.deal.price ? ` · buyer price ~$${Math.round(ranking.deal.price / 1000)}k` : ""} · {ranking.considered} buyers ranked
+                {ranking.deal.price ? ` · buyer price ~$${Math.round(ranking.deal.price / 1000)}k` : ""}
               </span>
               <div className="ml-auto flex gap-1.5">
-                <button type="button" className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                <button type="button" className={BTN}
                   onClick={() => setSelected(new Set(rows.filter((r) => r.tier === "vip" && r.rank >= 50 && !r.alreadyBlasted).map((r) => r.contactId)))}
                   title="VIP buyers with a match score of 50+ who haven't been sent this deal — the first wave">
                   Select VIP wave
                 </button>
-                <button type="button" className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                <button type="button" className={BTN}
                   onClick={() => setSelected(new Set(rows.filter((r) => !r.alreadyBlasted).slice(0, 25).map((r) => r.contactId)))}>
                   Select top 25
                 </button>
@@ -917,89 +763,25 @@ export default function Dispositions() {
             </>
           )}
         </div>
-        {ranking?.error && <div className="mt-2 text-sm text-red-700">{ranking.error}</div>}
-        {!deals.length && <p className="mt-1 text-xs text-slate-500">No live deals right now — promote an offer to a deal to rank buyers for it.</p>}
-      </div>
-
-      {/* ---- market: where they buy and how ---- */}
-      {Object.keys(data.counts.regions || {}).length > 0 && (
-        <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className={LABEL_CLS + " mb-0 mr-1"}>Tier</span>
-            {["", "vip", "active", "cold"].map((k) => (
-              <button key={k || "all"} type="button" onClick={() => setBookFilter({ tier: k })}
-                title={k === "vip" ? "Committed on a deal before, or scores 65+" : k === "active" ? "Scores 40+, or replied in the last 3 months" : k === "cold" ? "Everyone else — including buyers who ignored 3+ blasts" : ""}
-                className={`${PILL_CLS} ${tier === k ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
-                {k ? TIERS[k] : "All tiers"}{k && data.counts.tiers?.[k] != null ? <span className="opacity-70"> {data.counts.tiers[k]}</span> : null}
-              </button>
-            ))}
-            <button type="button" onClick={() => setShowInsights((v) => !v)} aria-expanded={showInsights}
-              className="ml-auto rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-              {showInsights ? "Hide map & charts" : "Map & charts"}
-            </button>
-          </div>
-          {showInsights && (
-            <div className="space-y-3 border-t border-slate-100 pt-3">
-              {insights?.error && <div className="text-sm text-red-700">{insights.error}</div>}
-              {!insights && <Loader2 size={14} className="animate-spin text-slate-400" />}
-              {insights && !insights.error && (
-                <>
-                  <p className="text-xs text-slate-500">
-                    {insights.investors} investors · {insights.purchases} properties financed
-                    {insights.purchases === 0 ? " — run the retag script with --record to load purchase history" : ""}
-                  </p>
-                  <div className="grid gap-3 xl:grid-cols-[3fr_2fr]">
-                    <BuyerMap points={insights.cityPoints} deal={ranking?.deal} selectedCity={city}
-                      onPickCity={(c) => setBookFilter({ city: c, region: c ? regionFor(c.replace(/-/g, " ")) || region : region })} />
-                    <DispoCharts insights={insights} region={region} onPickRegion={(r) => setBookFilter({ region: r, city: "" })} />
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
       )}
 
-      {Object.keys(data.counts.regions || {}).length > 0 && (
-        <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className={LABEL_CLS + " mb-0 mr-1"}>Where they buy</span>
-            <button type="button" onClick={() => setBookFilter({ region: "", city: "" })}
-              className={`${PILL_CLS} ${!region ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
-              Everywhere
-            </button>
-            {REGION_KEYS.filter((k) => data.counts.regions[k]).map((k) => (
-              <button key={k} type="button" onClick={() => setBookFilter({ region: region === k ? "" : k, city: "" })}
-                className={`${PILL_CLS} ${region === k ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
-                {REGIONS[k].label} <span className="opacity-70">{data.counts.regions[k]}</span>
-              </button>
-            ))}
-          </div>
-          {regionCities.length > 1 && (
-            <div className="flex flex-wrap items-center gap-1.5 pl-2">
-              <span className="text-xs text-slate-500">City:</span>
-              {regionCities.map(([c, n]) => (
-                <button key={c} type="button" onClick={() => setBookFilter({ city: city === c ? "" : c })}
-                  className={`${PILL_CLS} ${city === c ? "bg-blue-600 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"}`}>
-                  {cityLabel(c)} <span className="opacity-70">{n}</span>
-                </button>
-              ))}
-            </div>
+      {/* ---- map & charts ---- */}
+      {showInsights && (
+        <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+          {insights?.error && <div className="text-sm text-red-700">{insights.error}</div>}
+          {!insights && <Loader2 size={14} className="animate-spin text-slate-400" />}
+          {insights && !insights.error && (
+            <>
+              <p className="text-xs text-slate-500">
+                {insights.investors} investors · {insights.purchases} properties financed
+              </p>
+              <div className="grid gap-3 xl:grid-cols-[3fr_2fr]">
+                <BuyerMap points={insights.cityPoints} deal={ranking?.deal} selectedCity={city}
+                  onPickCity={(c) => { setCity(c); if (c) setRegion(regionFor(c.replace(/-/g, " ")) || region); }} />
+                <DispoCharts insights={insights} region={region} onPickRegion={(r) => { setRegion(r); setCity(""); }} />
+              </div>
+            </>
           )}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className={LABEL_CLS + " mb-0 mr-1"}>What they do</span>
-            {Object.entries(STRATEGIES).map(([k, label]) => (
-              <button key={k} type="button" onClick={() => setBookFilter({ type: type === k ? "" : k })}
-                className={`${PILL_CLS} ${type === k ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
-                {label} <span className="opacity-70">{data.counts.types?.[k] || 0}</span>
-              </button>
-            ))}
-            {(region || city || type) && (
-              <span className="ml-auto text-xs text-slate-500">
-                {rows.length} investor{rows.length === 1 ? "" : "s"} — select all shown to blast them
-              </span>
-            )}
-          </div>
         </div>
       )}
 
@@ -1069,46 +851,29 @@ export default function Dispositions() {
       )}
 
       {/* ---- table ---- */}
-      <div className="flex items-center gap-2">
-        <div className="flex min-w-[14rem] items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5">
-          <Search size={14} className="text-slate-400" />
-          <input value={nameFilter} onChange={(e) => setNameFilter(e.target.value)} placeholder="Filter by name or area…"
-            className="w-full text-sm focus:outline-none" />
-          {nameFilter && (
-            <button type="button" onClick={() => setNameFilter("")} className="rounded p-0.5 text-slate-400 hover:bg-slate-100">
-              <X size={13} />
-            </button>
-          )}
-        </div>
-      </div>
-
       {rows.length === 0 ? (
-        <EmptyState>
-          {search?.results
-            ? "No investor's buy box fits that. Try removing a criterion above, or sync if your book looks stale."
-            : investors.length === 0
-              ? "No investors yet — Sync from GoHighLevel to pull in every contact carrying your investor tags."
-              : "No investors match that filter."}
+        <EmptyState action={filtersOn ? <button type="button" className={BTN} onClick={clearFilters}>Clear filters</button> : null}>
+          {investors.length === 0
+            ? "No investors yet — Sync to pull in every contact carrying your investor tags."
+            : who === "talking" && !filtersOn
+              ? "Nobody here yet. Once the next sync counts replies and calls, everyone you've had a real back-and-forth with lands on this tab."
+              : "Nobody matches that."}
         </EmptyState>
       ) : (
         <TableCard>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                <th className="px-3 py-2.5">
-                  <input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all shown" />
+                <th className="w-8 px-3 py-2.5">
+                  <input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all shown" aria-label="Select all shown" />
                 </th>
-                <SortTh label="Investor" sortKey="name" sort={sort} onSort={onSort} />
+                <SortTh label="Buyer" sortKey="name" sort={sort} onSort={onSort} />
                 {ranking?.results && <SortTh label="Match" sortKey="match" sort={sort} onSort={onSort} />}
-                <SortTh label="Score" sortKey="score" sort={sort} onSort={onSort} />
+                <SortTh label="Last heard from" sortKey="reply" sort={sort} onSort={onSort} />
                 <SortTh label="Market" sortKey="region" sort={sort} onSort={onSort} />
-                <th className="px-4 py-2.5">Does</th>
-                <SortTh label="Last flip" sortKey="lastFlip" sort={sort} onSort={onSort} />
-                <SortTh label="Largest loan" sortKey="largest" sort={sort} onSort={onSort} />
-                <th className="px-4 py-2.5">Price band</th>
-                <SortTh label="Response" sortKey="reply" sort={sort} onSort={onSort} />
+                <th className="px-4 py-2.5">Buys</th>
+                <SortTh label="Score" sortKey="score" sort={sort} onSort={onSort} />
                 <SortTh label="Blasted" sortKey="blasted" sort={sort} onSort={onSort} />
-                {search?.results && <th className="px-4 py-2.5">Fit</th>}
                 <th className="sticky right-0 bg-white px-4 py-2.5" />
               </tr>
             </thead>
@@ -1116,33 +881,29 @@ export default function Dispositions() {
               {rows.map((inv) => {
                 const b = inv.buybox || {};
                 const open = expanded === inv.contactId;
+                const m = inv.markets || {};
+                const cities = (m.cities || []).map(cityLabel);
+                const regionText = (m.regions || []).map((r) => REGIONS[r]?.label || r).join(", ");
                 return (
                   <React.Fragment key={inv.contactId}>
                     <tr className="group border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                      <td className="px-3 py-2.5">
-                        <input type="checkbox" checked={selected.has(inv.contactId)}
+                      <td className="px-3 py-2.5 align-top">
+                        <input type="checkbox" checked={selected.has(inv.contactId)} aria-label={`Select ${inv.name || "buyer"}`}
                           onChange={() => toggle(inv.contactId)} onClick={(e) => e.stopPropagation()} />
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td className="max-w-[16rem] px-4 py-2.5 align-top">
                         <button type="button" onClick={() => setExpanded(open ? "" : inv.contactId)}
                           className="text-left font-semibold text-slate-900 hover:text-blue-700">
                           {inv.name || "Unnamed"}
                         </button>
-                        {buyboxIsEmpty(b) && (
-                          <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">
-                            no buy box
-                          </span>
-                        )}
                         {inv.onLiveDeal && (
-                          <span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] font-semibold text-blue-800"
-                            title="Already linked to a deal that's still in flight">
-                            on a deal
-                          </span>
+                          <span className="ml-1.5 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] font-semibold text-blue-800"
+                            title="Already linked to a deal that's still in flight">on a deal</span>
                         )}
-                        {inv.reason && <div className="mt-0.5 text-xs text-slate-600">{inv.reason}</div>}
+                        <div className="truncate text-xs text-slate-500">{[inv.email, fmtPhone(inv.phone)].filter(Boolean).join(" · ") || "—"}</div>
                       </td>
                       {ranking?.results && (
-                        <td className="max-w-[14rem] px-4 py-2.5">
+                        <td className="max-w-[14rem] px-4 py-2.5 align-top">
                           <div className="flex items-center gap-1.5">
                             <span className="w-8 tabular-nums font-semibold text-slate-900">{inv.rank}</span>
                             <span className="h-1.5 w-16 overflow-hidden rounded bg-slate-100"><span className="block h-full rounded bg-blue-600" style={{ width: `${inv.rank}%` }} /></span>
@@ -1154,44 +915,45 @@ export default function Dispositions() {
                           </div>
                         </td>
                       )}
-                      <td className="px-4 py-2.5"><TierBadge inv={inv} /></td>
-                      <td className="max-w-[16rem] px-4 py-2.5 text-slate-700">
-                        {(() => {
-                          const m = inv.markets || {};
-                          const cities = (m.cities || []).map(cityLabel);
-                          const regionText = (m.regions || []).map((r) => REGIONS[r]?.label || r).join(", ");
-                          if (!regionText && !cities.length && !m.states?.length) {
-                            return <span className="truncate" title={b.areasRaw || ""}>{b.areasRaw || "—"}</span>;
-                          }
-                          return (
-                            <div className="truncate" title={[cities.join(", "), (m.states || []).join(", "), b.areasRaw].filter(Boolean).join(" · ")}>
-                              <span className="font-medium text-slate-900">{regionText || (m.states || []).join(", ")}</span>
-                              {cities.length > 0 && <span className="text-xs text-slate-500"> · {cities.slice(0, 3).join(", ")}{cities.length > 3 ? ` +${cities.length - 3}` : ""}</span>}
-                            </div>
-                          );
-                        })()}
+                      <td className="px-4 py-2.5 align-top"><RelationshipCell inv={inv} /></td>
+                      <td className="max-w-[14rem] px-4 py-2.5 align-top text-slate-700">
+                        {!regionText && !cities.length && !m.states?.length ? (
+                          <span className="block truncate text-slate-500" title={b.areasRaw || ""}>{b.areasRaw || "—"}</span>
+                        ) : (
+                          <>
+                            <div className="truncate font-medium text-slate-900">{regionText || (m.states || []).join(", ")}</div>
+                            {cities.length > 0 && (
+                              <div className="truncate text-xs text-slate-500" title={cities.join(", ")}>
+                                {cities.slice(0, 3).join(", ")}{cities.length > 3 ? ` +${cities.length - 3}` : ""}
+                              </div>
+                            )}
+                          </>
+                        )}
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-slate-700">
-                        {(inv.markets?.types || []).map((t) => STRATEGIES[t]).join(", ") || "—"}
+                      <td className="max-w-[14rem] px-4 py-2.5 align-top">
+                        <div className="truncate text-slate-900">
+                          {(m.types || []).map((t) => STRATEGIES[t] || t).join(", ") || <span className="text-slate-400">—</span>}
+                          {priceBandText(b) && <span className="ml-1.5 font-semibold tabular-nums">{priceBandText(b)}</span>}
+                        </div>
+                        <div className="truncate text-xs text-slate-500" title={(inv.flips?.lenders || []).join(", ")}>
+                          {buyboxIsEmpty(b)
+                            ? <span className="text-amber-700">no buy box</span>
+                            : [
+                              (b.propertyTypes || []).map((t) => PROPERTY_TYPE_LABELS[t]).join(", "),
+                              b.rehabAppetite ? REHAB_APPETITE_LABELS[b.rehabAppetite] : "",
+                              b.exclusions,
+                            ].filter(Boolean).join(" · ") || b.areasRaw}
+                          {inv.flips && <> · last loan {fmtMonth(inv.flips.lastAt)}{inv.flips.count > 1 ? ` (${inv.flips.count})` : ""}</>}
+                        </div>
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-slate-700" title={inv.flips?.lastAddress || ""}>
-                        {inv.flips ? <>{fmtMonth(inv.flips.lastAt)}{inv.flips.count > 1 && <span className="text-slate-500"> · {inv.flips.count} loans</span>}</> : "—"}
-                      </td>
-                      <td className="px-4 py-2.5 tabular-nums text-slate-700" title={(inv.flips?.lenders || []).join(", ")}>
-                        {fmtMoneyShort(inv.flips?.largest)}
-                      </td>
-                      <td className="px-4 py-2.5 font-semibold tabular-nums text-slate-900">{priceBandText(b) || "—"}</td>
-                      <td className="px-4 py-2.5"><ReplyBadge investor={inv} /></td>
-                      <td className="px-4 py-2.5 text-xs text-slate-500">{inv.lastBlastAt ? fmtAgo(inv.lastBlastAt) : "—"}</td>
-                      {search?.results && (
-                        <td className="px-4 py-2.5"><FitBadge fit={inv.fit} score={inv.score} /></td>
-                      )}
-                      <td className="sticky right-0 bg-white px-4 py-2.5 group-hover:bg-slate-50">
+                      <td className="px-4 py-2.5 align-top"><TierBadge inv={inv} /></td>
+                      <td className="px-4 py-2.5 align-top text-xs text-slate-500">{inv.lastBlastAt ? fmtAgo(inv.lastBlastAt) : "—"}</td>
+                      <td className="sticky right-0 bg-white px-4 py-2.5 align-top group-hover:bg-slate-50">
                         <div className="flex items-center justify-end gap-2">
                           <ContactLink contactId={inv.contactId} party="investor" iconOnly stopPropagation title="Their full record">
                             <Eye size={14} />
                           </ContactLink>
-                          <button type="button" onClick={() => setExpanded(open ? "" : inv.contactId)}
+                          <button type="button" onClick={() => setExpanded(open ? "" : inv.contactId)} aria-label={open ? "Collapse" : "Expand"}
                             className="text-slate-400 hover:text-slate-700">
                             {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                           </button>
@@ -1200,11 +962,11 @@ export default function Dispositions() {
                     </tr>
                     {open && (
                       <tr className="border-b border-slate-100 bg-slate-50 last:border-0">
-                        <td colSpan={11 + (search?.results ? 1 : 0) + (ranking?.results ? 1 : 0)} className="px-4 py-4">
+                        <td colSpan={cols} className="px-4 py-4">
                           <InvestorDetail investor={inv} onSaved={onBuyboxSaved} />
                           <button type="button" onClick={() => archive(inv)}
                             className="mt-3 text-xs font-semibold text-slate-500 hover:text-slate-700">
-                            {inv.status === "archived" ? "Restore to the active book" : "Archive (hide from search)"}
+                            {inv.status === "archived" ? "Restore to the active book" : "Archive (hide from the book)"}
                           </button>
                         </td>
                       </tr>
@@ -1215,6 +977,9 @@ export default function Dispositions() {
             </tbody>
           </table>
         </TableCard>
+      )}
+      {rows.length > 0 && (
+        <p className="text-xs text-slate-400">{rows.length.toLocaleString()} shown</p>
       )}
     </div>
   );

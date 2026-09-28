@@ -851,10 +851,14 @@ const pgStore = {
   // Everything that happened in this location since `since`, oldest first.
   // The per-contact index cannot serve this; contact_events_loc_at_idx can.
   // The investor follow-up ladder and the funnel report are both built on it.
-  async listContactEventsSince(locationId, sinceIso, { types = null, limit = 5000 } = {}) {
+  // `notParty` drops one side's events (a null party is kept) — the buyer
+  // book reads talk events with notParty "agent", so the agents' far larger
+  // share can't fill the limit.
+  async listContactEventsSince(locationId, sinceIso, { types = null, limit = 5000, notParty = null } = {}) {
     const params = [locationId, sinceIso];
     let where = "";
     if (Array.isArray(types) && types.length) { params.push(types); where = ` and type = any($${params.length}::text[])`; }
+    if (notParty) { params.push(notParty); where += ` and (party is null or party <> $${params.length})`; }
     params.push(limit);
     const { rows } = await query(
       `select id, contact_id as "contactId", party, type, at, address, offer_id as "offerId", deal_id as "dealId", source, ref,
@@ -1889,12 +1893,12 @@ const fileStore = (() => {
         .sort((a, b) => String(b.at).localeCompare(String(a.at)) || String(b.createdAt).localeCompare(String(a.createdAt)))
         .slice(0, limit);
     },
-    async listContactEventsSince(locationId, sinceIso, { types = null, limit = 5000 } = {}) {
+    async listContactEventsSince(locationId, sinceIso, { types = null, limit = 5000, notParty = null } = {}) {
       ensure();
       return Object.entries(data.contactEvents)
         .filter(([k]) => k.startsWith(`${locationId}|`))
         .flatMap(([, list]) => list)
-        .filter((e) => e.at >= sinceIso && (!types?.length || types.includes(e.type)))
+        .filter((e) => e.at >= sinceIso && (!types?.length || types.includes(e.type)) && (!notParty || !e.party || e.party !== notParty))
         .sort((a, b) => String(a.at).localeCompare(String(b.at)))
         .slice(0, limit);
     },

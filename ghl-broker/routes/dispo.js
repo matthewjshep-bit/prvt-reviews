@@ -21,6 +21,7 @@ import express from "express";
 import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
 import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
 import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES } from "../shared/buyer-score.js";
+import { relationshipOf, TALK_EVENT_TYPES } from "../shared/talked-to.js";
 import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
 import { purchaseEvents } from "../buyer-import.js";
 import { DISPO_IMPORTS_ENABLED, previewCsv, startImport, getImportJob, publicImportJob, cancelImport } from "../dispo-import.js";
@@ -212,18 +213,24 @@ export default function createDispoRouter({ resolveLocation }) {
     scoreParts: i.scoreParts || null,
     scoreReasons: i.scoreReasons || [],
     engagement: i.engagement || null,
+    talk: i.talk || null,
+    relationship: i.relationship || relationshipOf(i),
   });
 
   // The whole book with what the page ranks on: markets, flips, engagement off
   // the timeline, and the buyer score + tier. One read per event family.
   async function scoredBook(locationId, { status = null } = {}) {
-    const [rows, onDeal, flips, engEvents] = await Promise.all([
+    const since = new Date(Date.now() - 2 * 365 * 86400000).toISOString();
+    const [rows, onDeal, flips, engEvents, talkEvents] = await Promise.all([
       store.listInvestors(locationId, { status }),
       liveDealContactIds(locationId),
       flipsByContact(locationId),
-      store.listContactEventsSince(locationId, new Date(Date.now() - 2 * 365 * 86400000).toISOString(), { types: ENGAGEMENT_TYPES, limit: 20000 }).catch(() => []),
+      store.listContactEventsSince(locationId, since, { types: ENGAGEMENT_TYPES, limit: 20000 }).catch(() => []),
+      // Evidence of a conversation (a logged call, a fact learned from them).
+      // Its own read: the agents' share would otherwise crowd out the blasts.
+      store.listContactEventsSince(locationId, since, { types: TALK_EVENT_TYPES, notParty: "agent", limit: 20000 }).catch(() => []),
     ]);
-    const eng = engagementFromEvents(engEvents);
+    const eng = engagementFromEvents([...engEvents, ...talkEvents]);
     return rows.map((r) => {
       const i = hydrate(r);
       const base = {
@@ -231,7 +238,7 @@ export default function createDispoRouter({ resolveLocation }) {
         flips: flips.get(i.contactId) || null, engagement: eng.get(i.contactId) || null,
       };
       const s = scoreBuyer(base);
-      return { ...base, score: s.score, tier: s.tier, scoreParts: s.parts, scoreReasons: s.reasons };
+      return { ...base, relationship: relationshipOf(base), score: s.score, tier: s.tier, scoreParts: s.parts, scoreReasons: s.reasons };
     });
   }
 
@@ -333,6 +340,7 @@ export default function createDispoRouter({ resolveLocation }) {
           replied: investors.filter((i) => replyState(i) === "replied").length,
           awaiting: investors.filter((i) => replyState(i) === "awaiting").length,
           neverContacted: investors.filter((i) => replyState(i) === "never").length,
+          relationships: tally((i) => [i.relationship]),
           regions: tally((i) => i.markets.regions),
           cities: tally((i) => i.markets.cities),
           types: tally((i) => i.markets.types),
@@ -402,6 +410,9 @@ export default function createDispoRouter({ resolveLocation }) {
           // and "we have never looked" are the same blank — and reusing it
           // means the cache can never warm up.
           scannedAt: r.doc?.inboundScannedAt || "",
+          // Replies and connected calls, counted on the same read. Absent on
+          // rows synced before it existed, which forces one re-read.
+          talk: r.doc?.talk || null,
         },
       ])
     );
@@ -411,6 +422,7 @@ export default function createDispoRouter({ resolveLocation }) {
     // "replied" from "we spoke last".
     let replies = new Map();
     let inbound = new Map();
+    const talk = new Map();
     let scannedConversations = 0;
     // Contacts whose reply state is authoritative after this run.
     const settled = new Set();
@@ -427,24 +439,25 @@ export default function createDispoRouter({ resolveLocation }) {
         const hit = replies.get(c.id);
         if (!hit) continue;
         const prev = known.get(c.id);
-        // Their last message is inbound — they replied, and we know exactly
-        // when, without opening the conversation at all.
-        if (String(hit.direction || "").toLowerCase() === "inbound") {
-          inbound.set(c.id, hit.at);
+        // Established before, and nothing has happened since — the stored
+        // answer still stands, including a stored "no, never replied".
+        if (prev?.scannedAt && prev.talk && prev.lastMessageAt === hit.at) {
+          if (prev.lastRepliedAt) inbound.set(c.id, prev.lastRepliedAt);
+          talk.set(c.id, prev.talk);
           settled.add(c.id);
           continue;
         }
-        // Established before, and nothing has happened since — the stored
-        // answer still stands, including a stored "no, never replied".
-        if (prev?.scannedAt && prev.lastMessageAt === hit.at) {
-          if (prev.lastRepliedAt) inbound.set(c.id, prev.lastRepliedAt);
+        // Their last message is inbound — they replied, and we know exactly
+        // when. The thread is still read, for how much they've said.
+        if (String(hit.direction || "").toLowerCase() === "inbound") {
+          inbound.set(c.id, hit.at);
           settled.add(c.id);
-          continue;
         }
         mine.set(c.id, hit);
       }
       const inb = await lastInboundByContact(client, mine);
-      for (const [cid, at] of inb.lastInbound) inbound.set(cid, at);
+      for (const [cid, at] of inb.lastInbound) if (!inbound.has(cid) || at > inbound.get(cid)) inbound.set(cid, at);
+      for (const [cid, t] of inb.talk || []) talk.set(cid, t);
       for (const cid of mine.keys()) settled.add(cid);
       scannedConversations = inb.scanned;
       if (inb.failures) {
@@ -478,6 +491,7 @@ export default function createDispoRouter({ resolveLocation }) {
         lastMessageDirection: reply?.direction || "",
         lastMessageType: reply?.type || "",
         lastRepliedAt: repliedAt,
+        talk: talk.get(c.id) || known.get(c.id)?.talk || (settled.has(c.id) ? { replies: 0, calls: 0 } : null),
         inboundScannedAt: settled.has(c.id) ? new Date().toISOString() : "",
         lastConvoSummary: custom.last_convo_summary || "",
         lastConvoDate: custom.last_convo_date || "",

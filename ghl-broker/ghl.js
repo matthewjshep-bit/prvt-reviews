@@ -5,6 +5,8 @@
 //   auth    Authorization: Bearer <token>   (Private Integration token works)
 //   version Version: 2021-07-28  (v2 default; conversations uses 2021-04-15)
 
+import { tallyMessages } from "./shared/talked-to.js";
+
 const BASE = "https://services.leadconnectorhq.com";
 const V2 = "2021-07-28";
 const V_CONVERSATIONS = "2021-04-15";
@@ -438,6 +440,10 @@ export async function lastInboundByContact(
   }
 
   const lastInbound = new Map();
+  // Their replies and connected calls on the pages read — the newest 100
+  // messages of each of their few latest threads, which settles "is this a
+  // back-and-forth" long before it runs out.
+  const talk = new Map();
   let failures = 0;
   let cursor = 0;
 
@@ -464,6 +470,9 @@ export async function lastInboundByContact(
         for (let page = 0; page < maxPagesPerConvo; page++) {
           await pause(spacingMs);
           const { messages, lastMessageId: next, nextPage } = await call(conversationId, lastMessageId);
+          const t = tallyMessages(messages);
+          const sum = talk.get(contactId) || { replies: 0, calls: 0 };
+          talk.set(contactId, { replies: sum.replies + t.replies, calls: sum.calls + t.calls });
           for (const m of messages) {
             if (String(m.direction || "").toLowerCase() !== "inbound") continue;
             const ms = Number(m.dateAdded) || new Date(m.dateAdded).getTime();
@@ -484,7 +493,7 @@ export async function lastInboundByContact(
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
 
-  return { lastInbound, scanned: jobs.length, failures };
+  return { lastInbound, talk, scanned: jobs.length, failures };
 }
 
 // Count of contacts carrying a tag, via the filtered contact search. Cheapest
