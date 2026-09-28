@@ -125,6 +125,7 @@ test("the header carries the offer's status menu, Edit offer and Record, and nam
   expect(html).toContain("Change status (currently Sent)");
   expect(html).toContain("Edit offer");
   expect(html).toContain("Record");
+  expect(html).toMatch(/> Call<\/button>/);
   expect(html).toContain("Dana · 12 Elm St");
   expect(html).not.toContain("Offers with");   // one offer: nothing to switch between
 });
@@ -187,6 +188,7 @@ test("a row about no one person says the conversation isn't here", () => {
   const blast = { id: "blast_no_opens:o7", kind: "blast_no_opens", severity: "soon", group: "yours", offerId: "o7", address: "7 Birch Ln, Auburn, WA", title: "Nobody opened it", ops: [{ key: "run_follow_ups", label: "Nudge them" }] };
   const html = render({ actions: [blast] });
   expect(html).toContain("isn&#x27;t a conversation with one person");
+  expect(html).not.toMatch(/> Call<\/button>/);   // nobody to ring
   expect(html).toContain("Nudge them");
 });
 

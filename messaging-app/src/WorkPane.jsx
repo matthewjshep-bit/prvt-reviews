@@ -1,7 +1,7 @@
 // WorkPane.jsx — one Today row, worked in one place.
 //
 //   ┌ who and which house, why it's here            3 of 12  ‹ › ┐
-//   │ the row's buttons       Status ▾ · Edit offer · Record · Coach │
+//   │ the row's buttons  Status ▾ · Edit offer · Call · Record · Coach │
 //   ├ the offer(s)               │ the conversation + the reply box  ┤
 //   └                            │ Feedback ▸                        ┘
 //
@@ -9,8 +9,8 @@
 // header says and which buttons the row names (shared/pipeline.js). The
 // header's right-hand buttons are the app's own, on whichever offer the left
 // side shows: the status menu (status, Hot, Current) is the one the Offers
-// list uses, Edit offer is the full editor (over Today), Record is the
-// contact drawer.
+// list uses, Edit offer is the full editor (over Today), Call rings them
+// (this device or GHL) and logs it, Record is the contact drawer.
 
 import React, { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, Keyboard, Pencil, UserRound } from "lucide-react";
@@ -23,6 +23,7 @@ import { OfferPanelBody, useOfferSide, useRequote } from "./OfferPanel.jsx";
 import ConversationPanel, { ConversationPanelBody } from "./ConversationPanel.jsx";
 import { IntentPill } from "./ConversationOutbox.jsx";
 import CoachIdeas, { coachKey, loadCoach } from "./CoachIdeas.jsx";
+import CallButton from "./CallButton.jsx";
 import OfferEditorSheet from "./OfferEditorSheet.jsx";
 import { useRowFeedback } from "./RowFeedback.jsx";
 import { useLoad } from "./work-data.js";
@@ -65,7 +66,7 @@ function menuOfferOf(offer, siblings) {
 }
 
 /** The app's own actions on this row's person and offer. */
-function RowActions({ offer, siblings, offerId, rowOfferId, contactId, onOpenContact, onEdit, onStatusChanged, coach, onCoachChanged }) {
+function RowActions({ offer, siblings, offerId, rowOfferId, contactId, name, party, onOpenContact, onEdit, onStatusChanged, coach, onCoachChanged }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);   // { tone, text }
   const menuOffer = menuOfferOf(offer, siblings);
@@ -91,6 +92,7 @@ function RowActions({ offer, siblings, offerId, rowOfferId, contactId, onOpenCon
         </span>
       )}
       {(offer || offerId) && <button type="button" className={ACT} disabled={!offer} onClick={() => onEdit(offer)} title="The full offer (O)"><Pencil size={12} /> Edit offer</button>}
+      <CallButton contactId={contactId} name={name} party={party} offerId={offer?.id || offerId || null} address={offer?.address || ""} />
       {contactId && <button type="button" className={ACT} onClick={onOpenContact} title="Their record: facts, offers, timeline"><UserRound size={13} /> Record</button>}
       <CoachIdeas coach={coach} onChanged={onCoachChanged} />
     </div>
@@ -191,6 +193,7 @@ export default function WorkPane({ item, targets, index, total, onPrev, onNext, 
     openContact,
     node: (
       <RowActions offer={side.offer} siblings={side.siblings} offerId={offerId} rowOfferId={side.replaced?.id === targets.offerId ? side.offer?.id : targets.offerId} contactId={targets.contactId}
+        name={item.contactName || targets.draft?.contactName || ""} party={targets.party}
         onOpenContact={openContact} onEdit={edit} onStatusChanged={() => { side.reload(); onDone?.(); }}
         coach={coach} onCoachChanged={coachLoad.reload} />
     ),
