@@ -5,7 +5,8 @@
 // the honest version of that is a short template with the deal's numbers in
 // it — the same text a person would paste. Three phrasings rotate so a buyer
 // on several lists doesn't see the identical line three times. No dollar
-// signs, no links (carrier rules).
+// signs. One link only: the buyer's own tracked package link, issued at send
+// time (blast-refresh.js), in place of "want the details?" (Matt, 2026-09-28).
 //
 // WHAT AN INVESTOR MAY SEE: the buyer price, the ARV and the rehab estimate —
 // the three figures the dataroom already shows them. What we paid, the
@@ -36,16 +37,18 @@ export function blastNote(text = "", max = 90) {
 
 /**
  * blastMessage({ firstName, address, city, price, beds, baths, sqft, yearBuilt,
- *                rehab, arv, repairs, note, variant }) → string
+ *                rehab, arv, repairs, note, variant, link }) → string
  *
- * `rehab` is a REHAB_APPETITES key or "". `variant` picks the phrasing (0-2);
+ * `rehab` is a REHAB_APPETITES key or "". `link` is the buyer's own package
+ * link; with it the text ends on the link rather than offering to send the
+ * details. `variant` picks the phrasing (0-2);
  * the caller rotates it per recipient. Every fact is optional — a deal with
  * nothing filled in still sends the street, the work and the price, which is
  * what this used to be.
  */
 export function blastMessage({
   firstName = "", address = "", city = "", price = 0, beds = 0, baths = 0, sqft = 0,
-  yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", variant = 0,
+  yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", variant = 0, link = "",
 } = {}) {
   const first = String(firstName || "").trim().split(/\s+/)[0] || "";
   const hi = first ? `Hey ${first}, ` : "Hey, ";
@@ -67,13 +70,14 @@ export function blastMessage({
   const line = blastNote(note);
   const tail = line ? `${line}. ` : "";
   const v = Math.abs(Math.round(Number(variant) || 0)) % 3;
+  const url = String(link || "").trim();
   if (v === 0) {
-    return `${hi}got ${street}${where} under contract${spec ? ` — ${spec}` : ""}, ${work}. ${money ? `${money}. ` : ""}${tail}Want the details?`;
+    return `${hi}got ${street}${where} under contract${spec ? ` — ${spec}` : ""}, ${work}. ${money ? `${money}. ` : ""}${tail}${url ? `Photos and numbers: ${url}` : "Want the details?"}`;
   }
   if (v === 1) {
-    return `${hi}new one${where}: ${street}${spec ? `, ${spec}` : ""}, ${work}. ${money ? `${money}. ` : ""}${tail}Interested?`;
+    return `${hi}new one${where}: ${street}${spec ? `, ${spec}` : ""}, ${work}. ${money ? `${money}. ` : ""}${tail}${url ? `Interested? Full package: ${url}` : "Interested?"}`;
   }
-  return `${hi}${street}${where} just went under contract${spec ? ` (${spec})` : ""}. ${work[0].toUpperCase()}${work.slice(1)}. ${money ? `${money}. ` : ""}${tail}Say the word and I'll send the package.`;
+  return `${hi}${street}${where} just went under contract${spec ? ` (${spec})` : ""}. ${work[0].toUpperCase()}${work.slice(1)}. ${money ? `${money}. ` : ""}${tail}${url ? `Everything's here: ${url}` : "Say the word and I'll send the package."}`;
 }
 
 /**

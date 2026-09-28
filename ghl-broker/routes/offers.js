@@ -3050,6 +3050,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   let dispoDeps = null;
   router.setDispoDeps = (d) => { dispoDeps = d; };
 
+  const PROMOTE_BLAST_GRACE_MS = 10 * 60 * 1000;
   // Blast on promote. Fire-and-forget after the deal is minted: the top-ranked
   // VIP/Active buyers for this deal (where they buy, price, recency, tier),
   // VIPs first, up to the cap, as staggered drafts. Any failure is a warning
@@ -3063,7 +3064,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const picked = (m.results || []).slice(0, da.autoBlastCount).map((r) => ({ contactId: r.contactId, name: r.name }));
       if (!picked.length) { console.log(`auto-blast: no VIP/Active buyers score ${da.minMatchScore}+ for ${offer.address}`); return; }
       const vips = (m.results || []).slice(0, da.autoBlastCount).filter((r) => r.tier === "vip").length;
-      const r = await dispoDeps.blastFromApp({ locationId, client, offer, investors: picked, saved, wave: 1 });
+      // The deal is minted before its fee is typed in (7034 S K St went out
+      // at the default 30k fee four seconds after promote). The first text
+      // waits a few minutes; each is priced off the deal as it sends.
+      const r = await dispoDeps.blastFromApp({ locationId, client, offer, investors: picked, saved, wave: 1, startAfterMs: PROMOTE_BLAST_GRACE_MS });
       console.log(`auto-blast on promote: ${offer.address} → ${picked.length} buyers, ${vips} VIP (${r.scheduled ? "scheduled" : `drafts: ${r.reason}`})`);
       await createContactNote(client, offer.contactId, { body: `Blasted ${offer.address} to the ${picked.length} top-ranked buyer${picked.length === 1 ? "" : "s"} for it (${vips} VIP)${r.scheduled ? "" : " (queued as drafts)"}.` }).catch(() => {});
     } catch (e) { console.error(`auto-blast on promote failed for ${offer.id}: ${e?.message}`); }

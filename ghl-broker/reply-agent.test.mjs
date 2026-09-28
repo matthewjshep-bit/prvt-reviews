@@ -3900,3 +3900,46 @@ test("the audit never releases a paper hold as a holding reply", async () => {
   const out = releaseForAudit({ auto, gate: { ok: true }, draft: { intent: "realm_yes", reply: "Let's do it." }, deps: { releaseHeld: true } });
   assert.equal(out.send, false);
 });
+
+test("a blast text quotes the deal's price when it sends, not the price when it was queued, and carries the buyer's own package link", async () => {
+  // 7034 S K St, 2026-09-28: promoted with the default 30k fee, the blast
+  // queued at contract + 30k, the fee was set to 11k two minutes later, and
+  // fifteen buyers were texted 349k on a 329k deal.
+  const queued = "Hey Alex, new one in Tacoma: 7034 South K Street, moderate rehab. Buyer price 349k, ARV around 499k, rehab about 45k. Interested?";
+  const open = { ...openDraft(), status: "scheduled", party: "investor", intent: "blast_open", contactName: "Alex Buyer", inbound: "", reply: queued,
+    outbound: { kind: "blast_open", offerId: "o1", address: "7034 South K Street, Tacoma, Washington 98408", label: "dispo-7034-south-k-street" },
+    propertyAddress: "7034 South K Street, Tacoma, Washington 98408" };
+  const store = fakeStore([open]);
+  store.getOffer = async () => ({ id: "o1", locationId: "LOC", address: "7034 South K Street, Tacoma, Washington 98408",
+    calc: { inputs: { arv: 499000, repairs: 45000 } }, deal: { stage: "under_contract", contractPrice: 318000, assignmentFee: 11000 } });
+  store.getOfferSettings = async () => ({ wholesaleFee: 30000 });
+  store.listDatarooms = async () => [{ id: "r1", locationId: "LOC", offerId: "o1", status: "active", kind: "deal", snapshot: {} }];
+  const invites = [];
+  store.createDataroomInvite = async (doc) => { const row = { ...doc, id: `i${invites.length + 1}`, status: "active" }; invites.push(row); return row; };
+  store.getDataroomInvite = async (id) => invites.find((i) => i.id === id) || null;
+  store.updateDataroomInvite = async (id, patch) => Object.assign(invites.find((i) => i.id === id), patch);
+  store.logDataroomEvent = async () => {};
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
+
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "", dataroomBaseUrl: "https://deals.example" });
+
+  const sms = calls.find(([p]) => p === "/conversations/messages")[1].body.message;
+  assert.match(sms, /Buyer price 329k/, sms);
+  assert.doesNotMatch(sms, /349k/);
+  assert.match(sms, /https:\/\/deals\.example\/d\/\S+$/, "their own link, at the end");
+  assert.equal(invites.length, 1);
+  assert.equal(invites[0].contactId, "c1");
+  assert.ok(invites[0].sentAt, "the invite is marked sent");
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.sentText, sms);
+  assert.equal(d.edited, false, "the machine's own refresh is not a person's edit");
+
+  // A person who rewrote the text is a person deciding: theirs goes as written.
+  const store2 = fakeStore([{ ...open, status: "draft" }]);
+  Object.assign(store2, { getOffer: store.getOffer, getOfferSettings: store.getOfferSettings, listDatarooms: store.listDatarooms, createDataroomInvite: store.createDataroomInvite });
+  const calls2 = [];
+  const client2 = { call: async (path, opts) => { calls2.push([path, opts]); return { messageId: "m2" }; } };
+  await sendReplyDraft({ client: client2, store: store2, locationId: "LOC", draftId: "d1", text: "Alex, call me about K St.", live: true, dataroomBaseUrl: "https://deals.example" });
+  assert.equal(calls2.find(([p]) => p === "/conversations/messages")[1].body.message, "Alex, call me about K St.");
+});

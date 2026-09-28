@@ -79,6 +79,7 @@ import {
 } from "./conversation-prompt.js";
 import { planActions, runActions } from "./conversation-actions.js";
 import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend } from "./conversation-scheduler.js";
+import { refreshBlastText, defaultDataroomBaseUrl } from "./blast-refresh.js";
 
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
@@ -3475,12 +3476,12 @@ const readRecentThread = async (client, locationId, contactId) => {
   } catch { return ""; }
 };
 
-export async function sendReplyDraft({ client, store, locationId, draftId, text, live, auto = false, reason = null, readThread = readRecentThread, now = Date.now() }) {
+export async function sendReplyDraft({ client, store, locationId, draftId, text, live, auto = false, reason = null, readThread = readRecentThread, now = Date.now(), dataroomBaseUrl = defaultDataroomBaseUrl() }) {
   const d = await store.getReplyDraft(draftId);
   if (!d || d.locationId !== locationId) throw Object.assign(new Error("no such draft"), { http: 404 });
   const sendable = OPEN_STATUSES.has(d.status) || (auto && d.status === "sending");
   if (!sendable) throw Object.assign(new Error(`that draft was already ${d.status}`), { http: 409 });
-  const body = String(auto ? d.reply : (text ?? d.reply ?? "")).trim();
+  let body = String(auto ? d.reply : (text ?? d.reply ?? "")).trim();
   if (!body) throw Object.assign(new Error("nothing to send"), { http: 400 });
 
   if (!live) {
@@ -3563,6 +3564,26 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     }
   }
 
+  // A blast is written again as it leaves: the deal's price now, not when it
+  // was queued, and the buyer's own package link (blast-refresh.js). Only the
+  // machine's own words — a text a person rewrote goes as they wrote it. A
+  // deal whose price can't be read holds the text rather than send a number
+  // nobody checked.
+  let blast = null;
+  if (d.outbound?.kind === "blast_open" && body === String(d.reply || "").trim()) {
+    try {
+      blast = await refreshBlastText({ store, client, locationId, draft: d, baseUrl: dataroomBaseUrl });
+    } catch (e) {
+      const ts = new Date(now).toISOString();
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "draft", sendAt: null, sendingAt: null, updatedAt: ts,
+        flags: [...(d.flags || []), `couldn't read the deal's price (${e.message}) — not sent`],
+      });
+      return { ok: true, skipped: "couldn't read the deal's price" };
+    }
+    if (blast?.text) body = blast.text;
+  }
+
   let result;
   if (d.channel === "email") {
     const subject = d.propertyAddress ? `Re: ${d.propertyAddress}` : "Re: your message";
@@ -3575,7 +3596,8 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   const ts = new Date().toISOString();
   const updated = {
     ...d, status: "sent", sentAt: ts, sentText: body, autoSent: Boolean(auto),
-    edited: auto ? false : body !== String(d.reply || "").trim(),
+    edited: auto || blast ? false : body !== String(d.reply || "").trim(),
+    ...(blast ? { quotedPrice: blast.price, ...(blast.invite ? { dataroomInviteId: blast.invite.id } : {}) } : {}),
     // Why a person changed it, when they said (the nightly coach reads this).
     ...(!auto && normalizeDraftFeedback(reason) ? { feedback: { ...normalizeDraftFeedback(reason), at: ts } } : {}),
     ghlMessageId: result?.messageId || result?.id || null, sendAt: null, sendingAt: null, updatedAt: ts,
@@ -3594,6 +3616,10 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       data: { draftId: d.id, auto: Boolean(auto), label: d.outbound.label || "", via: "app" },
     }).catch(() => {});
     await store.setInvestorStatus?.(locationId, d.contactId, { lastBlastAt: ts }).catch(() => {});
+    if (blast?.invite) {
+      await store.updateDataroomInvite?.(blast.invite.id, { sentAt: ts }).catch(() => {});
+      await store.logDataroomEvent?.(blast.room.id, blast.invite.id, "sent", { via: "blast" }).catch(() => {});
+    }
   }
   if (d.outbound?.kind === "outreach_open") {
     await recordEvent({
