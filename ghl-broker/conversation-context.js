@@ -22,6 +22,7 @@ import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
 import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor } from "./shared/current-offer.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
+import { emailContextText } from "./shared/gmail.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -343,6 +344,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
     takeLines.length ? `THE AGENT'S OWN TAKE (their numbers, not ours — don't ask again, don't adopt them):\n${takeLines.join("\n")}` : "",
     hook,
     history.length ? `PROPERTIES THEY'VE SENT OR DISCUSSED WITH US BEFORE (oldest first):\n${history.map((l) => `- ${l}`).join("\n")}` : "",
+    emailContextText(events),
     fields.length ? `WHAT WE KNOW ABOUT THEM:\n${fields.join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
   return {
@@ -579,6 +581,7 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
       : "LIVE DEALS THAT FIT THEIR BUY BOX: none right now — say we'll reach out when something fits, and ask what they're after.",
     goneLines.length ? `NO LONGER AVAILABLE (if they ask about one of these, say so and offer what fits):\n${goneLines.join("\n")}` : "",
     history.length ? `PROPERTIES THEY'VE LOOKED AT WITH US BEFORE (oldest first):\n${history.map((l) => `- ${l}`).join("\n")}` : "",
+    emailContextText(events),
     fields.length ? `WHAT WE KNOW ABOUT THEM:\n${fields.join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
 

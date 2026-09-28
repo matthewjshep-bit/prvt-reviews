@@ -18,7 +18,7 @@ import { appHref } from "./links.js";
 import ConversationTryIt from "./ConversationTryIt.jsx";
 import {
   AnswersEditor, WriteUpTermsEditor, AutoSendCard, BookingCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, InvestorBandCard, MediaCard, OptOutCard, PartyPlaybooks,
-  CoachSettingsCard, PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
+  CoachSettingsCard, GmailCard, PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
 } from "./ConversationPlaybooks.jsx";
 import { IntentPill, PartyPill, ago } from "./ConversationOutbox.jsx";
 
@@ -248,6 +248,7 @@ export default function ConversationAi({ settings }) {
       <RequoteCard config={form} patch={patch} />
       <ProfileCard config={form} patch={patch} />
       <CoachSettingsCard config={form} patch={patch} />
+      <GmailCard config={form} patch={patch} />
       <StyleCard config={form} patch={patch} />
       <OptOutCard config={form} patch={patch} version={version} workflows={workflows} />
       <MediaCard config={form} patch={patch} />
