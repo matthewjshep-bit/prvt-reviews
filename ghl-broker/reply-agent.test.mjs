@@ -3907,7 +3907,7 @@ test("a blast text quotes the deal's price when it sends, not the price when it 
   // fifteen buyers were texted 349k on a 329k deal.
   const queued = "Hey Alex, new one in Tacoma: 7034 South K Street, moderate rehab. Buyer price 349k, ARV around 499k, rehab about 45k. Interested?";
   const open = { ...openDraft(), status: "scheduled", party: "investor", intent: "blast_open", contactName: "Alex Buyer", inbound: "", reply: queued,
-    outbound: { kind: "blast_open", offerId: "o1", address: "7034 South K Street, Tacoma, Washington 98408", label: "dispo-7034-south-k-street" },
+    outbound: { kind: "blast_open", offerId: "o1", address: "7034 South K Street, Tacoma, Washington 98408", label: "dispo-7034-south-k-street", note: "Big lot, ADU upside" },
     propertyAddress: "7034 South K Street, Tacoma, Washington 98408" };
   const store = fakeStore([open]);
   store.getOffer = async () => ({ id: "o1", locationId: "LOC", address: "7034 South K Street, Tacoma, Washington 98408",
@@ -3928,6 +3928,7 @@ test("a blast text quotes the deal's price when it sends, not the price when it 
   assert.match(sms, /Buyer price 329k/, sms);
   assert.doesNotMatch(sms, /349k/);
   assert.match(sms, /https:\/\/deals\.example\/d\/\S+$/, "their own link, at the end");
+  assert.match(sms, /Big lot, ADU upside\./, "the operator's line for this blast survives the rewrite");
   assert.equal(invites.length, 1);
   assert.equal(invites[0].contactId, "c1");
   assert.ok(invites[0].sentAt, "the invite is marked sent");

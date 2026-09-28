@@ -1018,7 +1018,11 @@ export default function createDispoRouter({ resolveLocation }) {
           const row = await store.getInvestor(locationId, contactId);
           if (row) investors.push({ contactId, name: row.name || row.doc?.name || "" });
         }
-        const r = await blastFromApp({ locationId, client, offer, investors, saved, dryRun: req.body?.dryRun !== false, label: label || slugStreet(offer.address), wave: 1 });
+        // `note`: the operator's one line about the deal for this blast, in
+        // place of the package headline. `wave`: which wave this is, for the record.
+        const note = String(req.body?.note || "").slice(0, 200);
+        const wave = Math.max(1, Math.min(9, Math.round(Number(req.body?.wave) || 1)));
+        const r = await blastFromApp({ locationId, client, offer, investors, saved, dryRun: req.body?.dryRun !== false, label: label || slugStreet(offer.address), wave, note });
         return res.json({ ok: true, sendWith: "app", blastTag: r.blastTag, ...r });
       }
 
@@ -1091,7 +1095,7 @@ export default function createDispoRouter({ resolveLocation }) {
    * deal's own blast tag on each contact and a `blasts` entry on the deal so
    * the second wave and the feedback package know. Never the trigger tag.
    */
-  async function blastFromApp({ locationId, client, offer, investors = [], saved = null, dryRun = false, label = "", wave = 1, now = Date.now(), startAfterMs = 0 }) {
+  async function blastFromApp({ locationId, client, offer, investors = [], saved = null, dryRun = false, label = "", wave = 1, now = Date.now(), startAfterMs = 0, note = "" }) {
     // Somebody is probably taking this one. Every app blast comes through
     // here — the button, the blast on promote, the second wave — so this is
     // the one place that has to ask.
@@ -1103,7 +1107,7 @@ export default function createDispoRouter({ resolveLocation }) {
     const settings = saved || await getSettings(locationId);
     const prefix = sanitizeTag(settings?.dispoBlastTagPrefix || "dispo") || "dispo";
     const blastTag = sanitizeTag(`${prefix}-${label || slugStreet(offer.address) || "deal"}`);
-    const r = await queueBlastDrafts({ store, locationId, offer, investors, saved: settings, now, dryRun, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED, label: blastTag, startAfterMs });
+    const r = await queueBlastDrafts({ store, locationId, offer, investors, saved: settings, now, dryRun, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED, label: blastTag, startAfterMs, note });
     if (!dryRun && (r.queued || r.drafted)) {
       const warnings = [];
       await mapPool(investors, 2, async (inv) => {

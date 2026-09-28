@@ -57,7 +57,7 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
     invite = out.invite;
     link = out.link;
   }
-  const facts = dealFacts(offer, { price, note: room?.snapshot?.headline || "" });
+  const facts = dealFacts(offer, { price, note: draft.outbound?.note || room?.snapshot?.headline || "" });
   if (numbers.arv > 0) facts.arv = numbers.arv;
   if (numbers.repairs > 0) facts.repairs = numbers.repairs;
   const text = blastMessage({ ...facts, firstName: draft.contactName || "", variant: blastVariant(draft), link });
