@@ -20,7 +20,7 @@
 import express from "express";
 import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
 import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES } from "../shared/buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickWave } from "../shared/buyer-score.js";
 import { relationshipOf, TALK_EVENT_TYPES } from "../shared/talked-to.js";
 import { buyersInPlay } from "../shared/offer-status.js";
 import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
@@ -1018,7 +1018,11 @@ export default function createDispoRouter({ resolveLocation }) {
           const row = await store.getInvestor(locationId, contactId);
           if (row) investors.push({ contactId, name: row.name || row.doc?.name || "" });
         }
-        const r = await blastFromApp({ locationId, client, offer, investors, saved, dryRun: req.body?.dryRun !== false, label: label || slugStreet(offer.address), wave: 1 });
+        // `note`: the operator's one line about the deal for this blast, in
+        // place of the package headline. `wave`: which wave this is, for the record.
+        const note = String(req.body?.note || "").slice(0, 200);
+        const wave = Math.max(1, Math.min(9, Math.round(Number(req.body?.wave) || 1)));
+        const r = await blastFromApp({ locationId, client, offer, investors, saved, dryRun: req.body?.dryRun !== false, label: label || slugStreet(offer.address), wave, note });
         return res.json({ ok: true, sendWith: "app", blastTag: r.blastTag, ...r });
       }
 
@@ -1091,7 +1095,7 @@ export default function createDispoRouter({ resolveLocation }) {
    * deal's own blast tag on each contact and a `blasts` entry on the deal so
    * the second wave and the feedback package know. Never the trigger tag.
    */
-  async function blastFromApp({ locationId, client, offer, investors = [], saved = null, dryRun = false, label = "", wave = 1, now = Date.now() }) {
+  async function blastFromApp({ locationId, client, offer, investors = [], saved = null, dryRun = false, label = "", wave = 1, now = Date.now(), startAfterMs = 0, note = "" }) {
     // Somebody is probably taking this one. Every app blast comes through
     // here — the button, the blast on promote, the second wave — so this is
     // the one place that has to ask.
@@ -1103,7 +1107,7 @@ export default function createDispoRouter({ resolveLocation }) {
     const settings = saved || await getSettings(locationId);
     const prefix = sanitizeTag(settings?.dispoBlastTagPrefix || "dispo") || "dispo";
     const blastTag = sanitizeTag(`${prefix}-${label || slugStreet(offer.address) || "deal"}`);
-    const r = await queueBlastDrafts({ store, locationId, offer, investors, saved: settings, now, dryRun, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED, label: blastTag });
+    const r = await queueBlastDrafts({ store, locationId, offer, investors, saved: settings, now, dryRun, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED, label: blastTag, startAfterMs, note });
     if (!dryRun && (r.queued || r.drafted)) {
       const warnings = [];
       await mapPool(investors, 2, async (inv) => {
@@ -1148,20 +1152,16 @@ export default function createDispoRouter({ resolveLocation }) {
    * Who the autopilot sends a deal to. Wave 1 (on promote): VIP and Active
    * buyers at or above the first-wave match score, VIPs first. Wave 2 (no
    * commitment after the delay): anyone at or above the second-wave score who
-   * hasn't been sent it yet. Always: a phone to text, not already on a live
-   * deal, not already blasted this deal.
+   * hasn't been sent it yet. Always: buys in the deal's city or region, a
+   * phone to text, not already on a live deal, not already blasted this deal
+   * (shared/buyer-score.js pickWave).
    */
   async function matchForDeal(locationId, offer, { wave = 1, exclude = "blasted" } = {}) {
     const saved = await getSettings(locationId);
     const da = normalizeDispoAutopilot(saved.dispoAutopilot);
     const { target, ranked } = await rankedForDeal(locationId, offer);
     const floor = wave === 1 ? da.minMatchScore : da.secondWaveMinScore;
-    const tierOrder = { vip: 0, active: 1, cold: 2 };
-    const results = ranked
-      .filter((i) => i.phone && !i.onLiveDeal && i.rank >= floor)
-      .filter((i) => exclude !== "blasted" || !i.alreadyBlasted)
-      .filter((i) => wave !== 1 || i.tier === "vip" || i.tier === "active")
-      .sort((a, b) => wave === 1 ? (tierOrder[a.tier] - tierOrder[b.tier]) || (b.rank - a.rank) : b.rank - a.rank)
+    const results = pickWave(ranked, { wave, floor, exclude })
       .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons }));
     return { results, target };
   }

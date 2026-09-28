@@ -20,7 +20,7 @@
 //   offers router's deps; this file holds the settings and the queue.
 
 import { store as defaultStore } from "./store.js";
-import { blastMessage, dealFacts } from "./shared/blast-text.js";
+import { blastMessage, blastNote, dealFacts } from "./shared/blast-text.js";
 import { normalizeBookSync } from "./investor-sync.js";
 import { normalizeBuyerPulse } from "./shared/buyer-pulse.js";
 import { dealNumbers } from "./dataroom.js";
@@ -66,7 +66,7 @@ export function normalizeDispoAutopilot(v = {}) {
  * times are staggered `spreadSec` apart from the next open minute, so a
  * blast never lands as a burst and never at night.
  */
-export async function queueBlastDrafts({ store = defaultStore, locationId, offer, investors = [], saved = {}, now = Date.now(), dryRun = false, sendsEnabled = false, blastsEnabled = DISPO_BLASTS_ENABLED, label = "" }) {
+export async function queueBlastDrafts({ store = defaultStore, locationId, offer, investors = [], saved = {}, now = Date.now(), dryRun = false, sendsEnabled = false, blastsEnabled = DISPO_BLASTS_ENABLED, label = "", startAfterMs = 0, note: noteOverride = "" }) {
   const da = normalizeDispoAutopilot(saved.dispoAutopilot);
   const config = conversationConfig(saved);
   const pb = config.parties.investor;
@@ -81,8 +81,10 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
   // headline is already written for buyers — it is the one sentence they'd
   // read at the top of the package — so it belongs in the text that offers
   // them the deal. Best-effort: a missing room just means a shorter message.
-  let note = "";
-  try {
+  // A line the operator wrote for this blast wins over the headline.
+  const ownLine = blastNote(noteOverride);
+  let note = ownLine;
+  if (!note) try {
     const rooms = await store.listDatarooms(locationId, { offerId: offer.id, limit: 5 });
     const room = rooms.find((r) => r.status === "active" && r.kind !== "portfolio" && r.kind !== "offer");
     note = room?.snapshot?.headline || "";
@@ -95,12 +97,13 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
   // anything past the close into the next open window.
   // The first text lands at the next open minute — on a weekday, unless the
   // page allows weekends — and the rest follow it.
-  let cursor = Date.parse(spreadAcrossDay({ now, quietHours: config.autoSend.quietHours, hours: 0, weekends: config.autoSend.weekends || "all" }));
+  let cursor = Date.parse(spreadAcrossDay({ now: now + Math.max(0, Number(startAfterMs) || 0), quietHours: config.autoSend.quietHours, hours: 0, weekends: config.autoSend.weekends || "all" }));
   for (const inv of investors) {
     const contactId = inv.contactId;
     if (!contactId) continue;
     const name = inv.name || inv.doc?.name || "";
-    const text = blastMessage({ ...facts, firstName: name, variant: i });
+    const variant = i;
+    const text = blastMessage({ ...facts, firstName: name, variant });
     if (i > 0) cursor += da.spreadSec * 1000 + Math.round(Math.random() * 15000);
     const sendAt = nextSendTime({ now: cursor, delayMs: 0, quietHours: config.autoSend.quietHours });
     cursor = Date.parse(sendAt);
@@ -114,7 +117,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const ts = iso(now);
     const record = await store.createReplyDraft({
       locationId, contactId, contactName: name, status: willSchedule ? "scheduled" : "draft", channel: "sms", jobId: null,
-      inbound: "", outbound: { kind: "blast_open", offerId: offer.id, address: offer.address, label: label || "" },
+      inbound: "", outbound: { kind: "blast_open", offerId: offer.id, address: offer.address, label: label || "", variant, ...(ownLine ? { note: ownLine } : {}) },
       reply: text, intent: "blast_open", confidence: "high", needsHuman: false, humanReason: "",
       summary: `Puts ${offer.address} in front of ${name || "a buyer"} at ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}.`,
       propertyAddress: offer.address || "", counterAmount: null, autoSendable: true, flags: [], party: "investor", partySource: "deal",

@@ -76,3 +76,16 @@ test("the operator's dataroom headline rides along, scrubbed", () => {
   assert.equal(blastNote("x".repeat(120)), "");
   assert.equal(blastNote(""), "");
 });
+
+test("with the buyer's own package link, the blast ends on the link instead of offering to send details", () => {
+  const link = "https://deals.shepflips.com/d/tok123";
+  const texts = [0, 1, 2].map((variant) => blastMessage({ firstName: "Alex", address: "7034 South K Street, Tacoma, WA", city: "Tacoma", price: 329000, arv: 499000, repairs: 45000, rehab: "moderate", variant, link }));
+  for (const t of texts) {
+    assert.match(t, /Buyer price 329k/);
+    assert.ok(t.endsWith(link), t);
+    assert.doesNotMatch(t, /Want the details\?|Say the word|\$/);
+  }
+  assert.equal(new Set(texts).size, 3, "the three phrasings still differ");
+  // No link, no change: the text still asks.
+  assert.match(blastMessage({ address: "9 Elm St", price: 495000, variant: 0 }), /Want the details\?$/);
+});

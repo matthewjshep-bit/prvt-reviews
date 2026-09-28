@@ -42,6 +42,24 @@ test("with the intent ticked and both gates on, a blast becomes staggered schedu
   assert.notEqual(drafts[0].reply, drafts[1].reply, "the phrasing rotates");
 });
 
+test("the blast on promote waits before its first text, so the fee can be set; each draft keeps its phrasing", async () => {
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } }, dispoAutopilot: { spreadSec: 60 } };
+  const now0 = await queueBlastDrafts({ store: fakeStore(), locationId: "L", offer, investors: buyers, saved, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  const store = fakeStore();
+  const later = await queueBlastDrafts({ store, locationId: "L", offer, investors: buyers, saved, now: NOW, sendsEnabled: true, blastsEnabled: true, startAfterMs: 10 * 60000 });
+  assert.ok(Date.parse(later.rows[0].sendAt) - Date.parse(now0.rows[0].sendAt) >= 10 * 60000 - 1000, "ten minutes later");
+  assert.deepEqual([...store.rows.values()].map((d) => d.outbound.variant), [0, 1, 2]);
+});
+
+test("the operator's one line for a blast rides in the text and on the draft, so the send-time rewrite keeps it", async () => {
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } } };
+  const store = fakeStore();
+  await queueBlastDrafts({ store, locationId: "L", offer, investors: buyers.slice(0, 1), saved, now: NOW, sendsEnabled: true, blastsEnabled: true, note: "3bd 1952 rambler on a quarter acre with an 840 sqft garage, ADU upside" });
+  const d = [...store.rows.values()][0];
+  assert.match(d.reply, /3bd 1952 rambler on a quarter acre with an 840 sqft garage, ADU upside\. /);
+  assert.equal(d.outbound.note, "3bd 1952 rambler on a quarter acre with an 840 sqft garage, ADU upside");
+});
+
 test("without the intent on the allowlist it is drafts only, and says why; a dry run writes nothing", async () => {
   const store = fakeStore();
   const saved = { conversationAi: { enabled: true } };
