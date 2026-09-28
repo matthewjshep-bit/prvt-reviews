@@ -18,6 +18,7 @@
 // Pure. The broker feeds it the timeline; the page only reads the result.
 
 import { regionFor, citySlug } from "./dispo-regions.js";
+import { TALK_EVENT_TYPES, isTalkEvent } from "./talked-to.js";
 
 export const TIERS = { vip: "VIP", active: "Active", cold: "Cold" };
 // VIP: committed on a deal before, or scores at least this. Active: 40+, or replied in the last 3 months.
@@ -139,13 +140,16 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   };
 }
 
-/** engagementFromEvents(events) → Map(contactId → { blasts, viewed, evaluating, committed, passed, lastEngagedAt }) */
+/** engagementFromEvents(events) → Map(contactId → { blasts, viewed, evaluating, committed, passed, talks, lastEngagedAt }) */
 export function engagementFromEvents(events = []) {
   const out = new Map();
   for (const ev of events) {
     if (!ev?.contactId) continue;
-    const e = out.get(ev.contactId) || { blasts: 0, viewed: 0, evaluating: 0, committed: 0, passed: 0, lastEngagedAt: "" };
+    const e = out.get(ev.contactId) || { blasts: 0, viewed: 0, evaluating: 0, committed: 0, passed: 0, talks: 0, lastEngagedAt: "" };
     if (ev.type === "blast_sent") e.blasts++;
+    // A logged call, or a fact learned from them: evidence of a conversation,
+    // not of a deal, so it leaves lastEngagedAt (the deal clock) alone.
+    else if (TALK_EVENT_TYPES.includes(ev.type)) { if (isTalkEvent(ev)) e.talks++; }
     else {
       if (ev.type === "dataroom_viewed") e.viewed++;
       else if (ev.type === "investor_evaluating") e.evaluating++;

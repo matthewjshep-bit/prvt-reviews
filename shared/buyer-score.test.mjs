@@ -46,5 +46,15 @@ test("engagement counts fold per contact", () => {
     { contactId: "a", type: "dataroom_viewed", at: "2026-01-02" },
     { contactId: "a", type: "investor_committed", at: "2026-01-05" },
   ]);
-  assert.deepEqual(m.get("a"), { blasts: 1, viewed: 1, evaluating: 0, committed: 1, passed: 0, lastEngagedAt: "2026-01-05" });
+  assert.deepEqual(m.get("a"), { blasts: 1, viewed: 1, evaluating: 0, committed: 1, passed: 0, talks: 0, lastEngagedAt: "2026-01-05" });
+});
+
+test("a logged call or a fact learned from them counts as a talk, and never moves the deal clock", () => {
+  const m = engagementFromEvents([
+    { contactId: "a", type: "call_summary", source: "call", at: "2026-02-01" },
+    { contactId: "a", type: "fact_learned", source: "conversation", at: "2026-02-02" },
+    { contactId: "a", type: "fact_learned", source: "operator", at: "2026-02-03" },
+  ]);
+  assert.equal(m.get("a").talks, 2);
+  assert.equal(m.get("a").lastEngagedAt, "");
 });
