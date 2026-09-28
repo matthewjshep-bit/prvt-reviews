@@ -8,28 +8,45 @@
 // instead — a category and his own words — and to have that feed the nightly
 // coach, which proposes lessons he applies with one tap. This is the shared
 // vocabulary; the event lives in contact_events as `row_feedback`.
-//
-// It is separate from the draft chips ("What was wrong with it?",
-// DRAFT_FEEDBACK in conversation-ai.js): those judge the words of one draft;
-// this judges what the machine did with the row.
 
-export const ROW_FEEDBACK = ["should_have_replied", "should_have_acted", "wrong_read", "right_to_hand_over"];
+import { DRAFT_FEEDBACK_LABEL } from "./conversation-ai.js";
+
+// 2026-09-28: it used to sit beside the draft chips ("What was wrong with
+// it?", DRAFT_FEEDBACK in conversation-ai.js), and the two said much the same
+// thing twice on one screen. Now it is one list in two groups: what was wrong
+// with the words (only asked when there is a draft), and what the machine
+// should have done with the row. "Other" is not a chip: say it in the note.
+
+export const ROW_FEEDBACK_WORDS = ["wrong_tone", "wrong_facts", "wrong_number", "too_long", "missed_the_question"];
+export const ROW_FEEDBACK_ACTS = ["should_not_reply", "should_have_replied", "should_have_acted", "wrong_read", "right_to_hand_over"];
+export const ROW_FEEDBACK = [...ROW_FEEDBACK_ACTS, ...ROW_FEEDBACK_WORDS];
 export const ROW_FEEDBACK_LABEL = {
+  should_not_reply: DRAFT_FEEDBACK_LABEL.should_not_reply,
   should_have_replied: "Should have replied itself",
   should_have_acted: "Should have taken an action",
   wrong_read: "Wrong read of the message",
   right_to_hand_over: "Right to hand it to me",
+  ...Object.fromEntries(ROW_FEEDBACK_WORDS.map((c) => [c, DRAFT_FEEDBACK_LABEL[c]])),
 };
-// One line under each chip, so the four read as distinct choices.
+// One line under each chip, so they read as distinct choices.
 export const ROW_FEEDBACK_HINT = {
+  should_not_reply: "It answered when it should have stayed out.",
   should_have_replied: "It held or stayed out when it could have answered.",
   should_have_acted: "Send the offer, run the numbers, mark it, tag it, book it.",
   wrong_read: "It misread the message, the party, the address or the number.",
   right_to_hand_over: "Nothing to learn — this one needed a person.",
+  wrong_tone: "Right idea, wrong voice.",
+  wrong_facts: "It said something about the house or the deal that isn't so.",
+  wrong_number: "The dollar figure in it was wrong.",
+  too_long: "Say it in fewer words.",
+  missed_the_question: "They asked something and it didn't answer.",
 };
 // The categories a lesson can be built on. "Right to hand it to me" is
 // counter-evidence: the coach is shown it and may never cite it.
-export const LEARNABLE_FEEDBACK = new Set(["should_have_replied", "should_have_acted", "wrong_read"]);
+export const LEARNABLE_FEEDBACK = new Set(ROW_FEEDBACK.filter((c) => c !== "right_to_hand_over"));
+// The ones that are also a draft's own why (DRAFT_FEEDBACK), so Send and
+// Dismiss can carry them onto the draft for the outbox's numbers.
+export const isWordFeedback = (c) => ROW_FEEDBACK_WORDS.includes(c) || c === "should_not_reply";
 
 export const ROW_FEEDBACK_EVENT = "row_feedback";
 // Rows with no contact (a blast row) are filed under this contact id so no

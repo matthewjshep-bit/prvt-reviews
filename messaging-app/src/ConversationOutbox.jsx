@@ -34,7 +34,7 @@ const PARTY_CLS = { agent: "bg-slate-200 text-slate-700", investor: "bg-sky-100 
 
 // Why the clock woke this one up. Said in the operator's terms, not the
 // kind's — "we sent them an offer and they went quiet" beats "offer_nudge".
-const money = (n) => `$${Math.round(Number(n) || 0).toLocaleString()}`;
+export const money = (n) => `$${Math.round(Number(n) || 0).toLocaleString()}`;
 
 const NUDGE_KINDS = {
   offer_nudge: (a) => `we sent an offer on ${a || "a property"} and heard nothing back`,
@@ -57,7 +57,7 @@ export const intentLabel = (party, intent) =>
 import { ago } from "./ui.jsx";
 export { ago };
 
-const countdown = (ms) => {
+export const countdown = (ms) => {
   const s = Math.max(0, Math.round(ms / 1000));
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 };
@@ -422,7 +422,7 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, o
   );
 }
 
-function actionLabel(a) {
+export function actionLabel(a) {
   switch (a.type) {
     case "add_tags": return `Tag ${a.tags?.join(", ")}`;
     case "remove_tags": return `Untag ${a.tags?.join(", ")}`;

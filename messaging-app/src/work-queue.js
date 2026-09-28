@@ -121,7 +121,7 @@ export function keyIntent(e) {
 }
 
 export const KEYS_HELP = [
-  ["J  ↓", "next row"], ["K  ↑", "previous row"], ["R", "reply"], ["T", "teach the bot"], ["O", "open the offer"], ["⌘ ↵", "send what you typed"], ["?", "these keys"],
+  ["J  ↓", "next row"], ["K  ↑", "previous row"], ["R", "reply"], ["T", "feedback for the bot"], ["O", "edit the offer"], ["⌘ ↵", "send what you typed"], ["?", "these keys"],
 ];
 
 /**

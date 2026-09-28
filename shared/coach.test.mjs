@@ -279,3 +279,13 @@ test("a proposal shows on the contact whose drafts it cites", async () => {
   assert.deepEqual(proposalsForContact(proposals, { draftIds: ["d5"] }).map((p) => p.id), ["p3"], "an applied lesson stays visible with its scorecard");
   assert.deepEqual(proposalsForContact(proposals, {}), []);
 });
+
+test("a draft you dismissed with a reason and also gave feedback on is counted once", () => {
+  const drafts = [{ id: "d5", party: "agent", intent: "other", status: "dismissed", dismissedBy: "you", dismissedAt: new Date(NOW - 3600000).toISOString(),
+    inbound: "Put forth an offer.", reply: "Straight up, 774.", feedback: { code: "wrong_number", note: "" } }];
+  const s = gatherSignals({ now: NOW, drafts, promiseEvents: [fb("e7", "wrong_number", { draftId: "d5" })] });
+  assert.equal(s.rowFeedback.length, 1);
+  assert.equal(s.rowFeedback[0].label, "Wrong number");
+  assert.equal(s.dismissals.length, 1, "the dismissal still counts as something you did");
+  assert.equal(s.dismissals[0].why, null, "its why is the feedback row, not a second copy");
+});

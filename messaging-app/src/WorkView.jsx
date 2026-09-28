@@ -7,11 +7,11 @@
 // instant. Keys are ignored while you type or while the contact record is open.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { offerEditorUrl } from "./api.js";
 import WorkRail from "./WorkRail.jsx";
-import WorkPane from "./WorkPane.jsx";
+import WorkPane, { OPEN_OFFER_EVENT } from "./WorkPane.jsx";
 import { REPLY_BOX_ID, loadThread, threadKey } from "./ConversationPanel.jsx";
-import { TEACH_NOTE_ID, coachKey, loadCoach } from "./CoachPanel.jsx";
+import { coachKey, loadCoach } from "./CoachIdeas.jsx";
+import { TEACH_EVENT } from "./RowFeedback.jsx";
 import { loadOffer, offerKey } from "./OfferPanel.jsx";
 import { forget, prefetch } from "./work-data.js";
 import { GROUP_LABEL, KIND_LABEL, keyIntent, neighborId, nextAfterRemoval, orderRows, railLabel, rowTargets, teachRowId } from "./work-queue.js";
@@ -29,11 +29,12 @@ const writeRowParam = (id) => {
 const modalOpen = () => typeof document !== "undefined" && Boolean(document.querySelector('[aria-modal="true"]'));
 
 /**
- * <WorkView actions drafts rowFeedback sendsEnabled serverOffsetMs onDone bodies? initialRowId? />
+ * <WorkView actions drafts rowFeedback sendsEnabled serverOffsetMs onDone settings bodies? initialRowId? />
  *   onDone   refresh Today (the queue and its drafts)
+ *   settings the app's saved settings, for the offer editor the pane opens
  *   bodies   tests only: data for the pane's three sides instead of loading it
  */
-export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, sendsEnabled, serverOffsetMs = 0, onDone, bodies = null, initialRowId = null }) {
+export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, sendsEnabled, serverOffsetMs = 0, onDone, settings = null, bodies = null, initialRowId = null }) {
   const ordered = useMemo(() => orderRows(actions), [actions]);
   const [selectedId, setSelectedId] = useState(() => initialRowId || (typeof window !== "undefined" ? readRowParam() : null));
   const [filter, setFilter] = useState("");
@@ -98,8 +99,8 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
       if (intent === "next") go(nextId);
       else if (intent === "prev") go(prevId);
       else if (intent === "reply") document.getElementById(REPLY_BOX_ID)?.focus();
-      else if (intent === "teach") document.getElementById(TEACH_NOTE_ID)?.focus();
-      else if (intent === "offer" && targets.offerId) window.open(offerEditorUrl(targets.offerId), "_blank", "noreferrer");
+      else if (intent === "teach") window.dispatchEvent(new Event(TEACH_EVENT));
+      else if (intent === "offer") window.dispatchEvent(new Event(OPEN_OFFER_EVENT));
       else if (intent === "help") setShowKeys((v) => !v);
     }
     window.addEventListener("keydown", onKey);
@@ -135,7 +136,7 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
         <WorkPane key={current.id} item={current} targets={targets} index={index} total={visible.length}
           onPrev={prevId ? () => go(prevId) : null} onNext={nextId ? () => go(nextId) : null} picker={picker}
           onDone={done} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} feedback={feedback}
-          showKeys={showKeys} onToggleKeys={() => setShowKeys((v) => !v)} bodies={bodies} />
+          showKeys={showKeys} onToggleKeys={() => setShowKeys((v) => !v)} settings={settings} bodies={bodies} />
       ) : (
         <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
           {needle ? "Nothing matches that filter." : "Nothing is waiting on you. The machine has the rest."}

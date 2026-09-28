@@ -59,3 +59,9 @@ test("a bad category, or no row, is a 400", async () => {
   await assert.rejects(() => recordRowFeedback({ store, locationId: LOC, body: { rowId: "x", category: "vibes" } }), (e) => e.http === 400);
   await assert.rejects(() => recordRowFeedback({ store, locationId: LOC, body: { category: "wrong_read" } }), (e) => e.http === 400);
 });
+
+test("what was wrong with a draft's words is recorded like any other feedback, and 'other' is still a 400", async () => {
+  const r = await recordRowFeedback({ store, locationId: LOC, body: { rowId: "draft:dw", rowKind: "draft_waiting", contactId: "c3", category: "wrong_number", note: "too high" } });
+  assert.equal(r.feedback.label, "Wrong number");
+  await assert.rejects(() => recordRowFeedback({ store, locationId: LOC, body: { rowId: "draft:dw", category: "other" } }), (e) => e.http === 400 && /wrong_number/.test(e.message));
+});

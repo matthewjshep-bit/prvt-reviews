@@ -1,18 +1,22 @@
 // ConversationPanel.jsx — the right side of Today's work pane: everything
 // said with this person, and the box to answer them in.
 //
-// The box is the bot's open draft when it has one (DraftRow, embedded: Send,
-// edit, why-you-changed-it, Dismiss, Hold and the action chips all work as
-// they do everywhere, so the coach still sees your edits). When it has none,
+// The box holds the bot's open draft when it has one (DraftComposer: the
+// draft is just the text, with Send, Dismiss, Hold and the bot's suggested
+// actions; the coach still sees your edits). When it has none,
 // it is a plain text box that goes out as you (POST /api/contacts/:id/reply)
 // and leaves the thread to you for three days. A row that is a question the
 // bot couldn't answer gets the answer box here instead (drafted in the bot's
 // voice and kept for next time), with the plain box one click away.
+//
+// Under the box, one Feedback line for the whole row (RowFeedback.jsx).
 
 import React, { useEffect, useRef, useState } from "react";
 import { ExternalLink, Loader2, RefreshCw, Send } from "lucide-react";
 import { getContactThread, ghlContactUrl, sendHandReply } from "./api.js";
-import { DraftRow, PartyPill } from "./ConversationOutbox.jsx";
+import { PartyPill } from "./ConversationOutbox.jsx";
+import { DraftComposer } from "./Composer.jsx";
+import { PaneFeedback } from "./RowFeedback.jsx";
 import ContactLink from "./ContactLink.jsx";
 import ThreadView from "./ThreadView.jsx";
 import { BTN_PRIMARY } from "./ui.jsx";
@@ -69,18 +73,24 @@ export function HandReply({ contactId, offerId, name, sendsEnabled, onSent }) {
  */
 export function ConversationPanelBody({
   item, targets, thread = null, threadError = "", loading = false, onReload,
-  sendsEnabled, serverOffsetMs = 0, onDone, onSent,
+  sendsEnabled, serverOffsetMs = 0, onDone, onSent, fb = null, taught = [],
 }) {
   const bottom = useRef(null);
   const [typeInstead, setTypeInstead] = useState(false);
   const asked = Boolean(item.question && (item.ops || []).some((op) => op.key === "answer"));
   const count = thread?.messages?.length || 0;
   useEffect(() => { bottom.current?.scrollIntoView({ block: "end" }); }, [count, targets.contactId]);
+  const feedback = fb ? <PaneFeedback fb={fb} withWords={Boolean(targets.draft)} taught={taught} /> : null;
+  // When they last wrote: a draft older than that was written to an earlier message.
+  const lastInboundAt = (thread?.messages || []).filter((m) => m.dir === "in" && m.at).map((m) => m.at).sort().at(-1) || null;
 
   if (!targets.contactId) {
     return (
-      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-slate-500">
-        This row isn't a conversation with one person{item.address ? ` — it's about ${item.address.split(",")[0]}` : ""}. Its buttons are above.
+      <div className="flex h-full flex-col">
+        <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-slate-500">
+          This row isn't a conversation with one person{item.address ? ` — it's about ${item.address.split(",")[0]}` : ""}. Its buttons are above.
+        </div>
+        {feedback}
       </div>
     );
   }
@@ -112,8 +122,8 @@ export function ConversationPanelBody({
 
       <div className="max-h-[60%] shrink-0 overflow-y-auto border-t border-slate-200 bg-white">
         {targets.draft
-          ? <ul><DraftRow key={targets.draft.id} draft={targets.draft} offerId={targets.offerId} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs}
-              onDone={onSent || onDone} rowKind={item.kind} embedded textareaId={REPLY_BOX_ID} /></ul>
+          ? <DraftComposer key={targets.draft.id} draft={targets.draft} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs}
+              onDone={onSent || onDone} textareaId={REPLY_BOX_ID} lastInboundAt={lastInboundAt} fb={fb} />
           : asked && !typeInstead
           ? (
             <div className="px-3 py-2.5">
@@ -122,12 +132,13 @@ export function ConversationPanelBody({
             </div>
           )
           : <HandReply key={targets.contactId} contactId={targets.contactId} offerId={targets.offerId} name={name.split(" ")[0]} sendsEnabled={sendsEnabled} onSent={onSent || onDone} />}
+        {feedback}
       </div>
     </div>
   );
 }
 
-export default function ConversationPanel({ item, targets, sendsEnabled, serverOffsetMs, onDone }) {
+export default function ConversationPanel({ item, targets, sendsEnabled, serverOffsetMs, onDone, fb, taught }) {
   const key = threadKey(targets.contactId);
   const t = useLoad(key, loadThread(targets.contactId), { maxAgeMs: THREAD_POLL_MS, pollMs: THREAD_POLL_MS });
   // After anything is sent: the thread is stale, and so is the queue. The old
@@ -135,6 +146,6 @@ export default function ConversationPanel({ item, targets, sendsEnabled, serverO
   const onSent = () => { t.reload(); onDone?.(); };
   return (
     <ConversationPanelBody item={item} targets={targets} thread={t.data} threadError={t.error} loading={t.loading}
-      onReload={t.reload} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} onSent={onSent} />
+      onReload={t.reload} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} onSent={onSent} fb={fb} taught={taught} />
   );
 }

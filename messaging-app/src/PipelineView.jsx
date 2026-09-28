@@ -46,7 +46,7 @@ function StatusStrip({ autopilot, working, liveDeals, daytime, refreshBtn }) {
   );
 }
 
-export default function PipelineView({ section = "queue" }) {
+export default function PipelineView({ section = "queue", settings = null }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -115,7 +115,7 @@ export default function PipelineView({ section = "queue" }) {
         <>
           <StatusStrip autopilot={data?.autopilot} working={working} liveDeals={liveDeals} daytime={data?.daytime} refreshBtn={refreshBtn} />
           <WorkView actions={actions} drafts={drafts} rowFeedback={data?.rowFeedback || {}} sendsEnabled={data?.sendsEnabled}
-            serverOffsetMs={offsetRef.current} onDone={refresh} />
+            serverOffsetMs={offsetRef.current} onDone={refresh} settings={settings} />
         </>
       )}
 

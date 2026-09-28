@@ -73,21 +73,30 @@ test("your calls come first on the rail; a machine row, opened, says what's next
   expect(html).not.toContain(">Stuck<");   // nothing is stuck, so there is no Stuck heading
 });
 
-test("every row on Today, a draft or not, opens with Teach it already showing, and what was taught", () => {
+test("every row on Today, a draft or not, has one Feedback control, and says what was noted", () => {
   const r = owedNumber();
   const audit = { id: "audit:unanswered_inbound:c9:2026-09-19T19:09:53", kind: "audit_owed", severity: "now", group: "yours", contactId: "c9", contactName: "Melissa W", title: "Melissa W: Texts we never answered", detail: "not drafted: the cap", ops: [{ key: "open_contact", label: "Open the thread", intent: "primary" }],
     feedback: { category: "should_have_replied", label: "Should have replied itself", note: "", at: "2026-09-20T15:00:00Z" } };
   const draft = { id: "d1", contactId: "c2", contactName: "Alan R", status: "draft", intent: "buyer_pulse", party: "investor", reply: "Alan, buying right now?", createdAt: "2026-09-20T09:00:00Z", outbound: { kind: "buyer_pulse" } };
   const draftRow = { id: "draft_waiting:d1", kind: "draft_waiting", severity: "now", group: "yours", contactId: "c2", draftId: "d1", title: "Alan R", ops: [] };
-  const actions = [...r.actions, audit, draftRow];
+  const blast = { id: "blast_no_opens:o7", kind: "blast_no_opens", severity: "soon", group: "yours", offerId: "o7", address: "7 Birch Ln, Auburn, WA", title: "Nobody opened it", ops: [] };
+  const actions = [...r.actions, audit, draftRow, blast];
   const rowFeedback = { "draft:d1": { category: "right_to_hand_over", label: "Right to hand it to me", note: "", at: "2026-09-20T15:00:00Z" } };
   for (const a of actions) {
     const html = render({ actions, drafts: [draft], rowFeedback, initialRowId: a.id });
-    expect(html).toContain("What should the bot have done?");
-    expect(html).toContain("Should have replied itself");   // the chips, without a click
+    expect(html.match(/aria-label="Feedback for the bot"/g)?.length).toBe(1);
+    expect(html).not.toContain("Teach the bot");
+    expect(html).not.toContain("What was wrong with it?");
   }
   expect(render({ actions, drafts: [draft], rowFeedback, initialRowId: audit.id })).toContain("noted · Should have replied itself");
   expect(render({ actions, drafts: [draft], rowFeedback, initialRowId: draftRow.id })).toContain("noted · Right to hand it to me");
+});
+
+test("the pane's own Record button stands in for the row's 'open the thread' button", () => {
+  const audit = { id: "audit:unanswered_inbound:c9:x", kind: "audit_owed", severity: "now", group: "yours", contactId: "c9", contactName: "Melissa W", title: "Melissa W: Texts we never answered", ops: [{ key: "open_contact", label: "Open the thread", intent: "primary" }] };
+  const html = render({ actions: [audit] });
+  expect(html).toContain("Record");
+  expect(html).not.toContain("Open the thread");
 });
 
 /* ---------- the three sides ---------- */
@@ -104,8 +113,28 @@ test("the offer side shows our number against theirs and what a buyer would be i
   expect(html).toContain("over what buyers pay (70%)");
   expect(html).toContain("85.6% of ARV");        // at their counter
   expect(html).toContain("seller wants 360");
-  expect(html).toContain("Their other offers");
+  expect(html).toContain("Offers with Dana · 2");
   expect(html).toContain("9 Oak St");
+  expect(html).not.toContain("Their other offers");
+});
+
+test("the header carries the offer's status menu, Edit offer and Record, and names the person and the house", () => {
+  const r = owedNumber();
+  const offer = { id: "o1", contactId: "c1", contactName: "Dana", address: "12 Elm St, Renton, WA", cashAmount: 410000, status: "sent", sends: [{ ts: "2026-09-19T00:00:00Z" }] };
+  const html = render({ actions: r.actions, bodies: { ...EMPTY, offer, siblings: [offer] } });
+  expect(html).toContain("Change status (currently Sent)");
+  expect(html).toContain("Edit offer");
+  expect(html).toContain("Record");
+  expect(html).toContain("Dana · 12 Elm St");
+  expect(html).not.toContain("Offers with");   // one offer: nothing to switch between
+});
+
+test("a row with no offer has no status menu to press", () => {
+  const events = [{ contactId: "c1", type: "promise_owed", at: "2026-09-20T13:00:00Z", address: "44 Pine Ave, Kent, WA", data: { what: "number", text: "I'll get back to you with a number." } }];
+  const r = buildPipeline({ events, now: NOW });
+  const html = render({ actions: r.actions });
+  expect(html).not.toContain("Change status");
+  expect(html).not.toContain("Edit offer");
 });
 
 test("a row with no offer says so and offers to start one", () => {
@@ -116,17 +145,32 @@ test("a row with no offer says so and offers to start one", () => {
   expect(html).toContain("Start one");
 });
 
-test("the reply box is the bot's draft when one is open, and a plain box when not", () => {
+test("the reply box holds the bot's draft as plain text, without the draft card around it", () => {
   const r = owedNumber();
-  const open = { id: "d5", contactId: "c1", contactName: "Dana", status: "draft", intent: "question", party: "agent", inbound: "Any update?", reply: "Still running numbers, Dana.", createdAt: "2026-09-20T16:00:00Z", flags: ["asks for a number"] };
+  const open = { id: "d5", contactId: "c1", contactName: "Dana", status: "draft", intent: "question", party: "agent", inbound: "Any update?", reply: "Still running numbers, Dana.", createdAt: "2026-09-20T16:00:00Z",
+    flags: ["a other is a person's call"], summary: "Dana asks for an update", profileUpdates: { learned: ["history: still live"] } };
   const withDraft = render({ actions: r.actions, drafts: [open] });
-  expect(withDraft).toContain("The bot&#x27;s draft");
+  expect(withDraft).toContain("drafted by the bot");
   expect(withDraft).toContain("Still running numbers, Dana.");
   expect(withDraft).toContain('id="work-reply"');
+  expect(withDraft).not.toContain("The bot&#x27;s draft");
+  expect(withDraft).not.toContain("They said:");
+  expect(withDraft).not.toContain("Needs you:");
+  expect(withDraft).not.toContain("Filed to their profile");
+  expect(withDraft).not.toContain("Dana asks for an update");
   const without = renderToStaticMarkup(<WorkView sendsEnabled={false} onDone={() => {}} bodies={EMPTY} actions={r.actions} drafts={[]} />);
   expect(without).toContain("The bot has nothing drafted");
   expect(without).toContain("sends are off — this previews only");
   expect(without).toContain('id="work-reply"');
+});
+
+test("a draft written before their last message says they've written since", () => {
+  const r = owedNumber();
+  const open = { id: "d5", contactId: "c1", contactName: "Dana", status: "draft", intent: "other", party: "agent", reply: "Straight up, 774.", createdAt: "2026-09-12T16:00:00Z" };
+  const thread = { more: false, messages: [{ id: "m1", at: "2026-09-19T18:00:00Z", channel: "sms", dir: "in", body: "Put forth an offer." }] };
+  expect(render({ actions: r.actions, drafts: [open], bodies: { ...EMPTY, thread } })).toContain("they&#x27;ve written since");
+  const fresh = { ...open, createdAt: "2026-09-19T19:00:00Z" };
+  expect(render({ actions: r.actions, drafts: [fresh], bodies: { ...EMPTY, thread } })).not.toContain("written since");
 });
 
 test("the thread shows both sides, oldest first", () => {
@@ -146,19 +190,15 @@ test("a row about no one person says the conversation isn't here", () => {
   expect(html).toContain("Nudge them");
 });
 
-test("the coach side shows this thread's lessons and what was taught before", () => {
+test("the coach's ideas for this thread are a header button, and only when it has some", () => {
   const r = owedNumber();
   const coach = {
     canFile: false,
     proposals: [{ id: "p1", kind: "rule", status: "open", text: "Don't open with sympathy.", why: "you cut the opener twice", evidence: ["d1"] }],
-    taught: [{ eventId: "e1", label: "Wrong read of the message", note: "they meant the other house", at: "2026-09-18T00:00:00Z", rowKind: "draft_waiting" }],
+    taught: [],
   };
-  const html = render({ actions: r.actions, bodies: { ...EMPTY, coach } });
-  expect(html).toContain("The coach proposes, from this thread");
-  expect(html).toContain("Don&#x27;t open with sympathy.");
-  expect(html).toContain(">Apply<");
-  expect(html).toContain("You taught it before");
-  expect(html).toContain("they meant the other house");
+  expect(render({ actions: r.actions, bodies: { ...EMPTY, coach } })).toContain("Coach · 1 idea");
+  expect(render({ actions: r.actions })).not.toContain("Coach ·");
 });
 
 test("the rail and the pane agree on where you are", () => {
