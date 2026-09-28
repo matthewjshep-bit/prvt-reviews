@@ -20,7 +20,7 @@ import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
-import { ourComeDown, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor } from "./shared/current-offer.js";
+import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor } from "./shared/current-offer.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
@@ -104,6 +104,8 @@ const statusWord = (s) => ({
 // current-offer.js), where the paper check reads it too.
 export { ourComeDown };
 
+const theirs = (note) => note.replace(/^countered at\b/i, "they countered at");
+
 export function summarizeOffers(offers = [], { now = Date.now(), showMath = false, transcript = "" } = {}) {
   const stale = new Set();
   // One line per house: its current offer (shared/current-offer.js), or its
@@ -123,6 +125,9 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
   const older = new Set();
   const lines = [];
   const amounts = new Set();
+  // Our number on each house — the come-down when there is one — for the
+  // reply gate's "never more than ours" check.
+  const numbers = [];
   for (const { row: o, superseded } of houses) {
     for (const s of superseded) if (Number(s.cashAmount) > 0) older.add(Math.round(Number(s.cashAmount)));
     const status = effectiveStatus(o);
@@ -132,6 +137,11 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       for (const n of roughAmounts(down.amount)) amounts.add(n);
       stale.add(Math.round(amount));
     } else if (amount) for (const n of roughAmounts(amount)) amounts.add(n);
+    if (amount) numbers.push({ address: o.address, amount: Math.round(down ? down.amount : amount) });
+    // A higher number we texted that the offer never moved to (Jesse,
+    // 2026-09-25: "workable for us at 650" on a 550K offer). Not allowed, and
+    // the model is told plainly so it neither repeats nor confirms it.
+    const up = !down && amount && !["passed", "expired", "withdrawn", "we_passed"].includes(status) ? ourMoveUp(o, transcript) : null;
     const asking = Number(o.askingPrice ?? o.inputs?.askingPrice ?? o.calc?.inputs?.askingPrice) || 0;
     if (asking) amounts.add(asking);
     const lastSend = (o.sends || []).filter((s) => s && s.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0];
@@ -158,8 +168,12 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     const gap = atPct && amount ? atPct - repairs - amount : 0;
     const ties = Boolean(atPct && amount) && gap >= 0 && gap <= Math.max(60000, amount * 0.08);
     if (showMath) { for (const n of [arv, repairs, atPct, atPct && repairs ? atPct - repairs : 0]) if (n > 0) amounts.add(n); }
+    // A counter on the book is always THEIRS. "countered at $650,000" read
+    // as ours once — say whose it is.
     const counters = (o.statusHistory || []).filter((h) => h?.status === "countered").slice(-2)
-      .map((h) => `countered${h.note ? ` (${String(h.note).slice(0, 60)})` : ""} ${dateWord(h.ts)}`);
+      .map((h) => (Number(h.amount) > 0
+        ? `they countered at ${fmtMoney(h.amount)} ${dateWord(h.ts)}`
+        : `they countered${h.note ? ` (${theirs(String(h.note).slice(0, 60))})` : ""} ${dateWord(h.ts)}`));
     const heat = offerHeat(o);
     const realm = o.realm?.answer === "yes" ? "agent said the number is in the realm" : "";
     const parts = [
@@ -179,6 +193,10 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
           `${atPct && repairs ? `; less rehab = ${fmtMoney(atPct - repairs)}` : ""}; after our costs and margin = the offer` +
           `${ties ? "" : " — the figures don't tie exactly (the number was capped or set by hand): describe the method, don't do the arithmetic out loud"}]`
         : "",
+      up
+        ? `— WE TEXTED ${fmtMoney(up.amount)} ${dateWord(up.ts)} ("${up.text}"), but the offer was never revised to it. ` +
+          `It is NOT our number: never repeat it, confirm it, or treat a yes as agreement to it. A person is settling the price — say you're confirming with your partner`
+        : "",
       `— status: ${statusWord(status)}`,
       status === "we_passed" ? "WE WALKED AWAY from this house: closed on our side, do not chase it or name its number" : "",
       lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" ? "" : "not sent yet",
@@ -187,8 +205,8 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       counters.length ? `history: ${counters.join("; ")}` : "",
       realm,
       // Step 4 of the goal is reached: what's left is getting it written up.
-      heat ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on NWMLS forms for us to sign` : "",
-      o.statusNote ? `note: ${String(o.statusNote).slice(0, 120)}` : "",
+      heat && !up ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on NWMLS forms for us to sign` : "",
+      o.statusNote ? `note: ${theirs(String(o.statusNote).slice(0, 120))}` : "",
       superseded.length ? `(${superseded.length} older offer${superseded.length === 1 ? "" : "s"} on this house superseded — this is the only number on it; never quote an older one)` : "",
     ].filter(Boolean);
     lines.push(`- ${parts.join(" ")}`);
@@ -196,7 +214,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
   // An older row's number is stale unless the live book says it too.
   for (const n of older) if (!amounts.has(n)) stale.add(n);
   for (const n of stale) amounts.delete(n);
-  return { text: lines.join("\n"), amounts: [...amounts], stale: [...stale], count: rows.length };
+  return { text: lines.join("\n"), amounts: [...amounts], stale: [...stale], count: rows.length, numbers };
 }
 
 // The tail of a history ledger — the properties they've sent or discussed

@@ -256,6 +256,98 @@ export function ourComeDown(o, transcript = "") {
   return best;
 }
 
+/**
+ * shorthandPrices(text, reference) → [dollars]
+ *
+ * A price typed without its thousands: "workable for us at 650", "we can do
+ * 650", "650 works". The money readers want a $, a comma group or a k, so
+ * this is the sentence that got past them (Jesse, 39811 226th Ave SE,
+ * 2026-09-25: the bot agreed to 650 on our 550K offer and nothing saw a
+ * number). Only beside a price word, never before a unit or a capitalised
+ * street name, and only where ×1000 is plausible beside `reference` (our
+ * number) — 50K to 5M when there is none.
+ */
+const SHORT_UNIT = /^\s*(?:[kKmM%]|days?\b|hours?\b|hrs?\b|minutes?\b|mins?\b|weeks?\b|wks?\b|months?\b|years?\b|yrs?\b|am\b|pm\b|sq|beds?\b|baths?\b|st\b|nd\b|rd\b|th\b)/;
+const SHORT_BEFORE_RX = /\b(?:at|to|for|do|of|around|about|pay|paying|offer|go|be|near|meet(?:\s+you)?\s+at|up\s+to)\s+(\d{2,4})(ish)?(?![\d,]|\.\d)/gi;
+// Not the tail of "1,304,955" or "$683,750": whole numbers only.
+const SHORT_AFTER_RX = /(?<![\d,.$])\b(\d{2,4})(ish)?\s+(?:works|would\s+work|could\s+work|is\s+workable|is\s+doable|as-is|as\s+is|cash|flat|all\s+in)\b/gi;
+function shorthandHits(t, reference) {
+  const ref = Math.max(0, Number(reference) || 0);
+  const plausible = (v) => (ref ? v >= ref * 0.4 && v <= ref * 3 : v >= 50000 && v <= 5e6);
+  const hits = [];
+  for (const rx of [SHORT_BEFORE_RX, SHORT_AFTER_RX]) {
+    for (const m of t.matchAll(rx)) {
+      const said = m[1] + (m[2] || "");
+      const start = rx === SHORT_BEFORE_RX ? m.index + m[0].length - said.length : m.index;
+      const end = start + said.length;
+      const rest = rx === SHORT_BEFORE_RX ? t.slice(end, end + 12) : "";
+      if (rest && (SHORT_UNIT.test(rest) || /^\s+[A-Z]/.test(rest))) continue;
+      const v = Number(m[1]) * 1000;
+      if (plausible(v)) hits.push({ v, start, end });
+    }
+  }
+  return hits;
+}
+export function shorthandPrices(text = "", reference = 0) {
+  return [...new Set(shorthandHits(String(text || ""), reference).map((h) => h.v))];
+}
+
+// Not a price we'd pay: the list price, their price, and the value or the work.
+const NOT_OURS_AFTER = /^\s*(?:arv\b|after[- ]repair|(?:in|of|for)\s+(?:rehab|repairs?|work)\b|rehab\b|repairs?\b|(?:worth\s+)?of\s+work\b|done\b|fixed\b|finished\b|renovated\b|retail\b|once\b|after\s+(?:the\s+)?(?:work|reno|rehab|repairs)|emd\b|earnest\b|deposit\b|is\s+(?:way\s+|well\s+|a\s+(?:bit|lot)\s+|too\s+)?(?:past|over|above|beyond|out\s+of|more\s+than|too))/i;
+const NOT_OURS_BEFORE = /(?:\barv|after[- ]repair value|\brehab|\brepairs?|\bwork|\blist(?:ed|ing)?(?:\s+price)?|\basking(?:\s+price)?|\bpriced|\bon\s+price|\bthe\s+market|\bworth|\bvalue|\b(?:came|come|dropped|reduced|cut|down)\s+(?:down\s+)?to|\breads?\s+(?:like|as))\s*(?:is|of|at|=|:|around|about|~|for)?\s*$/i;
+
+/**
+ * pricesWeName(text, reference) → [dollars]
+ *
+ * The prices a reply of ours puts on the house — "$650k", "650k", and the
+ * shorthand "at 650" — but not the ARV, the rehab or the list price said
+ * beside them. What the reply gate measures against our own number.
+ */
+export function pricesWeName(text = "", reference = 0) {
+  const t = String(text || "");
+  const out = new Set();
+  const ours = (start, end) => !NOT_OURS_AFTER.test(t.slice(end, end + 28)) && !NOT_OURS_BEFORE.test(t.slice(Math.max(0, start - 28), start));
+  for (const m of t.matchAll(LINE_MONEY_RX)) {
+    if (!ours(m.index, m.index + m[0].length)) continue;
+    const n = toDollars(m[0]);
+    if (n > 0) out.add(n);
+  }
+  for (const h of shorthandHits(t, reference)) if (ours(h.start, h.end)) out.add(h.v);
+  return [...out];
+}
+
+/**
+ * ourMoveUp(offer, transcript) → { amount, ts, text } | null
+ *
+ * The other half of ourComeDown: a HIGHER number we put to the agent after
+ * the offer's number last moved, that the offer was never revised to. Jesse
+ * (2026-09-25): the book said 550K, the bot texted "workable for us at
+ * 650", and his "yes I can do that" was released as an acceptance of 550.
+ * Whoever typed it, the book and the thread now disagree, and nothing a
+ * machine does next — accept, send paper, restate — is safe until a person
+ * settles the number (a re-quote or a revision moves pricedAt past it).
+ */
+export function ourMoveUp(o, transcript = "") {
+  const amount = Number(o?.cashAmount) || 0;
+  if (!amount || !transcript) return null;
+  const since = pricedAt(o);
+  const slack = Math.max(1000, amount * 0.005);
+  let best = null;
+  for (const line of String(transcript).split(/\r?\n/)) {
+    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US \w+: (.*)$/.exec(line);
+    if (!m) continue;
+    const ts = Date.parse(`${m[1]}T${m[2]}:00Z`);
+    if (!Number.isFinite(ts) || ts < since) continue;
+    const text = m[3].trim();
+    if (/\bhere's our (revised )?(written cash offer|letter of intent)\b/i.test(text)) continue;
+    const higher = pricesWeName(text, amount).filter((n) => n > amount + slack && n <= amount * 3);
+    if (!higher.length) continue;
+    const n = Math.max(...higher);
+    if (!best || n > best.amount) best = { amount: n, ts, text: text.slice(0, 120) };
+  }
+  return best;
+}
+
 const kText = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(2)}M` : `${Math.round(n / 1000)}K`);
 
 /**
@@ -277,6 +369,15 @@ export function paperCheck({ offer = null, offers = null, transcript = "" } = {}
     return {
       ok: false, comeDown: down,
       reason: `we texted ${kText(down.amount)} on ${new Date(down.ts).toISOString().slice(0, 10)} after this offer's ${fmtMoney(Number(offer.cashAmount) || 0)} — re-quote it at ${kText(down.amount)} before any paper goes out`,
+    };
+  }
+  // A higher number is never re-quoted to by a button: that is a person
+  // deciding to pay more, so there is no comeDown for the app to offer.
+  const up = ourMoveUp(offer, transcript);
+  if (up) {
+    return {
+      ok: false, moveUp: up,
+      reason: `we texted ${kText(up.amount)} on ${new Date(up.ts).toISOString().slice(0, 10)} after this offer's ${fmtMoney(Number(offer.cashAmount) || 0)} — a person has to settle the number before any paper goes out`,
     };
   }
   return { ok: true, reason: "" };

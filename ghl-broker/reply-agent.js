@@ -47,7 +47,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
-import { currentOffers, currentOfferFor, paperCheck, ourComeDown } from "./shared/current-offer.js";
+import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
@@ -652,7 +652,7 @@ const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 
 export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], inboundMessage = "", channel = "sms", style = null,
-  minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "",
+  minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", ourAmount = 0,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -711,7 +711,9 @@ export function evaluateReplyGates({
   // never hear — our contract price, our fee — is flagged even if they said
   // it first. And a number that is in neither the record book nor their own
   // message was made up, which is the worst thing this could do.
-  const said = moneyIn(draft.reply);
+  // "at 650" is a price too (shorthandPrices) — Jesse, 2026-09-25.
+  const ours = Math.max(0, Math.round(Number(ourAmount) || 0));
+  const said = [...new Set([...moneyIn(draft.reply), ...shorthandPrices(draft.reply, ours)])];
   const forbidden = new Set(forbiddenAmounts.map((n) => Math.round(n)));
   const leaked = said.filter((n) => forbidden.has(n));
   if (leaked.length) {
@@ -725,10 +727,32 @@ export function evaluateReplyGates({
   if (backTo.length) {
     flags.push(`the draft names ${[...new Set(backTo)].map((n) => fmtMoney(n)).join(", ")}, which we already came down from in the thread`);
   }
-  const allowed = new Set([...allowedAmounts, ...moneyIn(inboundMessage)].map((n) => Math.round(n)));
+  // Their shorthand counts as theirs the way ours counts as ours: "$650 is
+  // their bottom" is 650K, and echoing it is not inventing it.
+  const theirShort = [
+    ...shorthandPrices(inboundMessage, ours),
+    ...moneyIn(inboundMessage).filter((n) => n >= 10 && n < 10000).map((n) => n * 1000),
+  ];
+  const allowed = new Set([...allowedAmounts, ...moneyIn(inboundMessage), ...theirShort].map((n) => Math.round(n)));
   const invented = said.filter((n) => !allowed.has(n) && !forbidden.has(n) && !stale.has(n) && !roundsFromBook(n, allowed) && !roundsFromBook(n, stale));
   if (invented.length) {
     flags.push(`the draft names ${[...new Set(invented)].map((n) => fmtMoney(n)).join(", ")}, which is not in the ${party === "investor" ? "deal book" : "offer book"}`);
+  }
+  // More than our number, on the house, in our words. That the agent typed
+  // it first makes it allowed to echo, not ours to agree to: "that scope is
+  // workable for us at 650" on a 550K offer went out as a deal_available
+  // (Jesse, 2026-09-25). Paying more is the counter band's arithmetic
+  // or a person's call, never the model's. A counter is left clean so the
+  // band can still weigh it — and a band that says yes rewrites the reply in
+  // its own words — but `overOffer` rides on the gate so nothing else (the
+  // nightly audit) can release it.
+  let overOffer = [];
+  if (party === "agent" && ours > 0) {
+    const slack = Math.max(1000, ours * 0.005);
+    overOffer = pricesWeName(draft.reply, ours).filter((n) => n > ours + slack && !forbidden.has(n));
+    if (overOffer.length && draft.intent !== "counter") {
+      flags.push(`the draft says ${overOffer.map((n) => fmtMoney(n)).join(", ")}, above our ${fmtMoney(ours)} offer — only the counter band or a person agrees to more`);
+    }
   }
   // `ok` is the row's word — a counter is not auto-sendable, full stop. But
   // the lock is the ONE flag a guard may overturn, so it is named apart from
@@ -737,7 +761,7 @@ export function evaluateReplyGates({
   // only code releaseUnderGuard will open. Without this the band and the
   // calendar could never release anything — the lock tripped "gates" first.
   const locked = flags.find((f) => / is a person's call$/.test(f)) || null;
-  return { ok: flags.length === 0, flags, locked, clean: flags.filter((f) => f !== locked).length === 0 };
+  return { ok: flags.length === 0, flags, locked, clean: flags.filter((f) => f !== locked).length === 0, overOffer };
 }
 
 /**
@@ -793,6 +817,8 @@ export function releaseForAudit({ auto, gate, draft, deps }) {
   // A paper hold (stale_number) is a number question, like the gates: never
   // released as "a holding reply".
   if (!HELD_FOR_A_PERSON.has(auto?.code) || auto.code === "gates" || auto.code === "stale_number") return auto;
+  // A counter that names more than our number is never "a holding reply".
+  if (gate?.overOffer?.length) return auto;
   // "Locked but clean" is how the gates report a never-auto intent whose
   // reply passed every money check — the shape decideAutoSend itself accepts.
   const clean = Boolean(gate?.ok || (gate?.locked && gate?.clean));
@@ -992,8 +1018,25 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
   };
   const args = { offer: full, draft, inboundMessage: job.message || "", settings: saved || {},
                  band, openOffers: open, releasedToday, now, moneyIn: saidMoney,
-                 comeDown: full ? ourComeDown(full, transcript) : null };
+                 // A higher number we texted that the offer never moved to
+                 // disagrees with the book just as much: "yes" to it is not
+                 // a yes to the book (Jesse, 2026-09-25).
+                 comeDown: full ? (ourComeDown(full, transcript) || ourMoveUp(full, transcript)) : null };
   return draft.intent === "acceptance" ? evaluateAcceptance(args) : evaluateCounterBand(args);
+}
+
+// Our number on the house a draft is about, from the offer book — the most
+// the reply may say we'd pay. A named house the book doesn't have has no
+// number of ours (a made-up one is still caught as not in the book); no house
+// named, the highest of ours.
+export function ourNumberFor(numbers = [], address = "") {
+  const list = (numbers || []).filter((n) => n && Number(n.amount) > 0);
+  if (!list.length) return 0;
+  if (address) {
+    const named = list.find((n) => sameStreet(n.address, address));
+    return named ? Math.round(named.amount) : 0;
+  }
+  return Math.round(Math.max(...list.map((n) => n.amount)));
 }
 
 // Do we already have this house in the agent's book? A live or recent offer
@@ -2089,7 +2132,8 @@ async function runProactive(job, ctx) {
   const forbiddenAmounts = extraForbidden.length
     ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]
     : context.forbiddenAmounts;
-  const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff });
+  const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
+    ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)) });
   const gate = gateFor(draft);
   let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
   auto = releaseForAudit({ auto, gate, draft, deps });
@@ -2313,7 +2357,7 @@ async function runReply(job, ctx) {
     }
   }
 
-  // A counter far past what we'd pay is a pass, not a negotiation. Jesse Roach
+  // A counter far past what we'd pay is a pass, not a negotiation. Jesse
   // (2026-09-14): "They can't take that offer. Their lowest at this time is
   // $700k" against our $550k — the band had no room (our number was already
   // over the buyer line), so the draft sat for a person, the offer stayed
@@ -2491,6 +2535,7 @@ async function runReply(job, ctx) {
     draft: d, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
     inboundMessage: inboundText, channel: job.channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
+    ourAmount: ourNumberFor(context.offers?.numbers, d.propertyAddress),
   });
   const gate = gateFor(draft);
   let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive });
@@ -3384,6 +3429,7 @@ export async function previewConversation({
   const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [], inboundMessage: message, channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
+    ourAmount: ourNumberFor(context.offers?.numbers, draft.propertyAddress),
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
