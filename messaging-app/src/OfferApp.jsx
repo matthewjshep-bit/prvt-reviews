@@ -337,7 +337,7 @@ export default function OfferApp() {
               : (o) => { setEditing(o); setView("new"); }} />
         )}
         {view === "conversation" && <ConversationAi settings={settings} />}
-        {view === "pipeline" && <PipelineView section="queue" />}
+        {view === "pipeline" && <PipelineView section="queue" settings={settings} />}
         {view === "board" && <PipelineView section="board" />}
         {view === "controls" && <AutopilotView />}
         {view === "lessons" && <LessonsTab onSettingsSaved={(s) => setSettings(s)} />}

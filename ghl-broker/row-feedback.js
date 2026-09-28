@@ -13,7 +13,7 @@ import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
 import {
   normalizeRowFeedback, publicRowFeedback, rowFeedbackDedupeKey,
-  ROW_FEEDBACK_EVENT, ROW_FEEDBACK_SENTINEL_CONTACT,
+  ROW_FEEDBACK, ROW_FEEDBACK_EVENT, ROW_FEEDBACK_SENTINEL_CONTACT,
 } from "./shared/row-feedback.js";
 
 const clip = (v, n) => String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, n);
@@ -27,7 +27,7 @@ const idish = (v, n = 64) => clip(v, n);
  */
 export async function recordRowFeedback({ store = defaultStore, locationId, body = {}, now = Date.now() } = {}) {
   const fb = normalizeRowFeedback(body);
-  if (!fb) throw Object.assign(new Error("category must be one of: should_have_replied, should_have_acted, wrong_read, right_to_hand_over"), { http: 400 });
+  if (!fb) throw Object.assign(new Error(`category must be one of: ${ROW_FEEDBACK.join(", ")}`), { http: 400 });
   const rowId = clip(body.rowId, 200);
   if (!rowId) throw Object.assign(new Error("rowId is required"), { http: 400 });
 

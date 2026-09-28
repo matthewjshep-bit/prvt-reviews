@@ -67,7 +67,7 @@ const kindLabelOf = (rowKind, auditKind = "") => {
   if (rowKind === "draft" || rowKind === "draft_waiting") return "Drafts waiting on you";
   return String(rowKind || "a row on Today").replace(/_/g, " ");
 };
-const base = (d) => ({
+const baseOf = (d) => ({
   id: d.id, party: d.party || "agent", intent: d.intent || "other", kind: d.outbound?.kind || null,
   theySaid: clip(d.inbound), botWrote: clip(d.reply),
   why: d.feedback ? { code: d.feedback.code, label: DRAFT_FEEDBACK_LABEL[d.feedback.code] || d.feedback.code, note: clip(d.feedback.note, 300) } : null,
@@ -87,6 +87,10 @@ export function gatherSignals({ drafts = [], audit = null, stats = null, errors 
   const recent = drafts.filter((d) => d && ms(when(d)) >= from && ms(when(d)) <= now);
   const newest = (a, b) => ms(when(b)) - ms(when(a));
 
+  // A draft you also gave feedback on (Today's one Feedback control) keeps
+  // its verdict there; its own why would be the same thing counted twice.
+  const fbDrafts = new Set((promiseEvents || []).filter((e) => e?.type === ROW_FEEDBACK_EVENT && e.data?.draftId).map((e) => e.data.draftId));
+  const base = (d) => ({ ...baseOf(d), why: fbDrafts.has(d.id) ? null : baseOf(d).why });
   const edits = recent.filter((d) => d.status === "sent" && d.edited && !d.autoSent).sort(newest)
     .slice(0, SIGNAL_CAP).map((d) => ({ ...base(d), youSent: clip(d.sentText) }));
   const dismissals = recent.filter(personDismissed).sort(newest)
@@ -181,6 +185,8 @@ The data may include "rowFeedback": the owner saying directly, on a row of the a
 - "Should have replied itself": the bot held or stayed out when it could have answered. Propose an instruction or a rule for that situation. If it was held by a gate, an auto-send switch or a "person's call" rule, that is a code_gap — never a rule that tells the bot to skip a gate.
 - "Should have taken an action": the bot should have sent the offer, run the numbers, marked a status, tagged, or booked. Propose a code_gap that names the action and the situation.
 - "Wrong read of the message": it misread the intent, the party, the address or the number. Propose an example (when the owner's note says what the right reading was) or a rule.
+- "Shouldn't have replied": the bot answered when it should have stayed out. Propose a rule or an instruction naming the situation.
+- "Wrong tone", "Wrong facts", "Wrong number", "Too long", "Missed the question": what was wrong with the words of the bot's draft (botWrote). Treat them as you would the same reason on a dismissed draft.
 "counterEvidence" lists rows the owner marked "Right to hand it to me": nothing to learn, and never build a lesson on them. If a rowFeedback note contradicts the current guidance, say so in "why" and propose the change.
 
 Hard limits. Break one and the proposal is thrown away:

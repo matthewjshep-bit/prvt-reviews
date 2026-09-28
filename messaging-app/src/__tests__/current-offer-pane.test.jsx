@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { OfferPanelBody } from "../OfferPanel.jsx";
+import { OfferPanelBody, parseAmount } from "../OfferPanel.jsx";
 
 // 13041 SE 208th St, Kent (2026-09-25): five rows on one house. The pane says
 // which is current, what the older ones are, and offers the re-quote when the
@@ -23,4 +23,28 @@ test("a row that pointed at the older offer says it is showing the current one",
   const html = renderToStaticMarkup(<OfferPanelBody offer={aug} siblings={[aug, july]} item={{ offerId: "july" }} replaced={july} />);
   expect(html).toContain("pointed at an older offer");
   expect(html).toContain("$416,500");
+});
+
+test("our number can be re-quoted in place, except on a deal", () => {
+  const live = renderToStaticMarkup(<OfferPanelBody offer={july} siblings={[july]} item={{ offerId: "july" }} onRequote={() => ({})} />);
+  const pencil = (html) => html.match(/<button[^>]*aria-label="Change our offer"[^>]*>/)?.[0] || "";
+  expect(pencil(live)).not.toBe("");
+  expect(pencil(live)).not.toContain(`disabled=""`);
+  const deal = renderToStaticMarkup(<OfferPanelBody offer={{ ...july, deal: { stage: "under_contract" } }} siblings={[]} item={{ offerId: "july" }} onRequote={() => ({})} />);
+  expect(pencil(deal)).toContain(`disabled=""`);
+  expect(deal).toContain("It&#x27;s a deal — change the price on the deal");
+});
+
+test("a typed re-quote reads 750k, $750,000 and a bare 750 as the same number", () => {
+  expect(parseAmount("750k")).toBe(750000);
+  expect(parseAmount("$750,000")).toBe(750000);
+  expect(parseAmount("750")).toBe(750000);
+  expect(parseAmount("1.2m")).toBe(1200000);
+  expect(parseAmount("abc")).toBe(0);
+});
+
+test("switching between their offers happens in the pane, with the one shown marked", () => {
+  const html = renderToStaticMarkup(<OfferPanelBody offer={aug} siblings={[aug, july]} item={{ offerId: "aug", contactName: "Rae Q" }} onSelectOffer={() => {}} />);
+  expect(html).toContain("Offers with Rae · 2");
+  expect(html).toMatch(/aria-current="true"[^>]*>[\s\S]*?13041 SE 208th St/);
 });

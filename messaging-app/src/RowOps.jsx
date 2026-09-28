@@ -155,12 +155,14 @@ export function AnswerBox({ item, onDone, textareaId }) {
 const PANE_HANDLES = new Set(["show_draft", "answer"]);
 
 /**
- * <RowOpsBar item onDone onOpenContact hasDraft />
+ * <RowOpsBar item onDone onOpenContact hasDraft hasRecord />
  * Every op the row names, in its order. open_outbox is the draft when the
- * conversation has it, the contact's record when it doesn't.
+ * conversation has it, the contact's record when it doesn't. With hasRecord
+ * the pane's own Record button already opens the contact, so open_contact
+ * isn't a second one.
  */
-export function RowOpsBar({ item, onDone, onOpenContact, hasDraft = false }) {
-  const ops = (item.ops || []).filter((op) => !PANE_HANDLES.has(op.key) && !(op.key === "open_outbox" && hasDraft));
+export function RowOpsBar({ item, onDone, onOpenContact, hasDraft = false, hasRecord = false }) {
+  const ops = (item.ops || []).filter((op) => !PANE_HANDLES.has(op.key) && !(op.key === "open_outbox" && hasDraft) && !(op.key === "open_contact" && hasRecord));
   if (!ops.length) return null;
   return (
     <div className="flex flex-wrap items-start gap-1.5">

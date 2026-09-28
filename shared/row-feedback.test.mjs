@@ -1,14 +1,14 @@
 // row-feedback.test.mjs — the vocabulary for "what should the bot have done?"
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeRowFeedback, latestRowFeedback, feedbackEvidenceId, publicRowFeedback, ROW_FEEDBACK, LEARNABLE_FEEDBACK } from "./row-feedback.js";
+import { normalizeRowFeedback, latestRowFeedback, feedbackEvidenceId, publicRowFeedback, ROW_FEEDBACK, ROW_FEEDBACK_WORDS, ROW_FEEDBACK_ACTS, LEARNABLE_FEEDBACK, isWordFeedback } from "./row-feedback.js";
 
 test("a category the app doesn't know is not feedback; a note is kept to 300 characters", () => {
   assert.equal(normalizeRowFeedback({ category: "vibes", note: "x" }), null);
   assert.equal(normalizeRowFeedback({ note: "a note with no category" }), null);
   assert.deepEqual(normalizeRowFeedback({ category: "Should Have Replied", note: "  it   knew the answer  " }), { category: "should_have_replied", note: "it knew the answer" });
   assert.equal(normalizeRowFeedback({ category: "wrong_read", note: "x".repeat(400) }).note.length, 300);
-  assert.equal(ROW_FEEDBACK.length, 4);
+  assert.equal(ROW_FEEDBACK.length, ROW_FEEDBACK_WORDS.length + ROW_FEEDBACK_ACTS.length);
   assert.equal(LEARNABLE_FEEDBACK.has("right_to_hand_over"), false, "handing it over is not a lesson");
 });
 
@@ -28,4 +28,13 @@ test("two saves on one row: the newer one is what's read", () => {
 
 test("the evidence id names the event, not the row", () => {
   assert.equal(feedbackEvidenceId({ id: "e9", data: { rowId: "r1" } }), "fb:e9");
+});
+
+test("one feedback list: what was wrong with the words, and what it should have done, both teach the coach", () => {
+  assert.deepEqual(normalizeRowFeedback({ category: "Wrong number", note: "we never go over 600" }), { category: "wrong_number", note: "we never go over 600" });
+  assert.deepEqual(normalizeRowFeedback({ category: "should_not_reply" }), { category: "should_not_reply", note: "" });
+  for (const c of ["wrong_tone", "wrong_facts", "wrong_number", "too_long", "missed_the_question", "should_not_reply"]) assert.ok(LEARNABLE_FEEDBACK.has(c), c);
+  assert.equal(normalizeRowFeedback({ category: "other", note: "x" }), null, "'other' is a note, not a chip");
+  assert.equal(isWordFeedback("wrong_tone"), true);
+  assert.equal(isWordFeedback("should_have_replied"), false);
 });
