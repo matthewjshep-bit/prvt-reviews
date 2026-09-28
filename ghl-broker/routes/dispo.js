@@ -22,6 +22,7 @@ import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } f
 import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
 import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES } from "../shared/buyer-score.js";
 import { relationshipOf, TALK_EVENT_TYPES } from "../shared/talked-to.js";
+import { buyersInPlay } from "../shared/offer-status.js";
 import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
 import { purchaseEvents } from "../buyer-import.js";
 import { DISPO_IMPORTS_ENABLED, previewCsv, startImport, getImportJob, publicImportJob, cancelImport } from "../dispo-import.js";
@@ -298,10 +299,9 @@ export default function createDispoRouter({ resolveLocation }) {
     const ids = new Set();
     for (const offer of await store.listDeals(locationId)) {
       if (!LIVE.has(offer.deal?.stage)) continue;
-      for (const i of offer.deal.investors || []) {
-        // Someone who already passed on this deal is free for the next one.
-        if (i.status !== "passed") ids.add(i.contactId);
-      }
+      // Committed, or evaluating while the deal still needs a buyer. A pass,
+      // a bare pitch or a backup is free for the next deal.
+      for (const id of buyersInPlay(offer.deal.investors)) ids.add(id);
     }
     return ids;
   }

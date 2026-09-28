@@ -336,6 +336,24 @@ export const outreachPausedReason = (p, address = "") =>
  * was retired still carry it, and there is no migration: a buyer we'd sent
  * a deal to was being worked, which is what evaluating means.
  */
+/**
+ * buyersInPlay(deal.investors) → Set of contactIds actually working this deal.
+ *
+ * Committed or soft-committed always. Evaluating only while nobody has
+ * committed — once a buyer has, the rest are backups, not buyers in play.
+ * A pitch ("sent") and a pass never count.
+ */
+export function buyersInPlay(investors = []) {
+  const list = investors || [];
+  const taken = list.some((i) => i?.status === "committed" || i?.status === "soft_commit");
+  const ids = new Set();
+  for (const i of list) {
+    if (!i?.contactId) continue;
+    if (i.status === "committed" || i.status === "soft_commit" || (!taken && i.status === "evaluating")) ids.add(i.contactId);
+  }
+  return ids;
+}
+
 export function investorStatus(s) {
   const v = String(s || "").trim().toLowerCase();
   if (v === "sent") return "evaluating";
