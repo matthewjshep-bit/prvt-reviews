@@ -48,3 +48,8 @@ test("markets read back off synced tags, ignoring unrelated dispo tags", () => {
   assert.deepEqual(m, { cities: ["lake-forest-park"], regions: ["north-king"], types: ["rental"], states: ["TX"] });
   assert.equal(cityLabel("lake-forest-park"), "Lake Forest Park");
 });
+
+test("a mobile home buyer shows as mobile / manufactured, not dropped as an unknown type", () => {
+  const m = marketsFromTags(["investor", "dispo-type-mobile-home", "dispo-source-fb-warei"]);
+  assert.deepEqual(m.types, ["mobile-home"]);
+});

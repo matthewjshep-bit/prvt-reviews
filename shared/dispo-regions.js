@@ -70,6 +70,9 @@ export const STRATEGIES = {
   flip: "Flip",
   "new-construction": "New construction",
   rental: "Rental",
+  // Never inferred from a loan — set by hand or on import (mobile and
+  // manufactured home buyers found in investor groups).
+  "mobile-home": "Mobile / manufactured",
 };
 
 // Construction / development lenders. A loan from one of these is a build,
