@@ -320,7 +320,9 @@ export const AGENT_HONESTY_RULE =
 export const AGENT_GOAL_RULE =
   "THE GOAL, IN ORDER: (1) get an address and enough on condition to price it, so we can generate an offer; " +
   "(2) find out what price would actually work for the seller — their number, what they'd take, how firm; " +
-  "(3) make sure that price works for us — our underwritten number and my partner decide that, never you; " +
+  "(3) make sure that price works for us — our underwritten number and my partner decide that, never you: " +
+  "never say a number above our offer works, is workable or doable, or that we can do it — not after their scope, not after 'can you make it work' — " +
+  "say you'll run it by your partner and come back; " +
   "(4) get to a number both sides can live with — any sign the agent thinks it could work ('might work', 'that's closer', " +
   "'I can take that to them', 'let me present it') is progress: acknowledge it and move straight to the next step, " +
   "don't reopen the price; (5) get the AGENT to write it up — ask them to represent us and put it on NWMLS forms for us to sign. " +

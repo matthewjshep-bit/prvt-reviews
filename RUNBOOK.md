@@ -1037,6 +1037,47 @@ the row the old send path would have picked, and any paper that would be
 held. First run, 2026-09-25: 207 houses; 57 with more than one offer; on 36
 of those the old path picked a different row; 2 held.
 
+### Never more than our number (2026-09-28)
+
+Jesse, 39811 226th Ave SE, Enumclaw. Our offer was 550K, already over
+the band's ceiling (the ceiling reads 0 on this house). The passed check-in
+asked if the sellers had moved. He came back with "$650 is their bottom
+bottom … $650k plus my fees". The bot asked for his value and repairs. He sent
+a scope, and the bot auto-sent a `deal_available` reply: "That scope is
+workable for us at 650. Can you write it up on NWMLS forms". **"at 650" has no
+k**, so `moneyIn` never saw a number and the money guard had nothing to check.
+His "Yes I can do that" was then released under the acceptance band as "they
+took our number". The band read the book's 550, not the 650 we had just
+texted. Three days of "waiting on my partner" texts followed.
+
+What holds it now:
+- **Shorthand is money.** `shorthandPrices` (`shared/current-offer.js`) reads
+  a bare 2–4 digit number beside a price word ("at 650", "do 650",
+  "650 works", "650ish as-is") as thousands, when ×1000 is plausible beside
+  our number (0.4–3×). It never reads a number before a unit or a capitalised
+  street name, or the tail of a comma group. The gate's `said` includes it.
+  Their shorthand ("$650 is their bottom") counts as theirs to echo.
+- **Nothing above ours.** `evaluateReplyGates({ ourAmount })` flags any price
+  in an agent reply above our number on the house (`pricesWeName`, slack
+  max($1k, 0.5%)), even when the agent typed it first. Our number comes from
+  `ourNumberFor(book.numbers, draft.propertyAddress)`: the come-down when there
+  is one, and 0 for a named house with no offer. A `counter` stays clean so
+  the band can weigh it, and the band's own words replace the reply. The gate
+  carries `overOffer`, and `releaseForAudit` never releases it.
+- Not counted as ours: the ARV, rehab or work, the list price, "came down to",
+  "reads as", EMD or earnest, and "Nk is way past…".
+- **The thread moved up.** `ourMoveUp` is `ourComeDown`'s other half. It finds a
+  higher number we texted after the row last moved. Both bands' `current_number`
+  check fails on it. `paperCheck` holds paper with no `comeDown`, so there is no
+  "Re-quote at N" button: paying more is a person's call. The offer book tells
+  the model the number is not ours, and hides the HOT line.
+- **Counters read as theirs** in the book: "they countered at $650,000".
+- The prompt's goal rule (3) says never to call a number above ours workable.
+
+Replay over the 30 days before the fix: 11 of 606 agent replies with an offer
+on the book would have held. Most were genuine mismatches, e.g. "still at 400"
+on a 373.5K book, and "still good for 700k" on a 669K book.
+
 ### What the drafts cost (2026-09-25)
 
 September's bill was about $7 a day, and 85–90% of it was the reply drafter
