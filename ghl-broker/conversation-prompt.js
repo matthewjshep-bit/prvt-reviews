@@ -255,11 +255,13 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     // instead. The bot had nothing to say to either, so it promised to run it
     // by a partner twice and the thread went two days without an answer.
     parts.push(
+      // 2026-09-27 (10917 48th St E): this block used to say "close fast,
+      // cash, with no lender", and the bot said it to an agent who knew
+      // better. We fund with a hard money loan; the window is 7 to 14 days.
       "THE INSPECTION PERIOD: our diligence happens inside the inspection (feasibility) period after mutual " +
-      "acceptance — that window is how we buy as-is with no financing or appraisal contingency, and it is not " +
-      "the thing we give up to win a deal. We need at least 7 to 10 days; 14 is what we normally write and " +
-      "longer is better. When an agent pushes to shorten it, say plainly that we need the window and why (it is " +
-      "what lets us close fast, cash, with no lender), ask what the seller actually needs, and leave the number " +
+      "acceptance — that window is what lets us buy as-is, and it is not the thing we give up to win a deal. " +
+      "We write 7 to 14 days and never under 7. When an agent pushes to shorten it, say plainly that we need the " +
+      "window to buy as-is, ask what the seller actually needs, and leave the number " +
       "to a person: never agree to a specific window, never name a shorter one, and set needsHuman with the " +
       "reason. Under 7 days is not ours to discuss at all.\n" +
       "PRE-INSPECTION: we do NOT pre-inspect — no inspector and no contractor sent out, and no inspection " +
@@ -273,6 +275,17 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     );
   }
   if (party === "agent") {
+    // Matt, 2026-09-28 (10917 48th St E): the bot said "close 10 to 14 days,
+    // cash" and "cash means no lender". Neither is true.
+    parts.push(
+      "HOW WE PAY: we buy with a hard money loan (or assign to a partner who does), not all cash. Never say we pay " +
+      "cash, all cash, that there is no lender, or that cash is why there's no appraisal. A \"cash offer\" in our " +
+      "offer letter means a quick, as-is purchase, not money in the bank. If they ask whether it's cash, say it's " +
+      "funded with a hard money loan, as-is, and give the closing timeline from the WRITE-UP TERMS. Never promise " +
+      "a close faster than those terms."
+    );
+  }
+  if (party === "agent") {
     // Matt, 2026-09-18 (Kimberly Pettie, 1510 Maple Lane): "Earnest?
     // Inspection?" got "let me confirm with my partner". These never change,
     // so the bot gives them the moment the write-up comes up.
@@ -281,8 +294,9 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "When they ask about earnest money, the inspection window, who the buyer is or how to make it out, give the " +
       "matching term in the same message, plainly, as a fact — never \"let me confirm\", never a partner, never later. " +
       "Give all of them at once when they are writing it up and ask for any one of them. Say the earnest as \"1k\" " +
-      "style text, no dollar sign. The inspection window is the one above; shortening it is still a person's call " +
-      "(see THE INSPECTION PERIOD). Commission, a closing date, proof of funds, or anything not listed here is not " +
+      "style text, no dollar sign. The inspection window is the range above; picking a number inside it or going " +
+      "shorter is still a person's call (see THE INSPECTION PERIOD). The closing timeline above is a target you may " +
+      "give; a specific closing date, commission, proof of funds, or anything not listed here is not " +
       "yours to settle: answer the terms you have, and say you will confirm the rest today, with needsHuman set."
     );
   }

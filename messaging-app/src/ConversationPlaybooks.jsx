@@ -489,11 +489,14 @@ export function WriteUpTermsEditor({ config, patch }) {
   const set = (k) => (v) => patch({ writeUp: { ...w, [k]: v } });
   return (
     <Section title="Write-up terms"
-      intro="What the bot tells a listing agent who asks how to write it up. Earnest and the inspection window it may say on its own; shortening the window, commission and the closing date still wait for you.">
+      intro="What the bot tells a listing agent who asks how to write it up. Earnest, the inspection range, how we pay and the target close it may say on its own; picking a window, a closing date and commission still wait for you.">
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Earnest money ($)" hint="Said as text, e.g. 1k."><Text type="number" value={w.earnestMoney} onChange={(v) => set("earnestMoney")(Number(v))} /></Field>
         <Field label="Earnest due" hint='"after inspection" reads as "preferably due after the inspection period".'><Text value={w.earnestDue} onChange={set("earnestDue")} placeholder="after inspection" /></Field>
-        <Field label="Inspection window (days)"><Text type="number" value={w.inspectionDays} onChange={(v) => set("inspectionDays")(Number(v))} /></Field>
+        <Field label="Inspection window, shortest (days)"><Text type="number" value={w.inspectionDaysMin} onChange={(v) => set("inspectionDaysMin")(Number(v))} /></Field>
+        <Field label="Inspection window, longest (days)"><Text type="number" value={w.inspectionDays} onChange={(v) => set("inspectionDays")(Number(v))} /></Field>
+        <Field label="How we pay" hint='Said as "funded with …". Never "cash, no lender".'><Text value={w.funding} onChange={set("funding")} placeholder="a hard money loan" /></Field>
+        <Field label="Close (days from mutual acceptance)" hint="Inspection included."><Text type="number" value={w.closeDays} onChange={(v) => set("closeDays")(Number(v))} /></Field>
         <Field label="Buyer on the contract"><Text value={w.buyer} onChange={set("buyer")} placeholder="Matthew Shepherd and/or assigns" /></Field>
       </div>
     </Section>
