@@ -523,6 +523,10 @@ export const getDashboardAudit = () => fetch(`${API_BASE}/api/dashboard/audit?${
 export const dismissPromise = (contactId, address = "", reason = null) => post(`/api/dashboard/promises/dismiss`, { contactId, address, reason });
 // "What should the bot have done?" on any Today row (shared/row-feedback.js). The nightly coach reads it.
 export const sendRowFeedback = (body) => post(`/api/dashboard/feedback`, body);
+// Dismiss on any Today row: off the queue until it says something new
+// (shared/today-dismiss.js). restoreTodayRow is the Undo.
+export const dismissTodayRow = (row) => post(`/api/dashboard/rows/dismiss`, { rowId: row.id, kind: row.kind, severity: row.severity, title: row.title, detail: row.detail });
+export const restoreTodayRow = (rowId) => post(`/api/dashboard/rows/restore`, { rowId });
 // A question the bot couldn't answer, answered from Today: drafted to them in
 // our voice (waits in the outbox for Send) and kept as a standing answer.
 export const answerPartnerQuestion = ({ contactId, draftId = null, address = "", question = "", answer, saveAsFact = true }) =>

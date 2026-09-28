@@ -25,6 +25,7 @@ import { settlePromise, heldTriageForPromises } from "../promise-sweep.js";
 import { recordEvent } from "../contact-record.js";
 import { recordRowFeedback } from "../row-feedback.js";
 import { latestRowFeedback, publicRowFeedback, ROW_FEEDBACK_EVENT, ROW_FEEDBACK_DAYS } from "../shared/row-feedback.js";
+import { addDismissal, removeDismissal, applyDismissals, TODAY_DISMISS_CURSOR } from "../shared/today-dismiss.js";
 import { answerPartnerQuestion, forgetAnswer } from "../partner-answer.js";
 import express from "express";
 import { store } from "../store.js";
@@ -419,7 +420,16 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const rowFeedback = {};
       for (const [rowId, e] of latestRowFeedback(feedbackEvents, { now })) rowFeedback[rowId] = publicRowFeedback(e);
       const withFeedback = (a) => (rowFeedback[a.id] ? { ...a, feedback: rowFeedback[a.id] } : a);
+      // Rows you dismissed stay off until they say something new
+      // (shared/today-dismiss.js); the counts drop with them.
+      const dismissedDoc = (await store.getJobCursor?.(locationId, TODAY_DISMISS_CURSOR).catch(() => null))?.doc || null;
+      const { actions: shownActions, hidden: dismissedRows } = applyDismissals([...out.actions, ...fromLastNight], dismissedDoc, now);
+      for (const a of dismissedRows) {
+        if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
+        if (out.actions.includes(a) && out.counts.actions[a.severity] > 0) out.counts.actions[a.severity]--;
+      }
       res.json({
+        dismissedCount: dismissedRows.length,
         rowFeedback,
         audit: audit ? { lastRunAt: auditCursor.at, run: auditCursor.doc?.run || null, counts: audit.counts, summary: summarizeAudit(audit), finishedAt: audit.finishedAt, trigger: audit.trigger, dryRun: audit.dryRun, error: audit.error, ghlRead: audit.ghlRead } : null,
         daytime: dayLast ? { finishedAt: dayLast.finishedAt, started: (dayLast.acted || []).filter((a) => ["started", "queued", "clocked"].includes(a.status)).length,
@@ -434,7 +444,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         // row the outbox uses, so send/edit/dismiss/apply come for free.
         drafts,
         ...out,
-        actions: [...out.actions, ...fromLastNight].map(withFeedback),
+        actions: shownActions.map(withFeedback),
       });
     } catch (err) { fail(res, err); }
   });
@@ -464,6 +474,33 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     try {
       const { locationId } = resolveLocation(req);
       res.json(await recordRowFeedback({ store, locationId, body: req.body || {} }));
+    } catch (err) { fail(res, err); }
+  });
+
+  // Dismiss on any Today row: off the queue until it says something new.
+  // Body: { rowId, kind, severity, title, detail } — what the row read when
+  // you dismissed it, so a change brings it back. POST /rows/restore { rowId }
+  // is the Undo. Nothing about the row is changed, sent or logged.
+  router.post("/rows/dismiss", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const b = req.body || {};
+      const rowId = String(b.rowId || "").slice(0, 200);
+      if (!rowId) return res.status(400).json({ error: "rowId is required" });
+      const cur = await store.getJobCursor(locationId, TODAY_DISMISS_CURSOR).catch(() => null);
+      const doc = addDismissal(cur?.doc, { id: rowId, kind: b.kind, severity: b.severity, title: b.title, detail: b.detail });
+      await store.setJobCursor(locationId, TODAY_DISMISS_CURSOR, { doc });
+      res.json({ ok: true, rowId });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/rows/restore", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const rowId = String(req.body?.rowId || "").slice(0, 200);
+      if (!rowId) return res.status(400).json({ error: "rowId is required" });
+      const cur = await store.getJobCursor(locationId, TODAY_DISMISS_CURSOR).catch(() => null);
+      await store.setJobCursor(locationId, TODAY_DISMISS_CURSOR, { doc: removeDismissal(cur?.doc, rowId) });
+      res.json({ ok: true, rowId });
     } catch (err) { fail(res, err); }
   });
 

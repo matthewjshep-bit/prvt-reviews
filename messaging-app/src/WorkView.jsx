@@ -14,7 +14,8 @@ import { coachKey, loadCoach } from "./CoachIdeas.jsx";
 import { TEACH_EVENT } from "./RowFeedback.jsx";
 import { loadOffer, offerKey } from "./OfferPanel.jsx";
 import { forget, prefetch } from "./work-data.js";
-import { GROUP_LABEL, KIND_LABEL, keyIntent, neighborId, nextAfterRemoval, orderRows, railLabel, rowTargets, teachRowId } from "./work-queue.js";
+import { dismissTodayRow, restoreTodayRow } from "./api.js";
+import { GROUP_LABEL, KIND_LABEL, canDismissRow, keyIntent, neighborId, nextAfterRemoval, orderRows, railLabel, rowTargets, teachRowId } from "./work-queue.js";
 
 const readRowParam = () => {
   try { return new URLSearchParams(window.location.search).get("row") || null; } catch { return null; }
@@ -35,7 +36,11 @@ const modalOpen = () => typeof document !== "undefined" && Boolean(document.quer
  *   bodies   tests only: data for the pane's three sides instead of loading it
  */
 export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, sendsEnabled, serverOffsetMs = 0, onDone, settings = null, bodies = null, initialRowId = null }) {
-  const ordered = useMemo(() => orderRows(actions), [actions]);
+  // Rows dismissed here leave at once, before the refresh confirms it.
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+  const ordered = useMemo(() => orderRows(actions).filter((r) => !hiddenIds.has(r.id)), [actions, hiddenIds]);
+  const [undoRow, setUndoRow] = useState(null);   // the row the toast can bring back
+  const dismissedId = useRef(null);
   const [selectedId, setSelectedId] = useState(() => initialRowId || (typeof window !== "undefined" ? readRowParam() : null));
   const [filter, setFilter] = useState("");
   const [machineOpen, setMachineOpen] = useState(false);
@@ -65,11 +70,17 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
     if (next !== was) {
       setSelectedId(next);
       const row = ordered.find((r) => r.id === next);
-      setToast(row ? `Done — next: ${railLabel(row)}` : "Done — that was the last one.");
+      const verb = dismissedId.current === was ? "Dismissed" : "Done";
+      dismissedId.current = null;
+      setToast(row ? `${verb} — next: ${railLabel(row)}` : `${verb} — that was the last one.`);
     }
   }, [ordered]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { if (!toast) return undefined; const t = setTimeout(() => setToast(""), 3500); return () => clearTimeout(t); }, [toast]);
+  useEffect(() => {
+    if (!toast) return undefined;
+    const t = setTimeout(() => { setToast(""); setUndoRow(null); }, undoRow ? 6000 : 3500);
+    return () => clearTimeout(t);
+  }, [toast, undoRow]);
   useEffect(() => { shownId.current = current?.id || null; if (current) writeRowParam(current.id); }, [current?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Read the next row ahead.
@@ -90,6 +101,32 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
   // the queue.
   const done = () => { forget(offerKey(targets.offerId), coachKey(targets.contactId)); onDone?.(); };
 
+  // Dismiss: off the queue now (the pane moves to the next row), remembered
+  // by the broker so a refresh doesn't bring it back, and undoable from the toast.
+  const dismiss = async (row) => {
+    if (!row || !canDismissRow(row)) return;
+    dismissedId.current = row.id;
+    setUndoRow(row);
+    setHiddenIds((s) => new Set([...s, row.id]));
+    try { await dismissTodayRow(row); onDone?.(); }
+    catch (e) {
+      setHiddenIds((s) => { const n = new Set(s); n.delete(row.id); return n; });
+      setUndoRow(null);
+      setToast(`Couldn't dismiss it: ${e.message || "try again"}`);
+    }
+  };
+  const undo = async () => {
+    const row = undoRow;
+    if (!row) return;
+    setUndoRow(null); setToast("");
+    try {
+      await restoreTodayRow(row.id);
+      setHiddenIds((s) => { const n = new Set(s); n.delete(row.id); return n; });
+      setSelectedId(row.id);
+      onDone?.();
+    } catch (e) { setToast(`Couldn't undo: ${e.message || "try again"}`); }
+  };
+
   useEffect(() => {
     function onKey(e) {
       if (modalOpen()) return;
@@ -101,6 +138,7 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
       else if (intent === "reply") document.getElementById(REPLY_BOX_ID)?.focus();
       else if (intent === "teach") window.dispatchEvent(new Event(TEACH_EVENT));
       else if (intent === "offer") window.dispatchEvent(new Event(OPEN_OFFER_EVENT));
+      else if (intent === "dismiss") dismiss(current);
       else if (intent === "help") setShowKeys((v) => !v);
     }
     window.addEventListener("keydown", onKey);
@@ -135,7 +173,7 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
       {current ? (
         <WorkPane key={current.id} item={current} targets={targets} index={index} total={visible.length}
           onPrev={prevId ? () => go(prevId) : null} onNext={nextId ? () => go(nextId) : null} picker={picker}
-          onDone={done} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} feedback={feedback}
+          onDone={done} onDismiss={dismiss} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} feedback={feedback}
           showKeys={showKeys} onToggleKeys={() => setShowKeys((v) => !v)} settings={settings} bodies={bodies} />
       ) : (
         <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
@@ -143,8 +181,9 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
         </div>
       )}
       {toast && (
-        <div role="status" className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-1.5 text-sm text-white shadow-lg">
-          {toast}
+        <div role="status" className={`${undoRow ? "" : "pointer-events-none "}absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-lg bg-slate-900 px-3 py-1.5 text-sm text-white shadow-lg`}>
+          <span>{toast}</span>
+          {undoRow && <button type="button" className="font-semibold text-sky-300 underline" onClick={undo}>Undo</button>}
         </div>
       )}
     </div>

@@ -89,6 +89,11 @@ export function rowTargets(item, drafts = []) {
 // The Teach control's row id. A draft row is taught under its draft (the
 // same key the outbox uses), every other row under its own id.
 export const DRAFT_ROW_KINDS = new Set(["draft_waiting", "draft_scheduled"]);
+// Every row can be dismissed from its header, except the two that already
+// carry a Dismiss of their own: a draft (the composer bins it) and an owed
+// promise (it asks why, for the coach).
+export const canDismissRow = (item) => Boolean(item?.id) && !DRAFT_ROW_KINDS.has(item.kind) && !(item.ops || []).some((o) => o.key === "dismiss_promise");
+
 export const teachRowId = (item) => (DRAFT_ROW_KINDS.has(item?.kind) && item.draftId ? `draft:${item.draftId}` : item?.id);
 
 /** What the rail calls a row: the street, else the person, else the title. */
@@ -98,7 +103,7 @@ export function railLabel(item) {
 }
 
 /**
- * keyIntent(e) → "next" | "prev" | "reply" | "teach" | "offer" | "help" | null
+ * keyIntent(e) → "next" | "prev" | "reply" | "teach" | "offer" | "dismiss" | "help" | null
  *
  * Typing is never a shortcut: nothing fires from a text box, a select, an
  * open menu, or with a modifier held.
@@ -115,13 +120,14 @@ export function keyIntent(e) {
     case "r": case "R": return "reply";
     case "t": case "T": return "teach";
     case "o": case "O": return "offer";
+    case "d": case "D": return "dismiss";
     case "?": return "help";
     default: return null;
   }
 }
 
 export const KEYS_HELP = [
-  ["J  ↓", "next row"], ["K  ↑", "previous row"], ["R", "reply"], ["T", "feedback for the bot"], ["O", "edit the offer"], ["⌘ ↵", "send what you typed"], ["?", "these keys"],
+  ["J  ↓", "next row"], ["K  ↑", "previous row"], ["R", "reply"], ["T", "feedback for the bot"], ["O", "edit the offer"], ["D", "dismiss the row"], ["⌘ ↵", "send what you typed"], ["?", "these keys"],
 ];
 
 /**

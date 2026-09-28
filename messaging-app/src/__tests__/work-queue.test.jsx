@@ -1,5 +1,5 @@
 import { test, expect } from "vitest";
-import { orderRows, neighborId, nextAfterRemoval, rowTargets, teachRowId, railLabel, keyIntent, allInPct, allInTone } from "../work-queue.js";
+import { orderRows, neighborId, nextAfterRemoval, rowTargets, teachRowId, railLabel, keyIntent, allInPct, allInTone, canDismissRow } from "../work-queue.js";
 
 const row = (id, kind, group, over = {}) => ({ id, kind, group, severity: "soon", title: id, ops: [], ...over });
 
@@ -85,4 +85,12 @@ test("all-in reads against the 70% a buyer pays", () => {
 test("a held-paper draft opens on the offer it would have sent", () => {
   const drafts = [{ id: "h1", contactId: "c1", status: "draft", paperHold: { offerId: "aug", amount: 400000 } }];
   expect(rowTargets({ id: "r", kind: "draft_waiting", group: "yours", contactId: "c1", draftId: "h1" }, drafts).offerId).toBe("aug");
+});
+
+test("D dismisses the row, and draft and promise rows keep the Dismiss they already have", () => {
+  expect(keyIntent({ key: "d", target: { tagName: "DIV" } })).toBe("dismiss");
+  expect(keyIntent({ key: "d", target: { tagName: "TEXTAREA" } })).toBe(null);
+  expect(canDismissRow({ id: "closing_soon:o1", kind: "closing_soon", ops: [] })).toBe(true);
+  expect(canDismissRow({ id: "draft_waiting:d1", kind: "draft_waiting", ops: [] })).toBe(false);
+  expect(canDismissRow({ id: "promise:c1", kind: "promise_owed", ops: [{ key: "dismiss_promise" }] })).toBe(false);
 });
