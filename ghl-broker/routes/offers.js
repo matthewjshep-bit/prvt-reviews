@@ -4557,6 +4557,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const ts = new Date().toISOString();
       const counter = Math.max(0, Math.round(Number(amount) || 0));
       recordStatus(offer, status, dealStr(note, 200), ts, { amount: counter, source: "conversation" });
+      // A counter or a no says the price isn't settled: heat the conversation
+      // raised comes off (a flag a person set is theirs to clear). A later
+      // warm word raises it again.
+      if (offer.hot?.by === "conversation") delete offer.hot;
       await store.updateOffer(offer.id, offer);
       await appendDealHistory(client, locationId, contactId, "agent_deal_history",
         historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), dealStr(note, 200)),
@@ -4715,6 +4719,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     if (String(hint || "").trim()) {
       const closed = pickDealByAddress(live, hint);
       if (closed && (status === "countered" || effectiveStatus(closed) === status)) return closed;
+      // The house they named is ours and closed: what they said is about IT,
+      // never about their other house (34418 54th Ave S, 2026-09-23: "your
+      // price is firm" on the passed 54th made 28605 51st Pl S hot).
+      if (closed) return { reason: `the offer on ${closed.address} is ${effectiveStatus(closed).replace(/_/g, " ")}` };
       if (!open.length) return { reason: "no open offer on that address" };
       return open.length === 1 ? open[0] : { reason: "the message named a house with no open offer, and the agent has several" };
     }
