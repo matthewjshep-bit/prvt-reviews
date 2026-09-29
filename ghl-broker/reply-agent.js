@@ -42,6 +42,7 @@ import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
+import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
@@ -317,6 +318,24 @@ export async function callDraftModel(client, params, { batch = null } = {}) {
   return { response, batched: false };
 }
 
+/**
+ * walkthroughDealFor(deals, address) → the deal row a buyer's walkthrough
+ * talk is about, or null.
+ *
+ * Only a deal under contract that the buyer is already on (sent it, or
+ * linked). The one the message names, else the only one there is — two open
+ * houses and no address is a person's read, not ours.
+ */
+export function walkthroughDealFor(deals = null, address = "") {
+  const rows = (deals?.linked || []).filter((d) => d?.stage === "under_contract" && d.offerId);
+  if (!rows.length) return null;
+  if (address) {
+    const named = rows.find((d) => sameStreet(d.address, address));
+    if (named) return named;
+  }
+  return rows.length === 1 ? rows[0] : null;
+}
+
 function parseDraft(response, intents, cfg) {
   if (response.stop_reason === "max_tokens") {
     throw Object.assign(new Error("reply drafting was truncated"), { http: 502 });
@@ -337,6 +356,8 @@ function parseDraft(response, intents, cfg) {
     counterAmount: Math.max(0, Number(p.counterAmount) || 0),
     // Investors only, and only when they turned something down.
     passReason: normalizePassReason(p.passReason),
+    // Investors only: what this message said about walking the house.
+    walkthrough: RSVP_SIGNALS.includes(p.walkthrough) ? p.walkthrough : "",
     // Agents only: what THEY think it's worth and costs. Theirs, never ours.
     agentTake: normalizeAgentTake(p),
     // Agents only: how warm they are toward our number ("might work", "let's present it").
@@ -2532,12 +2553,25 @@ async function runReply(job, ctx) {
     return;
   }
 
+  // The buyer walkthrough (shared/showing.js). A buyer's answer about
+  // walking a house we hold is filed on the deal whatever happens to the
+  // reply — "I can make Saturday" must not live only in a thread.
+  const walkDeal = party === "investor" ? walkthroughDealFor(context?.deals, draft.propertyAddress) : null;
+  if (walkDeal && draft.walkthrough && deps.recordShowingRsvp) {
+    await deps.recordShowingRsvp({ offerId: walkDeal.offerId, contactId: job.contactId, name: a.contactName || "", status: draft.walkthrough })
+      .catch((e) => warnings.push(`walkthrough answer not filed: ${e.message}`));
+  }
+
   // A walkthrough, a call, a time: yours by design, and therefore a draft
   // that was never going to be sent. The heads-up is the useful output. The
   // calendar is the exception — once it is wired it can answer a time for
-  // real, so the draft stands and the guard decides.
+  // real, so the draft stands and the guard decides. So is a buyer who wants
+  // to walk a house we have under contract (Matt, 2026-09-29): getting them
+  // out there is the job, so the reply is written for a person to send —
+  // wants_walkthrough stays NEVER_AUTO, so it is never sent on its own.
   const bookingCouldAnswer = Boolean(booking) && (BOOKING_INTENTS[party] || []).includes(draft.intent);
-  if ((config.notifyOnly || []).includes(draft.intent) && !bookingCouldAnswer) {
+  const walkthroughDraft = Boolean(walkDeal) && draft.intent === "wants_walkthrough";
+  if ((config.notifyOnly || []).includes(draft.intent) && !bookingCouldAnswer && !walkthroughDraft) {
     await handleNotifyOnly(job, { ...ctx, config, party, partySource: a.partySource, matchedTags: a.matchedTags, draft });
     return;
   }
@@ -2845,6 +2879,7 @@ async function runReply(job, ctx) {
     // Why they turned it down. Rides on the draft so the feedback actions
     // have it, and so the row can show it whether or not they ran.
     passReason: draft.passReason || null,
+    ...(draft.walkthrough ? { walkthrough: draft.walkthrough } : {}),
     // The model's own words, kept when the reply was rewritten to say the
     // offer went out, so step 5 can put them back if it didn't.
     ...(draft.replyBeforeSend ? { replyBeforeSend: draft.replyBeforeSend } : {}),

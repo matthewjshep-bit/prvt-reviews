@@ -53,7 +53,7 @@ export function nextAfterRemoval(prevList = [], nextList = [], id) {
   return nextList[0]?.id ?? null;
 }
 
-const INVESTOR_KINDS = new Set(["deal_no_buyers", "blast_no_opens", "investor_price_agreed", "closing_soon"]);
+const INVESTOR_KINDS = new Set(["deal_no_buyers", "blast_no_opens", "investor_price_agreed", "closing_soon", "showing_soon"]);
 const OPEN_DRAFT = new Set(["draft", "scheduled"]);
 
 /**

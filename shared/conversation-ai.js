@@ -72,7 +72,7 @@ export const INTENT_LABEL = {
     realm_yes: "number is in the realm", realm_check: "floated our number", take_check: "floated our read",
     offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", take_ask: "asked for their read to finish our numbers", partner_answer: "your answer to a question the bot couldn't", passed_checkin: "checked back in on a passed offer", hot_push: "pushed an agreed price toward paper",
     outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text",
-    call_followup: "text after a call", promise_due: "kept our word on a number we owed", price_drop: "saw the list price come down", checkin_due: "the check-in they asked for", address_chase: "asked again for the address of a property they said was coming",
+    call_followup: "text after a call", showing_ask: "asked for a buyer walkthrough window", promise_due: "kept our word on a number we owed", price_drop: "saw the list price come down", checkin_due: "the check-in they asked for", address_chase: "asked again for the address of a property they said was coming",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
     wants_call: "wants a call", scheduling: "scheduling", proof_of_funds: "proof of funds",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",

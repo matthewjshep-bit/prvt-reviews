@@ -41,14 +41,15 @@ export function blastNote(text = "", max = 90) {
  *
  * `rehab` is a REHAB_APPETITES key or "". `link` is the buyer's own package
  * link; with it the text ends on the link rather than offering to send the
- * details. `variant` picks the phrasing (0-2);
+ * details. `ask` is the walkthrough question; with it the text ends on that
+ * question (then the link). `variant` picks the phrasing (0-2);
  * the caller rotates it per recipient. Every fact is optional — a deal with
  * nothing filled in still sends the street, the work and the price, which is
  * what this used to be.
  */
 export function blastMessage({
   firstName = "", address = "", city = "", price = 0, beds = 0, baths = 0, sqft = 0,
-  yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", variant = 0, link = "",
+  yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", variant = 0, link = "", ask = "",
 } = {}) {
   const first = String(firstName || "").trim().split(/\s+/)[0] || "";
   const hi = first ? `Hey ${first}, ` : "Hey, ";
@@ -61,9 +62,9 @@ export function blastMessage({
   const work = REHAB_WORDS[rehab] ? `${REHAB_WORDS[rehab]} rehab` : "needs work";
   // What it costs and what it's worth — the ask first, because that is the
   // number they decide on, then the two that say whether it's a deal.
-  const ask = kText(price);
+  const priceText = kText(price);
   const money = [
-    ask ? `Buyer price ${ask}` : "",
+    priceText ? `Buyer price ${priceText}` : "",
     kText(arv) ? `ARV around ${kText(arv)}` : "",
     kText(repairs) ? `rehab about ${kText(repairs)}` : "",
   ].filter(Boolean).join(", ");
@@ -71,6 +72,19 @@ export function blastMessage({
   const tail = line ? `${line}. ` : "";
   const v = Math.abs(Math.round(Number(variant) || 0)) % 3;
   const url = String(link || "").trim();
+  // The walkthrough question (shared/showing.js walkthroughAsk). A buyer who
+  // walks it buys it, so when the caller has one the text ends on it, with
+  // the package link after, in place of the offer to send the details.
+  const q = String(ask || "").replace(/\$/g, "").replace(/\s+/g, " ").trim();
+  if (q) {
+    const lead = ["Photos and numbers", "Full package", "Everything's here"][v];
+    const opener = v === 0
+      ? `${hi}got ${street}${where} under contract${spec ? ` — ${spec}` : ""}, ${work}. `
+      : v === 1
+        ? `${hi}new one${where}: ${street}${spec ? `, ${spec}` : ""}, ${work}. `
+        : `${hi}${street}${where} just went under contract${spec ? ` (${spec})` : ""}. ${work[0].toUpperCase()}${work.slice(1)}. `;
+    return `${opener}${money ? `${money}. ` : ""}${tail}${q}${url ? ` ${lead}: ${url}` : ""}`;
+  }
   if (v === 0) {
     return `${hi}got ${street}${where} under contract${spec ? ` — ${spec}` : ""}, ${work}. ${money ? `${money}. ` : ""}${tail}${url ? `Photos and numbers: ${url}` : "Want the details?"}`;
   }

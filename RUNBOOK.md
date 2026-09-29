@@ -2408,6 +2408,51 @@ that becomes the usual suggestion with the reason on it. Off by default.
 PDF from the deal, the buyer and the company settings (`offer.assignment`),
 for review. Off by default.
 
+### Buyer walkthrough (2026-09-29)
+
+The goal of every text to a buyer about a deal under contract is a time they
+will walk it. Matt chose one **group window** per house, agreed with the
+listing agent, that every blast and reply invites buyers to. Asking commits
+nobody, so the machine may ask. A text that **confirms** a buyer's time is a
+person's to send: `wants_walkthrough` stays in `NEVER_AUTO`.
+
+- **The shape.** `offer.deal.showing` holds `windows` (up to 3, start/end ISO),
+  `access` (`agent` | `lockbox` | `matt`, set per deal, plus a private note),
+  `agentAsk` (`none` | `asked` | `confirmed`) and `rsvps` (`interested`,
+  `coming`, `cant_make_it`, `attended`, `no_show`). The pure rules live in
+  `shared/showing.js`. The offer doc stores it, so there is no schema change.
+- **Blasts.** `dispoAutopilot.showings.askInBlast` is on by default because it
+  changes copy, not sends. A blast ends on "Walkthrough is Sat Oct 3,
+  10am-12pm. Can you make it?", or on "When could you get out to walk it?"
+  when no window is set, followed by the package link. `blast-refresh.js`
+  reads the question again at send time, so a window set after the blast was
+  queued is in every text that hasn't gone out yet.
+- **The listing agent.** The live-deal hold keeps the model away from the
+  agent on a deal under contract, so the ask is a fixed text written straight
+  to the outbox (`outbound.kind: "showing_ask"`, party agent). It asks for a
+  day, an hour window, and whether they let buyers in or there's a lockbox.
+  There are two ways to send it:
+  - press **Ask for a window** in the Deals modal or on the Today row; it
+    sends at the next open minute;
+  - turn on `dispoAutopilot.showings.askAgentOnPromote` (off by default).
+
+  The agent's answer isn't parsed. You type the window on the deal, and that
+  marks the ask `confirmed`.
+- **Buyer replies.** The investor context gives every deal under contract its
+  window, its access line and this buyer's RSVP. `COMMITMENTS.investor` ("THE
+  GOAL IS A WALKTHROUGH") tells the bot to invite them to the exact window and
+  never to propose another time. The investor schema's `walkthrough` field
+  (`coming` / `cant_make_it` / `interested`) is filed on the deal by
+  `deps.recordShowingRsvp` before the notify-only check, whatever happens to
+  the reply. A `wants_walkthrough` on a deal we hold is drafted instead of
+  notify-only, and the draft waits on Today for you.
+- **Today.** `showing_no_window` fires when there's no window and the agent
+  hasn't been asked, or 1+ day after asking with no window set.
+  `showing_soon` fires when a window starts within 36h, and says who's coming
+  and whether access is set.
+- **Not built.** A reminder text the day before, and a "what did you think?"
+  text after the window.
+
 ### Pulse check between deals (2026-09-18)
 
 Settings → Dispositions → "Pulse check between deals". The buyer pool only

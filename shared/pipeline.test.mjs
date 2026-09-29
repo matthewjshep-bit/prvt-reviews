@@ -628,3 +628,21 @@ test("the board shows one card per house — the current offer — and moves a d
   assert.deepEqual(r.cards.map((c) => c.offerId || c.id), ["aug"]);
   assert.equal(r.counts.hidden.superseded, 1);
 });
+
+// Matt, 2026-09-29: every buyer text invites them to a walkthrough window,
+// so a deal under contract without one is the first thing Today asks about.
+test("a deal under contract with no walkthrough window asks for one, then says who's coming once it's near", () => {
+  const none = build({ offers: [deal()] });
+  const row = none.actions.find((a) => a.kind === "showing_no_window");
+  assert.equal(row?.ops[0].key, "ask_agent_window");
+  const asked = build({ offers: [deal({}, { showing: { agentAsk: { status: "asked", at: D(2) } } })] });
+  assert.match(asked.actions.find((a) => a.kind === "showing_no_window")?.title || "", /asked the agent for a walkthrough window 2d ago/);
+  const soon = build({ offers: [deal({}, { showing: {
+    windows: [{ start: new Date(NOW + 20 * 3600000).toISOString(), end: new Date(NOW + 22 * 3600000).toISOString() }],
+    access: { mode: "agent" }, rsvps: [{ contactId: "b1", name: "Ray", status: "coming" }, { contactId: "b2", status: "interested" }],
+  } })] });
+  assert.equal(kinds(soon).includes("showing_no_window"), false);
+  const s = soon.actions.find((a) => a.kind === "showing_soon");
+  assert.equal(s?.detail, "1 coming · 1 interested, no time yet");
+  assert.equal(soon.cards[0].deal.showing.coming, 1);
+});

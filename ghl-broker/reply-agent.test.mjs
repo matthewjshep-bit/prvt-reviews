@@ -3944,3 +3944,53 @@ test("a blast text quotes the deal's price when it sends, not the price when it 
   await sendReplyDraft({ client: client2, store: store2, locationId: "LOC", draftId: "d1", text: "Alex, call me about K St.", live: true, dataroomBaseUrl: "https://deals.example" });
   assert.equal(calls2.find(([p]) => p === "/conversations/messages")[1].body.message, "Alex, call me about K St.");
 });
+
+// Matt, 2026-09-29: the goal of every buyer text is a time they'll walk the
+// house. "Can I see it Saturday?" on a deal we hold used to get a GHL note
+// and no reply at all (wants_walkthrough is notify-only); now the answer is
+// filed on the deal and a reply is written for Matt to send.
+test("a buyer who wants to walk a house we have under contract gets a reply drafted for Matt, and their answer is filed on the deal", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor-active"]);
+  const store = fakeStore();
+  const walkDeal = { ...DEAL, deal: { ...DEAL.deal, investors: [{ contactId: "c1", name: "Sam Lee", status: "evaluating" }],
+    showing: { windows: [{ start: "2026-09-05T17:00:00Z", end: "2026-09-05T19:00:00Z" }], access: { mode: "agent" } } } };
+  store.listDeals = async () => [walkDeal];
+  const filed = [];
+  let seen;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: AUTO_SAVED, store, contactId: "c1", message: "yeah I can make saturday",
+    deps: {
+      now: () => NOW,
+      recordShowingRsvp: async (x) => { filed.push(x); return { ok: true }; },
+      draft: async (args) => { seen = args; return { ...INVESTOR_DRAFT, intent: "wants_walkthrough", walkthrough: "coming", needsHuman: true,
+        reply: "Great, I'll put you down for Saturday and send the details.", summary: "Coming to the Saturday walkthrough." }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.match(seen.context.text, /walkthrough window: Sat Sep 5, 10am-12pm/);
+  assert.match(seen.context.text, /listing agent lets buyers in/);
+  assert.deepEqual(filed, [{ offerId: "o1", contactId: "c1", name: "Sam Lee", status: "coming" }]);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft", "a confirmed time is a person's to send");
+  assert.equal(d.reply, "Great, I'll put you down for Saturday and send the details.");
+  assert.equal(d.walkthrough, "coming");
+});
+
+test("a walkthrough ask with no deal under contract behind it is still just a heads-up", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor-active"]);
+  const store = fakeStore();
+  store.listDeals = async () => [];
+  const filed = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "can I see it?",
+    deps: { recordShowingRsvp: async (x) => { filed.push(x); return { ok: true }; },
+      draft: async () => ({ ...INVESTOR_DRAFT, intent: "wants_walkthrough", walkthrough: "interested" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(filed.length, 0);
+  assert.equal((await store.getReplyDraft(job.draftId)).status, "handled");
+});

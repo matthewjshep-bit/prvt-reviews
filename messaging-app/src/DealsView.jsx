@@ -22,6 +22,7 @@ import ContactLink from "./ContactLink.jsx";
 import DataroomModal from "./DataroomModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 import MatchInvestorsModal from "./MatchInvestorsModal.jsx";
+import WalkthroughCard from "./WalkthroughCard.jsx";
 import {
   BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
   rowActivation,
@@ -577,6 +578,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   : `${paused.name || "A buyer"} is a soft commit, so no new blasts, second wave, nudges or package links go to anyone else. Put them back to Evaluating and it picks up where it left off.`}
               </p>
             )}
+            {deal.stage === "under_contract" && <WalkthroughCard key={offer.id} offer={offer} onUpdated={onUpdated} />}
             <div>
               <span className={labelCls}>Disposition investors</span>
               <div className="space-y-1.5">

@@ -392,6 +392,15 @@ export const updateDealInvestor = (id, contactId, status) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/investors/${encodeURIComponent(contactId)}`, { status }, "PATCH");
 export const removeDealInvestor = (id, contactId) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/investors/${encodeURIComponent(contactId)}?${locq()}`, { method: "DELETE" }).then(j);
+// The buyer walkthrough (shared/showing.js). Windows and access ride on
+// updateDeal({ showing }); these are the ask to the listing agent and a
+// buyer's answer set by hand.
+export const getAgentAskText = (id) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/showing/ask-agent?${locq()}`).then(j);
+export const askAgentForWindow = (id, text) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal/showing/ask-agent`, text ? { text } : {});
+export const setShowingRsvp = (id, { contactId, name, status }) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal/showing/rsvp`, { contactId, name, status });
 export const suggestInvestors = (id) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/suggest-investors`, {});
 

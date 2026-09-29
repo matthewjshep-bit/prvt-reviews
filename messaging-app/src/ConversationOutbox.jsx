@@ -29,6 +29,7 @@ const INTENT_CLS = {
   looking_for_deals: "bg-sky-100 text-sky-800", buybox_update: "bg-sky-100 text-sky-800",
   offer_nudge: "bg-indigo-100 text-indigo-800", blast_nudge: "bg-indigo-100 text-indigo-800",
   dataroom_nudge: "bg-indigo-100 text-indigo-800", buyer_pulse: "bg-indigo-100 text-indigo-800",
+  showing_ask: "bg-amber-100 text-amber-800",
 };
 const PARTY_CLS = { agent: "bg-slate-200 text-slate-700", investor: "bg-sky-100 text-sky-800", unknown: "bg-amber-100 text-amber-800" };
 
@@ -240,6 +241,10 @@ export function DraftRow({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, o
       ) : d.outbound?.kind === "check_in" ? (
         <p className="text-xs text-slate-600">
           <span className="text-slate-400">Check-in:</span> they passed on {d.outbound.address}{d.outbound.amount ? ` at $${Number(d.outbound.amount).toLocaleString()}` : ""} — asks whether the seller has come around.
+        </p>
+      ) : d.outbound?.kind === "showing_ask" ? (
+        <p className="text-xs text-slate-600">
+          <span className="text-slate-400">Walkthrough:</span> asks the listing agent for a window to bring buyers through {d.outbound.address}.
         </p>
       ) : d.outbound?.kind === "buyer_pulse" ? (
         <p className="text-xs text-slate-600">

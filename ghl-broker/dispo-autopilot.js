@@ -23,6 +23,7 @@ import { store as defaultStore } from "./store.js";
 import { blastMessage, blastNote, dealFacts } from "./shared/blast-text.js";
 import { normalizeBookSync } from "./investor-sync.js";
 import { normalizeBuyerPulse } from "./shared/buyer-pulse.js";
+import { walkthroughAsk } from "./shared/showing.js";
 import { dealNumbers } from "./dataroom.js";
 import { dealOutreachPaused } from "./shared/offer-status.js";
 import { conversationConfig } from "./reply-agent.js";
@@ -53,7 +54,28 @@ export function normalizeDispoAutopilot(v = {}) {
     pulse: normalizeBuyerPulse(o.pulse),
     // The buyer book re-read from GHL once a night (investor-sync.js). Off.
     bookSync: normalizeBookSync(o.bookSync),
+    // The buyer walkthrough (shared/showing.js).
+    showings: normalizeShowings(o.showings),
   };
+}
+
+/**
+ * normalizeShowings(v) → { askInBlast, askAgentOnPromote }
+ *
+ * askInBlast: a blast ends on the walkthrough question (the window when the
+ * deal has one) instead of "want the details?". Copy, not a send, so on.
+ * askAgentOnPromote: the moment a deal is minted, text the listing agent for
+ * a walkthrough window. A send nobody pressed, so off until Matt turns it on.
+ */
+export function normalizeShowings(v = {}) {
+  const o = v && typeof v === "object" ? v : {};
+  return { askInBlast: o.askInBlast !== false, askAgentOnPromote: o.askAgentOnPromote === true };
+}
+
+/** blastAsk(offer, saved, now) → the walkthrough question for this deal's blast, or "". */
+export function blastAsk(offer, saved = {}, now = Date.now()) {
+  const da = normalizeDispoAutopilot(saved?.dispoAutopilot);
+  return da.showings.askInBlast ? walkthroughAsk({ showing: offer?.deal?.showing || null, now }) : "";
 }
 
 /**
@@ -90,6 +112,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     note = room?.snapshot?.headline || "";
   } catch { /* the line is a courtesy, never the message */ }
   const facts = dealFacts(offer, { price: numbers.investorPrice, note });
+  const ask = blastAsk(offer, saved, now);
   const rows = [];
   let queued = 0, drafted = 0, i = 0;
   // Cumulative: each text lands at least `spreadSec` after the one before,
@@ -103,7 +126,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     if (!contactId) continue;
     const name = inv.name || inv.doc?.name || "";
     const variant = i;
-    const text = blastMessage({ ...facts, firstName: name, variant });
+    const text = blastMessage({ ...facts, firstName: name, variant, ask });
     if (i > 0) cursor += da.spreadSec * 1000 + Math.round(Math.random() * 15000);
     const sendAt = nextSendTime({ now: cursor, delayMs: 0, quietHours: config.autoSend.quietHours });
     cursor = Date.parse(sendAt);

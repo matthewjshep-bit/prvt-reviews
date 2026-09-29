@@ -147,3 +147,20 @@ test("the buyer price, the ARV and the rehab go out with the blast; what we paid
   assert.match(text, /Buyer price 495k, ARV around 640k, rehab about 60k/);
   assert.doesNotMatch(text, /465|30k/, "the contract price and the assignment fee stay ours");
 });
+
+// Matt, 2026-09-29: a blast is there to get buyers out to the house. It ends
+// on the deal's walkthrough window, or on when they could come when there is
+// none — and the switch puts the old closing line back.
+test("a blast ends on the walkthrough: the deal's window when it has one, when they could come when it doesn't", async () => {
+  const withWindow = { ...offer, deal: { ...offer.deal, showing: { windows: [{ start: "2026-09-12T17:00:00Z", end: "2026-09-12T19:00:00Z" }] } } };
+  const store = fakeStore();
+  await queueBlastDrafts({ store, locationId: "L", offer: withWindow, investors: buyers.slice(0, 1), saved: {}, now: NOW });
+  assert.match([...store.rows.values()][0].reply, /Walkthrough is Sat Sep 12, 10am-12pm\. Can you make it\?$/);
+  const bare = fakeStore();
+  await queueBlastDrafts({ store: bare, locationId: "L", offer, investors: buyers.slice(0, 1), saved: {}, now: NOW });
+  assert.match([...bare.rows.values()][0].reply, /When could you get out to walk it\?$/);
+  const off = fakeStore();
+  await queueBlastDrafts({ store: off, locationId: "L", offer: withWindow, investors: buyers.slice(0, 1), saved: { dispoAutopilot: { showings: { askInBlast: false } } }, now: NOW });
+  assert.match([...off.rows.values()][0].reply, /Want the details\?$/);
+  assert.equal(normalizeDispoAutopilot().showings.askAgentOnPromote, false, "texting the agent on its own ships off");
+});
