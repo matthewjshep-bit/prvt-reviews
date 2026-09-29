@@ -55,12 +55,19 @@ export function removeDismissal(doc, rowId) {
   return { rows };
 }
 
-/** isDismissed(row, doc, now) → true while the row still says what it said when dismissed. */
+/**
+ * isDismissed(row, doc, now) → true while the row still says what it said when dismissed.
+ *
+ * `row.dismissedAs` is the title the row carried before the page learned the
+ * contact's name ("An agent: Texts we never answered"), so a row dismissed
+ * then stays dismissed once it reads "Sam Lee: Texts we never answered".
+ */
 export function isDismissed(row, doc, now = Date.now()) {
   const d = rowsOf(doc)[row?.id];
   if (!d) return false;
   if (!(Date.parse(d.at) >= now - TODAY_DISMISS_KEEP_DAYS * DAY_MS)) return false;
-  return d.sig === rowSignature(row);
+  if (d.sig === rowSignature(row)) return true;
+  return Boolean(row?.dismissedAs) && d.sig === rowSignature({ ...row, title: row.dismissedAs });
 }
 
 /** applyDismissals(actions, doc, now) → { actions, hidden } — the rows still to show, and the ones kept off. */

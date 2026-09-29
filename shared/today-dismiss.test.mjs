@@ -37,3 +37,12 @@ test("the doc keeps a fingerprint, never the row's words", () => {
   assert.doesNotMatch(JSON.stringify(doc), /2nd St|buyer found/);
   assert.equal(rowSignature(closing(2)), doc.rows[closing(2).id].sig);
 });
+
+test("a row dismissed before its contact had a name stays dismissed once it has one", () => {
+  const before = { id: "audit:x", kind: "audit_owed", severity: "now", title: "An agent: Texts we never answered", detail: "they texted and nothing was drafted" };
+  const doc = addDismissal(null, before);
+  const named = { ...before, title: "Sam Lee: Texts we never answered", dismissedAs: before.title };
+  assert.equal(isDismissed(named, doc), true);
+  assert.equal(isDismissed({ ...named, dismissedAs: undefined }, doc), false);
+  assert.equal(isDismissed({ ...named, detail: "they texted again" }, doc), false, "a row that says something new comes back");
+});
