@@ -4103,3 +4103,28 @@ test("the hot push asked the agent to write up one house at the number we quoted
   assert.ok(d.flags.some((f) => /\$173,000, which is not in the offer book/.test(f)), d.flags.join(" · "));
   assert.notEqual(d.status, "scheduled");
 });
+
+// Gina Hasson, 2026-09-29: the outreach workflow's 14-day follow-up ("reached
+// out a couple weeks back… the uglier the better") went at 18:09, she answered
+// at 18:10, and the bot stood down: "you replied to them 2 minutes ago". The
+// template matched neither phrase the guard knew. GHL says who sent a text —
+// a workflow's carries source "workflow" and no userId — so that decides, not
+// the wording of whichever template it was.
+test("an agent who answers a workflow text the guard has never seen still gets an answer, not silence", async () => {
+  const now = Date.parse("2026-09-29T18:11:00Z");
+  const transcript = "[2026-09-29 18:09] US sms: Hi Gina reached out a couple weeks back about one of your listings... Anything like that on your end?\n[2026-09-29 18:10] THEM sms: No, nothing right now";
+  const clientWith = (msg) => ({ call: async (path) => {
+    if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+    if (path.startsWith("/conversations/cv1/messages")) return { messages: { messages: [
+      { direction: "inbound", dateAdded: "2026-09-29T18:10:51Z", body: "No, nothing right now" },
+      { direction: "outbound", dateAdded: "2026-09-29T18:09:31Z", body: "Hi Gina reached out a couple weeks back about one of your listings... Anything like that on your end?", ...msg },
+    ] } };
+    throw new Error(`unexpected ${path}`);
+  } });
+  const store = fakeStore();
+  assert.equal(await humanHasThread({ store, client: clientWith({ source: "workflow" }), locationId: "LOC", contactId: "c1", transcript, minutes: 30, now }), null);
+  assert.equal(await humanHasThread({ store, client: clientWith({ source: "bulk_actions" }), locationId: "LOC", contactId: "c1", transcript, minutes: 30, now }), null);
+  assert.ok(await humanHasThread({ store, client: clientWith({ source: "app", userId: "u1" }), locationId: "LOC", contactId: "c1", transcript, minutes: 30, now }), "a text Matt typed in GHL still holds the bot");
+  // GHL unreachable: fall back to holding, the careful way.
+  assert.ok(await humanHasThread({ store, client: deadClient, locationId: "LOC", contactId: "c1", transcript, minutes: 30, now }));
+});

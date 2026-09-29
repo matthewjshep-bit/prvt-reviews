@@ -43,7 +43,7 @@ import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
-import { getFreeSlots } from "./ghl.js";
+import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
@@ -1404,7 +1404,7 @@ export function roundsFromBook(n, allowed) {
 export const OUTREACH_OPEN_RX = /\bcame across your listing\b/i;
 // The opt-out line every one of Matt's GHL workflow templates ends on.
 export const WORKFLOW_FOOTER_RX = /\bno worries if not,? can stop\b/i;
-export async function humanHasThread({ store, locationId, contactId, transcript, minutes = 30, now = Date.now() }) {
+export async function humanHasThread({ store, client = null, locationId, contactId, transcript, minutes = 30, now = Date.now() }) {
   if (!minutes || !contactId) return null;
   const last = lastOutbound(transcript);
   if (!last || !Number.isFinite(last.ts) || now - last.ts > minutes * 60000) return null;
@@ -1422,7 +1422,37 @@ export async function humanHasThread({ store, locationId, contactId, transcript,
   // thread". The first text's own words, or the templates' footer, which no
   // person types.
   if (OUTREACH_OPEN_RX.test(String(last.text || "")) || WORKFLOW_FOOTER_RX.test(String(last.text || ""))) return null;
+  // And whatever the template says, GHL knows who sent it. Gina Hasson
+  // (2026-09-29) answered the 14-day follow-up ("reached out a couple weeks
+  // back…") within two minutes and got silence: no phrase above matched.
+  if (client && (await sentByMachine({ client, locationId, contactId, last }))) return null;
   return { at: new Date(last.ts).toISOString(), minutesAgo: Math.max(0, Math.round((now - last.ts) / 60000)) };
+}
+
+/**
+ * sentByMachine({ client, locationId, contactId, last }) → true when GHL
+ * records the transcript's last outbound as sent by a workflow, a bulk send
+ * or a campaign rather than a person.
+ *
+ * A person is a message with a userId, or one sent from the GHL app or the
+ * mobile app. The message is matched by its text (the transcript is a
+ * string). Unreadable or not found → false: holding is the careful default.
+ */
+export async function sentByMachine({ client, locationId, contactId, last }) {
+  try {
+    const norm = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
+    const want = norm(last?.text).slice(0, 120);
+    if (!want) return false;
+    const { conversations } = await searchConversations(client, locationId, { contactId, limit: 3 });
+    for (const c of conversations.slice(0, 2)) {
+      const { messages } = await listConversationMessages(client, c.id, { limit: 15 });
+      const m = messages.find((x) => String(x.direction || "").toLowerCase() === "outbound" && norm(x.body).startsWith(want));
+      if (!m) continue;
+      const source = String(m.source || "").toLowerCase();
+      return !m.userId && !["app", "mobile", "mobile_app"].includes(source) && Boolean(source);
+    }
+  } catch { /* GHL unreachable: a person may have the thread */ }
+  return false;
 }
 
 // This contact's drafts today, from the store plus what is in flight.
@@ -1563,7 +1593,7 @@ export async function assembleConversation({
     context = await loadInvestorContext({ store, locationId, contactId, contactName: name, custom, settings: saved || {}, tags, now });
   }
   const humanActive = light ? null : await humanHasThread({
-    store, locationId, contactId, transcript: real, minutes: config.autoSend?.humanActiveMin, now,
+    store, client, locationId, contactId, transcript: real, minutes: config.autoSend?.humanActiveMin, now,
   });
 
   const playbook = config.parties?.[party] || null;
