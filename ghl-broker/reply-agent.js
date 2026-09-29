@@ -318,6 +318,9 @@ export async function callDraftModel(client, params, { batch = null } = {}) {
   return { response, batched: false };
 }
 
+// A buyer saying they want to see it or buy it (reply-agent runReply).
+const WARM_INTENTS = new Set(["wants_walkthrough", "wants_to_buy"]);
+
 /**
  * walkthroughDealFor(deals, address) → the deal row a buyer's walkthrough
  * talk is about, or null.
@@ -2658,6 +2661,18 @@ async function runReply(job, ctx) {
       .catch((e) => warnings.push(`walkthrough answer not filed: ${e.message}`));
   }
 
+  // Wanting to walk it or buy it puts them on the deal, whatever becomes of
+  // the reply. James Knopf (2026-09-29) asked to "pop by after 5:00 one
+  // night" on 3511 NE 153rd St; the notice below returned before the
+  // playbook's link ran, so he was the one interested buyer not on the deal.
+  // Linking only records them — it sends nothing.
+  let linkedForInterest = false;
+  if (party === "investor" && WARM_INTENTS.has(draft.intent) && deps.linkDealInterest) {
+    const r = await deps.linkDealInterest({ contactId: job.contactId, addressHint: draft.propertyAddress || walkDeal?.address || "" })
+      .catch((e) => { warnings.push(`not put on the deal: ${e.message}`); return null; });
+    linkedForInterest = Boolean(r?.ok);
+  }
+
   // A walkthrough, a call, a time: yours by design, and therefore a draft
   // that was never going to be sent. The heads-up is the useful output. The
   // calendar is the exception — once it is wired it can answer a time for
@@ -2704,6 +2719,10 @@ async function runReply(job, ctx) {
   const bookingVerdict = guard?.kind === "booking" ? guard : null;
   const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
+  if (linkedForInterest) {
+    plan.auto = plan.auto.filter((x) => x.type !== "link_deal_evaluating");
+    plan.suggested = plan.suggested.filter((x) => x.type !== "link_deal_evaluating");
+  }
   // Number first: the reply promises numbers, so the underwrite runs whatever
   // the tier's rule carries (Tier 2 carries none) — replacing a held draft
   // rather than standing down behind it.
