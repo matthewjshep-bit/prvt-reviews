@@ -11,6 +11,7 @@
 
 import { blastMessage, dealFacts } from "./shared/blast-text.js";
 import { dealNumbers, applyNumberOverrides, issueDataroomInvite } from "./dataroom.js";
+import { walkthroughAsk } from "./shared/showing.js";
 
 export const defaultDataroomBaseUrl = () =>
   String(process.env.DATAROOM_BASE_URL || process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
@@ -60,6 +61,11 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
   const facts = dealFacts(offer, { price, note: draft.outbound?.note || room?.snapshot?.headline || "" });
   if (numbers.arv > 0) facts.arv = numbers.arv;
   if (numbers.repairs > 0) facts.repairs = numbers.repairs;
-  const text = blastMessage({ ...facts, firstName: draft.contactName || "", variant: blastVariant(draft), link });
+  // The walkthrough question, read now too: a window set after the blast
+  // queued is in every text that hasn't left yet.
+  // (dispoAutopilot.showings.askInBlast, on unless switched off — read here
+  // rather than through dispo-autopilot.js, which imports reply-agent.js.)
+  const ask = settings?.dispoAutopilot?.showings?.askInBlast === false ? "" : walkthroughAsk({ showing: offer.deal?.showing || null });
+  const text = blastMessage({ ...facts, firstName: draft.contactName || "", variant: blastVariant(draft), link, ask });
   return { text, price, invite, room };
 }

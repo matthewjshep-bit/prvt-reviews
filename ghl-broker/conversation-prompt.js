@@ -8,6 +8,7 @@
 
 import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS, DEAL_SIGNALS, writeUpTermsText, CONVERSATION_AI_DEFAULTS } from "./shared/conversation-ai.js";
 import { heldInPlainWords } from "./shared/held-underwrites.js";
+import { RSVP_SIGNALS } from "./shared/showing.js";
 
 const LENGTH_RULE = {
   short: "One to three sentences.",
@@ -107,8 +108,23 @@ const COMMITMENTS = {
   investor:
     "COMMITMENTS: you may NOT lower a price, agree to terms, promise a deal to them, confirm a walkthrough time, " +
     "or send documents. When the investor wants to buy, walk the property, or pushes on price, write a holding " +
-    "reply that answers it, no recap, and promises a same-day answer (\"Let me confirm it's still open " +
+    "reply that answers it, no recap, and promises a same-day answer (\"Let me confirm it's still available " +
     "and get you a time today\"), and set needsHuman to true with the reason. " +
+    // Rajesh Kasturi, 2026-09-29: "it's open right now" read as the house being open.
+    "THE HOUSE ITSELF: a deal is \"available\", never \"open\". Say whether the house is vacant or lived in, and how " +
+    "buyers get in, only as that deal's occupancy and access lines in the context put it; when they say not recorded, " +
+    "say you'll confirm access with the agent. Never say or imply a house is open, unlocked, empty, or that they can go " +
+    "by or walk in any time, and never give or promise a lockbox or door code. " +
+    // Matt, 2026-09-29: the point of every buyer text is getting them out to the house.
+    "THE GOAL IS A WALKTHROUGH: on a deal under contract, the job of the text is to get them to commit to a time " +
+    "to walk it. When the context gives the deal a walkthrough window, invite them to that window by its exact " +
+    "wording and ask if they can make it; never propose any other time. When it says no window is set, ask which " +
+    "day they could get out and say you'll line it up with the agent. When they say yes to a window, say you'll " +
+    "put them down and send the details, and set needsHuman (a person confirms). Say how they get in only as the " +
+    "context's access line puts it; never give or promise an access code yourself. Ask once per message; if they " +
+    "want the numbers first, answer those and put the walkthrough ask after. Set walkthrough to what THIS message " +
+    "said about it: 'coming' (yes to a window), 'cant_make_it' (the window doesn't work for them), 'interested' " +
+    "(wants to see it, no time agreed), else empty. " +
     "PRICE: the only figure you may quote on a deal is the buyer price listed for it in the context. Never " +
     "state, hint at, or let them back into our purchase price, contract price, assignment fee, spread or " +
     "margin — if asked, say the price is the price and move on. Never name a deal that is not in the context.",
@@ -135,7 +151,7 @@ const CONTINUITY = {
   investor:
     "CONTINUITY: the deals listed above are your memory of working with this person. Reach for them sparingly — " +
     "most messages need none, and answering plainly beats a callback. When one genuinely fits, " +
-    "name ONE and where it went — \"54th ended up going to another buyer\" — and pivot to what is open that " +
+    "name ONE and where it went — \"54th ended up going to another buyer\" — and pivot to what is available that " +
     "suits what they buy. One deal per message, never a list, never a file being read back, and never a deal " +
     "that is not in the context.",
   unknown: "",
@@ -763,7 +779,7 @@ export function schemaFor(party = "agent", { profile = true, outbound = null, bo
     type: "object",
     additionalProperties: false,
     required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount",
-      ...(party === "investor" ? ["passReason"] : []), ...(party === "agent" ? ["propertyDetails", "agentArv", "agentRehab", "agentTakeNote", "dealSignal"] : []), ...(profile ? ["profile"] : []),
+      ...(party === "investor" ? ["passReason", "walkthrough"] : []), ...(party === "agent" ? ["propertyDetails", "agentArv", "agentRehab", "agentTakeNote", "dealSignal"] : []), ...(profile ? ["profile"] : []),
       ...(booking ? ["offeredSlots", "chosenSlot"] : [])],
     properties: {
       ...(profile ? { profile: profileSchemaFor(party) } : {}),
@@ -786,7 +802,12 @@ export function schemaFor(party = "agent", { profile = true, outbound = null, bo
           "and the record does not have. Empty when no property is identifiable.",
       },
       counterAmount: { type: "integer", description: "A dollar figure they named, in whole dollars; 0 if none" },
-      ...(party === "investor" ? { passReason: PASS_REASON_SCHEMA } : {}),
+      ...(party === "investor" ? {
+        passReason: PASS_REASON_SCHEMA,
+        walkthrough: { type: "string", enum: RSVP_SIGNALS, description:
+          "What THIS message said about walking the property: 'coming' = yes to a walkthrough window we named; " +
+          "'cant_make_it' = that window doesn't work for them; 'interested' = wants to see it, no time agreed; empty if nothing" },
+      } : {}),
       ...(party === "agent" ? {
         propertyDetails: {
           type: "object", additionalProperties: false,

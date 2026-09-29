@@ -2408,6 +2408,87 @@ that becomes the usual suggestion with the reason on it. Off by default.
 PDF from the deal, the buyer and the company settings (`offer.assignment`),
 for review. Off by default.
 
+### Deal parties and the closing checklist (2026-09-29)
+
+The Deals modal has three tabs: **Overview**, **Buyers**, and **Terms & paperwork**. The open tab is kept in `?tab=`.
+
+**Overview** holds two things:
+- the closing timeline;
+- the deal's parties.
+
+**Parties** (`shared/deal-parties.js`, stored at `offer.deal.parties`) covers five roles: title / escrow, seller's agent, buyer's agent, lender and assignee.
+- Each role is picked from GHL (the `ContactSearch` typeahead) or typed in.
+- Only what you set is stored. The rest is filled in when the deal is read, and says where it came from:
+  - the seller's agent is the offer's contact;
+  - the assignee is the committed buyer;
+  - title comes from the offer's PSA fields, or from the PSA defaults in Settings.
+- The lender is never pre-filled. Settings' PSA lender is ours, and on an assignment the assignee's lender is the one that matters.
+- To edit a party, `PATCH /:id/deal { parties: { role: {...} | null } }`. Only the roles you name change, and `null` goes back to the default.
+- `AssignmentModal` takes the assignee from `parties.assignee` first.
+
+**The checklist** (`shared/deal-checklist.js`, stored at `offer.deal.checklist.items`) is a soft stage gate.
+- Every item has:
+  - a gate (`under_contract` / `buyer_found` / `assigned`);
+  - an owner (`us` or one of the party roles);
+  - a due date. The date comes from a rule relative to the contract date, the inspection date, the closing date, or the day the deal reached that stage. A typed date overrides the rule.
+- **The template.** `CHECKLIST_TEMPLATE` is the standard WA assignment list. Promote writes a copy onto the deal. A deal promoted before this change reads the template until its first edit.
+- **Editing.** `POST /:id/deal/checklist` changes one item per call. It can tick, re-date, reassign, rename, add a note, `remove`, or `add: { gate, label, owner, due }`.
+- **Automatic ticks:**
+  - uploading a *Purchase & sale* or *Assignment* document ticks the matching item;
+  - marking a buyer's RSVP *attended* ticks the walkthrough item.
+- **Moving the deal on.** Moving to a later stage with items still open asks first. It never blocks.
+
+**Today** adds one `closing_task_due` row per live deal, for the most urgent open item, once that item is overdue or due within 2 days.
+- Its ops are **Done** (`tick_task`) and **Open the deal**.
+- The kind is deliberately not named `deal_*`. `rowTargets` routes any `deal*` kind to the investor pane, and this row belongs in the listing agent's thread.
+
+The Deals table's **Next** column shows the same item, with its due chip and `done/total`.
+
+### Buyer walkthrough (2026-09-29)
+
+The goal of every text to a buyer about a deal under contract is a time they
+will walk it. Matt chose one **group window** per house, agreed with the
+listing agent, that every blast and reply invites buyers to. Asking commits
+nobody, so the machine may ask. A text that **confirms** a buyer's time is a
+person's to send: `wants_walkthrough` stays in `NEVER_AUTO`.
+
+- **The shape.** `offer.deal.showing` holds `windows` (up to 3, start/end ISO),
+  `access` (`agent` | `lockbox` | `matt`, set per deal, plus a private note),
+  `agentAsk` (`none` | `asked` | `confirmed`) and `rsvps` (`interested`,
+  `coming`, `cant_make_it`, `attended`, `no_show`). The pure rules live in
+  `shared/showing.js`. The offer doc stores it, so there is no schema change.
+- **Blasts.** `dispoAutopilot.showings.askInBlast` is on by default because it
+  changes copy, not sends. A blast ends on "Walkthrough is Sat Oct 3,
+  10am-12pm. Can you make it?", or on "When could you get out to walk it?"
+  when no window is set, followed by the package link. `blast-refresh.js`
+  reads the question again at send time, so a window set after the blast was
+  queued is in every text that hasn't gone out yet.
+- **The listing agent.** The live-deal hold keeps the model away from the
+  agent on a deal under contract, so the ask is a fixed text written straight
+  to the outbox (`outbound.kind: "showing_ask"`, party agent). It asks for a
+  day, an hour window, and whether they let buyers in or there's a lockbox.
+  There are two ways to send it:
+  - press **Ask for a window** in the Deals modal or on the Today row; it
+    sends at the next open minute;
+  - turn on `dispoAutopilot.showings.askAgentOnPromote` (off by default).
+
+  The agent's answer isn't parsed. You type the window on the deal, and that
+  marks the ask `confirmed`.
+- **Buyer replies.** The investor context gives every deal under contract its
+  window, its access line and this buyer's RSVP. `COMMITMENTS.investor` ("THE
+  GOAL IS A WALKTHROUGH") tells the bot to invite them to the exact window and
+  never to propose another time. The investor schema's `walkthrough` field
+  (`coming` / `cant_make_it` / `interested`) is filed on the deal by
+  `deps.recordShowingRsvp` before the notify-only check, whatever happens to
+  the reply. A `wants_walkthrough` on a deal we hold is drafted instead of
+  notify-only, and the draft waits on Today for you.
+- **Today.** `showing_no_window` fires when there's no window and the agent
+  hasn't been asked, or 1+ day after asking with no window set.
+  `showing_soon` fires when a window starts within 36h, and says who's coming
+  and whether access is set.
+- **Not built.** A reminder text the day before, and a "what did you think?"
+  text after the window.
+
 ### Pulse check between deals (2026-09-18)
 
 Settings → Dispositions → "Pulse check between deals". The buyer pool only

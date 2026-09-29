@@ -34,13 +34,14 @@ export default function AssignmentModal({ offer, settings, onClose, onGenerated 
   const contractPrice = Number(offer.deal?.contractPrice) || Number(offer.contract?.fields?.price) || Number(offer.cashAmount) || 0;
   const fee = Number(offer.deal?.assignmentFee) || Number(offer.calc?.settings?.wholesaleFee ?? settings?.wholesaleFee) || 0;
   // The committed disposition investor (if the deal has one) is the assignee.
-  const committed = offer.deal?.investors?.find((i) => i.status === "committed");
+  // The assignee named on the deal's parties wins over the committed buyer.
+  const committed = offer.deal?.parties?.assignee || offer.deal?.investors?.find((i) => i.status === "committed");
   const [fields, setFields] = useState(() => ({
     effectiveDate: saved?.effectiveDate || ymd(new Date()),
     assignorName: saved?.assignorName || settings?.company?.signer || "",
     assignorCompany: saved?.assignorCompany || settings?.company?.name || "",
     assigneeName: saved?.assigneeName || committed?.name || "",
-    assigneeCompany: saved?.assigneeCompany || "",
+    assigneeCompany: saved?.assigneeCompany || committed?.company || "",
     address: saved?.address || offer.address || "",
     totalPrice: saved?.totalPrice || (contractPrice ? contractPrice + fee : ""),
     deposit: saved?.deposit || "",

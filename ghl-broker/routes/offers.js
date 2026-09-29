@@ -37,7 +37,10 @@
 //   POST   /api/offers/custom-fields           create one custom field (idempotent)
 //   GET    /api/offers/deals                  offers promoted to active deals
 //   POST   /api/offers/:id/deal               promote an offer to a deal (under contract)
-//   PATCH  /api/offers/:id/deal               update stage / terms
+//   PATCH  /api/offers/:id/deal               update stage / terms / walkthrough / parties / access
+//   POST   /api/offers/:id/deal/checklist     tick, re-date, reassign, remove or add one closing-checklist item
+//   GET/POST /api/offers/:id/deal/showing/ask-agent   the walkthrough-window text to the listing agent; send it
+//   POST   /api/offers/:id/deal/showing/rsvp  a buyer's walkthrough answer, set by hand
 //   DELETE /api/offers/:id/deal               un-promote (mistake correction)
 //   POST   /api/offers/:id/deal/investors     link a disposition investor (GHL contact)
 //   POST   /api/offers/:id/deal/suggest-investors   AI-suggest investors from conversation history
@@ -110,6 +113,10 @@ import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
 import { nextSendTime, spreadAcrossDay } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
+import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STATUSES } from "../shared/showing.js";
+import { mergeParties } from "../shared/deal-parties.js";
+import { mergeAccess, accessFor } from "../shared/deal-access.js";
+import { normalizeChecklist, applyChecklistEdit, addChecklistItem, tickByDoc, tickById, GATES } from "../shared/deal-checklist.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop } from "../ghl-mirror.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
@@ -3059,6 +3066,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const saved = (await store.getOfferSettings(locationId)) || {};
       const da = normalizeDispoAutopilot(saved.dispoAutopilot);
+      // The walkthrough window, asked for the moment the deal exists — the
+      // blast below invites buyers to it once the agent answers. Its own
+      // switch, off unless Matt turns it on.
+      if (da.showings.askAgentOnPromote && !offer.deal?.showing?.agentAsk?.at) {
+        await queueShowingAsk({ locationId, offer, saved, send: true })
+          .catch((e) => console.error(`showing ask on promote failed for ${offer.id}: ${e?.message}`));
+      }
       if (!da.autoBlastOnPromote || !dispoDeps) return;
       const m = await dispoDeps.matchForDeal(locationId, offer, { wave: 1, exclude: "blasted" });
       const picked = (m.results || []).slice(0, da.autoBlastCount).map((r) => ({ contactId: r.contactId, name: r.name }));
@@ -3105,6 +3119,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       fellThroughCode: "",
       investors: [],
       ghl: { tag: false, note: false },
+      // What has to happen before closing (shared/deal-checklist.js), written
+      // down now so a later change to the template never rewrites this deal.
+      checklist: normalizeChecklist(null),
     };
     // Under contract IS the accepted state — keep the two from disagreeing.
     recordStatus(offer, "accepted", "", ts);
@@ -3592,6 +3609,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (b.notes !== undefined) deal.notes = dealStr(b.notes, 4000);
       if (b.fellThroughReason !== undefined) deal.fellThroughReason = dealStr(b.fellThroughReason, 200);
       if (fellThroughCode !== undefined) deal.fellThroughCode = fellThroughCode;
+      // The walkthrough: windows and who opens the door are the operator's
+      // (shared/showing.js). The ask and the RSVPs keep what the machine wrote.
+      if (b.showing && typeof b.showing === "object") deal.showing = applyShowingEdit(deal.showing, b.showing);
+      // Who else is on the deal (shared/deal-parties.js): only the roles sent
+      // change; a role sent as null goes back to its default.
+      if (b.parties && typeof b.parties === "object") deal.parties = mergeParties(deal.parties, b.parties);
+      // Occupancy and how buyers get in (shared/deal-access.js) — what the
+      // investor bot may say about the house. Starts from the walkthrough's
+      // old access pick so an older deal keeps what it had.
+      if (b.access && typeof b.access === "object") deal.access = mergeAccess(accessFor(deal), b.access);
       deal.updatedAt = new Date().toISOString();
       await store.updateOffer(offer.id, offer);
       // Re-price the investor package off the new terms. The rest of its
@@ -3640,6 +3667,121 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
   });
+
+  /* ---------- the closing checklist (shared/deal-checklist.js) ---------- */
+
+  // One item per call — tick, re-date, reassign, rename, note, remove — or
+  // `add: { gate, label, owner, due }`. Read fresh and saved at once, so a
+  // tick never overwrites a parties or terms edit made in another tab.
+  router.post("/:id/deal/checklist", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { offer } = ctx;
+      const b = req.body || {};
+      if (b.add) {
+        if (!GATES.includes(b.add.gate)) return res.status(400).json({ error: `gate must be one of: ${GATES.join(", ")}` });
+        if (!String(b.add.label || "").trim()) return res.status(400).json({ error: "label required" });
+        offer.deal.checklist = addChecklistItem(offer.deal.checklist, b.add);
+      } else {
+        const current = normalizeChecklist(offer.deal.checklist);
+        if (!current.items.some((i) => i.id === b.id)) return res.status(404).json({ error: "no such checklist item" });
+        offer.deal.checklist = applyChecklistEdit(current, b);
+      }
+      offer.deal.updatedAt = new Date().toISOString();
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- the buyer walkthrough (shared/showing.js) ---------- */
+
+  // The text to the listing agent asking for a walkthrough window, as it
+  // would go out. GET so the Deals modal can show it before anyone presses.
+  router.get("/:id/deal/showing/ask-agent", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { offer } = ctx;
+      res.json({ ok: true, text: agentAskText({ agentName: offer.contactName, address: offer.address }), showing: normalizeShowing(offer.deal.showing) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Ask the listing agent for a window. Body: { text? }. A person pressed
+  // it, so it sends at the next open minute; with sends off on the broker it
+  // waits in the outbox as a draft.
+  router.post("/:id/deal/showing/ask-agent", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { locationId, offer } = ctx;
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const out = await queueShowingAsk({ locationId, offer, saved, text: req.body?.text, send: true });
+      res.json({ ok: true, ...out });
+    } catch (err) { fail(res, err); }
+  });
+
+  // A buyer's walkthrough answer, set by hand (walked it, no-show, coming).
+  // Body: { contactId, name?, status }.
+  router.post("/:id/deal/showing/rsvp", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { offer } = ctx;
+      const b = req.body || {};
+      if (!b.contactId) return res.status(400).json({ error: "contactId required" });
+      if (!RSVP_STATUSES.includes(b.status)) return res.status(400).json({ error: `status must be one of: ${RSVP_STATUSES.join(", ")}` });
+      const name = b.name || (offer.deal.investors || []).find((i) => i.contactId === b.contactId)?.name || "";
+      offer.deal.showing = recordRsvp(offer.deal.showing, { contactId: String(b.contactId), name, status: b.status, source: "manual" });
+      // Somebody walked it: that line of the closing checklist is done.
+      if (b.status === "attended") offer.deal.checklist = tickById(offer.deal.checklist, "walkthrough");
+      offer.deal.updatedAt = new Date().toISOString();
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, showing: offer.deal.showing });
+    } catch (err) { fail(res, err); }
+  });
+
+  /**
+   * queueShowingAsk({ locationId, offer, saved, text, send, now }) → { draftId, status, sendAt, text, reason }
+   *
+   * One text to the listing agent (offer.contactId) asking for a walkthrough
+   * window, written straight to the outbox the way a blast is — the agent on
+   * a deal under contract is under the live-deal hold, so the model never
+   * drafts to them, and this is a fixed ask anyway. Supersedes an earlier
+   * open ask. Marks the deal's ask as sent.
+   */
+  async function queueShowingAsk({ locationId, offer, saved = {}, text = "", send = true, now = Date.now() }) {
+    const body = String(text || "").trim().slice(0, 600) || agentAskText({ agentName: offer.contactName, address: offer.address });
+    const cfg = conversationConfig(saved);
+    const live = send && CARD_SENDS_ENABLED && cfg.enabled;
+    const reason = !send ? "drafted for you" : !CARD_SENDS_ENABLED ? "sends are off on the broker (CARD_SENDS_ENABLED)" : !cfg.enabled ? "Conversation AI is switched off" : "";
+    const ts = new Date(now).toISOString();
+    const sendAt = live ? nextSendTime({ now, delayMs: 0, quietHours: cfg.autoSend.quietHours }) : null;
+    const open = await store.listReplyDrafts(locationId, { contactId: offer.contactId, status: ["draft", "scheduled"], limit: 10 }).catch(() => []);
+    const stale = open.filter((d) => d.outbound?.kind === "showing_ask" && d.outbound?.offerId === offer.id);
+    for (const old of stale) {
+      await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: ts }).catch(() => {});
+    }
+    const record = await store.createReplyDraft({
+      locationId, contactId: offer.contactId, contactName: offer.contactName || "", status: live ? "scheduled" : "draft", channel: "sms", jobId: null,
+      inbound: "", outbound: { kind: "showing_ask", offerId: offer.id, address: offer.address },
+      reply: body, intent: "showing_ask", confidence: "high", needsHuman: false, humanReason: "",
+      summary: `Asks ${offer.contactName || "the listing agent"} for a buyer walkthrough window at ${offer.address}.`,
+      propertyAddress: offer.address || "", counterAmount: null, autoSendable: true, flags: [], party: "agent", partySource: "deal",
+      matchedTags: { agent: [], investor: [] }, contextSummary: { deal: offer.id }, offersInContext: 1,
+      autoSend: { decided: live, reason }, humanActive: null, actions: [],
+      supersededIds: stale.map((o) => o.id), warnings: [], noteOnAutoSend: cfg.notes?.onAutoSend !== false, promptVersion: 3,
+      ...(live ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
+    });
+    const fresh = (await store.getOffer(offer.id)) || offer;
+    if (fresh.deal) {
+      fresh.deal.showing = applyShowingEdit(fresh.deal.showing, { agentAsk: { status: "asked", at: ts, draftId: record.id } });
+      fresh.deal.updatedAt = ts;
+      await store.updateOffer(fresh.id, fresh);
+      offer.deal = fresh.deal;
+    }
+    return { draftId: record.id, status: live ? "scheduled" : "draft", sendAt, text: body, reason };
+  }
 
   // Link a disposition investor (an existing GHL contact) to the deal.
   // Idempotent on contactId. Body: { contactId, name? }.
@@ -4575,6 +4717,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         { type: `offer_${status}`, offerId: offer.id, source: "conversation", at: ts, ...(counter ? { data: { amount: counter } } : {}) });
       await syncAgentOfferTag(client, locationId, contactId);
       return { ok: true, address: offer.address, status, amount: counter };
+    },
+    // A buyer's answer about the walkthrough, filed on the deal
+    // (shared/showing.js recordRsvp). Read fresh: the reply may land while
+    // the operator is editing the window.
+    recordShowingRsvp: async ({ offerId, contactId, name = "", status }) => {
+      const offer = await store.getOffer(offerId);
+      if (!offer?.deal || offer.locationId !== locationId) return { ok: false, reason: "deal not found" };
+      offer.deal.showing = recordRsvp(offer.deal.showing, { contactId, name, status, source: "conversation" });
+      offer.deal.updatedAt = new Date().toISOString();
+      await store.updateOffer(offer.id, offer);
+      return { ok: true };
     },
     // The investor's standing on a deal: passed, or the committed buyer
     // (which advances an under-contract deal to buyer_found, as the Deals
@@ -5651,6 +5804,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const kind = DEAL_DOC_KINDS.includes(req.body?.kind) ? req.body.kind : "Other";
       const { bytes, contentType } = decodeDealDocUpload(req.body?.data, name);
       const document = await store.saveDealDoc(ctx.offer.id, ctx.locationId, { kind, name, contentType, bytes });
+      // The signed P&S or the assignment is on file: its checklist line is done.
+      const ticked = tickByDoc(ctx.offer.deal.checklist, kind);
+      if (JSON.stringify(ticked) !== JSON.stringify(normalizeChecklist(ctx.offer.deal.checklist))) {
+        const fresh = await store.getOffer(ctx.offer.id);
+        if (fresh?.deal) {
+          fresh.deal.checklist = tickByDoc(fresh.deal.checklist, kind);
+          fresh.deal.updatedAt = new Date().toISOString();
+          await store.updateOffer(fresh.id, fresh);
+        }
+      }
       res.json({ ok: true, document, documents: await store.listDealDocs(ctx.offer.id) });
     } catch (err) { fail(res, err); }
   });

@@ -42,6 +42,7 @@ import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
+import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
@@ -317,6 +318,58 @@ export async function callDraftModel(client, params, { batch = null } = {}) {
   return { response, batched: false };
 }
 
+/**
+ * walkthroughDealFor(deals, address) → the deal row a buyer's walkthrough
+ * talk is about, or null.
+ *
+ * Only a deal under contract that the buyer is already on (sent it, or
+ * linked). The one the message names, else the only one there is — two open
+ * houses and no address is a person's read, not ours.
+ */
+export function walkthroughDealFor(deals = null, address = "") {
+  const rows = (deals?.linked || []).filter((d) => d?.stage === "under_contract" && d.offerId);
+  if (!rows.length) return null;
+  if (address) {
+    const named = rows.find((d) => sameStreet(d.address, address));
+    if (named) return named;
+  }
+  return rows.length === 1 ? rows[0] : null;
+}
+
+/**
+ * vacantPerRecord(deals, address) → true only when the deal this text is
+ * about is recorded vacant (shared/deal-access.js). No address, no match, or
+ * nothing recorded → false: "vacant" is then the model's guess.
+ */
+export function vacantPerRecord(deals = null, address = "") {
+  if (!address) return false;
+  const rows = [...(deals?.linked || []), ...(deals?.matching || [])];
+  const hit = rows.find((d) => sameStreet(d?.address, address));
+  return hit?.occupancy === "vacant";
+}
+
+/**
+ * claimsAccess(reply, { vacantOk }) → the words that claim something about
+ * getting into the house, or "".
+ *
+ * "Open" about the house is never ours to say (a deal is "available"); an
+ * access code never goes in a text; "vacant"/"empty"/"go by any time" only
+ * when the deal is recorded vacant. "Open to a call" and "are you open to
+ * heavy rehab" are about the person, not the house.
+ */
+export function claimsAccess(reply = "", { vacantOk = false } = {}) {
+  const t = String(reply || "");
+  const open = t.match(/\b(?:it'?s|it is|house is|place is|property is|home is|still)\s+(?:still\s+|wide\s+)?open\b(?!\s+to\b)|\bopen\s+(?:right now|now|today|house)\b/i);
+  if (open) return open[0];
+  const code = t.match(/\b(?:lock\s?box|door|gate|access|entry)\s+code\b/i);
+  if (code) return code[0];
+  if (!vacantOk) {
+    const empty = t.match(/\b(?:vacant|empty|unlocked|unoccupied|nobody(?:'s| is) (?:living|home)|no one(?:'s| is)? living)\b|\b(?:go|swing|drive|stop|pop) by (?:any ?time|whenever)\b|\b(?:walk|see) (?:it|in) (?:any ?time|whenever)\b/i);
+    if (empty) return empty[0];
+  }
+  return "";
+}
+
 function parseDraft(response, intents, cfg) {
   if (response.stop_reason === "max_tokens") {
     throw Object.assign(new Error("reply drafting was truncated"), { http: 502 });
@@ -337,6 +390,8 @@ function parseDraft(response, intents, cfg) {
     counterAmount: Math.max(0, Number(p.counterAmount) || 0),
     // Investors only, and only when they turned something down.
     passReason: normalizePassReason(p.passReason),
+    // Investors only: what this message said about walking the house.
+    walkthrough: RSVP_SIGNALS.includes(p.walkthrough) ? p.walkthrough : "",
     // Agents only: what THEY think it's worth and costs. Theirs, never ours.
     agentTake: normalizeAgentTake(p),
     // Agents only: how warm they are toward our number ("might work", "let's present it").
@@ -655,6 +710,7 @@ const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", ourAmount = 0,
+  vacantOk = false,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -711,6 +767,15 @@ export function evaluateReplyGates({
     // 10917 48th St E, 2026-09-27: "cash means no lender". We use hard money.
     const cash = claimsAllCash(draft.reply);
     if (cash) flags.push(`the draft says "${cash}" — we buy with a hard money loan, not all cash`);
+  }
+  // What the house is like to get into. Rajesh Kasturi, 2026-09-29: "it's
+  // open right now" went to a buyer about a house nobody had said was open.
+  // Only the deal's access record knows (shared/deal-access.js), and the
+  // prompt is told what it says; this holds the text when the model says
+  // more than that.
+  if (party === "investor") {
+    const claim = claimsAccess(draft.reply, { vacantOk });
+    if (claim) flags.push(`the draft says "${claim}" — only the deal's access record says whether a house is open, vacant or how to get in`);
   }
   // The two rules that are not judgment calls. A number the other side must
   // never hear — our contract price, our fee — is flagged even if they said
@@ -2144,7 +2209,8 @@ async function runProactive(job, ctx) {
     ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]
     : context.forbiddenAmounts;
   const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
-    ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)) });
+    ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
+    vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address) });
   const gate = gateFor(draft);
   let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
   auto = releaseForAudit({ auto, gate, draft, deps });
@@ -2532,12 +2598,25 @@ async function runReply(job, ctx) {
     return;
   }
 
+  // The buyer walkthrough (shared/showing.js). A buyer's answer about
+  // walking a house we hold is filed on the deal whatever happens to the
+  // reply — "I can make Saturday" must not live only in a thread.
+  const walkDeal = party === "investor" ? walkthroughDealFor(context?.deals, draft.propertyAddress) : null;
+  if (walkDeal && draft.walkthrough && deps.recordShowingRsvp) {
+    await deps.recordShowingRsvp({ offerId: walkDeal.offerId, contactId: job.contactId, name: a.contactName || "", status: draft.walkthrough })
+      .catch((e) => warnings.push(`walkthrough answer not filed: ${e.message}`));
+  }
+
   // A walkthrough, a call, a time: yours by design, and therefore a draft
   // that was never going to be sent. The heads-up is the useful output. The
   // calendar is the exception — once it is wired it can answer a time for
-  // real, so the draft stands and the guard decides.
+  // real, so the draft stands and the guard decides. So is a buyer who wants
+  // to walk a house we have under contract (Matt, 2026-09-29): getting them
+  // out there is the job, so the reply is written for a person to send —
+  // wants_walkthrough stays NEVER_AUTO, so it is never sent on its own.
   const bookingCouldAnswer = Boolean(booking) && (BOOKING_INTENTS[party] || []).includes(draft.intent);
-  if ((config.notifyOnly || []).includes(draft.intent) && !bookingCouldAnswer) {
+  const walkthroughDraft = Boolean(walkDeal) && draft.intent === "wants_walkthrough";
+  if ((config.notifyOnly || []).includes(draft.intent) && !bookingCouldAnswer && !walkthroughDraft) {
     await handleNotifyOnly(job, { ...ctx, config, party, partySource: a.partySource, matchedTags: a.matchedTags, draft });
     return;
   }
@@ -2547,6 +2626,7 @@ async function runReply(job, ctx) {
     inboundMessage: inboundText, channel: job.channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: ourNumberFor(context.offers?.numbers, d.propertyAddress),
+    vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
   });
   const gate = gateFor(draft);
   let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive });
@@ -2845,6 +2925,7 @@ async function runReply(job, ctx) {
     // Why they turned it down. Rides on the draft so the feedback actions
     // have it, and so the row can show it whether or not they ran.
     passReason: draft.passReason || null,
+    ...(draft.walkthrough ? { walkthrough: draft.walkthrough } : {}),
     // The model's own words, kept when the reply was rewritten to say the
     // offer went out, so step 5 can put them back if it didn't.
     ...(draft.replyBeforeSend ? { replyBeforeSend: draft.replyBeforeSend } : {}),
@@ -3441,6 +3522,7 @@ export async function previewConversation({
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [], inboundMessage: message, channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: ourNumberFor(context.offers?.numbers, draft.propertyAddress),
+    vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };

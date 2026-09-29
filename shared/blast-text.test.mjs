@@ -89,3 +89,16 @@ test("with the buyer's own package link, the blast ends on the link instead of o
   // No link, no change: the text still asks.
   assert.match(blastMessage({ address: "9 Elm St", price: 495000, variant: 0 }), /Want the details\?$/);
 });
+
+// Matt, 2026-09-29: the point of a buyer text is getting them out to the
+// house. With a walkthrough question the text ends on it, the link after.
+test("a blast with a walkthrough question ends on it, then the package link", () => {
+  const f = { firstName: "Rick R", address: "3511 NE 153rd St, Lake Forest Park, WA", city: "Lake Forest Park", price: 421000, arv: 849000, repairs: 200000, rehab: "heavy" };
+  const t = blastMessage({ ...f, variant: 1, link: "https://deals.example/d/abc", ask: "Walkthrough is Sat Oct 3, 10am-12pm. Can you make it?" });
+  assert.equal(t, "Hey Rick, new one in Lake Forest Park: 3511 NE 153rd St, heavy rehab. Buyer price 421k, ARV around 849k, rehab about 200k. Walkthrough is Sat Oct 3, 10am-12pm. Can you make it? Full package: https://deals.example/d/abc");
+  for (const v of [0, 1, 2]) {
+    const s = blastMessage({ ...f, variant: v, ask: "When could you get out to walk it?" });
+    assert.match(s, /When could you get out to walk it\?$/);
+    assert.doesNotMatch(s, /Want the details|Interested\?|send the package/);
+  }
+});

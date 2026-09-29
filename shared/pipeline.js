@@ -26,6 +26,10 @@ import { addressKey } from "./contact-record.js";
 import { openPromises, resolvePromise } from "./promise-resolver.js";
 import { UNANSWERED_LIMIT } from "./thread-health.js";
 import { groupHouses, resolveHouse } from "./current-offer.js";
+import { showingSummary } from "./showing.js";
+import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
+import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
+import { accessFor } from "./deal-access.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -62,10 +66,13 @@ export const ACTION_KINDS = [
   { key: "handoff",           label: "One click from you" },
   { key: "investor_price_agreed", label: "Prices the machine agreed" },
   { key: "closing_soon",      label: "Closing" },
+  { key: "closing_task_due",  label: "Closing checklist" },
   { key: "hot_stalled",       label: "Price agreed, gone quiet" },
   { key: "underwrite_held",   label: "Underwrites that need a look" },
   { key: "offer_ready",       label: "Priced, not floated" },
   { key: "ladder_exhausted",  label: "Followed up, no reply" },
+  { key: "showing_soon",      label: "Walkthroughs coming up" },
+  { key: "showing_no_window", label: "No walkthrough window yet" },
   { key: "deal_no_buyers",    label: "Deals with nobody on them" },
   { key: "blast_no_opens",    label: "Blasted, nobody opened it" },
   { key: "draft_scheduled",   label: "Sending itself" },
@@ -299,6 +306,12 @@ export function buildPipeline({
         stage: d.stage, closingDate: d.closingDate || null, closingInDays,
         contractPrice: round(d.contractPrice), assignmentFee: round(d.assignmentFee),
         investors: investorChips(d, myEvents, contactNames),
+        showing: { ...showingSummary(d.showing, now), accessSet: Boolean(accessFor(d).method) },
+        checklist: (() => {
+          const c = resolveChecklist(d, { now });
+          const done = c.items.filter((i) => i.done).length;
+          return { done, total: c.items.length, next: c.next ? { id: c.next.id, label: c.next.label, owner: c.next.owner, state: c.next.state, dueYmd: c.next.dueYmd, dueDays: c.next.dueDays } : null };
+        })(),
       };
       // The investor band agreed a price with one buyer. It said yes in words
       // and wrote the number down; committing them, and the dataroom that
@@ -365,6 +378,19 @@ export function buildPipeline({
           detail: dd.stage.replace(/_/g, " "),
           ops: [{ key: "mark_closed", label: "Mark closed", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }, { key: "fell_through", label: "Fell through", intent: "danger" }] }));
       }
+      // The closing checklist (shared/deal-checklist.js): one row per deal, for
+      // the thing to chase first, once it's overdue or due within two days.
+      const cl = resolveChecklist(o.deal, { now });
+      if (cl.next && (cl.next.state === "overdue" || cl.next.state === "due_soon")) {
+        const n = cl.next;
+        const owner = n.owner === "us" ? "Us" : partyName(resolveParties(o, {})[n.owner]) || OWNER_LABEL[n.owner];
+        const openHere = cl.open.filter((i) => i.gate === cl.currentGate).length;
+        card.actionIds.push(push({ ...base, kind: "closing_task_due", severity: n.state === "overdue" ? "now" : "soon",
+          title: `${card.address}: ${n.label}, ${dueWords(n)}`,
+          detail: `${owner}${cl.currentGate ? ` · ${openHere} open before ${GATE_LABEL[cl.currentGate]} is done` : ""}`,
+          taskId: n.id,
+          ops: [{ key: "tick_task", label: "Done", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
+      }
       const anyBuyer = dd.investors.length > 0;
       const blasts = myEvents.filter((e) => e.type === "blast_sent");
       const views = myEvents.filter((e) => e.type === "dataroom_viewed");
@@ -380,6 +406,29 @@ export function buildPipeline({
           card.actionIds.push(push({ ...base, kind: "blast_no_opens", severity: "soon",
             title: `${card.address}: blasted ${blastDays}d ago, nobody opened it`, detail: `${blasts.length} blast${blasts.length === 1 ? "" : "s"}`,
             ops: [{ key: "preview_follow_ups", label: "Who'd get a nudge", intent: "secondary" }, { key: "run_follow_ups", label: "Nudge them", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
+        }
+      }
+      // The walkthrough (shared/showing.js). Every buyer text invites them to
+      // a window, so a deal without one is the first thing to fix; a window
+      // in the next day and a half is worth a look at who's coming.
+      const sh = dd.showing;
+      if (dd.stage === "under_contract" && sh) {
+        if (!sh.next && sh.agentAsk !== "asked") {
+          card.actionIds.push(push({ ...base, kind: "showing_no_window", severity: "soon",
+            title: `${card.address}: no walkthrough window`, detail: "buyers are asked when they could come; get a window from the listing agent",
+            ops: [{ key: "ask_agent_window", label: "Ask the agent for a window", intent: "primary" }, { key: "open_deals", label: "Set it on the deal", intent: "secondary" }] }));
+        } else if (!sh.next && sh.agentAsk === "asked") {
+          const askedDays = ms(sh.askedAt) != null ? Math.floor((now - ms(sh.askedAt)) / DAY_MS) : 0;
+          if (askedDays >= 1) {
+            card.actionIds.push(push({ ...base, kind: "showing_no_window", severity: "fyi",
+              title: `${card.address}: asked the agent for a walkthrough window ${askedDays}d ago`, detail: "set the window on the deal once they answer",
+              ops: [{ key: "open_deals", label: "Set it on the deal", intent: "primary" }, { key: "ask_agent_window", label: "Ask again", intent: "secondary" }] }));
+          }
+        } else if (sh.next && sh.hoursToNext != null && sh.hoursToNext <= 36) {
+          card.actionIds.push(push({ ...base, kind: "showing_soon", severity: sh.coming ? "soon" : "now",
+            title: `${card.address}: walkthrough ${sh.nextLabel}`,
+            detail: sh.coming ? `${sh.coming} coming${sh.interested ? ` · ${sh.interested} interested, no time yet` : ""}${sh.accessSet ? "" : " · access not set"}` : "nobody has said they're coming",
+            ops: [{ key: "open_deals", label: "Open the deal", intent: "primary" }] }));
         }
       }
       if (dd.stage === "under_contract" && dd.investors.some((i) => i.state === "committed")) {

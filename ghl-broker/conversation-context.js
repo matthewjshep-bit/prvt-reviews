@@ -23,6 +23,8 @@ import { addressKey as propertyKey } from "./shared/us-address.js";
 import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor } from "./shared/current-offer.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { emailContextText } from "./shared/gmail.js";
+import { showingContextLines } from "./shared/showing.js";
+import { accessFor, accessLines } from "./shared/deal-access.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -468,7 +470,10 @@ const dealLine = (d) => {
   const invite = d.invite
     ? ` — dataroom link sent ${dateWord(d.invite.sentAt || d.invite.createdAt)}${d.invite.viewCount ? `, opened ${d.invite.viewCount}× (last ${dateWord(d.invite.lastViewedAt)})` : ", not opened yet"}`
     : "";
-  return `- ${d.address}: ${money}${status}${said}${stage}${invite}`;
+  // The walkthrough (shared/showing.js): the window buyers are invited to,
+  // how they get in, and where this buyer stands on it.
+  const walk = (d.showing || []).length ? `\n    ${d.showing.join("\n    ")}` : "";
+  return `- ${d.address}: ${money}${status}${said}${stage}${invite}${walk}`;
 };
 
 /**
@@ -550,6 +555,14 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
       linkStatus: link ? investorStatus(link.status) : (blasted ? "blasted" : null), blasted,
       price: n.price, agreed: Boolean(n.agreed), arv: n.arv, repairs: n.repairs, invite: room ? inviteByRoom.get(room.id) || null : null,
       offerId: offer.id, reason: reasonWords(link?.reason),
+      // Only a deal we hold the house on has a walkthrough to invite them to.
+      showing: [
+        ...(offer.deal.stage === "under_contract" ? showingContextLines(offer.deal.showing, { contactId, now }) : []),
+        // Occupancy and how buyers get in (shared/deal-access.js): what the
+        // bot may say about the house itself, and nothing past it.
+        ...accessLines(accessFor(offer.deal)),
+      ],
+      occupancy: accessFor(offer.deal).occupancy,
     };
     if (link || blasted) linked.push(row);
     else {
