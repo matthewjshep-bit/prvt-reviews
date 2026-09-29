@@ -1014,6 +1014,25 @@ texted after the current row last moved.
 `ourComeDown` doesn't count the offer's own number said short ("227K" for
 227,552), or figures named as ARV, rehab, repairs or work.
 
+**The machine never raises our own number (2026-09-29).** 336 SW 15th St,
+Chehalis: we quoted 185k. The agent said the floors were new, a re-underwrite
+landed at 192,250, and the realm check texted "we can go around 192k" to an
+agent who hadn't countered. Separately, the hot push asked her to write it
+up at 173k, which was her other listing's number.
+- `machineRaise` finds the last price we texted on the house, in a line of
+  ours that names its number and street (`lastQuoteOnHouse`). It fires when
+  the offer is above that price and no person has stood behind it since. A
+  pin, a revision, a re-quote, a send, or a row a person made or published
+  counts as standing behind it.
+- `startProactive` reads the thread before a realm check or hot push and skips
+  on a raise. The skip is marked on the offer (Today's "priced, not floated"),
+  and `floatNumber` leaves a contact note. **Float** on the offer
+  (`personAsked`) sends it anyway.
+- `paperCheck` holds paper on a raise the same way it holds a come-down, and
+  offers **Re-quote at** the number the agent has.
+- The hot push may name only its own house's number (`onlyFloats`), not every
+  number in the agent's book.
+
 **The bot's offer book** lists one line per house: the current row, plus a
 count of superseded rows. Superseded amounts are stale, so a draft that says
 one is held.

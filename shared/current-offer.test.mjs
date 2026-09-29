@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   houseKey, pricedAt, resolveHouse, currentOffers, currentOfferFor, annotateCurrent,
-  isSuperseded, ourComeDown, paperCheck,
+  isSuperseded, ourComeDown, paperCheck, lastQuoteOnHouse, machineRaise,
 } from "./current-offer.js";
 
 // 13041 SE 208th St, Kent (2026-09-25): five rows on one house, the thread at
@@ -134,4 +134,42 @@ test("an offer's number said short, or the ARV and rehab behind it, is not a com
   assert.equal(ourComeDown(p, "[2026-08-31 10:00] US sms: with $110K of work we can do $235K").amount, 235000, "the price in the same line still counts");
   // The real ones still hold.
   assert.equal(ourComeDown({ cashAmount: 250562, createdAt: "2026-09-14T00:00:00Z" }, "[2026-09-16 10:00] US sms: im down to make an offer at $230K").amount, 230000);
+});
+
+// 336 SW 15th St, Chehalis (2026-09-25): we quoted 185k (and restated 186k),
+// the agent said the floors were new, a re-underwrite landed at 192,250 and
+// the bot texted "we can go around 192k" on its own. Her other listing's 173k
+// sits in the same thread.
+const CH = "336 SW 15th St, Chehalis, WA 98532";
+const CH_THREAD = [
+  "[2026-09-22 23:12] US sms: Good to know. On 336 SW 15th we'd likely land around 185k as-is with a quick close. Is that in the realm for the seller?",
+  "[2026-09-22 23:51] US sms: On 1213 Rhobina we can likely do around 173k as-is with a quick close. Is that in the realm for the seller?",
+  "[2026-09-25 17:20] US sms: Ran 336 SW 15th again and we can likely do around 186k as-is with a quick close. Does that work for the seller?",
+  "[2026-09-26 00:38] THEM sms: He said they painted inside and put new floors in.",
+  "[2026-09-26 00:40] US sms: Vacant and ready to close works for us. Can you float the 186 by him when you talk?",
+].join("\n");
+const REUNDERWRITE = { id: "70f8d3a9", address: CH, cashAmount: 192250, createdAt: "2026-09-26T00:42:31Z", status: "new",
+  autoUnderwrite: { passed: true, compsUsedCount: 4 } };
+
+test("a re-underwrite that came in above the number we already texted on the house is a raise nobody decided on", () => {
+  const q = lastQuoteOnHouse(REUNDERWRITE, CH_THREAD);
+  assert.equal(q.amount, 186000, "the last number texted on THIS house — not the other listing's 173k");
+  assert.equal(machineRaise(REUNDERWRITE, CH_THREAD).amount, 186000);
+  const check = paperCheck({ offer: REUNDERWRITE, transcript: CH_THREAD });
+  assert.equal(check.ok, false);
+  assert.equal(check.comeDown.amount, 186000, "the pane offers the re-quote at the number they have");
+  assert.match(check.reason, /last texted 186K .* above it at \$192,250/);
+});
+
+test("a raise a person stood behind is theirs to make: a pin, a revision, a send, or a row they made", () => {
+  assert.equal(machineRaise({ ...REUNDERWRITE, pin: { at: "2026-09-26T01:00:00Z" } }, CH_THREAD), null);
+  assert.equal(machineRaise({ ...REUNDERWRITE, revisions: [{ ts: "2026-09-26T01:00:00Z", from: 190000, to: 192250 }] }, CH_THREAD), null);
+  assert.equal(machineRaise({ ...REUNDERWRITE, sends: [{ ts: "2026-09-26T01:00:00Z" }] }, CH_THREAD), null);
+  assert.equal(machineRaise({ ...REUNDERWRITE, autoUnderwrite: undefined }, CH_THREAD), null, "made by hand after the text");
+  assert.equal(machineRaise({ ...REUNDERWRITE, autoUnderwrite: { ...REUNDERWRITE.autoUnderwrite, publishedAt: "2026-09-26T01:00:00Z" } }, CH_THREAD), null);
+  // The machine's own row the text came off, said the way people text it, is not a raise.
+  assert.equal(machineRaise({ ...REUNDERWRITE, cashAmount: 185500 }, CH_THREAD), null);
+  assert.equal(machineRaise({ ...REUNDERWRITE, cashAmount: 180000 }, CH_THREAD), null, "going down is not a raise");
+  // Nothing texted on this house yet: nothing to raise over.
+  assert.equal(machineRaise({ ...REUNDERWRITE, address: "1213 Rhobina St, Centralia, WA 98531", cashAmount: 180000 }, CH_THREAD.split("\n").slice(0, 1).join("\n")), null);
 });
