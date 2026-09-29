@@ -425,22 +425,30 @@ export function auditConversations({
  */
 const STILL_YOURS = new Set(["book_checkin"]);
 export const HELD_SWEEP_KINDS = new Set(["held_rerun", "held_ask", "held_yours", "held_over", "held_junk"]);
-export function auditActions(last, { now = Date.now() } = {}) {
+export function auditActions(last, { now = Date.now(), names = {} } = {}) {
   if (!last?.findings) return [];
   const labelOf = Object.fromEntries(AUDIT_KINDS.map((x) => [x.key, x.label]));
   return last.findings
     // A held underwrite that is yours is already on the queue as
     // underwrite_held (with Open and Drop); the card lists it, the queue doesn't twice.
     .filter((f) => f.severity !== "fyi" && (!f.action || STILL_YOURS.has(f.action.type)) && !HELD_SWEEP_KINDS.has(f.kind))
-    .map((f) => ({
-      id: f.id, kind: "audit_owed", severity: f.severity, contactId: f.contactId, contactName: f.contactName || "",
+    .map((f) => {
+      // The sweep names a contact only from drafts and offers; `names` is the
+      // contact record's, for the ones it couldn't (Sam, 2026-09-29: an agent
+      // who sent a deal read "An agent" / "contact" on Today).
+      const who = f.contactName || names[f.contactId] || "";
+      const tail = `${f.address ? ` · ${street(f.address)}` : ""}: ${labelOf[f.kind] || f.kind}`;
+      return {
+      id: f.id, kind: "audit_owed", severity: f.severity, contactId: f.contactId, contactName: who,
       address: f.address || "", offerId: f.offerId || null, draftId: f.draftId || null,
-      title: `${f.contactName || "An agent"}${f.address ? ` · ${street(f.address)}` : ""}: ${labelOf[f.kind] || f.kind}`,
+      title: `${who || "An agent"}${tail}`,
+      ...(who && !f.contactName ? { dismissedAs: `An agent${tail}` } : {}),
       detail: f.why, dueAt: f.dueAt, since: last.finishedAt || last.generatedAt || null,
       ops: f.draftId ? [{ key: "open_outbox", label: "Open the draft", intent: "primary" }]
         : f.offerId ? [{ key: "open_offer", label: "Open the offer", intent: "primary" }]
         : [{ key: "open_contact", label: "Open the thread", intent: "primary" }],
-    }));
+      };
+    });
 }
 
 // One line for the card header.

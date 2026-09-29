@@ -240,3 +240,21 @@ test("a held reply the gates called locked-but-clean is releasable; rows from be
   const old = draft({ id: "o", status: "draft", createdAt: ago(20), sentAt: null, autoSendable: false, needsHuman: false, autoSend: { decided: false, reason: "a other is a person's call" } });
   assert.equal(audit({ drafts: [old], events: [], offers: [] }).findings[0].action?.type, "book_checkin", "no verdict on the row: not released");
 });
+
+// Sam, 2026-09-29: an agent who sent a deal came back unanswered and Today
+// read "An agent: Texts we never answered" over a pane headed "contact" — the
+// sweep only names contacts off drafts and offers. The contact record's name
+// fills it; the old title rides along so a row dismissed before stays gone.
+test("an unanswered text shows who it's from when the sweep didn't know the name", async () => {
+  const { auditActions } = await import("./conversation-audit.js");
+  const last = { finishedAt: "2026-09-29T02:00:00Z", findings: [
+    { id: "audit:unanswered_inbound:c9:x", kind: "unanswered_inbound", severity: "now", contactId: "c9", contactName: "", address: "", why: "they texted and nothing was drafted" },
+    { id: "audit:unanswered_inbound:c8:x", kind: "unanswered_inbound", severity: "now", contactId: "c8", contactName: "Polly P", address: "", why: "they texted and nothing was drafted" },
+  ] };
+  const [a, b] = auditActions(last, { names: { c9: "Sam Lee" } });
+  assert.equal(a.contactName, "Sam Lee");
+  assert.match(a.title, /^Sam Lee: /);
+  assert.match(a.dismissedAs, /^An agent: /);
+  assert.equal(b.title.startsWith("Polly P"), true);
+  assert.equal("dismissedAs" in b, false);
+});

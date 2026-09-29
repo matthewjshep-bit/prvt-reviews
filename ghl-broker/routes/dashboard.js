@@ -39,7 +39,8 @@ import { buildFlow, FLOW_STAGES } from "../shared/flow.js";
 import { buildDigest } from "../shared/digest.js";
 import { lessons, dealScorecard } from "../shared/post-mortem.js";
 import { effectiveSettings } from "../shared/offer-calc.js";
-import { listPipelines } from "../ghl.js";
+import { listPipelines, getContact } from "../ghl.js";
+import { mapPool } from "../map-pool.js";
 import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR } from "../ghl-mirror.js";
 import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_UNDERWRITE_ENABLED } from "../auto-underwrite.js";
 import { draftStats } from "../shared/conversation-ai.js";
@@ -374,9 +375,37 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     } catch (err) { fail(res, err); }
   });
 
+  // The audit's findings that came back without a name: the contact record
+  // first, then GHL — at most 25 lookups a load, three at a time, cached for
+  // the process so a refresh doesn't ask again.
+  const nameCache = new Map();
+  const contactName = (c) => String(c?.contactName || c?.name || [c?.firstName, c?.lastName].filter(Boolean).join(" ") || "").trim();
+  async function namesForAudit({ store, client, locationId, audit }) {
+    const missing = [...new Set((audit?.findings || []).filter((f) => f?.contactId && !f.contactName).map((f) => f.contactId))];
+    const out = {};
+    const need = [];
+    for (const id of missing) {
+      const hit = nameCache.get(`${locationId}|${id}`);
+      if (hit) out[id] = hit; else need.push(id);
+    }
+    if (!need.length) return out;
+    const profiles = await store.listContactProfiles?.(locationId, { limit: 5000 }).catch(() => []) || [];
+    const byId = new Map(profiles.filter((p) => p?.name).map((p) => [p.contactId, p.name]));
+    const ask = [];
+    for (const id of need) {
+      if (byId.has(id)) { out[id] = byId.get(id); nameCache.set(`${locationId}|${id}`, out[id]); } else ask.push(id);
+    }
+    await mapPool(ask.slice(0, 25), 3, async (id) => {
+      const c = await getContact(client, id).catch(() => null);
+      const name = contactName(c) || "";
+      if (name) { out[id] = name; nameCache.set(`${locationId}|${id}`, name); }
+    });
+    return out;
+  }
+
   router.get("/pipeline", async (req, res) => {
     try {
-      const { locationId } = resolveLocation(req);
+      const { locationId, client } = resolveLocation(req);
       const now = Date.now();
       const since = new Date(now - PIPELINE_EVENT_DAYS * DAY_MS).toISOString();
       const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
@@ -410,7 +439,10 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const dayCursor = config.driver?.daytime?.enabled ? await store.getJobCursor?.(locationId, DAY_CURSOR_NAME).catch(() => null) : null;
       const dayLast = dayCursor?.doc?.last || null;
       const audit = auditCursor?.doc?.last || null;
-      const fromLastNight = auditActions(audit, { now }).filter((a) =>
+      // Names the sweep didn't have, off the contact record, then GHL for
+      // the few still missing (bounded; a failure just leaves "An agent").
+      const names = await namesForAudit({ store, client, locationId, audit }).catch(() => ({}));
+      const fromLastNight = auditActions(audit, { now, names }).filter((a) =>
         !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled")))
         .map((a) => ({ ...a, group: "yours" }));
       out.counts.actions.byGroup.yours += fromLastNight.length;
