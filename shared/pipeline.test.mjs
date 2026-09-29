@@ -646,3 +646,25 @@ test("a deal under contract with no walkthrough window asks for one, then says w
   assert.equal(s?.detail, "1 coming · 1 interested, no time yet");
   assert.equal(soon.cards[0].deal.showing.coming, 1);
 });
+
+// Matt, 2026-09-29: the closing checklist nags from Today, once per deal,
+// only when the thing to chase first is late or about to be.
+test("a deal's most urgent closing item shows on Today when it's overdue or due in two days, never on a closed deal", () => {
+  // Under contract 4 days ago: the P&S (contract +0) and escrow (+1) are late.
+  const late = build({ offers: [deal()] });
+  const rows = late.actions.filter((a) => a.kind === "closing_task_due");
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].title, /Purchase & sale signed by both sides, 4d overdue/);
+  assert.equal(rows[0].severity, "now");
+  assert.equal(rows[0].taskId, "psa_signed");
+  assert.deepEqual(rows[0].ops.map((o) => o.key), ["tick_task", "open_deals"]);
+  assert.equal(late.cards[0].deal.checklist.next.id, "psa_signed");
+  // Everything in the gate done or far off: nothing to nag about.
+  const items = ["psa_signed", "open_escrow", "earnest_money", "prelim_title", "walkthrough"].map((id) => ({ id, done: true }));
+  const calm = build({ offers: [deal({}, { inspectionDate: ymd(10), checklist: { items: [
+    ...items.map((i) => ({ ...i, gate: "under_contract", label: i.id })),
+    { id: "inspection", gate: "under_contract", label: "Inspection", owner: "us", rule: { from: "inspection", days: 0 } },
+  ] } })] });
+  assert.equal(kinds(calm).includes("closing_task_due"), false);
+  assert.equal(kinds(build({ offers: [deal({}, { stage: "closed" })] })).includes("closing_task_due"), false);
+});

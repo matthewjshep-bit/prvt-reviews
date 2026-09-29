@@ -27,6 +27,8 @@ import { openPromises, resolvePromise } from "./promise-resolver.js";
 import { UNANSWERED_LIMIT } from "./thread-health.js";
 import { groupHouses, resolveHouse } from "./current-offer.js";
 import { showingSummary } from "./showing.js";
+import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
+import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -63,6 +65,7 @@ export const ACTION_KINDS = [
   { key: "handoff",           label: "One click from you" },
   { key: "investor_price_agreed", label: "Prices the machine agreed" },
   { key: "closing_soon",      label: "Closing" },
+  { key: "closing_task_due",  label: "Closing checklist" },
   { key: "hot_stalled",       label: "Price agreed, gone quiet" },
   { key: "underwrite_held",   label: "Underwrites that need a look" },
   { key: "offer_ready",       label: "Priced, not floated" },
@@ -303,6 +306,11 @@ export function buildPipeline({
         contractPrice: round(d.contractPrice), assignmentFee: round(d.assignmentFee),
         investors: investorChips(d, myEvents, contactNames),
         showing: showingSummary(d.showing, now),
+        checklist: (() => {
+          const c = resolveChecklist(d, { now });
+          const done = c.items.filter((i) => i.done).length;
+          return { done, total: c.items.length, next: c.next ? { id: c.next.id, label: c.next.label, owner: c.next.owner, state: c.next.state, dueYmd: c.next.dueYmd, dueDays: c.next.dueDays } : null };
+        })(),
       };
       // The investor band agreed a price with one buyer. It said yes in words
       // and wrote the number down; committing them, and the dataroom that
@@ -368,6 +376,19 @@ export function buildPipeline({
           title: dd.closingInDays < 0 ? `${card.address} was due to close ${-dd.closingInDays}d ago` : `${card.address} closes ${dd.closingInDays === 0 ? "today" : `in ${dd.closingInDays}d`}`,
           detail: dd.stage.replace(/_/g, " "),
           ops: [{ key: "mark_closed", label: "Mark closed", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }, { key: "fell_through", label: "Fell through", intent: "danger" }] }));
+      }
+      // The closing checklist (shared/deal-checklist.js): one row per deal, for
+      // the thing to chase first, once it's overdue or due within two days.
+      const cl = resolveChecklist(o.deal, { now });
+      if (cl.next && (cl.next.state === "overdue" || cl.next.state === "due_soon")) {
+        const n = cl.next;
+        const owner = n.owner === "us" ? "Us" : partyName(resolveParties(o, {})[n.owner]) || OWNER_LABEL[n.owner];
+        const openHere = cl.open.filter((i) => i.gate === cl.currentGate).length;
+        card.actionIds.push(push({ ...base, kind: "closing_task_due", severity: n.state === "overdue" ? "now" : "soon",
+          title: `${card.address}: ${n.label}, ${dueWords(n)}`,
+          detail: `${owner}${cl.currentGate ? ` · ${openHere} open before ${GATE_LABEL[cl.currentGate]} is done` : ""}`,
+          taskId: n.id,
+          ops: [{ key: "tick_task", label: "Done", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
       }
       const anyBuyer = dd.investors.length > 0;
       const blasts = myEvents.filter((e) => e.type === "blast_sent");

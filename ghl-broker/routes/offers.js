@@ -37,7 +37,10 @@
 //   POST   /api/offers/custom-fields           create one custom field (idempotent)
 //   GET    /api/offers/deals                  offers promoted to active deals
 //   POST   /api/offers/:id/deal               promote an offer to a deal (under contract)
-//   PATCH  /api/offers/:id/deal               update stage / terms
+//   PATCH  /api/offers/:id/deal               update stage / terms / walkthrough / parties
+//   POST   /api/offers/:id/deal/checklist     tick, re-date, reassign, remove or add one closing-checklist item
+//   GET/POST /api/offers/:id/deal/showing/ask-agent   the walkthrough-window text to the listing agent; send it
+//   POST   /api/offers/:id/deal/showing/rsvp  a buyer's walkthrough answer, set by hand
 //   DELETE /api/offers/:id/deal               un-promote (mistake correction)
 //   POST   /api/offers/:id/deal/investors     link a disposition investor (GHL contact)
 //   POST   /api/offers/:id/deal/suggest-investors   AI-suggest investors from conversation history
@@ -111,6 +114,8 @@ import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAut
 import { nextSendTime, spreadAcrossDay } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STATUSES } from "../shared/showing.js";
+import { mergeParties } from "../shared/deal-parties.js";
+import { normalizeChecklist, applyChecklistEdit, addChecklistItem, tickByDoc, tickById, GATES } from "../shared/deal-checklist.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop } from "../ghl-mirror.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
@@ -3113,6 +3118,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       fellThroughCode: "",
       investors: [],
       ghl: { tag: false, note: false },
+      // What has to happen before closing (shared/deal-checklist.js), written
+      // down now so a later change to the template never rewrites this deal.
+      checklist: normalizeChecklist(null),
     };
     // Under contract IS the accepted state — keep the two from disagreeing.
     recordStatus(offer, "accepted", "", ts);
@@ -3603,6 +3611,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // The walkthrough: windows and who opens the door are the operator's
       // (shared/showing.js). The ask and the RSVPs keep what the machine wrote.
       if (b.showing && typeof b.showing === "object") deal.showing = applyShowingEdit(deal.showing, b.showing);
+      // Who else is on the deal (shared/deal-parties.js): only the roles sent
+      // change; a role sent as null goes back to its default.
+      if (b.parties && typeof b.parties === "object") deal.parties = mergeParties(deal.parties, b.parties);
       deal.updatedAt = new Date().toISOString();
       await store.updateOffer(offer.id, offer);
       // Re-price the investor package off the new terms. The rest of its
@@ -3652,6 +3663,32 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  /* ---------- the closing checklist (shared/deal-checklist.js) ---------- */
+
+  // One item per call — tick, re-date, reassign, rename, note, remove — or
+  // `add: { gate, label, owner, due }`. Read fresh and saved at once, so a
+  // tick never overwrites a parties or terms edit made in another tab.
+  router.post("/:id/deal/checklist", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { offer } = ctx;
+      const b = req.body || {};
+      if (b.add) {
+        if (!GATES.includes(b.add.gate)) return res.status(400).json({ error: `gate must be one of: ${GATES.join(", ")}` });
+        if (!String(b.add.label || "").trim()) return res.status(400).json({ error: "label required" });
+        offer.deal.checklist = addChecklistItem(offer.deal.checklist, b.add);
+      } else {
+        const current = normalizeChecklist(offer.deal.checklist);
+        if (!current.items.some((i) => i.id === b.id)) return res.status(404).json({ error: "no such checklist item" });
+        offer.deal.checklist = applyChecklistEdit(current, b);
+      }
+      offer.deal.updatedAt = new Date().toISOString();
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---------- the buyer walkthrough (shared/showing.js) ---------- */
 
   // The text to the listing agent asking for a walkthrough window, as it
@@ -3691,6 +3728,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!RSVP_STATUSES.includes(b.status)) return res.status(400).json({ error: `status must be one of: ${RSVP_STATUSES.join(", ")}` });
       const name = b.name || (offer.deal.investors || []).find((i) => i.contactId === b.contactId)?.name || "";
       offer.deal.showing = recordRsvp(offer.deal.showing, { contactId: String(b.contactId), name, status: b.status, source: "manual" });
+      // Somebody walked it: that line of the closing checklist is done.
+      if (b.status === "attended") offer.deal.checklist = tickById(offer.deal.checklist, "walkthrough");
       offer.deal.updatedAt = new Date().toISOString();
       await store.updateOffer(offer.id, offer);
       res.json({ ok: true, showing: offer.deal.showing });
@@ -5760,6 +5799,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const kind = DEAL_DOC_KINDS.includes(req.body?.kind) ? req.body.kind : "Other";
       const { bytes, contentType } = decodeDealDocUpload(req.body?.data, name);
       const document = await store.saveDealDoc(ctx.offer.id, ctx.locationId, { kind, name, contentType, bytes });
+      // The signed P&S or the assignment is on file: its checklist line is done.
+      const ticked = tickByDoc(ctx.offer.deal.checklist, kind);
+      if (JSON.stringify(ticked) !== JSON.stringify(normalizeChecklist(ctx.offer.deal.checklist))) {
+        const fresh = await store.getOffer(ctx.offer.id);
+        if (fresh?.deal) {
+          fresh.deal.checklist = tickByDoc(fresh.deal.checklist, kind);
+          fresh.deal.updatedAt = new Date().toISOString();
+          await store.updateOffer(fresh.id, fresh);
+        }
+      }
       res.json({ ok: true, document, documents: await store.listDealDocs(ctx.offer.id) });
     } catch (err) { fail(res, err); }
   });

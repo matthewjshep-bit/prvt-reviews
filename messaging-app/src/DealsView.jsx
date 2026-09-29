@@ -15,7 +15,7 @@ import { ClipboardCheck } from "lucide-react";
 import PostMortemModal from "./PostMortemView.jsx";
 import {
   addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
-  removeDeal, removeDealInvestor, searchContacts, suggestInvestors, updateDeal, updateDealInvestor,
+  removeDeal, removeDealInvestor, suggestInvestors, updateDeal, updateDealInvestor,
   uploadDealDoc, zillowUrl, dealFeedbackUrl } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
 import ContactLink from "./ContactLink.jsx";
@@ -23,6 +23,11 @@ import DataroomModal from "./DataroomModal.jsx";
 import EnrichModal from "./EnrichModal.jsx";
 import MatchInvestorsModal from "./MatchInvestorsModal.jsx";
 import WalkthroughCard from "./WalkthroughCard.jsx";
+import ContactSearch from "./ContactSearch.jsx";
+import DealTimeline from "./DealTimeline.jsx";
+import DealParties from "./DealParties.jsx";
+import { resolveChecklist, dueWords } from "@shared/deal-checklist.js";
+import { resolveParties } from "@shared/deal-parties.js";
 import {
   BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
   rowActivation,
@@ -279,65 +284,18 @@ function DealDocuments({ offerId }) {
   );
 }
 
-// Typeahead over existing GHL contacts — same debounced pattern as NewOffer's
-// ContactPicker, trimmed down to add-investor.
+// Add-investor: the shared GHL contact typeahead, with contacts already on
+// the deal greyed out.
 function InvestorPicker({ existingIds, onPick, busy }) {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState([]);
-  const [searching, setSearching] = useState(false);
-  const [open, setOpen] = useState(false);
-  const timer = useRef(null);
-
-  useEffect(() => {
-    clearTimeout(timer.current);
-    if (!query.trim() || query.trim().length < 2) {
-      setResults([]);
-      return;
-    }
-    timer.current = setTimeout(() => {
-      setSearching(true);
-      searchContacts(query.trim())
-        .then(setResults)
-        .catch(() => setResults([]))
-        .finally(() => setSearching(false));
-    }, 300);
-    return () => clearTimeout(timer.current);
-  }, [query]);
-
-  return (
-    <div className="relative">
-      <input
-        value={query}
-        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        placeholder="Add investor — search your GHL contacts…"
-        disabled={busy}
-        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:opacity-60"
-      />
-      {searching && <Loader2 size={14} className="absolute right-3 top-3 animate-spin text-slate-400" />}
-      {open && results.length > 0 && (
-        <div className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-          {results.map((c) => {
-            const linked = existingIds.has(c.id);
-            return (
-              <button key={c.id} type="button" disabled={linked}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => { onPick(c); setQuery(""); setResults([]); setOpen(false); }}
-                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:opacity-50">
-                <span>
-                  <span className="font-medium">{c.name || "(no name)"}</span>
-                  <span className="ml-2 text-xs text-slate-500">{[c.phone, c.email].filter(Boolean).join(" · ")}</span>
-                </span>
-                {linked && <span className="text-[11px] text-slate-400">linked</span>}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
+  return <ContactSearch onPick={onPick} busy={busy} placeholder="Add investor — search your GHL contacts…" isTaken={(c) => existingIds.has(c.id)} />;
 }
+
+const DEAL_TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "buyers", label: "Buyers" },
+  { key: "paper", label: "Terms & paperwork" },
+];
+const STAGE_ORDER = ["under_contract", "buyer_found", "assigned", "closed"];
 
 function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onDataroom, onEdit, onEnrich }) {
   const deal = offer.deal;
@@ -353,6 +311,16 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Which tab: kept in ?tab= so a link from Today can open the right one.
+  const [tab, setTab] = useState(() => {
+    try { const t = new URLSearchParams(window.location.search).get("tab"); return DEAL_TABS.some((x) => x.key === t) ? t : "overview"; } catch { return "overview"; }
+  });
+  const pickTab = (t) => {
+    setTab(t);
+    try { const u = new URL(window.location.href); u.searchParams.set("tab", t); window.history.replaceState(null, "", u); } catch { /* the tab still switches */ }
+  };
+  const checklist = resolveChecklist(deal);
+  const parties = resolveParties(offer, settings || {});
   const [suggest, setSuggest] = useState(null); // null | {busy} | suggest-investors response | {error}
   const [matching, setMatching] = useState(false); // buy-box match modal open
   // The fell-through form: a coded reason (the post-mortem counts it) and a
@@ -389,6 +357,13 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
       const suggested = codeFromPassReasons(summarizeFeedback([...(deal.feedback || []), ...(deal.investors || []).filter((i) => i.reason?.code).map((i) => i.reason)]).byCode);
       setFellForm({ code: deal.fellThroughCode || suggested, reason: deal.fellThroughReason || "" });
       return;
+    }
+    // The soft gate (shared/deal-checklist.js): moving on with work still
+    // open asks first. It never blocks — the list doesn't know everything.
+    const ahead = STAGE_ORDER.indexOf(stage) > STAGE_ORDER.indexOf(deal.stage);
+    if (ahead) {
+      const open = checklist.items.filter((i) => !i.done && STAGE_ORDER.indexOf(i.gate) < STAGE_ORDER.indexOf(stage));
+      if (open.length && !window.confirm(`${open.length} item${open.length === 1 ? "" : "s"} still open before ${STAGE[stage]?.label || stage}:\n\n${open.slice(0, 6).map((i) => `• ${i.label}`).join("\n")}${open.length > 6 ? "\n…" : ""}\n\nMove it anyway?`)) return;
     }
     run(() => updateDeal(offer.id, { stage }));
   };
@@ -509,62 +484,32 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
           )}
         </div>
 
-        {/* Three lanes on a wide screen — terms, disposition, paperwork — so a
-            deal with twenty investors doesn't push the documents off the fold. */}
-        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.15fr)_minmax(0,1fr)]">
-          {/* Terms */}
-          <div className="space-y-3">
-            <div>
-              <span className={labelCls}>Contract price</span>
-              <input className={inputCls} value={terms.contractPrice} placeholder="$"
-                onChange={(e) => setTerms((t) => ({ ...t, contractPrice: e.target.value }))} />
-            </div>
-            <div>
-              <span className={labelCls}>Assignment fee</span>
-              <input className={inputCls} value={terms.assignmentFee} placeholder={`$ — e.g. ${fmtMoney(settings?.wholesaleFee || 15000)}`}
-                onChange={(e) => setTerms((t) => ({ ...t, assignmentFee: e.target.value }))} />
-            </div>
-            <div className="rounded-lg bg-slate-50 px-3 py-2">
-              <span className={labelCls}>Assignment contract</span>
-              <div className="font-semibold tabular-nums">
-                {assignmentTotal(terms.contractPrice, terms.assignmentFee)
-                  ? fmtMoney(assignmentTotal(terms.contractPrice, terms.assignmentFee))
-                  : "—"}
-              </div>
-              <div className="text-xs text-slate-500">Contract price + fee — what the end buyer pays.</div>
-              {ceiling.computable && (
-                <div className={`mt-1.5 rounded-md px-2 py-1 text-xs ${overBy > 0 ? "bg-amber-100 text-amber-900" : "bg-emerald-50 text-emerald-800"}`}
-                  title={`${ceiling.pct}% × ARV ${fmtMoney(ceiling.arv)} − repairs ${fmtMoney(ceiling.repairs)}. Every deal that fell through sat above this line; every one that sold sat at it.`}>
-                  Buyer ceiling ({ceiling.pct}% rule): <b>{fmtMoney(ceiling.noFee)}</b>
-                  {asking ? (overBy > 0 ? <> — this asks <b>{fmtMoney(overBy)}</b> more</> : <> — <b>{fmtMoney(-overBy)}</b> of room</>) : null}
-                </div>
+        {/* Three tabs (Matt, 2026-09-29): what has to happen next and who's
+            on it first; the buyers; the numbers and the paper. */}
+        <div role="tablist" className="mb-5 flex gap-1 border-b border-slate-200">
+          {DEAL_TABS.map((t) => (
+            <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} onClick={() => pickTab(t.key)}
+              className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold transition-colors ${tab === t.key ? "border-blue-600 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-800"}`}>
+              {t.label}
+              {t.key === "overview" && checklist.open.length > 0 && (
+                <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[11px] tabular-nums ${checklist.next?.state === "overdue" ? "bg-rose-100 text-rose-800" : "bg-slate-100 text-slate-700"}`}>{checklist.open.length}</span>
               )}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <span className={labelCls}>Inspection ends</span>
-                <input type="date" className={inputCls} value={terms.inspectionDate}
-                  onChange={(e) => setTerms((t) => ({ ...t, inspectionDate: e.target.value }))} />
-              </div>
-              <div>
-                <span className={labelCls}>Closing date</span>
-                <input type="date" className={inputCls} value={terms.closingDate}
-                  onChange={(e) => setTerms((t) => ({ ...t, closingDate: e.target.value }))} />
-              </div>
-            </div>
-            <div>
-              <span className={labelCls}>Notes</span>
-              <textarea rows={3} className={inputCls} value={terms.notes} placeholder="Deal notes…"
-                onChange={(e) => setTerms((t) => ({ ...t, notes: e.target.value }))} />
-            </div>
-            {termsDirty && (
-              <button type="button" onClick={saveTerms} disabled={busy}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
-                Save terms
-              </button>
-            )}
-          </div>
+              {t.key === "buyers" && (deal.investors || []).length > 0 && (
+                <span className="ml-1.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[11px] tabular-nums text-slate-700">{deal.investors.length}</span>
+              )}
+            </button>
+          ))}
+        </div>
 
+        {tab === "overview" && (
+          <div className="grid gap-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+            <DealTimeline key={offer.id} offer={offer} parties={parties} onUpdated={onUpdated} />
+            <DealParties offer={offer} settings={settings} onUpdated={onUpdated} />
+          </div>
+        )}
+
+        {tab === "buyers" && (
+          <div className="max-w-3xl">
           {/* Disposition — who the deal is being shopped to */}
           <div className="space-y-4">
             {/* Why nothing is going out. Said here rather than left to be
@@ -681,13 +626,69 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               </div>
             </div>
           </div>
+          </div>
+        )}
 
-          {/* Paperwork — generated documents, uploaded originals, timeline */}
+        {tab === "paper" && (
+          <div className="grid gap-8 lg:grid-cols-2">
+          {/* Terms */}
+          <div className="space-y-3">
+            <div>
+              <span className={labelCls}>Contract price</span>
+              <input className={inputCls} value={terms.contractPrice} placeholder="$"
+                onChange={(e) => setTerms((t) => ({ ...t, contractPrice: e.target.value }))} />
+            </div>
+            <div>
+              <span className={labelCls}>Assignment fee</span>
+              <input className={inputCls} value={terms.assignmentFee} placeholder={`$ — e.g. ${fmtMoney(settings?.wholesaleFee || 15000)}`}
+                onChange={(e) => setTerms((t) => ({ ...t, assignmentFee: e.target.value }))} />
+            </div>
+            <div className="rounded-lg bg-slate-50 px-3 py-2">
+              <span className={labelCls}>Assignment contract</span>
+              <div className="font-semibold tabular-nums">
+                {assignmentTotal(terms.contractPrice, terms.assignmentFee)
+                  ? fmtMoney(assignmentTotal(terms.contractPrice, terms.assignmentFee))
+                  : "—"}
+              </div>
+              <div className="text-xs text-slate-500">Contract price + fee — what the end buyer pays.</div>
+              {ceiling.computable && (
+                <div className={`mt-1.5 rounded-md px-2 py-1 text-xs ${overBy > 0 ? "bg-amber-100 text-amber-900" : "bg-emerald-50 text-emerald-800"}`}
+                  title={`${ceiling.pct}% × ARV ${fmtMoney(ceiling.arv)} − repairs ${fmtMoney(ceiling.repairs)}. Every deal that fell through sat above this line; every one that sold sat at it.`}>
+                  Buyer ceiling ({ceiling.pct}% rule): <b>{fmtMoney(ceiling.noFee)}</b>
+                  {asking ? (overBy > 0 ? <> — this asks <b>{fmtMoney(overBy)}</b> more</> : <> — <b>{fmtMoney(-overBy)}</b> of room</>) : null}
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <span className={labelCls}>Inspection ends</span>
+                <input type="date" className={inputCls} value={terms.inspectionDate}
+                  onChange={(e) => setTerms((t) => ({ ...t, inspectionDate: e.target.value }))} />
+              </div>
+              <div>
+                <span className={labelCls}>Closing date</span>
+                <input type="date" className={inputCls} value={terms.closingDate}
+                  onChange={(e) => setTerms((t) => ({ ...t, closingDate: e.target.value }))} />
+              </div>
+            </div>
+            <div>
+              <span className={labelCls}>Notes</span>
+              <textarea rows={3} className={inputCls} value={terms.notes} placeholder="Deal notes…"
+                onChange={(e) => setTerms((t) => ({ ...t, notes: e.target.value }))} />
+            </div>
+            {termsDirty && (
+              <button type="button" onClick={saveTerms} disabled={busy}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
+                Save terms
+              </button>
+            )}
+          </div>
+          {/* Paperwork — generated documents, uploaded originals, stage history */}
           <div className="space-y-4">
             <DealDocuments offerId={offer.id} />
 
             <div>
-              <span className={labelCls}>Timeline</span>
+              <span className={labelCls}>Stage history</span>
               <div className="space-y-0.5 text-xs text-slate-600">
                 {(deal.stageHistory || []).map((h, idx) => (
                   <div key={idx} className="flex justify-between gap-3">
@@ -736,7 +737,8 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               <Trash2 size={13} /> Remove deal tracking (keeps the offer)
             </button>
           </div>
-        </div>
+          </div>
+        )}
       </div>
 
       {postMortemOpen && (
@@ -829,6 +831,7 @@ export default function DealsView({ settings, onEdit }) {
                   <th className="px-4 py-2.5 text-right">Assignment</th>
                   <th className="px-4 py-2.5">Inspection</th>
                   <th className="px-4 py-2.5">Closing</th>
+                  <th className="px-4 py-2.5">Next</th>
                   <th className="px-4 py-2.5" />
                 </tr>
               </thead>
@@ -838,6 +841,8 @@ export default function DealsView({ settings, onEdit }) {
                   const closing = dateInfo(d.closingDate);
                   const inspection = dateInfo(d.inspectionDate);
                   const assignment = assignmentTotal(d.contractPrice, d.assignmentFee);
+                  const cl = TERMINAL.has(d.stage) ? null : resolveChecklist(d);
+                  const clDone = cl ? cl.items.filter((i) => i.done).length : 0;
                   return (
                     <tr key={o.id} {...rowActivation(() => setSelectedId(o.id))}
                       aria-label={`${o.address || "Deal"} — ${STAGE[d.stage]?.label || d.stage}`}
@@ -874,6 +879,18 @@ export default function DealsView({ settings, onEdit }) {
                           <span className={closing.days < 0 && !TERMINAL.has(d.stage) ? "font-semibold text-red-600" : ""}>
                             {closing.label}
                             <span className="ml-1 text-xs text-slate-400">{TERMINAL.has(d.stage) ? "" : closingSub(closing.days)}</span>
+                          </span>
+                        ) : <span className="text-slate-400">—</span>}
+                      </td>
+                      <td className="max-w-[18rem] px-4 py-2.5">
+                        {/* The closing checklist's next thing to chase (shared/deal-checklist.js). */}
+                        {cl?.next ? (
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="truncate" title={cl.next.label}>{cl.next.label}</span>
+                            {dueWords(cl.next) && (
+                              <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-medium ${cl.next.state === "overdue" ? "bg-rose-100 text-rose-800" : cl.next.state === "due_soon" ? "bg-amber-100 text-amber-900" : "bg-slate-100 text-slate-700"}`}>{dueWords(cl.next)}</span>
+                            )}
+                            <span className="shrink-0 text-xs tabular-nums text-slate-400">{clDone}/{cl.items.length}</span>
                           </span>
                         ) : <span className="text-slate-400">—</span>}
                       </td>

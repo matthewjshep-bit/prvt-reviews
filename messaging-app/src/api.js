@@ -399,6 +399,10 @@ export const getAgentAskText = (id) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/showing/ask-agent?${locq()}`).then(j);
 export const askAgentForWindow = (id, text) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/showing/ask-agent`, text ? { text } : {});
+// The closing checklist (shared/deal-checklist.js): one item per call —
+// { id, done?, due?, owner?, label?, note?, remove? } or { add: { gate, label, owner, due } }.
+export const updateDealChecklist = (id, edit) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal/checklist`, edit);
 export const setShowingRsvp = (id, { contactId, name, status }) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/showing/rsvp`, { contactId, name, status });
 export const suggestInvestors = (id) =>
