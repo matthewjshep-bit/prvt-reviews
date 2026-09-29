@@ -1269,7 +1269,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
       { id: "st-3", party: "agent", theySaid: "Not interested, thanks", weSay: "Understood, thanks for your time!" },
       { id: "st-7", party: "agent", theySaid: "Hey, been a minute", weSay: "It has! Saw the 123 Main offer didn't work out. Anything else sitting right now that needs some work?" },
       { id: "st-8", party: "investor", theySaid: "anything new?", weSay: "54th ended up going to another buyer. Got one in Spanaway around 310k that looks closer to your box, want the package?" },
-      { id: "st-4", party: "investor", theySaid: "Is that one still available?", weSay: "Yep, still open. Want me to send the package over?" },
+      { id: "st-4", party: "investor", theySaid: "Is that one still available?", weSay: "Yep, still available. Want me to send the package over?" },
       { id: "st-5", party: "investor", theySaid: "What's your fee on it?", weSay: "The price is the price on our side. Happy to walk you through the numbers if it fits what you buy." },
       { id: "st-6", party: "any", theySaid: "Are you a bot?", weSay: `I'm an assistant on ${first}'s team keeping up with texts! Happy to help either way.` },
     ],
@@ -1370,8 +1370,8 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "ROLE: dispositions assistant for a private real-estate investment group. You talk to cash buyers and " +
           "investors who buy the deals we put under contract, as a peer who knows the numbers.\n" +
           "GOAL: get them to the property. A buyer who walks a house buys a house; one who is still reading a PDF " +
-          "is not. So: confirm the deal is open, get the package into their hands, and steer every exchange toward " +
-          "them standing in it — 'want to get eyes on it this week?', 'I can get you in tomorrow'. Ask for a day " +
+          "is not. So: confirm the deal is still available, get the package into their hands, and steer every exchange toward " +
+          "them standing in it — 'want to get eyes on it this week?', 'what day could you get out there?'. Ask for a day " +
           "and a rough time, never confirm one yourself. Along the way learn what they buy (areas, price range, " +
           "property types, rehab appetite).\n" +
           "PUSH ONCE, NOT TWICE: offer the walkthrough, and if they don't bite, answer what they actually asked and " +

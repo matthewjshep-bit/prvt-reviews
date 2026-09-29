@@ -3944,3 +3944,19 @@ test("a blast text quotes the deal's price when it sends, not the price when it 
   await sendReplyDraft({ client: client2, store: store2, locationId: "LOC", draftId: "d1", text: "Alex, call me about K St.", live: true, dataroomBaseUrl: "https://deals.example" });
   assert.equal(calls2.find(([p]) => p === "/conversations/messages")[1].body.message, "Alex, call me about K St.");
 });
+
+// Rajesh Kasturi, 2026-09-29, 3511 NE 153rd St: "Sounds good, it's open
+// right now." went out on its own. The bot meant the deal was available; a
+// buyer reads that the house is open to walk into. We never know that, and
+// "open" is never the word for a deal (Matt).
+test("a buyer is never told a house is open, vacant, or how to get in", () => {
+  const inv = (reply) => evaluateReplyGates({ draft: { intent: "interested", confidence: "high", needsHuman: false, reply }, party: "investor", inboundMessage: "Will check" });
+  const rajesh = inv("Sounds good, it's open right now. Let me know what you think on the numbers.");
+  assert.equal(rajesh.ok, false);
+  assert.match(rajesh.flags.join(" · "), /says "it's open"/);
+  assert.equal(inv("Yep, still open. Want me to send the package over?").ok, false);
+  assert.equal(inv("It's vacant, go by any time.").ok, false);
+  assert.equal(inv("The lockbox code is 1234.").ok, false);
+  assert.equal(inv("Still available. Are you open to heavy rehab?").ok, true);
+  assert.equal(inv("Open to a call later?").ok, true);
+});

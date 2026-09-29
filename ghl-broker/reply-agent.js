@@ -317,6 +317,28 @@ export async function callDraftModel(client, params, { batch = null } = {}) {
   return { response, batched: false };
 }
 
+/**
+ * claimsAccess(reply, { vacantOk }) → the words that claim something about
+ * getting into the house, or "".
+ *
+ * "Open" about the house is never ours to say (a deal is "available"); an
+ * access code never goes in a text; "vacant"/"empty"/"go by any time" only
+ * when the deal is recorded vacant. "Open to a call" and "are you open to
+ * heavy rehab" are about the person, not the house.
+ */
+export function claimsAccess(reply = "", { vacantOk = false } = {}) {
+  const t = String(reply || "");
+  const open = t.match(/\b(?:it'?s|it is|house is|place is|property is|home is|still)\s+(?:still\s+|wide\s+)?open\b(?!\s+to\b)|\bopen\s+(?:right now|now|today|house)\b/i);
+  if (open) return open[0];
+  const code = t.match(/\b(?:lock\s?box|door|gate|access|entry)\s+code\b/i);
+  if (code) return code[0];
+  if (!vacantOk) {
+    const empty = t.match(/\b(?:vacant|empty|unlocked|unoccupied|nobody(?:'s| is) (?:living|home)|no one(?:'s| is)? living)\b|\b(?:go|swing|drive|stop|pop) by (?:any ?time|whenever)\b|\b(?:walk|see) (?:it|in) (?:any ?time|whenever)\b/i);
+    if (empty) return empty[0];
+  }
+  return "";
+}
+
 function parseDraft(response, intents, cfg) {
   if (response.stop_reason === "max_tokens") {
     throw Object.assign(new Error("reply drafting was truncated"), { http: 502 });
@@ -711,6 +733,13 @@ export function evaluateReplyGates({
     // 10917 48th St E, 2026-09-27: "cash means no lender". We use hard money.
     const cash = claimsAllCash(draft.reply);
     if (cash) flags.push(`the draft says "${cash}" — we buy with a hard money loan, not all cash`);
+  }
+  // What the house is like to get into. Rajesh Kasturi, 2026-09-29: "it's
+  // open right now" went to a buyer about a house nobody had said was open.
+  // Nothing on the deal records it yet, so any claim about it is held.
+  if (party === "investor") {
+    const claim = claimsAccess(draft.reply);
+    if (claim) flags.push(`the draft says "${claim}" — nothing on the deal says whether the house is open, vacant or how to get in`);
   }
   // The two rules that are not judgment calls. A number the other side must
   // never hear — our contract price, our fee — is flagged even if they said
