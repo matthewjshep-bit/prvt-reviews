@@ -1,164 +1,101 @@
-// gmail-sync.js — new mail in Matt's Gmail, onto the contacts it is with.
+// gmail-sync.js — the email with one person, read from Matt's Gmail when it
+// is needed.
 //
-// Every 15-minute tick, when conversationAi.gmail is on and the GMAIL_* env
-// is set: ask Gmail what arrived since the cursor's historyId, keep the mail
-// a person wrote, look each address up as a GHL contact, and write one
-// email_received / email_sent event per contact it is with (keyed on the
-// Gmail message id, so a replay writes nothing). Mail with nobody we know is
-// dropped — not stored, not logged. The reply agent reads those events as
-// "EMAIL WITH THEM" (shared/gmail.js emailContextText). Read-only: nothing
-// here sends, and nothing here starts a reply. Matt, 2026-09-28.
+// When the reply agent is about to draft for a contact (and when someone
+// presses "Check Gmail" in their drawer), this searches the inbox for mail
+// from or to that contact's addresses in the last lookbackDays, keeps the
+// mail a person wrote, and writes one email_received / email_sent event per
+// message (keyed on the Gmail message id, so a second read writes nothing).
+// The reply agent then reads them as "EMAIL WITH THEM" (shared/gmail.js
+// emailContextText). The rest of the inbox is never looked at.
 //
-// Gating is the conversation audit's: the cursor is written before the run
-// (`run`), a run left on it past STALE_RUN_MS is retried, the day's failed
-// or stale retries are capped, and `last` keeps counts only — no addresses,
-// subjects or words.
+// First built as a 15-minute poll of the whole inbox; Matt, 2026-09-28:
+// read it only when the conversation AI needs it. Read-only: nothing here
+// sends, and nothing here starts a reply. Logs and results carry counts,
+// never addresses, subjects or words.
 
 import { store as defaultStore } from "./store.js";
-import { searchContacts } from "./ghl.js";
 import { recordEvent } from "./contact-record.js";
 import { gmailEnv, makeGmail } from "./gmail-api.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
-import { isPersonMail, summarizeMessage, emailEvent, addressInEmail } from "./shared/gmail.js";
+import { isPersonMail, summarizeMessage, emailEvent, addressInEmail, emailDedupeKey, EMAIL_EVENT_TYPES } from "./shared/gmail.js";
 
-export const CURSOR_NAME = "gmail";
-export const STALE_RUN_MS = 30 * 60 * 1000;
-export const MAX_DAILY_RETRIES = 6;
-export const MAX_MESSAGES_PER_RUN = 300;
-export const MAX_LOOKUPS_PER_RUN = 120;
-export const MAX_ADDRESSES_PER_MESSAGE = 6;
-export const FALLBACK_DAYS = 2;             // a historyId Gmail can no longer replay
-const LOOKUP_HIT_MS = 24 * 3600000;
-const LOOKUP_MISS_MS = 12 * 3600000;
-const iso = (ms) => new Date(ms).toISOString();
-const pacificDay = (ms) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(ms));
-const SEARCH_NOISE = "-in:chats -category:promotions -category:social";
+export const MAX_MESSAGES = 25;           // newest first; older ones are already on the record
+export const MAX_ADDRESSES = 3;
+export const RECHECK_MS = 10 * 60 * 1000;  // two drafts a minute apart don't search twice
+export const DRAFT_TIMEOUT_MS = 8000;      // a slow Gmail never holds a draft longer than this
 
-const jobs = new Map();
-export const getGmailJob = (locationId) => jobs.get(locationId) || null;
-const lookups = new Map();   // `${locationId}|${email}` → { id|null, at }
-export function _reset() { jobs.clear(); lookups.clear(); }
+const lastChecked = new Map();   // `${locationId}|${contactId}` → ms
+export function _reset() { lastChecked.clear(); }
 
-/**
- * contactIdForEmail({ client, locationId, email, deps, now }) → contactId | null
- *
- * GHL's contact search by the address, with an exact compare: the duplicate
- * endpoint misses known contacts by email (2026-09-28, dispo-talked-to).
- * Remembered a day for a hit and half a day for a miss, so a busy inbox
- * doesn't re-ask GHL about the same stranger every tick.
- */
-export async function contactIdForEmail({ client, locationId, email, deps = {}, now = Date.now() }) {
-  const key = `${locationId}|${email}`;
-  const hit = lookups.get(key);
-  if (hit && now - hit.at < (hit.id ? LOOKUP_HIT_MS : LOOKUP_MISS_MS)) return { id: hit.id, cached: true };
-  const search = deps.searchContacts || searchContacts;
-  const rows = await search(client, locationId, email);
-  const same = (v) => String(v || "").trim().toLowerCase() === email;
-  const found = (rows || []).find((c) => same(c?.email) || (c?.additionalEmails || []).some((a) => same(a?.email ?? a)));
-  const id = found?.id || null;
-  lookups.set(key, { id, at: now });
-  return { id, cached: false };
+/** The contact's addresses, as GHL has them: the main one first. */
+export function contactEmails(contact) {
+  const out = [];
+  const add = (v) => { const e = String(v || "").trim().toLowerCase(); if (e.includes("@") && !out.includes(e)) out.push(e); };
+  add(contact?.email);
+  for (const a of contact?.additionalEmails || []) add(a?.email ?? a);
+  return out.slice(0, MAX_ADDRESSES);
 }
 
+export const gmailQuery = (emails, days) =>
+  `{${emails.map((e) => `from:${e} to:${e} cc:${e}`).join(" ")}} newer_than:${days}d -in:chats`;
+
 /**
- * runGmailSync({ client, locationId, saved, store, deps, now, doc })
- *   → { historyId, counts }
+ * syncContactGmail({ locationId, contactId, emails, saved, store, deps, now, force })
+ *   → { skipped } | { found, recorded, already, bulk }
  *
- * `doc` is the cursor as it was before this run. `deps.gmail` stands in for
- * the Gmail client in tests; `deps.searchContacts` for GHL's search.
+ * `deps.gmail` stands in for the Gmail client in tests. Without `force`, a
+ * contact checked in the last RECHECK_MS is not searched again.
  */
-export async function runGmailSync({ client, locationId, saved = {}, store = defaultStore, deps = {}, now = Date.now(), doc = {} }) {
+export async function syncContactGmail({ locationId, contactId, emails = [], saved = {}, store = defaultStore, deps = {}, now = Date.now(), force = false, env = process.env }) {
   const cfg = normalizeConversationAi(saved?.conversationAi || {}).gmail;
-  const gmail = deps.gmail || makeGmail(gmailEnv());
+  if (!cfg.enabled) return { skipped: "Gmail is switched off in Conversation AI settings" };
+  const creds = deps.gmail ? null : gmailEnv(env);
+  if (!deps.gmail && !creds) return { skipped: "the broker has no Gmail credentials (GMAIL_REFRESH_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)" };
+  if (!contactId || !emails.length) return { skipped: "no email address on the contact" };
+  const key = `${locationId}|${contactId}`;
+  if (!force && now - (lastChecked.get(key) || 0) < RECHECK_MS) return { skipped: "checked a few minutes ago" };
+  lastChecked.set(key, now);
+
+  const gmail = deps.gmail || makeGmail(creds);
   const profile = await gmail.profile();
-  const self = [String(profile.emailAddress || "").toLowerCase(), ...(deps.selfEmails || [])].filter(Boolean);
-  const counts = { messages: 0, bulk: 0, noContact: 0, recorded: 0, duplicate: 0, lookups: 0, lookupCapped: 0, truncated: 0, mode: "" };
+  const self = [String(profile.emailAddress || "").toLowerCase()].filter(Boolean);
+  const ids = await gmail.list(gmailQuery(emails, cfg.lookbackDays), { max: MAX_MESSAGES });
 
-  let ids = [];
-  let historyId = String(profile.historyId || "");
-  if (!doc.historyId) {
-    counts.mode = "backfill";
-    if (cfg.backfillDays > 0) ids = await gmail.list(`newer_than:${cfg.backfillDays}d ${SEARCH_NOISE}`, { max: MAX_MESSAGES_PER_RUN });
-  } else {
-    try {
-      const h = await gmail.history(doc.historyId);
-      ids = h.ids;
-      historyId = h.historyId || historyId;
-      counts.mode = h.complete ? "history" : "history-partial";
-    } catch (e) {
-      if (e?.status !== 404) throw e;
-      counts.mode = "history-expired";
-      ids = await gmail.list(`newer_than:${FALLBACK_DAYS}d ${SEARCH_NOISE}`, { max: MAX_MESSAGES_PER_RUN });
-    }
-  }
-  if (ids.length > MAX_MESSAGES_PER_RUN) { counts.truncated = ids.length - MAX_MESSAGES_PER_RUN; ids = ids.slice(-MAX_MESSAGES_PER_RUN); }
-
-  const offersFor = new Map();
+  const seen = new Set((await store.listContactEvents?.(locationId, contactId, { types: EMAIL_EVENT_TYPES, limit: 500 }).catch(() => []) || []).map((e) => e.dedupeKey));
+  const offers = await store.listOffers?.(locationId, { contactId, limit: 25, lean: true }).catch(() => []) || [];
+  const counts = { found: ids.length, recorded: 0, already: 0, bulk: 0 };
   for (const id of ids) {
+    if (seen.has(emailDedupeKey(id))) { counts.already++; continue; }
     let msg;
     try { msg = await gmail.message(id); } catch (e) { if (e?.status === 404) continue; throw e; }
-    counts.messages++;
     if (!isPersonMail(msg)) { counts.bulk++; continue; }
     const s = summarizeMessage(msg, { self });
     if (!s.id || !s.at) continue;
-    const contactIds = new Set();
-    for (const email of s.others.slice(0, MAX_ADDRESSES_PER_MESSAGE)) {
-      const known = lookups.get(`${locationId}|${email}`);
-      if (!known && counts.lookups >= MAX_LOOKUPS_PER_RUN) { counts.lookupCapped++; continue; }
-      const r = await contactIdForEmail({ client, locationId, email, deps, now });
-      if (!r.cached) counts.lookups++;
-      if (r.id) contactIds.add(r.id);
-    }
-    if (!contactIds.size) { counts.noContact++; continue; }
-    for (const contactId of contactIds) {
-      if (!offersFor.has(contactId)) offersFor.set(contactId, await store.listOffers?.(locationId, { contactId, limit: 25, lean: true }).catch(() => []) || []);
-      const offers = offersFor.get(contactId);
-      const address = addressInEmail(s, offers.map((o) => o?.address).filter(Boolean));
-      const offer = address ? offers.find((o) => o?.address === address) : null;
-      const { inserted } = await recordEvent({ store, locationId, ...emailEvent(s, { contactId, address, offerId: offer?.id || null }) });
-      if (inserted) counts.recorded++; else counts.duplicate++;
-    }
+    const address = addressInEmail(s, offers.map((o) => o?.address).filter(Boolean));
+    const offer = address ? offers.find((o) => o?.address === address) : null;
+    const { inserted } = await recordEvent({ store, locationId, ...emailEvent(s, { contactId, address, offerId: offer?.id || null }) });
+    if (inserted) counts.recorded++; else counts.already++;
   }
-  return { historyId, counts };
+  return counts;
 }
 
 /**
- * maybeSyncGmail({ client, locationId, saved, store, deps, now, env, log }) → boolean started
+ * gmailBeforeDraft(args) → the same result, never throws, never waits past
+ * DRAFT_TIMEOUT_MS. What the reply agent calls; a failure is a warning on
+ * the draft, and the draft goes on with whatever the record already has.
  */
-export async function maybeSyncGmail({ client, locationId, saved = {}, store = defaultStore, deps = {}, now = Date.now(), env = process.env, log = () => {} }) {
-  const cfg = normalizeConversationAi(saved?.conversationAi || {}).gmail;
-  if (!cfg.enabled) return false;
-  if (!deps.gmail && !gmailEnv(env)) return false;
-  if (jobs.get(locationId)?.status === "running") return false;
-  const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
-  const doc = cursor?.doc || {};
-  const today = pacificDay(now);
-  const stale = doc.run?.startedAt && now - Date.parse(doc.run.startedAt) >= STALE_RUN_MS;
-  if (doc.run && !stale) return false;           // going, here or on another broker
-  const retries = doc.day === today ? Number(doc.retries) || 0 : 0;
-  const retrying = stale || doc.failed;
-  if (retrying && retries >= MAX_DAILY_RETRIES) return false;
-
-  const run = { startedAt: iso(now) };
-  const base = { historyId: doc.historyId || null, last: doc.last || null, day: today, retries: retrying ? retries + 1 : retries };
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: { ...base, run, ...(stale ? { staleRun: doc.run } : {}) } }).catch(() => {});
-  const job = { locationId, status: "running", startedAt: run.startedAt };
-  jobs.set(locationId, job);
-
-  const finish = async (patch) => {
-    job.status = patch.failed ? "error" : "done";
-    await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(Date.now()), doc: { ...base, ...patch } }).catch(() => {});
-  };
-  job.done = (async () => {
-    try {
-      const r = await runGmailSync({ client, locationId, saved, store, deps, now, doc });
-      await finish({ historyId: r.historyId || base.historyId, failed: false, last: { at: iso(Date.now()), startedAt: run.startedAt, ...r.counts } });
-      if (r.counts.recorded) log(`gmail sync ${locationId}: ${r.counts.recorded} email${r.counts.recorded === 1 ? "" : "s"} onto the record`);
-    } catch (e) {
-      // Status only: a Gmail error message can quote a query or an id.
-      await finish({ failed: true, last: { at: iso(Date.now()), startedAt: run.startedAt, error: `HTTP ${e?.status || "?"}` } });
-      log(`gmail sync ${locationId} failed: HTTP ${e?.status || "?"}${e?.status === 401 || e?.status === 400 ? " (refresh token revoked or GOOGLE_CLIENT_* wrong?)" : ""}`);
-    }
-  })();
-  return true;
+export async function gmailBeforeDraft({ warnings = [], timeoutMs = DRAFT_TIMEOUT_MS, ...args }) {
+  const cfg = normalizeConversationAi(args.saved?.conversationAi || {}).gmail;
+  if (!cfg.enabled) return { skipped: "off" };
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve({ skipped: "timeout" }), timeoutMs); });
+  try {
+    const r = await Promise.race([syncContactGmail(args), timeout]);
+    if (r.skipped === "timeout") warnings.push("gmail: took too long, drafted without it");
+    return r;
+  } catch (e) {
+    warnings.push(`gmail: HTTP ${e?.status || "?"}`);
+    return { skipped: `HTTP ${e?.status || "?"}` };
+  } finally { clearTimeout(timer); }
 }

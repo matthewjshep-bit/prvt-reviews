@@ -1,16 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { maybeSyncGmail, runGmailSync, getGmailJob, _reset, MAX_DAILY_RETRIES, CURSOR_NAME } from "./gmail-sync.js";
+import { syncContactGmail, gmailBeforeDraft, contactEmails, gmailQuery, _reset, RECHECK_MS } from "./gmail-sync.js";
 import { buildAgentContext } from "./conversation-context.js";
+import { assembleConversation } from "./reply-agent.js";
 
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64url");
-const mail = (id, from, text, { to = "matt@shepflips.com", labels = ["INBOX"], subject = "Re: 1234 Cedar Ave" } = {}) => ({
+const mail = (id, from, text, { to = "matt@shepflips.com", labels = ["INBOX"], subject = "Re: 1234 Cedar Ave", extra = [] } = {}) => ({
   id, threadId: `t-${id}`, internalDate: String(Date.parse("2026-09-27T17:00:00Z")), labelIds: labels,
-  payload: { mimeType: "text/plain", headers: [{ name: "From", value: from }, { name: "To", value: to }, { name: "Subject", value: subject }], body: { data: b64(text) } },
+  payload: { mimeType: "text/plain", headers: [{ name: "From", value: from }, { name: "To", value: to }, { name: "Subject", value: subject }, ...extra], body: { data: b64(text) } },
 });
 
 const fakeStore = () => ({
-  events: [], cursors: new Map(),
+  events: [],
   async appendContactEvents(l, contactId, rows) {
     let inserted = 0;
     for (const r of rows) {
@@ -19,105 +20,93 @@ const fakeStore = () => ({
     }
     return { inserted, skipped: rows.length - inserted };
   },
+  async listContactEvents(l, contactId) { return this.events.filter((e) => e.contactId === contactId); },
   async getContactProfile() { return null; }, async upsertContactProfile() { return {}; },
-  async listOffers(l, { contactId }) { return contactId === "c-jo" ? [{ id: "o1", address: "1234 Cedar Ave, Seattle, WA" }] : []; },
-  async getJobCursor(l, name) { return this.cursors.get(name) || null; },
-  async setJobCursor(l, name, v) { this.cursors.set(name, v); },
+  async listOffers(l, { contactId }) { return contactId === "c-jo" ? [{ id: "o1", contactId, address: "1234 Cedar Ave, Seattle, WA" }] : []; },
 });
 
-const fakeGmail = (messages, { historyId = "500", history = null } = {}) => ({
-  calls: [],
-  async profile() { return { emailAddress: "matt@shepflips.com", historyId }; },
-  async list(q) { this.calls.push(["list", q]); return Object.keys(messages); },
-  async history(start) { this.calls.push(["history", start]); if (history instanceof Error) throw history; return { ids: history || [], historyId: "600", complete: true }; },
-  async message(id) { return messages[id]; },
+const fakeGmail = (messages) => ({
+  queries: [], fetched: [],
+  async profile() { return { emailAddress: "matt@shepflips.com", historyId: "500" }; },
+  async list(q) { this.queries.push(q); return Object.keys(messages); },
+  async message(id) { this.fetched.push(id); return messages[id]; },
+});
+const saved = { conversationAi: { gmail: { enabled: true, lookbackDays: 60 } } };
+
+test("only the contact's own email is searched, by every address they have", () => {
+  const emails = contactEmails({ email: "Jo@KW.com", additionalEmails: [{ email: "jo@gmail.com" }, "jo@kw.com"] });
+  assert.deepEqual(emails, ["jo@kw.com", "jo@gmail.com"]);
+  assert.equal(gmailQuery(emails, 60), "{from:jo@kw.com to:jo@kw.com cc:jo@kw.com from:jo@gmail.com to:jo@gmail.com cc:jo@gmail.com} newer_than:60d -in:chats");
 });
 
-const contacts = { "jo@kw.com": { id: "c-jo", email: "Jo@KW.com" } };
-const searchContacts = async (client, loc, q) => (contacts[q] ? [contacts[q]] : []);
-const saved = { conversationAi: { gmail: { enabled: true, backfillDays: 14 } } };
-
-test("an agent's email lands on their record once, on the house it names; a stranger's is not kept", async () => {
+test("the agent's email lands on their record once, on the house it names; their newsletter does not", async () => {
   _reset();
   const store = fakeStore();
   const gmail = fakeGmail({
     m1: mail("m1", "Jo <jo@kw.com>", "Disclosures attached for 1234 Cedar"),
-    m2: mail("m2", "Aunt May <may@gmail.com>", "Dinner Sunday?"),
-    m3: mail("m3", "Zillow <no-reply@zillow.com>", "New listings"),
+    m2: mail("m2", "matt@shepflips.com", "Here's the LOI", { to: "jo@kw.com", labels: ["SENT"] }),
+    m3: mail("m3", "Jo <jo@kw.com>", "Just listed!", { extra: [{ name: "List-Unsubscribe", value: "<mailto:x>" }] }),
   });
-  const r = await runGmailSync({ locationId: "L", saved, store, deps: { gmail, searchContacts }, doc: {} });
-  assert.equal(r.historyId, "500");
-  assert.equal(r.counts.mode, "backfill");
-  assert.match(gmail.calls[0][1], /^newer_than:14d /);
-  assert.equal(r.counts.recorded, 1);
-  assert.equal(r.counts.noContact, 1);
-  assert.equal(r.counts.bulk, 1);
-  assert.equal(store.events.length, 1);
-  const ev = store.events[0];
-  assert.equal(ev.contactId, "c-jo");
-  assert.equal(ev.type, "email_received");
-  assert.equal(ev.address, "1234 Cedar Ave, Seattle, WA");
-  assert.equal(ev.offerId, "o1");
-  assert.equal(ev.data.body, "Disclosures attached for 1234 Cedar");
+  const r = await syncContactGmail({ locationId: "L", contactId: "c-jo", emails: ["jo@kw.com"], saved, store, deps: { gmail } });
+  assert.deepEqual(r, { found: 3, recorded: 2, already: 0, bulk: 1 });
+  assert.match(gmail.queries[0], /newer_than:60d/);
+  const got = store.events.find((e) => e.ref === "m1");
+  assert.equal(got.type, "email_received");
+  assert.equal(got.address, "1234 Cedar Ave, Seattle, WA");
+  assert.equal(got.offerId, "o1");
+  assert.equal(store.events.find((e) => e.ref === "m2").type, "email_sent");
 
-  const again = await runGmailSync({ locationId: "L", saved, store, deps: { gmail, searchContacts }, doc: {} });
-  assert.equal(again.counts.recorded, 0);
-  assert.equal(again.counts.duplicate, 1);
-  assert.equal(store.events.length, 1);
+  // A second look fetches nothing it already has.
+  gmail.fetched.length = 0;
+  const again = await syncContactGmail({ locationId: "L", contactId: "c-jo", emails: ["jo@kw.com"], saved, store, deps: { gmail }, force: true });
+  assert.equal(again.recorded, 0);
+  assert.deepEqual(gmail.fetched, ["m3"]);
 });
 
-test("after the first run it reads only what Gmail says was added, and an expired history falls back to the last two days", async () => {
+test("two drafts minutes apart search once; the drawer button always searches", async () => {
   _reset();
   const store = fakeStore();
-  const msgs = { m9: mail("m9", "matt@shepflips.com", "Here's the LOI", { to: "jo@kw.com", labels: ["SENT"] }) };
-  const r = await runGmailSync({ locationId: "L", saved, store, deps: { gmail: fakeGmail(msgs, { history: ["m9"] }), searchContacts }, doc: { historyId: "450" } });
-  assert.equal(r.historyId, "600");
-  assert.equal(store.events[0].type, "email_sent");
-
-  const expired = fakeGmail(msgs, { history: Object.assign(new Error("gone"), { status: 404 }) });
-  const r2 = await runGmailSync({ locationId: "L", saved, store, deps: { gmail: expired, searchContacts }, doc: { historyId: "1" } });
-  assert.equal(r2.counts.mode, "history-expired");
-  assert.match(expired.calls[1][1], /^newer_than:2d /);
-  assert.equal(r2.historyId, "500");
-});
-
-test("the sync is off by default and without the Gmail env", async () => {
-  _reset();
-  const store = fakeStore();
-  assert.equal(await maybeSyncGmail({ locationId: "L", saved: {}, store, env: {} }), false);
-  assert.equal(await maybeSyncGmail({ locationId: "L", saved, store, env: {} }), false);
-});
-
-test("the cursor is written before the run, moves on success, and a failed run keeps its place and stops retrying for the day", async () => {
-  _reset();
-  const store = fakeStore();
+  const gmail = fakeGmail({});
   const now = Date.parse("2026-09-28T18:00:00Z");
-  const gmail = fakeGmail({ m1: mail("m1", "jo@kw.com", "hi") });
-  assert.equal(await maybeSyncGmail({ locationId: "L", saved, store, deps: { gmail, searchContacts }, now }), true);
-  await getGmailJob("L").done;
-  const doc = store.cursors.get(CURSOR_NAME).doc;
-  assert.equal(doc.historyId, "500");
-  assert.equal(doc.run, undefined);
-  assert.equal(doc.last.recorded, 1);
-  assert.ok(!JSON.stringify(doc).includes("jo@kw.com"), "no addresses on the cursor");
+  const args = { locationId: "L", contactId: "c-jo", emails: ["jo@kw.com"], saved, store, deps: { gmail } };
+  await syncContactGmail({ ...args, now });
+  assert.equal((await syncContactGmail({ ...args, now: now + 60000 })).skipped, "checked a few minutes ago");
+  await syncContactGmail({ ...args, now: now + 60000, force: true });
+  await syncContactGmail({ ...args, now: now + 60000 + RECHECK_MS + 1 });   // the forced look restarted the wait
+  assert.equal(gmail.queries.length, 3);
+});
 
-  // A run another broker left going is left alone until it is stale.
-  store.cursors.set(CURSOR_NAME, { doc: { ...doc, run: { startedAt: new Date(now - 60000).toISOString() } } });
-  assert.equal(await maybeSyncGmail({ locationId: "L", saved, store, deps: { gmail, searchContacts }, now }), false);
+test("off, without credentials, or without an address, nothing is searched", async () => {
+  _reset();
+  const store = fakeStore();
+  assert.match((await syncContactGmail({ locationId: "L", contactId: "c", emails: ["a@b.co"], saved: {}, store, env: {} })).skipped, /switched off/);
+  assert.match((await syncContactGmail({ locationId: "L", contactId: "c", emails: ["a@b.co"], saved, store, env: {} })).skipped, /no Gmail credentials/);
+  assert.match((await syncContactGmail({ locationId: "L", contactId: "c", emails: [], saved, store, deps: { gmail: fakeGmail({}) } })).skipped, /no email address/);
+});
 
-  const broken = { ...gmail, async profile() { throw Object.assign(new Error("nope jo@kw.com"), { status: 401 }); } };
-  store.cursors.set(CURSOR_NAME, { doc });
-  const logs = [];
-  for (let i = 0; i < MAX_DAILY_RETRIES + 2; i++) {
-    const started = await maybeSyncGmail({ locationId: "L", saved, store, deps: { gmail: broken, searchContacts }, now: now + i * 900000, log: (l) => logs.push(l) });
-    if (started) await getGmailJob("L").done;
-  }
-  const after = store.cursors.get(CURSOR_NAME).doc;
-  assert.equal(after.historyId, "500", "a failure never moves the cursor");
-  assert.equal(after.failed, true);
-  assert.equal(after.retries, MAX_DAILY_RETRIES);
-  assert.equal(after.last.error, "HTTP 401");
-  assert.ok(logs.every((l) => !l.includes("jo@kw.com")), "no addresses in the log");
+test("a slow or broken Gmail never holds up a draft, and the warning names no address", async () => {
+  _reset();
+  const warnings = [];
+  const slow = { ...fakeGmail({}), profile: () => new Promise(() => {}) };
+  const r = await gmailBeforeDraft({ locationId: "L", contactId: "c1", emails: ["jo@kw.com"], saved, store: fakeStore(), deps: { gmail: slow }, warnings, timeoutMs: 30 });
+  assert.equal(r.skipped, "timeout");
+  const broken = { ...fakeGmail({}), async profile() { throw Object.assign(new Error("bad jo@kw.com"), { status: 401 }); } };
+  await gmailBeforeDraft({ locationId: "L", contactId: "c2", emails: ["jo@kw.com"], saved, store: fakeStore(), deps: { gmail: broken }, warnings });
+  assert.deepEqual(warnings, ["gmail: took too long, drafted without it", "gmail: HTTP 401"]);
+});
+
+test("the reply agent reads Gmail for the contact before it reads their record, only when switched on", async () => {
+  const calls = [];
+  const client = { call: async (path) => {
+    if (path.startsWith("/contacts/")) return { contact: { id: "c-jo", firstName: "Jo", email: "jo@kw.com", tags: ["agent"] } };
+    throw Object.assign(new Error("not stubbed"), { status: 404 });
+  } };
+  const store = { ...fakeStore(), async listReplyDrafts() { return []; }, async listDeals() { return []; } };
+  const gmailSync = async (a) => { calls.push(a.emails); };
+  await assembleConversation({ client, locationId: "L", saved, store, contactId: "c-jo", message: "hi", explicitParty: "agent", gmailSync });
+  assert.deepEqual(calls, [["jo@kw.com"]]);
+  await assembleConversation({ client, locationId: "L", saved: {}, store, contactId: "c-jo", message: "hi", explicitParty: "agent", gmailSync });
+  assert.equal(calls.length, 1);
 });
 
 test("the reply agent sees what already went by email", () => {

@@ -13,7 +13,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   X, ExternalLink, RefreshCw, Loader2, Plus, Send, RefreshCw as Revise, ArrowLeftRight, XCircle, Clock, CheckCircle2,
   ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake, MessageSquareQuote, Megaphone, FolderOpen, Phone,
-  MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download, Circle, Trash2, Calculator, ClipboardList,
+  MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download, Circle, Trash2, Calculator, ClipboardList, Mail,
 } from "lucide-react";
 import { EVENT_LABEL, FACT_KEYS, factKeysFor, AI_SOURCES, SOURCE_LABEL, groupByDay } from "@shared/contact-record.js";
 import { EventDayGroups, when, dayLabel } from "./EventFeed.jsx";
@@ -21,7 +21,7 @@ import { PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { summarizeFeedback } from "@shared/conversation-ai.js";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { INVESTOR_STATUS_LABEL } from "@shared/offer-status.js";
-import { getContactProfile, saveContactFacts, addContactEvent, ghlContactUrl } from "./api.js";
+import { getContactProfile, saveContactFacts, addContactEvent, checkContactGmail, ghlContactUrl } from "./api.js";
 import { BTN, BTN_PRIMARY, CurrentPill, Pill, StatusPill, StagePill } from "./ui.jsx";
 import { PartyPill, DraftRow } from "./ConversationOutbox.jsx";
 
@@ -102,6 +102,7 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [showAll, setShowAll] = useState(false);
+  const [gmailNote, setGmailNote] = useState("");
 
   const load = async (pull = false) => {
     setError("");
@@ -122,6 +123,11 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
   const run = async (fn) => { setBusy(true); setError(""); try { const r = await fn(); if (r?.events) setRec(r); else await load(false); } catch (e) { setError(e.message); } finally { setBusy(false); } };
   const removeFact = (key, value) => run(() => saveContactFacts(contactId, { party, remove: [{ key, value }] }));
   const addFact = (key, value) => run(() => saveContactFacts(contactId, { party, add: [{ key, value }] }));
+  const checkGmail = () => run(async () => {
+    setGmailNote("");
+    const r = await checkContactGmail(contactId);
+    setGmailNote(r.skipped ? r.skipped : r.recorded ? `${r.recorded} new email${r.recorded === 1 ? "" : "s"} added` : r.found ? "nothing new in Gmail" : "no email with them in Gmail");
+  });
   const addNote = () => { const text = note.trim(); if (!text) return; setNote(""); run(() => addContactEvent(contactId, { type: "note", text, party })); };
 
   if (!contactId) return null;
@@ -144,6 +150,8 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
               {p?.email && <span>{p.email}</span>}
               <a href={ghlContactUrl(contactId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-semibold text-blue-600 hover:text-blue-700">Open in GoHighLevel <ExternalLink size={11} /></a>
               <button type="button" disabled={busy} onClick={() => load(true)} className="inline-flex items-center gap-1 hover:text-slate-800" title="Read the GHL contact again and fill any gaps"><RefreshCw size={11} /> Pull from GHL</button>
+              <button type="button" disabled={busy || !p?.email} onClick={checkGmail} className="inline-flex items-center gap-1 hover:text-slate-800 disabled:opacity-50" title={p?.email ? "Read the email with them from Gmail onto their timeline" : "No email address on this contact"}><Mail size={11} /> Check Gmail</button>
+              {gmailNote && <span className="text-slate-600">{gmailNote}</span>}
             </div>
           </div>
           <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close"><X size={18} /></button>

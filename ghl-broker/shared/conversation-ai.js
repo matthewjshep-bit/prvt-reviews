@@ -589,10 +589,12 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // push them. On by default with the bot — the draft it produces is
   // draft-only until "text after a call" is ticked, like everything else.
   callIntake: { enabled: true },
-  // Matt's Gmail, read into each contact's timeline so the bot knows what
-  // already went by email (ghl-broker/gmail-sync.js). Read-only, never sends,
-  // and needs the GMAIL_* env on the broker. Off until switched on.
-  gmail: { enabled: false, backfillDays: 14 },
+  // Matt's Gmail: before a draft, the email with that person (from or to
+  // their address, the last lookbackDays) is read onto their timeline so the
+  // bot knows what already went by email (ghl-broker/gmail-sync.js). Only
+  // that person's mail is searched. Read-only, never sends, and needs the
+  // GMAIL_* env on the broker. Off until switched on.
+  gmail: { enabled: false, lookbackDays: 60 },
   optOut: { enabled: true, keywords: DEFAULT_OPT_OUT_KEYWORDS, tags: ["dnc"], removeTags: [], workflowId: "" },
   media: { reply: "Thanks for the images, taking a look!" },
   // Intents that get a heads-up instead of a reply. These can never
@@ -1001,7 +1003,7 @@ export function normalizeConversationAi(doc, seed = {}) {
       maxSmsChars: int(style.maxSmsChars, D.style.maxSmsChars, 60, 1600),
     },
     callIntake: { enabled: bool(d.callIntake?.enabled, true) },
-    gmail: { enabled: bool(d.gmail?.enabled, D.gmail.enabled), backfillDays: int(d.gmail?.backfillDays, D.gmail.backfillDays, 0, 60) },
+    gmail: { enabled: bool(d.gmail?.enabled, D.gmail.enabled), lookbackDays: int(d.gmail?.lookbackDays, D.gmail.lookbackDays, 1, 365) },
     booking: (() => {
       const b = d.booking && typeof d.booking === "object" ? d.booking : {};
       return {

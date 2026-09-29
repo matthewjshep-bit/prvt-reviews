@@ -27,7 +27,6 @@ import { maybeStartOutreachSweep } from "./outreach-sweep.js";
 import { maybeStartOutreachFollowUp } from "./outreach-followup.js";
 import { maybeRunPromiseSweep } from "./promise-sweep.js";
 import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation-audit.js";
-import { maybeSyncGmail } from "./gmail-sync.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeRunTierCheck } from "./tier-check.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
@@ -294,9 +293,6 @@ setInterval(async () => {
       if (pulsed) console.log(`buyer pulse started for ${locationId}`);
       // The board, onto GHL's Opportunities. Every tick, bounded.
       await maybeMirror({ client: makeClient(token), locationId, saved, store, log: console.log });
-      // New mail in Matt's Gmail, onto the contacts it is with. Read-only;
-      // off until conversationAi.gmail.enabled and the GMAIL_* env are set.
-      await maybeSyncGmail({ client: makeClient(token), locationId, saved, store, log: console.log });
       // Calls that ended since the last look, read like inbound texts. No
       // GHL trigger needed.
       await maybeSweepCalls({
