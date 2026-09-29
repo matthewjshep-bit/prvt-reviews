@@ -9,7 +9,7 @@ import React from "react";
 import {
   Send, RefreshCw, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
   MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download,
-  Calculator, ClipboardList, Circle, BellRing, CalendarCheck, Undo2,
+  Calculator, ClipboardList, Circle, BellRing, CalendarCheck, Undo2, Mail,
 } from "lucide-react";
 import { EVENT_LABEL, EVENT_ICON, AI_SOURCES, FACT_KEYS, PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
 import { PASS_REASON_LABEL } from "@shared/conversation-ai.js";
@@ -20,7 +20,7 @@ import { offerEditorUrl } from "./api.js";
 const ICONS = {
   Send, RefreshCw, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
   MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download,
-  Calculator, ClipboardList, BellRing, CalendarCheck, Undo2,
+  Calculator, ClipboardList, BellRing, CalendarCheck, Undo2, Mail,
 };
 export const EventIcon = ({ type, size = 13 }) => { const I = ICONS[EVENT_ICON[type]] || Circle; return <I size={size} className="shrink-0" />; };
 
@@ -53,6 +53,8 @@ export function eventLine(ev) {
     case "follow_up_sent": return `${String(d.kind || "").replace(/_/g, " ")}${d.step ? ` · day ${d.step}` : ""}`;
     case "blast_sent": return d.label ? String(d.label).replace(/^dispo-/, "") : "";
     case "call_booked": return d.label || "";
+    case "email_received":
+    case "email_sent": return [d.subject ? `“${d.subject}”` : "(no subject)", d.attachments?.length ? `📎 ${d.attachments.slice(0, 3).join(", ")}` : ""].filter(Boolean).join(" · ");
     default: return d.note || "";
   }
 }
@@ -84,6 +86,9 @@ export function EventDayGroups({ groups = [], withLinks = false, party = null })
                       ? <a href={offerEditorUrl(ev.offerId)} target="_blank" rel="noreferrer" className="text-slate-500 hover:text-blue-700"> · {ev.address}</a>
                       : <span className="text-slate-500"> · {ev.address}</span>)}
                     {line && <span className="block text-xs text-slate-600">{line}</span>}
+                    {ev.source === "gmail" && ev.data?.link && (
+                      <a href={ev.data.link} target="_blank" rel="noreferrer" className="text-xs text-blue-700 hover:underline">Open in Gmail</a>
+                    )}
                   </span>
                   <span className="shrink-0 text-[11px] text-slate-400" title={ev.source}>{when(ev.at).replace(/^[A-Za-z]+ \d+, /, "")}</span>
                 </li>

@@ -71,6 +71,10 @@ export const EVENT_TYPES = [
   // A loan recorded on a property they bought — from a borrower list. What the
   // Dispositions page reads for where an investor buys and how.
   "property_financed",
+  // An email with them in Matt's Gmail (ghl-broker/gmail-sync.js), read-only.
+  // The words are kept, short, so the reply agent knows what already went by
+  // email; the key is the Gmail message id.
+  "email_received", "email_sent",
   "enrich_run", "tag_added", "tag_removed",
   "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate", "property_details",
 ];
@@ -96,6 +100,8 @@ export const EVENT_LABEL = {
   hand_reply: "you texted them",
   post_mortem_built: "post-mortem written",
   property_financed: "financed a property",
+  email_received: "they emailed us",
+  email_sent: "we emailed them",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -118,12 +124,14 @@ export const EVENT_ICON = {
   call_booked: "CalendarCheck",
   hand_reply: "MessageSquare",
   post_mortem_built: "ClipboardCheck",
+  email_received: "Mail",
+  email_sent: "Mail",
 };
 
-export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast"];
+export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];
 export const SOURCE_LABEL = {
   conversation: "from a text", call: "from a call", sweep: "AI sweep", operator: "entered by hand",
-  import: "imported", offer: "from an offer", deal: "from a deal", dataroom: "dataroom", blast: "blast",
+  import: "imported", offer: "from an offer", deal: "from a deal", dataroom: "dataroom", blast: "blast", gmail: "from Gmail",
 };
 // The sources the drawer colours violet: something the AI inferred rather
 // than something a person stated or a record produced.

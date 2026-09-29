@@ -718,6 +718,23 @@ export function CoachSettingsCard({ config, patch }) {
   );
 }
 
+// Matt's Gmail, read onto each contact's timeline (ghl-broker/gmail-sync.js).
+export function GmailCard({ config, patch }) {
+  const g = config.gmail || { enabled: false, backfillDays: 14 };
+  const set = (k) => (v) => patch({ gmail: { ...g, [k]: v } });
+  return (
+    <Section title="Gmail"
+      intro="Every 15 minutes it reads new mail in the Gmail inbox and puts each email from or to an agent or investor on their timeline, so the bot knows what already went by email (the Form 21, the disclosures) and doesn't ask for it again. Mail with anyone who isn't a contact is skipped and never stored. It only reads: it never sends, labels or deletes, and it doesn't start replies. It needs GMAIL_REFRESH_TOKEN, GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on the broker.">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="flex items-end pb-2"><Toggle checked={g.enabled} onChange={set("enabled")}>Read Gmail onto the record</Toggle></div>
+        <Field label="Days to read back the first time" hint="0 to start from now. Up to 60.">
+          <Text type="number" value={g.backfillDays} onChange={(v) => set("backfillDays")(Number(v))} />
+        </Field>
+      </div>
+    </Section>
+  );
+}
+
 export function OptOutCard({ config, patch, version, workflows }) {
   const o = config.optOut;
   const set = (k) => (v) => patch({ optOut: { ...o, [k]: v } });
