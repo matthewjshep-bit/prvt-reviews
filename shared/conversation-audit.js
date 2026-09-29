@@ -15,7 +15,7 @@
 // file to read to know what the nightly sweep would and wouldn't do.
 
 import { OPEN_STATUSES, DEAD_STATUSES, effectiveStatus, dealIsOver } from "./offer-status.js";
-import { currentOffers } from "./current-offer.js";
+import { currentOffers, currentOfferFor } from "./current-offer.js";
 import { unansweredCheckIn, nextMorning } from "./follow-up.js";
 import { NEVER_AUTO } from "./conversation-ai.js";
 
@@ -446,6 +446,23 @@ export function auditActions(last, { now = Date.now(), names = {} } = {}) {
         : [{ key: "open_contact", label: "Open the thread", intent: "primary" }],
       };
     });
+}
+
+/**
+ * withCurrentOffers(rows, offers) → rows, each naming the offer on its house
+ *
+ * Pure. The sweep names an offer only on offer-book findings, so a row about
+ * a text ("Texts we never answered") carried the house and no offer, and
+ * Today's pane read "No offer yet" beside a thread with a sent offer in it
+ * (2026-09-29). A row that already names one keeps it; the rest get the
+ * current offer on the contact's named house, or on their only house.
+ */
+export function withCurrentOffers(rows = [], offers = []) {
+  return rows.map((r) => {
+    if (r.offerId || !r.contactId) return r;
+    const o = currentOfferFor(offers, { contactId: r.contactId, address: r.address || "" });
+    return o ? { ...r, offerId: o.id } : r;
+  });
 }
 
 // One line for the card header.

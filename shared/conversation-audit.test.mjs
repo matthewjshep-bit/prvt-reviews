@@ -258,3 +258,29 @@ test("an unanswered text shows who it's from when the sweep didn't know the name
   assert.equal(b.title.startsWith("Polly P"), true);
   assert.equal("dismissedAs" in b, false);
 });
+
+// 2026-09-29: a "Texts we never answered" row for a listing agent on Today
+// read "No offer yet on 14429 Portland Ave. SE Lakewood" beside the thread,
+// though the offer we emailed her was right there in the book. The sweep only
+// names an offer on offer-book findings; a row about a text named the house
+// and nothing else.
+test("a last-night row about a text shows the offer on that house beside the thread", async () => {
+  const { withCurrentOffers } = await import("./conversation-audit.js");
+  const offers = [
+    { id: "sent", contactId: "c1", address: "14429 Portland Ave. SE Lakewood, Wa. 98498", status: "countered", cashAmount: 214231, createdAt: "2026-08-25T21:40:05Z", sentAt: "2026-08-25T22:43:00Z" },
+    { id: "other-house", contactId: "c1", address: "14429 Portland Avenue Southwest, Lakewood, Washington 98498", status: "new", cashAmount: 302250, createdAt: "2026-08-25T15:45:17Z" },
+    { id: "someone-else", contactId: "c2", address: "14429 Portland Ave. SE Lakewood, Wa. 98498", status: "new", createdAt: "2026-08-25T21:00:00Z" },
+  ];
+  const rows = [
+    { id: "r1", kind: "audit_owed", contactId: "c1", address: "14429 Portland Ave. SE Lakewood", offerId: null, draftId: "d1" },
+    { id: "r2", kind: "audit_owed", contactId: "c1", address: "", offerId: null },
+    { id: "r3", kind: "audit_owed", contactId: "c1", address: "14429 Portland Ave. SE Lakewood", offerId: "pinned" },
+  ];
+  const out = withCurrentOffers(rows, offers);
+  assert.equal(out[0].offerId, "sent");
+  assert.equal(out[0].draftId, "d1");
+  // Two houses and no house named: no guess.
+  assert.equal(out[1].offerId, null);
+  // A row that already names its offer keeps it.
+  assert.equal(out[2].offerId, "pinned");
+});

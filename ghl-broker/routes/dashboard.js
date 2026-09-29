@@ -47,7 +47,7 @@ import { draftStats } from "../shared/conversation-ai.js";
 import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
 import { conversationConfig } from "../reply-agent.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
-import { auditActions, summarize as summarizeAudit } from "../shared/conversation-audit.js";
+import { auditActions, withCurrentOffers, summarize as summarizeAudit } from "../shared/conversation-audit.js";
 import { startCoach, coachReport, coachForContact, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
 
 // Same expression routes/offers.js reads: the broker's one send gate. The
@@ -442,8 +442,10 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // Names the sweep didn't have, off the contact record, then GHL for
       // the few still missing (bounded; a failure just leaves "An agent").
       const names = await namesForAudit({ store, client, locationId, audit }).catch(() => ({}));
-      const fromLastNight = auditActions(audit, { now, names }).filter((a) =>
-        !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled")))
+      // The offer is looked up after the de-dupe, so a row about an
+      // unanswered text isn't hidden behind a pipeline row on the same offer.
+      const fromLastNight = withCurrentOffers(auditActions(audit, { now, names }).filter((a) =>
+        !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled"))), offers)
         .map((a) => ({ ...a, group: "yours" }));
       out.counts.actions.byGroup.yours += fromLastNight.length;
       // Feedback by row id, newest per row. Draft rows are keyed
