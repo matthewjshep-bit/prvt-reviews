@@ -329,11 +329,14 @@ export const regenerateCompToken = () =>
 // `activity` asks the broker to stamp each row with the agent's last
 // communication ({ at, dir, type, machine }). Opt-in: it costs two extra
 // indexed reads, and only the history table shows the column.
-export const listOffers = ({ contactId = "", limit = 50, lean = false, activity = false } = {}) => {
+// `next` stamps each row with its next follow-up ({ at, kind, label, who,
+// reason } — shared/next-follow-up.js). Opt-in for the same reason.
+export const listOffers = ({ contactId = "", limit = 50, lean = false, activity = false, next = false } = {}) => {
   const p = new URLSearchParams(locq());
   p.set("limit", limit);
   if (lean) p.set("lean", "1");
   if (activity) p.set("activity", "1");
+  if (next) p.set("next", "1");
   if (contactId) p.set("contact_id", contactId);
   return fetch(`${API_BASE}/api/offers?${p}`).then(j).then((r) => r.offers);
 };

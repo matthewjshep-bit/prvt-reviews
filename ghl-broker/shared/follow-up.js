@@ -351,6 +351,103 @@ export function exhausted({ steps = [], sentSteps = [], startedAt, now = Date.no
 }
 
 /**
+ * nextRungAt({ steps, repeatEvery, startedAt, sentSteps, now }) → { at, step, due } | null
+ *
+ * The same ladder dueStep reads, asked the other way round: not "is a rung
+ * due now" but "which rung is next, and on what day". `due` means the rung's
+ * day has passed and it hasn't gone — the next sweep sends it. null when the
+ * ladder is finished. Inbound, the gap between texts and the weekly cap are
+ * the caller's (they aren't a property of the ladder).
+ */
+export function nextRungAt({ steps = [], repeatEvery = 0, startedAt, sentSteps = [], now = Date.now() } = {}) {
+  const configured = normalizeSteps(steps);
+  const started = ms(startedAt);
+  if (!configured.length || started == null) return null;
+  // Far enough ahead that a repeating ladder always has a rung after `now`.
+  const every = Math.round(Number(repeatEvery) || 0);
+  const ladder = rungsThrough(configured, every, started, now + Math.max(every, 1) * DAY_MS);
+  const done = new Set(sentSteps.map((s) => Math.round(Number(s))).filter(Number.isFinite));
+  const overdue = ladder.filter((d) => started + d * DAY_MS <= now);
+  const pick = overdue.at(-1);
+  if (pick != null && !done.has(pick)) return { at: new Date(started + pick * DAY_MS).toISOString(), step: pick, due: true };
+  const next = ladder.find((d) => !done.has(d) && started + d * DAY_MS > now);
+  return next == null ? null : { at: new Date(started + next * DAY_MS).toISOString(), step: next, due: false };
+}
+
+/* ---------- where each offer ladder counts from ---------- */
+// The sweep (ghl-broker/follow-up-sweep.js) and the Offers tab's "Next
+// follow-up" column (shared/next-follow-up.js) both read these, so the day
+// the column promises is the day the sweep acts.
+
+const latest = (xs) => xs.filter(Boolean).sort().at(-1) || null;
+
+/** An open offer: from the last time we put it in front of them. */
+export function offerNudgeStart(offer) {
+  return latest((offer?.sends || []).map((s) => s?.ts)) || offer?.statusAt || offer?.createdAt || null;
+}
+
+/**
+ * threadTimes(drafts) → { lastInboundAt, lastHandledAt, lastMachineTouchAt, heldSince, scheduled }
+ *
+ * One contact's reply drafts, read for the clocks. A draft row exists for
+ * every inbound, so this is who spoke last and whether it was dealt with:
+ *
+ *   lastHandledAt       our last text out (a reply counts as much as a nudge),
+ *                       or an inbound we chose to leave — "ok thanks" is
+ *                       dismissed or skipped, not owed
+ *   lastMachineTouchAt  our last machine-started text (the 40-hour gap)
+ *   heldSince           their newest text, when its reply is held for a person
+ *   scheduled           replies queued to send, soonest first
+ */
+export function threadTimes(drafts = []) {
+  const list = (drafts || []).filter(Boolean);
+  const inbound = list.filter((d) => String(d.inbound || "").trim());
+  const newestIn = [...inbound].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || ""))).at(-1) || null;
+  return {
+    lastInboundAt: latest(inbound.map((d) => d.createdAt)),
+    lastHandledAt: latest([
+      ...list.filter((d) => d.status === "sent").map((d) => d.sentAt || d.updatedAt || d.createdAt),
+      ...inbound.filter((d) => d.status === "dismissed" || d.status === "skipped").map((d) => d.createdAt),
+    ]),
+    lastMachineTouchAt: latest(list.filter((d) => d.outbound?.kind && d.status === "sent").map((d) => d.updatedAt || d.createdAt)),
+    heldSince: newestIn?.status === "draft" ? newestIn.createdAt : null,
+    scheduled: list.filter((d) => (d.status === "scheduled" || d.status === "sending") && d.sendAt)
+      .sort((a, b) => String(a.sendAt).localeCompare(String(b.sendAt))),
+  };
+}
+
+/**
+ * offerNudgeAnchor({ startedAt, lastInboundAt, lastHandledAt })
+ *   → { startedAt, reanchored, waitingOnUs }
+ *
+ * They answered, it was dealt with, and it went quiet: the offer is still
+ * open and still ours to ask about, counted from when it was dealt with.
+ * Until 2026-09-29 the ladder ended at their first reply ("they replied") and
+ * a sent or countered offer could sit with no clock at all. If THEIR text is
+ * the last word and nobody has dealt with it, nothing is anchored — that is a
+ * reply we owe, not a follow-up.
+ */
+export function offerNudgeAnchor({ startedAt, lastInboundAt = null, lastHandledAt = null } = {}) {
+  const inbound = ms(lastInboundAt);
+  const start = ms(startedAt);
+  if (inbound == null || start == null || inbound <= start) return { startedAt, reanchored: false, waitingOnUs: false };
+  const handled = ms(lastHandledAt);
+  if (handled == null || handled < inbound) return { startedAt, reanchored: false, waitingOnUs: true };
+  return { startedAt: new Date(handled).toISOString(), reanchored: true, waitingOnUs: false };
+}
+
+// The dead statuses a check-in brings back: their pass, and a number that
+// went out and never got a word back (shared/offer-status.js REVIVABLE_STATUSES).
+export const CHECKIN_STATUSES = new Set(["passed", "no_response"]);
+
+/** A passed or gone-quiet offer: from when it was marked so. */
+export function passedStart(offer) {
+  const status = offer?.status;
+  return latest((offer?.statusHistory || []).filter((h) => h?.status === status).map((h) => h.ts))
+    || offer?.statusAt || offer?.createdAt || null;
+}
+
+/**
  * followUpDedupeKey({ kind, subjectId, step }) → string
  *
  * The contact_events unique key, and therefore the claim. Two ticks racing on

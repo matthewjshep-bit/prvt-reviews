@@ -1884,7 +1884,9 @@ export const OUTBOUND_KINDS = {
     ready: ({ offer }) => {
       if (!offer?.address) return "nothing to check in on";
       if (offer.deal) return "it became a deal";
-      if (offerStatus(offer) !== "passed") return `the offer is ${offerStatus(offer)} now, not passed`;
+      // no_response too (2026-09-29): an offer that went quiet is checked
+      // back in on the same way — the prompt words it as "never heard back".
+      if (offerStatus(offer) !== "passed" && offerStatus(offer) !== "no_response") return `the offer is ${offerStatus(offer)} now, not passed`;
       return true;
     },
     floats: () => [],
@@ -2119,6 +2121,9 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
   if (kind === "partner_answer") {
     return { ...base, address: offer?.address || subject?.address || "", question: String(subject?.question || "").slice(0, 300), answer: String(subject?.answer || "").slice(0, 600) };
   }
+  if (kind === "passed_checkin") {
+    return { ...base, quiet: offerStatus(offer) === "no_response" };
+  }
   if (kind === "counter_nudge") {
     const theirs = Math.round(Number(offer?.counter?.amount) || 0);
     const at = Date.parse(offer?.counter?.at || "");
@@ -2194,7 +2199,9 @@ function outboundSummary({ kind, offer, outbound }) {
     case "partner_answer": return "Your answer to a question the bot couldn't answer, in its voice.";
     case "hot_push": return `Pushes the agreed price on ${where} toward paper: asks them to write it up on NWMLS forms for us to sign${rung}.`;
     case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held${outbound.heldReason ? ` (${outbound.heldReason})` : ""}.`;
-    case "passed_checkin": return `Checks back in on ${where} — they passed; asks if the seller would come closer to our number${rung}.`;
+    case "passed_checkin": return outbound.quiet
+      ? `Checks back in on ${where} — we never heard back on our offer; asks if it's still available and where the seller is${rung}.`
+      : `Checks back in on ${where} — they passed; asks if the seller would come closer to our number${rung}.`;
     case "outreach_open": return `First text: saw their listing at ${where}, asks if they have anything distressed.`;
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "buyer_pulse":   return `Checks in between deals: are they buying right now, and ${outbound.buyBox ? "is their buy box still right" : "what is their buy box"}.`;

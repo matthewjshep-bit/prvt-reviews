@@ -549,3 +549,61 @@ test("a hot flag on a superseded row doesn't push a write-up at its number", asy
   assert.deepEqual(await hotCandidates({ store, locationId: "LOC", config: HOT_SAVED.conversationAi, now }), []);
   assert.equal((await hotCandidates({ store: fakeStore({ offers: [july] }), locationId: "LOC", config: HOT_SAVED.conversationAi, now })).length, 1, "alone on the house it is the current row");
 });
+
+/* ---------- no live offer without a clock (2026-09-29) ---------- */
+
+// The offer ladder used to end at the agent's first reply. A countered or
+// sent offer where they answered, we answered them, and then nothing, sat
+// with no follow-up at all.
+test("an open offer the agent answered and then went quiet is still asked about", async () => {
+  _resetJobs();
+  const theirs = { id: "in1", contactId: "c1", status: "sent", intent: "status_check", inbound: "let me run it by the seller", reply: "sounds good", createdAt: at(1), sentAt: at(1.05), updatedAt: at(1.05) };
+  const store = fakeStore({ offers: [anOffer()], drafts: [theirs] });
+  const { job, started } = spySweep(store, { now: T0 + 4.2 * DAY });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(started.map((s) => [s.kind, s.subject.step]), [["offer_nudge", 3]], "day three after our last word");
+  const claim = store.events.find((e) => e.type === "follow_up_sent");
+  assert.equal(claim.dedupeKey, followUpDedupeKey({ kind: "offer_nudge", subjectId: `o1@${at(1.05).slice(0, 10)}`, step: 3 }), "a fresh claim per anchor");
+
+  _resetJobs();
+  const early = spySweep(fakeStore({ offers: [anOffer()], drafts: [theirs] }), { now: T0 + 3.2 * DAY });
+  await settle();
+  assert.equal(early.started.length, 0, "day three counts from our answer, not from the offer");
+
+  _resetJobs();
+  const annoyed = { ...theirs, inbound: "stop texting me about this", createdAt: at(1), sentAt: at(1.05) };
+  const braked = spySweep(fakeStore({ offers: [anOffer()], drafts: [annoyed] }), { now: T0 + 4.2 * DAY });
+  await settle();
+  assert.equal(braked.started.length, 0, "a re-anchored nudge asks the brake first");
+
+  _resetJobs();
+  const thanks = { id: "in2", contactId: "c1", status: "dismissed", intent: "small_talk", inbound: "ok thanks!", reply: "", createdAt: at(1), updatedAt: at(1) };
+  const closer = spySweep(fakeStore({ offers: [anOffer()], drafts: [thanks] }), { now: T0 + 4.2 * DAY });
+  await settle();
+  assert.deepEqual(closer.started.map((s) => s.kind), ["offer_nudge"], "an 'ok thanks' left unanswered is not a reply we owe");
+});
+
+const CHECKIN_SAVED = { aiApiKey: "k", conversationAi: configWith({ agent: { followUp: { enabled: true, ladders: {
+  offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 0 }, passed_checkin: { enabled: true, steps: [10, 20, 30] } } } } }) };
+
+test("an offer that went quiet gets a check-in like a passed one", async () => {
+  _resetJobs();
+  const quiet = anOffer({ status: "no_response", statusAt: at(0), sends: [{ ts: at(-14) }], statusHistory: [{ status: "sent", ts: at(-14) }, { status: "no_response", ts: at(0) }] });
+  const store = fakeStore({ offers: [quiet] });
+  const { job, started } = spySweep(store, { now: T0 + 10.2 * DAY, opts: { saved: CHECKIN_SAVED } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(started.map((s) => [s.kind, s.subject.step]), [["passed_checkin", 10]]);
+  assert.equal(started[0].offer.status, "no_response", "the draft knows we never heard back, not that they said no");
+});
+
+test("a passed house that sold stops getting check-ins", async () => {
+  _resetJobs();
+  const passed = anOffer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }] });
+  const store = fakeStore({ offers: [passed], events: [{ contactId: "c1", type: "listing_off_market", at: at(5), offerId: "o1", data: { status: "PENDING" } }] });
+  const { job, started } = spySweep(store, { now: T0 + 10.2 * DAY, opts: { saved: CHECKIN_SAVED } });
+  await settle();
+  assert.equal(started.length, 0);
+  assert.match(job.results.find((r) => r.kind === "passed_checkin").reason, /off the market/);
+});

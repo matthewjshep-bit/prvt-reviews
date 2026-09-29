@@ -97,6 +97,29 @@ test("marking they passed keeps the check-in ladder's queued text", async () => 
   assert.equal((await store.getReplyDraft(queued.id)).status, "scheduled");
 });
 
+// The 2026-09-29 book cleanup re-staged offers from their threads. A pass
+// from July marked today would start its ten-day check-in from today; the
+// ladders count from the day it really happened.
+test("a status fixed by hand keeps the day it really happened", async () => {
+  const created = new Date(Date.now() - 60 * 86400000).toISOString();
+  // The store stamps createdAt itself; age the row the way time would.
+  const o = await mkOffer({ status: "sent" });
+  await store.updateOffer(o.id, { ...(await store.getOffer(o.id)), createdAt: created });
+  const when = new Date(Date.now() - 30 * 86400000).toISOString();
+  const r = await req("PATCH", `/api/offers/${o.id}/status`, { status: "countered", at: when, amount: 450000, note: "seller wants 450" });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.offer.statusAt, when);
+  assert.equal(r.json.offer.statusHistory.at(-1).ts, when);
+  assert.deepEqual(r.json.offer.counter, { amount: 450000, at: when, source: "operator" }, "the counter's number reaches the band");
+
+  const future = await req("PATCH", `/api/offers/${o.id}/status`, { status: "passed", at: new Date(Date.now() + 86400000).toISOString() });
+  assert.equal(future.status, 400, "not in the future");
+  const before = await req("PATCH", `/api/offers/${o.id}/status`, { status: "passed", at: new Date(Date.parse(created) - 3 * 86400000).toISOString() });
+  assert.equal(before.status, 400, "not before the offer existed");
+  const junk = await req("PATCH", `/api/offers/${o.id}/status`, { status: "passed", at: "last tuesday" });
+  assert.equal(junk.status, 400);
+});
+
 test("an unknown status is refused", async () => {
   const o = await mkOffer();
   const r = await req("PATCH", `/api/offers/${o.id}/status`, { status: "vibes" });
@@ -200,4 +223,24 @@ test("a lean row carries the numbers and terms the Conversation AI needs, not th
   assert.equal(row.realm.answer, "yes");
   assert.equal(row.calc, undefined);
   assert.deepEqual(toRow(row), row, "idempotent");
+});
+
+test("the offer list says when each offer is next followed up, and with what", async () => {
+  await store.saveOfferSettings(LOC, { conversationAi: { enabled: true, parties: { agent: {
+    followUp: { enabled: true, ladders: { offer_nudge: { enabled: true, steps: [3, 7, 14] }, passed_checkin: { enabled: true, steps: [10, 20] } } },
+    autoSend: { enabled: true, intents: ["offer_nudge", "passed_checkin"] },
+  } } } });
+  const sent = await mkOffer({ contactId: "next-1", address: "8 Next St, Kent, WA 98031", status: "sent", sends: [{ ts: new Date().toISOString() }] });
+  const gone = await mkOffer({ contactId: "next-2", address: "9 Next St, Kent, WA 98031", status: "we_passed" });
+  const r = await req("GET", "/api/offers?lean=1&next=1&limit=2000");
+  assert.equal(r.status, 200);
+  assert.equal(r.json.next, true);
+  const row = (id) => r.json.offers.find((o) => o.id === id);
+  assert.equal(row(sent.id).nextFollowUp.kind, "offer_nudge");
+  assert.ok(row(sent.id).nextFollowUp.at, "a date");
+  assert.equal(row(sent.id).nextFollowUp.who, "machine");
+  assert.equal(row(gone.id).nextFollowUp.kind, "we_passed");
+  assert.equal(row(gone.id).nextFollowUp.at, null);
+  const plain = await req("GET", "/api/offers?lean=1&limit=2000");
+  assert.equal(plain.json.offers.find((o) => o.id === sent.id).nextFollowUp, undefined, "opt-in");
 });

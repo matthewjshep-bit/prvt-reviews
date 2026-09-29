@@ -25,7 +25,10 @@ import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreac
 import { addressKey } from "./shared/us-address.js";
 import { sameStreet } from "./shared/us-address.js";
 import { supersededIds } from "./shared/current-offer.js";
-import { dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor, HOT_MIN_HOURS } from "./shared/follow-up.js";
+import {
+  dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor, HOT_MIN_HOURS,
+  offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, CHECKIN_STATUSES,
+} from "./shared/follow-up.js";
 import { threadHealth } from "./shared/thread-health.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
@@ -117,8 +120,7 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     // Its expiry date is not checked: the offer stands until they answer, and
     // asking about it is the follow-up, not a re-offer.
     // Count from the last time we actually put it in front of them.
-    const lastSend = (o.sends || []).filter((s) => s?.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0];
-    const startedAt = lastSend?.ts || o.statusAt || o.createdAt;
+    const startedAt = offerNudgeStart(o);
     if (!startedAt) continue;
     out.push({
       kind: "offer_nudge", party: "agent", contactId: o.contactId, subjectId: o.id,
@@ -168,11 +170,15 @@ export function isTheOfferToAskAbout(offer, siblings = []) {
 /**
  * passedCandidates({ store, locationId, config, now }) → [candidate]
  *
- * Offers the agent passed on, counted from when they passed. Every ten days
- * by default: has anything changed, would the seller come closer to our
- * number? Expired offers still count — the number is the conversation, and
- * it's ours to restate. A deal, a withdrawal on our side, or a status that
- * moved on (they countered after all) ends it.
+ * Offers the agent passed on, counted from when they passed — and offers
+ * that went quiet (no_response), counted from when they were marked so. Every
+ * ten days by default: has anything changed, would the seller come closer to
+ * our number? Expired offers still count — the number is the conversation,
+ * and it's ours to restate. A deal, a withdrawal on our side, or a status
+ * that moved on (they countered after all) ends it.
+ *
+ * no_response joined 2026-09-29: it is revivable (a counter brings it back)
+ * but nothing ever asked, so every offer the timers marked quiet was done.
  */
 export async function passedCandidates({ store, locationId, config, now = Date.now() }) {
   const pb = config?.parties?.agent;
@@ -180,20 +186,27 @@ export async function passedCandidates({ store, locationId, config, now = Date.n
   if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
   const earliest = Math.min(...ladder.steps);
   const rows = await store.listOffersForFollowUp(locationId, {
-    statuses: ["passed"], before: iso(now - earliest * DAY_MS), limit: 200,
+    statuses: [...CHECKIN_STATUSES], before: iso(now - earliest * DAY_MS), limit: 400,
   }).catch(() => []);
   const replaced = await replacedOffers(store, locationId);
+  // The price watch writes this when the listing goes pending or sells. A
+  // check-in asking whether the seller has softened is pointless after that.
+  const offMarket = typeof store.listContactEventsSince === "function"
+    ? await store.listContactEventsSince(locationId, iso(now - 200 * DAY_MS), { types: ["listing_off_market"], limit: 2000 }).catch(() => [])
+    : [];
   const out = [];
   for (const o of rows) {
     if (!o?.contactId || !o.address || o.deal) continue;
     if (replaced.has(o.id)) continue;       // a row the house moved past
-    if (effectiveStatus(o) !== "passed") continue;
-    const passedAt = (o.statusHistory || []).filter((h) => h?.status === "passed").map((h) => h.ts).filter(Boolean).sort().at(-1)
-      || o.statusAt || o.createdAt;
+    if (!CHECKIN_STATUSES.has(effectiveStatus(o))) continue;
+    const passedAt = passedStart(o);
     if (!passedAt) continue;
+    const key = propertyKeyOf(o);
+    const gone = offMarket.filter((e) => (e.offerId === o.id || (key && e.address && addressKey(e.address) === key)) && String(e.at) > String(passedAt))
+      .map((e) => e.at).sort().at(-1) || null;
     out.push({
       kind: "passed_checkin", party: "agent", contactId: o.contactId, subjectId: o.id,
-      offerId: o.id, address: o.address, startedAt: passedAt,
+      offerId: o.id, address: o.address, startedAt: passedAt, offMarketAt: gone,
       sentSteps: (o.followUps || []).filter((f) => f?.kind === "passed_checkin").map((f) => f.step),
       ladder,
     });
@@ -451,16 +464,54 @@ async function runSweep(job, ctx) {
     // exists for every inbound, so one indexed read answers it.
     let lastInboundAt = c.lastInboundAt ?? null;
     let lastTouchAt = c.lastTouchAt ?? null;
+    let lastHandledAt = null;
+    let agentDrafts = [];
     if (c.party === "agent") {
       try {
         const rows = await store.listReplyDrafts(locationId, { contactId: c.contactId, limit: 20 });
-        const fromDrafts = rows.filter((d) => d.inbound).map((d) => d.createdAt).sort().at(-1) || null;
-        const touched = rows.filter((d) => d.outbound?.kind && d.status === "sent").map((d) => d.updatedAt || d.createdAt).sort().at(-1) || null;
+        agentDrafts = rows;
+        const times = threadTimes(rows);
+        const fromDrafts = times.lastInboundAt;
+        const touched = times.lastMachineTouchAt;
+        lastHandledAt = times.lastHandledAt;
         // A cold agent's candidate row already carries the event stream's
         // answer; whichever source saw them most recently wins.
         lastInboundAt = [lastInboundAt, fromDrafts].filter(Boolean).sort().at(-1) || null;
         lastTouchAt = [lastTouchAt, touched].filter(Boolean).sort().at(-1) || null;
       } catch { /* no drafts to read is not a reason to skip a nudge */ }
+    }
+
+    // They answered, we answered, it went quiet: the open offer is asked
+    // about again, counted from our last word (shared/follow-up.js
+    // offerNudgeAnchor). The anchor day rides in the subject id, as the hot
+    // push does, so the new rungs get fresh claims. This is the machine
+    // starting something by itself, so it asks the brake — except for the
+    // "two unanswered" stop, which the plain offer ladder never had either:
+    // it asks once a week until they answer.
+    let reanchored = false;
+    if (c.kind === "offer_nudge") {
+      const a = offerNudgeAnchor({ startedAt: c.startedAt, lastInboundAt, lastHandledAt });
+      if (a.reanchored) {
+        const timeline = typeof store.listContactEvents === "function"
+          ? await store.listContactEvents(locationId, c.contactId, { limit: 300 }).catch(() => []) : [];
+        const offer = await store.getOffer(c.offerId).catch(() => null);
+        const health = threadHealth({ offer, drafts: agentDrafts, events: timeline, now });
+        if (!health.drive && health.reason !== "two_unanswered") {
+          job.skipped++;
+          push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: `${health.reason}: ${health.detail}` });
+          continue;
+        }
+        const anchorDay = String(a.startedAt).slice(0, 10);
+        c.startedAt = a.startedAt;
+        c.subjectId = `${c.offerId}@${anchorDay}`;
+        c.sentSteps = (offer?.followUps || []).filter((f) => f?.kind === "offer_nudge" && String(f.at || "") > a.startedAt).map((f) => f.step);
+        reanchored = true;
+      }
+    }
+    if (c.kind === "passed_checkin" && c.offMarketAt) {
+      job.skipped++;
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: "the listing went off the market" });
+      continue;
     }
 
     // The hot push is the machine pressing: it asks the brake first
@@ -490,7 +541,7 @@ async function runSweep(job, ctx) {
       lastInboundAt, lastTouchAt, now,
       // The hot push re-anchors on their reply instead of stopping on it,
       // and keeps its own floor between texts.
-      stopOnAnyInbound: c.kind === "passed_checkin" || c.kind === "hot_push" ? false : fu.stopOnAnyInbound,
+      stopOnAnyInbound: c.kind === "passed_checkin" || c.kind === "hot_push" || reanchored ? false : fu.stopOnAnyInbound,
       minHoursBetween: c.kind === "hot_push" ? HOT_MIN_HOURS : fu.minHoursBetween,
       repeatEvery: c.ladder.repeatEvery,
     });

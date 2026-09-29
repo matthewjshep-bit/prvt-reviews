@@ -80,6 +80,7 @@ import {
   startFollowUpSweep, getFollowUpJob, publicFollowUpJob, cancelFollowUpSweep,
   agentCandidates, investorCandidates,
 } from "../follow-up-sweep.js";
+import { attachNextFollowUps } from "../next-follow-up.js";
 import { dueStep } from "../shared/follow-up.js";
 import { autoAcceptCeiling } from "../shared/auto-accept.js";
 import { buyerCeiling, normalizeFellThroughCode, FELL_THROUGH_LABEL } from "../shared/post-mortem.js";
@@ -2456,22 +2457,32 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // lean projection because it is derived per request, not a field on the
       // stored document (toListOffer would strip it anyway). Both reads fall
       // back to empty: a column that can't load must not take the table down.
-      if (req.query.activity === "1" || req.query.activity === "true") {
-        const [rows, drafts] = await Promise.all([
-          store.lastContactActivity(locationId, { types: LAST_ACTIVITY_TYPES }).catch(() => []),
-          store.listReplyDrafts(locationId, { limit: 2000 }).catch(() => []),
-        ]);
+      const wantActivity = req.query.activity === "1" || req.query.activity === "true";
+      const wantNext = req.query.next === "1" || req.query.next === "true";
+      // Both columns read the reply drafts; one read serves both.
+      const drafts = wantActivity || wantNext
+        ? await store.listReplyDrafts(locationId, { limit: wantNext ? 4000 : 2000 }).catch(() => [])
+        : null;
+      if (wantActivity) {
+        const rows = await store.lastContactActivity(locationId, { types: LAST_ACTIVITY_TYPES }).catch(() => []);
         const seen = mergeDraftActivity(lastActivityFromEvents(rows), drafts);
         // Threads the app never recorded (GHL inbox, workflows, before the
         // contact record) come from GHL's own last-message date.
         const ghl = await ghlLastMessages(client, locationId).catch(() => new Map());
         mergeGhlActivity(seen, ghl, [...new Set(offers.map((o) => o?.contactId).filter(Boolean))]);
         for (const o of offers) if (o?.contactId) o.lastActivity = seen.get(o.contactId) || null;
-        // The flag is what lets the column tell "we didn't ask" (—) apart
-        // from "we asked and they've never spoken" (never).
-        return res.json({ offers, activity: true });
       }
-      res.json({ offers });
+      // When each offer is next followed up, and with what
+      // (shared/next-follow-up.js). Opt-in, like activity.
+      if (wantNext) {
+        const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+        await attachNextFollowUps({ store, locationId, saved, offers, drafts }).catch((e) => {
+          console.error(`offers: next follow-up failed loc=${locationId}:`, e?.message);
+        });
+      }
+      // The activity flag is what lets that column tell "we didn't ask" (—)
+      // apart from "we asked and they've never spoken" (never).
+      res.json({ offers, ...(wantActivity ? { activity: true } : {}), ...(wantNext ? { next: true } : {}) });
     } catch (err) { fail(res, err); }
   });
 
@@ -3224,8 +3235,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         return res.json({ ok: true, promoted: true, ...r });
       }
 
-      const ts = new Date().toISOString();
-      recordStatus(offer, status, note, ts);
+      // When it happened, if not now: a status fixed after the fact keeps its
+      // real day, because the follow-up ladders count from it (a July pass
+      // re-marked today would otherwise start its check-ins from today). A
+      // day before the offer existed, or one in the future, is a typo.
+      let ts = new Date().toISOString();
+      if (req.body?.at != null) {
+        const t = Date.parse(String(req.body.at));
+        const born = Date.parse(offer.createdAt || "") || 0;
+        if (!Number.isFinite(t) || t > Date.now() + 60000 || t < born - 86400000) {
+          return res.status(400).json({ error: "at must be a date between the offer's creation and now" });
+        }
+        ts = new Date(t).toISOString();
+      }
+      // Their number, when the status is their counter: the band reads it.
+      const amount = status === "countered" ? Math.max(0, Math.round(Number(req.body?.amount) || 0)) : 0;
+      recordStatus(offer, status, note, ts, amount ? { amount, source: "operator" } : {});
       await store.updateOffer(offer.id, offer);
 
       // Best-effort CRM mirror: the ledger line keeps AI enrichment from

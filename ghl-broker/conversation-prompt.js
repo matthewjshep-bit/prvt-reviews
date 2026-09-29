@@ -575,7 +575,9 @@ export function outboundOpening(outbound) {
     // A pass is not the end of a listing. Check back in on it: is it still
     // sitting, has the seller softened, would they come closer to our number?
     case "passed_checkin":
-      return `${START} This agent passed on our offer on ${o.address}. It's been a while — check back in, in one or ` +
+      return `${START} ${o.quiet
+        ? `We made this agent an offer on ${o.address} and never heard back.`
+        : `This agent passed on our offer on ${o.address}.`} It's been a while — check back in, in one or ` +
         `two lines: is it still available, has anything changed with the seller, would they come closer to where we were? ` +
         `Do NOT name any number: not the one we offered (it is weeks old and saying it again recommits us to it), not ` +
         `theirs, not a new one. Say "our number" or "where we were". Never hint that we'd go higher — movement on ours ` +
