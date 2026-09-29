@@ -34,6 +34,7 @@ import EnrichModal from "./EnrichModal.jsx";
 import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
 import UnderwriteStrip from "./UnderwriteStrip.jsx";
+import NextFollowUp, { groupNext, needsFollowUp, nextSortKey } from "./NextFollowUp.jsx";
 import {
   ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
   SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, StatusPill, TableCard,
@@ -85,6 +86,9 @@ const FILTERS = [
   { key: "dead", label: "Passed / no reply", test: (o) => !o.deal && DEAD_STATUSES.has(effectiveStatus(o)) },
   { key: "deals", label: "Deals", test: (o) => Boolean(o.deal) },
   { key: "drafts", label: "Drafts", test: (o) => o.status === "draft" },
+  // A live offer with no follow-up coming, or one that's late. Every offer
+  // should have a next touch or a reason it doesn't (2026-09-29).
+  { key: "nofollow", label: "No follow-up", title: "Live offers with nothing scheduled, or a follow-up that's overdue", test: (o) => needsFollowUp(o) },
   // A different axis from the six above — those ask where an offer is in the
   // funnel, this asks who made it and whether anyone has looked. It sits last
   // and wears its own colour so it doesn't read as another funnel state, and
@@ -120,6 +124,8 @@ const SORTS = {
   // sinks nulls in both directions, so agents you've never contacted stay at
   // the bottom whichever way you click.
   activity: { natural: "desc", of: (o) => o.lastActivity?.at || null },
+  // Soonest first; nothing coming sinks (compareBy), whichever way you click.
+  next: { natural: "asc", of: nextSortKey },
 };
 
 // One agent, one group. Offers with no contact record still collapse together
@@ -180,7 +186,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
   // the KPI strip alike. The row is ~1KB, so the whole book fits; a fat field
   // is fetched on demand by hydrate().
   useEffect(() => {
-    listOffers({ limit: 2000, lean: true, activity: true })
+    listOffers({ limit: 2000, lean: true, activity: true, next: true })
       .then(setOffers)
       .catch((e) => setError(e.message));
   }, []);
@@ -195,7 +201,13 @@ export default function OffersHistory({ onEdit, onDeal }) {
   function patchOffer(updated) {
     if (!updated) return;
     const patch = (o) => (o && o.id === updated.id ? updated : o);
-    setOffers((list) => (list || []).map((o) => (o.id === updated.id ? toListOffer(updated) : o)));
+    // The per-request columns aren't on the document: keep the agent's last
+    // activity, and say the schedule is recomputed on reload rather than show
+    // one worked out for the old status.
+    setOffers((list) => (list || []).map((o) => (o.id === updated.id
+      ? { ...toListOffer(updated), lastActivity: o.lastActivity,
+          nextFollowUp: o.nextFollowUp && effectiveStatus(o) !== effectiveStatus(updated) ? { stale: true } : o.nextFollowUp }
+      : o)));
     setSelected(patch);
     setSending(patch);
     setContracting(patch);
@@ -497,7 +509,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
         {/* min-w scrolls the card rather than crushing columns on narrow
             screens; the document links wrap (below) rather than run under the
             opaque sticky action cell when the table is merely tight. */}
-        <table className="w-full min-w-[70rem] text-sm">
+        <table className="w-full min-w-[80rem] text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
               <th scope="col" className="px-3 py-2.5">
@@ -513,6 +525,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
                   would read as another property of the offer rather than of
                   the agent. */}
               <SortHeader label="Last activity" sortKey="activity" sort={sort} onSort={toggleSort} naturalDir={SORTS.activity.natural} />
+              <SortHeader label="Next follow-up" sortKey="next" sort={sort} onSort={toggleSort} naturalDir={SORTS.next.natural} />
               <th scope="col" className="w-44 px-4 py-2.5">Document</th>
               <th scope="col" className="sticky right-0 bg-white px-4 py-2.5"><span className="sr-only">Actions</span></th>
             </tr>
@@ -572,6 +585,9 @@ export default function OffersHistory({ onEdit, onDeal }) {
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5">
                       <ActivityStamp activity={groupActivity(g.offers)} enriched={g.offers.some((o) => o.lastActivity !== undefined)} />
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <NextFollowUp next={groupNext(g.offers)} enriched={g.offers.some((o) => o.nextFollowUp !== undefined)} />
                     </td>
                     <td className="px-4 py-2.5" />
                     <td className="sticky right-0 whitespace-nowrap bg-slate-50/60 px-4 py-2.5 text-right group-hover:bg-slate-100"
@@ -639,6 +655,9 @@ export default function OffersHistory({ onEdit, onDeal }) {
                     inherited by every offer of theirs, not about this house. */}
                 <td className="whitespace-nowrap px-4 py-2.5">
                   <ActivityStamp activity={o.lastActivity} enriched={o.lastActivity !== undefined} muted />
+                </td>
+                <td className="px-4 py-2.5">
+                  <NextFollowUp next={o.nextFollowUp} enriched={o.nextFollowUp !== undefined} muted={old} />
                 </td>
                 <td className="w-44 px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                   {/* shrink-0 on the links: flex items shrink before they wrap,

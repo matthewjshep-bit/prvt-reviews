@@ -1056,6 +1056,79 @@ the row the old send path would have picked, and any paper that would be
 held. First run, 2026-09-25: 207 houses; 57 with more than one offer; on 36
 of those the old path picked a different row; 2 held.
 
+### Next follow-up — one answer per offer (2026-09-29)
+
+Matt asked for every offer to be in the right stage and to show the follow-up
+it has coming. On 9/29 the live book had 230 houses. Every ladder was on and
+auto-sending on the Full dial. Offers still stalled, for four reasons:
+
+- **The offer ladder ended at their first reply.** `stopOnAnyInbound` turned
+  "they answered, we answered, then silence" into no clock at all.
+- **`no_response` had no clock.** It is revivable, but only `passed` got
+  check-ins.
+- **A sold or pending house kept getting check-ins.** The price watch saw
+  it go, but the check-in ladder never asked.
+- **Nobody could see what was next.** The preview ignored inbound, caps and
+  the hot and passed ladders.
+
+**What changed in the sweep** (`ghl-broker/follow-up-sweep.js`):
+- **Re-anchor.** The offer nudge re-anchors on the last time the thread was
+  dealt with, instead of stopping. A reply sent counts. So does a closer we
+  left unanswered on purpose ("ok thanks", a draft that was dismissed or
+  skipped). The anchor day rides in the subject id (`offerId@day`), so the
+  new rungs get fresh claims, the same trick the hot push uses.
+  - It asks `threadHealth` first, like the hot push. It ignores the
+    two-unanswered stop, which the plain offer ladder never had either.
+  - If their text is the last word and nobody has dealt with it, there is
+    still no nudge. That is a reply owed, not a follow-up.
+- **Gone-quiet offers.** `passedCandidates` reads `no_response` as well,
+  counted from its no_response history entry. The check-in text says "we
+  never heard back" instead of "they passed" (`outbound.quiet`).
+- **Off the market.** A `listing_off_market` event after the pass or silence
+  ends that house's check-ins.
+
+**The column.** `nextFollowUp` in `shared/next-follow-up.js` is pure. It uses
+the same start points as the sweep (`offerNudgeStart`, `offerNudgeAnchor`,
+`passedStart`, `threadTimes`, `nextRungAt` in `shared/follow-up.js`), so the
+day it shows is the day the sweep acts. First match wins:
+
+1. **Nothing, by design.** A deal, our pass, a superseded row, a draft, or
+   an accepted offer.
+2. **Stopped.** They opted out, or you stopped it on Today.
+3. **Queued.** A draft is already scheduled; its send time shows.
+4. **Reply held.** Their text is waiting on you.
+5. **The soonest of:**
+   - a promise we made
+   - a check-in they asked for
+   - the hot push
+   - the offer nudge
+   - the passed or quiet check-in
+   - the float timer (after a day overdue, it reads as yours)
+6. **None scheduled**, with the reason (the ladder ran out, the machine
+   stands down, and so on).
+
+A rung lands on the first daily sweep at or after its day (16:00 UTC). A
+weekend rung moves to Monday unless `autoSend.weekends` is `all`. The weekly
+per-contact cap can't be seen ahead of time, so the column is the plan, not a
+guarantee.
+
+**API.** `GET /api/offers?lean=1&next=1` adds `nextFollowUp {at, kind, label,
+who, reason, overdue}` to each row. It is opt-in, like `activity=1`. It costs
+two location-wide reads (reply drafts and the clocks' events), done in
+`ghl-broker/next-follow-up.js`.
+
+**On the Offers tab:**
+- A sortable "Next follow-up" column. The group header shows the agent's
+  soonest follow-up, or their gap.
+- A "No follow-up" chip: live offers with nothing coming, or one that's late.
+- Changing a status in the table shows "updates on reload" rather than a
+  schedule worked out for the old status.
+
+**Fixing a status after the fact.** `PATCH /api/offers/:id/status` takes an
+optional `at` (ISO, between the offer's creation and now) and `amount` (only
+with countered; it becomes `offer.counter`). A July pass marked in September
+keeps its July date, so its check-ins count from then.
+
 ### Never more than our number (2026-09-28)
 
 Jesse, 39811 226th Ave SE, Enumclaw. Our offer was 550K, already over
