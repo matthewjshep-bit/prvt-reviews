@@ -37,7 +37,7 @@
 //   POST   /api/offers/custom-fields           create one custom field (idempotent)
 //   GET    /api/offers/deals                  offers promoted to active deals
 //   POST   /api/offers/:id/deal               promote an offer to a deal (under contract)
-//   PATCH  /api/offers/:id/deal               update stage / terms / walkthrough / parties
+//   PATCH  /api/offers/:id/deal               update stage / terms / walkthrough / parties / access
 //   POST   /api/offers/:id/deal/checklist     tick, re-date, reassign, remove or add one closing-checklist item
 //   GET/POST /api/offers/:id/deal/showing/ask-agent   the walkthrough-window text to the listing agent; send it
 //   POST   /api/offers/:id/deal/showing/rsvp  a buyer's walkthrough answer, set by hand
@@ -115,6 +115,7 @@ import { nextSendTime, spreadAcrossDay } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STATUSES } from "../shared/showing.js";
 import { mergeParties } from "../shared/deal-parties.js";
+import { mergeAccess, accessFor } from "../shared/deal-access.js";
 import { normalizeChecklist, applyChecklistEdit, addChecklistItem, tickByDoc, tickById, GATES } from "../shared/deal-checklist.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop } from "../ghl-mirror.js";
@@ -3614,6 +3615,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // Who else is on the deal (shared/deal-parties.js): only the roles sent
       // change; a role sent as null goes back to its default.
       if (b.parties && typeof b.parties === "object") deal.parties = mergeParties(deal.parties, b.parties);
+      // Occupancy and how buyers get in (shared/deal-access.js) — what the
+      // investor bot may say about the house. Starts from the walkthrough's
+      // old access pick so an older deal keeps what it had.
+      if (b.access && typeof b.access === "object") deal.access = mergeAccess(accessFor(deal), b.access);
       deal.updatedAt = new Date().toISOString();
       await store.updateOffer(offer.id, offer);
       // Re-price the investor package off the new terms. The rest of its

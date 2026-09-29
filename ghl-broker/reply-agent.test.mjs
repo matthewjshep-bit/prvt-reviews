@@ -3994,3 +3994,40 @@ test("a walkthrough ask with no deal under contract behind it is still just a he
   assert.equal(filed.length, 0);
   assert.equal((await store.getReplyDraft(job.draftId)).status, "handled");
 });
+
+// Rajesh Kasturi, 2026-09-29, 3511 NE 153rd St: "Sounds good, it's open
+// right now." went out on its own. The bot meant the deal was available; a
+// buyer reads that the house is open to walk into. We never know that unless
+// the deal says so, and "open" is never the word for a deal (Matt).
+test("a buyer is never told a house is open, and only told it's vacant when the deal says it is", () => {
+  const inv = (reply, extra = {}) => evaluateReplyGates({ draft: { intent: "interested", confidence: "high", needsHuman: false, reply }, party: "investor", inboundMessage: "Will check", ...extra });
+  const rajesh = inv("Sounds good, it's open right now. Let me know what you think on the numbers.");
+  assert.equal(rajesh.ok, false);
+  assert.match(rajesh.flags.join(" · "), /says "it's open"/);
+  assert.equal(inv("Yep, still open. Want me to send the package over?").ok, false);
+  assert.equal(inv("It's vacant, go by any time.").ok, false);
+  assert.equal(inv("It's vacant, walkthrough is Sat Oct 3.", { vacantOk: true }).ok, true);
+  assert.equal(inv("The lockbox code is 1234.", { vacantOk: true }).ok, false);
+  // The words are fine when they aren't about the house.
+  assert.equal(inv("Still available. Are you open to heavy rehab?").ok, true);
+  assert.equal(inv("Open to a call later?").ok, true);
+});
+
+test("the buyer bot is told whether anyone lives there and how to get in, and 'vacant' passes only on a deal recorded vacant", async () => {
+  for (const [access, expectOk] of [[{ occupancy: "vacant", method: "lockbox" }, true], [null, false]]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["investor-active"]);
+    const store = fakeStore();
+    store.listDeals = async () => [{ ...DEAL, deal: { ...DEAL.deal, investors: [{ contactId: "c1", name: "Sam Lee", status: "evaluating" }], ...(access ? { access } : {}) } }];
+    let seen;
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "anyone living there?",
+      deps: { draft: async (args) => { seen = args; return { ...INVESTOR_DRAFT, intent: "question", reply: "It's vacant, and the walkthrough time is coming.", propertyAddress: "2010 NE 54th St" }; } },
+    });
+    await settle();
+    assert.equal(job.status, "done", job.error);
+    assert.match(seen.context.text, access ? /occupancy: vacant/ : /occupancy: not recorded/);
+    const d = await store.getReplyDraft(job.draftId);
+    assert.equal(d.flags.some((f) => /access record/.test(f)), !expectOk, d.flags.join(" · "));
+  }
+});

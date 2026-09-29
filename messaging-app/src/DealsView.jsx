@@ -26,6 +26,7 @@ import WalkthroughCard from "./WalkthroughCard.jsx";
 import ContactSearch from "./ContactSearch.jsx";
 import DealTimeline from "./DealTimeline.jsx";
 import DealParties from "./DealParties.jsx";
+import DealAccess from "./DealAccess.jsx";
 import { resolveChecklist, dueWords } from "@shared/deal-checklist.js";
 import { resolveParties } from "@shared/deal-parties.js";
 import {
@@ -504,7 +505,10 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
         {tab === "overview" && (
           <div className="grid gap-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
             <DealTimeline key={offer.id} offer={offer} parties={parties} onUpdated={onUpdated} />
-            <DealParties offer={offer} settings={settings} onUpdated={onUpdated} />
+            <div className="space-y-6">
+              <DealAccess key={`access-${offer.id}`} offer={offer} onUpdated={onUpdated} />
+              <DealParties offer={offer} settings={settings} onUpdated={onUpdated} />
+            </div>
           </div>
         )}
 

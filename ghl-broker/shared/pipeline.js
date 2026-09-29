@@ -32,6 +32,7 @@ import { groupHouses, resolveHouse } from "./current-offer.js";
 import { showingSummary } from "./showing.js";
 import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
 import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
+import { accessFor } from "./deal-access.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -308,7 +309,7 @@ export function buildPipeline({
         stage: d.stage, closingDate: d.closingDate || null, closingInDays,
         contractPrice: round(d.contractPrice), assignmentFee: round(d.assignmentFee),
         investors: investorChips(d, myEvents, contactNames),
-        showing: showingSummary(d.showing, now),
+        showing: { ...showingSummary(d.showing, now), accessSet: Boolean(accessFor(d).method) },
         checklist: (() => {
           const c = resolveChecklist(d, { now });
           const done = c.items.filter((i) => i.done).length;

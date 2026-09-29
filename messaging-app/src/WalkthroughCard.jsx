@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import {
-  ACCESS_MODES, ACCESS_LABEL, RSVP_STATUSES, RSVP_LABEL, MAX_WINDOWS, normalizeShowing, windowLabel, upcomingWindows,
+  RSVP_STATUSES, RSVP_LABEL, MAX_WINDOWS, normalizeShowing, windowLabel, upcomingWindows,
 } from "@shared/showing.js";
 import { updateDeal, getAgentAskText, askAgentForWindow, setShowingRsvp } from "./api.js";
 import { BTN, BTN_PRIMARY } from "./ui.jsx";
@@ -41,18 +41,13 @@ export default function WalkthroughCard({ offer, onUpdated }) {
   const deal = offer.deal;
   const showing = normalizeShowing(deal.showing);
   const [rows, setRows] = useState(() => showing.windows.map(toInputs));
-  const [access, setAccess] = useState(showing.access);
   const [ask, setAsk] = useState(null); // null | { text } while the ask editor is open
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
 
-  // A reply filed a new RSVP while the modal was open: keep the editor's
-  // unsaved windows, pick up the rest.
-  useEffect(() => { setAccess(normalizeShowing(offer.deal.showing).access); }, [offer.deal.showing?.access?.mode]);
 
-  const saved = JSON.stringify({ w: showing.windows.map(toInputs), a: showing.access });
-  const dirty = JSON.stringify({ w: rows, a: access }) !== saved;
+  const dirty = JSON.stringify(rows) !== JSON.stringify(showing.windows.map(toInputs));
 
   async function run(fn, done = "") {
     setError(""); setNote(""); setBusy(true);
@@ -64,7 +59,7 @@ export default function WalkthroughCard({ offer, onUpdated }) {
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
 
-  const save = () => run(() => updateDeal(offer.id, { showing: { windows: rows.map(fromInputs).filter(Boolean), access } }), "Saved. Every buyer text from here invites them to it.");
+  const save = () => run(() => updateDeal(offer.id, { showing: { windows: rows.map(fromInputs).filter(Boolean) } }), "Saved. Every buyer text from here invites them to it.");
   const openAsk = async () => {
     const r = await run(() => getAgentAskText(offer.id));
     if (r?.text) setAsk({ text: r.text });
@@ -107,13 +102,7 @@ export default function WalkthroughCard({ offer, onUpdated }) {
         <button type="button" className={BTN} onClick={() => setRows((x) => [...x, { date: "", from: "10:00", to: "11:00" }])}>+ Add a window</button>
       )}
 
-      <div className="grid grid-cols-[auto_1fr] items-center gap-2">
-        <select value={access.mode} onChange={(e) => setAccess((a) => ({ ...a, mode: e.target.value }))}
-          className="rounded-md border border-slate-300 px-1.5 py-1 text-xs focus:border-blue-500 focus:outline-none">
-          {ACCESS_MODES.map((m) => <option key={m} value={m}>{m ? ACCESS_LABEL[m] : "Access: not set"}</option>)}
-        </select>
-        <input className={inputCls} value={access.note} placeholder="Note for you (never texted)" onChange={(e) => setAccess((a) => ({ ...a, note: e.target.value }))} />
-      </div>
+      <p className="text-xs text-slate-500">Occupancy and how buyers get in are set under Access on the Overview tab.</p>
       {dirty && <button type="button" onClick={save} disabled={busy} className={BTN_PRIMARY}>Save walkthrough</button>}
 
       <div className="rounded-md bg-slate-50 px-2.5 py-2 text-xs text-slate-600">

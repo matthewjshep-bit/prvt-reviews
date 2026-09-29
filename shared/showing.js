@@ -28,12 +28,6 @@ export const ACCESS_LABEL = {
   lockbox: "Lockbox (we send access once the time is confirmed)",
   matt: "Matt meets them there",
 };
-// The line the investor prompt gets. Written for the bot to paraphrase.
-const ACCESS_FOR_BUYER = {
-  agent: "the listing agent lets buyers in during the window",
-  lockbox: "there is a lockbox; access details go to them from Matt once their time is confirmed, never from you",
-  matt: "Matt meets buyers at the house during the window",
-};
 
 export const AGENT_ASK_STATUSES = ["none", "asked", "confirmed"];
 
@@ -207,9 +201,9 @@ export function recordRsvp(showing, { contactId, name = "", status, windowStart 
 /**
  * showingContextLines(showing, { contactId, now }) → string[]
  *
- * What the investor prompt is told about a deal's walkthrough. Only the
- * windows and how access works — never an access code, never another
- * buyer's name.
+ * What the investor prompt is told about a deal's walkthrough: the windows
+ * and where this buyer stands. Never another buyer's name. Access and
+ * occupancy come from shared/deal-access.js.
  */
 export function showingContextLines(showing, { contactId = "", now = Date.now() } = {}) {
   const s = normalizeShowing(showing);
@@ -217,7 +211,8 @@ export function showingContextLines(showing, { contactId = "", now = Date.now() 
   const out = [];
   if (next.length) out.push(`walkthrough window${next.length > 1 ? "s" : ""}: ${next.map((w) => windowLabel(w)).join("; ")}`);
   else out.push("walkthrough: no window set yet; ask which day they could get out, and say you'll line it up with the agent");
-  if (ACCESS_FOR_BUYER[s.access.mode]) out.push(`access: ${ACCESS_FOR_BUYER[s.access.mode]}`);
+  // How they get in is the deal's access record (shared/deal-access.js),
+  // told to the prompt beside this — not the walkthrough's to say.
   const mine = contactId ? s.rsvps.find((r) => r.contactId === contactId) : null;
   if (mine) out.push(`their walkthrough answer so far: ${RSVP_LABEL[mine.status].toLowerCase()}`);
   const coming = s.rsvps.filter((r) => r.status === "coming").length;

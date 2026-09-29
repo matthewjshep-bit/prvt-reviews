@@ -91,4 +91,15 @@ test("uploading the signed assignment ticks its line on the checklist", async ()
   assert.equal(items.find((i) => i.id === "psa_signed").done, false);
 });
 
+test("occupancy and access save on the deal, an older deal keeps its walkthrough pick, and an edit only changes what it sends", async () => {
+  const o = await mkOffer({ status: "accepted", deal: { stage: "under_contract", investors: [], stageHistory: [], createdAt: new Date().toISOString(), showing: { access: { mode: "lockbox" } } } });
+  let r = await req("PATCH", `/api/offers/${o.id}/deal`, { access: { occupancy: "tenant_occupied", noticeHours: 24 } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  let a = (await store.getOffer(o.id)).deal.access;
+  assert.deepEqual([a.occupancy, a.method, a.noticeHours], ["tenant_occupied", "lockbox", 24]);
+  await req("PATCH", `/api/offers/${o.id}/deal`, { access: { method: "appointment" } });
+  a = (await store.getOffer(o.id)).deal.access;
+  assert.deepEqual([a.occupancy, a.method], ["tenant_occupied", "appointment"]);
+});
+
 test.after(() => server.close());

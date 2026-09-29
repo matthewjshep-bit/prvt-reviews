@@ -37,3 +37,15 @@ test("the parties say who's filled in from the offer and what's still missing", 
   expect(html).toContain("from your PSA settings");
   expect(html).toContain("not set");
 });
+
+import DealAccess from "../DealAccess.jsx";
+
+test("access says what the bot will tell buyers, and nothing recorded means it will only say it'll confirm", () => {
+  const none = renderToStaticMarkup(<DealAccess offer={OFFER} onUpdated={() => {}} />);
+  expect(none).toContain("Occupancy");
+  expect(none).toContain("Tenant-occupied");
+  expect(none).toContain("never says it&#x27;s open or vacant");
+  const lived = renderToStaticMarkup(<DealAccess offer={{ ...OFFER, deal: { ...OFFER.deal, access: { occupancy: "tenant_occupied", method: "appointment", noticeHours: 24 } } }} onUpdated={() => {}} />);
+  expect(lived).toContain("no drive-bys, no knocking");
+  expect(lived).toContain('aria-checked="true"');
+});

@@ -65,13 +65,12 @@ test("the listing agent is asked for a window and how buyers get in, never for o
   assert.match(t, /lockbox\?$/);
 });
 
-test("the investor prompt hears the window and how access works, never another buyer's name", () => {
+test("the investor prompt hears the window and where this buyer stands, never another buyer's name", () => {
   const s = { windows: [SAT], access: { mode: "agent" }, rsvps: [{ contactId: "c1", name: "Rick", status: "coming" }, { contactId: "c2", name: "Taj", status: "coming" }] };
   const lines = showingContextLines(s, { contactId: "c1", now: NOW });
   assert.equal(lines[0], "walkthrough window: Sat Oct 3, 10am-12pm");
-  assert.match(lines[1], /listing agent lets buyers in/);
-  assert.match(lines[2], /coming/);
-  assert.match(lines[3], /2 buyers are coming/);
+  assert.match(lines[1], /coming/);
+  assert.match(lines[2], /2 buyers are coming/);
   assert.doesNotMatch(lines.join(" "), /Rick|Taj/);
   assert.match(showingContextLines(null, { now: NOW })[0], /no window set yet/);
 });

@@ -24,6 +24,7 @@ import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOff
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { emailContextText } from "./shared/gmail.js";
 import { showingContextLines } from "./shared/showing.js";
+import { accessFor, accessLines } from "./shared/deal-access.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -555,7 +556,13 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
       price: n.price, agreed: Boolean(n.agreed), arv: n.arv, repairs: n.repairs, invite: room ? inviteByRoom.get(room.id) || null : null,
       offerId: offer.id, reason: reasonWords(link?.reason),
       // Only a deal we hold the house on has a walkthrough to invite them to.
-      showing: offer.deal.stage === "under_contract" ? showingContextLines(offer.deal.showing, { contactId, now }) : [],
+      showing: [
+        ...(offer.deal.stage === "under_contract" ? showingContextLines(offer.deal.showing, { contactId, now }) : []),
+        // Occupancy and how buyers get in (shared/deal-access.js): what the
+        // bot may say about the house itself, and nothing past it.
+        ...accessLines(accessFor(offer.deal)),
+      ],
+      occupancy: accessFor(offer.deal).occupancy,
     };
     if (link || blasted) linked.push(row);
     else {
