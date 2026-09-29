@@ -193,6 +193,13 @@ test("a check-in on an offer they passed on re-quoted our old price, and every o
   assert.match(t, /still available/);
 });
 
+test("a check-in on an offer that went quiet doesn't tell them they passed", () => {
+  const t = outboundOpening({ kind: "passed_checkin", address: "3817 Bells Beach Rd, Langley, WA", stepIndex: 1, quiet: true });
+  assert.match(t, /never heard back/);
+  assert.doesNotMatch(t, /passed on our offer/);
+  assert.match(t, /do NOT name any number/i);
+});
+
 test("the model is told today's date, so the 18th is never 'past month end'", () => {
   const ctx = buildUserContext({ party: "agent", contact: { name: "Nate Wright" }, signer: "Matt", message: "hi", now: Date.parse("2026-09-18T17:16:00Z") });
   assert.match(ctx, /TODAY: Friday, September 18, 2026/);

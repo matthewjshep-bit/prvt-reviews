@@ -24,7 +24,7 @@ test("passed offers are candidates, counted from when they passed; deals and mov
   const config = { parties: { agent: { followUp: { enabled: true, ladders: { passed_checkin: { enabled: true, steps: [10, 20] } } } } } };
   const store = {
     async listOffersForFollowUp(_loc, { statuses }) {
-      assert.deepEqual(statuses, ["passed"]);
+      assert.deepEqual(statuses, ["passed", "no_response"]);
       return [
         { id: "o1", contactId: "c1", address: "12 Elm St", status: "passed", statusAt: ago(12),
           statusHistory: [{ status: "sent", ts: ago(20) }, { status: "passed", ts: ago(12) }],
