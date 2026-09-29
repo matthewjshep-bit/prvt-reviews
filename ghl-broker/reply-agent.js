@@ -48,7 +48,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
-import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
+import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
@@ -1828,6 +1828,11 @@ export const OUTBOUND_KINDS = {
     },
     floats: ({ offer }) => [Math.round(Number(offer?.cashAmount) || 0)].filter(Boolean),
     forbids: () => [],
+    // The agreed number on THIS house and no other. The book holds every
+    // house the agent has with us, and 336 SW 15th St (2026-09-25) was asked
+    // to be written up "at 173k" — the number we had quoted on her other
+    // listing.
+    onlyFloats: true,
   },
   // The owner's answer to a question the bot deflected (partner-answer.js,
   // Today's answer box). A person typed it and pressed the button, so no
@@ -1943,7 +1948,7 @@ const outboundLabel = (kind) => String(kind || "").replace(/_/g, " ");
  */
 export async function startProactive({
   client, locationId, saved, store, contactId, kind = "realm_check",
-  offer = null, subject = null, sendsEnabled = false, deps = {},
+  offer = null, subject = null, sendsEnabled = false, deps = {}, personAsked = false,
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
@@ -1966,6 +1971,20 @@ export async function startProactive({
   }
   const ready = spec.ready({ offer, subject, config, dossier });
   if (ready !== true) return { skipped: ready, job: null };
+
+  // A number the machine puts to the agent is never above the last one we
+  // texted on that house (shared/current-offer.js machineRaise). A person
+  // pressing Float has decided; nothing else has. The thread is read here,
+  // before a job exists, so the caller can say why nothing went.
+  if (NUMBER_FLOATS.has(kind) && offer?.cashAmount && !personAsked) {
+    let thread = "";
+    try { thread = (await buildTranscript(client, locationId, contactId, { maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 60, maxChars: 16000, maxCallTranscripts: 0 })).text || ""; }
+    catch (e) { return { skipped: `couldn't read the thread to check the number (${String(e?.message || e).slice(0, 80)})`, job: null }; }
+    const raise = machineRaise(offer, thread);
+    if (raise) {
+      return { skipped: `we last texted ${kText(raise.amount)} on ${offer.address} and this number is ${kText(Number(offer.cashAmount))} — the machine never raises our own number; a person decides to go up`, raise, job: null };
+    }
+  }
 
   const job = {
     id: newJobId(), locationId, contactId, contactName: "", status: "queued", phase: "queued",
@@ -1992,6 +2011,8 @@ export async function startProactive({
   );
   return { skipped: null, job };
 }
+// The kinds that put a price on a house in front of the agent.
+const NUMBER_FLOATS = new Set(["realm_check", "hot_push"]);
 // "850K", not "$850K": a dollar sign in a text trips carrier spam filters, and
 // the style gate would hold the draft for it.
 const kText = (n) => `${Math.round(n / 1000)}K`;
@@ -2203,7 +2224,7 @@ async function runProactive(job, ctx) {
   // what it forbids is subtracted even though the book has it. A nudge floats
   // nothing, so its allowance is exactly the book.
   const floats = spec.floats({ offer, subject }).filter(Boolean);
-  const allowed = [...new Set([...(context.amounts || []), ...floats])];
+  const allowed = spec.onlyFloats ? floats : [...new Set([...(context.amounts || []), ...floats])];
   const extraForbidden = spec.forbids({ offer, subject }).filter(Boolean);
   const forbiddenAmounts = extraForbidden.length
     ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]

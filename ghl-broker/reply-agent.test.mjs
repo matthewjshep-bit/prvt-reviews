@@ -4031,3 +4031,75 @@ test("the buyer bot is told whether anyone lives there and how to get in, and 'v
     assert.equal(d.flags.some((f) => /access record/.test(f)), !expectOk, d.flags.join(" · "));
   }
 });
+
+// 336 SW 15th St, Chehalis (2026-09-25). One agent, two listings in play.
+const CHEHALIS = "336 SW 15th St, Chehalis, WA 98532";
+const RHOBINA = "1213 Rhobina St, Centralia, WA 98531";
+const withMessages = (base, messages) => ({
+  ...base,
+  call: async (path, opts = {}) => {
+    if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+    if (path.startsWith("/conversations/cv1/messages")) return { messages: { messages: messages.map((m, i) => ({ id: `m${i}`, messageType: "TYPE_SMS", ...m })) } };
+    return base.call(path, opts);
+  },
+});
+const hoursAgo = (h) => new Date(Date.now() - h * 3600000).toISOString();
+
+test("a re-underwrite above the number we already texted on the house is not floated to the agent", async () => {
+  _resetJobs();
+  const client = withMessages(ghlStubFor(["agent"]).client, [
+    { direction: "outbound", dateAdded: hoursAgo(5), body: "On 336 SW 15th we'd likely land around 185k as-is with a quick close. Is that in the realm for the seller?" },
+    { direction: "inbound", dateAdded: hoursAgo(1), body: "He said they painted inside and put new floors in." },
+  ]);
+  const regun = { id: "o-192", address: CHEHALIS, contactId: "c1", cashAmount: 192250, status: "new", createdAt: new Date().toISOString(),
+    autoUnderwrite: { passed: true, compsUsedCount: 4 } };
+  const store = withTheirTake(fakeStore());
+  store.listOffers = async () => [regun];
+  let drafted = false;
+  const r = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: regun, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return { ...DRAFT, intent: "realm_check", reply: "Update: we can go around 192k on 336 SW 15th." }; } },
+  });
+  assert.equal(r.job, null);
+  assert.match(r.skipped, /last texted 185K .* 192K — the machine never raises our own number/);
+  assert.equal(r.raise.amount, 185000);
+  assert.equal(drafted, false);
+
+  // A person pressing Float has decided to go up.
+  _resetJobs();
+  const pressed = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: regun, sendsEnabled: true, personAsked: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "realm_check", reply: "We can go around 192k on 336 SW 15th." }) },
+  });
+  assert.equal(pressed.skipped, null);
+  assert.ok(pressed.job);
+  await settle();
+});
+
+test("the hot push asked the agent to write up one house at the number we quoted on her other listing", async () => {
+  _resetJobs();
+  const client = withMessages(ghlStubFor(["agent"]).client, [
+    { direction: "outbound", dateAdded: hoursAgo(70), body: "On 336 SW 15th we'd likely land around 185k as-is with a quick close." },
+    { direction: "outbound", dateAdded: hoursAgo(69), body: "On 1213 Rhobina we can likely do around 173k as-is with a quick close." },
+  ]);
+  const hot = { id: "o-185", address: CHEHALIS, contactId: "c1", cashAmount: 185500, status: "new", createdAt: hoursAgo(71),
+    hot: { at: hoursAgo(60), by: "operator" } };
+  const other = { id: "o-173", address: RHOBINA, contactId: "c1", cashAmount: 173000, status: "new", createdAt: hoursAgo(70) };
+  const store = fakeStore();
+  store.listOffers = async () => [hot, other];
+  const saved = structuredClone(STARTER_SAVED);
+  saved.conversationAi.parties.agent.followUp = { ...(saved.conversationAi.parties.agent.followUp || {}), enabled: true,
+    ladders: { ...(saved.conversationAi.parties.agent.followUp?.ladders || {}), hot_push: { enabled: true, steps: [1, 3] } } };
+  saved.conversationAi.parties.agent.autoSend = { enabled: true, intents: ["hot_push"] };
+  const { job } = await startProactive({
+    client, locationId: "LOC", saved, store, contactId: "c1", kind: "hot_push", offer: hot, subject: { address: CHEHALIS, step: 1, steps: [1, 3] }, sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "hot_push", reply: "On 336 SW 15th, any chance you can write it up on NWMLS forms at 173k and send it over for me to sign?" }), now: () => Date.now(), random: () => 0 },
+  });
+  assert.ok(job, "started");
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.autoSendable, false);
+  assert.ok(d.flags.some((f) => /\$173,000, which is not in the offer book/.test(f)), d.flags.join(" · "));
+  assert.notEqual(d.status, "scheduled");
+});

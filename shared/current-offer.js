@@ -345,6 +345,71 @@ export function ourMoveUp(o, transcript = "") {
   return best;
 }
 
+// A text of ours is about this house when it names its number and street:
+// "On 336 SW 15th we'd likely land around 185k". A line that names only the
+// street ("the 15th St seller") could be any house on it, and an agent with
+// four houses in play gets numbers for all four in one thread.
+const DIRECTION = /^(?:n|s|e|w|ne|nw|se|sw|north|south|east|west|northeast|northwest|southeast|southwest)$/i;
+function namesHouse(text, address) {
+  const p = parseUsAddress(address);
+  const word = String(p.street || "").split(/\s+/).find((w) => w && !DIRECTION.test(w.replace(/\./g, "")));
+  if (!p.houseNo || !word) return false;
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${esc(p.houseNo)}\\b`).test(text) && new RegExp(`\\b${esc(word)}\\b`, "i").test(text);
+}
+
+/**
+ * lastQuoteOnHouse(offer, transcript) → { amount, ts, text } | null
+ *
+ * The price we last put to the agent on this offer's house — a text of ours
+ * that names the house — whatever row it came off, and whoever typed it.
+ * The lowest price in that text when it names several.
+ */
+export function lastQuoteOnHouse(o, transcript = "") {
+  const amount = Number(o?.cashAmount) || 0;
+  if (!amount || !transcript || !o?.address) return null;
+  let last = null;
+  for (const line of String(transcript).split(/\r?\n/)) {
+    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US \w+: (.*)$/.exec(line);
+    if (!m) continue;
+    const ts = Date.parse(`${m[1]}T${m[2]}:00Z`);
+    const text = m[3].trim();
+    if (!Number.isFinite(ts) || !namesHouse(text, o.address)) continue;
+    const prices = pricesWeName(text, amount).filter((n) => n >= amount * 0.4 && n <= amount * 3);
+    if (!prices.length) continue;
+    if (!last || ts >= last.ts) last = { amount: Math.min(...prices), ts, text: text.slice(0, 120) };
+  }
+  return last;
+}
+
+/**
+ * machineRaise(offer, transcript) → { amount, ts, text } | null
+ *
+ * The offer's number is above the last price we put to the agent on its
+ * house, and no person has stood behind the higher number since. 336 SW
+ * 15th St, Chehalis (2026-09-25): we had quoted 185k, a fresh underwrite
+ * landed at 192,250 when the agent said the floors were new, and the bot
+ * texted "update before you talk to him: we can go around 192k" — seven
+ * thousand against ourselves, nobody having asked. A machine never raises
+ * our own number; a person does (pin, revise, re-quote, send, or a row
+ * they made or published after that text).
+ */
+export function machineRaise(o, transcript = "") {
+  const amount = Number(o?.cashAmount) || 0;
+  const q = lastQuoteOnHouse(o, transcript);
+  if (!q || amount <= q.amount + Math.max(1000, amount * 0.005)) return null;
+  const uw = o.autoUnderwrite;
+  const personMade = !uw || uw.publishedAt;
+  const settled = maxOf([
+    lastSentAt(o),
+    ...(o.revisions || []).map((r) => ms(r?.ts)),
+    ...(o.requotes || []).map((r) => ms(r?.ts)),
+    o.pin?.at && !o.pin.off ? ms(o.pin.at) : 0,
+    personMade ? maxOf([ms(o.createdAt), ms(uw?.publishedAt)]) : 0,
+  ]);
+  return settled > q.ts ? null : q;
+}
+
 const kText = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(2)}M` : `${Math.round(n / 1000)}K`);
 
 /**
@@ -375,6 +440,16 @@ export function paperCheck({ offer = null, offers = null, transcript = "" } = {}
     return {
       ok: false, moveUp: up,
       reason: `we texted ${kText(up.amount)} on ${new Date(up.ts).toISOString().slice(0, 10)} after this offer's ${fmtMoney(Number(offer.cashAmount) || 0)} — a person has to settle the number before any paper goes out`,
+    };
+  }
+  // A machine's row came in above what the agent last heard from us on this
+  // house: the paper would be a raise nobody decided on. Re-quoting down to
+  // the number they have is the button; going up is a pin or a revision.
+  const raise = machineRaise(offer, transcript);
+  if (raise) {
+    return {
+      ok: false, comeDown: raise,
+      reason: `we last texted ${kText(raise.amount)} on ${new Date(raise.ts).toISOString().slice(0, 10)} and this offer came in above it at ${fmtMoney(Number(offer.cashAmount) || 0)} — re-quote it at ${kText(raise.amount)}, or a person decides to go up`,
     };
   }
   return { ok: true, reason: "" };

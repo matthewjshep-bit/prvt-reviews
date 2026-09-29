@@ -4129,6 +4129,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     });
     if (r.skipped) { console.log(`${kind} skipped for ${offer.id}: ${r.skipped}`); await markFloatSkipped(offer.id, kind, r.skipped); }
     else await markProactive(offer.id, kind);
+    if (r.raise) {
+      await createContactNote(client, offer.contactId, {
+        body: `Underwrote ${offer.address} at ${fmtMoney(offer.cashAmount)}, above the ${fmtMoney(r.raise.amount)} we last texted there — nothing was texted. Yours to decide whether to go up (Float on the offer sends it).`,
+      }).catch(() => {});
+    }
     return { skipped: r.skipped || null, kind, job: r.job || null };
   }
 
@@ -5310,6 +5315,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const r = await startProactive({
         client, locationId, saved: fresh, store, contactId: offer.contactId, kind, offer,
         sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
+        personAsked: true,
       });
       if (!r.skipped) await markProactive(offer.id, kind);
       res.status(r.skipped ? 200 : 202).json({ ok: true, kind, skipped: r.skipped || null, job: r.job ? publicReplyJob(r.job) : null });
