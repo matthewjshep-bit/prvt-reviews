@@ -80,6 +80,7 @@ import {
 import { planActions, runActions } from "./conversation-actions.js";
 import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend } from "./conversation-scheduler.js";
 import { refreshBlastText, defaultDataroomBaseUrl } from "./blast-refresh.js";
+import { gmailBeforeDraft, contactEmails } from "./gmail-sync.js";
 
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
@@ -1392,7 +1393,7 @@ const renderFakeThread = (thread = [], channel = "sms") =>
 export async function assembleConversation({
   client, locationId, saved, store, contactId = "", message = "", channel = "sms",
   explicitParty = "", fakeThread = null, fakeParty = "", now = Date.now(), warnings = [],
-  aiApiKey = "", classify = classifyParty, light = false,
+  aiApiKey = "", classify = classifyParty, light = false, gmailSync = gmailBeforeDraft,
 }) {
   const config = conversationConfig(saved);
 
@@ -1470,6 +1471,12 @@ export async function assembleConversation({
   }
 
   const custom = contact && !light ? await loadContactContext({ client, locationId, contact }) : {};
+
+  // What already went by email with them, onto the record before it is read
+  // (off unless conversationAi.gmail is on; bounded, never throws).
+  if (!light && contactId && config.gmail?.enabled) {
+    await gmailSync({ locationId, contactId, emails: contactEmails(contact), saved, store, now, warnings });
+  }
 
   let context = { text: "", amounts: [], forbiddenAmounts: [], summary: {} };
   let underwriting = [];

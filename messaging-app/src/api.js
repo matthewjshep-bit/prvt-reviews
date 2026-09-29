@@ -109,6 +109,9 @@ export const saveContactFacts = (id, { party, add = [], remove = [] }) =>
   post(`/api/contacts/${encodeURIComponent(id)}/facts`, { party, add, remove });
 export const addContactEvent = (id, body) =>
   post(`/api/contacts/${encodeURIComponent(id)}/events`, body);
+// Read the email with them from Gmail onto their record → { found, recorded, already, bulk } | { skipped }
+export const checkContactGmail = (id) =>
+  post(`/api/contacts/${encodeURIComponent(id)}/gmail`, {});
 // A text typed on Today's work pane when the bot has no draft open. Dry run
 // unless CARD_SENDS_ENABLED; the bot then leaves the thread to you for three days.
 export const sendHandReply = (id, { text, offerId = null }) =>

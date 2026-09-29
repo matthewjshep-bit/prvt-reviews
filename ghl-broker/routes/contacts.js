@@ -5,6 +5,7 @@
 //   POST /api/contacts/:id/reply          a text typed on Today's work pane (no bot draft); dry-run unless CARD_SENDS_ENABLED
 //   POST /api/contacts/:id/facts          an operator adds or removes facts; GHL is re-projected
 //   POST /api/contacts/:id/events         an operator adds a note or a call summary
+//   POST /api/contacts/:id/gmail          read the email with them from Gmail onto the record (read-only)
 //   POST /api/contacts/backfill           fill the record from existing offers, deals, drafts, invites and GHL fields
 //   GET  /api/contacts/backfill/status    the running or last job, plus the record's counts
 //
@@ -16,7 +17,8 @@ import { store } from "../store.js";
 import { getContactRecord, learnFacts, forgetFact, recordEvent, projectToGhl, reconcileFromGhl } from "../contact-record.js";
 import { startContactBackfill, getBackfillJob, publicBackfillJob, cancelBackfill } from "../contact-backfill.js";
 import { FACT_KEYS } from "../shared/contact-record.js";
-import { searchConversations, listConversationMessages } from "../ghl.js";
+import { searchConversations, listConversationMessages, getContact } from "../ghl.js";
+import { syncContactGmail, contactEmails } from "../gmail-sync.js";
 import { sendHandReply } from "../hand-reply.js";
 
 // The same switch every other send reads (routes/offers.js).
@@ -60,6 +62,21 @@ export default function createContactsRouter({ resolveLocation }) {
       const record = await getContactRecord({ store, locationId, contactId, party });
       res.json({ ok: true, ...record, pulled });
     } catch (err) { fail(res, err); }
+  });
+
+  // "Check Gmail" in the drawer: the same read the reply agent does before a
+  // draft, on demand and without the few-minute recheck wait. Counts only.
+  router.post("/:id/gmail", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = str(req.params.id, 64);
+      const [contact, saved] = await Promise.all([getContact(client, contactId), store.getOfferSettings(locationId)]);
+      const result = await syncContactGmail({ locationId, contactId, emails: contactEmails(contact), saved, store, force: true });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      // A Gmail error names the status, never the query (it holds the address).
+      fail(res, err?.status ? Object.assign(new Error(`Gmail answered HTTP ${err.status}`), { http: 502 }) : err);
+    }
   });
 
   // The last messages with this person, straight from GHL, so a draft can be
