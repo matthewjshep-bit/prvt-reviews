@@ -4128,3 +4128,25 @@ test("an agent who answers a workflow text the guard has never seen still gets a
   // GHL unreachable: fall back to holding, the careful way.
   assert.ok(await humanHasThread({ store, client: deadClient, locationId: "LOC", contactId: "c1", transcript, minutes: 30, now }));
 });
+
+// James Knopf, 2026-09-29, 3511 NE 153rd St: "Is it possible to pop by after
+// 5:00 one night this week?" A walkthrough ask is notify-only, and the
+// notice returned before the playbook ran — so he was never put on the deal,
+// while the "maybe"s were. Wanting to walk it or buy it is the warmest
+// interest there is; it lands him on the deal whatever the reply does.
+test("a buyer who asks to walk a house is put on the deal even when the reply is just a heads-up", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor-active"]);
+  const store = fakeStore();
+  store.listDeals = async () => [];
+  const linked = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "Looks like a fun one... possible to pop by after 5 one night this week?",
+    deps: { linkDealInterest: async (x) => { linked.push(x); return { ok: true, linked: true }; },
+      draft: async () => ({ ...INVESTOR_DRAFT, intent: "wants_walkthrough", propertyAddress: "2010 NE 54th St" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(linked, [{ contactId: "c1", addressHint: "2010 NE 54th St" }]);
+  assert.equal((await store.getReplyDraft(job.draftId)).status, "handled");
+});
