@@ -11,6 +11,8 @@ import { addressQueryVariants, parseUsAddress, zillowLookupForms } from "./share
 import { mapPool } from "./map-pool.js";
 
 const MAX_PHOTOS = 40;
+// Output budget for the scope scan, thinking included. See runScan.
+export const SCAN_MAX_TOKENS = 48000;
 // The model that reads listing photos: the rehab scope and comp grading.
 export const VISION_MODEL = "claude-sonnet-5";
 
@@ -545,8 +547,7 @@ const SYSTEM_PROMPT =
   "stay inside one; the bands are a sanity check, not a target.";
 
 // Run the scan. settings must carry aiApiKey; subject: {beds, baths, sqft, yearBuilt}.
-export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }) {
-  const client = new Anthropic({ apiKey: aiApiKey });
+export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey, client = new Anthropic({ apiKey: aiApiKey }) }) {
 
   // Quote the catalog at THIS house's prices, not the 1,500 sqft baseline —
   // otherwise the model reasons about totals the app will never compute.
@@ -625,15 +626,21 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey }
 
   // Sonnet 5, not Opus: the scope is the biggest cost in an underwrite (up to 40
   // photos a run), and Matt chose the cheaper model on 2026-09-15.
+  //
+  // 16k tokens was not enough for a 40-photo house: the thinking spent the
+  // budget before the scope was written, and three runs on 2026-09-29 ended
+  // "AI scan output truncated" while every house with 33 photos or fewer
+  // passed. The SDK refuses a budget this size without streaming, hence
+  // stream().finalMessage() — the scan still reads as one response.
   const runScan = (schema) =>
-    client.messages.create({
+    client.messages.stream({
       model: VISION_MODEL,
-      max_tokens: 16000,
+      max_tokens: SCAN_MAX_TOKENS,
       thinking: { type: "adaptive" },
       system: SYSTEM_PROMPT,
       output_config: { format: { type: "json_schema", schema } },
       messages: [{ role: "user", content }],
-    });
+    }).finalMessage();
 
   let response;
   try {

@@ -945,3 +945,19 @@ test("an unattended run never re-prices a house the agent already has our number
   assert.equal(await findOfferOut({ store, locationId: "L", contactId: "c1", address: "1 Elm St, Kent, WA" }), null);
   assert.equal(await findOfferOut({ store, locationId: "L", contactId: "c1", address: addr, ignoreId: "o1" }), null, "replacing it on purpose is allowed");
 });
+
+// 2026-09-29: an agent's text was a Zillow link to 835 SW 355th Ct,
+// Federal Way, and the workflow named the same house — but the thread referee
+// had last seen 8228 24th St Ct W, Tacoma, and the run underwrote Tacoma. The
+// Federal Way house never got a number.
+test("a listing link that agrees with the workflow is not overruled by an older house in the thread", async () => {
+  const { addressSourceFor } = await import("./auto-underwrite.js");
+  const linked = { address: "835 SW 355th Ct, Federal Way, WA 98023", source: "zillow" };
+  const refereed = { address: "8228 24th St Ct W, Tacoma, WA 98466", moved: true };
+  assert.equal(addressSourceFor({ linked, suppliedAddress: "835 SW 355th Ct, Federal Way, WA 98023", refereed }), "standing");
+  // A link to a different house than the workflow's still wins outright…
+  assert.equal(addressSourceFor({ linked, suppliedAddress: "9 Other St, Kent, WA 98030", refereed }), "link");
+  // …and with no link the referee still catches a stale field.
+  assert.equal(addressSourceFor({ linked: null, suppliedAddress: "835 SW 355th Ct, Federal Way, WA 98023", refereed }), "thread");
+  assert.equal(addressSourceFor({ linked: null, suppliedAddress: "835 SW 355th Ct, Federal Way, WA 98023", refereed: null }), "standing");
+});

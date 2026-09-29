@@ -833,6 +833,23 @@ const subjectPropertyFieldId = (client, locationId) =>
   );
 
 /**
+ * addressSourceFor({ linked, suppliedAddress, refereed }) → "link" | "thread" | "standing"
+ *
+ * Pure. Which answer the run works from. A listing link in the message is the
+ * newest thing the agent sent and names the house outright, so the thread
+ * referee never overrules it — not even when the link agrees with the
+ * workflow. On 2026-09-29 an agent texted a Zillow link to 835 SW 355th
+ * Ct, the workflow said the same house, and the referee (reading an older
+ * mention of 8228 24th St Ct W in the thread) sent the run to Tacoma instead.
+ */
+export function addressSourceFor({ linked = null, suppliedAddress = "", refereed = null } = {}) {
+  if (linked && addressKey(linked.address) !== addressKey(suppliedAddress)) return "link";
+  if (linked) return "standing";
+  if (refereed?.moved) return "thread";
+  return "standing";
+}
+
+/**
  * refereeAddress({ standing, recent, transcript }) → { address, moved } | null
  *
  * Pure. `standing` is the address a field or workflow handed us; `recent`
@@ -1182,7 +1199,8 @@ async function runUnderwrite(job, ctx) {
   }
 
   let extraction;
-  if (linked && addressKey(linked.address) !== addressKey(job.suppliedAddress || "")) {
+  const from = addressSourceFor({ linked, suppliedAddress: job.suppliedAddress || "", refereed });
+  if (from === "link") {
     extraction = {
       address: linked.address,
       askingPrice: job.suppliedAskingPrice,
@@ -1193,7 +1211,7 @@ async function runUnderwrite(job, ctx) {
     if (standing && addressKey(standing) !== addressKey(linked.address)) {
       warnings.push(`the message's ${linked.source} link is for ${linked.address}, not ${standing} — went with the link`);
     }
-  } else if (refereed?.moved) {
+  } else if (from === "thread") {
     extraction = {
       address: refereed.address,
       askingPrice: 0,
