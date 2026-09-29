@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fetchZillowPhotos, fetchZillowFacts, fetchZillowUnits, lotSqftFromDetail, lighterZillowRendition, loadImageBlocks, _resetFactsCache } from "./rehab-scan.js";
+import { fetchZillowPhotos, fetchZillowFacts, fetchZillowUnits, lotSqftFromDetail, lighterZillowRendition, loadImageBlocks, _resetFactsCache, scanRehabFromPhotos } from "./rehab-scan.js";
 
 // The detail actor was rebuilt on 2026-09-02 with the same rename as the search
 // one: the carousel became `listingPhotos`, the status `listingStatus`, the
@@ -329,4 +329,32 @@ test("fetchZillowUnits still answers with units only", async () => {
     const m = await fetchZillowUnits(["5 Elm St, Kent, WA", "6 Elm St, Kent, WA"], "t");
     assert.deepEqual([...m], [["5 elm st", 2]]);
   } finally { restore(); }
+});
+
+// 8228 24th St Ct W (Tacoma) and 30071 10th Ave SW (Federal Way) ended "AI scan
+// output truncated" on 2026-09-29 — both had 40 listing photos, and the model's
+// thinking spent the whole 16k budget before it wrote the scope. Every house
+// with 33 photos or fewer that afternoon scanned fine. The stand-in model runs
+// out the same way unless the scan gives it room.
+test("a house with forty listing photos gets a scope of work instead of 'output truncated'", async () => {
+  const photos = Array.from({ length: 40 }, () => "data:image/jpeg;base64,AAAA");
+  const asked = [];
+  const client = {
+    messages: {
+      stream(body) {
+        asked.push(body);
+        const images = body.messages[0].content.filter((b) => b.type === "image").length;
+        const ranOut = images >= 40 && body.max_tokens <= 16000;
+        return {
+          finalMessage: async () => ranOut
+            ? { stop_reason: "max_tokens", content: [] }
+            : { stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ summary: "dated throughout", items: [], bathrooms: [], bedrooms: [], areas: [] }) }] },
+        };
+      },
+    },
+  };
+  const scan = await scanRehabFromPhotos({ photos, listing: {}, subject: { beds: 3, baths: 2, sqft: 1600 }, client });
+  assert.equal(scan.summary, "dated throughout");
+  assert.equal(asked.length, 1);
+  assert.ok(asked[0].max_tokens > 16000);
 });
