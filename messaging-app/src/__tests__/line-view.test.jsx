@@ -32,3 +32,14 @@ test("the Line shows what fell off, the stations against target, the jobs, and p
   expect(html).toContain("Evidence only");
   expect(html).toContain("70.7%");
 });
+
+test("buyers queued behind today's check-in seats show as backlog, apart from the leaks", () => {
+  const data = buildLine({
+    now: NOW,
+    buyerPlan: { settings: { enabled: true }, picks: [1, 2], counts: { pool: 100, eligible: 50, passWorkdays: 25 } },
+  });
+  const html = renderToStaticMarkup(<LineBody data={data} />);
+  expect(html).toContain("Leaks — 0 fell off with nothing scheduled");
+  expect(html).toContain("Backlog: <b>48</b>");
+  expect(html).toContain("queued behind today&#x27;s seats (backlog)");
+});

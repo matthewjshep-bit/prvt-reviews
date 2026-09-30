@@ -38,6 +38,7 @@ function StatusStrip({ autopilot, working, liveDeals, daytime, leaks, refreshBtn
       {leaks && (
         <a href={appHref("/reports", "line")} className="rounded-md hover:text-blue-700" title="What fell off the line with nothing scheduled — the Line view">
           Leaks last night: <b className={`tabular-nums ${leaks.total ? "text-amber-700" : "text-emerald-700"}`}>{leaks.total}</b>
+          {leaks.backlog ? <span className="text-slate-400"> · {leaks.backlog} waiting for a check-in seat</span> : null}
         </a>
       )}
       {daytime && (

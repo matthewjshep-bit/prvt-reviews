@@ -57,8 +57,11 @@ export async function lineFor({ store, locationId, saved = {}, now = Date.now(),
   const settings = effectiveSettings(saved || {});
   const config = conversationConfig(saved || {});
   const since30 = iso(now - 30 * DAY_MS);
-  const [offersRaw, openDrafts, dealEvents, cursors, errors, flowRead, flowDrafts] = await Promise.all([
+  const [offersRaw, dealDocs, openDrafts, dealEvents, cursors, errors, flowRead, flowDrafts] = await Promise.all([
     store.listOffers(locationId, { limit: 5000, lean: true }).catch(() => []),
+    // The whole deal documents, for what buyers paid: the lean list above is
+    // trimmed in SQL on Postgres and carries no ARV or repairs.
+    store.listDeals(locationId, { limit: 500 }).catch(() => []),
     store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 1000 }).catch(() => []),
     store.listContactEventsSince(locationId, iso(now - 90 * DAY_MS), { types: DEAL_EVENT_TYPES, limit: 20000 }).catch(() => []),
     typeof store.listJobCursors === "function" ? store.listJobCursors(locationId).catch(() => []) : [],
@@ -91,9 +94,10 @@ export async function lineFor({ store, locationId, saved = {}, now = Date.now(),
     buyerBook ? planBuyerPulse({ locationId, saved, store, now, deps: { book: buyerBook } }).catch(() => null) : null,
   ]);
 
-  // What buyers paid, all-in, on the deals that ended.
+  // What buyers paid, all-in, on the deals that ended. From the whole deal,
+  // the way Lessons reads it, so the two can't disagree.
   const scorecards = [];
-  for (const o of offersRaw) {
+  for (const o of dealDocs) {
     const deal = o?.deal;
     if (!deal) continue;
     if (deal.stage === "fell_through") scorecards.push(deal.postMortem?.scorecard || dealScorecard({ offer: o, settings, feedback: deal.feedbackPackage || null, now }));
@@ -109,10 +113,11 @@ export function leakSummary(line) {
   if (!line) return null;
   const l = line.leaks || {};
   return {
-    total: line.leakTotal,
+    total: line.leakTotal, backlog: line.backlog || 0,
     offersNothing: l.offers?.nothing || 0, offersMissed: l.offers?.missed || 0, waitingOnYou: l.offers?.waitingOnYou || 0,
-    agentsDue: l.agents ? l.agents.dueNoSeat + l.agents.dueWhileOff : 0,
-    buyersDue: l.buyers ? l.buyers.dueNoSeat : 0,
+    // Due while their check-in is off (a leak) / queued behind today's seats (backlog).
+    agentsOff: l.agents?.dueWhileOff || 0, agentsQueued: l.agents?.dueNoSeat || 0,
+    buyersOff: l.buyers?.dueWhileOff || 0, buyersQueued: l.buyers?.dueNoSeat || 0,
     deals: l.deals?.total || 0,
   };
 }

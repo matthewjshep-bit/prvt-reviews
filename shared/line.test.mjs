@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeLineTargets, lineStations, methodMath, cycleTimes, offerLeaks, agentLeaks, buyerLeaks, dealLeaks,
-  leakTotal, lineJobs, errorsByArea, realizedPricing, buildLine, LINE_JOBS,
+  leakTotal, backlogTotal, lineJobs, errorsByArea, realizedPricing, buildLine, LINE_JOBS,
 } from "./line.js";
 
 const NOW = Date.parse("2026-09-29T18:00:00Z");
@@ -46,7 +46,7 @@ test("cycle times count only hops that finished in the window, median and 90th",
   ];
   const c = Object.fromEntries(cycleTimes(offers, { now: NOW, days: 30 }).map((h) => [h.key, h]));
   assert.equal(c.out.n, 2, "the 80-day-old send is outside the window");
-  assert.equal(c.out.medianDays, 1);
+  assert.equal(c.out.medianDays, 1.5, "two hops of 1 and 2 days: the median is the middle of the two");
   assert.equal(c.answer.n, 2);
   assert.equal(c.contract.medianDays, 1);
   assert.equal(c.blast.medianDays, 0.5);
@@ -63,10 +63,10 @@ test("realized all-in splits sold from died, beside the setting, and never touch
     { offerId: "d2", street: "4 D St", outcome: "fell_through", arv: 450000, allInPctOfArv: 82 },
     { offerId: "live", street: "5 E St", outcome: "live", arv: 450000, allInPctOfArv: 90 },
   ] });
-  assert.deepEqual(r.sold, { n: 2, medianPct: 70.7 });
-  assert.deepEqual(r.died, { n: 2, medianPct: 74.2 });
+  assert.deepEqual(r.sold, { n: 2, medianPct: 70.9 });
+  assert.deepEqual(r.died, { n: 2, medianPct: 78.1 });
   assert.equal(r.setting, 75);
-  assert.equal(r.gapToSold, 4.3);
+  assert.equal(r.gapToSold, 4.1);
   assert.equal(r.rows.some((x) => x.outcome === "live"), false);
   assert.deepEqual(settings, { maoPctOfArv: 75 });
 });
@@ -131,4 +131,16 @@ test("the whole line adds its leaks into one number, leaving out what waits on y
   assert.equal(leakTotal({}), 0);
   assert.deepEqual(dealLeaks([]).byKind, {});
   assert.deepEqual(dealLeaks([{ kind: "closing_task_due", severity: "soon" }, { kind: "closing_task_due", severity: "now" }]).byKind, { closing_task_due: 1 }, "a checklist item is a leak once overdue");
+});
+
+test("a buyer or agent waiting for a check-in seat is backlog, not a leak; with the check-in off, everyone due is a leak", () => {
+  const buyerPlan = (enabled) => ({ settings: { enabled }, picks: [1, 2], counts: { pool: 100, eligible: 50 } });
+  const agentPlan = (enabled) => ({ settings: { enabled }, counts: { due: { general: 7 }, dueNoSeat: 5, coverage: {} } });
+  const on = buildLine({ now: NOW, buyerPlan: buyerPlan(true), agentPlan: agentPlan(true) });
+  assert.equal(on.leakTotal, 0, "queued for a seat is scheduled");
+  assert.equal(on.backlog, 48 + 5);
+  const off = buildLine({ now: NOW, buyerPlan: buyerPlan(false), agentPlan: agentPlan(false) });
+  assert.equal(off.leakTotal, 50 + 7, "nothing will pick them up while it's off");
+  assert.equal(off.backlog, 0);
+  assert.equal(backlogTotal({}), 0);
 });

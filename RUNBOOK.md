@@ -2373,17 +2373,16 @@ The whole business as one line, measured the way a factory floor is: is each sta
   - a machine clock more than 26 hours past due, which means a missed sweep.
   - Held replies, accepted offers waiting to be promoted, and floats the timer gave up on are shown as *waiting on you*. They aren't counted as leaks.
   - Deliberate stops (opted out, stopped by you, we passed, off market) aren't leaks. Neither is a passed offer whose check-ins finished: its agent belongs to the agent check-in from there.
-- **Agents** (`planAgentPulse`): with the check-in on, agents due with no seat today; with it off, every agent it would text.
-- **Buyers** (`planBuyerPulse`): due beyond today's seats, and how many workdays one pass through the pool takes. It's flagged when that's longer than the buyer touch target.
+- **Agents** (`planAgentPulse`) and **buyers** (`planBuyerPulse`): with a check-in off, everyone it would text is a leak — nothing will pick them up. With it on, those due beyond today's seats are **backlog**, counted apart: they're scheduled, just late. The buyer side also says how many workdays one pass through the pool takes, flagged when that's longer than the buyer touch target.
 - **Deals** (the Today rows): nobody on it, blasted and nobody opened, buyers looked and nobody's committing, no buyer package, a stage lag, and a closing date or checklist item once it's *overdue*.
 
 **Coverage.** The share of agents who have written back that were touched inside the check-in cadence, and the share of reachable buyers inside theirs.
 
 **The jobs.** One row per durable job (`LINE_JOBS`, from `job_cursors` via `store.listJobCursors`, which reads only the run fields): when it last ran, whether it failed and why, or that it never ran. Whether a quiet job is switched off is the Autopilot page's to say. App errors from the last 7 days are grouped by area.
 
-**What buyers paid** (`realizedPricing`, read-only). All-in (contract price + fee + repairs) as a share of ARV. It shows the median for deals that sold (buyer found, assigned, closed) and for deals that died, beside the offer setting (`maoPctOfArv`). The 2026-09-10 post-mortem found the sold deals near 70% and the dead ones asking 74–82%. The page keeps that evidence current and changes nothing.
+**What buyers paid** (`realizedPricing`, read-only). All-in (contract price + fee + repairs) as a share of ARV, scored from the whole deal documents the way Lessons reads them (the offer list is trimmed in SQL on Postgres and carries no ARV). It shows the median for deals that sold (buyer found, assigned, closed) and for deals that died, beside the offer setting (`maoPctOfArv`). The 2026-09-10 post-mortem found the sold deals near 70% and the dead ones asking 74–82%. The page keeps that evidence current and changes nothing.
 
-**Last night's leaks on Today.** The nightly audit runs `lineFor` after its sweep and keeps `leakSummary` on its result (`audit.leaks`). Today's status strip shows "Leaks last night: N", linking to this tab. N counts what fell off, not what waits on you.
+**Last night's leaks on Today.** The nightly audit runs `lineFor` after its sweep and keeps `leakSummary` on its result (`audit.leaks`). Today's status strip shows "Leaks last night: N", linking to this tab, with the backlog beside it ("· M waiting for a check-in seat"). N counts what fell off, not what waits on you or waits for a seat.
 
 ## Contact record (the app is the system of record; GHL is the digest)
 

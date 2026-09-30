@@ -97,13 +97,15 @@ function LeakRows({ rows = [] }) {
   );
 }
 
-function Leaks({ leaks = {}, total }) {
+function Leaks({ leaks = {}, total, backlog = 0 }) {
   const o = leaks.offers || {};
   const a = leaks.agents;
   const b = leaks.buyers;
   const d = leaks.deals || {};
   return (
-    <Card title={`Leaks — ${n(total)} fell off with nothing scheduled`}>
+    <Card title={`Leaks — ${n(total)} fell off with nothing scheduled`} right={backlog ? (
+      <span className="text-[11px] text-slate-500">Backlog: <b>{n(backlog)}</b> due a check-in, queued behind today's seats</span>
+    ) : null}>
       <div className="grid gap-4 md:grid-cols-2">
         <div>
           <div className="text-xs font-semibold text-slate-600">Offers</div>
@@ -123,7 +125,7 @@ function Leaks({ leaks = {}, total }) {
           {a ? (
             <div className="text-sm text-slate-700">
               {a.enabled
-                ? <><b>{n(a.dueNoSeat)}</b> due a check-in with no seat today</>
+                ? <><b>{n(a.dueNoSeat)}</b> due a check-in, queued behind today's seats (backlog)</>
                 : <><b>{n(a.dueWhileOff)}</b> due a check-in, and the agent check-in is off</>}
               {a.freshListings ? <> · {n(a.freshListings)} with a fresh listing</> : null}
               {a.coldDropped ? <span className="text-slate-500"> · {n(a.coldDropped)} cold agents dropped after three unanswered</span> : null}
@@ -135,7 +137,7 @@ function Leaks({ leaks = {}, total }) {
           {b ? (
             <div className="text-sm text-slate-700">
               {b.enabled
-                ? <><b>{n(b.dueNoSeat)}</b> due a check-in beyond today's seats</>
+                ? <><b>{n(b.dueNoSeat)}</b> due a check-in, queued behind today's seats (backlog)</>
                 : <><b>{n(b.dueWhileOff)}</b> due a check-in, and the buyer check-in is off</>}
               {b.passWorkdays != null ? <> · one pass through the pool takes <b className={b.passTooLong ? "text-amber-700" : ""}>{n(b.passWorkdays)} workdays</b></> : null}
             </div>
@@ -222,7 +224,7 @@ export function LineBody({ data }) {
   if (!data) return null;
   return (
     <>
-      <Leaks leaks={data.leaks} total={data.leakTotal} />
+      <Leaks leaks={data.leaks} total={data.leakTotal} backlog={data.backlog} />
       <Stations stations={data.stations} method={data.method} />
       <div className="grid gap-4 lg:grid-cols-2">
         <Cycle cycle={data.cycle} />

@@ -112,10 +112,19 @@ export const CYCLE_HOPS = [
   { key: "close", label: "Under contract → assigned or closed" },
 ];
 
+// The 90th percentile: the slowest tenth starts here (nearest rank).
 const quantile = (xs, q) => {
   if (!xs.length) return null;
   const s = [...xs].sort((a, b) => a - b);
   return s[Math.min(s.length - 1, Math.max(0, Math.ceil(q * s.length) - 1))];
+};
+// The middle value, or the middle of the two: with four deals, the lower
+// middle alone read 72.5% where the median was 73.7%.
+const median = (xs) => {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 const firstStatus = (o, statuses) => (o.statusHistory || []).filter((h) => statuses.includes(h?.status)).map((h) => ms(h.ts)).filter((t) => t != null).sort((a, b) => a - b)[0] ?? null;
 const stageAt = (deal, stages) => (deal?.stageHistory || []).filter((h) => stages.includes(h?.stage)).map((h) => ms(h.ts)).filter((t) => t != null).sort((a, b) => a - b)[0] ?? null;
@@ -154,7 +163,7 @@ export function cycleTimes(offers = [], { now = Date.now(), days = 30 } = {}) {
   }
   return CYCLE_HOPS.map((h) => {
     const xs = spans[h.key];
-    return { ...h, n: xs.length, medianDays: xs.length ? round1(quantile(xs, 0.5)) : null, p90Days: xs.length ? round1(quantile(xs, 0.9)) : null };
+    return { ...h, n: xs.length, medianDays: xs.length ? round1(median(xs)) : null, p90Days: xs.length ? round1(quantile(xs, 0.9)) : null };
   });
 }
 
@@ -258,12 +267,21 @@ export function dealLeaks(actions = []) {
   return { total: rows.length, byKind, rows: rows.slice(0, LEAK_ROWS).map((a) => ({ kind: a.kind, offerId: a.offerId || null, address: a.address || "", title: a.title || "", severity: a.severity || "" })) };
 }
 
-/** leakTotal(leaks) → one number for the Today strip: what fell off, not what waits on you. */
+/**
+ * leakTotal(leaks) → one number for the Today strip: what fell off with
+ * nothing scheduled. Not what waits on you, and not the backlog: an agent or
+ * buyer queued behind today's check-in seats is scheduled, just late. With a
+ * check-in switched off, everyone it would reach is a leak.
+ */
 export function leakTotal(leaks = {}) {
   return (leaks.offers?.nothing || 0) + (leaks.offers?.missed || 0)
-    + (leaks.agents ? leaks.agents.dueNoSeat + leaks.agents.dueWhileOff : 0)
-    + (leaks.buyers ? leaks.buyers.dueNoSeat : 0)
+    + (leaks.agents?.dueWhileOff || 0) + (leaks.buyers?.dueWhileOff || 0)
     + (leaks.deals?.total || 0);
+}
+
+/** backlogTotal(leaks) → agents and buyers due a check-in, queued behind today's seats. */
+export function backlogTotal(leaks = {}) {
+  return (leaks.agents?.dueNoSeat || 0) + (leaks.buyers?.dueNoSeat || 0);
 }
 
 /* ---------- the switchboard ---------- */
@@ -332,8 +350,6 @@ export function errorsByArea(errors = []) {
 
 /* ---------- pricing, read-only ---------- */
 
-const median = (xs) => quantile(xs, 0.5);
-
 /**
  * realizedPricing({ scorecards, settings }) → { setting, sold, died, rows }
  *
@@ -364,7 +380,7 @@ export function realizedPricing({ scorecards = [], settings = {} } = {}) {
 
 /**
  * buildLine({ week, month, offers, actions, agentPlan, buyerPlan, cursors, errors, scorecards, settings, targets, now })
- *   → { targets, stations, method, cycle, leaks, leakTotal, coverage, jobs, errors, pricing }
+ *   → { targets, stations, method, cycle, leaks, leakTotal, backlog, coverage, jobs, errors, pricing }
  */
 export function buildLine({
   week = [], month = [], offers = [], actions = [], agentPlan = null, buyerPlan = null,
@@ -383,7 +399,7 @@ export function buildLine({
     stations: lineStations({ week, month, targets: t }),
     method: methodMath({ month, targets: t }),
     cycle: cycleTimes(offers, { now, days: 30 }),
-    leaks, leakTotal: leakTotal(leaks),
+    leaks, leakTotal: leakTotal(leaks), backlog: backlogTotal(leaks),
     coverage: { agents: leaks.agents?.coverage || null, buyers: leaks.buyers?.coverage || null },
     jobs: lineJobs(cursors, { now }),
     errors: errorsByArea(errors),
