@@ -31,6 +31,7 @@ import {
   PROPERTY_TYPES, REHAB_APPETITES, PROPERTY_TYPE_LABELS, REHAB_APPETITE_LABELS,
   buildBuyboxProfile, normalizeQuery, priceBandText,
 } from "./shared/buybox.js";
+import { meterAi } from "./ai-spend.js";
 
 // Same model as the enrichment sweep, for the same reason: this is structured
 // extraction plus a ranking judgment over pre-filtered, compact profiles —
@@ -116,6 +117,7 @@ export async function parseBuyboxQuery({ query, aiApiKey, extraInstructions }) {
     system: PARSE_SYSTEM + (extraInstructions ? `\n\nAdditional instructions from the team:\n${extraInstructions}` : ""),
     messages: [{ role: "user", content: `Question: ${query}` }],
   });
+  meterAi("buybox_parse", response, { model: DISPO_MODEL });
   // normalizeQuery re-validates the enums and swaps a backwards price band —
   // the schema constrains the model, this constrains everything downstream.
   return normalizeQuery(readJson(response, "query"));
@@ -217,6 +219,7 @@ export async function rankInvestors({ target, candidates, aiApiKey, extraInstruc
           `Rank these investors for this deal.`,
       }],
     });
+    meterAi("buyer_rank", response, { model: DISPO_MODEL });
     return readJson(response, "ranking").rankings || [];
   };
 

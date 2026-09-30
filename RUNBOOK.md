@@ -1225,6 +1225,25 @@ message beside the real Opus draft, until `shadowUntil` (2026-09-30).
   That's about 60% off the drafter.
 - Set `shadowModel: ""` to stop it early.
 
+### What every Claude call costs (2026-09-30)
+
+The drafts report said about $8 a day while the bill said more. Photo scans
+(up to 40 photos each), comp grading, enrichment, dispo ranking, party
+classification, post-mortems and the coach were never metered.
+
+- `ghl-broker/ai-spend.js`: every Claude call goes through `meterAi(feature,
+  response)`. It logs the call and adds it to a per-day, per-feature ledger in
+  `job_cursors` (location `_all`, name `aiSpend`, last 60 days). Metering never
+  throws. Until `startAiSpendMeter` runs at broker boot it only logs, so tests
+  and scripts write nothing.
+- Features: `draft_reply`, `draft_machine`, `draft_shadow`, `photo_scan`,
+  `comp_grade`, `address_extraction`, `enrich_contact`, `deal_interest`,
+  `buybox_parse`, `buyer_rank`, `classify_party`, `post_mortem`, `coach`.
+- Read it at `GET /api/offers/automations/ai-spend?days=N`. The last section
+  of `node scripts/ai-usage-report.mjs` prints it.
+- `classifyParty` set `output_config` twice. The second one (format only)
+  dropped effort "low", so the call ran at the default. It is one object now.
+
 ### The nightly audit (2026-09-16)
 
 **The audit answers what it finds (2026-09-22).** "From last night" had 18

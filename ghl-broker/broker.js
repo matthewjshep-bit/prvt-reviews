@@ -36,6 +36,7 @@ import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
 import { recordError } from "./app-errors.js";
 import { maybeRunCoach } from "./coach.js";
+import { startAiSpendMeter } from "./ai-spend.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -185,6 +186,9 @@ app.use("/d", createDataroomPublicRouter({ publicBaseUrl: DATAROOM_BASE_URL }));
 app.use("/o", createOfferPagePublicRouter());
 
 store.init().catch((e) => console.error("store init failed:", e.message));
+// Every Claude call is added to the day's spend ledger from here on
+// (ai-spend.js); before this, scans and enrichment were invisible.
+startAiSpendMeter({ store });
 // Say at boot whether property videos have somewhere to go. "not configured"
 // is a quiet state (uploads are refused with a message); a configured bucket
 // that doesn't answer is the thing to read this log for.

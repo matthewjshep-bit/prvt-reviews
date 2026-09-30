@@ -82,6 +82,7 @@ import { planActions, runActions } from "./conversation-actions.js";
 import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend } from "./conversation-scheduler.js";
 import { refreshBlastText, defaultDataroomBaseUrl } from "./blast-refresh.js";
 import { gmailBeforeDraft, contactEmails } from "./gmail-sync.js";
+import { meterAi } from "./ai-spend.js";
 
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
@@ -227,7 +228,7 @@ export async function draftReply({
   const shadowOn = shadowModel ?? shadowModelFor(cfg.ai, now);
   const shadowRun = shadowOn && shadowOn !== REPLY_MODEL
     ? callDraftModel(client, { ...params, model: shadowOn })
-      .then(({ response, batched }) => ({ model: shadowOn, ...parseDraft(response, intents, cfg), usage: usageOf(response, { model: shadowOn, batched }) }))
+      .then(({ response, batched }) => ({ model: shadowOn, ...parseDraft(response, intents, cfg), usage: meterAi("draft_shadow", response, { model: shadowOn, batched }) }))
       .catch((e) => ({ model: shadowOn, error: String(e?.message || e).slice(0, 160) }))
     : null;
 
@@ -245,7 +246,8 @@ export async function draftReply({
     ? await Promise.race([shadowRun, new Promise((r) => { graceTimer = setTimeout(() => r({ model: shadowOn, error: "shadow still running when the real draft was done" }), SHADOW_GRACE_MS); })])
     : null;
   clearTimeout(graceTimer);
-  return { ...parseDraft(response, intents, cfg), usage: usageOf(response, { model: REPLY_MODEL, batched }), ...(shadow ? { shadow } : {}) };
+  const usage = meterAi(outbound ? "draft_machine" : "draft_reply", response, { model: REPLY_MODEL, batched });
+  return { ...parseDraft(response, intents, cfg), usage, ...(shadow ? { shadow } : {}) };
 }
 
 // The shadow's draft as the row keeps it, judged by the same gates as the
@@ -632,16 +634,18 @@ export async function classifyParty({ contact = {}, transcript = "", message = "
       // ceiling from before that — enough reasoning to run past it and hand
       // back truncated JSON. Low effort for a three-way call, and room to land.
       max_tokens: 1200,
-      output_config: { effort: "low" },
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       system: CLASSIFY_SYSTEM,
-      output_config: { format: { type: "json_schema", schema: CLASSIFY_SCHEMA } },
+      // One output_config: this call used to set it twice, and the second
+      // (format only) silently dropped effort "low" (2026-09-30).
+      output_config: { effort: "low", format: { type: "json_schema", schema: CLASSIFY_SCHEMA } },
       messages: [{ role: "user", content: [{ type: "text", text: buildClassifyContext({ contact, transcript, message }) }] }],
     });
   } catch (e) {
     throw anthropicErrorToHttp(e);
   }
+  meterAi("classify_party", response, { model: "claude-sonnet-5" });
   // A truncated classification is unparseable JSON; unknown is the honest
   // answer and routing already knows what to do with it.
   if (response.stop_reason === "max_tokens" || response.stop_reason === "refusal") {

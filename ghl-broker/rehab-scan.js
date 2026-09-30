@@ -9,6 +9,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { ALL_REHAB_ITEMS, BATH_TIERS, BED_TIERS, lineCost, rehabBand } from "./shared/rehab-catalog.js";
 import { addressQueryVariants, parseUsAddress, zillowLookupForms } from "./shared/us-address.js";
 import { mapPool } from "./map-pool.js";
+import { meterAi } from "./ai-spend.js";
 
 const MAX_PHOTOS = 40;
 // Output budget for the scope scan, thinking included. See runScan.
@@ -651,6 +652,9 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey, 
     // a fraction of the size, and the prompt still states the room counts.
     response = await runScan(makeScanSchema());
   }
+  // The biggest single call in an underwrite (up to 40 photos) — metered
+  // since 2026-09-30, when it turned out to be missing from every report.
+  meterAi("photo_scan", response, { model: VISION_MODEL });
 
   if (response.stop_reason === "max_tokens") {
     throw Object.assign(new Error("AI scan output truncated — try again"), { http: 502 });
@@ -788,6 +792,7 @@ export async function gradeCompConditions({ subjectAddress, comps, aiApiKey }) {
     if (!isGrammarTooLarge(e)) throw e;
     response = await runGrade(arraySchema);
   }
+  meterAi("comp_grade", response, { model: VISION_MODEL });
 
   if (response.stop_reason === "max_tokens") {
     throw Object.assign(new Error("comp grading output truncated — try again"), { http: 502 });

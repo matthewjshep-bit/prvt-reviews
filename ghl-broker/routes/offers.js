@@ -81,6 +81,7 @@ import {
   agentCandidates, investorCandidates,
 } from "../follow-up-sweep.js";
 import { attachNextFollowUps } from "../next-follow-up.js";
+import { readSpend } from "../ai-spend.js";
 import { dueStep } from "../shared/follow-up.js";
 import { autoAcceptCeiling } from "../shared/auto-accept.js";
 import { buyerCeiling, normalizeFellThroughCode, FELL_THROUGH_LABEL } from "../shared/post-mortem.js";
@@ -5424,6 +5425,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     "inbound", "reply", "sentText", "summary", "propertyAddress", "autoSendable", "flags", "autoSend", "actions",
     "autoSent", "edited", "heldAt", "sendAt", "sentAt", "createdAt", "updatedAt", "usage", "shadow", "outbound",
   ];
+  // What every Claude call cost, by day and feature (ai-spend.js): drafts,
+  // photo scans, comp grading, enrichment, dispo, the coach. Body-free GET;
+  // ?days=1..60, default 7.
+  router.get("/automations/ai-spend", async (req, res) => {
+    try {
+      resolveLocation(req);
+      const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 7));
+      res.json({ ok: true, ...(await readSpend(store, { days })) });
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/automations/conversation/history", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);

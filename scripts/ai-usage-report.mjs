@@ -92,3 +92,19 @@ if (pairs.length) {
 } else {
   console.log(`\nno shadow drafts yet${failed.length ? ` (${failed.length} failed: ${failed[0].shadow.error})` : ""}`);
 }
+
+/* ---------- every Claude call, not just drafts (since 2026-09-30) ---------- */
+// The ledger ai-spend.js keeps: photo scans, comp grading, enrichment, dispo,
+// the coach and the drafts themselves, by day and feature. A broker older
+// than that change answers 404 and this section says so.
+{
+  const s = await fetch(`${BROKER}/api/offers/automations/ai-spend?location_id=${encodeURIComponent(env.GHL_LOCATION_ID)}&days=${DAYS}`)
+    .then((x) => (x.ok ? x.json() : null)).catch(() => null);
+  if (!s?.byFeature?.length) {
+    console.log("\nall Claude calls: nothing in the ledger yet (it starts with the deploy that added it)");
+  } else {
+    console.log(`\nall Claude calls, last ${DAYS} days: ${$(s.totalUsd)}`);
+    for (const d of s.byDay) console.log(`  ${d.day}  ${$(d.usd)}`);
+    for (const f of s.byFeature) console.log(`  ${f.feature.padEnd(20)} ${String(f.calls).padStart(5)} calls  ${$(f.usd).padStart(8)}  ${pct(f.usd, s.totalUsd).padStart(4)}`);
+  }
+}
