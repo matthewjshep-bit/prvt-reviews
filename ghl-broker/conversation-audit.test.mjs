@@ -426,3 +426,44 @@ test("a plain no to our check-in needs no answer and no row, unless there's an o
   await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store: withOffer, sendsEnabled: true, deps: d2, now: NOW, pace: 0 });
   assert.deepEqual(d2.calls, [["reply", "c9", "No"]], "a no with our offer out may be their pass: the reply agent records it");
 });
+
+// The same day's rows, read in GHL: three were goodbyes ("Sounds good! Thank
+// you for reaching out, have a good weekend!", "🙏🏻", "Sounds great man! I
+// will do that"), and two were leads behind a stop-bot tag whose rows said
+// only "a reply was started on an earlier run tonight".
+test("goodbyes are closers, however they're spelled", () => {
+  for (const bye of ["Sounds good! Thank you for reaching out, have a good weekend!", "🙏🏻", "Sounds great man! I will do that", "Please do!", "Will do, appreciate it"]) {
+    assert.equal(isCloser(bye), true, bye);
+  }
+  assert.equal(isCloser("I will keep an eye out! Remind me again on what price ranges you are looking at?"), false);
+  assert.equal(isCloser("7022 in Kenmore is the only thing close."), false);
+});
+
+test("a lead followed by 'not really' is still answered: every unanswered text is read, not just the last", async () => {
+  const store = fakeStore();
+  const d = deps({
+    latestInbound: async () => ({ body: "Otherwise. Not really", type: "SMS", at: ago(5) }),
+    unansweredInbound: async () => ["We just have the one in south park but 2 neighbors want to sell", "Otherwise. Not really"],
+  });
+  await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  assert.equal(d.calls.length, 1, "redrafted");
+  const leadThenNo = deps({ latestInbound: async () => ({ body: "No", type: "SMS", at: ago(5) }), unansweredInbound: async () => ["Just the one on 5th Ave that the owner wants gone", "No"] });
+  await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store: fakeStore(), sendsEnabled: true, deps: leadThenNo, now: NOW, pace: 0 });
+  assert.equal(leadThenNo.calls.length, 1, "the lead before the no is answered");
+  const bye = deps({ latestInbound: async () => ({ body: "Nope", type: "SMS", at: ago(5) }), unansweredInbound: async () => ["Sounds good!", "Nope"] });
+  const r = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store: fakeStore(), sendsEnabled: true, deps: bye, now: NOW, pace: 0 });
+  assert.equal(bye.calls.length, 0);
+  assert.equal(r.acted[0].status, "skipped");
+});
+
+test("when the bot stood down (a stop-bot tag), the row says so and shows their text, even the same night", async () => {
+  const store = fakeStore();
+  const d = deps({ latestInbound: async () => ({ body: "7022 in Kenmore is the only thing close.", type: "SMS", at: ago(5) }) });
+  await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  store.events.push({ contactId: "c9", type: "reply_held", at: ago(-0.1), data: { reason: "bot is off for this contact (tag: stop bot)" } });
+  const again = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW + 600000, pace: 0 });
+  assert.equal(again.acted[0].status, "yours");
+  assert.match(again.acted[0].reason, /stood down: bot is off for this contact/);
+  const f = again.result.findings.find((x) => x.contactId === "c9");
+  assert.equal(f.evidence.inbound, "7022 in Kenmore is the only thing close.");
+});

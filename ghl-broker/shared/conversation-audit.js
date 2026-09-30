@@ -77,13 +77,20 @@ export const REDRAFT_RETRY_AFTER_MS = 20 * 3600000;
 // "Sound good.", "Will do, thank you", "Thanks!". Five of last night's seven
 // "nothing came of it" rows (2026-09-22) were these or tapbacks. Short and
 // made only of those words; "Thanks, what about the roof?" is not one.
-const CLOSER_WORDS = "ok|okay|k|kk|sounds? good|sounds? great|good|great|perfect|awesome|cool|nice|got it|will do|noted|thanks?|thank you|thx|ty|no problem|np|you too|same to you|have a good (?:one|day|night|weekend)|talk soon|later|sure|yes|yep|yup|👍|🙏|❤️";
+// 2026-09-30 adds the goodbyes that sat on Today as "texts we never
+// answered": "Sounds good! Thank you for reaching out, have a good weekend!",
+// "Sounds great man! I will do that", "Please do!", "🙏🏻" (a skin tone).
+const CLOSER_WORDS = "thank you for reaching out|thanks for reaching out|for reaching out|i will do that|i'?ll do that|will do that|please do|appreciate (?:it|you|that)|you bet|for sure|absolutely|definitely|of course|" +
+  "ok|okay|k|kk|sounds? good|sounds? great|good|great|perfect|awesome|cool|nice|got it|will do|noted|thanks?|thank you|thx|ty|no problem|np|you too|same to you|have a (?:good|great|nice) (?:one|day|night|weekend|evening)|talk soon|later|sure|yes|yep|yup|👍|🙏|❤️";
 // Built from a plain string, not a template literal: in a template `\s` is just "s".
-const CLOSER_RX = new RegExp("^(?:(?:" + CLOSER_WORDS + ")[\\s!.,]*){1,4}(?:matt|matthew|man|sir|bud|buddy)?[\\s!.,]*$", "i");
+const CLOSER_RX = new RegExp("^(?:(?:" + CLOSER_WORDS + ")[\\s!.,]*){1,6}(?:matt|matthew|man|sir|bud|buddy)?[\\s!.,]*$", "i");
+// Skin tones and emoji variation selectors ride on a 🙏 or a 👍.
+const EMOJI_MODIFIERS = /[\u{1F3FB}-\u{1F3FF}\uFE0F\u200D]/gu;
 export function isCloser(body = "") {
-  const t = String(body || "").replace(/[\u200B\uFEFF]/g, "").trim();
-  if (!t || t.length > 48 || /\?/.test(t)) return false;
-  return CLOSER_RX.test(t);
+  const t = String(body || "").replace(/[\u200B\uFEFF]/g, "").replace(EMOJI_MODIFIERS, "").trim();
+  if (!t || t.length > 80 || /\?/.test(t)) return false;
+  // "man"/"matt" may sit anywhere in a goodbye ("Sounds great man! I will do that").
+  return CLOSER_RX.test(t.replace(/\b(?:matt|matthew|man|sir|bud|buddy)\b/gi, " ").replace(/\s+/g, " ").trim() || t);
 }
 
 // A plain "no" to our check-in ("anything cross your desk lately?"): "No /
@@ -464,7 +471,9 @@ export function auditActions(last, { now = Date.now(), names = {} } = {}) {
       address: f.address || "", offerId: f.offerId || null, draftId: f.draftId || null,
       title: `${who || "An agent"}${tail}`,
       ...(who && !f.contactName ? { dismissedAs: `An agent${tail}` } : {}),
-      detail: f.why, dueAt: f.dueAt, since: last.finishedAt || last.generatedAt || null,
+      // Their words first: "7022 in Kenmore is the only thing close." says
+      // more than any reason could.
+      detail: f.evidence?.inbound ? `“${f.evidence.inbound}” — ${f.why}` : f.why, dueAt: f.dueAt, since: last.finishedAt || last.generatedAt || null,
       ops: f.draftId ? [{ key: "open_outbox", label: "Open the draft", intent: "primary" }]
         : f.offerId ? [{ key: "open_offer", label: "Open the offer", intent: "primary" }]
         : [{ key: "open_contact", label: "Open the thread", intent: "primary" }],

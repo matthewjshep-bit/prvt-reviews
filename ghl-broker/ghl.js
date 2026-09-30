@@ -605,6 +605,26 @@ export async function getLatestInboundMessage(client, locationId, contactId, { c
   return rest;
 }
 
+// Every text they've sent since our last one, oldest first, from their
+// newest conversation: what the nightly audit reads before deciding a thread
+// is only a goodbye or a "no" (a lead and then "Not really" is a lead).
+// GHL's activity rows ("Opportunity created") are neither side's words.
+export async function getUnansweredInbound(client, locationId, contactId, { perConversation = 25 } = {}) {
+  const { conversations } = await searchConversations(client, locationId, { contactId, limit: 1 });
+  const c = conversations[0];
+  if (!c) return [];
+  const { messages } = await listConversationMessages(client, c.id, { limit: perConversation });
+  const out = [];
+  for (const m of messages) {
+    if (/ACTIVITY/i.test(String(m.messageType || m.type || ""))) continue;
+    const inbound = String(m.direction || "").toLowerCase() === "inbound";
+    if (!inbound) break;
+    const body = String(m.body || "").trim();
+    if (body) out.push(body);
+  }
+  return out.reverse();
+}
+
 // Sentence-level transcription of a recorded call message. Returns an array
 // of { mediaChannel, sentenceIndex, startTime, endTime, transcript,
 // confidence } (order not guaranteed — sort by sentenceIndex). Throws on GHL

@@ -1477,6 +1477,16 @@ else we need to do… I just want the high leverage important stuff."
   text, whoever wrote it; and no row that would text someone who
   unsubscribed (an `unsubscribed` event) is shown — audit rows, held drafts,
   scheduled drafts or promises. The counts drop with them.
+- Goodbyes are closers however they're spelled ("Sounds good! Thank you for
+  reaching out, have a good weekend!", "Sounds great man! I will do that",
+  "Please do!", "🙏🏻" with a skin tone), up to 80 characters.
+- The audit reads every text they sent since our last one
+  (`getUnansweredInbound`), not just the newest: only when all of them are
+  goodbyes, reactions or plain nos is the thread left alone — "We just have
+  the one in south park…" then "Otherwise. Not really" is a lead.
+- A row about their text shows it ("“7022 in Kenmore is the only thing
+  close.” — the bot stood down: bot is off for this contact (tag: stop
+  bot)"), and a stood-down reply says why before "a reply was started".
 
 ### The daytime pass (2026-09-17)
 

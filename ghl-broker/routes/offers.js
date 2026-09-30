@@ -144,7 +144,7 @@ import {
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
   customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField, getContactNotes,
   searchContactsByTag, listWorkflows, listLocationTags, searchAllContactsByTags, listCalendars, createAppointment,
-  getLatestInboundMessage,
+  getLatestInboundMessage, getUnansweredInbound,
 } from "../ghl.js";
 import {
   enrichFieldDefs, enrichTagVocab, ENRICH_TAG_GROUPS, inferContactType,
@@ -4359,6 +4359,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // morning. Exposed here so it gets them the way every sweep gets its deps.
     ghlLastMessages: () => ghlLastMessages(client, locationId),
     latestInbound: (contactId) => getLatestInboundMessage(client, locationId, contactId),
+    unansweredInbound: (contactId) => getUnansweredInbound(client, locationId, contactId),
     queueOfferSend: ({ offerId, reason }) => markSendPending(offerId, reason, { by: "audit" }),
     // The investor band's one write (investor-price.js): the price this buyer
     // was given on this deal, and a note so it is never a surprise.

@@ -310,3 +310,9 @@ test("last night's rows step aside once a reply went or is queued, and nobody un
   assert.equal(row.findingKind, "unanswered_inbound");
   assert.equal(row.anchorAt, "2026-09-29T17:48:00Z");
 });
+
+test("a row about their text shows the text", () => {
+  const [row] = auditActions({ findings: [{ id: "f1", kind: "unanswered_inbound", severity: "now", contactId: "c1", anchorAt: "2026-09-29T20:26:00Z",
+    why: "the bot stood down: bot is off for this contact (tag: stop bot)", evidence: { inbound: "7022 in Kenmore is the only thing close." } }] });
+  assert.equal(row.detail, "“7022 in Kenmore is the only thing close.” — the bot stood down: bot is off for this contact (tag: stop bot)");
+});
