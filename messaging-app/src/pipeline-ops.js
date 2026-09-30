@@ -7,7 +7,7 @@
 // after any of them.
 
 import {
-  applyDraftAction, deleteOffer, dismissPromise, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
+  applyDraftAction, createDataroom, deleteOffer, dismissPromise, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
   askAgentForWindow, updateDealChecklist, rerunHeldUnderwrite, resumeDrive, retryUnderwrite, runFollowUps, stopDrive, setOfferStatus, updateDeal,
 } from "./api.js";
 import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL } from "@shared/post-mortem.js";
@@ -61,6 +61,7 @@ export async function runOp(key, item, extra = null) {
     case "ask_agent_window":   return askAgentForWindow(item.offerId);
     case "tick_task":          return updateDealChecklist(item.offerId, { id: item.taskId, done: true });
     case "match_investors":    return matchInvestorsToDeal(item.offerId);
+    case "build_dataroom":     return createDataroom({ offerId: item.offerId });
     case "preview_follow_ups": return getFollowUps(true);
     case "run_follow_ups":     return runFollowUps(false);
     case "dismiss_promise":    return dismissPromise(item.contactId, item.address, extra?.reason || null);
@@ -89,6 +90,7 @@ export function describeResult(key, r) {
   }
   if (key === "ask_agent_window") return r.status === "scheduled" ? "Asked. It goes out at the next open minute." : `Drafted for you${r.reason ? ` (${r.reason})` : ""} — check the outbox.`;
   if (key === "tick_task") return "Ticked off.";
+  if (key === "build_dataroom") return "Built. Open the deal to check it and copy the link.";
   if (key === "stop_drive") return "Stopped. It is yours until you press Resume.";
   if (key === "resume_drive") return "Back with the machine.";
   if (key === "retry_underwrite") return "Running it again.";

@@ -209,6 +209,31 @@ test("a deal blasted three days ago with no opens is flagged; one open clears it
   assert.equal(kinds(warm).includes("blast_no_opens"), false);
 });
 
+test("buyers who looked but aren't committing four days after the last wave put the deal on Today; a soft commit clears it", () => {
+  const events = [
+    { type: "blast_sent", contactId: "b1", address: "12 Elm St", at: D(5) },
+    { type: "dataroom_viewed", contactId: "b1", offerId: "o1", at: D(4) },
+  ];
+  const stalled = build({ offers: [deal()], events });
+  const row = stalled.actions.find((a) => a.kind === "deal_interest_stalled");
+  assert.ok(row, kinds(stalled).join(", "));
+  assert.equal(row.detail, "1 opened the package · last wave 5d ago");
+  assert.equal(row.ops[0].key, "match_investors");
+  const lastWave = build({ offers: [deal({}, { blasts: [{ at: D(2), via: "app", wave: 2 }] })], events });
+  assert.equal(kinds(lastWave).includes("deal_interest_stalled"), false, "the clock runs from the newest wave");
+  const soft = build({ offers: [deal({}, { investors: [{ contactId: "b1", name: "Ray", status: "soft_commit" }] })], events });
+  assert.equal(kinds(soft).includes("deal_interest_stalled"), false);
+});
+
+test("a deal a day under contract with no buyer package is on Today; one with a package isn't; a caller that didn't look never guesses", () => {
+  const bare = build({ offers: [deal()], dealRooms: [] });
+  const row = bare.actions.find((a) => a.kind === "deal_no_dataroom");
+  assert.ok(row, kinds(bare).join(", "));
+  assert.equal(row.ops[0].key, "build_dataroom");
+  assert.equal(kinds(build({ offers: [deal()], dealRooms: ["o1"] })).includes("deal_no_dataroom"), false);
+  assert.equal(kinds(build({ offers: [deal()] })).includes("deal_no_dataroom"), false);
+});
+
 test("closed and fell-through deals leave the board but are counted", () => {
   const r = build({ offers: [deal({ id: "c" }, { stage: "closed" }), deal({ id: "f" }, { stage: "fell_through" })] });
   assert.equal(laneOf(r, "c"), "closed");

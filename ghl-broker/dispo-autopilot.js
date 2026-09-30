@@ -49,7 +49,14 @@ export function normalizeDispoAutopilot(v = {}) {
     // Match score (rankForDeal, 0–100) a buyer needs to make each wave.
     minMatchScore: n(o.minMatchScore, 50, 0, 100),
     secondWaveMinScore: n(o.secondWaveMinScore, 35, 0, 100),
+    // How many app waves a deal gets in all. 2 = the first plus one more,
+    // which is how it has always run; 3 adds a third to the next ranked
+    // buyers `secondWaveHours` after the second.
+    maxWaves: n(o.maxWaves, 2, 1, 4),
     autoInvite: o.autoInvite === true,
+    // Build the buyer package (the dataroom) the moment an offer becomes a
+    // deal, before any wave, so the blast's link has somewhere to go. Off.
+    dataroomOnPromote: o.dataroomOnPromote === true,
     paperworkOnCommit: o.paperworkOnCommit === true,
     // The check-in between deals (buyer-pulse.js). Off, and draft-only when on.
     pulse: normalizeBuyerPulse(o.pulse),
@@ -70,7 +77,15 @@ export function normalizeDispoAutopilot(v = {}) {
  */
 export function normalizeShowings(v = {}) {
   const o = v && typeof v === "object" ? v : {};
-  return { askInBlast: o.askInBlast !== false, askAgentOnPromote: o.askAgentOnPromote === true };
+  return {
+    askInBlast: o.askInBlast !== false, askAgentOnPromote: o.askAgentOnPromote === true,
+    // The walkthrough texts (showing-sweep.js): a reminder the afternoon
+    // before to buyers coming, and a follow-up after to those who came.
+    // Drafts for you unless autoSend; all off.
+    remindDayBefore: o.remindDayBefore === true,
+    followUpAfter: o.followUpAfter === true,
+    autoSend: o.autoSend === true,
+  };
 }
 
 /** blastAsk(offer, saved, now) → the walkthrough question for this deal's blast, or "". */
@@ -163,28 +178,47 @@ export const getDispoJob = (locationId) => jobs.get(locationId) || null;
 export function _resetJobs() { jobs.clear(); }
 
 /**
- * secondWaveCandidates({ store, locationId, saved, now }) → [{ offer, blastedAt }]
+ * nextWave(deal, da, now) → { wave, dueAt, due, why }
  *
- * Live deals blasted once from the app, with nobody committed, whose blast
- * is older than the wave delay. Pure read.
+ * The deal's next automatic wave: its number, when it's due (the wave delay
+ * after the last one), and, when there is none, why. Pure.
+ */
+export function nextWave(d = {}, da = normalizeDispoAutopilot({}), now = Date.now()) {
+  const none = (why) => ({ wave: null, dueAt: null, due: false, why });
+  if (d.stage !== "under_contract") return none(`the deal is ${String(d.stage || "not live").replace(/_/g, " ")}`);
+  // Waves sent from the app. A deal only ever blasted through a GHL
+  // workflow is left alone: an automatic wave on an old deal would surprise.
+  const blasts = Array.isArray(d.blasts) ? d.blasts : [];
+  if (!blasts.length) return none("no wave from the app yet");
+  if (blasts.length >= da.maxWaves) return none(`all ${da.maxWaves} wave${da.maxWaves === 1 ? "" : "s"} sent`);
+  // Committed, or somebody probably taking it: the wave is new outreach.
+  const paused = dealOutreachPaused(d);
+  if (paused) return none(paused.status === "committed" ? "a buyer committed" : "a buyer is probably taking it");
+  const at = Date.parse(blasts[blasts.length - 1].at || "");
+  if (!Number.isFinite(at)) return none("the last wave has no time on it");
+  const dueMs = at + da.secondWaveHours * 3600000;
+  return { wave: blasts.length + 1, dueAt: new Date(dueMs).toISOString(), due: dueMs <= now, why: "" };
+}
+
+/**
+ * secondWaveCandidates({ store, locationId, saved, now }) → [{ offer, blastedAt, wave }]
+ *
+ * Live deals with an app wave behind them and waves left (maxWaves), with
+ * nobody committed, whose last wave is older than the wave delay. Pure read.
  */
 export async function secondWaveCandidates({ store = defaultStore, locationId, saved = {}, now = Date.now() }) {
   const da = normalizeDispoAutopilot(saved.dispoAutopilot);
   const deals = await store.listDeals(locationId).catch(() => []);
   const out = [];
   for (const o of deals) {
-    const d = o.deal || {};
-    if (!["under_contract"].includes(d.stage)) continue;
-    const blasts = Array.isArray(d.blasts) ? d.blasts : [];
-    if (blasts.length !== 1) continue;
-    // Committed, or somebody probably taking it: the wave is new outreach.
-    if (dealOutreachPaused(d)) continue;
-    const at = Date.parse(blasts[0].at || "");
-    if (!Number.isFinite(at) || now - at < da.secondWaveHours * 3600000) continue;
-    out.push({ offer: o, blastedAt: blasts[0].at });
+    const n = nextWave(o.deal || {}, da, now);
+    if (!n.due) continue;
+    out.push({ offer: o, blastedAt: o.deal.blasts.at(-1).at, wave: n.wave });
   }
   return out;
 }
+// Every wave after the first is the "next" wave: the same rules, one more.
+export const waveCandidates = secondWaveCandidates;
 
 /**
  * startDispoSweep({ locationId, client, saved, store, deps, now }) → job
@@ -201,12 +235,12 @@ export function startDispoSweep({ locationId, client, saved = {}, store = defaul
     const da = normalizeDispoAutopilot(saved.dispoAutopilot);
     const cands = await secondWaveCandidates({ store, locationId, saved, now });
     job.deals = cands.length;
-    for (const { offer } of cands) {
+    for (const { offer, wave = 2 } of cands) {
       try {
         const m = await deps.matchForDeal(locationId, offer, { wave: 2, exclude: "blasted" });
         const picked = (m.results || []).slice(0, da.secondWaveCount);
-        if (!picked.length) { job.results.push({ offerId: offer.id, address: offer.address, blasted: 0, reason: "no ranked buyers left to send it to" }); continue; }
-        const r = await deps.blastFromApp({ locationId, client, offer, investors: picked, saved, now, wave: 2 });
+        if (!picked.length) { job.results.push({ offerId: offer.id, address: offer.address, wave, blasted: 0, reason: "no ranked buyers left to send it to" }); continue; }
+        const r = await deps.blastFromApp({ locationId, client, offer, investors: picked, saved, now, wave });
         job.blasted += r.queued + r.drafted;
         job.results.push({ offerId: offer.id, address: offer.address, blasted: r.queued + r.drafted, scheduled: r.scheduled, reason: r.reason });
       } catch (e) {

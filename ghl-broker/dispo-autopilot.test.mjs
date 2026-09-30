@@ -112,6 +112,34 @@ test("the second wave finds a deal blasted once with nobody committed, after the
   assert.equal(job.blasted, 2);
 });
 
+test("a third wave runs only when the setting allows three, to the next-ranked buyers, as wave 3", async () => {
+  _resetJobs();
+  const at = (h) => new Date(NOW - h * 3600000).toISOString();
+  const two = { ...offer, id: "o6", deal: { ...offer.deal, blasts: [{ at: at(120), via: "app", wave: 1 }, { at: at(50), via: "app", wave: 2 }] } };
+  const ghlOnly = { ...offer, id: "o7", deal: { ...offer.deal, blastTags: ["dispo-22018-76th-ave-w"], blasts: [] } };
+  const store = fakeStore([two, ghlOnly]);
+  assert.deepEqual(await secondWaveCandidates({ store, locationId: "L", saved: {}, now: NOW }), [], "two waves is the default, and all it does");
+  const three = await secondWaveCandidates({ store, locationId: "L", saved: { dispoAutopilot: { maxWaves: 3 } }, now: NOW });
+  assert.deepEqual(three.map((c) => [c.offer.id, c.wave]), [["o6", 3]], "a deal blasted only through a GHL workflow gets no automatic wave");
+  const early = await secondWaveCandidates({ store: fakeStore([{ ...two, deal: { ...two.deal, blasts: [two.deal.blasts[0], { at: at(10), via: "app", wave: 2 }] } }]), locationId: "L", saved: { dispoAutopilot: { maxWaves: 3 } }, now: NOW });
+  assert.deepEqual(early, [], "the delay runs from the last wave, not the first");
+
+  const seen = [];
+  const job = startDispoSweep({ locationId: "L", client: {}, saved: { dispoAutopilot: { autoBlastOnPromote: true, maxWaves: 3, secondWaveCount: 5 } }, store, now: NOW, deps: {
+    matchForDeal: async (_l, o, opts) => { seen.push(["match", o.id, opts]); return { results: [{ contactId: "p9" }] }; },
+    blastFromApp: async (args) => { seen.push(["blast", args.offer.id, args.wave]); return { queued: 0, drafted: 1 }; },
+  } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(seen, [["match", "o6", { wave: 2, exclude: "blasted" }], ["blast", "o6", 3]]);
+});
+
+test("waves-in-all defaults to two and clamps to one through four", () => {
+  assert.equal(normalizeDispoAutopilot({}).maxWaves, 2);
+  assert.equal(normalizeDispoAutopilot({ maxWaves: 9 }).maxWaves, 4);
+  assert.equal(normalizeDispoAutopilot({ maxWaves: 0 }).maxWaves, 1);
+});
+
 /* ---------- the soft commit ---------- */
 
 // "I think I have a buyer for this one." Nothing is signed, so the deal stays

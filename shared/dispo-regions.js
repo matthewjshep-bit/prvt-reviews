@@ -58,6 +58,29 @@ const CITY_ALIASES = { seatac: "seatac", "sea-tac": "seatac", dupont: "dupont" }
 
 export const citySlug = (city) => { const s = slug(city); return CITY_ALIASES[s] || s; };
 
+// Region words people type in a buy box ("South King", "King County",
+// "Kitsap") → the region keys they mean. "King" alone spans four.
+const REGION_ALIASES = {
+  king: ["seattle", "north-king", "eastside", "south-king"], "king-county": ["seattle", "north-king", "eastside", "south-king"],
+  "south-king-county": ["south-king"], "south-end": ["south-king"], "south-seattle": ["south-king", "seattle"],
+  "north-king-county": ["north-king"], "north-end": ["north-king"], "east-side": ["eastside"], "the-eastside": ["eastside"], "east-king": ["eastside"],
+  "pierce-county": ["pierce"], "snohomish-county": ["snohomish"], "snoco": ["snohomish"],
+  kitsap: ["kitsap-mason"], "kitsap-county": ["kitsap-mason"], mason: ["kitsap-mason"], "mason-county": ["kitsap-mason"],
+  "thurston-county": ["thurston"], olympia: ["thurston"],
+};
+
+/**
+ * regionsForArea(area) → [region key] — the regions a buy-box area names, or
+ * [] when it's a city (or unknown). 2026-09-29: waves used to read buy-box
+ * areas as city names only, so "South King" never matched a Kent deal.
+ */
+export function regionsForArea(area) {
+  const s = slug(area);
+  if (!s) return [];
+  if (REGIONS[s] && s !== "other-wa") return [s];
+  return REGION_ALIASES[s] || [];
+}
+
 /** regionFor(city, state) → region key | null (out of state) */
 export function regionFor(city, state = "WA") {
   if (String(state || "WA").trim().toUpperCase() !== "WA") return null;

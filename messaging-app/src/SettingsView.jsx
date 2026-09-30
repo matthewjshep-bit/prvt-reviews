@@ -443,7 +443,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           ...(pulse ? { pulse: { ...pulse, dailyCap: Number(pulse.dailyCap) || 20, everyDays: Number(pulse.everyDays) || 21, coldEveryDays: Number(pulse.coldEveryDays) || 60,
             coldMaxUnanswered: Number(pulse.coldMaxUnanswered) || 3, engagedMaxUnanswered: pulse.engagedMaxUnanswered === "" || pulse.engagedMaxUnanswered == null ? 6 : Number(pulse.engagedMaxUnanswered) } } : {}) };
       }
-      if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount", "minMatchScore", "secondWaveMinScore"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
+      if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount", "minMatchScore", "secondWaveMinScore", "maxWaves"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
       if (clean.dispoAutopilot?.pulse) clean.dispoAutopilot.pulse = { ...clean.dispoAutopilot.pulse, ...Object.fromEntries(["dailyCap", "everyDays", "quietDays", "conversedShare"].filter((k) => clean.dispoAutopilot.pulse[k] != null).map((k) => [k, Number(clean.dispoAutopilot.pulse[k])])) };
       const r = await saveSettings(clean);
       onSaved?.(r.settings);
@@ -1056,10 +1056,15 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             <Num label="Buyers on the second wave" value={form.dispoAutopilot?.secondWaveCount ?? 25} onChange={setDispoAuto("secondWaveCount")} />
             <Num label="First wave: minimum match score" suffix="/100" value={form.dispoAutopilot?.minMatchScore ?? 50} onChange={setDispoAuto("minMatchScore")} />
             <Num label="Second wave: minimum match score" suffix="/100" value={form.dispoAutopilot?.secondWaveMinScore ?? 35} onChange={setDispoAuto("secondWaveMinScore")} />
+            <Num label="Waves in all (2 = first + second; 3 adds a third)" value={form.dispoAutopilot?.maxWaves ?? 2} onChange={setDispoAuto("maxWaves")} />
           </div>
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.autoBlastOnPromote)} onChange={(e) => setDispoAuto("autoBlastOnPromote")(e.target.checked)} />
             <span><span className="font-semibold">Blast on promote</span><span className="block text-xs text-slate-500">When an offer becomes a deal, blast the top-ranked VIP and Active buyers for it (where they buy, price, recency, engagement), VIPs first. With nobody committed after the delay, the next-ranked buyers who haven't been sent it. Only buyers with a phone who aren't on another live deal.</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.dataroomOnPromote)} onChange={(e) => setDispoAuto("dataroomOnPromote")(e.target.checked)} />
+            <span><span className="font-semibold">Build the buyer package on promote</span><span className="block text-xs text-slate-500">When an offer becomes a deal, build its dataroom straight away, before any wave, so every "want the details?" has a package behind it. A deal still without one a day after contract shows on Today either way.</span></span>
           </label>
           {/* The buyer walkthrough (shared/showing.js). Asking isn't committing:
               a blast may ask on its own; confirming a buyer's time stays yours. */}
@@ -1072,6 +1077,21 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.showings?.askAgentOnPromote)}
               onChange={(e) => setDispoAuto("showings")({ ...(form.dispoAutopilot?.showings || {}), askAgentOnPromote: e.target.checked })} />
             <span><span className="font-semibold">Ask the listing agent for a walkthrough window on promote</span><span className="block text-xs text-slate-500">When an offer becomes a deal, text the listing agent asking for a day and an hour window for buyers, and whether they let them in or there's a lockbox. You set the window on the deal when they answer.</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.showings?.remindDayBefore)}
+              onChange={(e) => setDispoAuto("showings")({ ...(form.dispoAutopilot?.showings || {}), remindDayBefore: e.target.checked })} />
+            <span><span className="font-semibold">Remind buyers the afternoon before a walkthrough</span><span className="block text-xs text-slate-500">Between 3 and 6pm Pacific the day before a window, one text to each buyer who said they're coming: see you tomorrow, the time, how they get in (only what the deal's access says). Once per buyer per window.</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.showings?.followUpAfter)}
+              onChange={(e) => setDispoAuto("showings")({ ...(form.dispoAutopilot?.showings || {}), followUpAfter: e.target.checked })} />
+            <span><span className="font-semibold">Follow up after a walkthrough</span><span className="block text-xs text-slate-500">Two hours to two days after a window, one text to each buyer who came or said they would: how did it look, do they want it. Never to a no-show, a buyer who said they couldn't make it, or one who already answered.</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-sm pl-6">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.showings?.autoSend)}
+              onChange={(e) => setDispoAuto("showings")({ ...(form.dispoAutopilot?.showings || {}), autoSend: e.target.checked })} />
+            <span><span className="font-semibold">Walkthrough texts send themselves</span><span className="block text-xs text-slate-500">Off: they wait in the outbox for you. Confirming a buyer's time is always yours.</span></span>
           </label>
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.autoInvite)} onChange={(e) => setDispoAuto("autoInvite")(e.target.checked)} />

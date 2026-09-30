@@ -428,8 +428,7 @@ export function threadTimes(drafts = []) {
 export const MACHINE_STARTED_KINDS = new Set([
   "outreach_open", "outreach_nudge", "take_check", "realm_check", "offer_nudge", "counter_nudge", "take_ask",
   "hot_push", "passed_checkin", "promise_due", "price_drop", "checkin_due", "address_chase",
-  "blast_nudge", "dataroom_nudge", "buyer_pulse", "agent_pulse",
-]);
+  "blast_nudge", "dataroom_nudge", "buyer_pulse", "agent_pulse", "showing_reminder", "showing_followup"]);
 
 // A draft that answers something they sent. Reply rows carry no outbound
 // kind — a photo-only text has an empty `inbound`, so the kind decides.

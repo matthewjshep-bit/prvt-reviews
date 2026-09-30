@@ -40,7 +40,10 @@ const fakeStore = ({ events = [], drafts = [] } = {}) => {
 };
 const starter = (book) => {
   const calls = [];
-  return { calls, book: async () => book, startProactive: async (args) => { calls.push(args); return { skipped: null, job: { id: `j${calls.length}` } }; } };
+  // The runner reads each buyer from GHL before claiming (2026-09-29): a
+  // reachable contact, unless a test says otherwise.
+  return { calls, book: async () => book, getContact: async (id) => ({ id, phone: "+12065550100", tags: [] }),
+    startProactive: async (args) => { calls.push(args); return { skipped: null, job: { id: `j${calls.length}`, draftId: `d${calls.length}` } }; } };
 };
 const done = async (loc = "LOC") => { for (let i = 0; i < 50 && getBuyerPulseJob(loc)?.status === "running"; i++) await new Promise((r) => setImmediate(r)); return getBuyerPulseJob(loc); };
 
@@ -157,4 +160,33 @@ test("each text in a day gets a different way in, and a second batch carries on 
   startBuyerPulse({ locationId: "LOC", saved: saved(), store, deps: s, now: NOW + HOUR, limit: 2 });
   await done();
   assert.deepEqual(s.calls.map((c) => c.subject.variant), [0, 1, 2, 3]);
+});
+
+/* ---------- DND never burns a seat; a void gives the claim back (2026-09-29) ---------- */
+
+test("an unsubscribed buyer is skipped before the claim, and the seat goes to the next in line", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  const s = starter([buyer("stop", { score: 90 }), buyer("next", { score: 50 }), buyer("third", { score: 10 })]);
+  s.getContact = async (id) => ({ id, phone: "+12065550100", tags: [], ...(id === "stop" ? { dndSettings: { SMS: { status: "permanent" } } } : {}) });
+  s.markedUnsub = [];
+  startBuyerPulse({ locationId: "LOC", saved: saved({ dailyCap: 1, conversedShare: 0 }), store, deps: s, trigger: "manual", now: NOW, client: { call: async () => ({}) } });
+  const job = await done();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(s.calls.map((c) => c.contactId), ["next"], "the seat went to the next buyer");
+  assert.equal(store.events.some((e) => e.type === "pulse_sent" && e.contactId === "stop"), false, "never claimed");
+  assert.ok(store.events.some((e) => e.type === "unsubscribed" && e.contactId === "stop"), "and remembered");
+});
+
+test("a check-in the bot stood down on gives the claim back: no seat spent, no cadence started", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  const s = starter([buyer("a")]);
+  s.startProactive = async () => ({ skipped: "you replied to them 5 minutes ago — you have the thread" });
+  startBuyerPulse({ locationId: "LOC", saved: saved({ dailyCap: 2 }), store, deps: s, trigger: "manual", now: NOW });
+  await done();
+  assert.ok(store.events.some((e) => e.type === "pulse_voided"));
+  const plan = await planBuyerPulse({ locationId: "LOC", saved: saved({ dailyCap: 2 }), store, deps: s, now: NOW + DAY });
+  assert.equal(plan.counts.claimedToday, 0);
+  assert.deepEqual(plan.picks.map((p) => p.contactId), ["a"], "tomorrow they're picked again — no 30-day wait for a text that never went");
 });

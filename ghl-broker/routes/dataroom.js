@@ -225,6 +225,38 @@ const publicInvite = (i) => ({
   createdAt: i.createdAt,
 });
 
+/**
+ * buildDataroomForOffer({ locationId, offer, body }) → room
+ *
+ * A buyer package from one offer. The snapshot is frozen here on purpose,
+ * and the share link is minted at once, so the deal can be linked (and is on
+ * the portfolio) the moment it's built. Used by the Build button and by the
+ * build on promote (dispoAutopilot.dataroomOnPromote).
+ */
+export async function buildDataroomForOffer({ locationId, offer, body = {} }) {
+  const settings = effectiveSettings(await store.getOfferSettings(locationId));
+  const snapshot = buildSnapshot({
+    offer, settings,
+    sections: body.sections,
+    headline: body.headline,
+    notes: body.notes,
+    links: body.links,
+  });
+  const room = await store.createDataroom({
+    locationId,
+    offerId: offer.id,
+    address: offer.address || snapshot.property.address || null,
+    status: "active",
+    snapshot,
+    defaultExpiryDays: Math.min(365, Math.max(1, parseInt(body.expiryDays, 10) || DEFAULT_EXPIRY_DAYS)),
+  });
+  await ensureShareLink(room);
+  return room;
+}
+
+// A deal's own package: live, and neither the portfolio nor an offer page.
+export const isDealRoom = (r) => r?.status === "active" && r.kind !== "portfolio" && r.kind !== "offer";
+
 /* ============================================================= *
  * Operator API
  * ============================================================= */
@@ -312,25 +344,7 @@ export function createDataroomRouter({ resolveLocation, publicBaseUrl }) {
       if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
       if (offer.status === "draft") return res.status(400).json({ error: "create the offer before building a dataroom" });
 
-      const settings = effectiveSettings(await store.getOfferSettings(locationId));
-      const snapshot = buildSnapshot({
-        offer, settings,
-        sections: req.body?.sections,
-        headline: req.body?.headline,
-        notes: req.body?.notes,
-        links: req.body?.links,
-      });
-      const room = await store.createDataroom({
-        locationId,
-        offerId,
-        address: offer.address || snapshot.property.address || null,
-        status: "active",
-        snapshot,
-        defaultExpiryDays: Math.min(365, Math.max(1, parseInt(req.body?.expiryDays, 10) || DEFAULT_EXPIRY_DAYS)),
-      });
-      // Mint the share link now rather than on first open, so the deal is
-      // linkable — and shows up on the portfolio — the moment it's built.
-      await ensureShareLink(room);
+      const room = await buildDataroomForOffer({ locationId, offer, body: req.body || {} });
       res.json({ ok: true, dataroom: { ...room, shareLink: roomLink(room.shareToken), invites: [] } });
     } catch (err) { fail(res, err); }
   });

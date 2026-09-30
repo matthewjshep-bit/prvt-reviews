@@ -29,6 +29,7 @@ import { addDismissal, removeDismissal, applyDismissals, TODAY_DISMISS_CURSOR } 
 import { answerPartnerQuestion, forgetAnswer } from "../partner-answer.js";
 import express from "express";
 import { store } from "../store.js";
+import { isDealRoom } from "./dataroom.js";
 import {
   countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
 } from "../ghl.js";
@@ -196,6 +197,18 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   //
   // Local DB only — no GHL calls — so it stays in the fast tier beside
   // /summary and needs none of the caching the /ghl endpoints carry.
+  // Which live deals have a buyer package, for the "no buyer package" row.
+  // One small read per deal under contract (there are only ever a few); a
+  // read that fails counts as having one, so the row never guesses.
+  async function dealRoomIds(locationId, offers = []) {
+    const live = offers.filter((o) => o?.deal?.stage === "under_contract");
+    const ids = await Promise.all(live.map(async (o) => {
+      try { return (await store.listDatarooms(locationId, { offerId: o.id, limit: 10 })).some(isDealRoom) ? o.id : null; }
+      catch { return o.id; }
+    }));
+    return ids.filter(Boolean);
+  }
+
   router.get("/funnel", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -437,7 +450,8 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // have since given, and the triage of any held underwrite in the way.
       const sentDrafts = recentDrafts.filter((d) => d?.status === "sent");
       const heldTriageByOffer = await heldTriageForPromises({ store, locationId, offers, events, config, now }).catch(() => ({}));
-      const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT });
+      const dealRooms = await dealRoomIds(locationId, offers);
+      const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT, dealRooms });
       // Last night's audit: the rows that are Matt's join the queue under
       // "From last night"; the rest of the result rides along for the card.
       const auditCursor = await store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null);

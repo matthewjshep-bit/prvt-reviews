@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeShowing, applyShowingEdit, windowLabel, walkthroughAsk, agentAskText, recordRsvp,
-  showingContextLines, showingSummary, upcomingWindows,
+  showingContextLines, showingSummary, upcomingWindows, showingTouches,
 } from "./showing.js";
 
 // Sat Oct 3 2026, 10am–12pm Pacific (PDT, UTC−7).
@@ -82,4 +82,50 @@ test("the summary counts who is coming to the next window", () => {
   assert.equal(sum.interested, 1);
   assert.equal(Math.round(sum.hoursToNext), 97);
   assert.equal(upcomingWindows({ windows: [SAT] }, Date.parse("2026-10-04T00:00:00Z")).length, 0);
+});
+
+/* ---------- the reminder and the follow-up ---------- */
+
+const dealWith = (showing, over = {}) => ({ id: "o1", address: "3511 NE 153rd St, Lake Forest Park, WA 98155",
+  deal: { stage: "under_contract", investors: [], showing, ...over } });
+const FRI_4PM = Date.parse("2026-10-02T23:00:00Z");   // Fri Oct 2, 4pm PDT: the afternoon before SAT
+const FRI_10AM = Date.parse("2026-10-02T17:00:00Z");  // Fri Oct 2, 10am PDT: too early for tomorrow's reminder
+const SAT_4PM = Date.parse("2026-10-03T23:00:00Z");   // Sat Oct 3, 4pm PDT: 4h after SAT ended
+const ALL = { remindDayBefore: true, followUpAfter: true };
+
+test("the day before, only buyers coming get a reminder, in the afternoon, keyed once per window", () => {
+  const s = { windows: [SAT], rsvps: [
+    { contactId: "c1", name: "Rick", status: "coming", windowStart: SAT.start },
+    { contactId: "c2", name: "Taj", status: "interested" },
+    { contactId: "c3", name: "Lou", status: "cant_make_it" },
+  ] };
+  const t = showingTouches(dealWith(s), { now: FRI_4PM, ...ALL });
+  assert.deepEqual(t.map((x) => [x.kind, x.contactId]), [["showing_reminder", "c1"]]);
+  assert.equal(t[0].key, `showing_reminder:o1:c1:${SAT.start}`);
+  assert.equal(t[0].windowLabel, "Sat Oct 3, 10am-12pm");
+  assert.equal(t[0].street, "3511 NE 153rd St");
+  assert.deepEqual(showingTouches(dealWith(s), { now: FRI_10AM, ...ALL }), [], "not in the morning: the afternoon before");
+  assert.deepEqual(showingTouches(dealWith(s), { now: FRI_4PM, remindDayBefore: false, followUpAfter: true }), [], "its own switch");
+});
+
+test("after the window, buyers who came or said they would get one follow-up; a no-show or a no does not", () => {
+  const s = { windows: [SAT], rsvps: [
+    { contactId: "c1", status: "coming", windowStart: SAT.start },
+    { contactId: "c2", status: "attended" },
+    { contactId: "c3", status: "no_show" },
+    { contactId: "c4", status: "cant_make_it" },
+  ] };
+  const t = showingTouches(dealWith(s), { now: SAT_4PM, ...ALL });
+  assert.deepEqual(t.map((x) => [x.kind, x.contactId]), [["showing_followup", "c1"], ["showing_followup", "c2"]]);
+  assert.deepEqual(showingTouches(dealWith(s), { now: SAT.end && Date.parse(SAT.end) + 3600000, ...ALL }), [], "not inside two hours");
+  assert.deepEqual(showingTouches(dealWith(s), { now: Date.parse(SAT.end) + 49 * 3600000, ...ALL }), [], "not after two days");
+});
+
+test("a buyer who has answered on the deal, or a deal somebody is taking, gets no walkthrough text", () => {
+  const s = { windows: [SAT], rsvps: [{ contactId: "c1", status: "coming", windowStart: SAT.start }, { contactId: "c2", status: "coming", windowStart: SAT.start }] };
+  const passed = dealWith(s, { investors: [{ contactId: "c1", status: "passed" }] });
+  assert.deepEqual(showingTouches(passed, { now: FRI_4PM, ...ALL }).map((x) => x.contactId), ["c2"]);
+  const taken = dealWith(s, { investors: [{ contactId: "c9", status: "committed" }] });
+  assert.deepEqual(showingTouches(taken, { now: FRI_4PM, ...ALL }), []);
+  assert.deepEqual(showingTouches(dealWith(s, { stage: "closed" }), { now: FRI_4PM, ...ALL }), []);
 });

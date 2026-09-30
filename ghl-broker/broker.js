@@ -38,6 +38,7 @@ import { recordError } from "./app-errors.js";
 import { maybeRunCoach } from "./coach.js";
 import { runLocationTick } from "./tick.js";
 import { maybeRunAgentPulse } from "./agent-pulse.js";
+import { maybeRunShowingSweep } from "./showing-sweep.js";
 import { startAiSpendMeter } from "./ai-spend.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -310,6 +311,14 @@ const TICK_JOBS = [
   { area: "agent-pulse", run: async ({ client, locationId, saved }) => {
     if (await maybeRunAgentPulse({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
       deps: offersRouter.conversationDepsFor({ locationId, client, saved }) })) console.log(`agent check-in started for ${locationId}`);
+  } },
+  // The walkthrough texts (showing-sweep.js): the reminder the afternoon
+  // before and the follow-up after. Every tick; each text is its own claim.
+  // Off until dispoAutopilot.showings.remindDayBefore / followUpAfter.
+  { area: "showings", run: async ({ client, locationId, saved }) => {
+    const r = await maybeRunShowingSweep({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
+    if (r?.started) console.log(`walkthrough texts started for ${locationId}: ${r.started}`);
   } },
   // The board, onto GHL's Opportunities. Every tick, bounded.
   { area: "mirror", run: async ({ client, locationId, saved }) => { await maybeMirror({ client, locationId, saved, store, log: console.log }); } },

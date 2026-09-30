@@ -153,6 +153,7 @@ import {
 import { OFFER_FIELDS, APP_FIELD_REGISTRY, registryByKey } from "../field-registry.js";
 import { fitSnapshot } from "../offer-snapshot.js";
 import { syncDealNumbers } from "../dataroom.js";
+import { buildDataroomForOffer, isDealRoom } from "./dataroom.js";
 import { ensureOfferPage, refreshOfferPages } from "../offer-page.js";
 import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
 
@@ -3084,6 +3085,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (da.showings.askAgentOnPromote && !offer.deal?.showing?.agentAsk?.at) {
         await queueShowingAsk({ locationId, offer, saved, send: true })
           .catch((e) => console.error(`showing ask on promote failed for ${offer.id}: ${e?.message}`));
+      }
+      // The buyer package, built before any wave so the blast's link has
+      // somewhere to go. Its own switch, off unless Matt turns it on.
+      if (da.dataroomOnPromote) {
+        const rooms = await store.listDatarooms(locationId, { offerId: offer.id, limit: 10 }).catch(() => null);
+        if (rooms && !rooms.some(isDealRoom)) {
+          await buildDataroomForOffer({ locationId, offer })
+            .catch((e) => console.error(`dataroom on promote failed for ${offer.id}: ${e?.message}`));
+        }
       }
       if (!da.autoBlastOnPromote || !dispoDeps) return;
       const m = await dispoDeps.matchForDeal(locationId, offer, { wave: 1, exclude: "blasted" });

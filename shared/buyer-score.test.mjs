@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, pickWave } from "./buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, pickWave, blastedTo } from "./buyer-score.js";
 
 const NOW = Date.parse("2026-09-13T12:00:00Z");
 const monthsBack = (n) => new Date(NOW - n * 30.44 * 86400000).toISOString();
@@ -81,4 +81,72 @@ test("a deal goes only to buyers who buy where it is: a VIP who works Snohomish 
   assert.deepEqual(w1, ["pierce-vip", "tacoma-active"]);
   const w2 = pickWave(ranked, { wave: 2, floor: 35 }).map((i) => i.contactId);
   assert.ok(!w2.includes("snohomish-vip") && !w2.includes("eastside-vip"));
+});
+
+/* ---------- ranking by the buy box, not only the city (2026-09-29) ---------- */
+
+const kent = dealTarget({ city: "Kent", zip: "98031", priceMin: 300000, priceMax: 340000, propertyTypes: ["single_family"], rehabAppetite: "medium" });
+const bare = (over = {}) => ({ markets: { cities: [], regions: [], types: [] }, buybox: {}, tier: "active", phone: "+1", ...over });
+
+test("a 'South King' buy box buys in Kent", () => {
+  const r = rankForDeal(bare({ buybox: { areas: ["South King"] } }), kent, { now: NOW });
+  assert.equal(r.parts.location, 22);
+  assert.ok(r.reasons.includes("buys in this region"));
+  assert.equal(rankForDeal(bare({ buybox: { areas: ["King County"] } }), kent, { now: NOW }).parts.location, 22, "King alone spans the county's regions");
+});
+
+test("a zip buy box matches the deal's zip", () => {
+  const r = rankForDeal(bare({ buybox: { areas: ["98031", "98032"] } }), kent, { now: NOW });
+  assert.equal(r.parts.location, 35);
+  assert.ok(r.reasons.includes("buys in this zip"));
+});
+
+test("a buy box that rules the deal out ranks it down; one that fits ranks it up", () => {
+  const condoOnly = rankForDeal(bare({ buybox: { areas: ["Kent"], propertyTypes: ["condo"] } }), kent, { now: NOW });
+  assert.equal(condoOnly.parts.box, -20);
+  const fits = rankForDeal(bare({ buybox: { areas: ["Kent"], propertyTypes: ["single_family"], rehabAppetite: "heavy" } }), kent, { now: NOW });
+  assert.equal(fits.parts.box, 10);
+  assert.ok(fits.score > condoOnly.score);
+});
+
+test("a buyer we're talking to ranks above a stranger with the same fit", () => {
+  const stranger = rankForDeal(bare({ buybox: { areas: ["Kent"] } }), kent, { now: NOW });
+  const talking = rankForDeal(bare({ buybox: { areas: ["Kent"] }, relationship: "talking" }), kent, { now: NOW });
+  assert.equal(talking.score - stranger.score, 8);
+});
+
+test("a buyer weighing another deal still gets this deal's wave; one committed elsewhere does not; a DND buyer never does", () => {
+  const row = (id, over) => ({ contactId: id, phone: "+1", tier: "vip", rank: 80, rankParts: { location: 35 }, ...over });
+  const picked = pickWave([
+    row("weighing", { onLiveDeal: true, spokenFor: false }),
+    row("committed", { onLiveDeal: true, spokenFor: true }),
+    row("dnd", { dnd: true }),
+    row("stop-tag", { tags: ["STOP"] }),
+  ], { wave: 1, floor: 50 });
+  assert.deepEqual(picked.map((i) => i.contactId), ["weighing"]);
+  // A row from before carries only onLiveDeal: read the old way.
+  assert.deepEqual(pickWave([row("old", { onLiveDeal: true })], { wave: 1, floor: 50 }), []);
+});
+
+test("wave 2 never re-texts a wave-1 buyer whose draft hasn't sent", () => {
+  const deal = { id: "o1", address: "123 Main St, Kent, WA 98031",
+    deal: { blastTags: ["dispo-123-main-st"], blasts: [{ at: "2026-09-20T18:00:00Z", via: "app", contactIds: ["onWave1"] }] } };
+  const sent = blastedTo(deal, {
+    events: [
+      { type: "blast_sent", contactId: "appSent", offerId: "o1" },
+      { type: "blast_sent", contactId: "ghlTag", offerId: null, address: "", data: { tag: "dispo-123-main-st" } },
+      { type: "blast_sent", contactId: "ghlStreet", offerId: null, address: "123 Main Street" },
+      { type: "blast_sent", contactId: "otherDeal", offerId: "o2", address: "123 Main St" },
+      { type: "blast_sent", contactId: "otherStreet", offerId: null, address: "9 Elm St", data: { tag: "dispo-9-elm-st" } },
+      { type: "dataroom_viewed", contactId: "viewer", offerId: "o1" },
+    ],
+    drafts: [
+      { contactId: "waiting", status: "draft", outbound: { kind: "blast_open", offerId: "o1" } },
+      { contactId: "queued", status: "scheduled", outbound: { kind: "blast_open", offerId: "o1" } },
+      { contactId: "midSend", status: "sending", outbound: { kind: "blast_open", offerId: "o1" } },
+      { contactId: "otherDraft", status: "draft", outbound: { kind: "blast_open", offerId: "o2" } },
+      { contactId: "aReply", status: "draft", outbound: null },
+    ],
+  });
+  assert.deepEqual([...sent].sort(), ["appSent", "ghlStreet", "ghlTag", "midSend", "onWave1", "queued", "waiting"]);
 });

@@ -2873,6 +2873,56 @@ run; a run stale after 45 min is retried, 3 tries, until 4pm).
 `POST /api/dispo/pulse/run {dryRun, limit}` — a dry run (the default, and the
 Preview button) lists who it would text and their clues and touches nobody.
 
+### The buyer greenhouse (2026-09-29)
+
+The selling side, reviewed as one line: every live deal reaches every buyer who fits it, once, and the buyer pool stays warm between deals. What changed:
+
+**Unsubscribed buyers are never texted.**
+- The nightly book sync writes `dnd` onto each buyer from GHL, and an `unsubscribed` event counts too.
+- Waves skip DND buyers and buyers with a do-not-text tag (`isBlockedBuyer`).
+- The pulse reads the contact from GHL before it claims a buyer. An unsubscribed buyer is marked, skipped, and their seat goes to the next in line (`spares`).
+
+**A pulse that drafts nothing gives the claim back.** It writes `pulse_voided`. The day's cap and the cadence ignore voided claims. A buyer tried today waits for tomorrow, because the day's dedupe key is spent.
+
+**The pulse's reach, and friends first.**
+- `GET /api/dispo/pulse` counts show `passWorkdays`: how many workdays one pass through the reachable pool takes at today's cap.
+- Optional `quietEveryDays` (30–365) sets the cadence for buyers who never wrote back. It defaults to `everyDays`, so the live setting is unchanged.
+- Buyers who have committed on a deal with us get the first seats (`friends`).
+
+**Waves read the whole buy box** (`shared/buyer-score.js`):
+- *Location* matches the deal's city (35), its ZIP (35), or a region the buy box names (22): "South King" buys in Kent, and "King County" spans the county's regions (`regionsForArea`).
+- A *box* part adds +10 when type, rehab appetite and lot fit, and −20 when the box rules the deal out.
+- A buyer we're talking to gets +8.
+- Only committed and soft-committed buyers are kept off another deal's waves. A buyer weighing one deal still hears about the next.
+
+**Waves never repeat.** "Already sent this deal" (`blastedTo`) is the union of:
+- `blast_sent` events for the offer;
+- GHL-workflow blasts matched by the deal's blast tag or its street;
+- anyone on one of the deal's app waves (`deal.blasts[].contactIds`, written from now on);
+- and — the one that bit — a `blast_open` draft for the deal still waiting to go.
+
+Before this, wave 2 re-drafted every wave-1 buyer whose text was still sitting in the outbox.
+
+**A third wave.** `dispoAutopilot.maxWaves` (1–4, default 2, which is how it has always run) caps the app waves per deal. Each next wave goes `secondWaveHours` after the *last* one, to the next-ranked buyers at the second-wave score. A deal blasted only through a GHL workflow gets no automatic wave.
+- `GET /api/dispo/waves/preview?offerId=` shows a deal's waves so far, the next one (when it's due, or why there is none), how many buyers already have it, and who the next wave would go to. It reads only.
+
+**Buyers looked, nobody's committing.** A Today row, `deal_interest_stalled`, shows when a deal under contract has package opens or a buyer evaluating, nobody soft-committed or committed, and 4 days since the last wave (`INTEREST_STALL_DAYS`). Its op is **Find more buyers**.
+
+**A package on promote.** `dispoAutopilot.dataroomOnPromote` (off) builds the deal's dataroom the moment it's promoted, before any wave. It uses the same builder as the Build button (`buildDataroomForOffer` in `routes/dataroom.js`).
+- Either way, a deal still without a live package a day after contract gets a Today row, `deal_no_dataroom`, with a **Build it** button.
+- The Today route reads each live deal's rooms. A read that fails counts as having one, so the row never guesses.
+
+**Walkthrough texts** (`ghl-broker/showing-sweep.js`, rules in `shared/showing.js` `showingTouches`):
+- `showing_reminder` goes 3–6pm Pacific the afternoon before a window, to each buyer who said they're *coming* to it.
+- `showing_followup` goes 2–48 hours after a window, to each buyer who came or said they would: how did it look, do they want it. A no-show, a "can't make it", or a buyer who has since committed, passed or soft-committed gets nothing. A deal somebody is taking texts nobody.
+- **How it runs.** Every tick. Each text is its own claim, `showing_reminder_sent` / `showing_followup_sent`, keyed per buyer per window, so it goes once, ever.
+  - A buyer with their own text waiting on you is skipped *before* the claim, and the next tick tries again once it's answered.
+  - An unsubscribed buyer is marked and skipped.
+- **What the model may say.** Both are investor outbound kinds that float nothing. Any number in the draft holds it; the street number and the time don't count as numbers. The prompt may say only what the deal's access lines say about getting in.
+- **Switches.** `dispoAutopilot.showings.remindDayBefore`, `.followUpAfter` and `.autoSend`, all off. The texts are drafts until `autoSend` is on, and even then only with `CARD_SENDS_ENABLED` and `DISPO_BLASTS_ENABLED`. They aren't on the playbook grid, and the dial never touches them.
+- Confirming a buyer's time is still yours: `wants_walkthrough` stays in `NEVER_AUTO`.
+- `GET /api/dispo/showings/preview` lists who is owed a walkthrough text right now, as the tick would see it.
+
 ## Dataroom photos from a Google Drive folder
 
 The dataroom photo box takes a Drive **folder** link and imports everything in

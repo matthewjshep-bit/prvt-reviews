@@ -20,7 +20,7 @@
 import express from "express";
 import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
 import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickWave } from "../shared/buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickWave, blastedTo } from "../shared/buyer-score.js";
 import { relationshipOf, TALK_EVENT_TYPES } from "../shared/talked-to.js";
 import { buyersInPlay } from "../shared/offer-status.js";
 import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
@@ -31,13 +31,15 @@ import { buyboxCustom, investorProfileText, refreshInvestorRow } from "../invest
 import { CURSOR_NAME as BOOK_SYNC_CURSOR } from "../investor-sync.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { queueBlastDrafts, normalizeDispoAutopilot } from "../dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot, nextWave } from "../dispo-autopilot.js";
 import { planBuyerPulse, startBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
+import { runShowingSweep } from "../showing-sweep.js";
 import { dealOutreachPaused, outreachPausedReason } from "../shared/offer-status.js";
 import {
   searchAllContactsByTags, getContact, updateContact, listLocationTags,
   findOrCreateCustomFieldByKey, customFieldIdKeyMapForDefs, contactCustomRecord,
   addContactTags, scanConversationsByContact, lastInboundByContact,
+  smsUnsubscribed,
 } from "../ghl.js";
 import { anthropicErrorToHttp } from "../rehab-scan.js";
 import {
@@ -222,20 +224,30 @@ export default function createDispoRouter({ resolveLocation }) {
   // the timeline, and the buyer score + tier. One read per event family.
   async function scoredBook(locationId, { status = null } = {}) {
     const since = new Date(Date.now() - 2 * 365 * 86400000).toISOString();
-    const [rows, onDeal, flips, engEvents, talkEvents] = await Promise.all([
+    const [rows, roles, flips, engEvents, talkEvents, unsubEvents] = await Promise.all([
       store.listInvestors(locationId, { status }),
-      liveDealContactIds(locationId),
+      liveDealRoles(locationId),
       flipsByContact(locationId),
       store.listContactEventsSince(locationId, since, { types: ENGAGEMENT_TYPES, limit: 20000 }).catch(() => []),
       // Evidence of a conversation (a logged call, a fact learned from them).
       // Its own read: the agents' share would otherwise crowd out the blasts.
       store.listContactEventsSince(locationId, since, { types: TALK_EVENT_TYPES, notParty: "agent", limit: 20000 }).catch(() => []),
+      // Unsubscribed since the last sync (the bot marks it when GHL refuses).
+      store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: ["unsubscribed"], limit: 20000 }).catch(() => []),
     ]);
     const eng = engagementFromEvents([...engEvents, ...talkEvents]);
+    const unsub = new Set(unsubEvents.map((e) => e.contactId));
     return rows.map((r) => {
       const i = hydrate(r);
+      const role = roles.get(i.contactId) || null;
       const base = {
-        ...i, onLiveDeal: onDeal.has(i.contactId), markets: marketsFromTags(i.tags),
+        ...i,
+        // On a live deal at all (the pulse leaves them to that conversation),
+        // and spoken for — committed or soft-committed — which is the only
+        // thing that keeps a buyer out of ANOTHER deal's waves.
+        onLiveDeal: Boolean(role), spokenFor: role === "committed",
+        dnd: Boolean(i.dnd) || unsub.has(i.contactId),
+        markets: marketsFromTags(i.tags),
         flips: flips.get(i.contactId) || null, engagement: eng.get(i.contactId) || null,
       };
       const s = scoreBuyer(base);
@@ -294,6 +306,24 @@ export default function createDispoRouter({ resolveLocation }) {
   // Contacts linked to a deal that is still live (not closed or dead). The
   // point of excluding them is "who ELSE can buy something" — a buyer already
   // working one of your contracts is not available for the next one.
+  // contactId → "committed" (committed or soft-committed on a live deal) |
+  // "evaluating" (weighing a live deal nobody has committed on).
+  async function liveDealRoles(locationId) {
+    const LIVE = new Set(["under_contract", "buyer_found", "assigned"]);
+    const roles = new Map();
+    for (const offer of await store.listDeals(locationId)) {
+      if (!LIVE.has(offer.deal?.stage)) continue;
+      const list = offer.deal.investors || [];
+      for (const id of buyersInPlay(list)) {
+        const me = list.find((x) => x?.contactId === id);
+        const committed = me?.status === "committed" || me?.status === "soft_commit";
+        if (committed) roles.set(id, "committed");
+        else if (!roles.has(id)) roles.set(id, "evaluating");
+      }
+    }
+    return roles;
+  }
+
   async function liveDealContactIds(locationId) {
     const LIVE = new Set(["under_contract", "buyer_found", "assigned"]);
     const ids = new Set();
@@ -486,6 +516,9 @@ export default function createDispoRouter({ resolveLocation }) {
         email: c.email || "",
         phone: c.phone || "",
         tags: Array.isArray(c.tags) ? c.tags : [],
+        // Unsubscribed in GHL (a STOP): the pulse and the waves skip them
+        // rather than burn a seat on a text that can never go (2026-09-29).
+        dnd: smsUnsubscribed(c),
         custom,
         lastMessageAt: reply?.at || "",
         lastMessageDirection: reply?.direction || "",
@@ -694,6 +727,30 @@ export default function createDispoRouter({ resolveLocation }) {
         ok: true,
         deal: { offerId: offer.id, address: offer.address, stage: offer.deal?.stage || null, ...target, lat: coords?.[0] ?? null, lng: coords?.[1] ?? null },
         linked: [...linked], results, considered,
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // GET /waves/preview?offerId= — the deal's waves so far, the next one
+  // (when, or why there is none), and who it would go to now. Reads only.
+  router.get("/waves/preview", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const offer = await store.getOffer(String(req.query?.offerId || ""));
+      if (!offer?.deal || offer.locationId !== locationId) return res.status(404).json({ error: "deal not found" });
+      const saved = await getSettings(locationId);
+      const da = normalizeDispoAutopilot(saved.dispoAutopilot);
+      const next = nextWave(offer.deal, da);
+      const { ranked } = await rankedForDeal(locationId, offer);
+      const wouldGet = pickWave(ranked, { wave: 2, floor: da.secondWaveMinScore, exclude: "blasted" }).slice(0, da.secondWaveCount)
+        .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons }));
+      res.json({
+        ok: true, offerId: offer.id, address: offer.address, stage: offer.deal.stage || null,
+        autoBlastOnPromote: da.autoBlastOnPromote, maxWaves: da.maxWaves, waveHours: da.secondWaveHours,
+        waves: (offer.deal.blasts || []).map((b, i) => ({ wave: b.wave || i + 1, at: b.at, count: b.count ?? (b.contactIds || []).length, via: b.via || "app" })),
+        ghlTags: offer.deal.blastTags || [],
+        alreadySent: ranked.filter((i) => i.alreadyBlasted).length,
+        next, wouldGet,
       });
     } catch (err) { fail(res, err); }
   });
@@ -1117,7 +1174,10 @@ export default function createDispoRouter({ resolveLocation }) {
       const full = await store.getOffer(offer.id);
       if (full?.deal) {
         full.deal.blastTags = [...new Set([...(full.deal.blastTags || []), blastTag])];
-        full.deal.blasts = [...(full.deal.blasts || []), { at: new Date(now).toISOString(), count: investors.length, queued: r.queued, drafted: r.drafted, via: "app", wave, tag: blastTag }];
+        // Who this wave went to, so the next never picks them again, sent
+        // or not (shared/buyer-score.js blastedTo).
+        const contactIds = (r.rows || []).filter((x) => x.draftId).map((x) => x.contactId);
+        full.deal.blasts = [...(full.deal.blasts || []), { at: new Date(now).toISOString(), count: investors.length, queued: r.queued, drafted: r.drafted, via: "app", wave, tag: blastTag, contactIds }];
         await store.updateOffer(full.id, full);
       }
       r.warnings = warnings;
@@ -1134,11 +1194,16 @@ export default function createDispoRouter({ resolveLocation }) {
    */
   async function rankedForDeal(locationId, offer) {
     const q = dealToQuery(offer).query;
-    const city = addressAreas(offer.address).find((a) => !/^\d{5}$/.test(a)) || "";
-    const target = dealTarget({ city, priceMin: q.priceMin, priceMax: q.priceMax, rehabAppetite: q.rehabAppetite });
+    const areas = addressAreas(offer.address);
+    const city = areas.find((a) => !/^\d{5}$/.test(a)) || "";
+    const zip = areas.find((a) => /^\d{5}$/.test(a)) || "";
+    const target = dealTarget({ city, zip, priceMin: q.priceMin, priceMax: q.priceMax, rehabAppetite: q.rehabAppetite,
+      propertyTypes: q.propertyTypes || [], lotMin: q.lotMin ?? null });
     const linked = new Set((offer.deal?.investors || []).map((i) => i.contactId));
-    const blasted = new Set((await store.listContactEventsSince(locationId, new Date(Date.now() - 365 * 86400000).toISOString(), { types: ["blast_sent"], limit: 20000 }).catch(() => []))
-      .filter((e) => e.offerId === offer.id).map((e) => e.contactId));
+    const blasted = blastedTo(offer, {
+      events: await store.listContactEventsSince(locationId, new Date(Date.now() - 365 * 86400000).toISOString(), { types: ["blast_sent"], limit: 20000 }).catch(() => []),
+      drafts: await store.listReplyDrafts(locationId, { status: ["draft", "scheduled", "sending"], limit: 5000 }).catch(() => []),
+    });
     const book = (await scoredBook(locationId, { status: "active" })).filter((i) => !linked.has(i.contactId));
     const ranked = book
       .map((i) => { const r = rankForDeal(i, target); return { ...i, rank: r.score, rankParts: r.parts, rankReasons: r.reasons, alreadyBlasted: blasted.has(i.contactId) }; })
@@ -1205,6 +1270,19 @@ export default function createDispoRouter({ resolveLocation }) {
         trigger: "manual", dryRun, limit,
       });
       res.json({ ok: true, job });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- the walkthrough texts ---------- */
+
+  // Who is owed a walkthrough text right now (the reminder the afternoon
+  // before, the follow-up after), as the tick would see it. Reads only.
+  router.get("/showings/preview", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const r = await runShowingSweep({ client, locationId, saved, store, dryRun: true });
+      res.json({ ok: true, settings: normalizeDispoAutopilot(saved.dispoAutopilot).showings, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED, ...r });
     } catch (err) { fail(res, err); }
   });
 
