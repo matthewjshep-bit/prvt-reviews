@@ -25,6 +25,7 @@ import { conversationConfig } from "./reply-agent.js";
 import { listJobs as listUnderwriteJobs, publicJob } from "./auto-underwrite.js";
 import { buildPipeline, timerMoves } from "./shared/pipeline.js";
 import { threadHealth } from "./shared/thread-health.js";
+import { blockingDraft, blockingReason } from "./shared/follow-up.js";
 
 const iso = (ms) => new Date(ms).toISOString();
 const CLAIM_KEY = {
@@ -63,6 +64,10 @@ export async function runTodayTimers({ client = null, locationId, saved = {}, st
         ]);
         const health = threadHealth({ offer: offers.find((o) => o.id === m.offerId) || null, drafts: theirs, events: timeline, now });
         if (!health.drive) { row.status = "stopped"; row.reason = health.reason; continue; }
+        // Their text (or your own draft) waiting in the outbox holds the float,
+        // unclaimed: the next pass floats it once that row is dealt with.
+        const waiting = blockingDraft(theirs.filter((d) => !d?.contactId || d.contactId === m.contactId));
+        if (waiting) { row.status = "waiting"; row.reason = blockingReason(waiting); continue; }
       }
       const claim = await recordEvent({
         store, locationId, contactId: m.contactId, party: "agent", type: "audit_action", at: iso(now), address: m.address || "",

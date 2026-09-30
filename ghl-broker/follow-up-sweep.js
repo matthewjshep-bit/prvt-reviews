@@ -32,6 +32,7 @@ import {
 import { threadHealth } from "./shared/thread-health.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
+import { waitingReason } from "./outbox-guard.js";
 
 const DAY_MS = 86400000;
 // GHL's burst cap is 100 req / 10s per location; the same pace the enrichment
@@ -119,8 +120,15 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     if (hotLadderOn && pushesToPaper(o)) continue;
     // Its expiry date is not checked: the offer stands until they answer, and
     // asking about it is the follow-up, not a re-offer.
+    // Nothing went out on it yet — no letter, no number floated — so there is
+    // nothing to follow up: "we sent you an offer" would be false, and a
+    // priced offer waiting to be floated is the float timer's. A number
+    // floated by text is followed up from when it was floated.
+    const onPaper = (o.sends || []).some((s) => s?.ts);
+    const floatedAt = o.proactive?.realmCheckAt || o.proactive?.takeCheckAt || null;
+    if (!onPaper && !floatedAt && effectiveStatus(o) === "new") continue;
     // Count from the last time we actually put it in front of them.
-    const startedAt = offerNudgeStart(o);
+    const startedAt = onPaper ? offerNudgeStart(o) : (floatedAt || offerNudgeStart(o));
     if (!startedAt) continue;
     out.push({
       kind: "offer_nudge", party: "agent", contactId: o.contactId, subjectId: o.id,
@@ -576,6 +584,16 @@ async function runSweep(job, ctx) {
     if (c.kind !== "hot_push" && already >= fu.maxPerContactPerWeek) {
       job.skipped++;
       push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: "they've had enough from us this week" });
+      continue;
+    }
+
+    // One voice at a time: their text (or your own draft) waiting in the
+    // outbox holds the nudge, and the rung is not spent on it — it goes on a
+    // later run, once that row is dealt with.
+    const waiting = await waitingReason({ store, locationId, contactId: c.contactId });
+    if (waiting) {
+      job.skipped++;
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: waiting });
       continue;
     }
 

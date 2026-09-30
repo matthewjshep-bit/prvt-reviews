@@ -407,3 +407,34 @@ test("the counter band won't measure a counter from a number we've left", () => 
   assert.equal(v.passed, false);
   assert.equal(failed(v), "current_number");
 });
+
+/* ---------- a seller's yes, recorded (2026-09-29) ---------- */
+
+import { acceptanceAtOurNumber } from "./auto-accept.js";
+
+const YES_OFFER = { id: "y1", address: "12 Elm St, Renton, WA", cashAmount: 410000, status: "sent" };
+const sureYes = { intent: "acceptance", confidence: "high", counterAmount: 0, propertyAddress: "12 Elm St" };
+
+test("a seller's yes at our number is a yes, even said the way people round it", () => {
+  const plain = acceptanceAtOurNumber({ offer: YES_OFFER, draft: sureYes, inboundMessage: "Seller accepted your offer!", openOffers: [YES_OFFER] });
+  assert.equal(plain.ok, true, plain.reason);
+  assert.equal(plain.amount, 410000);
+  const rounded = acceptanceAtOurNumber({ offer: YES_OFFER, draft: sureYes, inboundMessage: "they'll take the $410k", openOffers: [YES_OFFER] });
+  assert.equal(rounded.ok, true, rounded.reason);
+});
+
+test("a yes that names another number is a counter, not an agreed price", () => {
+  const v = acceptanceAtOurNumber({ offer: YES_OFFER, draft: sureYes, inboundMessage: "seller will accept at $440k", openOffers: [YES_OFFER] });
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /that is a counter/);
+  const read = acceptanceAtOurNumber({ offer: YES_OFFER, draft: { ...sureYes, counterAmount: 440000 }, inboundMessage: "seller accepts", openOffers: [YES_OFFER] });
+  assert.equal(read.ok, false, "the model's own counter read counts too");
+});
+
+test("nothing is recorded when the thread's number isn't the offer's, two houses are open, or the read wasn't sure", () => {
+  assert.equal(acceptanceAtOurNumber({ offer: YES_OFFER, draft: sureYes, inboundMessage: "accepted", openOffers: [YES_OFFER], comeDown: { amount: 400000 } }).ok, false);
+  const other = { ...YES_OFFER, id: "y2", address: "40 Oak Ave, Kent, WA" };
+  assert.equal(acceptanceAtOurNumber({ offer: YES_OFFER, draft: { ...sureYes, propertyAddress: "" }, inboundMessage: "accepted", openOffers: [YES_OFFER, other] }).ok, false);
+  assert.equal(acceptanceAtOurNumber({ offer: YES_OFFER, draft: { ...sureYes, confidence: "medium" }, inboundMessage: "accepted", openOffers: [YES_OFFER] }).ok, false);
+  assert.equal(acceptanceAtOurNumber({ offer: { ...YES_OFFER, deal: { stage: "under_contract" } }, draft: sureYes, inboundMessage: "accepted", openOffers: [] }).ok, false);
+});

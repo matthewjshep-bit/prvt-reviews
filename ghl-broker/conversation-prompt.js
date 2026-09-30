@@ -549,11 +549,22 @@ export function outboundOpening(outbound) {
 
     // The nudges. They introduce NO number — the money guard would flag one
     // anyway, but the instruction has to match the gate or every draft parks.
-    case "offer_nudge":
-      return `${START} We sent this agent an offer on ${o.address} and they haven't answered. ` +
-        `${nudgePressure(o)} Check in on it in one or two lines. You may refer to the offer we sent, but do NOT ` +
-        `name a number, sweeten it, or imply we'd go higher — that is a person's call. Asking whether they got it, ` +
-        `whether the seller has seen it, or where it stands are all good. ${CONTINUE} Set intent to offer_nudge.`;
+    // Worded by what they actually have from us (whatWentOut): until
+    // 2026-09-29 a number we had only floated by text was followed up as
+    // "the offer we sent".
+    case "offer_nudge": {
+      const what = o.went === "number" ? `We floated a rough number on ${o.address} by text (nothing in writing yet)`
+        : o.went === "read" ? `We shared our read on ${o.address} (what it's worth fixed up and what the work runs) and asked for theirs`
+        : `We sent this agent an offer on ${o.address}`;
+      const it = o.went === "number" ? "the number we floated" : o.went === "read" ? "what we shared" : "the offer we sent";
+      const asks = o.went === "number" ? "whether it's in the realm for the seller, or where it stands"
+        : o.went === "read" ? "what they think it's worth and what the work would run"
+        : "whether they got it, whether the seller has seen it, or where it stands";
+      return `${START} ${what} and they haven't answered. ` +
+        `${nudgePressure(o)} Check in on it in one or two lines. You may refer to ${it}, but do NOT ` +
+        `name a number, sweeten it, or imply we'd go higher — that is a person's call. Asking ${asks} ` +
+        `${o.went === "number" || o.went === "read" ? "is" : "are all"} good. ${o.went === "number" || o.went === "read" ? "Do NOT say we sent an offer or anything in writing. " : ""}${CONTINUE} Set intent to offer_nudge.`;
+    }
 
     // A price is agreed and nothing is on paper. One ask, said a different
     // way each rung: the listing agent writes it up on NWMLS forms and sends
@@ -575,7 +586,9 @@ export function outboundOpening(outbound) {
     // A pass is not the end of a listing. Check back in on it: is it still
     // sitting, has the seller softened, would they come closer to our number?
     case "passed_checkin":
-      return `${START} ${o.quiet
+      return `${START} ${o.went === "number" || o.went === "read"
+        ? (o.quiet ? `We floated where we'd be on ${o.address} by text (nothing in writing) and never heard back.` : `This agent passed on where we'd be on ${o.address} (floated by text, nothing in writing).`)
+        : o.quiet
         ? `We made this agent an offer on ${o.address} and never heard back.`
         : `This agent passed on our offer on ${o.address}.`} It's been a while — check back in, in one or ` +
         `two lines: is it still available, has anything changed with the seller, would they come closer to where we were? ` +
@@ -658,7 +671,8 @@ export function outboundOpening(outbound) {
     case "price_drop":
       return `${START} The list price on ${o.address} just came down${o.fromK ? ` from ${o.fromK}` : ""} to ${o.toK}. ` +
         (o.offerStatus === "passed"
-          ? `They passed on our offer${o.ourK ? ` of ${o.ourK}` : ""} earlier. `
+          ? `They passed on our ${o.went === "number" ? "number" : "offer"}${o.ourK ? ` of ${o.ourK}` : ""} earlier. `
+          : o.went === "number" ? `The number we floated${o.ourK ? ` (${o.ourK})` : ""} is still where we are. `
           : `Our offer${o.ourK ? ` of ${o.ourK}` : ""} is still out to them. `) +
         `One or two lines: say you saw the price move, and ask whether the seller would look at a cash, as-is offer ` +
         `closer to ours now. You may say their new list price and restate our number exactly as it is in the offer book; ` +

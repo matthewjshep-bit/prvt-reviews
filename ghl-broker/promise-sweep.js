@@ -29,6 +29,7 @@ import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
 import { triageHeldUnderwrite } from "./shared/held-underwrites.js";
 import { openPromises, resolvePromise, normalizePromiseDismissal, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
 import { driveOpenPromises, promiseClaimed } from "./promise-driver.js";
+import { waitingReason } from "./outbox-guard.js";
 
 const HOUR_MS = 3600000;
 
@@ -188,6 +189,11 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
     const heldReason = held ? String(aiHoldReasons(held)[0]).split(" — ")[0].slice(0, 120) : "";
     const what = open.some((p) => p.data?.what === "number") ? "number" : "answer";
 
+    // Their text (or your own draft) is waiting in the outbox: whoever answers
+    // it keeps the promise or says so. Nothing is claimed; the next tick looks again.
+    const waitingOn = await waitingReason({ store, locationId, contactId });
+    if (waitingOn) { out.waiting++; out.results.push({ contactId, address, status: "waiting", reason: waitingOn }); continue; }
+
     const claim = await recordEvent({
       store, locationId, contactId, party: "agent", type: "promise_owed", at: iso(now), address,
       offerId: held?.id || null, source: "conversation", ref: due.ref || null,
@@ -279,6 +285,12 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
         continue;
       }
     }
+    // The "unanswered" check-in is the net under the reply held for a person:
+    // it may take THAT draft's place, and no other waiting row's. Anything
+    // else waiting holds it, unclaimed, for a later tick.
+    const continues = req.data?.kind === "unanswered" ? (req.data?.draftId || null) : null;
+    const waitingOn = await waitingReason({ store, locationId, contactId, continues });
+    if (waitingOn) { out.results.push({ contactId, status: "waiting", reason: waitingOn }); continue; }
     const claim = await recordEvent({
       store, locationId, contactId, party: "agent", type: "checkin_sent", at: iso(now), address: req.address || "",
       source: "conversation", dedupeKey: `checkin_sent:${contactId}:${req.at}`,
@@ -286,7 +298,7 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     });
     if (!claim.inserted) continue;
     const r = await start({
-      client, locationId, saved, store, contactId, kind: "checkin_due", offer: null,
+      client, locationId, saved, store, contactId, kind: "checkin_due", offer: null, continues,
       subject: { address: req.address || "", phrase: req.data?.phrase || "", sourceKind: req.data?.kind || "date" },
       sendsEnabled, deps,
     }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
@@ -372,6 +384,8 @@ export async function runAddressChase({ client, locationId, saved = {}, store, s
       out.results.push({ contactId, status: "waiting", reason: "they're mid-conversation" });
       continue;
     }
+    const waitingOn = await waitingReason({ store, locationId, contactId });
+    if (waitingOn) { out.waiting++; out.results.push({ contactId, status: "waiting", reason: waitingOn }); continue; }
     const claim = await recordEvent({
       store, locationId, contactId, party: "agent", type: "address_chase_sent", at: iso(now), address: "",
       source: "conversation", dedupeKey: `address_chase:${contactId}:${pending.at}:${due}`,

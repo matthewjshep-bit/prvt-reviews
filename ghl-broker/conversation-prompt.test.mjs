@@ -238,3 +238,19 @@ test("on a long thread the newest messages reach the drafter, not the oldest", (
   assert.match(ctx, /We should draw it up; she might sign it\./);
   assert.doesNotMatch(ctx, /old line 0 /, "the oldest lines are the ones dropped");
 });
+
+/* ---------- say only what's true about the offer (2026-09-29) ---------- */
+
+test("a nudge on a number we only floated never says we sent an offer", () => {
+  const floated = outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "number", step: 3, stepIndex: 1, stepCount: 3 });
+  assert.doesNotMatch(floated, /We sent this agent an offer/);
+  assert.match(floated, /floated a rough number on 12 Elm St by text \(nothing in writing yet\)/);
+  assert.match(floated, /Do NOT say we sent an offer/);
+  const read = outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "read" });
+  assert.match(read, /shared our read on 12 Elm St/);
+  // The letter went: the words are exactly what they were.
+  const paper = outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper" });
+  assert.match(paper, /We sent this agent an offer on 12 Elm St and they haven't answered/);
+  const passed = outboundOpening({ kind: "passed_checkin", address: "12 Elm St", went: "number", quiet: true });
+  assert.match(passed, /floated where we'd be on 12 Elm St by text \(nothing in writing\) and never heard back/);
+});

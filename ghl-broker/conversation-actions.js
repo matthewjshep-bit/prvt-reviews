@@ -129,6 +129,16 @@ const EXECUTORS = {
     if (!r?.ok) return r?.reason || "no open offer to note";
     return `${r.address}: in the realm — send the formal offer`;
   },
+  // "The seller accepted": a yes to our number, recorded as the agreed price
+  // (routes/offers.js markOfferAgreed). Injected by the reply agent after its
+  // own check (shared/auto-accept.js acceptanceAtOurNumber), never on a rule.
+  async mark_offer_agreed({ deps, contactId, draft, action }) {
+    if (typeof deps?.markOfferAgreed !== "function") throw new Error("agreed prices are not wired on this broker");
+    const r = await deps.markOfferAgreed({ contactId, offerId: action?.offerId, draftId: draft?.id || null, note: String(draft?.summary || "").slice(0, 200) });
+    if (!r?.ok) return r?.reason || "no offer to note";
+    if (r.unchanged) return `${r.address}: already agreed at ${fmtMoney(r.amount)}`;
+    return `${r.address}: the seller accepted ${fmtMoney(r.amount)}${r.revived ? " (brought back from their pass)" : ""} — pushing it to paper`;
+  },
   // The first no on a live offer: remembered on the offer, so the second
   // one closes it. Injected by the reply agent, never wired on a rule.
   async note_first_decline({ deps, draft, action }) {

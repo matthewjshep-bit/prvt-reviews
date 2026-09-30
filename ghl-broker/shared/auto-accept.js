@@ -305,6 +305,41 @@ export function evaluateAcceptance({
   };
 }
 
+/**
+ * acceptanceAtOurNumber({ offer, draft, inboundMessage, openOffers, comeDown, moneyIn }) → { ok, checks, reason, amount }
+ *
+ * "The seller accepted" as a FACT about this offer: a yes to its number, the
+ * price agreed. That is what the push to paper waits for (offer.agreed), and
+ * until 2026-09-29 only the counter band and a realm yes wrote it — so an
+ * agent saying the seller took our number kept getting "any update on our
+ * offer?" once a week instead of "can you write it up?".
+ *
+ * The same reading of the money as evaluateAcceptance (within $1k or 0.5% of
+ * ours is ours; any other figure they named, or a counter the model read, is
+ * a counter) and none of its release switches: recording what happened sends
+ * nothing. Nothing is recorded when the model wasn't sure, when the thread's
+ * number isn't the offer's, or when two houses are open and none was named.
+ */
+export function acceptanceAtOurNumber({ offer, draft = {}, inboundMessage = "", openOffers = [], comeDown = null, moneyIn = defaultMoneyIn } = {}) {
+  const checks = [];
+  const check = (name, ok, detail) => { checks.push({ name, ok: Boolean(ok), detail }); return Boolean(ok); };
+  const ours = round(offer?.cashAmount);
+  check("has_number", ours > 0, "the offer has no number");
+  check("current_number", !comeDown,
+    comeDown ? `we texted ${money(comeDown.amount)} after this offer's ${money(ours)} — the paper waits for a person` : "");
+  const slack = Math.max(1000, Math.round(ours * 0.005));
+  const strangers = moneyIn(inboundMessage).map(round).filter((n) => !(ours > 0 && Math.abs(n - ours) <= slack));
+  check("no_new_number", !round(draft.counterAmount) && strangers.length === 0,
+    strangers.length ? `they named ${strangers.map(money).join(", ")} — that is a counter, not a yes` : "they named a number — that is a counter, not a yes");
+  const live = openOffers.filter((o) => o && !o.deal);
+  check("one_offer", Boolean(offer?.id) && (live.length <= 1 || Boolean(draft.propertyAddress)), "more than one open offer and no house named");
+  check("offer_live", Boolean(offer) && !offer.deal, offer?.deal ? "already a deal" : "no open offer");
+  check("sure", draft.confidence === "high", `only ${draft.confidence || "unknown"} confidence it was a yes`);
+  const ok = checks.every((c) => c.ok);
+  const failed = checks.find((c) => !c.ok);
+  return { ok, checks, reason: ok ? "" : (failed?.detail || failed?.name.replace(/_/g, " ") || ""), amount: ours };
+}
+
 /* ---------- the investor band (2026-09-17) ---------- */
 
 // Matt, 2026-09-17: a buyer who pushes back on price ("it's a deal for me

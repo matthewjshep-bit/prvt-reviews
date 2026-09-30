@@ -96,3 +96,18 @@ test("no timer reads or writes an env switch", () => {
   const src = readFileSync(new URL("./today-timers.js", import.meta.url), "utf8");
   assert.doesNotMatch(src, /process\.env/);
 });
+
+/* ---------- one voice: a waiting reply holds the float (2026-09-29) ---------- */
+
+test("a float waits, unclaimed, while their text is held for you, and goes once it's dealt with", async () => {
+  const held = { id: "h1", contactId: "c1", status: "draft", inbound: "what are you thinking on it?", reply: "Let me run it.", createdAt: ago(1) };
+  const store = fakeStore({ offers: [ready()], drafts: [held] });
+  const s = spies();
+  const r = await run(store, s.deps);
+  assert.deepEqual(s.calls.float, []);
+  assert.equal(r.results[0].status, "waiting");
+  assert.match(r.results[0].reason, /their text is waiting on you/);
+  held.status = "sent";
+  await run(store, s.deps, { now: NOW + 2 * 3600000 });
+  assert.deepEqual(s.calls.float, [{ offerId: "o1" }], "nothing was claimed, so the next pass floats it");
+});

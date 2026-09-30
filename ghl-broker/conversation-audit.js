@@ -22,6 +22,11 @@ import { sweepHeldUnderwrites } from "./held-underwrites.js";
 import { liveDealHold } from "./conversation-context.js";
 import { threadHealth, STOP_LABEL } from "./shared/thread-health.js";
 import { runTodayTimers } from "./today-timers.js";
+import { waitingReason } from "./outbox-guard.js";
+
+// The remedies that end in a text the machine writes itself (not a reply to
+// their text): each waits while a reply or a person's draft is in the outbox.
+const MACHINE_TEXT_REMEDIES = new Set(["nudge_offer", "nudge_counter", "requote"]);
 
 export const CURSOR_NAME = "conversationAudit";
 // The daytime pass keeps its own cursor: `last` on the night's cursor is what
@@ -247,6 +252,12 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
           }
         }
         redraftKey = h.tries > 0 ? `${h.key}:try${h.tries + 1}` : h.key;
+      }
+      // A text the machine starts waits while their text (or your own draft)
+      // is in the outbox — unclaimed, so tomorrow's pass can still act.
+      if (MACHINE_TEXT_REMEDIES.has(a.type)) {
+        const waiting = await waitingReason({ store, locationId, contactId: f.contactId });
+        if (waiting) { row.status = "skipped"; row.reason = waiting; continue; }
       }
       // Everything that ends in a text is claimed first, so a second audit
       // the same night — or the morning sweep — starts nothing twice.

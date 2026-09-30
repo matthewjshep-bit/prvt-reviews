@@ -1658,7 +1658,9 @@ test("their take arriving hands off to the realm check, and a confirmed address 
   });
   await settle();
   assert.equal(job.status, "done", job.error);
-  assert.deepEqual(calls.find((c) => c[0] === "afterAgentTake")[1], { contactId: "c1", address: "12 Elm St, Renton, WA 98056" });
+  // The reply that carried their read is handed along: the realm check it
+  // starts may take that draft's place, and no other waiting row's.
+  assert.deepEqual(calls.find((c) => c[0] === "afterAgentTake")[1], { contactId: "c1", address: "12 Elm St, Renton, WA 98056", draftId: job.draftId });
   assert.ok(calls.some((c) => c[0] === "startUnderwrite" && c[1] === "12 Elm St, Renton, WA 98056"), `the new_property rule kicks the underwrite off: ${JSON.stringify(calls)}`);
   const d = await store.getReplyDraft(job.draftId);
   assert.ok(d.actions.some((a) => a.type === "start_underwrite" && a.status === "done"), JSON.stringify(d.actions.map((a) => [a.type, a.status, a.detail || a.error])));
@@ -4156,4 +4158,162 @@ test("a held reply says why in plain words, never 'a other'", async () => {
   assert.equal(personsCall("counter"), "a counter is a person's call");
   assert.equal(personsCall("other"), "a reply the bot couldn't place is a person's call");
   assert.equal(personsCall("opt_out"), "an opt out is a person's call");
+});
+
+/* ---------- one voice: a machine text never talks over a waiting reply (2026-09-29) ---------- */
+
+// Until this, every text the machine started superseded whatever was in the
+// outbox: a question held for a person left Today, and a canned check-in or
+// float went out in its place.
+const waitingReply = (over = {}) => ({ id: "r1", locationId: "LOC", contactId: "c1", status: "draft", channel: "sms",
+  inbound: "Is 410 firm? The seller might do 440.", reply: "Let me check with my partner.", intent: "question",
+  createdAt: iso(60_000), updatedAt: iso(60_000), ...over });
+const REALM_REPLY = { ...DRAFT, intent: "realm_check", reply: "We'd land around 410k as-is. In the realm for your seller?" };
+
+test("a float never talks over their text waiting on you — the held reply stays and nothing is drafted", async () => {
+  _resetJobs();
+  const store = withTheirTake(fakeStore([waitingReply()]));
+  store.listOffers = async () => [LANDED];
+  let drafted = false;
+  const r = await startProactive({ client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: LANDED,
+    deps: { draft: async () => { drafted = true; return REALM_REPLY; } } });
+  assert.equal(r.job, null);
+  assert.match(r.skipped, /their text is waiting on you/);
+  assert.equal(r.blocked.draftId, "r1", "the caller can tell it was held, not refused");
+  assert.equal(drafted, false, "nothing is spent on a text that can't go");
+  assert.equal((await store.getReplyDraft("r1")).status, "draft", "their reply stays where you'll see it");
+});
+
+test("a machine text still replaces an older machine text nobody sent", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = withTheirTake(fakeStore([waitingReply({ id: "n1", inbound: "", intent: "offer_nudge", outbound: { kind: "offer_nudge", offerId: LANDED.id, address: LANDED.address } })]));
+  store.listOffers = async () => [LANDED];
+  const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: LANDED, deps: { draft: async () => REALM_REPLY } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal((await store.getReplyDraft("n1")).status, "superseded");
+  assert.equal((await store.getReplyDraft(job.draftId)).outbound.kind, "realm_check");
+});
+
+test("the re-quote that answers their numbers still replaces the reply it carries on from", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = withTheirTake(fakeStore([waitingReply()]));
+  store.listOffers = async () => [LANDED];
+  const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: LANDED, continues: "r1", deps: { draft: async () => REALM_REPLY } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal((await store.getReplyDraft("r1")).status, "superseded");
+});
+
+test("a person pressing Float may replace the waiting reply", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = withTheirTake(fakeStore([waitingReply()]));
+  store.listOffers = async () => [LANDED];
+  const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: LANDED, personAsked: true, deps: { draft: async () => REALM_REPLY } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal((await store.getReplyDraft("r1")).status, "superseded");
+});
+
+test("a float doesn't replace your hand-written check-in, your answer to their question, or a queued deal text", async () => {
+  for (const [kind, word] of [["check_in", "check-in"], ["partner_answer", "answer"], ["blast_open", "deal text"], ["showing_ask", "walkthrough ask"]]) {
+    _resetJobs();
+    const store = withTheirTake(fakeStore([waitingReply({ id: "p1", inbound: "", intent: kind, outbound: { kind } })]));
+    store.listOffers = async () => [LANDED];
+    const r = await startProactive({ client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: LANDED });
+    assert.match(r.skipped || "", new RegExp(`your ${word} to them is waiting in the outbox`), kind);
+    assert.equal((await store.getReplyDraft("p1")).status, "draft", kind);
+  }
+});
+
+test("a text that lands while the machine is writing wins — the machine's draft is never saved", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = withTheirTake(fakeStore());
+  store.listOffers = async () => [LANDED];
+  const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: LANDED,
+    deps: { draft: async () => { await store.createReplyDraft(waitingReply({ id: undefined })); return REALM_REPLY; } } });
+  await settle();
+  assert.equal(job.status, "held");
+  assert.match(job.heldReason, /their text is waiting on you/);
+  assert.deepEqual([...store.rows.values()].map((d) => [d.status, Boolean(d.inbound)]), [["draft", true]], "only their reply is in the outbox");
+});
+
+/* ---------- a seller's yes is a price agreed (2026-09-29) ---------- */
+
+// Until this, "the seller accepted" only tagged the agent and warmed the
+// offer: nothing recorded the price as agreed, so the push to paper never
+// started and the offer kept its weekly "any update?".
+const yesDraft = (over = {}) => async () => ({ ...DRAFT, intent: "acceptance", confidence: "high", needsHuman: true, counterAmount: 0,
+  reply: "Great news. Can you write it up on NWMLS forms for us to sign?", propertyAddress: "12 Elm St", ...over });
+
+test("a seller's yes at our number is recorded as agreed, so the push to paper starts", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const agreed = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Seller accepted your offer on 12 Elm! What's the next step?",
+    deps: { draft: yesDraft(), markOfferAgreed: async (args) => { agreed.push(args); return { ok: true, address: NEGOTIATION_OFFER.address, amount: 300000 }; } },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(agreed.map((a) => a.offerId), ["o1"]);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.ok(d.actions.some((x) => x.type === "mark_offer_agreed" && x.status === "done"), JSON.stringify(d.actions.map((x) => [x.type, x.status])));
+});
+
+test("a yes that names another number is a counter — nothing is agreed", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const agreed = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Seller will accept at $340k on 12 Elm",
+    deps: { draft: yesDraft(), markOfferAgreed: async (args) => { agreed.push(args); return { ok: true }; } },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(agreed.length, 0);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.ok((d.warnings || []).some((w) => /wasn't recorded as agreed: they named \$340,000/.test(w)), JSON.stringify(d.warnings));
+});
+
+/* ---------- replies to people always have room (2026-09-29) ---------- */
+
+import { REPLY_RESERVE_SHARE, REPLY_RESERVE_MIN, conversationConfig as configOf } from "./reply-agent.js";
+
+// The cap counted machine texts but only ever stopped replies: a day of
+// nudges and pulses could leave an agent's own text unanswered by evening.
+test("machine-started texts stop short of the daily cap so a reply to a person always has room", async () => {
+  _resetJobs();
+  const cap = configOf(STARTER_SAVED).dailyCap;
+  const reserve = Math.max(REPLY_RESERVE_MIN, Math.ceil(cap * REPLY_RESERVE_SHARE));
+  const today = Array.from({ length: cap - reserve }, (_, i) => ({ id: `t${i}`, jobId: `ra-t${i}`, locationId: "LOC", contactId: `x${i}`, createdAt: iso(60_000), status: "sent" }));
+  const store = withTheirTake(fakeStore(today));
+  store.listOffers = async () => [LANDED];
+  const r = await startProactive({ client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: LANDED });
+  assert.equal(r.job, null);
+  assert.match(r.skipped, new RegExp(`kept for people who text us \\(${cap - reserve} of ${cap}; the last ${reserve} are theirs\\)`));
+  const reply = await startReply({ client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "is it still available?" });
+  assert.ok(reply.job, `a reply to a person still drafts: ${reply.skipped}`);
+});
+
+// A store that pages like Postgres: newest first, and `limit` is real.
+const pagedStore = (rows) => ({ listReplyDrafts: async (_loc, { since = null, limit = 100 } = {}) =>
+  rows.filter((d) => !since || d.createdAt >= since).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, limit) });
+
+test("the cap counts every draft today, not the newest five hundred", async () => {
+  _resetJobs();
+  const noon = Date.parse("2026-09-29T19:00:00Z");
+  const rows = Array.from({ length: 650 }, (_, i) => ({ id: `r${i}`, jobId: `ra-r${i}`, createdAt: new Date(noon - (i + 1) * 1000).toISOString() }));
+  assert.equal(await countToday({ store: pagedStore(rows), locationId: "LOC", cap: 700, now: noon }), 650);
+  // The band's own daily count: a release this morning still counts after a blast day's worth of drafts.
+  const released = { id: "band", createdAt: new Date(noon - 700_000).toISOString(), exception: { passed: true, kind: "counter_band" } };
+  assert.equal(await bandReleasesToday({ store: pagedStore([...rows, released]), locationId: "LOC", now: noon }), 1);
 });
