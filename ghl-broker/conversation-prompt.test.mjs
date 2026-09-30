@@ -303,3 +303,14 @@ test("a check-in with history opens on one real thing from the conversation, sou
   assert.doesNotMatch(cold, /ONE real, specific thing/, "a stranger has no history to lean on");
   assert.match(cold, /123 Main St in Kent/);
 });
+
+// The first samples: "…had a price cut and is still sitting, aside from the
+// landscaping story you shared." A reference that doesn't fit in one natural
+// clause reads like a form letter; the listing is already the point.
+test("with a listing to ask about, history is a few natural words or nothing, never an aside", () => {
+  const t = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged",
+    listing: { street: "4706 64th St E", city: "Tacoma", dom: 70, cut: true }, aboutThem: [{ what: "redoing their backyard", daysAgo: 12 }] });
+  assert.match(t, /the listing is the point/i);
+  assert.match(t, /never tack it on as an aside/i);
+  assert.match(t, /leave it out/i);
+});

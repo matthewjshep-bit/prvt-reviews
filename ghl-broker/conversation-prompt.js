@@ -690,11 +690,15 @@ export function outboundOpening(outbound) {
         o.nextAction ? `What we meant to do next with them: ${o.nextAction}.` : "",
         o.dealsWithUs ? "We have done a deal together — this is a friend, write like it." : "",
       ].filter(Boolean);
-      const reference = cold ? "" :
-        `THE ONE REFERENCE: this is a relationship check-in, and your history with them is the point. READ THE THREAD, then open with ONE real, specific thing from it or from the notes below, said in your own words in a clause — ` +
+      const reference = cold ? "" : o.reason === "fresh_listing" && l
+        ? `YOUR HISTORY WITH THEM: the listing is the point of this text. READ THE THREAD: a few words that show you remember them are welcome only if they fit ` +
+          `naturally in the same sentence as the listing (e.g. "know the Tacoma one wasn't a fit, but…") — never tack it on as an aside ("aside from…", "besides the … you shared"), ` +
+          `never a personal detail next to a sales question, never invented. If it doesn't fit in a few natural words, leave it out. Do NOT reintroduce yourself. `
+        : `THE ONE REFERENCE: this is a relationship check-in, and your history with them is the point. READ THE THREAD, then open with ONE real, specific thing from it or from the notes below, said in your own words in a clause — ` +
         `in this order of preference: something they told us that's still open (a listing or a seller they mentioned, a property they said was coming, their timing); ` +
         `the last house we talked about and how it went (by street, never a number); something personal they shared, only if it's recent enough to still be true and it reads warm, not nosy; their market. ` +
-        `Prefer the newest. Never quote them, never recite the thread, never more than one reference, never something months old as if it were last week — and never invent one: ` +
+        `Prefer the newest. It must read the way a person would naturally say it — never tack it on as an aside; if it doesn't fit in one natural clause, leave it out. ` +
+        `Never quote them, never recite the thread, never more than one reference, never something months old as if it were last week — and never invent one: ` +
         `if the thread and the notes have nothing specific, keep it general. For this message the PERSONAL TOUCH rule's "most messages carry none" does not apply: carry exactly one when there is one. `;
       const shapes = cold ? AGENT_PULSE_COLD_SHAPES : AGENT_PULSE_SHAPES;
       return `${START} There is NO offer in this message. It is a check-in with a listing agent${cold ? " who has not written back before" : " we know"}. ` +
