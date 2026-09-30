@@ -154,7 +154,7 @@ import { OFFER_FIELDS, APP_FIELD_REGISTRY, registryByKey } from "../field-regist
 import { fitSnapshot } from "../offer-snapshot.js";
 import { syncDealNumbers } from "../dataroom.js";
 import { buildDataroomForOffer, isDealRoom } from "./dataroom.js";
-import { normalizeAgentPulse, tierDrips } from "../shared/agent-pulse.js";
+import { normalizeAgentPulse } from "../shared/agent-pulse.js";
 import { ensureOfferPage, refreshOfferPages } from "../offer-page.js";
 import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
 
@@ -4343,14 +4343,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (e) { console.log(`paper hold stamp failed for ${offer.id}: ${e.message}`); }
   };
 
+  // Drips picked by hand in Settings only. The nurture the check-in replaces
+  // by default is started by GHL on a stage move, never by the bot, and the
+  // TIER 2/3 workflows the bot does enroll into move the card — they run.
   const replacedDripIds = (saved) => {
     const pulse = normalizeAgentPulse(saved?.outreachAutopilot?.pulse);
-    return pulse.enabled ? tierDrips({ pulse, conversationAi: saved?.conversationAi }).map((d) => d.id) : [];
+    return pulse.enabled ? pulse.replacesWorkflowIds : [];
   };
   const conversationDeps = ({ client, locationId, saved }) => ({
-    // The GHL drips the agent check-in replaces, while it's on (the TIER 2/3
-    // check-ins; shared/agent-pulse.js tierDrips). A tier rule still tags the
-    // agent, but add_to_workflow keeps them out of these.
+    // GHL drips picked by hand as replaced by the agent check-in, while it's
+    // on: a rule's add_to_workflow keeps agents out of these.
     replacedWorkflowIds: replacedDripIds(saved),
     // For the nightly audit (conversation-audit.js): the one GHL read it
     // makes, the text it re-answers, and the offer send it queues for the

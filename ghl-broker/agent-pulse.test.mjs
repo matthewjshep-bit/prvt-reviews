@@ -139,13 +139,18 @@ const tierCai = (over = {}) => normalizeConversationAi({ enabled: true, parties:
   rejection: { mode: "auto", actions: [{ type: "add_tags", tags: ["tier-3"] }, { type: "add_to_workflow", workflowId: "wf-t3", workflowName: "TIER 3" }] },
 } } }, ...over });
 const savedTier = (pulse = {}) => ({ aiApiKey: "k", conversationAi: tierCai(), outreachAutopilot: { pulse: { enabled: true, dailyCap: 5, ...pulse } } });
+// GHL's list: the nurture drip GHL starts on a Tier 2/3 stage move is what texts.
+const WORKFLOWS = async () => [
+  { id: "wf-t2", name: "TIER 2", status: "published" }, { id: "wf-t3", name: "TIER 3", status: "published" },
+  { id: "wf-n", name: "Tier 2+3 nurture", status: "published" },
+];
 
-test("an agent the check-in texts leaves the TIER 2/3 drips first, so they never hear from both; a dry run takes nobody out", async () => {
+test("an agent the check-in texts leaves the tier nurture drip first, so they never hear from both; a dry run takes nobody out", async () => {
   _resetJobs();
   const loc = "loc-ap-drips";
   await repliedAgent(loc, "ag5");
   const removed = [];
-  const deps = { getContact: reachable, removeFromWorkflow: async (id, wf) => { removed.push([id, wf]); },
+  const deps = { getContact: reachable, removeFromWorkflow: async (id, wf) => { removed.push([id, wf]); }, listWorkflows: WORKFLOWS,
     startProactive: async () => ({ job: { id: "j", draftId: "d" } }) };
   startAgentPulse({ client, locationId: loc, saved: savedTier(), store, dryRun: true, deps });
   await settle();
@@ -154,36 +159,41 @@ test("an agent the check-in texts leaves the TIER 2/3 drips first, so they never
   const job = startAgentPulse({ client, locationId: loc, saved: savedTier(), store, deps });
   await settle();
   assert.equal(job.started, 1, JSON.stringify(job.results));
-  assert.deepEqual(removed, [["ag5", "wf-t2"], ["ag5", "wf-t3"]]);
+  assert.deepEqual(removed, [["ag5", "wf-n"]], "the nurture only; TIER 2/3 keep moving the card");
   const events = await store.listContactEvents(loc, "ag5", { limit: 50 });
-  assert.deepEqual(events.filter((e) => e.type === "workflow_left").map((e) => e.data.workflowId).sort(), ["wf-t2", "wf-t3"]);
+  assert.deepEqual(events.filter((e) => e.type === "workflow_left").map((e) => e.data.workflowId), ["wf-n"]);
 });
 
-test("taking everyone out of the TIER drips now: a dry run counts, a live run removes each tagged agent once, and never while the check-in is off", async () => {
+test("taking everyone out of the nurture drip now: a dry run counts, a live run removes each tagged agent once, and never while the check-in is off", async () => {
   const loc = "loc-ap-leave";
   const tagged = async () => [{ id: "t1", tags: ["tier-2"] }, { id: "t2", tags: ["tier-3", "agent"] }];
   const removed = [];
   const removeFromWorkflow = async (id, wf) => {
-    if (id === "t2" && wf === "wf-t2") { const e = new Error("not enrolled"); e.status = 400; throw e; }
+    if (id === "t2") { const e = new Error("not enrolled"); e.status = 400; throw e; }
     removed.push([id, wf]);
   };
-  const dry = startLeaveDrips({ client, locationId: loc, saved: savedTier(), store, dryRun: true, deps: { taggedContacts: tagged, removeFromWorkflow } });
+  const dry = startLeaveDrips({ client, locationId: loc, saved: savedTier(), store, dryRun: true, deps: { taggedContacts: tagged, removeFromWorkflow, listWorkflows: WORKFLOWS } });
   await settle();
   assert.equal(dry.status, "done", dry.error);
   assert.equal(dry.tagged, 2);
-  assert.deepEqual(dry.drips.map((d) => d.name), ["TIER 2", "TIER 3"]);
+  assert.deepEqual(dry.drips.map((d) => d.name), ["Tier 2+3 nurture"]);
   assert.deepEqual(removed, []);
 
-  assert.throws(() => startLeaveDrips({ client, locationId: loc, saved: savedTier({ enabled: false }), store, deps: { taggedContacts: tagged, removeFromWorkflow } }),
+  assert.throws(() => startLeaveDrips({ client, locationId: loc, saved: savedTier({ enabled: false }), store, deps: { taggedContacts: tagged, removeFromWorkflow, listWorkflows: WORKFLOWS } }),
     /turn the agent check-in on first/);
 
-  const live = startLeaveDrips({ client, locationId: loc, saved: savedTier(), store, deps: { taggedContacts: tagged, removeFromWorkflow, paceMs: 0 } });
+  const live = startLeaveDrips({ client, locationId: loc, saved: savedTier(), store, deps: { taggedContacts: tagged, removeFromWorkflow, listWorkflows: WORKFLOWS, paceMs: 0 } });
   await settle();
   assert.equal(live.status, "done", live.error);
-  assert.deepEqual(removed, [["t1", "wf-t2"], ["t1", "wf-t3"], ["t2", "wf-t3"]]);
-  assert.equal(live.removed, 3);
+  assert.deepEqual(removed, [["t1", "wf-n"]]);
+  assert.equal(live.removed, 1);
   assert.equal(live.notIn, 1);
   assert.equal(getLeaveDripsJob(loc).id, live.id);
+
+  const none = startLeaveDrips({ client, locationId: "loc-ap-leave-none", saved: savedTier(), store, dryRun: true, deps: { taggedContacts: tagged, listWorkflows: async () => [{ id: "wf-t2", name: "TIER 2", status: "published" }] } });
+  await settle();
+  assert.equal(none.status, "error");
+  assert.match(none.error, /no nurture drip/i);
 });
 
 test("a preview drafts the next check-ins without a claim, a draft row or a send", async () => {

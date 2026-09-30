@@ -54,8 +54,8 @@ export const AGENT_PULSE_DEFAULTS = {
   coldEveryDays: 60, coldMaxUnanswered: 3, engagedMaxUnanswered: 6,
   hour: 12, weekdaysOnly: true,
   ghlWorkflowDays: 21, quietWorkflowIds: [],
-  // The GHL drips this check-in replaces. Empty: the TIER 2 and TIER 3
-  // workflows the playbook's tier rules enroll agents in (tierDrips).
+  // The GHL drips this check-in replaces. Empty: the published "tier …
+  // nurture" workflows in GHL's list (tierDrips) — never TIER 2/3 themselves.
   replacesWorkflowIds: [],
   // Matt's own notes on how the check-in should sound, handed to the drafter.
   voice: "",
@@ -455,28 +455,33 @@ export function agentPulseSubject({ agent = {}, verdict = {}, now = Date.now() }
 }
 
 /**
- * tierDrips({ pulse, conversationAi }) → [{ id, name }]
+ * tierDrips({ pulse, conversationAi, workflows }) → [{ id, name }]
  *
  * The GHL drips this check-in replaces (Matt, 2026-09-30: "make sure the tier
- * 2/3 workflow that checks in is being replaced"). A list set by hand wins;
- * without one, every TIER 2 or TIER 3 workflow the agent playbook's rules or
- * its catch-all enroll people in. Names come from the playbook where it
- * knows them. Pure; works on the saved or the normalized config.
+ * 2/3 workflow that checks in is being replaced"). The texts come from a
+ * nurture workflow GHL starts by itself when an agent's card moves to Tier 2
+ * or Tier 3 ("Tier 2+3 nurture") — NOT the TIER 2/3 workflows the playbook
+ * enrolls agents in, which move the card and must keep running. So: a list
+ * set by hand wins; without one, every published workflow in GHL's list whose
+ * name says both "tier" and "nurture" (never a disposition one). Without the
+ * list it guesses nothing. Names come from GHL's list, else the playbook.
  */
-const TIER_DRIP_RX = /^\s*tier[\s_-]*[23]\b/i;
-export function tierDrips({ pulse = {}, conversationAi = null } = {}) {
+const NURTURE_RX = /nurture/i;
+const TIER_RX = /tier/i;
+const DISPO_RX = /dispo/i;
+export function tierDrips({ pulse = {}, conversationAi = null, workflows = null } = {}) {
   const agentPb = conversationAi?.parties?.agent || {};
-  const actions = [
+  const playbookNames = new Map([
     ...Object.values(agentPb.intentRules || {}).flatMap((r) => (Array.isArray(r?.actions) ? r.actions : [])),
     ...(Array.isArray(agentPb.fallback?.actions) ? agentPb.fallback.actions : []),
-  ].filter((a) => a && (a.type === "add_to_workflow" || a.type === "remove_from_workflow") && a.workflowId);
-  const nameOf = new Map(actions.map((a) => [String(a.workflowId), String(a.workflowName || "")]));
+  ].filter((a) => a?.workflowId).map((a) => [String(a.workflowId), String(a.workflowName || "")]));
+  const listNames = new Map((Array.isArray(workflows) ? workflows : []).filter((w) => w?.id).map((w) => [String(w.id), String(w.name || "")]));
+  const nameOf = (id) => listNames.get(id) || playbookNames.get(id) || "";
   const set = normalizeAgentPulse(pulse).replacesWorkflowIds;
-  if (set.length) return set.map((id) => ({ id, name: nameOf.get(id) || "" }));
-  const out = [];
-  for (const a of actions) {
-    const id = String(a.workflowId);
-    if (a.type === "add_to_workflow" && TIER_DRIP_RX.test(String(a.workflowName || "")) && !out.some((d) => d.id === id)) out.push({ id, name: String(a.workflowName || "") });
-  }
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+  if (set.length) return set.map((id) => ({ id, name: nameOf(id) }));
+  if (!Array.isArray(workflows)) return [];
+  return workflows
+    .filter((w) => w?.id && String(w.status || "").toLowerCase() !== "draft" && NURTURE_RX.test(String(w.name || "")) && TIER_RX.test(String(w.name || "")) && !DISPO_RX.test(String(w.name || "")))
+    .map((w) => ({ id: String(w.id), name: String(w.name || "") }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }

@@ -187,10 +187,22 @@ const TIER_CAI = normalizeConversationAi({ enabled: true, parties: { agent: {
   fallback: { mode: "auto", actions: [{ type: "add_to_workflow", workflowId: "wf-t3", workflowName: "TIER 3" }] },
 } } });
 
-test("the check-in finds the TIER 2 and TIER 3 drips in the playbook; a list set by hand wins", () => {
-  assert.deepEqual(tierDrips({ pulse: {}, conversationAi: TIER_CAI }), [{ id: "wf-t2", name: "TIER 2" }, { id: "wf-t3", name: "TIER 3" }]);
-  assert.deepEqual(tierDrips({ pulse: { replacesWorkflowIds: "wf-x, wf-t3" }, conversationAi: TIER_CAI }), [{ id: "wf-x", name: "" }, { id: "wf-t3", name: "TIER 3" }]);
-  assert.deepEqual(tierDrips({ pulse: {}, conversationAi: null }), [], "no playbook, nothing to replace");
+// Matt's screenshot, 2026-09-30: the check-in texts come from a separate GHL
+// workflow, "Tier 2+3 nurture", which GHL starts when an agent's card moves to
+// Tier 2 or Tier 3. TIER 2/3 themselves (the ones the bot enrolls agents in)
+// move the card, and must keep running.
+const WORKFLOWS = [
+  { id: "wf-t2", name: "TIER 2", status: "published" }, { id: "wf-t3", name: "TIER 3", status: "published" },
+  { id: "wf-n", name: "Tier 2+3 nurture", status: "published" }, { id: "wf-nn", name: "Not Now Nurture", status: "published" },
+  { id: "wf-d", name: "Tier 2 Disposition", status: "published" }, { id: "wf-old", name: "Old tier nurture", status: "draft" },
+];
+
+test("the check-in replaces the tier nurture drip, never the TIER workflows that move the card; a list set by hand wins", () => {
+  assert.deepEqual(tierDrips({ pulse: {}, conversationAi: TIER_CAI, workflows: WORKFLOWS }), [{ id: "wf-n", name: "Tier 2+3 nurture" }]);
+  assert.deepEqual(tierDrips({ pulse: { replacesWorkflowIds: "wf-nn, wf-n" }, workflows: WORKFLOWS }),
+    [{ id: "wf-nn", name: "Not Now Nurture" }, { id: "wf-n", name: "Tier 2+3 nurture" }]);
+  assert.deepEqual(tierDrips({ pulse: { replacesWorkflowIds: ["wf-x"] } }), [{ id: "wf-x", name: "" }]);
+  assert.deepEqual(tierDrips({ pulse: {}, conversationAi: TIER_CAI }), [], "without GHL's workflow list it guesses nothing");
 });
 
 test("once the check-in replaces the drips, an agent the bot put in TIER 3 is the check-in's, not the drip's", () => {

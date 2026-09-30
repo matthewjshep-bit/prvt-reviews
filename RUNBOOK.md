@@ -2552,29 +2552,35 @@ segment, who another clock owns and why, who's due and why, coverage) plus
 the last run; it writes nothing. `POST /api/outreach/pulse/run {dryRun, limit}`
 is a dry run unless `dryRun: false`.
 
-**It replaces the TIER 2/3 drips (2026-09-30).** Those GHL workflows text
-"still looking for fixers…" / "anything ugly cross your desk lately?" about
-every four weeks (sampled 2026-09-30: 59 of the 60 oldest tier-2/3 agents had
-them). The check-in is the one clock now, so while it's on:
-- the playbook's tier rules still tag `tier-2`/`tier-3` (the stage follows the
-  tag), but `add_to_workflow` keeps the agent out of the drips it replaces —
-  conversationDeps hands the executor `replacedWorkflowIds`;
+**It replaces the tier nurture drip (2026-09-30).** The check-in texts come
+from a GHL workflow, "Tier 2+3 nurture", that GHL starts by itself when an
+agent's Acquisitions card moves to Tier 2 or Tier 3 (Wait → SMS → Wait → SMS;
+256 agents in it on 2026-09-30). It sends "still looking for fixers…" /
+"anything ugly cross your desk lately?" about every four weeks. The TIER 1/2/3
+workflows the playbook's rules enroll agents in move the card and are left
+alone — an early version of this skipped them, which would have stopped new
+cards (fixed the same day).
+
+Which drips: `shared/agent-pulse.js` `tierDrips` — the ones picked in
+Settings (`pulse.replacesWorkflowIds`), else every published workflow in
+GHL's list whose name says both "tier" and "nurture" (not disposition).
+GHL's list is read through `pulseWorkflows` (cached ten minutes); without it,
+only picked ones count. While the check-in is on:
 - an agent it texts is taken out of those drips first (`workflow_left`, a 4xx
   is "wasn't in it"), so nobody hears from both;
-- a drip enrollment never "owns" an agent in the plan.
+- a drip enrollment never "owns" an agent in the plan;
+- a rule's `add_to_workflow` into a drip picked by hand is skipped
+  (conversationDeps `replacedWorkflowIds` — picked ones only).
 
-Which drips: `shared/agent-pulse.js` `tierDrips` — every TIER 2 or TIER 3
-workflow the agent playbook's rules or catch-all enroll people in, unless
-`pulse.replacesWorkflowIds` names them by hand. While the check-in is off
-nothing changes: the rules enroll as before and the drips keep texting.
-
-GHL starts a workflow on its own when its trigger tag is added, which the app
-can't stop, so the text steps inside TIER 2 and TIER 3 should be deleted in
-GHL too (keep the tag and stage steps). Settings → "Replaces the TIER 2/3
-check-in drips" → **Count who's in them**, then **Take everyone out now**
-(`POST /api/outreach/pulse/leave-drips {dryRun}`, live only with the check-in
-on; progress at `GET /api/outreach/pulse/leave-drips`) takes everyone tagged
-tier-2/tier-3 out at once — GHL has no API that lists a workflow's members.
+GHL keeps starting the nurture on every Tier 2/3 stage move, which the app
+can't stop, so switch it to Draft in GHL the same day the check-in goes on
+(keep it rather than delete it). Settings → "Replaces these GHL check-in
+drips" lists GHL's nurture workflows to tick; **Count who's in them**, then
+**Take everyone out now** (`POST /api/outreach/pulse/leave-drips {dryRun}`,
+live only with the check-in on; progress at `GET /api/outreach/pulse/leave-drips`)
+takes everyone tagged tier-2/tier-3 out at once — GHL has no API that lists a
+workflow's members. "Not Now Nurture" is a second published nurture; tick it
+only if it texts agents.
 
 **How it sounds.** An agent we know gets one real, specific thing from the
 history first — something they told us that's still open, the last house and
@@ -2596,8 +2602,8 @@ written in its place. A listing the outreach first text already asked about
 (`outreach_enrolled` / `outreach_sent` address, matched by number and street)
 is never raised again as new.
 
-**Turning it on.** Delete the text steps in the GHL TIER 2/3 workflows. Save
-your voice notes and read the samples. Tick "Check in with every agent", then
+**Turning it on.** Save your voice notes and read the samples. Tick "Check in
+with every agent", switch "Tier 2+3 nurture" to Draft in GHL the same day, then
 Count and Take everyone out of the drips. Read a day of drafts, and only then
 tick "Let them send themselves".
 
