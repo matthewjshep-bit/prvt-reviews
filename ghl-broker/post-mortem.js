@@ -20,6 +20,7 @@ import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { buildPostMortem, dealScorecard, FELL_THROUGH_CODES, normalizeAnalysis } from "./shared/post-mortem.js";
 import { PASS_REASONS, PASS_REASON_GLOSS } from "./shared/conversation-ai.js";
 import { effectiveSettings } from "./shared/offer-calc.js";
+import { meterAi } from "./ai-spend.js";
 
 const POST_MORTEM_MODEL = "claude-sonnet-5";
 const AGENT_THREAD_CHARS = 30000;
@@ -162,6 +163,7 @@ export async function analyzePostMortem({ offer, scorecard, feedback, agentThrea
         `Why did this deal die, and what do we do differently?`,
     }],
   }).catch((e) => { throw anthropicErrorToHttp(e); });
+  meterAi("post_mortem", response, { model: POST_MORTEM_MODEL });
 
   if (response.stop_reason === "max_tokens") throw Object.assign(new Error("post-mortem output truncated — try again"), { http: 502 });
   if (response.stop_reason === "refusal") throw Object.assign(new Error("post-mortem was declined"), { http: 502 });

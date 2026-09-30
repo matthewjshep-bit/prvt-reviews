@@ -53,6 +53,7 @@ import { propertyDossier } from "./shared/contact-record.js";
 import { VALUE_HOLD, WORK_HOLD } from "./shared/held-underwrites.js";
 import { mostRecentlyMentioned } from "./shared/us-address.js";
 import { usageOf } from "./shared/ai-cost.js";
+import { meterAi } from "./ai-spend.js";
 
 /* ---------- the dials ---------- */
 
@@ -471,8 +472,7 @@ export async function extractRequest({ message, transcript, aiApiKey }) {
       output_config: { effort: "low", format: { type: "json_schema", schema: EXTRACT_SCHEMA } },
       messages: [{ role: "user", content: [{ type: "text", text }] }],
     });
-    const u = usageOf(response, { model: EXTRACT_MODEL });
-    console.log(`ai usage: address extraction ${u.model} in=${u.input} out=${u.output} $${u.costUsd}`);
+    meterAi("address_extraction", response, { model: EXTRACT_MODEL });
   } catch (e) {
     throw anthropicErrorToHttp(e);
   }

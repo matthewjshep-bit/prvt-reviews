@@ -24,6 +24,7 @@ import { workHour } from "./outreach-sweep.js";
 import { CURSOR_NAME as AUDIT_CURSOR } from "./conversation-audit.js";
 import { recordError } from "./app-errors.js";
 import { usageOf } from "./shared/ai-cost.js";
+import { meterAi } from "./ai-spend.js";
 
 export const CURSOR_NAME = "coach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -56,8 +57,7 @@ export async function proposeWithModel({ signals, config, aiApiKey }) {
       output_config: { effort: "medium", format: { type: "json_schema", schema: COACH_SCHEMA } },
       messages: [{ role: "user", content: [{ type: "text", text: buildCoachContext({ signals, config }) }] }],
     });
-    const u = usageOf(response, { model: "claude-opus-5" });
-    console.log(`ai usage: nightly coach ${u.model} in=${u.input} out=${u.output} $${u.costUsd}`);
+    meterAi("coach", response, { model: "claude-opus-5" });
   } catch (e) {
     throw anthropicErrorToHttp(e);
   }

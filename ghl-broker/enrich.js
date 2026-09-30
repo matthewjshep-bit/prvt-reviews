@@ -7,6 +7,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { searchConversations, listConversationMessages, getMessageTranscription } from "./ghl.js";
+import { meterAi } from "./ai-spend.js";
 
 // Sonnet: structured extraction (buy box, areas, personal details) doesn't
 // need Opus, and it cuts the per-contact sweep cost roughly 5x.
@@ -481,6 +482,7 @@ export async function runEnrichment({ contact, currentFields, currentTags, trans
         `Propose updated field values and tag changes for this ${TYPE_LABEL[type]}.`,
     }],
   });
+  meterAi("enrich_contact", response, { model: ENRICH_MODEL });
 
   if (response.stop_reason === "max_tokens") {
     throw Object.assign(new Error("AI enrichment output truncated — try again"), { http: 502 });
@@ -567,6 +569,7 @@ export async function suggestDealInvestors({ deal, candidates, aiApiKey, extraIn
         `Which of these investors are interested in or actively working this deal?`,
     }],
   });
+  meterAi("deal_interest", response, { model: ENRICH_MODEL });
 
   if (response.stop_reason === "max_tokens") {
     throw Object.assign(new Error("AI suggestion output truncated — try again"), { http: 502 });

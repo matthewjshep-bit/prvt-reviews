@@ -244,3 +244,14 @@ test("the offer list says when each offer is next followed up, and with what", a
   const plain = await req("GET", "/api/offers?lean=1&limit=2000");
   assert.equal(plain.json.offers.find((o) => o.id === sent.id).nextFollowUp, undefined, "opt-in");
 });
+
+test("the spend ledger is readable by day and feature", async () => {
+  const { startAiSpendMeter, meterAi, _stopAiSpendMeter } = await import("./ai-spend.js");
+  startAiSpendMeter({ store });
+  meterAi("photo_scan", { model: "claude-sonnet-5", usage: { input_tokens: 60000, output_tokens: 20000 } });
+  await _stopAiSpendMeter();
+  const r = await req("GET", "/api/offers/automations/ai-spend?days=3");
+  assert.equal(r.status, 200);
+  assert.equal(r.json.byFeature[0].feature, "photo_scan");
+  assert.ok(r.json.totalUsd > 0.3, "60k in + 20k out on Sonnet is about 32 cents");
+});
