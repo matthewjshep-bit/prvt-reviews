@@ -159,3 +159,8 @@ test("a priced offer nobody floated is the timer's for a day, then it's yours", 
   assert.equal(stuck.who, "you");
   assert.equal(stuck.overdue, true);
 });
+
+test("an offer the agent is presenting shows a nudge, not a push to paper", () => {
+  const n = next(offer({ hot: { at: at(0), by: "conversation", signal: "presenting" } }));
+  assert.equal(n.kind, "offer_nudge");
+});

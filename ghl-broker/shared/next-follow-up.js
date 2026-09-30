@@ -18,7 +18,7 @@
 //
 // Pure. `now` is passed in.
 
-import { effectiveStatus, OPEN_STATUSES, isHot, offerHeat, aiHoldReasons } from "./offer-status.js";
+import { effectiveStatus, OPEN_STATUSES, pushesToPaper, offerHeat, aiHoldReasons } from "./offer-status.js";
 import {
   nextRungAt, offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, stepLabel, normalizeSteps,
   CHECKIN_STATUSES, HOT_MIN_HOURS,
@@ -169,7 +169,7 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
   let ladderNote = "";
   if (fu.enabled && OPEN_STATUSES.has(status)) {
     const hotOn = ladders.hot_push?.enabled && ladders.hot_push.steps?.length;
-    if (hotOn && isHot(offer)) {
+    if (hotOn && pushesToPaper(offer)) {
       const heat = offerHeat(offer);
       const hotAt = heat?.at || offer.counterBand?.acceptedAt || offer.realm?.ts || offer.statusAt || offer.createdAt;
       const anchor = latest([hotAt, times.lastInboundAt]);

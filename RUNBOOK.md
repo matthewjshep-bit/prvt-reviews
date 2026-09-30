@@ -1124,6 +1124,15 @@ two location-wide reads (reply drafts and the clocks' events), done in
 - Changing a status in the table shows "updates on reload" rather than a
   schedule worked out for the old status.
 
+**Hot is not a yes (same day).** Four offers went hot when the agent said
+they would take our number to the seller (`signal: "presenting"`). The push
+to paper was about to ask each agent to write it up before the seller had
+answered. `pushesToPaper` (shared/offer-status.js) now decides the push. It
+needs a yes: an agreed price (`priceAgreed`), the `writing_up` signal, or
+your own flag. "Presenting" and "warm" still put an offer in the Hot lane,
+but the offer nudge keeps it until a yes. The sweep, the hot_push `ready`
+check and the column all read this.
+
 **Fixing a status after the fact.** `PATCH /api/offers/:id/status` takes an
 optional `at` (ISO, between the offer's creation and now) and `amount` (only
 with countered; it becomes `offer.counter`). A July pass marked in September
