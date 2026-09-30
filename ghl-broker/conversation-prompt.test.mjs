@@ -314,3 +314,14 @@ test("with a listing to ask about, history is a few natural words or nothing, ne
   assert.match(t, /never tack it on as an aside/i);
   assert.match(t, /leave it out/i);
 });
+
+// The first live batch, 2026-09-30: "…been sitting a bit, 84 days now",
+// "never did connect after that 4pm", and one that opened "Would your seller…"
+// with no name. Days on market is handed over as "a while", never a count.
+test("a check-in never gets the days-on-market count, never names a time or date, and opens with their first name", () => {
+  const t = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged", listing: { street: "19712 207th Street Ct E", city: "Bonney Lake", dom: 84, cut: false } });
+  assert.match(t, /listing at 19712 207th Street Ct E in Bonney Lake, on the market a while\./);
+  assert.doesNotMatch(t, /about 84 days/, "no count to repeat");
+  assert.match(t, /Open with their first name/);
+  assert.match(t, /never a count of days, a time of day or a date/i);
+});

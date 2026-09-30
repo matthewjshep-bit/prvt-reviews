@@ -674,7 +674,7 @@ export function outboundOpening(outbound) {
       const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
       const ago = (d) => (d == null ? "" : d <= 1 ? "a day ago" : `${d} days ago`);
       const why = o.reason === "fresh_listing" && l
-        ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom ? `, on the market about ${l.dom} days` : ""}${l.cut ? `, with a price cut` : ""}. ` +
+        ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
           `Ask whether the seller would look at an as-is cash offer — we buy houses that need work. Name the street; never its price or any number.`
         : o.reason === "our_house" && h
         ? `Last time it was ${h.street}, which ${h.how === "closed" ? "closed" : h.how === "fell through" ? "fell through" : h.how === "never heard back" ? "we never heard back on" : "didn't work out"}. ` +
@@ -693,7 +693,7 @@ export function outboundOpening(outbound) {
       const reference = cold ? "" : o.reason === "fresh_listing" && l
         ? `YOUR HISTORY WITH THEM: the listing is the point of this text. READ THE THREAD: a few words that show you remember them are welcome only if they fit ` +
           `naturally in the same sentence as the listing (e.g. "know the Tacoma one wasn't a fit, but…") — never tack it on as an aside ("aside from…", "besides the … you shared"), ` +
-          `never a personal detail next to a sales question, never invented. If it doesn't fit in a few natural words, leave it out. Do NOT reintroduce yourself. `
+          `never a personal detail next to a sales question, never invented. If it doesn't fit in a few natural words, leave it out. `
         : `THE ONE REFERENCE: this is a relationship check-in, and your history with them is the point. READ THE THREAD, then open with ONE real, specific thing from it or from the notes below, said in your own words in a clause — ` +
         `in this order of preference: something they told us that's still open (a listing or a seller they mentioned, a property they said was coming, their timing); ` +
         `the last house we talked about and how it went (by street, never a number); something personal they shared, only if it's recent enough to still be true and it reads warm, not nosy; their market. ` +
@@ -705,11 +705,11 @@ export function outboundOpening(outbound) {
         `${why} ` +
         `${reference}${material.length ? `NOTES FROM OUR HISTORY: ${material.join(" ")} ` : ""}` +
         `TONE: friendly and professional — how a local investor who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
-        `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Their first name once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
+        `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
         `${cold ? "One clause on who you are: a local investor who buys houses that need work, as-is. " : "Do NOT reintroduce yourself. "}` +
         `${shapes[(Number(o.variant) || 0) % shapes.length]} ` +
         `${o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}" ` : ""}` +
-        `Do NOT name a price, a number, a percentage, an ARV or a link — a street name is fine, a dollar figure never. Do NOT promise an offer or say what we'd pay. ` +
+        `Do NOT name a price, a number, a percentage, an ARV or a link — a street address is fine, but never a dollar figure, and never a count of days, a time of day or a date ("sitting a while", not "84 days"; "a while back", not "that 4pm"). Do NOT promise an offer or say what we'd pay. ` +
         `Do NOT say "I'm reaching out", "touching base" or "just checking in". Easy to ignore, easy to answer in a line. ` +
         `${cold ? "" : `${CONTINUE} `}Set intent to agent_pulse.`;
     }
