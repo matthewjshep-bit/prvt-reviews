@@ -266,3 +266,16 @@ test("the listing check-in names the street, never the price", () => {
   assert.match(known, /this is a friend/);
   assert.match(known, /do NOT reintroduce yourself/);
 });
+
+test("the walkthrough reminder names the street and window, says only what the access lines say, and names no price", () => {
+  const t = outboundOpening({ kind: "showing_reminder", street: "3511 NE 153rd St", windowLabel: "Sat Oct 3, 10am-12pm" });
+  assert.match(t, /walkthrough at 3511 NE 153rd St tomorrow, Sat Oct 3, 10am-12pm/);
+  assert.match(t, /ONLY what the deal's access lines above say/);
+  assert.match(t, /never that it's open/);
+  assert.match(t, /Do NOT name a price/);
+  assert.match(t, /intent to showing_reminder/);
+  const f = outboundOpening({ kind: "showing_followup", street: "3511 NE 153rd St", windowLabel: "Sat Oct 3, 10am-12pm" });
+  assert.match(f, /ask how it looked/);
+  assert.match(f, /didn't make it/);
+  assert.match(f, /intent to showing_followup/);
+});

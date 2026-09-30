@@ -20,6 +20,8 @@
 // A text that CONFIRMS a time to a buyer is a person's: `wants_walkthrough`
 // stays in NEVER_AUTO and those replies are drafts on Today.
 
+import { dealOutreachPaused, investorStatus } from "./offer-status.js";
+
 export const SHOWING_TZ = "America/Los_Angeles";
 
 // Who opens the door. It differs per deal, so the deal says; the bot tells a
@@ -240,4 +242,61 @@ export function showingSummary(showing, now = Date.now()) {
     attended: count("attended"),
     accessSet: Boolean(s.access.mode),
   };
+}
+
+/* ---------- the reminder and the follow-up ---------- */
+
+// The afternoon before a window, Pacific: when "see you tomorrow" goes.
+export const REMIND_FROM_HOUR = 15;
+export const REMIND_TO_HOUR = 18;
+// After a window ends: long enough that they're home, soon enough to matter.
+export const FOLLOW_UP_AFTER_HOURS = 2;
+export const FOLLOW_UP_WITHIN_HOURS = 48;
+
+const pacific = (t) => {
+  const p = new Intl.DateTimeFormat("en-CA", { timeZone: SHOWING_TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" }).formatToParts(new Date(t));
+  const get = (type) => p.find((x) => x.type === type)?.value || "";
+  return { day: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")) };
+};
+
+/**
+ * showingTouches(offer, { now, remindDayBefore, followUpAfter }) → [{ kind, contactId, name, windowStart, windowLabel, street, key }]
+ *
+ * The walkthrough texts a deal owes right now (ghl-broker/showing-sweep.js):
+ *   showing_reminder  the afternoon before a window, to each buyer who said
+ *                     they're coming to it;
+ *   showing_followup  two hours to two days after a window, to each buyer who
+ *                     came or said they would. A no-show or a no gets nothing.
+ * `key` is the claim: one of each per buyer per window, ever. A buyer who has
+ * since committed, passed or been taken off the deal has answered, and a deal
+ * somebody is taking (dealOutreachPaused) texts nobody new. Pure.
+ */
+export function showingTouches(offer = {}, { now = Date.now(), remindDayBefore = false, followUpAfter = false } = {}) {
+  const deal = offer?.deal;
+  if (!deal || deal.stage !== "under_contract" || (!remindDayBefore && !followUpAfter)) return [];
+  if (dealOutreachPaused(deal)) return [];
+  const s = normalizeShowing(deal.showing);
+  if (!s.windows.length || !s.rsvps.length) return [];
+  const answered = new Set((deal.investors || []).filter((i) => ["committed", "soft_commit", "passed"].includes(investorStatus(i?.status))).map((i) => i.contactId));
+  const street = String(offer.address || "").split(",")[0].trim();
+  const out = [];
+  const add = (kind, r, w) => out.push({ kind, contactId: r.contactId, name: r.name || "", windowStart: w.start, windowLabel: windowLabel(w), street,
+    key: `${kind}:${offer.id}:${r.contactId}:${w.start}` });
+  // Which window an answer is for: the one they named, or with none named the
+  // soonest window after they answered.
+  const windowOf = (r) => r.windowStart
+    ? s.windows.find((w) => w.start === r.windowStart) || null
+    : s.windows.find((w) => Date.parse(w.end) > Date.parse(r.at || 0)) || null;
+  const here = pacific(now);
+  const tomorrow = pacific(now + 86400000).day;
+  for (const r of s.rsvps) {
+    if (answered.has(r.contactId)) continue;
+    const w = windowOf(r);
+    if (!w) continue;
+    if (remindDayBefore && r.status === "coming" && Date.parse(w.start) > now && pacific(Date.parse(w.start)).day === tomorrow
+        && here.hour >= REMIND_FROM_HOUR && here.hour < REMIND_TO_HOUR) add("showing_reminder", r, w);
+    const since = (now - Date.parse(w.end)) / 3600000;
+    if (followUpAfter && ["coming", "attended"].includes(r.status) && since >= FOLLOW_UP_AFTER_HOURS && since <= FOLLOW_UP_WITHIN_HOURS) add("showing_followup", r, w);
+  }
+  return out;
 }

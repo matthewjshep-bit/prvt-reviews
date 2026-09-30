@@ -33,11 +33,15 @@ const clamp = (x, d, lo, hi) => { const k = Math.round(Number(x)); return Number
  */
 export function normalizeBuyerPulse(v = {}) {
   const o = v && typeof v === "object" ? v : {};
+  const everyDays = clamp(o.everyDays, DEFAULT_EVERY_DAYS, 30, 365);
   return {
     enabled: o.enabled === true,
     autoSend: o.autoSend === true,
     dailyCap: clamp(o.dailyCap, DEFAULT_DAILY_CAP, 1, MAX_DAILY_CAP),
-    everyDays: clamp(o.everyDays, DEFAULT_EVERY_DAYS, 30, 365),
+    everyDays,
+    // Buyers who have never written back may be checked in on less often
+    // than the ones we talk to. Unset, it is `everyDays` — no change.
+    quietEveryDays: o.quietEveryDays == null || o.quietEveryDays === "" ? everyDays : clamp(o.quietEveryDays, everyDays, 30, 365),
     quietDays: clamp(o.quietDays, DEFAULT_QUIET_DAYS, 1, 60),
     conversedShare: clamp(o.conversedShare, DEFAULT_CONVERSED_SHARE, 0, 100),
     hour: clamp(o.hour, DEFAULT_HOUR, 8, 18),
@@ -47,6 +51,9 @@ export function normalizeBuyerPulse(v = {}) {
 
 // Tags that mean "do not text", however they were spelled.
 const BLOCK_TAG_RX = /^(?:dnc|dnd|do[-\s]?not[-\s]?(?:contact|text|call)|opt(?:ed)?[-\s]?out|unsubscribed?|stop|wrong[-\s]?number)$/i;
+// Unsubscribed in GHL (synced onto the row as `dnd`) or tagged off. The pulse
+// and the blast waves both ask (shared/buyer-score.js pickWave).
+export const isBlockedBuyer = (inv = {}) => Boolean(inv?.dnd) || (inv?.tags || []).some((t) => BLOCK_TAG_RX.test(String(t).trim()));
 
 // Market tags are slugs: "federal-way" → "Federal Way".
 const titleCase = (s) => String(s || "").toLowerCase().replace(/[-_]+/g, " ").replace(/\b[a-z]/g, (c) => c.toUpperCase());
@@ -111,38 +118,53 @@ export function pulseSubject(inv = {}, { now = Date.now() } = {}) {
  */
 export function pickPulseBuyers({ investors = [], pulsedAt = new Map(), openDraftIds = new Set(), settings = {}, now = Date.now() } = {}) {
   const s = normalizeBuyerPulse(settings);
-  const counts = { pool: investors.length, eligible: 0, quiet: 0, conversed: 0, noPhone: 0, blocked: 0, onDeal: 0, recentlyTexted: 0, openDraft: 0, pulsedRecently: 0 };
-  const quiet = [], conversed = [];
+  const counts = { pool: investors.length, eligible: 0, friends: 0, quiet: 0, conversed: 0, noPhone: 0, blocked: 0, onDeal: 0, recentlyTexted: 0, openDraft: 0, pulsedRecently: 0 };
+  const quiet = [], conversed = [], friends = [];
   for (const inv of investors) {
     if (!inv?.contactId || (inv.status && inv.status !== "active")) continue;
     if (!String(inv.phone || "").trim()) { counts.noPhone++; continue; }
-    if (inv.dnd || (inv.tags || []).some((t) => BLOCK_TAG_RX.test(String(t).trim()))) { counts.blocked++; continue; }
+    if (isBlockedBuyer(inv)) { counts.blocked++; continue; }
     if (inv.onLiveDeal) { counts.onDeal++; continue; }
     const last = Math.max(Date.parse(inv.lastMessageAt || "") || 0, Date.parse(inv.lastBlastAt || "") || 0, Date.parse(inv.lastRepliedAt || "") || 0);
     if (last && now - last < s.quietDays * DAY_MS) { counts.recentlyTexted++; continue; }
     if (openDraftIds.has(inv.contactId)) { counts.openDraft++; continue; }
     const pulsed = Date.parse(pulsedAt.get(inv.contactId) || "");
-    if (Number.isFinite(pulsed) && now - pulsed < s.everyDays * DAY_MS) { counts.pulsedRecently++; continue; }
+    const cadence = hasConversed(inv) ? s.everyDays : s.quietEveryDays;
+    if (Number.isFinite(pulsed) && now - pulsed < cadence * DAY_MS) { counts.pulsedRecently++; continue; }
     counts.eligible++;
-    (hasConversed(inv) ? conversed : quiet).push(inv);
+    // Bought from us before: a friend, first in line (2026-09-29).
+    if ((Number(inv.engagement?.committed) || 0) > 0) friends.push(inv);
+    else (hasConversed(inv) ? conversed : quiet).push(inv);
   }
+  counts.friends = friends.length;
   counts.quiet = quiet.length;
   counts.conversed = conversed.length;
+  // How long one pass through everyone reachable takes at this cap, in
+  // workdays — the honest answer to "is everyDays achievable?".
+  const reachable = counts.pool - counts.noPhone - counts.blocked - counts.onDeal;
+  counts.passWorkdays = s.dailyCap > 0 ? Math.ceil(Math.max(0, reachable) / s.dailyCap) : null;
   const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""));
   quiet.sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0) || byName(a, b));
   const lastTalked = (i) => String(i.lastRepliedAt || i.engagement?.lastEngagedAt || "");
   conversed.sort((a, b) => lastTalked(a).localeCompare(lastTalked(b)) || byName(a, b));
 
-  let seatsConversed = conversed.length ? Math.max(1, Math.round(s.dailyCap * s.conversedShare / 100)) : 0;
+  friends.sort((a, b) => lastTalked(a).localeCompare(lastTalked(b)) || byName(a, b));
+  const seatsFriends = Math.min(friends.length, s.dailyCap);
+  const cap = s.dailyCap - seatsFriends;
+  let seatsConversed = conversed.length ? Math.max(1, Math.round(cap * s.conversedShare / 100)) : 0;
   if (s.conversedShare === 0) seatsConversed = 0;
-  seatsConversed = Math.min(seatsConversed, conversed.length, s.dailyCap);
-  let seatsQuiet = Math.min(quiet.length, s.dailyCap - seatsConversed);
+  seatsConversed = Math.min(seatsConversed, conversed.length, cap);
+  let seatsQuiet = Math.min(quiet.length, cap - seatsConversed);
   // Nobody quiet left to fill their seats: the conversed line takes them.
-  seatsConversed = Math.min(conversed.length, s.dailyCap - seatsQuiet);
+  seatsConversed = Math.min(conversed.length, cap - seatsQuiet);
 
   const row = (group) => (inv) => ({ contactId: inv.contactId, name: inv.name || "", group, subject: pulseSubject(inv, { now }) });
+  // `spares`: the next in line after the day's picks, so a buyer skipped
+  // before being claimed (unsubscribed in GHL) gives the seat to someone.
+  const rest = [...quiet.slice(seatsQuiet).map(row("quiet")), ...conversed.slice(seatsConversed).map(row("conversed"))];
   return {
-    picks: [...quiet.slice(0, seatsQuiet).map(row("quiet")), ...conversed.slice(0, seatsConversed).map(row("conversed"))],
+    picks: [...friends.slice(0, seatsFriends).map(row("friend")), ...quiet.slice(0, seatsQuiet).map(row("quiet")), ...conversed.slice(0, seatsConversed).map(row("conversed"))],
+    spares: rest.slice(0, Math.max(5, Math.ceil(s.dailyCap / 2))),
     counts,
   };
 }

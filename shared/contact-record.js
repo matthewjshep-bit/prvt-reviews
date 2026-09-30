@@ -72,6 +72,12 @@ export const EVENT_TYPES = [
   // Written BEFORE the draft, so it is also the claim: one per buyer per day,
   // and the clock the next one counts from.
   "pulse_sent",
+  // A check-in that drafted nothing gives its claim back (buyer-pulse.js).
+  "pulse_voided",
+  // The walkthrough texts (ghl-broker/showing-sweep.js): the reminder the
+  // afternoon before and the follow-up after. Each is its own claim, one per
+  // buyer per window, written before the draft.
+  "showing_reminder_sent", "showing_followup_sent",
   // The bot (or a person) put a call or a visit on the calendar.
   "call_booked",
   "call_summary", "text_summary", "note",
@@ -113,6 +119,8 @@ export const EVENT_LABEL = {
   outreach_enrolled: "added to an outreach workflow",
   outreach_left: "taken out of the outreach workflow (they replied)",
   pulse_sent: "checked in between deals",
+  pulse_voided: "a check-in drafted nothing",
+  showing_reminder_sent: "reminded them about the walkthrough", showing_followup_sent: "followed up after the walkthrough",
   call_booked: "call booked",
   hand_reply: "you texted them",
   post_mortem_built: "post-mortem written",
@@ -138,6 +146,8 @@ export const EVENT_ICON = {
   outreach_enrolled: "Workflow",
   outreach_left: "LogOut",
   pulse_sent: "BellRing",
+  pulse_voided: "Clock",
+  showing_reminder_sent: "CalendarCheck", showing_followup_sent: "MessageSquare",
   call_booked: "CalendarCheck",
   hand_reply: "MessageSquare",
   post_mortem_built: "ClipboardCheck",

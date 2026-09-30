@@ -393,7 +393,7 @@ export function auditConversations({
   /* --- the rest --- */
   const flagged = new Set(findings.map((f) => f.contactId));
   const quietWins = [...touched].filter((c) => !flagged.has(c) && !excluded(c)).map((c) => ({ contactId: c, contactName: who(c) }));
-  const dealLag = pipelineActions.filter((a) => ["stage_lag", "closing_soon", "deal_no_buyers", "blast_no_opens"].includes(a?.kind)).length;
+  const dealLag = pipelineActions.filter((a) => ["stage_lag", "closing_soon", "deal_no_buyers", "blast_no_opens", "deal_interest_stalled", "deal_no_dataroom"].includes(a?.kind)).length;
   const byKind = Object.fromEntries(AUDIT_KINDS.map((x) => [x.key, findings.filter((f) => f.kind === x.key).length]));
   const order = Object.fromEntries(AUDIT_KINDS.map((x, i) => [x.key, i]));
   findings.sort((a, b) => (order[a.kind] ?? 99) - (order[b.kind] ?? 99) || String(a.anchorAt).localeCompare(String(b.anchorAt)));

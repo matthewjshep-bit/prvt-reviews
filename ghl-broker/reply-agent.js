@@ -284,7 +284,7 @@ export const SHADOW_GRACE_MS = 20_000;
 // Plain check-ins with no number, no negotiation and no terms in them — the
 // texts where thinking harder buys nothing (2026-09-25). Everything else,
 // replies included, stays at medium.
-export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge"]);
+export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "showing_reminder", "showing_followup"]);
 export const draftEffort = (outbound) => (outbound && LOW_EFFORT_KINDS.has(outbound.kind) ? "low" : "medium");
 
 // Texts a sweep starts that nobody is waiting on: these may go through the
@@ -293,6 +293,7 @@ export const draftEffort = (outbound) => (outbound && LOW_EFFORT_KINDS.has(outbo
 export const BATCHABLE_KINDS = new Set([
   "outreach_open", "outreach_nudge", "counter_nudge", "take_ask", "offer_nudge", "hot_push", "passed_checkin",
   "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "promise_due", "price_drop", "checkin_due",
+  "showing_reminder", "showing_followup",
 ]);
 
 export function draftParams({ model, system, user, schema, effort = "medium" }) {
@@ -2012,6 +2013,26 @@ export const OUTBOUND_KINDS = {
     forbids: () => [],
     onlyFloats: true,
   },
+  // The walkthrough texts (showing-sweep.js): "see you tomorrow" to a buyer
+  // coming, and "how did it look" after. The window and the street, never a
+  // price: any number holds the draft. Their switches are
+  // dispoAutopilot.showings, checked by the runner; not on the playbook grid.
+  showing_reminder: {
+    party: "investor",
+    enabled: () => true,
+    ready: ({ subject }) => (subject?.windowLabel ? true : "no walkthrough window"),
+    floats: () => [],
+    forbids: () => [],
+    onlyFloats: true,
+  },
+  showing_followup: {
+    party: "investor",
+    enabled: () => true,
+    ready: ({ subject }) => (subject?.windowLabel ? true : "no walkthrough window"),
+    floats: () => [],
+    forbids: () => [],
+    onlyFloats: true,
+  },
 };
 
 const outboundLabel = (kind) => String(kind || "").replace(/_/g, " ");
@@ -2248,6 +2269,13 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       listing: p.listing || null, house: p.house || null, dealsWithUs: Number(p.dealsWithUs) || 0, offersWithUs: Number(p.offersWithUs) || 0,
       lastSummary: String(p.lastSummary || "").slice(0, 200), nextAction: String(p.nextAction || "").slice(0, 160), variant: Number(p.variant) || 0 };
   }
+  if (kind === "showing_reminder" || kind === "showing_followup") {
+    // The walkthrough: the street and the window as a buyer reads it
+    // (shared/showing.js windowLabel). How they get in is the deal's access
+    // record, which the investor context carries; nothing here adds to it.
+    const p = subject || {};
+    return { ...base, street: String(p.street || String(address).split(",")[0]).trim(), windowLabel: String(p.windowLabel || "") };
+  }
   if (kind === "buyer_pulse") {
     // Context clues for a check-in with no deal in it (shared/buyer-pulse.js
     // pulseSubject). There is no property, so no address.
@@ -2308,6 +2336,8 @@ function outboundSummary({ kind, offer, outbound }) {
       if (outbound.reason === "fresh_listing") return `Checks in about their listing at ${outbound.listing?.street || where}: would the seller look at an as-is cash offer?`;
       if (outbound.reason === "our_house") return `Checks back in on ${outbound.house?.street || where} (${outbound.house?.how || "it ended"}) and asks what else is coming up.`;
       return "Checks in: anything coming up that needs work, or off market?";
+    case "showing_reminder": return `Reminds them about the walkthrough at ${outbound.street || where} tomorrow, ${outbound.windowLabel}.`;
+    case "showing_followup": return `Asks how ${outbound.street || where} looked after the walkthrough (${outbound.windowLabel}) and whether they want it.`;
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
     case "dataroom_nudge": return `Follows up on ${where} — they opened the package and went quiet${rung}.`;
     case "checkin_due":

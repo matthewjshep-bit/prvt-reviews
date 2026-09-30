@@ -61,6 +61,8 @@ export const HIDDEN_LANES = [{ key: "dead", label: "Dead", hidden: true }];
 export const ALL_LANES = [...AGENT_LANES, ...DISPO_LANES, ...HIDDEN_LANES];
 
 export const SEVERITY_RANK = { now: 0, soon: 1, fyi: 2 };
+// Days after the last wave that buyers looking but not committing becomes a row.
+export const INTEREST_STALL_DAYS = 4;
 
 // The order the queue shows its groups in, and what each is called.
 export const ACTION_KINDS = [
@@ -78,6 +80,8 @@ export const ACTION_KINDS = [
   { key: "showing_no_window", label: "No walkthrough window yet" },
   { key: "deal_no_buyers",    label: "Deals with nobody on them" },
   { key: "blast_no_opens",    label: "Blasted, nobody opened it" },
+  { key: "deal_interest_stalled", label: "Buyers looked, nobody's committing" },
+  { key: "deal_no_dataroom",  label: "Deals with no buyer package" },
   { key: "draft_scheduled",   label: "Sending itself" },
   { key: "stage_lag",         label: "Stage is behind" },
   { key: "gone_quiet",        label: "Gone quiet" },
@@ -162,12 +166,16 @@ const PROMISE_MOVE_LABEL = {
  *                 drafts a promise is waiting on — the route reads what the
  *                 triage needs so this stays pure
  *   eventsLimit   what the route asked for, so we can say if the read filled
+ *   dealRooms     offer ids with a live buyer package (dataroom). Only when
+ *                 given does a deal without one get a row: a caller that
+ *                 didn't look never guesses.
  */
 export function buildPipeline({
   offers = [], drafts = [], events = [], jobs = [], config = null, contactNames = {},
   sentDrafts = [], heldTriageByOffer = {},
-  now = Date.now(), eventsLimit = 0,
+  now = Date.now(), eventsLimit = 0, dealRooms = null,
 } = {}) {
+  const rooms = dealRooms ? new Set(dealRooms) : null;
   const ladders = {
     agent: config?.parties?.agent?.followUp || null,
     investor: config?.parties?.investor?.followUp || null,
@@ -395,6 +403,13 @@ export function buildPipeline({
           taskId: n.id,
           ops: [{ key: "tick_task", label: "Done", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
       }
+      // No buyer package a day after contract: every wave's link and every
+      // "send me details" is supposed to lead to it.
+      if (rooms && dd.stage === "under_contract" && ageDays >= 1 && !rooms.has(o.id)) {
+        card.actionIds.push(push({ ...base, kind: "deal_no_dataroom", severity: "soon",
+          title: `${card.address} has no buyer package`, detail: `under contract ${ageDays}d · the waves and "send me details" link to it`,
+          ops: [{ key: "build_dataroom", label: "Build it", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
+      }
       const anyBuyer = dd.investors.length > 0;
       const blasts = myEvents.filter((e) => e.type === "blast_sent");
       const views = myEvents.filter((e) => e.type === "dataroom_viewed");
@@ -410,6 +425,19 @@ export function buildPipeline({
           card.actionIds.push(push({ ...base, kind: "blast_no_opens", severity: "soon",
             title: `${card.address}: blasted ${blastDays}d ago, nobody opened it`, detail: `${blasts.length} blast${blasts.length === 1 ? "" : "s"}`,
             ops: [{ key: "preview_follow_ups", label: "Who'd get a nudge", intent: "secondary" }, { key: "run_follow_ups", label: "Nudge them", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
+        }
+      } else if (dd.stage === "under_contract" && (views.length || dd.investors.some((i) => i.state === "evaluating"))
+          && !dd.investors.some((i) => i.state === "soft_commit" || i.state === "committed")) {
+        // Buyers looked, and nobody is committing (2026-09-29): until this a
+        // deal in that state had no row at all while its contingency ran down.
+        const lastWave = ms((o.deal?.blasts || []).at(-1)?.at) ?? ms(blasts.at(-1)?.at);
+        const days = lastWave != null ? Math.floor((now - lastWave) / DAY_MS) : null;
+        if (days != null && days >= INTEREST_STALL_DAYS) {
+          const weighing = dd.investors.filter((i) => i.state === "evaluating").length;
+          card.actionIds.push(push({ ...base, kind: "deal_interest_stalled", severity: "soon",
+            title: `${card.address}: buyers looked, nobody's committing`,
+            detail: `${weighing ? `${weighing} weighing it · ` : ""}${views.length} opened the package · last wave ${days}d ago`,
+            ops: [{ key: "match_investors", label: "Find more buyers", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
         }
       }
       // The walkthrough (shared/showing.js). Every buyer text invites them to

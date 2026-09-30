@@ -17,7 +17,8 @@
 
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
-import { conversationConfig, startProactive } from "./reply-agent.js";
+import { conversationConfig, startProactive, markUnsubscribed } from "./reply-agent.js";
+import { getContact, smsUnsubscribed } from "./ghl.js";
 import { workHour, isWorkday } from "./outreach-sweep.js";
 import { normalizeBuyerPulse, pickPulseBuyers } from "./shared/buyer-pulse.js";
 
@@ -47,12 +48,21 @@ export const pulseSettings = (saved = {}) => normalizeBuyerPulse(saved?.dispoAut
 export async function planBuyerPulse({ locationId, saved = {}, store = defaultStore, deps = {}, now = Date.now() }) {
   const settings = pulseSettings(saved);
   const investors = await deps.book(locationId);
-  const events = await store.listContactEventsSince(locationId, iso(now - settings.everyDays * DAY_MS), { types: ["pulse_sent"], limit: 20000 }).catch(() => []);
+  const lookback = Math.max(settings.everyDays, settings.quietEveryDays);
+  const events = await store.listContactEventsSince(locationId, iso(now - lookback * DAY_MS), { types: ["pulse_sent", "pulse_voided"], limit: 20000 }).catch(() => []);
+  // A claim that drafted nothing (the bot stood down, a waiting reply, a
+  // failure) is voided: it neither starts the buyer's cadence nor takes a
+  // seat. Until 2026-09-29 it did both — a DND buyer cost a seat and 30 days.
+  const voided = new Set(events.filter((e) => e?.type === "pulse_voided").map((e) => e.data?.claimKey).filter(Boolean));
   const pulsedAt = new Map();
+  const triedToday = new Set();
   let claimedToday = 0;
   for (const e of events) {
-    if (!e?.contactId) continue;
-    if (pacificDay(Date.parse(e.at)) === pacificDay(now)) claimedToday++;
+    if (!e?.contactId || e.type !== "pulse_sent") continue;
+    const today = pacificDay(Date.parse(e.at)) === pacificDay(now);
+    if (today) triedToday.add(e.contactId);
+    if (voided.has(e.dedupeKey)) continue;
+    if (today) claimedToday++;
     if (String(e.at) > String(pulsedAt.get(e.contactId) || "")) pulsedAt.set(e.contactId, e.at);
   }
   const openDraftIds = new Set();
@@ -63,8 +73,10 @@ export async function planBuyerPulse({ locationId, saved = {}, store = defaultSt
   // The cap is the DAY's, not the run's: a retry after a run that died half
   // way, or a second press of Run now, only gets the seats still empty.
   const left = Math.max(0, settings.dailyCap - claimedToday);
-  const plan = pickPulseBuyers({ investors, pulsedAt, openDraftIds, settings, now });
-  return { picks: plan.picks.slice(0, left), counts: { ...plan.counts, claimedToday, seatsLeft: left }, settings };
+  // Tried today already (a voided claim): tomorrow, not twice today.
+  const plan = pickPulseBuyers({ investors: investors.filter((i) => !triedToday.has(i.contactId)), pulsedAt, openDraftIds, settings, now });
+  const line = [...plan.picks, ...(plan.spares || [])];
+  return { picks: line.slice(0, left), spares: line.slice(left, left + Math.max(5, Math.ceil(settings.dailyCap / 2))), counts: { ...plan.counts, claimedToday, seatsLeft: left }, settings };
 }
 
 /**
@@ -101,20 +113,45 @@ export function startBuyerPulse({ client, locationId, saved = {}, store = defaul
     // A different way in for each text, continuing across the day's runs so
     // two batches don't open alike.
     let n = Number(plan.counts.claimedToday) || 0;
-    for (const p of picks) {
+    const read = typeof deps.getContact === "function" ? deps.getContact : (id) => getContact(client, id);
+    const seats = picks.length;
+    let claimed = 0;
+    // The day's picks, then the spares: a buyer skipped before being claimed
+    // (unsubscribed in GHL) gives the seat to the next in line.
+    for (const p of [...picks, ...(dryRun ? [] : plan.spares || [])]) {
+      if (claimed >= seats) break;
       p.subject = { ...p.subject, variant: n++ };
       if (dryRun) { job.results.push({ contactId: p.contactId, name: p.name, group: p.group, status: "would draft", clues: p.subject }); continue; }
+      if (!deps.skipPreflight) {
+        let contact = null;
+        try { contact = await read(p.contactId); } catch (e) { job.skipped++; job.results.push({ contactId: p.contactId, group: p.group, status: "skipped", reason: `couldn't read the contact (${String(e?.message || e).slice(0, 80)})` }); continue; }
+        if (smsUnsubscribed(contact)) {
+          await markUnsubscribed({ client, store, locationId, contactId: p.contactId, party: "investor", now }).catch(() => {});
+          job.skipped++; job.results.push({ contactId: p.contactId, group: p.group, status: "skipped", reason: "they unsubscribed" });
+          continue;
+        }
+      }
+      const claimKey = `pulse_sent:${p.contactId}:${pacificDay(now)}`;
       const claim = await recordEvent({
         store, locationId, contactId: p.contactId, party: "investor", type: "pulse_sent", at: iso(now), source: "conversation",
-        dedupeKey: `pulse_sent:${p.contactId}:${pacificDay(now)}`, data: { group: p.group, trigger },
+        dedupeKey: claimKey, data: { group: p.group, trigger },
       });
       if (!claim.inserted) { job.skipped++; job.results.push({ contactId: p.contactId, group: p.group, status: "skipped", reason: "already claimed today" }); continue; }
+      claimed++;
+      let voidedOnce = false;
+      const voidClaim = async (why) => {
+        if (voidedOnce) return;
+        voidedOnce = true;
+        await recordEvent({ store, locationId, contactId: p.contactId, party: "investor", type: "pulse_voided", at: iso(Date.now()), source: "conversation",
+          dedupeKey: `pulse_voided:${claimKey}`, data: { claimKey, why: String(why || "").slice(0, 160) } }).catch(() => {});
+      };
       const r = await start({
         client, locationId, saved, store, contactId: p.contactId, kind: "buyer_pulse", offer: null, subject: p.subject,
         sendsEnabled: live,
-        deps: { ...deps, releaseHeld: plan.settings.autoSend, releaseReason: "the pulse check may send itself (Settings → Dispositions)" },
+        deps: { ...deps, releaseHeld: plan.settings.autoSend, releaseReason: "the pulse check may send itself (Settings → Dispositions)",
+          onSettled: (j) => { if (!j?.draftId) voidClaim(j?.heldReason || j?.error || "nothing was drafted"); } },
       }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
-      if (r?.skipped) { job.skipped++; job.results.push({ contactId: p.contactId, group: p.group, status: "skipped", reason: r.skipped }); }
+      if (r?.skipped) { await voidClaim(r.skipped); job.skipped++; job.results.push({ contactId: p.contactId, group: p.group, status: "skipped", reason: r.skipped }); }
       else { job.started++; job.results.push({ contactId: p.contactId, group: p.group, status: "drafting", jobId: r?.job?.id || null }); }
     }
     await finish({ status: "done" });

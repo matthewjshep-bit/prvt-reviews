@@ -109,3 +109,29 @@ test("a buyer who passed on a deal has talked with us, whatever the reply stamp 
 test("a market slug reads as a place name", () => {
   assert.deepEqual(pulseSubject(buyer("x", { markets: { cities: ["federal-way"] } }), { now: NOW }).cities, ["Federal Way"]);
 });
+
+/* ---------- friends first, and each line its own cadence (2026-09-29) ---------- */
+
+test("a buyer who bought from us is checked in with first", () => {
+  const { picks, counts } = pickPulseBuyers({ now: NOW, settings: { dailyCap: 2 }, investors: [
+    buyer("quiet1", { score: 90 }), buyer("quiet2", { score: 80 }),
+    buyer("friend", { engagement: { committed: 1 }, lastRepliedAt: ago(40) }),
+  ] });
+  assert.equal(picks[0].contactId, "friend");
+  assert.equal(picks[0].group, "friend");
+  assert.equal(counts.friends, 1);
+});
+
+test("buyers we never talked to can wait out a longer cadence than the ones we did", () => {
+  const pulsedAt = new Map([["quiet", ago(45)], ["talked", ago(45)]]);
+  const investors = [buyer("quiet"), buyer("talked", { lastRepliedAt: ago(100) })];
+  const same = pickPulseBuyers({ now: NOW, investors, pulsedAt, settings: { dailyCap: 5, everyDays: 30 } });
+  assert.equal(same.picks.length, 2, "unset, one cadence for both — nothing changes");
+  const split = pickPulseBuyers({ now: NOW, investors, pulsedAt, settings: { dailyCap: 5, everyDays: 30, quietEveryDays: 90 } });
+  assert.deepEqual(split.picks.map((p) => p.contactId), ["talked"]);
+});
+
+test("the plan says how long one pass through the book takes at this cap", () => {
+  const investors = Array.from({ length: 95 }, (_, i) => buyer(`b${i}`));
+  assert.equal(pickPulseBuyers({ now: NOW, investors, settings: { dailyCap: 30 } }).counts.passWorkdays, 4);
+});

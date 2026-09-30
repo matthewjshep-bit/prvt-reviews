@@ -696,6 +696,26 @@ export function outboundOpening(outbound) {
         `it twice" is not. ${nudgePressure(o)} Do NOT name a price or any number. ${CONTINUE} ` +
         `Set intent to dataroom_nudge.`;
 
+    // The walkthrough (ghl-broker/showing-sweep.js). A buyer who said they're
+    // coming, the afternoon before; and after, one who came or said they
+    // would. The deal's access lines are the only thing to say about getting
+    // in (shared/deal-access.js) — "it's open" was never ours to say.
+    case "showing_reminder":
+      return `${START} This buyer said they're coming to the walkthrough at ${o.street} tomorrow, ${o.windowLabel}. ` +
+        `One or two short lines: see you tomorrow, the day and window as written here, and ask them to text if anything changes. ` +
+        `How they get in: say ONLY what the deal's access lines above say, or nothing — never that it's open, never a code. ` +
+        `READ THE THREAD: if they have since said they can't make it or asked something, answer that instead of reminding. ` +
+        `Do NOT name a price or any number other than the time. Do NOT confirm a different time than the window. ` +
+        `${CONTINUE} Set intent to showing_reminder.`;
+
+    case "showing_followup":
+      return `${START} The walkthrough at ${o.street} was ${o.windowLabel}, and this buyer said they'd be there. ` +
+        `One or two short lines: ask how it looked, and whether they want to move on it — one question, easy to answer. ` +
+        `READ THE THREAD: if it shows they didn't make it, ask whether they'd still like to see it instead; if they already ` +
+        `told us what they thought, don't ask again — answer what they said. ` +
+        `Do NOT name a price or any number, and do NOT say others are interested unless the context above says so. ` +
+        `${CONTINUE} Set intent to showing_followup.`;
+
     // We said we'd come back and didn't. The failure mode is a second empty
     // promise; the useful message either moves the deal or asks for the one
     // thing that would.

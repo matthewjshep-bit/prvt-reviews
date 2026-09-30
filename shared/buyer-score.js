@@ -14,8 +14,11 @@
 //
 // Pure. The broker feeds it the timeline; the page only reads the result.
 
-import { regionFor, citySlug } from "./dispo-regions.js";
+import { regionFor, citySlug, regionsForArea } from "./dispo-regions.js";
 import { TALK_EVENT_TYPES, isTalkEvent } from "./talked-to.js";
+import { matchBuybox } from "./buybox.js";
+import { isBlockedBuyer } from "./buyer-pulse.js";
+import { sameStreet } from "./us-address.js";
 
 export const TIERS = { vip: "VIP", active: "Active", cold: "Cold" };
 // VIP: committed on a deal before, or scores at least this. Active: 40+, or replied in the last 3 months.
@@ -78,12 +81,20 @@ export function scoreBuyer(i = {}, { now = Date.now() } = {}) {
 /**
  * dealTarget({ address, city, priceMin, priceMax, rehabAppetite }) → the deal as rankForDeal reads it
  */
-export function dealTarget({ city = "", priceMin = null, priceMax = null, rehabAppetite = null } = {}) {
+export function dealTarget({ city = "", zip = "", priceMin = null, priceMax = null, rehabAppetite = null, propertyTypes = [], lotMin = null } = {}) {
   const slug = citySlug(city);
   const mid = priceMin != null && priceMax != null ? (priceMin + priceMax) / 2 : priceMax ?? priceMin ?? null;
   const strategy = rehabAppetite === "full_gut" ? "new-construction" : "flip";
-  return { city: slug, region: slug ? regionFor(city) : null, price: mid, strategy };
+  return { city: slug, zip: /^\d{5}$/.test(String(zip || "")) ? String(zip) : "", region: slug ? regionFor(city) : null, price: mid, strategy,
+    // What the buy box can rule in or out beyond place and price.
+    box: { propertyTypes: propertyTypes || [], rehabAppetite: rehabAppetite || null, lotMin: lotMin ?? null } };
 }
+
+// A buyer spoken for elsewhere (committed or soft-committed on another live
+// deal). A buyer only weighing another deal is NOT: the hottest buyers are
+// the ones to show the next deal (2026-09-29). Rows from before carry only
+// `onLiveDeal`, which is read the old way.
+const spokenFor = (i) => (i.spokenFor !== undefined ? Boolean(i.spokenFor) : Boolean(i.onLiveDeal));
 
 /**
  * rankForDeal(buyer, target) → { score, parts, reasons }
@@ -95,11 +106,16 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   const b = i.buybox || {};
   const reasons = [];
 
-  // Location — do they buy where this is.
+  // Location — do they buy where this is: the city (their loans or their buy
+  // box), the zip in their buy box, or the region either way ("South King").
   let location = 0;
-  const areas = (b.areas || []).map((a) => citySlug(a));
+  const rawAreas = (b.areas || []).map((a) => String(a || "").trim()).filter(Boolean);
+  const areas = rawAreas.map((a) => citySlug(a));
+  const zips = rawAreas.filter((a) => /^\d{5}$/.test(a));
+  const areaRegions = new Set(rawAreas.flatMap(regionsForArea));
   if (t.city && (mk.cities.includes(t.city) || areas.includes(t.city))) { location = 35; reasons.push("buys in this city"); }
-  else if (t.region && mk.regions.includes(t.region)) { location = 22; reasons.push("buys in this region"); }
+  else if (t.zip && zips.includes(t.zip)) { location = 35; reasons.push("buys in this zip"); }
+  else if (t.region && (mk.regions.includes(t.region) || areaRegions.has(t.region))) { location = 22; reasons.push("buys in this region"); }
 
   // Price — does the deal sit where they spend. A buy box band wins; failing
   // that, their largest loan (loans run below price, so the band is generous).
@@ -128,11 +144,28 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   if (mk.types?.includes(t.strategy)) { strategy = 10; reasons.push(t.strategy === "flip" ? "flips" : "builds"); }
   else if (mk.types?.length) strategy = 3;
 
-  let score = location + price + recency + tierPts + strategy;
-  if (i.onLiveDeal) { score -= 10; reasons.push("already on a live deal"); }
+  // Their buy box on the rest — the kind of house, how much work, the lot.
+  // A documented fit earns a little; a documented contradiction costs a lot
+  // (a mismatched blast is what teaches a buyer to ignore us).
+  let box = 0;
+  const q = t.box || {};
+  if (q.propertyTypes?.length || q.rehabAppetite || q.lotMin != null) {
+    const m = matchBuybox(b, q);
+    if (m.missed.length) { box = -20; reasons.push(`their buy box rules it out (${m.missed.join(", ")})`); }
+    else if (m.matched.length) { box = 10; reasons.push("fits their buy box"); }
+  }
+
+  // Someone we are actually talking to (shared/talked-to.js) — Matt,
+  // 2026-09-29: wave 2 on 3511 NE 153rd went by location tags alone, and the
+  // buyers already in conversation scored no better than strangers.
+  const talking = i.relationship === "talking" ? 8 : 0;
+  if (talking) reasons.push("we're talking with them");
+
+  let score = location + price + recency + tierPts + strategy + box + talking;
+  if (spokenFor(i)) { score -= 10; reasons.push("committed to another live deal"); }
   return {
     score: Math.max(0, Math.min(100, Math.round(score))),
-    parts: { location, price, recency, tier: tierPts, strategy },
+    parts: { location, price, recency, tier: tierPts, strategy, box, talking },
     reasons,
   };
 }
@@ -149,11 +182,42 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
 export function pickWave(ranked = [], { wave = 1, floor = 0, exclude = "blasted" } = {}) {
   const tierOrder = { vip: 0, active: 1, cold: 2 };
   return ranked
-    .filter((i) => i.phone && !i.onLiveDeal && i.rank >= floor)
+    .filter((i) => i.phone && !isBlockedBuyer(i) && !spokenFor(i) && i.rank >= floor)
     .filter((i) => (i.rankParts?.location || 0) > 0)
     .filter((i) => exclude !== "blasted" || !i.alreadyBlasted)
     .filter((i) => wave !== 1 || i.tier === "vip" || i.tier === "active")
     .sort((a, b) => wave === 1 ? ((tierOrder[a.tier] ?? 3) - (tierOrder[b.tier] ?? 3)) || (b.rank - a.rank) : b.rank - a.rank);
+}
+
+// A blast draft that is going out, or about to.
+const BLAST_DRAFT_LIVE = new Set(["draft", "scheduled", "sending"]);
+
+/**
+ * blastedTo(offer, { events, drafts }) → Set(contactId)
+ *
+ * Everyone this deal has gone to or is about to go to. That means:
+ *   - a blast_sent recorded for the offer;
+ *   - a GHL-workflow blast, which knows its tag and label but not its deal,
+ *     matched on one of the deal's blast tags or its street;
+ *   - anyone on one of the deal's app waves (deal.blasts[].contactIds);
+ *   - a blast draft for the deal still waiting to go.
+ * A wave that read only what had already sent would draft a wave-1 buyer
+ * again while their first text was still waiting in the outbox.
+ */
+export function blastedTo(offer = {}, { events = [], drafts = [] } = {}) {
+  const out = new Set();
+  const tags = new Set((offer?.deal?.blastTags || []).map((t) => String(t || "").toLowerCase()).filter(Boolean));
+  for (const e of events || []) {
+    if (e?.type !== "blast_sent" || !e.contactId) continue;
+    if (e.offerId) { if (e.offerId === offer?.id) out.add(e.contactId); continue; }
+    const tag = String(e.data?.tag || "").toLowerCase();
+    if ((tag && tags.has(tag)) || sameStreet(e.address || e.data?.label || "", offer?.address || "")) out.add(e.contactId);
+  }
+  for (const b of offer?.deal?.blasts || []) for (const id of b?.contactIds || []) if (id) out.add(id);
+  for (const d of drafts || []) {
+    if (d?.contactId && d.outbound?.kind === "blast_open" && d.outbound?.offerId === offer?.id && BLAST_DRAFT_LIVE.has(d.status)) out.add(d.contactId);
+  }
+  return out;
 }
 
 /** engagementFromEvents(events) → Map(contactId → { blasts, viewed, evaluating, committed, passed, talks, lastEngagedAt }) */
