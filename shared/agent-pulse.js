@@ -378,12 +378,16 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   due.sort(cmp);
   const cap = seats == null ? s.dailyCap : Math.max(0, seats);
   counts.dueNoSeat = Math.max(0, due.length - cap);
-  const picks = due.slice(0, cap).map(({ agent, verdict }) => ({
+  const toPick = ({ agent, verdict }) => ({
     contactId: agent.contactId, name: agent.name || "", segment: verdict.segment, reason: verdict.pulseReason,
     listingKey: verdict.listing?.listingKey || null,
     subject: agentPulseSubject({ agent, verdict, now }),
-  }));
-  return { picks, counts };
+  });
+  const picks = due.slice(0, cap).map(toPick);
+  // The next in line after the day's seats: an agent skipped before being
+  // claimed (unsubscribed in GHL, tagged off, no phone) hands the seat on.
+  const spares = due.slice(cap, cap + Math.max(5, Math.ceil(s.dailyCap / 2))).map(toPick);
+  return { picks, spares, counts };
 }
 
 const street = (address) => String(address || "").split(",")[0].trim();

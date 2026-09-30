@@ -202,7 +202,12 @@ export function startAgentPulse({
     const botOff = config.routing?.botOffTags || [];
     // A different way in for each text, continuing across the day's runs.
     let n = Number(plan.claimedToday) || 0;
-    for (const p of picks) {
+    // The day's picks, then the spares: an agent skipped before being claimed
+    // (unsubscribed, tagged off, no phone) hands the seat to the next in line.
+    const seats = picks.length;
+    let claimed = 0;
+    for (const p of [...picks, ...(dryRun ? [] : plan.spares || [])]) {
+      if (claimed >= seats) break;
       const row = { contactId: p.contactId, segment: p.segment, pulse: p.reason, address: p.subject?.address || "" };
       job.results.push(row);
       const skip = (why) => { row.status = "skipped"; row.detail = why; job.skipped++; };
@@ -227,6 +232,7 @@ export function startAgentPulse({
         address: p.subject?.address || "", dedupeKey: claimKey, data: { segment: p.segment, reason: p.reason, listingKey: p.listingKey || null, trigger },
       });
       if (!claim.inserted) { skip("already claimed today"); continue; }
+      claimed++;
       const pingKey = p.reason === "fresh_listing" && p.listingKey ? `listing_pinged:${p.contactId}:${p.listingKey}` : null;
       if (pingKey) {
         await recordEvent({
@@ -309,9 +315,15 @@ export async function previewAgentPulse({ client, locationId, saved = {}, store 
   const preview = typeof deps.previewProactive === "function" ? deps.previewProactive : previewProactive;
   const n = Math.max(1, Math.min(5, Math.round(Number(limit)) || 3));
   const previews = [];
-  for (const [i, p] of plan.picks.slice(0, n).entries()) {
+  // A pick that wouldn't be drafted (unsubscribed, a person has the thread)
+  // is shown with why, and the next in line is written in its place.
+  let drafted = 0;
+  const line = [...plan.picks, ...(plan.spares || [])].slice(0, n + 4);
+  for (const [i, p] of line.entries()) {
+    if (drafted >= n) break;
     const r = await preview({ client, locationId, saved, store, contactId: p.contactId, kind: "agent_pulse", offer: null, subject: { ...p.subject, variant: i } })
       .catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
+    if (!r?.skipped) drafted++;
     previews.push({
       contactId: p.contactId, name: r?.contactName || p.name || "", segment: p.segment, reason: p.reason, street: p.subject?.address || "",
       reply: r?.reply || "", held: Boolean(r?.held), flags: r?.flags || [], skipped: r?.skipped || "",
