@@ -4150,3 +4150,10 @@ test("a buyer who asks to walk a house is put on the deal even when the reply is
   assert.deepEqual(linked, [{ contactId: "c1", addressHint: "2010 NE 54th St" }]);
   assert.equal((await store.getReplyDraft(job.draftId)).status, "handled");
 });
+
+test("a held reply says why in plain words, never 'a other'", async () => {
+  const { personsCall } = await import("./reply-agent.js");
+  assert.equal(personsCall("counter"), "a counter is a person's call");
+  assert.equal(personsCall("other"), "a reply the bot couldn't place is a person's call");
+  assert.equal(personsCall("opt_out"), "an opt out is a person's call");
+});
