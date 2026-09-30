@@ -2552,10 +2552,46 @@ segment, who another clock owns and why, who's due and why, coverage) plus
 the last run; it writes nothing. `POST /api/outreach/pulse/run {dryRun, limit}`
 is a dry run unless `dryRun: false`.
 
-**Turning it on.** First trim the GHL TIER 2/3 workflows to tags and stage
-moves: the app can't see enrollments made before this. Then read
-`GET /api/outreach/pulse`, tick "Check in with every agent", read a day of
-drafts, and only then tick "Let them send themselves".
+**It replaces the TIER 2/3 drips (2026-09-30).** Those GHL workflows text
+"still looking for fixers…" / "anything ugly cross your desk lately?" about
+every four weeks (sampled 2026-09-30: 59 of the 60 oldest tier-2/3 agents had
+them). The check-in is the one clock now, so while it's on:
+- the playbook's tier rules still tag `tier-2`/`tier-3` (the stage follows the
+  tag), but `add_to_workflow` keeps the agent out of the drips it replaces —
+  conversationDeps hands the executor `replacedWorkflowIds`;
+- an agent it texts is taken out of those drips first (`workflow_left`, a 4xx
+  is "wasn't in it"), so nobody hears from both;
+- a drip enrollment never "owns" an agent in the plan.
+
+Which drips: `shared/agent-pulse.js` `tierDrips` — every TIER 2 or TIER 3
+workflow the agent playbook's rules or catch-all enroll people in, unless
+`pulse.replacesWorkflowIds` names them by hand. While the check-in is off
+nothing changes: the rules enroll as before and the drips keep texting.
+
+GHL starts a workflow on its own when its trigger tag is added, which the app
+can't stop, so the text steps inside TIER 2 and TIER 3 should be deleted in
+GHL too (keep the tag and stage steps). Settings → "Replaces the TIER 2/3
+check-in drips" → **Count who's in them**, then **Take everyone out now**
+(`POST /api/outreach/pulse/leave-drips {dryRun}`, live only with the check-in
+on; progress at `GET /api/outreach/pulse/leave-drips`) takes everyone tagged
+tier-2/tier-3 out at once — GHL has no API that lists a workflow's members.
+
+**How it sounds.** An agent we know gets one real, specific thing from the
+history first — something they told us that's still open, the last house and
+how it went, something personal they shared (only if recent), or their market
+— then the question; never quoted, never invented, never more than one, and
+never a number. The subject carries `lastHouse`, `aboutThem` (the record's
+"About them", newest first, each with days ago), `areas` and the last
+conversation summary. A stranger gets the listing. `pulse.voice` (Settings,
+600 characters) is Matt's own note on the voice, passed to the drafter.
+**Write 3 sample check-ins** (`POST /api/outreach/pulse/preview {limit}`)
+drafts the next ones from their real threads with the saved settings —
+`reply-agent.js previewProactive`, which writes nothing and sends nothing.
+
+**Turning it on.** Delete the text steps in the GHL TIER 2/3 workflows. Save
+your voice notes and read the samples. Tick "Check in with every agent", then
+Count and Take everyone out of the drips. Read a day of drafts, and only then
+tick "Let them send themselves".
 
 **Also in this change.** The "I'll send you deals" check-ins can start again
 when an agent offers a second time (the key used to be one per contact,

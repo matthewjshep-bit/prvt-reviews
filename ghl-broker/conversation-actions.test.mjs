@@ -349,3 +349,29 @@ test("putting someone in a GHL workflow, or taking them out, is on their timelin
   ] });
   assert.deepEqual(rows.map((e) => [e.type, e.data.workflowId]), [["workflow_enrolled", "wf-tier2"], ["workflow_left", "wf-tier1"]]);
 });
+
+// Matt, 2026-09-30: "make sure that the tier 2/3 workflow that checks in is
+// being replaced". While the agent check-in is on, a tier rule still tags the
+// agent (the stage follows the tag), but nobody is put in a drip it replaces.
+test("while the check-in replaces the TIER drips, a tier rule tags the agent but doesn't enroll them", async () => {
+  const { client, calls } = recordingClient();
+  const rows = [];
+  const store = {
+    async getContactProfile() { return null; }, async upsertContactProfile() { return {}; },
+    async appendContactEvents(_loc, contactId, add) { rows.push(...add.map((e) => ({ ...e, contactId }))); return { inserted: add.length, skipped: 0 }; },
+  };
+  const actions = () => [
+    { id: "t1", type: "add_tags", tags: ["tier-3"] },
+    { id: "t2", type: "add_to_workflow", workflowId: "wf-tier3", workflowName: "TIER 3" },
+    { id: "t3", type: "add_to_workflow", workflowId: "wf-tier1", workflowName: "TIER 1" },
+  ];
+  const r = await runActions({ client, locationId: "LOC", contactId: "c1", store, draft: { id: "d1" }, actions: actions(),
+    deps: { replacedWorkflowIds: ["wf-tier3"] } });
+  assert.ok(calls.some(([, p]) => p === "/contacts/c1/tags"), "the tier tag still goes on");
+  assert.equal(calls.some(([, p]) => p === "/contacts/c1/workflow/wf-tier3"), false, "never put in the drip the check-in replaces");
+  assert.ok(calls.some(([, p]) => p === "/contacts/c1/workflow/wf-tier1"), "a workflow it doesn't replace still runs");
+  const kept = r.find((a) => a.id === "t2");
+  assert.equal(kept.status, "done");
+  assert.match(kept.detail, /kept out of TIER 3/);
+  assert.equal(rows.some((e) => e.type === "workflow_enrolled" && e.data.workflowId === "wf-tier3"), false);
+});

@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeAgentPulse, evaluateAgent, pickPulseAgents, agentSegment, agentStops, agentOwner,
-  freshListingFor, listingDistressed, agentPulseSubject,
+  freshListingFor, listingDistressed, agentPulseSubject, tierDrips,
 } from "./agent-pulse.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
@@ -173,3 +173,54 @@ test("segments: a deal or a yes is a partner, a reply is engaged, silence is col
 
 import { addressKey as freshAddressKey } from "./us-address.js";
 function freshKey(l) { return freshAddressKey(l.doc.address); }
+
+/* ---------- the check-in replaces the TIER 2/3 drips (2026-09-30) ---------- */
+
+// The live playbook's tier rules, as Matt pasted them: a "no" and the catch-all
+// go to TIER 3, "open to investors" to TIER 2, a deal to TIER 1.
+const TIER_CAI = normalizeConversationAi({ enabled: true, parties: { agent: {
+  intentRules: {
+    deal_available: { mode: "auto", actions: [{ type: "add_to_workflow", workflowId: "wf-t1", workflowName: "TIER 1" }, { type: "remove_from_workflow", workflowId: "wf-t2", workflowName: "TIER 2" }] },
+    investor_open: { mode: "auto", actions: [{ type: "add_tags", tags: ["tier-2"] }, { type: "add_to_workflow", workflowId: "wf-t2", workflowName: "TIER 2" }] },
+    rejection: { mode: "auto", actions: [{ type: "add_tags", tags: ["tier-3"] }, { type: "add_to_workflow", workflowId: "wf-t3", workflowName: "TIER 3" }] },
+  },
+  fallback: { mode: "auto", actions: [{ type: "add_to_workflow", workflowId: "wf-t3", workflowName: "TIER 3" }] },
+} } });
+
+test("the check-in finds the TIER 2 and TIER 3 drips in the playbook; a list set by hand wins", () => {
+  assert.deepEqual(tierDrips({ pulse: {}, conversationAi: TIER_CAI }), [{ id: "wf-t2", name: "TIER 2" }, { id: "wf-t3", name: "TIER 3" }]);
+  assert.deepEqual(tierDrips({ pulse: { replacesWorkflowIds: "wf-x, wf-t3" }, conversationAi: TIER_CAI }), [{ id: "wf-x", name: "" }, { id: "wf-t3", name: "TIER 3" }]);
+  assert.deepEqual(tierDrips({ pulse: {}, conversationAi: null }), [], "no playbook, nothing to replace");
+});
+
+test("once the check-in replaces the drips, an agent the bot put in TIER 3 is the check-in's, not the drip's", () => {
+  const inTier = agent({ lastInboundAt: ago(60), events: [{ type: "workflow_enrolled", at: ago(5), data: { workflowId: "wf-t3", workflowName: "TIER 3" } }] });
+  assert.equal(evaluateAgent(inTier, ctx()).reason, "a GHL workflow (TIER 3)", "a drip nobody replaced still has them");
+  const replacing = normalizeAgentPulse({ enabled: true, replacesWorkflowIds: ["wf-t3"] });
+  assert.equal(evaluateAgent(inTier, ctx({ settings: replacing })).status, "due");
+});
+
+test("the check-in carries what it can mention: the last house, the areas they work, and what they've told us, each dated", () => {
+  const a = agent({
+    lastInboundAt: ago(30),
+    offers: [passed({ address: "9 Oak St, Kent, WA 98031", statusAt: ago(35) }), passed({ id: "o0", address: "4 Elm St, Kent, WA 98031", statusAt: ago(90), createdAt: ago(100) })],
+    facts: {
+      personal_details: [{ value: "back from Maui", at: ago(200) }, { value: "daughter just started at UW", at: ago(40) }],
+      agent_market_area: [{ value: "South King", at: ago(90) }],
+      last_convo_summary: [{ value: "said a Burien fixer might list after the holidays", at: ago(30) }],
+    },
+  });
+  const subj = agentPulseSubject({ agent: a, verdict: { pulseReason: "general", segment: "engaged" }, now: NOW });
+  assert.deepEqual(subj.lastHouse, { street: "9 Oak St", how: "passed", daysAgo: 35 });
+  assert.deepEqual(subj.aboutThem, [{ what: "daughter just started at UW", daysAgo: 40 }, { what: "back from Maui", daysAgo: 200 }]);
+  assert.deepEqual(subj.areas, ["South King"]);
+  assert.equal(subj.lastSummary, "said a Burien fixer might list after the holidays");
+  assert.doesNotMatch(JSON.stringify(subj), /300000|300k/i, "never a price");
+});
+
+test("Matt's notes on how the check-in should sound are kept, trimmed and capped", () => {
+  assert.equal(normalizeAgentPulse({}).voice, "");
+  assert.equal(normalizeAgentPulse({ voice: "  Keep it short. Sign off -Matt.  " }).voice, "Keep it short. Sign off -Matt.");
+  assert.equal(normalizeAgentPulse({ voice: "x".repeat(900) }).voice.length, 600);
+  assert.deepEqual(normalizeAgentPulse({ replacesWorkflowIds: "a, b\nc" }).replacesWorkflowIds, ["a", "b", "c"]);
+});

@@ -264,7 +264,7 @@ test("the listing check-in names the street, never the price", () => {
   const known = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", dealsWithUs: 1 });
   assert.match(known, /anything coming up that needs work/);
   assert.match(known, /this is a friend/);
-  assert.match(known, /do NOT reintroduce yourself/);
+  assert.match(known, /do NOT reintroduce yourself/i);
 });
 
 test("the walkthrough reminder names the street and window, says only what the access lines say, and names no price", () => {
@@ -278,4 +278,28 @@ test("the walkthrough reminder names the street and window, says only what the a
   assert.match(f, /ask how it looked/);
   assert.match(f, /didn't make it/);
   assert.match(f, /intent to showing_followup/);
+});
+
+// Matt, 2026-09-30: "make it reference pieces of the conversation we've had if
+// any, make it personalized, concise, friendly, professional, like we're
+// building a relationship".
+test("a check-in with history opens on one real thing from the conversation, sounds like Matt, and names no number", () => {
+  const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged",
+    lastHouse: { street: "9 Oak St", how: "passed", daysAgo: 35 },
+    aboutThem: [{ what: "daughter just started at UW", daysAgo: 40 }],
+    areas: ["South King"], lastSummary: "said a Burien fixer might list after the holidays",
+    voice: "Keep it short. Sign off -Matt." });
+  assert.match(t, /ONE real, specific thing/);
+  assert.match(t, /9 Oak St \(passed, 35 days ago\)/);
+  assert.match(t, /daughter just started at UW \(40 days ago\)/);
+  assert.match(t, /said a Burien fixer might list after the holidays/);
+  assert.match(t, /South King/);
+  assert.match(t, /friendly and professional/i);
+  assert.match(t, /never invent/i);
+  assert.match(t, /HOW MATT WANTS THESE TO SOUND[^]*Keep it short\. Sign off -Matt\./);
+  assert.match(t, /Do NOT name a price/);
+  assert.doesNotMatch(t, /colour only, never quote it back/, "the history is the point now, not colour to hide");
+  const cold = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "cold", listing: { street: "123 Main St", city: "Kent" } });
+  assert.doesNotMatch(cold, /ONE real, specific thing/, "a stranger has no history to lean on");
+  assert.match(cold, /123 Main St in Kent/);
 });

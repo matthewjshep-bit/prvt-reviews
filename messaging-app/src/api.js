@@ -647,6 +647,11 @@ export const runBuyerPulse = ({ dryRun = true, limit = null } = {}) => post(`/ap
 // The agent check-in (every agent on a ~3-week clock): today's plan, and a run.
 export const getAgentPulse = () => fetch(`${API_BASE}/api/outreach/pulse?${locq()}`).then(j);
 export const runAgentPulse = ({ dryRun = true, limit = null } = {}) => post(`/api/outreach/pulse/run`, { dryRun, ...(limit != null ? { limit } : {}) });
+// A few check-ins as the drafter would write them now, from real threads. Nothing saved or sent.
+export const sampleAgentPulse = (limit = 3) => post(`/api/outreach/pulse/preview`, { limit });
+// Everyone tagged tier-2/tier-3, out of the GHL drips the check-in replaces. dryRun only counts.
+export const leaveTierDrips = ({ dryRun = true } = {}) => post(`/api/outreach/pulse/leave-drips`, { dryRun });
+export const getLeaveTierDrips = () => fetch(`${API_BASE}/api/outreach/pulse/leave-drips?${locq()}`).then(j);
 export const saveBuybox = (contactId, buybox) =>
   post(`/api/dispo/investors/${encodeURIComponent(contactId)}/buybox`, { buybox }, "PUT");
 export const setInvestorStatus = (contactId, status) =>

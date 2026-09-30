@@ -441,10 +441,18 @@ const PULSE_SHAPES = [
 
 // The agent check-in's phrasings, rotated per text so a day's batch doesn't
 // read as a template (the buyer pulse learned this on its first live day).
+// Three ways into the same text, rotated so a day's check-ins don't open
+// alike. With history every shape carries the one reference; a stranger's
+// leads with the listing.
 const AGENT_PULSE_SHAPES = [
-  "SHAPE FOR THIS ONE: open with the question itself; the reason in a clause.",
-  "SHAPE FOR THIS ONE: open with the one thing you know about them (the listing, the house, what you last talked about), then the question.",
-  "SHAPE FOR THIS ONE: shortest version that still has their first name and the question — one sentence if you can.",
+  "SHAPE FOR THIS ONE: the reference first, in a clause, then the question.",
+  "SHAPE FOR THIS ONE: the question first, with the reference tucked into it.",
+  "SHAPE FOR THIS ONE: a short thanks or well-wish tied to the reference, then the question.",
+];
+const AGENT_PULSE_COLD_SHAPES = [
+  "SHAPE FOR THIS ONE: open with the listing, then the question.",
+  "SHAPE FOR THIS ONE: open with the question; the listing in a clause.",
+  "SHAPE FOR THIS ONE: shortest version that still has their first name, the street and the question — one sentence if you can.",
 ];
 
 const START = "YOU ARE STARTING THIS MESSAGE — nothing new came in.";
@@ -654,13 +662,17 @@ export function outboundOpening(outbound) {
 
     // The agent's own clock (shared/agent-pulse.js). Matt, 2026-09-29:
     // "reach out to these agents proactively and frequently, every 3 weeks or
-    // so, to see if they have any new listings or leads". One local investor
-    // texting an agent; the reason is the one the pulse picked, and every clue
-    // is colour, never a dossier.
+    // so, to see if they have any new listings or leads" — and 2026-09-30:
+    // "make it reference pieces of the conversation we've had if any, make it
+    // personalized, concise, friendly, professional, like we're building a
+    // relationship". So for an agent we know, the history IS the message: one
+    // real thing from it, then the question. A stranger gets the listing.
     case "agent_pulse": {
       const l = o.listing || null;
       const h = o.house || null;
+      const lh = o.lastHouse || null;
       const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
+      const ago = (d) => (d == null ? "" : d <= 1 ? "a day ago" : `${d} days ago`);
       const why = o.reason === "fresh_listing" && l
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom ? `, on the market about ${l.dom} days` : ""}${l.cut ? `, with a price cut` : ""}. ` +
           `Ask whether the seller would look at an as-is cash offer — we buy houses that need work. Name the street; never its price or any number.`
@@ -668,17 +680,32 @@ export function outboundOpening(outbound) {
         ? `Last time it was ${h.street}, which ${h.how === "closed" ? "closed" : h.how === "fell through" ? "fell through" : h.how === "never heard back" ? "we never heard back on" : "didn't work out"}. ` +
           `Check in on THEM, not that house: anything else coming up that needs work, or anything off market?`
         : `No house in particular. Check in: anything coming up that needs work, or anything off market they'd want a quick as-is buyer for?`;
-      const clues = [
+      // What there is to mention, each with how long ago, so nothing old is
+      // told as if it were last week.
+      const material = cold ? [] : [
+        o.lastSummary ? `What we last talked about: ${o.lastSummary}.` : "",
+        lh && !(h && h.street === lh.street) ? `The last house we had with them: ${lh.street} (${[lh.how, ago(lh.daysAgo)].filter(Boolean).join(", ")}).` : "",
+        (o.aboutThem || []).length ? `What they've told us about themselves: ${(o.aboutThem || []).map((x) => `${x.what}${x.daysAgo != null ? ` (${ago(x.daysAgo)})` : ""}`).join("; ")}.` : "",
+        (o.areas || []).length ? `Areas they work: ${(o.areas || []).join(", ")}.` : "",
+        o.nextAction ? `What we meant to do next with them: ${o.nextAction}.` : "",
         o.dealsWithUs ? "We have done a deal together — this is a friend, write like it." : "",
-        o.lastSummary ? `What we last talked about (colour only, never quote it back): ${o.lastSummary}.` : "",
-        o.nextAction ? `What we meant to do next with them (colour only): ${o.nextAction}.` : "",
-      ].filter(Boolean).join(" ");
+      ].filter(Boolean);
+      const reference = cold ? "" :
+        `THE ONE REFERENCE: this is a relationship check-in, and your history with them is the point. READ THE THREAD, then open with ONE real, specific thing from it or from the notes below, said in your own words in a clause — ` +
+        `in this order of preference: something they told us that's still open (a listing or a seller they mentioned, a property they said was coming, their timing); ` +
+        `the last house we talked about and how it went (by street, never a number); something personal they shared, only if it's recent enough to still be true and it reads warm, not nosy; their market. ` +
+        `Prefer the newest. Never quote them, never recite the thread, never more than one reference, never something months old as if it were last week — and never invent one: ` +
+        `if the thread and the notes have nothing specific, keep it general. For this message the PERSONAL TOUCH rule's "most messages carry none" does not apply: carry exactly one when there is one. `;
+      const shapes = cold ? AGENT_PULSE_COLD_SHAPES : AGENT_PULSE_SHAPES;
       return `${START} There is NO offer in this message. It is a check-in with a listing agent${cold ? " who has not written back before" : " we know"}. ` +
-        `${why} ${clues ? `${clues} ` : ""}` +
-        `WHAT TO WRITE: one or two short sentences, one text, the way a local investor texts an agent. ` +
-        `${cold ? "One clause on who you are: a local investor who buys houses that need work, as-is. " : "READ THE THREAD and pick up like someone who remembers; do NOT reintroduce yourself. "}` +
-        `${AGENT_PULSE_SHAPES[(Number(o.variant) || 0) % AGENT_PULSE_SHAPES.length]} ` +
-        `Do NOT name a price, a number, a percentage, an ARV or a link. Do NOT promise an offer or say what we'd pay. ` +
+        `${why} ` +
+        `${reference}${material.length ? `NOTES FROM OUR HISTORY: ${material.join(" ")} ` : ""}` +
+        `TONE: friendly and professional — how a local investor who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
+        `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Their first name once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
+        `${cold ? "One clause on who you are: a local investor who buys houses that need work, as-is. " : "Do NOT reintroduce yourself. "}` +
+        `${shapes[(Number(o.variant) || 0) % shapes.length]} ` +
+        `${o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}" ` : ""}` +
+        `Do NOT name a price, a number, a percentage, an ARV or a link — a street name is fine, a dollar figure never. Do NOT promise an offer or say what we'd pay. ` +
         `Do NOT say "I'm reaching out", "touching base" or "just checking in". Easy to ignore, easy to answer in a line. ` +
         `${cold ? "" : `${CONTINUE} `}Set intent to agent_pulse.`;
     }

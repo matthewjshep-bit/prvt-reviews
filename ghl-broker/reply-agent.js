@@ -47,6 +47,7 @@ import { getFreeSlots, searchConversations, listConversationMessages } from "./g
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
+import { normalizeAgentPulse } from "./shared/agent-pulse.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
@@ -2262,12 +2263,19 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
   }
   if (kind === "agent_pulse") {
     // shared/agent-pulse.js agentPulseSubject: a listing by street (never its
-    // price), a house by street and how it ended, and what we last talked
-    // about as colour.
+    // price), a house by street and how it ended, what we last talked about,
+    // what they've told us and where they work — each dated — and Matt's own
+    // notes on how these should sound (Settings → Agent Outreach).
     const p = subject || {};
+    const list = (xs, n) => (Array.isArray(xs) ? xs.slice(0, n) : []);
     return { kind, address: String(p.address || ""), reason: p.reason || "general", segment: p.segment || "engaged",
       listing: p.listing || null, house: p.house || null, dealsWithUs: Number(p.dealsWithUs) || 0, offersWithUs: Number(p.offersWithUs) || 0,
-      lastSummary: String(p.lastSummary || "").slice(0, 200), nextAction: String(p.nextAction || "").slice(0, 160), variant: Number(p.variant) || 0 };
+      lastSummary: String(p.lastSummary || "").slice(0, 200), nextAction: String(p.nextAction || "").slice(0, 160),
+      lastHouse: p.lastHouse && p.lastHouse.street ? { street: String(p.lastHouse.street), how: String(p.lastHouse.how || ""), daysAgo: p.lastHouse.daysAgo ?? null } : null,
+      aboutThem: list(p.aboutThem, 3).map((x) => ({ what: String(x?.what || "").slice(0, 120), daysAgo: x?.daysAgo ?? null })).filter((x) => x.what),
+      areas: list(p.areas, 3).map((x) => String(x).slice(0, 60)),
+      voice: normalizeAgentPulse(saved?.outreachAutopilot?.pulse).voice,
+      variant: Number(p.variant) || 0 };
   }
   if (kind === "showing_reminder" || kind === "showing_followup") {
     // The walkthrough: the street and the window as a buyer reads it
@@ -2351,6 +2359,63 @@ function outboundSummary({ kind, offer, outbound }) {
   }
 }
 
+// The gates a machine-started text answers to. What its kind floats is what
+// it may say, on top of the record book — and what it forbids is subtracted
+// even though the book has it. A nudge floats nothing, so its allowance is
+// exactly the book; `onlyFloats` (a check-in) allows nothing at all.
+function outboundGateFor({ spec, offer, subject, context, config, party, a }) {
+  const floats = spec.floats({ offer, subject }).filter(Boolean);
+  const allowed = spec.onlyFloats ? floats : [...new Set([...(context.amounts || []), ...floats])];
+  const extraForbidden = spec.forbids({ offer, subject }).filter(Boolean);
+  const forbiddenAmounts = extraForbidden.length
+    ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]
+    : context.forbiddenAmounts;
+  return (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
+    ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
+    vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address) });
+}
+
+/**
+ * previewProactive({ client, locationId, saved, store, contactId, kind, offer, subject, deps })
+ *   → { contactName, reply, summary, held, flags } | { skipped }
+ *
+ * What a machine-started text WOULD say, drafted the way runProactive drafts
+ * it — their thread, their record, the prompt, the money guard — and then
+ * dropped: no draft row, no claim, no job, nothing sent. For reading the
+ * agent check-in's voice before it's switched on (Settings → Agent Outreach).
+ * `held` is the money guard or another gate objecting; the check-in's own
+ * "a person's call" lock is not counted, since its switch releases that.
+ */
+export async function previewProactive({ client, locationId, saved, store, contactId, kind, offer = null, subject = null, deps = {} }) {
+  const aiApiKey = String(saved?.aiApiKey || "").trim();
+  if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
+  const config = conversationConfig(saved);
+  const spec = OUTBOUND_KINDS[kind];
+  if (!spec) return { skipped: `unknown outbound kind ${kind}` };
+  const party = spec.party;
+  const ready = spec.ready({ offer, subject, config, dossier: null });
+  if (ready !== true) return { skipped: ready };
+  const a = await assembleConversation({
+    client, locationId, saved, store, contactId, message: "", channel: "sms", explicitParty: party, now: Date.now(), warnings: [], aiApiKey,
+  });
+  const handsOff = handsOffReason(a);
+  if (handsOff) return { skipped: handsOff, contactName: a.contactName };
+  const askedOff = optOutInTranscript(a.transcript, config.optOut);
+  if (askedOff) return { skipped: `they asked to be left alone on ${askedOff.at}`, contactName: a.contactName };
+  const { context } = a;
+  const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier: null });
+  const draft = await (deps.draft || draftReply)({
+    message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
+    contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
+    aiApiKey, party, config, context, channel: "sms", outbound, batch: null,
+  });
+  draft.intent = kind;
+  const gate = outboundGateFor({ spec, offer, subject, context, config, party, a })(draft);
+  const clean = Boolean(gate.ok || (gate.locked && gate.clean));
+  return { contactName: a.contactName, reply: String(draft.reply || ""), summary: String(draft.summary || ""),
+    held: !clean, flags: (gate.flags || []).filter((f) => f !== gate.locked) };
+}
+
 async function runProactive(job, ctx) {
   const { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, subject, spec, config, dossier, deps } = ctx;
   const now = typeof deps.now === "function" ? deps.now() : Date.now();
@@ -2393,18 +2458,7 @@ async function runProactive(job, ctx) {
   draft.intent = kind;
   if (draft.shadow && !draft.shadow.error) draft.shadow.intent = kind;
   job.summary = draft.summary;
-  // What this kind floats is what it may say, on top of the record book — and
-  // what it forbids is subtracted even though the book has it. A nudge floats
-  // nothing, so its allowance is exactly the book.
-  const floats = spec.floats({ offer, subject }).filter(Boolean);
-  const allowed = spec.onlyFloats ? floats : [...new Set([...(context.amounts || []), ...floats])];
-  const extraForbidden = spec.forbids({ offer, subject }).filter(Boolean);
-  const forbiddenAmounts = extraForbidden.length
-    ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]
-    : context.forbiddenAmounts;
-  const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
-    ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
-    vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address) });
+  const gateFor = outboundGateFor({ spec, offer, subject, context, config, party, a });
   const gate = gateFor(draft);
   let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
   auto = releaseForAudit({ auto, gate, draft, deps });

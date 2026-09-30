@@ -129,3 +129,75 @@ test("a dry run picks and reports, and claims nobody", async () => {
   assert.deepEqual(job.results.map((r) => [r.contactId, r.status]), [["ag4", "would draft"]]);
   assert.equal((await store.listContactEvents(loc, "ag4", { limit: 50 })).some((e) => e.type === "agent_pulse_sent"), false);
 });
+
+/* ---------- the check-in replaces the TIER 2/3 drips (2026-09-30) ---------- */
+
+const { startLeaveDrips, getLeaveDripsJob, previewAgentPulse } = await import("./agent-pulse.js");
+// The live playbook's tier rules: a "no" goes to TIER 3, "open to investors" to TIER 2.
+const tierCai = (over = {}) => normalizeConversationAi({ enabled: true, parties: { agent: { intentRules: {
+  investor_open: { mode: "auto", actions: [{ type: "add_tags", tags: ["tier-2"] }, { type: "add_to_workflow", workflowId: "wf-t2", workflowName: "TIER 2" }] },
+  rejection: { mode: "auto", actions: [{ type: "add_tags", tags: ["tier-3"] }, { type: "add_to_workflow", workflowId: "wf-t3", workflowName: "TIER 3" }] },
+} } }, ...over });
+const savedTier = (pulse = {}) => ({ aiApiKey: "k", conversationAi: tierCai(), outreachAutopilot: { pulse: { enabled: true, dailyCap: 5, ...pulse } } });
+
+test("an agent the check-in texts leaves the TIER 2/3 drips first, so they never hear from both; a dry run takes nobody out", async () => {
+  _resetJobs();
+  const loc = "loc-ap-drips";
+  await repliedAgent(loc, "ag5");
+  const removed = [];
+  const deps = { getContact: reachable, removeFromWorkflow: async (id, wf) => { removed.push([id, wf]); },
+    startProactive: async () => ({ job: { id: "j", draftId: "d" } }) };
+  startAgentPulse({ client, locationId: loc, saved: savedTier(), store, dryRun: true, deps });
+  await settle();
+  assert.deepEqual(removed, [], "a dry run touches nothing in GHL");
+  _resetJobs();
+  const job = startAgentPulse({ client, locationId: loc, saved: savedTier(), store, deps });
+  await settle();
+  assert.equal(job.started, 1, JSON.stringify(job.results));
+  assert.deepEqual(removed, [["ag5", "wf-t2"], ["ag5", "wf-t3"]]);
+  const events = await store.listContactEvents(loc, "ag5", { limit: 50 });
+  assert.deepEqual(events.filter((e) => e.type === "workflow_left").map((e) => e.data.workflowId).sort(), ["wf-t2", "wf-t3"]);
+});
+
+test("taking everyone out of the TIER drips now: a dry run counts, a live run removes each tagged agent once, and never while the check-in is off", async () => {
+  const loc = "loc-ap-leave";
+  const tagged = async () => [{ id: "t1", tags: ["tier-2"] }, { id: "t2", tags: ["tier-3", "agent"] }];
+  const removed = [];
+  const removeFromWorkflow = async (id, wf) => {
+    if (id === "t2" && wf === "wf-t2") { const e = new Error("not enrolled"); e.status = 400; throw e; }
+    removed.push([id, wf]);
+  };
+  const dry = startLeaveDrips({ client, locationId: loc, saved: savedTier(), store, dryRun: true, deps: { taggedContacts: tagged, removeFromWorkflow } });
+  await settle();
+  assert.equal(dry.status, "done", dry.error);
+  assert.equal(dry.tagged, 2);
+  assert.deepEqual(dry.drips.map((d) => d.name), ["TIER 2", "TIER 3"]);
+  assert.deepEqual(removed, []);
+
+  assert.throws(() => startLeaveDrips({ client, locationId: loc, saved: savedTier({ enabled: false }), store, deps: { taggedContacts: tagged, removeFromWorkflow } }),
+    /turn the agent check-in on first/);
+
+  const live = startLeaveDrips({ client, locationId: loc, saved: savedTier(), store, deps: { taggedContacts: tagged, removeFromWorkflow, paceMs: 0 } });
+  await settle();
+  assert.equal(live.status, "done", live.error);
+  assert.deepEqual(removed, [["t1", "wf-t2"], ["t1", "wf-t3"], ["t2", "wf-t3"]]);
+  assert.equal(live.removed, 3);
+  assert.equal(live.notIn, 1);
+  assert.equal(getLeaveDripsJob(loc).id, live.id);
+});
+
+test("a preview drafts the next check-ins without a claim, a draft row or a send", async () => {
+  _resetJobs();
+  const loc = "loc-ap-preview";
+  await repliedAgent(loc, "ag6");
+  const seen = [];
+  const r = await previewAgentPulse({ client, locationId: loc, saved: savedTier(), store, limit: 3,
+    deps: { previewProactive: async (args) => { seen.push(args); return { contactName: "Agent", reply: "Hi Dana, hope the Burien listing went well. Anything coming up that needs work?", held: false, flags: [] }; } } });
+  assert.equal(r.previews.length, 1);
+  assert.equal(r.previews[0].contactId, "ag6");
+  assert.match(r.previews[0].reply, /Burien/);
+  assert.equal(seen[0].kind, "agent_pulse");
+  const events = await store.listContactEvents(loc, "ag6", { limit: 50 });
+  assert.equal(events.some((e) => e.type === "agent_pulse_sent"), false, "nobody claimed");
+  assert.deepEqual(await store.listReplyDrafts(loc, { contactId: "ag6", limit: 5 }), [], "nothing in the outbox");
+});
