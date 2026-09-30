@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { auditConversations, auditActions, auditDedupeKey, summarize, AUDIT_KINDS, MAX_REDRAFTS } from "./conversation-audit.js";
+import { auditConversations, auditActions, auditDedupeKey, summarize, stillOwed, AUDIT_KINDS, MAX_REDRAFTS } from "./conversation-audit.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
 // 7:30pm Pacific on the day of the three quiet threads.
@@ -283,4 +283,30 @@ test("a last-night row about a text shows the offer on that house beside the thr
   assert.equal(out[1].offerId, null);
   // A row that already names its offer keeps it.
   assert.equal(out[2].offerId, "pinned");
+});
+
+// 2026-09-30: last night's rows are last night's. Mark Hulen's "texts we never
+// answered" was answered at 9:04 the next morning and still sat on Today, and
+// a draft for an agent who'd unsubscribed asked for Matt's call.
+test("last night's rows step aside once a reply went or is queued, and nobody unsubscribed asks for a call", () => {
+  const rows = [
+    { id: "answered", kind: "audit_owed", findingKind: "unanswered_inbound", contactId: "c1", anchorAt: "2026-09-29T17:48:00Z" },
+    { id: "queued", kind: "audit_owed", findingKind: "held_aging", contactId: "c2", anchorAt: "2026-09-29T17:48:00Z" },
+    { id: "owed a number", kind: "audit_owed", findingKind: "promise_open_overdue", contactId: "c3", anchorAt: "2026-09-20T00:00:00Z" },
+    { id: "still open", kind: "audit_owed", findingKind: "unanswered_inbound", contactId: "c4", anchorAt: "2026-09-29T17:48:00Z" },
+    { id: "dnd draft", kind: "draft_waiting", contactId: "c5" },
+    { id: "dnd deal", kind: "deal_no_buyers", contactId: "c5", offerId: "o5" },
+  ];
+  const kept = stillOwed(rows, {
+    drafts: [
+      { contactId: "c1", status: "sent", sentAt: "2026-09-30T16:04:00Z" },
+      { contactId: "c2", status: "scheduled", createdAt: "2026-09-30T02:30:00Z" },
+      { contactId: "c4", status: "sent", sentAt: "2026-09-28T16:04:00Z" },
+    ],
+    unsubscribed: new Set(["c5"]),
+  });
+  assert.deepEqual(kept.map((r) => r.id), ["owed a number", "still open", "dnd deal"]);
+  const [row] = auditActions({ findings: [{ id: "f1", kind: "unanswered_inbound", severity: "now", contactId: "c1", anchorAt: "2026-09-29T17:48:00Z", why: "x" }] });
+  assert.equal(row.findingKind, "unanswered_inbound");
+  assert.equal(row.anchorAt, "2026-09-29T17:48:00Z");
 });

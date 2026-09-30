@@ -86,6 +86,27 @@ export function isCloser(body = "") {
   return CLOSER_RX.test(t);
 }
 
+// A plain "no" to our check-in ("anything cross your desk lately?"): "No /
+// Sorry", "Nope", "Not right now", "Nothing yet, thanks", "Not a project".
+// It ends the thread and nothing is owed (Matt, 2026-09-30: "if they say
+// 'no' nothing else we need to do"). Short, made only of these words, with a
+// no in it — no question, no number, nothing after a "but" ("No, but I have
+// one in Kent…" is a lead, not a no).
+const NO_PARTS = [
+  "not that i know of", "nothing to report", "nothing on my end", "nothing at the moment", "nothing at this time", "nothing currently",
+  "nothing right now", "nothing new", "nothing yet", "not at the moment", "not at this time", "not right now", "not currently",
+  "not this time", "not a project", "no project", "not really", "not yet", "not now", "no thank you", "no thanks", "no sorry",
+  "unfortunately", "appreciate (?:it|you)", "thank you", "thanks?", "thx", "ty", "sorry", "nothing", "none", "nope", "nah", "no",
+  "right now", "currently", "at the moment", "for now", "yet", "matt", "man", "bud",
+].join("|");
+const NO_RX = new RegExp("^(?:(?:" + NO_PARTS + ")[\\s!.,/-]*){1,6}$", "i");
+export function isPlainNo(body = "") {
+  const t = String(body || "").replace(/[\u200B\uFEFF]/g, "").trim();
+  if (!t || t.length > 60 || /[?\d]/.test(t) || /\bbut\b/i.test(t)) return false;
+  if (!/\b(?:no|nope|nah|not|nothing|none)\b/i.test(t)) return false;
+  return NO_RX.test(t);
+}
+
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 const iso = (t) => new Date(t).toISOString();
 const clip = (s, n = 120) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
@@ -439,7 +460,7 @@ export function auditActions(last, { now = Date.now(), names = {} } = {}) {
       const who = f.contactName || names[f.contactId] || "";
       const tail = `${f.address ? ` · ${street(f.address)}` : ""}: ${labelOf[f.kind] || f.kind}`;
       return {
-      id: f.id, kind: "audit_owed", severity: f.severity, contactId: f.contactId, contactName: who,
+      id: f.id, kind: "audit_owed", findingKind: f.kind, anchorAt: f.anchorAt || null, severity: f.severity, contactId: f.contactId, contactName: who,
       address: f.address || "", offerId: f.offerId || null, draftId: f.draftId || null,
       title: `${who || "An agent"}${tail}`,
       ...(who && !f.contactName ? { dismissedAs: `An agent${tail}` } : {}),
@@ -449,6 +470,39 @@ export function auditActions(last, { now = Date.now(), names = {} } = {}) {
         : [{ key: "open_contact", label: "Open the thread", intent: "primary" }],
       };
     });
+}
+
+// Last night's findings about a text they sent: a reply that went (or is
+// queued) after it answers it, whoever wrote it.
+const ANSWERED_BY_A_REPLY = new Set(["unanswered_inbound", "held_aging"]);
+// Rows that ask for a text to someone. Nothing reaches a person who
+// unsubscribed, so none of these is a call to make.
+const TEXTING_KINDS = new Set(["audit_owed", "draft_waiting", "draft_scheduled", "promise_owed"]);
+
+/**
+ * stillOwed(rows, { drafts, unsubscribed }) → rows
+ *
+ * Today reads last night's audit, and last night is over by morning (Matt,
+ * 2026-09-30: Mark Hulen's "texts we never answered" was answered at 9:04 and
+ * still sat under Your call). A row about their text steps aside once a reply
+ * was sent or queued after it; a row that would text someone who unsubscribed
+ * steps aside for good. Pure; `drafts` are the location's recent drafts, any
+ * status, and `unsubscribed` the contact ids with an unsubscribed event.
+ */
+export function stillOwed(rows = [], { drafts = [], unsubscribed = new Set() } = {}) {
+  const repliedAfter = (contactId, at) => {
+    const t = ms(at);
+    if (t == null || !contactId) return false;
+    return (drafts || []).some((d) => d?.contactId === contactId && (
+      (d.status === "sent" && (ms(d.sentAt || d.updatedAt) ?? 0) > t) ||
+      (d.status === "scheduled" && (ms(d.createdAt) ?? 0) > t)));
+  };
+  return (rows || []).filter((r) => {
+    if (!r) return false;
+    if (r.contactId && unsubscribed?.has?.(r.contactId) && TEXTING_KINDS.has(r.kind)) return false;
+    if (r.kind === "audit_owed" && ANSWERED_BY_A_REPLY.has(r.findingKind) && repliedAfter(r.contactId, r.anchorAt)) return false;
+    return true;
+  });
 }
 
 /**

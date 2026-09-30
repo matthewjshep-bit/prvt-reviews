@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runConversationAudit, startConversationAudit, maybeRunConversationAudit, getAuditJob, _resetJobs, isReaction, CURSOR_NAME, STALE_RUN_MS, RETRY_GAP_MS, MAX_DAILY_TRIES } from "./conversation-audit.js";
-import { isCloser, MAX_REDRAFT_TRIES } from "./shared/conversation-audit.js";
+import { isCloser, isPlainNo, MAX_REDRAFT_TRIES } from "./shared/conversation-audit.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
 // 7:20pm Pacific on 2026-09-16.
@@ -398,4 +398,31 @@ test("the timers ride the daytime pass, and never the night's", async () => {
   assert.ok(acted.some((a) => a.kind === "timer_offer_ready" && a.status === "started"));
   await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store: fakeStore(), sendsEnabled: true, deps: d, now: NOW, pace: 0 });
   assert.deepEqual(ran, ["timers"], "7pm changes nothing");
+});
+
+/* ---------- Today is only what needs Matt (2026-09-30) ---------- */
+
+// Matt: "a lot of the ones you flagged from last night don't need anything
+// from me — they're just responses to me asking if anything has crossed the
+// desk. If they say 'no' nothing else we need to do." Mark Hulen's "No /
+// Sorry" to our check-in sat on Today as "Texts we never answered".
+test("a plain no to our check-in needs no answer and no row, unless there's an offer on the table", async () => {
+  for (const no of ["No\nSorry", "Nope", "No sorry", "Not right now", "Nothing right now, thanks", "Not a project", "Not at the moment!", "nothing yet", "No not currently", "Nothing on my end", "Unfortunately no"]) {
+    assert.equal(isPlainNo(no), true, no);
+  }
+  for (const not of ["No, but I have one in Kent coming next month", "No?", "Not this one, what else do you have?", "No 1234 Main St is pending", "Nothing yet but I'll send the Tacoma one Friday"]) {
+    assert.equal(isPlainNo(not), false, not);
+  }
+  const store = fakeStore();
+  const d = deps({ latestInbound: async () => ({ body: "No\nSorry", type: "SMS", at: ago(5) }) });
+  const { result, acted } = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  assert.equal(acted[0].status, "skipped");
+  assert.match(acted[0].reason, /a no to our check-in/);
+  assert.equal(d.calls.length, 0, "no reply drafted");
+  assert.ok(!result.findings.some((f) => f.kind === "unanswered_inbound"), "not a finding");
+
+  const withOffer = fakeStore({ offers: [{ id: "o1", contactId: "c9", address: "1 Main St, Kent, WA", status: "sent", statusAt: ago(48), createdAt: ago(72), sends: [{ ts: ago(48) }] }] });
+  const d2 = deps({ latestInbound: async () => ({ body: "No", type: "SMS", at: ago(5) }) });
+  await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store: withOffer, sendsEnabled: true, deps: d2, now: NOW, pace: 0 });
+  assert.deepEqual(d2.calls, [["reply", "c9", "No"]], "a no with our offer out may be their pass: the reply agent records it");
 });

@@ -10,7 +10,8 @@
 // lands next morning. Matt, 2026-09-16.
 
 import { store as defaultStore } from "./store.js";
-import { auditConversations, auditDedupeKey, isCloser, AUDIT_EVENT_TYPES, HELD_SWEEP_KINDS, MAX_REDRAFT_TRIES, REDRAFT_RETRY_AFTER_MS } from "./shared/conversation-audit.js";
+import { auditConversations, auditDedupeKey, isCloser, isPlainNo, AUDIT_EVENT_TYPES, HELD_SWEEP_KINDS, MAX_REDRAFT_TRIES, REDRAFT_RETRY_AFTER_MS } from "./shared/conversation-audit.js";
+import { effectiveStatus, OPEN_STATUSES, dealIsOver } from "./shared/offer-status.js";
 import { buildPipeline } from "./shared/pipeline.js";
 import { conversationConfig, startReply as defaultStartReply } from "./reply-agent.js";
 import { startFollowUpSweep as defaultStartFollowUpSweep } from "./follow-up-sweep.js";
@@ -237,6 +238,10 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         if (!latest?.body) { row.status = "skipped"; row.reason = "no inbound text to answer"; continue; }
         if (isReaction(latest.body)) { drop(f, row, "a reaction, not a text"); continue; }
         if (isCloser(latest.body)) { drop(f, row, "a closer, not a question"); continue; }
+        // A plain no to our check-in ends it — unless our offer is out, when
+        // the no may be their pass and the reply agent records it.
+        const liveOffer = offers.some((o) => o?.contactId === f.contactId && ((o.deal && !dealIsOver(o.deal)) || (!o.deal && OPEN_STATUSES.has(effectiveStatus(o)))));
+        if (!liveOffer && isPlainNo(latest.body)) { drop(f, row, "a no to our check-in — nothing to answer"); continue; }
         // An earlier night already tried this text. If the bot stood down for
         // a reason (a bot-off tag, a live deal, "you have the thread"), that
         // reason is the row — not "nothing came of it". Otherwise try again,

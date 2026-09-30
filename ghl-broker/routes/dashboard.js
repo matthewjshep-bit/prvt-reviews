@@ -49,7 +49,7 @@ import { conversationConfig } from "../reply-agent.js";
 import { allEventsSince } from "../contact-events.js";
 import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
-import { auditActions, withCurrentOffers, summarize as summarizeAudit } from "../shared/conversation-audit.js";
+import { auditActions, withCurrentOffers, stillOwed, summarize as summarizeAudit } from "../shared/conversation-audit.js";
 import { startCoach, coachReport, coachForContact, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
 
 // Same expression routes/offers.js reads: the broker's one send gate. The
@@ -476,10 +476,23 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const names = await namesForAudit({ store, client, locationId, audit }).catch(() => ({}));
       // The offer is looked up after the de-dupe, so a row about an
       // unanswered text isn't hidden behind a pipeline row on the same offer.
-      const fromLastNight = withCurrentOffers(auditActions(audit, { now, names }).filter((a) =>
+      const lastNight = withCurrentOffers(auditActions(audit, { now, names }).filter((a) =>
         !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled"))), offers)
         .map((a) => ({ ...a, group: "yours" }));
+      // Last night is over by morning (shared/conversation-audit.js stillOwed):
+      // a text answered or queued since isn't owed, and nothing that would
+      // text someone who unsubscribed is a call to make.
+      const unsubscribed = new Set((await store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: ["unsubscribed"], limit: 20000 }).catch(() => []))
+        .map((e) => e.contactId).filter(Boolean));
+      const fromLastNight = stillOwed(lastNight, { drafts: [...drafts, ...recentDrafts], unsubscribed });
       out.counts.actions.byGroup.yours += fromLastNight.length;
+      const reachable = stillOwed(out.actions, { unsubscribed });
+      for (const a of out.actions) {
+        if (reachable.includes(a)) continue;
+        if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
+        if (out.counts.actions[a.severity] > 0) out.counts.actions[a.severity]--;
+      }
+      out.actions = reachable;
       // Feedback by row id, newest per row. Draft rows are keyed
       // `draft:<draftId>` (the console renders them from `drafts`, and two
       // drafts on one offer share the pipeline's own id).
