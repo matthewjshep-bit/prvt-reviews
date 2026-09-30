@@ -216,11 +216,18 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
     }
   } else if (fu.enabled && CHECKIN_STATUSES.has(status) && ladders.passed_checkin?.enabled && ladders.passed_checkin.steps?.length) {
     const L = ladders.passed_checkin;
-    const start = passedStart(offer);
+    const passed = passedStart(offer);
     const key = offer.address ? addressKey(offer.address) : "";
-    const gone = (events || []).some((e) => e?.type === "listing_off_market" && (e.offerId === offer.id || (key && e.address && addressKey(e.address) === key)) && String(e.at) > String(start));
-    if (gone) return out("stopped", { label: "Stopped — listing went off market", reason: "pending or sold; the price watch saw it go" });
-    const r = nextRungAt({ steps: L.steps, repeatEvery: L.repeatEvery, startedAt: start, sentSteps: (offer.followUps || []).filter((f) => f?.kind === "passed_checkin").map((f) => f.step), now });
+    // Off the market stops it, until the price watch sees it come back
+    // (follow-up-sweep.js passedCandidates reads the same two events).
+    const mine = (events || []).filter((e) => (e?.type === "listing_off_market" || e?.type === "listing_back_on_market")
+      && (e.offerId === offer.id || (key && e.address && addressKey(e.address) === key)) && String(e.at) > String(passed));
+    const lastOff = mine.filter((e) => e.type === "listing_off_market").map((e) => e.at).sort().at(-1) || null;
+    const lastBack = mine.filter((e) => e.type === "listing_back_on_market").map((e) => e.at).sort().at(-1) || null;
+    if (lastOff && !(lastBack && String(lastBack) > String(lastOff))) return out("stopped", { label: "Stopped — listing went off market", reason: "pending or sold; the price watch saw it go" });
+    const relisted = fu.relist && lastBack ? lastBack : null;
+    const start = relisted || passed;
+    const r = nextRungAt({ steps: L.steps, repeatEvery: L.repeatEvery, startedAt: start, sentSteps: (offer.followUps || []).filter((f) => f?.kind === "passed_checkin" && (!relisted || String(f.at || "") > String(relisted))).map((f) => f.step), now });
     if (r) {
       // A live conversation pauses the check-in; it resumes three days after they last wrote.
       const talking = ms(times.lastInboundAt);

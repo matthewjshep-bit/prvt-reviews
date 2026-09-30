@@ -133,3 +133,37 @@ test("a reply takes them out of the outreach workflows once, and the follow-up l
   await settle();
   assert.equal(job.candidates, 0, "someone who replied is never followed up, even if GHL's last message is ours");
 });
+
+/* ---------- a busy window can't hide this month (2026-09-29) ---------- */
+
+// The run read enrollments and replies together, oldest first, capped at
+// 5,000: months of other agents' replies filled the read and last week's
+// enrollment fell off the end, so its follow-up never came.
+test("an agent enrolled two weeks ago is followed up even when months of replies fill the read", async () => {
+  const LOC = "loc-fu-busy";
+  for (let c = 0; c < 52; c++) {
+    const rows = Array.from({ length: 100 }, (_, i) => ({ type: "text_summary", at: ago(110 - (i % 90)), source: "conversation",
+      dedupeKey: `ts:${c}:${i}`, data: { inbound: "sounds good" } }));
+    await store.appendContactEvents(LOC, `other-${c}`, rows);
+  }
+  await recordEvent({ store, locationId: LOC, contactId: "fresh", party: "agent", type: "outreach_enrolled", at: ago(15),
+    source: "import", dedupeKey: "outreach_enrolled:first:fresh", data: { kind: "first", workflowId: "wf-first" } });
+  _resetJobs();
+  const ghl = fakeGhl({ fresh: "outbound" });
+  const job = startOutreachFollowUp({ locationId: LOC, client: ghl.client, saved, store, dryRun: true, now: NOW, paceMs: 0 });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(job.results.map((r) => [r.contactId, r.action]), [["fresh", "would enroll"]]);
+});
+
+test("a reply after the enrollment still ends it, read from their own timeline", async () => {
+  const LOC = "loc-fu-own";
+  await recordEvent({ store, locationId: LOC, contactId: "talked", party: "agent", type: "outreach_enrolled", at: ago(20),
+    source: "import", dedupeKey: "outreach_enrolled:first:talked", data: { kind: "first", workflowId: "wf-first" } });
+  await recordEvent({ store, locationId: LOC, contactId: "talked", party: "agent", type: "text_summary", at: ago(18),
+    source: "conversation", dedupeKey: "ts:talked", data: { inbound: "not a fixer, thanks" } });
+  _resetJobs();
+  const job = startOutreachFollowUp({ locationId: LOC, client: fakeGhl({ talked: "outbound" }).client, saved, store, dryRun: true, now: NOW, paceMs: 0 });
+  await settle();
+  assert.equal(job.candidates, 0);
+});

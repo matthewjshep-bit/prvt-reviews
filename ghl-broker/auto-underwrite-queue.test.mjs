@@ -98,3 +98,21 @@ test("two houses from the same agent start a tick apart, and a deduped start sta
   assert.equal(r.started, 1);
   assert.deepEqual(queue(store), []);
 });
+
+/* ---------- a dropped underwrite is written down (2026-09-29) ---------- */
+
+test("an address that waited three days is handed back with why, not just dropped", async () => {
+  const store = fakeStore(2);
+  const now = Date.now();
+  await store.setJobCursor("LOC", QUEUE_CURSOR, { at: TODAY, doc: { items: [
+    { contactId: "c3", address: "3 C St, Kent, WA", message: "", at: new Date(now - 5 * 86400000).toISOString() },
+  ] } });
+  const r = await drainUnderwriteQueue({ store, locationId: "LOC", saved, start: async () => ({ job: { id: "uw" } }), now });
+  assert.deepEqual(r.droppedItems.map((d) => [d.contactId, d.address]), [["c3", "3 C St, Kent, WA"]]);
+  assert.match(r.droppedItems[0].reason, /waited more than 3 days/);
+
+  await store.setJobCursor("LOC", QUEUE_CURSOR, { at: TODAY, doc: { items: [{ contactId: "c4", address: "4 D St", message: "", at: new Date(now - 3600000).toISOString() }] } });
+  store.usedToday = 0;
+  const refused = await drainUnderwriteQueue({ store, locationId: "LOC", saved, start: async () => ({ skipped: "no address found" }), now });
+  assert.deepEqual(refused.droppedItems.map((d) => [d.contactId, d.reason]), [["c4", "no address found"]]);
+});

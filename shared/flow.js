@@ -122,7 +122,12 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
       case "outreach_sent": bump("first_text", m || (e.type === "outreach_enrolled" && autopilotBatches.has(e.data?.batchId)), feedRow(e, names)); if (!outreachOpen.has(e.contactId)) outreachOpen.set(e.contactId, t); break;
       case "text_summary":
       case "call_summary": {
+        // An AGENT answering us: never an investor (this is the acquisition
+        // row), and a text summary only when it summarises their text — the
+        // contact-record backfill writes one for our own machine drafts too.
         // Counted once per contact; the machine's when the bot answered it.
+        const theirs = e.type === "call_summary" || Boolean(String(e.data?.inbound || "").trim());
+        if (e.party === "investor" || !theirs) break;
         if (e.contactId && !replied.has(e.contactId)) { replied.add(e.contactId); bump("replied", botAnswered.has(e.contactId), feedRow(e, names)); }
         break;
       }
@@ -211,7 +216,10 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   const stages = FLOW_STAGES.map((s, i) => {
     const c = counts[s.key];
     const prev = i > 0 && FLOW_STAGES[i - 1].side === s.side ? counts[FLOW_STAGES[i - 1].key] : null;
-    const conversion = prev && prev.count > 0 ? Math.round((c.count / prev.count) * 100) : null;
+    // Opened counts buyer–deal pairs and Blasted counts deals, so the share
+    // is measured against the buyers blasted — it can't pass 100%.
+    const base = s.key === "opened" ? { count: blastedBuyers } : prev;
+    const conversion = base && base.count > 0 ? Math.min(100, Math.round((c.count / base.count) * 100)) : null;
     return { ...s, ...c, conversion };
   });
 

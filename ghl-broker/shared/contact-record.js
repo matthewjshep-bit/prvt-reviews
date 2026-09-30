@@ -50,6 +50,13 @@ export const EVENT_TYPES = [
   // The first cold text to a listing agent went out — from the app, so the
   // outreach ladder has something to count from.
   "outreach_sent",
+  // An address that waited in the underwrite queue past the daily cap and
+  // left it without running (auto-underwrite.js drainUnderwriteQueue). Today
+  // shows it until the house is priced.
+  "underwrite_dropped",
+  // The price watch (ghl-broker/price-watch.js): the listing went pending or
+  // sold, and — since 2026-09-29 — came back on the market.
+  "listing_off_market", "listing_back_on_market",
   // A new agent was put into a GHL outreach workflow by id — GHL sends the
   // texts, so this is the only record the app has that we reached out.
   // data.kind "first" (the import) or "followup" (outreach-followup.js).
@@ -83,6 +90,8 @@ export const EVENT_LABEL = {
   offer_sent: "we offered", offer_revised: "we revised our offer", offer_countered: "they countered",
   offer_passed: "they passed on our offer", offer_we_passed: "we passed on the property", offer_no_response: "no response to our offer", offer_accepted: "they accepted our offer",
   realm_yes: "number was in the realm", realm_no: "number was not in the realm",
+  underwrite_dropped: "an underwrite left the queue without running",
+  listing_off_market: "the listing went off the market", listing_back_on_market: "the listing came back on the market",
   deal_promoted: "under contract", deal_stage: "deal stage changed",
   investor_evaluating: "evaluating the deal", investor_committed: "committed buyer", investor_passed: "passed on the deal",
   feedback: "feedback on the deal", row_feedback: "you told the bot what it should have done",
@@ -126,6 +135,9 @@ export const EVENT_ICON = {
   post_mortem_built: "ClipboardCheck",
   email_received: "Mail",
   email_sent: "Mail",
+  underwrite_dropped: "Clock",
+  listing_off_market: "XCircle",
+  listing_back_on_market: "RefreshCw",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

@@ -46,6 +46,7 @@ import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_
 import { draftStats } from "../shared/conversation-ai.js";
 import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
 import { conversationConfig } from "../reply-agent.js";
+import { allEventsSince } from "../contact-events.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, summarize as summarizeAudit } from "../shared/conversation-audit.js";
 import { startCoach, coachReport, coachForContact, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
@@ -64,6 +65,7 @@ const PIPELINE_EVENT_TYPES = [
   "follow_up_sent", "text_summary", "call_summary",
   "outreach_sent",
   "promise_made", "promise_owed", "promise_kept",
+  "underwrite_dropped",
   "drive_stopped", "drive_resumed", "hand_reply",
 ];
 
@@ -304,15 +306,16 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const { startMs, endMs, startIso } = windowFor(days, tzOffset, end);
       const now = Date.now();
       const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
-      const [offers, events, drafts, saved, openDrafts, recentDrafts, investors] = await Promise.all([
+      const [offers, eventsRead, drafts, saved, openDrafts, recentDrafts, investors] = await Promise.all([
         store.listOffers(locationId, { limit: 2000, lean: true }),
-        store.listContactEventsSince(locationId, startIso, { types: FLOW_EVENT_TYPES, limit: 5000 }).catch(() => []),
+        allEventsSince(store, locationId, startIso, { types: FLOW_EVENT_TYPES }).catch(() => ({ events: [], truncated: false })),
         store.listReplyDrafts(locationId, { since: startIso, limit: 1000 }).catch(() => []),
         store.getOfferSettings(locationId).catch(() => null),
         store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }).catch(() => []),
         store.listReplyDrafts(locationId, { since: gradSince, limit: 1000 }).catch(() => []),
-        store.listInvestors(locationId, { limit: 2000 }).catch(() => []),
+        store.listInvestors(locationId).catch(() => []),
       ]);
+      const events = eventsRead.events;
       const config = conversationConfig(saved || {});
       const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
       const flow = buildFlow({ offers, events, drafts, jobs, now, windowStartMs: startMs, windowEndMs: endMs });
@@ -324,6 +327,8 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       res.json({
         ok: true, now: new Date(now).toISOString(), window: { days, startIso, end },
         ...flow,
+        // The window was bigger than the read's ceiling: the counts are low.
+        eventsTruncated: Boolean(eventsRead.truncated),
         autopilot: autopilotFor({ saved, config, recentDrafts }),
         queue: pipeline.counts.actions,
         // Agents whose outreach ladder ran out with nothing back. A number for
@@ -352,13 +357,14 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const { startMs, endMs, startIso } = windowFor(days, tzOffset, end);
       const now = Date.now();
       const limit = Math.min(500, parseInt(req.query.limit, 10) || 300);
-      const [offers, events, drafts, investors] = await Promise.all([
+      const [offers, eventsRead, drafts, investors] = await Promise.all([
         store.listOffers(locationId, { limit: 2000, lean: true }),
-        store.listContactEventsSince(locationId, startIso, { types: FLOW_EVENT_TYPES, limit: 5000 }).catch(() => []),
+        allEventsSince(store, locationId, startIso, { types: FLOW_EVENT_TYPES }).catch(() => ({ events: [], truncated: false })),
         store.listReplyDrafts(locationId, { since: startIso, limit: 1000 }).catch(() => []),
         // Buyer names are only ever needed on the disposition row.
-        stage.side === "dispo" ? store.listInvestors(locationId, { limit: 2000 }).catch(() => []) : Promise.resolve([]),
+        stage.side === "dispo" ? store.listInvestors(locationId).catch(() => []) : Promise.resolve([]),
       ]);
+      const events = eventsRead.events;
       const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
       const flow = buildFlow({
         offers, events, drafts, jobs, now, windowStartMs: startMs, windowEndMs: endMs,
@@ -414,7 +420,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }),
         store.listContactEventsSince(locationId, since, { types: PIPELINE_EVENT_TYPES, limit: PIPELINE_EVENT_LIMIT }).catch(() => []),
         store.getOfferSettings(locationId).catch(() => null),
-        store.listInvestors(locationId, { limit: 2000 }).catch(() => []),
+        store.listInvestors(locationId).catch(() => []),
         // The graduation window, for the "N intents are ready" line on the
         // autopilot card. One indexed read; the verdicts themselves live on
         // the Conversation AI tab.

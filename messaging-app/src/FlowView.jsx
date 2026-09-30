@@ -145,6 +145,11 @@ export default function FlowView() {
       {data && !data.conversationEnabled && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">The Conversation AI is switched off, so nothing here is moving on its own.</div>
       )}
+      {data?.eventsTruncated && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+          More happened in this window than one read holds — the counts below are low. Pick a shorter window for exact numbers.
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <FilterChips value={endDate ? 0 : days} onChange={(d) => { setEndDate(""); setDays(d); }} label="Window"

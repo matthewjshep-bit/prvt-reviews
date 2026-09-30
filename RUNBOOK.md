@@ -1192,6 +1192,50 @@ text is followed up from when it was floated, and the nudge, check-in and
 price-drop texts say "the number we floated", never "the offer we sent"
 (`whatWentOut` in reply-agent.js).
 
+### Reads that keep the newest (2026-09-29)
+
+Several reads stopped at a fixed number of rows and kept the OLDEST, so on a
+busy location the week every clock was asking about was the part cut off.
+
+- **The timeline window** (`store.listContactEventsSince`): past its limit it
+  now keeps the newest rows and says so (`rows.truncated`). A reader that
+  needs all of a window pages through it (`listContactEventsPage`, and
+  `allEventsSince` in ghl-broker/contact-events.js). The 14-day outreach
+  follow-up read enrollments and replies together, oldest first, capped at
+  5,000: months of replies filled the read and this month's enrollments fell
+  off the end. It now pages the enrollments and checks each agent's own
+  timeline for a reply.
+- **The follow-up sweep's offers** (`followUpRows`): open offers used to be
+  read oldest-first, 200 at a time (400 for check-ins), superseded rows
+  included. Now it pages through the whole book (500 a page, up to 5,000). A
+  run starts at most `MAX_STARTS_PER_RUN` (150) texts, hot pushes first, so a
+  backlog the paging uncovers goes out over days; a ladder only ever fires its
+  latest due rung. The push to paper no longer counts against the week's
+  two nudges.
+- **The price watch** reads only its 90-day window, all of it. It used to take
+  the oldest 300 offers of all time and then keep the last 90 days.
+- **The buyer book**: `listInvestors` stopped at 2,000 rows sorted by name, so
+  the end of the alphabet silently left every pulse, wave and search. It reads
+  the whole book now (and `listContactProfiles` 20,000).
+- **Underwrites that never ran**: an address that waited past the daily cap
+  for 3 days, or was refused on the tick, is written down
+  (`underwrite_dropped`) and shows on Today under "Underwrites that never ran"
+  with a Run it now button, until the house has an offer or a week passes.
+  It used to be a console line.
+- **Flow**: "Replied" counts only agents answering, meaning their inbound text
+  or a call. Investors, and the backfill's summaries of our own texts, no
+  longer count. "Opened" is measured against the buyers blasted, so it can't
+  pass 100%. The page says when a window was bigger than one read holds.
+
+**The price watch sees more.** A house that went off the market and comes
+back is recorded (`listing_back_on_market`). Off-market no longer ends its
+check-ins for good. With `followUp.relist` on, the passed-offer check-ins
+start over from the relist and say it's back on the market. A drop found
+while their text (or your own draft) is waiting in the outbox is kept
+(`priceWatch.dropOwed`) and texted on a later run, measured from the price
+before the drop. With `followUp.watchFloated` on, a number floated by text
+and never sent is watched too. Both switches ship off.
+
 ### Never more than our number (2026-09-28)
 
 Jesse, 39811 226th Ave SE, Enumclaw. Our offer was 550K, already over

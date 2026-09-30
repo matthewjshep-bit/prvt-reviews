@@ -817,6 +817,12 @@ function normalizeFollowUp(src = {}, party = "agent") {
     maxPerContactPerWeek: int(f.maxPerContactPerWeek, 2, 1, 20),
     stopOnAnyInbound: bool(f.stopOnAnyInbound, true),
     minHoursBetween: int(f.minHoursBetween, 40, 0, 720),
+    // The price watch (ghl-broker/price-watch.js), both off (2026-09-29):
+    // a house back on the market starts its passed-offer check-ins again
+    // from the relist; a number floated by text but never sent is watched.
+    // Outside the dial's fingerprint, which reads the ladders only.
+    relist: bool(f.relist, false),
+    watchFloated: bool(f.watchFloated, false),
   };
 }
 

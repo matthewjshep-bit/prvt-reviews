@@ -586,6 +586,12 @@ export function outboundOpening(outbound) {
     // A pass is not the end of a listing. Check back in on it: is it still
     // sitting, has the seller softened, would they come closer to our number?
     case "passed_checkin":
+      if (o.relisted) {
+        return `${START} ${o.address} went off the market after ${o.quiet ? "we made this agent an offer and never heard back" : "this agent passed on where we were"}, and it's back on the market now. ` +
+          `In one or two lines, say you saw it's back on the market and ask whether the seller would look at a cash, as-is offer now. ` +
+          `Do NOT name any number: not the one we offered, not theirs, not a new one. Say "our number" or "where we were". Never hint that we'd go higher — ` +
+          `movement on ours is a person's call. Keep it light and easy to ignore. ${CONTINUE} Set intent to passed_checkin.`;
+      }
       return `${START} ${o.went === "number" || o.went === "read"
         ? (o.quiet ? `We floated where we'd be on ${o.address} by text (nothing in writing) and never heard back.` : `This agent passed on where we'd be on ${o.address} (floated by text, nothing in writing).`)
         : o.quiet

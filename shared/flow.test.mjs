@@ -97,8 +97,8 @@ test("the outreach autopilot's finds and first texts are the machine's; so are r
     { id: "w1", contactId: "v1", type: "outreach_enrolled", at: at(10), source: "import", data: { kind: "first", workflowId: "wf", batchId: "b-auto" } },
     { id: "i2", contactId: "h1", type: "import", at: at(9), source: "import", data: { action: "created", batchId: "b-hand", batchName: "Tacoma pull" } },
     { id: "w2", contactId: "h1", type: "outreach_enrolled", at: at(9), source: "import", data: { kind: "first", workflowId: "wf", batchId: "b-hand" } },
-    { id: "r1", contactId: "v1", type: "text_summary", at: at(8), source: "conversation", data: {} },
-    { id: "r2", contactId: "h1", type: "text_summary", at: at(8), source: "conversation", data: {} },
+    { id: "r1", contactId: "v1", type: "text_summary", at: at(8), source: "conversation", data: { inbound: "might have one" } },
+    { id: "r2", contactId: "h1", type: "text_summary", at: at(8), source: "conversation", data: { inbound: "not right now" } },
   ];
   const drafts = [
     { id: "d1", contactId: "v1", status: "sent", autoSent: true, sentAt: at(7) },
@@ -125,7 +125,7 @@ const DRILL = (() => {
     { id: "e1", contactId: "a1", type: "import", at: at(100), source: "import", data: { trigger: "daily" } },
     { id: "e2", contactId: "a2", type: "import", at: at(99), source: "import", data: {} },
     { id: "e3", contactId: "a1", type: "outreach_sent", at: at(90), source: "conversation", data: { auto: true, contactName: "Priya" } },
-    { id: "e5", contactId: "a1", type: "text_summary", at: at(80), source: "conversation", data: { summary: "has a fixer" } },
+    { id: "e5", contactId: "a1", type: "text_summary", at: at(80), source: "conversation", data: { summary: "has a fixer", inbound: "I have a fixer in Kent" } },
     { id: "e6", contactId: "a1", type: "call_summary", at: at(70), source: "call", data: { summary: "seller would take 425" } },
     { id: "e7", contactId: "a1", type: "offer_sent", at: at(60), source: "conversation", data: { by: "underwrite" }, offerId: "o1" },
     { id: "e9", contactId: "a1", type: "deal_promoted", at: at(40), source: "deal", offerId: "o1" },
@@ -223,4 +223,33 @@ test("Offered counts documents that went out, not offers that merely exist", asy
   assert.equal(offered.count, 3);
   assert.equal(offered.machine, 1);
   assert.equal(offered.person, 2);
+});
+
+/* ---------- honest counts (2026-09-29) ---------- */
+
+const stageOf = (flow, key) => flow.stages.find((s) => s.key === key);
+
+test("an investor's reply is not an agent replying", () => {
+  const f = buildFlow({ ...win, events: [
+    { type: "text_summary", party: "investor", contactId: "inv1", at: at(2), data: { inbound: "send me more like this" } },
+    { type: "text_summary", party: "agent", contactId: "ag1", at: at(3), data: { inbound: "might have one soon" } },
+  ] });
+  assert.equal(stageOf(f, "replied").count, 1);
+});
+
+test("a backfilled summary of our own text is not a reply", () => {
+  const f = buildFlow({ ...win, events: [
+    { type: "text_summary", party: "agent", contactId: "ag2", at: at(2), data: { inbound: "", summary: "Asked about the offer" } },
+    { type: "call_summary", party: "agent", contactId: "ag3", at: at(3), data: {} },
+  ] });
+  assert.equal(stageOf(f, "replied").count, 1, "the call counts; our own nudge's summary does not");
+});
+
+test("opened is measured against buyers blasted and never passes one hundred", () => {
+  const blasts = Array.from({ length: 4 }, (_, i) => ({ type: "blast_sent", contactId: `b${i}`, offerId: "deal1", at: at(10) }));
+  const views = Array.from({ length: 3 }, (_, i) => ({ type: "dataroom_viewed", contactId: `b${i}`, offerId: "deal1", at: at(5) }));
+  const f = buildFlow({ ...win, events: [...blasts, ...views] });
+  assert.equal(stageOf(f, "blasted").count, 1, "one deal");
+  assert.equal(stageOf(f, "opened").count, 3);
+  assert.equal(stageOf(f, "opened").conversion, 75, "three of four buyers, not three of one deal");
 });

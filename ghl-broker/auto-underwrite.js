@@ -388,9 +388,13 @@ export function underwriteDailyCap(saved = {}) {
 export async function drainUnderwriteQueue({ store, locationId, saved = {}, start, now = Date.now() }) {
   const cur = await store.getJobCursor?.(locationId, QUEUE_CURSOR).catch(() => null);
   const all = Array.isArray(cur?.doc?.items) ? cur.doc.items : [];
-  if (!all.length || typeof start !== "function") return { started: 0, left: all.length, dropped: 0 };
+  if (!all.length || typeof start !== "function") return { started: 0, left: all.length, dropped: 0, droppedItems: [] };
   const fresh = all.filter((i) => now - Date.parse(i.at) <= QUEUE_MAX_DAYS * 86400000);
-  let dropped = all.length - fresh.length;
+  // What left the line without running, and why — the router writes each one
+  // down and puts it on Today. Until 2026-09-29 it was a console line.
+  const droppedItems = all.filter((i) => !fresh.includes(i))
+    .map((i) => ({ contactId: i.contactId, address: i.address || "", at: i.at, reason: `waited more than ${QUEUE_MAX_DAYS} days past the daily cap` }));
+  let dropped = droppedItems.length;
   const cap = underwriteDailyCap(saved);
   let room = cap === Infinity ? Infinity : cap - (await countToday({ store, locationId, now }));
   const left = [];
@@ -409,15 +413,18 @@ export async function drainUnderwriteQueue({ store, locationId, saved = {}, star
     try {
       const r = await start(item);
       if (r?.skipped && /daily cap/.test(r.skipped)) { left.push(item); room = 0; continue; }
-      if (r?.skipped) { dropped++; continue; }
+      if (r?.skipped) { dropped++; droppedItems.push({ contactId: item.contactId, address: item.address || "", at: item.at, reason: String(r.skipped).slice(0, 160) }); continue; }
       if (r?.deduped) { left.push(item); continue; }
       started++; room--; startedFor.add(item.contactId);
-    } catch { dropped++; }
+    } catch (e) {
+      dropped++;
+      droppedItems.push({ contactId: item.contactId, address: item.address || "", at: item.at, reason: `failed to start: ${String(e?.message || e).slice(0, 120)}` });
+    }
   }
   if (started || dropped || left.length !== all.length) {
     await store.setJobCursor?.(locationId, QUEUE_CURSOR, { at: new Date(now).toISOString(), doc: { items: left } });
   }
-  return { started, left: left.length, dropped };
+  return { started, left: left.length, dropped, droppedItems };
 }
 
 /* ---------- stage 1: what did the agent actually say? ---------- */

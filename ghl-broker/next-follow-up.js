@@ -18,7 +18,7 @@ const DRAFTS_PER_CONTACT = 20;
 export const NEXT_EVENT_TYPES = [
   "promise_made", "promise_owed", "promise_kept",
   "checkin_requested", "checkin_sent", "text_summary", "call_summary",
-  "listing_off_market", "drive_stopped", "drive_resumed", "unsubscribed", "hand_reply",
+  "listing_off_market", "listing_back_on_market", "drive_stopped", "drive_resumed", "unsubscribed", "hand_reply",
 ];
 
 const groupBy = (rows, cap = Infinity) => {
