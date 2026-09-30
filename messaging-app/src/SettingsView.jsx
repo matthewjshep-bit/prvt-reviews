@@ -11,6 +11,7 @@ import {
 import { getBuyerPulse, runBuyerPulse, getAgentPulse, sampleAgentPulse, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
+import { tierDrips } from "@shared/agent-pulse.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
 import ContactBackfill from "./ContactBackfill.jsx";
@@ -168,11 +169,21 @@ function AgentPulseSamples() {
   );
 }
 
-// The GHL drips the check-in replaces (the TIER 2/3 check-ins). While it's on,
-// the bot still tags tier-2/tier-3 but puts nobody in these, and each agent it
-// texts is taken out of them first. The button takes everyone out at once.
-function TierDripsCleanup({ pulseOn }) {
+// The GHL drips the check-in replaces. By default the published "tier …
+// nurture" workflow GHL starts by itself when an agent's card moves to Tier 2
+// or 3 (shared/agent-pulse.js tierDrips) — never TIER 1/2/3, which move the
+// card. While it's on, anyone it checks in with is taken out of these first;
+// the button takes everyone tagged tier-2/tier-3 out at once.
+function TierDripsCleanup({ pulseOn, pulse = {}, onPick }) {
+  const [wf, setWf] = useState({ list: null, error: "" });
+  useEffect(() => {
+    listWorkflows().then((r) => setWf({ list: r.workflows || [], error: r.error || "" }))
+      .catch((e) => setWf({ list: [], error: e.message || "couldn't read GHL's workflows" }));
+  }, []);
   const [state, setState] = useState({ busy: false, error: "", job: null });
+  const chosen = new Set(wf.list ? tierDrips({ pulse, workflows: wf.list }).map((d) => d.id) : []);
+  const candidates = (wf.list || []).filter((w) => chosen.has(w.id) || (/nurture/i.test(w.name) && !/dispo/i.test(w.name) && String(w.status).toLowerCase() !== "draft"));
+  const toggle = (id) => { const next = new Set(chosen); if (next.has(id)) next.delete(id); else next.add(id); onPick?.([...next]); };
   const poll = async (job) => {
     let j = job;
     for (let i = 0; i < 400 && j?.status === "running"; i++) {
@@ -191,24 +202,35 @@ function TierDripsCleanup({ pulseOn }) {
   const j = state.job;
   return (
     <div className="rounded-lg bg-slate-50 p-2">
-      <div className="text-xs font-semibold text-slate-700">Replaces the TIER 2/3 check-in drips</div>
+      <div className="text-xs font-semibold text-slate-700">Replaces these GHL check-in drips</div>
       <p className="mt-0.5 text-xs text-slate-500">
-        While this is on, the bot still tags agents tier-2/tier-3 (the stage follows the tag) but doesn't put anyone in the TIER 2 or TIER 3
-        workflow, and each agent it checks in with is taken out of them first. GHL starts a workflow on its own when its trigger tag is added,
-        so also delete the text steps inside TIER 2 and TIER 3 in GHL.
+        GHL starts them by itself when an agent's card moves to Tier 2 or 3, so switch them to Draft in GHL the same day you turn this on.
+        While this is on, anyone it checks in with is taken out of them first. TIER 1/2/3 keep running — they move the card.
       </p>
+      {wf.list === null ? <p className="mt-1 text-xs text-slate-400">Reading GHL's workflows…</p>
+        : wf.error ? <p className="mt-1 text-xs text-amber-700">Couldn't read GHL's workflows: {wf.error}</p>
+        : candidates.length ? (
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+            {candidates.map((w) => (
+              <label key={w.id} className="flex items-center gap-1.5 text-xs text-slate-700">
+                <input type="checkbox" checked={chosen.has(w.id)} onChange={() => toggle(w.id)} /> {w.name}
+              </label>
+            ))}
+          </div>
+        ) : <p className="mt-1 text-xs text-slate-500">No nurture workflow found in GHL.</p>}
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => start(true)} disabled={state.busy}
+        <button type="button" onClick={() => start(true)} disabled={state.busy || !chosen.size}
           className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium hover:bg-white disabled:opacity-50">Count who's in them</button>
         <button type="button" onClick={() => start(false)} disabled={state.busy || !pulseOn || !(j?.dryRun && j?.status === "done")}
           title={!pulseOn ? "Turn the check-in on and save first, so nobody is left without one" : "Count first"}
           className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium hover:bg-white disabled:opacity-50">Take everyone out now</button>
         {state.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" /> : null}
       </div>
+      <p className="mt-1 text-xs text-slate-400">Save your picks first; the buttons use the saved settings.</p>
       {state.error ? <p className="mt-1 text-xs text-red-600">{state.error}</p> : null}
       {j ? (
         <p className="mt-1 text-xs text-slate-600">
-          {(j.drips || []).map((d) => d.name || d.id).join(" and ")}: {j.tagged.toLocaleString()} agents tagged tier-2/tier-3{j.truncated ? " (the GHL search was cut off; run it again after)" : ""}.
+          {(j.drips || []).map((d) => d.name || d.id).join(" and ")}{j.drips?.length ? ": " : ""}{j.tagged.toLocaleString()} agents tagged tier-2/tier-3{j.truncated ? " (the GHL search was cut off; run it again after)" : ""}.
           {!j.dryRun ? ` ${j.status === "running" ? `Taking them out… ${j.done} of ${j.tagged}` : `Done: ${j.removed} taken out, ${j.notIn} weren't in one${j.failed ? `, ${j.failed} failed` : ""}.`}` : ""}
           {j.error ? <span className="text-red-600"> {j.error}</span> : null}
         </p>
@@ -1009,7 +1031,8 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                 </span>
               </label>
               <AgentPulseSamples />
-              <TierDripsCleanup pulseOn={Boolean(form.outreachAutopilot?.pulse?.enabled)} />
+              <TierDripsCleanup pulseOn={Boolean(form.outreachAutopilot?.pulse?.enabled)} pulse={form.outreachAutopilot?.pulse || {}}
+                onPick={setAgentPulse("replacesWorkflowIds")} />
             </div>
             {form.outreachAutopilot?.pulse?.enabled && (
               <div className="mt-3 grid grid-cols-2 gap-3">

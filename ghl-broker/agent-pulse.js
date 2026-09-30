@@ -19,7 +19,7 @@
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive, previewProactive, markUnsubscribed } from "./reply-agent.js";
-import { getContact, smsUnsubscribed, removeContactFromWorkflow, searchAllContactsByTags } from "./ghl.js";
+import { getContact, smsUnsubscribed, removeContactFromWorkflow, searchAllContactsByTags, listWorkflows } from "./ghl.js";
 import { workHour, isWorkday, normalizeOutreachAutopilot } from "./outreach-sweep.js";
 import { allEventsSince } from "./contact-events.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
@@ -39,8 +39,25 @@ const LEDGER_DAYS = 400;
 const iso = (ms) => new Date(ms).toISOString();
 const pacificDay = (ms) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(ms));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// The tags the TIER 2/3 drips go with; who the one-time clean-up reads.
+// The tags the tier nurture goes with; who the one-time clean-up reads.
 export const TIER_DRIP_TAGS = ["tier-2", "tier-3"];
+
+// GHL's workflow list, for finding the nurture drip by name. Ten minutes is
+// plenty: workflows are renamed by hand, rarely. A read that fails gives null,
+// and then only drips picked by hand are replaced.
+const WORKFLOWS_TTL_MS = 10 * 60 * 1000;
+const workflowCache = new Map();
+export async function pulseWorkflows(client, locationId, deps = {}) {
+  if (typeof deps.listWorkflows === "function") return deps.listWorkflows().catch(() => null);
+  const hit = workflowCache.get(locationId);
+  if (hit && Date.now() - hit.at < WORKFLOWS_TTL_MS) return hit.list;
+  if (!client) return null;
+  try {
+    const list = await listWorkflows(client, locationId);
+    workflowCache.set(locationId, { at: Date.now(), list });
+    return list;
+  } catch { return null; }
+}
 
 const jobs = new Map();
 export const getAgentPulseJob = (locationId) => jobs.get(locationId) || null;
@@ -87,7 +104,7 @@ export function housesFrom(offers = []) {
  * Pure read: who would get one today. One read per source, whatever the size
  * of the book.
  */
-export async function planAgentPulse({ locationId, saved = {}, store = defaultStore, now = Date.now() }) {
+export async function planAgentPulse({ locationId, saved = {}, store = defaultStore, now = Date.now(), workflows = null }) {
   const settings = agentPulseSettings(saved);
   const config = conversationConfig(saved);
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
@@ -143,9 +160,9 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
   // its seat back, but the agent waits for tomorrow (the day's claim key is
   // theirs), so the seat goes to someone else.
   const triedToday = new Set(today.map((e) => e.contactId));
-  // The drips this check-in replaces (the TIER 2/3 check-ins) never hold an
-  // agent back from it: the check-in is the one clock.
-  const drips = tierDrips({ pulse: settings, conversationAi: saved.conversationAi });
+  // The drips this check-in replaces (the tier nurture) never hold an agent
+  // back from it: the check-in is the one clock.
+  const drips = tierDrips({ pulse: settings, conversationAi: saved.conversationAi, workflows });
   const planSettings = { ...settings, replacesWorkflowIds: drips.map((d) => d.id) };
   const plan = pickPulseAgents({ agents: agents.filter((a) => !triedToday.has(a.contactId)), settings: planSettings, config, houses, outreachFollowUpDays: oa.followUpDays, seats, now });
   return { ...plan, settings, drips, claimedToday, seats, truncated: Boolean(evRead.truncated || ledgerRead.truncated) };
@@ -193,7 +210,7 @@ export function startAgentPulse({
   const finish = (patch) => { Object.assign(job, patch, { finishedAt: new Date().toISOString() }); try { onDone?.(job); } catch { /* the caller's */ } };
 
   (async () => {
-    const plan = await planAgentPulse({ locationId, saved, store, now });
+    const plan = await planAgentPulse({ locationId, saved, store, now, workflows: await pulseWorkflows(client, locationId, deps) });
     const picks = limit != null ? plan.picks.slice(0, Math.max(0, Math.round(Number(limit)) || 0)) : plan.picks;
     job.counts = plan.counts;
     job.picked = picks.length;
@@ -311,7 +328,7 @@ export async function maybeRunAgentPulse({ client, locationId, saved = {}, store
  * model call each, so a handful at most.
  */
 export async function previewAgentPulse({ client, locationId, saved = {}, store = defaultStore, limit = 3, deps = {}, now = Date.now() }) {
-  const plan = await planAgentPulse({ locationId, saved, store, now });
+  const plan = await planAgentPulse({ locationId, saved, store, now, workflows: await pulseWorkflows(client, locationId, deps) });
   const preview = typeof deps.previewProactive === "function" ? deps.previewProactive : previewProactive;
   const n = Math.max(1, Math.min(5, Math.round(Number(limit)) || 3));
   const previews = [];
@@ -332,7 +349,7 @@ export async function previewAgentPulse({ client, locationId, saved = {}, store 
   return { previews, counts: plan.counts, drips: plan.drips };
 }
 
-/* ---------- the one-time clean-up: everyone out of the TIER 2/3 drips ---------- */
+/* ---------- the one-time clean-up: everyone out of the tier nurture ---------- */
 
 const leaveJobs = new Map();
 export const getLeaveDripsJob = (locationId) => leaveJobs.get(locationId) || null;
@@ -341,7 +358,7 @@ export const getLeaveDripsJob = (locationId) => leaveJobs.get(locationId) || nul
  * startLeaveDrips({ client, locationId, saved, store, dryRun, deps }) → job
  *
  * Everyone tagged tier-2 or tier-3 in GHL, out of the drips the check-in
- * replaces — for the drips already running when the check-in is switched on
+ * replaces (the tier nurture) — for the ones already running when it's switched on
  * (GHL has no API that lists who's in a workflow, so the tags are the list).
  * A dry run only counts. Live, only with the check-in on, so nobody is left
  * with no check-in at all. Paced; a person who wasn't in a drip is counted,
@@ -349,13 +366,11 @@ export const getLeaveDripsJob = (locationId) => leaveJobs.get(locationId) || nul
  */
 export function startLeaveDrips({ client, locationId, saved = {}, store = defaultStore, dryRun = false, deps = {} }) {
   const s = agentPulseSettings(saved);
-  const drips = tierDrips({ pulse: s, conversationAi: saved.conversationAi });
-  if (!drips.length) throw Object.assign(new Error("no TIER 2/3 drips found in the playbook — set the ones the check-in replaces"), { http: 400 });
   if (!dryRun && !s.enabled) throw Object.assign(new Error("turn the agent check-in on first, so nobody is left without a check-in"), { http: 409 });
   if (leaveJobs.get(locationId)?.status === "running") throw Object.assign(new Error("already taking people out of the drips"), { http: 409 });
   const job = {
     id: `ld-${Date.now().toString(36)}`, locationId, dryRun: Boolean(dryRun), status: "running", startedAt: new Date().toISOString(), finishedAt: null,
-    drips, tagged: 0, done: 0, removed: 0, notIn: 0, failed: 0, truncated: false, error: null,
+    drips: [], tagged: 0, done: 0, removed: 0, notIn: 0, failed: 0, truncated: false, error: null,
   };
   leaveJobs.set(locationId, job);
   const remove = removerFor(client, deps);
@@ -363,6 +378,9 @@ export function startLeaveDrips({ client, locationId, saved = {}, store = defaul
   const tagged = typeof deps.taggedContacts === "function" ? deps.taggedContacts
     : async () => { const r = await searchAllContactsByTags(client, locationId, TIER_DRIP_TAGS); job.truncated = Boolean(r?.truncated); return r?.contacts || []; };
   (async () => {
+    const drips = tierDrips({ pulse: s, conversationAi: saved.conversationAi, workflows: await pulseWorkflows(client, locationId, deps) });
+    if (!drips.length) throw new Error("no nurture drip found in GHL — pick the drips the check-in replaces in Settings");
+    job.drips = drips;
     const contacts = ((await tagged()) || []).filter((c) => c?.id);
     job.tagged = contacts.length;
     if (!dryRun) {
