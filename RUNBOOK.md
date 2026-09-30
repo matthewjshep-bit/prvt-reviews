@@ -1465,6 +1465,19 @@ on a clock / need you, with Run now), the queue group "From last night", and
 `GET /api/dashboard/audit` (`last`, `run`, `tries`, `failed`); `POST
 /api/dashboard/audit/run { dryRun }` runs it by hand. Cursor `conversationAudit`.
 
+**Only what still needs you (2026-09-30).** Matt: "if they say 'no' nothing
+else we need to do… I just want the high leverage important stuff."
+- A plain no to our check-in — "No / Sorry", "Nope", "Not right now",
+  "Nothing yet, thanks", "Not a project" (`isPlainNo`: short, no question, no
+  number, nothing after a "but") — is dropped like a closer: no redraft, no
+  row. Unless our offer is out or a deal is live: then the no may be their
+  pass, and the reply agent answers and records it.
+- Today re-reads last night's rows when it loads (`stillOwed`): a "texts we
+  never answered" row leaves once a reply was sent or queued after their
+  text, whoever wrote it; and no row that would text someone who
+  unsubscribed (an `unsubscribed` event) is shown — audit rows, held drafts,
+  scheduled drafts or promises. The counts drop with them.
+
 ### The daytime pass (2026-09-17)
 
 **Why.** The audit's fixes ran once, at 7pm. A thread that stalled at 9am sat
