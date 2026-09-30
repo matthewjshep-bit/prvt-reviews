@@ -54,6 +54,14 @@ export const EVENT_TYPES = [
   // The price watch (ghl-broker/price-watch.js): the listing went pending or
   // sold, and — since 2026-09-29 — came back on the market.
   "listing_off_market", "listing_back_on_market",
+  // The agent's own clock (shared/agent-pulse.js). `agent_pulse_sent` is the
+  // day's claim, written before the draft; `agent_pulse_texted` is the text
+  // actually going; a claim that drafted nothing is voided so the seat and the
+  // listing come back. `listing_pinged` keeps a listing to one text, ever.
+  "agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided",
+  // A GHL workflow the app put them in or took them out of (conversation
+  // actions), so the pulse knows who a drip already has.
+  "workflow_enrolled", "workflow_left",
   // A new agent was put into a GHL outreach workflow by id — GHL sends the
   // texts, so this is the only record the app has that we reached out.
   // data.kind "first" (the import) or "followup" (outreach-followup.js).
@@ -89,6 +97,9 @@ export const EVENT_LABEL = {
   realm_yes: "number was in the realm", realm_no: "number was not in the realm",
   underwrite_dropped: "an underwrite left the queue without running",
   listing_off_market: "the listing went off the market", listing_back_on_market: "the listing came back on the market",
+  agent_pulse_sent: "a check-in was started", agent_pulse_texted: "we checked in", agent_pulse_voided: "a check-in drafted nothing",
+  listing_pinged: "we asked about their listing", listing_ping_voided: "a listing text drafted nothing",
+  workflow_enrolled: "added to a GHL workflow", workflow_left: "taken out of a GHL workflow",
   deal_promoted: "under contract", deal_stage: "deal stage changed",
   investor_evaluating: "evaluating the deal", investor_committed: "committed buyer", investor_passed: "passed on the deal",
   feedback: "feedback on the deal", row_feedback: "you told the bot what it should have done",
@@ -135,6 +146,9 @@ export const EVENT_ICON = {
   underwrite_dropped: "Clock",
   listing_off_market: "XCircle",
   listing_back_on_market: "RefreshCw",
+  agent_pulse_sent: "BellRing", agent_pulse_texted: "MessageSquare", agent_pulse_voided: "Clock",
+  listing_pinged: "Crosshair", listing_ping_voided: "Clock",
+  workflow_enrolled: "Workflow", workflow_left: "LogOut",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

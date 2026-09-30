@@ -59,10 +59,13 @@ export function offerListQuery({ locationId, contactId = null, limit = 50, lean 
 // about. Unbounded, `never` is the truth. It is also the cheaper read: the
 // (location_id, contact_id, at desc) index makes `distinct on` walk one row
 // per contact instead of every event in the window.
-export function lastActivityQuery({ locationId, types = null, limit = 5000 }) {
+export function lastActivityQuery({ locationId, types = null, limit = 5000, inboundOnly = false }) {
   const params = [locationId];
   const ph = (v) => `$${params.push(v)}`; // bind v, return its placeholder
-  const where = Array.isArray(types) && types.length ? ` and type = any(${ph(types)}::text[])` : "";
+  // `inboundOnly`: a text summary counts only when it summarises THEIR text —
+  // the contact-record backfill writes one for our own machine drafts too.
+  const where = (Array.isArray(types) && types.length ? ` and type = any(${ph(types)}::text[])` : "")
+    + (inboundOnly ? ` and (type <> 'text_summary' or coalesce(data->>'inbound', '') <> '')` : "");
   return {
     text: `select distinct on (contact_id)
                   contact_id as "contactId", type, at, source, data
@@ -680,6 +683,25 @@ const pgStore = {
     );
     return rows;
   },
+  // Listings of agents already in GHL, first seen since `since` and seen on a
+  // pull since `seenSince` (still listed) — what the agent pulse raises by
+  // name (agent-pulse.js). The contact comes off the agent row: the import's
+  // own contact_id, or the GHL match a pull saved on it.
+  async listFreshAgentListings(locationId, { since, seenSince, limit = 20000 } = {}) {
+    const { rows } = await query(
+      `select l.listing_key as "listingKey", l.agent_key as "agentKey", l.batch_id as "batchId",
+              l.first_seen as "firstSeen", l.last_seen as "lastSeen", l.doc,
+              coalesce(a.contact_id, a.doc->'ghl'->>'contactId') as "contactId", a.doc->>'distressRule' as "distressRule"
+         from outreach_listings l
+         join outreach_agents a on a.location_id = l.location_id and a.batch_id = l.batch_id and a.agent_key = l.agent_key
+        where l.location_id = $1 and l.first_seen >= $2 and l.last_seen >= $3
+          and coalesce(a.contact_id, a.doc->'ghl'->>'contactId') is not null
+        order by l.first_seen desc limit $4`,
+      [locationId, since, seenSince, limit]
+    );
+    return rows.map((r) => ({ ...r, firstSeen: r.firstSeen instanceof Date ? r.firstSeen.toISOString() : r.firstSeen,
+      lastSeen: r.lastSeen instanceof Date ? r.lastSeen.toISOString() : r.lastSeen }));
+  },
   // Delete the batch's non-imported agents + their listings. Returns the
   // number of agents removed.
   async clearOutreachAgents(locationId, batchId) {
@@ -928,8 +950,8 @@ const pgStore = {
   },
   // The newest communication per contact — see lastActivityQuery for why it
   // has no window.
-  async lastContactActivity(locationId, { types = null, limit = 5000 } = {}) {
-    const { text, params } = lastActivityQuery({ locationId, types, limit });
+  async lastContactActivity(locationId, { types = null, limit = 5000, inboundOnly = false } = {}) {
+    const { text, params } = lastActivityQuery({ locationId, types, limit, inboundOnly });
     const { rows } = await query(text, params);
     return rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at }));
   },
@@ -1787,6 +1809,19 @@ const fileStore = (() => {
         (l) => l.locationId === locationId && l.batchId === batchId && l.agentKey === agentKey
       );
     },
+    async listFreshAgentListings(locationId, { since, seenSince, limit = 20000 } = {}) {
+      ensure();
+      const out = [];
+      for (const l of Object.values(data.outreachListings)) {
+        if (l.locationId !== locationId || String(l.firstSeen) < String(since) || String(l.lastSeen) < String(seenSince)) continue;
+        const a = data.outreachAgents[`${locationId}|${l.batchId}|${l.agentKey}`];
+        const contactId = a?.contactId || a?.doc?.ghl?.contactId || null;
+        if (!contactId) continue;
+        out.push({ listingKey: l.listingKey, agentKey: l.agentKey, batchId: l.batchId, firstSeen: l.firstSeen, lastSeen: l.lastSeen,
+          doc: l.doc, contactId, distressRule: a?.doc?.distressRule || null });
+      }
+      return out.sort((x, y) => String(y.firstSeen).localeCompare(String(x.firstSeen))).slice(0, limit);
+    },
     async listAllOutreachListings(locationId, { batchId } = {}) {
       ensure();
       return Object.values(data.outreachListings).filter(
@@ -1979,13 +2014,14 @@ const fileStore = (() => {
       const last = rows.at(-1);
       return { rows, next: rows.length >= limit && last ? { at: last.at, id: last.id } : null };
     },
-    async lastContactActivity(locationId, { types = null, limit = 5000 } = {}) {
+    async lastContactActivity(locationId, { types = null, limit = 5000, inboundOnly = false } = {}) {
       ensure();
       const newest = new Map();
       for (const [k, list] of Object.entries(data.contactEvents)) {
         if (!k.startsWith(`${locationId}|`)) continue;
         for (const e of list) {
           if (!e?.contactId || (types?.length && !types.includes(e.type))) continue;
+          if (inboundOnly && e.type === "text_summary" && !String(e.data?.inbound || "").trim()) continue;
           const prev = newest.get(e.contactId);
           if (!prev || String(e.at || "").localeCompare(String(prev.at || "")) > 0) newest.set(e.contactId, e);
         }

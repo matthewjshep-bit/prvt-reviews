@@ -439,6 +439,14 @@ const PULSE_SHAPES = [
   "SHAPE FOR THIS ONE: shortest version you can write that still has their name, the question and the reason — two sentences. No clue at all.",
 ];
 
+// The agent check-in's phrasings, rotated per text so a day's batch doesn't
+// read as a template (the buyer pulse learned this on its first live day).
+const AGENT_PULSE_SHAPES = [
+  "SHAPE FOR THIS ONE: open with the question itself; the reason in a clause.",
+  "SHAPE FOR THIS ONE: open with the one thing you know about them (the listing, the house, what you last talked about), then the question.",
+  "SHAPE FOR THIS ONE: shortest version that still has their first name and the question — one sentence if you can.",
+];
+
 const START = "YOU ARE STARTING THIS MESSAGE — nothing new came in.";
 const CONTINUE = "Reference the thread so it reads as a continuation.";
 
@@ -642,6 +650,37 @@ export function outboundOpening(outbound) {
         `Do NOT name a price, a number, a percentage, an address or a link. Do NOT pitch a deal or promise one is coming. ` +
         `Do NOT say "I'm reaching out", "I hope this finds you well", "touching base" or "just checking in". ` +
         `No exclamation-mark cheer. Easy to ignore, easy to answer in a line. Set intent to buyer_pulse.`;
+    }
+
+    // The agent's own clock (shared/agent-pulse.js). Matt, 2026-09-29:
+    // "reach out to these agents proactively and frequently, every 3 weeks or
+    // so, to see if they have any new listings or leads". One local investor
+    // texting an agent; the reason is the one the pulse picked, and every clue
+    // is colour, never a dossier.
+    case "agent_pulse": {
+      const l = o.listing || null;
+      const h = o.house || null;
+      const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
+      const why = o.reason === "fresh_listing" && l
+        ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom ? `, on the market about ${l.dom} days` : ""}${l.cut ? `, with a price cut` : ""}. ` +
+          `Ask whether the seller would look at an as-is cash offer — we buy houses that need work. Name the street; never its price or any number.`
+        : o.reason === "our_house" && h
+        ? `Last time it was ${h.street}, which ${h.how === "closed" ? "closed" : h.how === "fell through" ? "fell through" : h.how === "never heard back" ? "we never heard back on" : "didn't work out"}. ` +
+          `Check in on THEM, not that house: anything else coming up that needs work, or anything off market?`
+        : `No house in particular. Check in: anything coming up that needs work, or anything off market they'd want a quick as-is buyer for?`;
+      const clues = [
+        o.dealsWithUs ? "We have done a deal together — this is a friend, write like it." : "",
+        o.lastSummary ? `What we last talked about (colour only, never quote it back): ${o.lastSummary}.` : "",
+        o.nextAction ? `What we meant to do next with them (colour only): ${o.nextAction}.` : "",
+      ].filter(Boolean).join(" ");
+      return `${START} There is NO offer in this message. It is a check-in with a listing agent${cold ? " who has not written back before" : " we know"}. ` +
+        `${why} ${clues ? `${clues} ` : ""}` +
+        `WHAT TO WRITE: one or two short sentences, one text, the way a local investor texts an agent. ` +
+        `${cold ? "One clause on who you are: a local investor who buys houses that need work, as-is. " : "READ THE THREAD and pick up like someone who remembers; do NOT reintroduce yourself. "}` +
+        `${AGENT_PULSE_SHAPES[(Number(o.variant) || 0) % AGENT_PULSE_SHAPES.length]} ` +
+        `Do NOT name a price, a number, a percentage, an ARV or a link. Do NOT promise an offer or say what we'd pay. ` +
+        `Do NOT say "I'm reaching out", "touching base" or "just checking in". Easy to ignore, easy to answer in a line. ` +
+        `${cold ? "" : `${CONTINUE} `}Set intent to agent_pulse.`;
     }
 
     case "blast_nudge":

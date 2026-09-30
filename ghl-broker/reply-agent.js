@@ -87,7 +87,7 @@ import { meterAi } from "./ai-spend.js";
 
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
-const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "outreach_nudge", "outreach_open", "buyer_pulse"]);
+const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "outreach_nudge", "outreach_open", "buyer_pulse", "agent_pulse"]);
 function scheduleFor({ config, now, kind = null, intent = "", replyLength = 0, random = Math.random }) {
   const a = config.autoSend || {};
   if (kind && STARTED_KINDS.has(kind)) {
@@ -284,7 +284,7 @@ export const SHADOW_GRACE_MS = 20_000;
 // Plain check-ins with no number, no negotiation and no terms in them — the
 // texts where thinking harder buys nothing (2026-09-25). Everything else,
 // replies included, stays at medium.
-export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "blast_nudge", "dataroom_nudge"]);
+export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge"]);
 export const draftEffort = (outbound) => (outbound && LOW_EFFORT_KINDS.has(outbound.kind) ? "low" : "medium");
 
 // Texts a sweep starts that nobody is waiting on: these may go through the
@@ -292,7 +292,7 @@ export const draftEffort = (outbound) => (outbound && LOW_EFFORT_KINDS.has(outbo
 // partner's answer, an address chase and every reply to a person may not.
 export const BATCHABLE_KINDS = new Set([
   "outreach_open", "outreach_nudge", "counter_nudge", "take_ask", "offer_nudge", "hot_push", "passed_checkin",
-  "buyer_pulse", "blast_nudge", "dataroom_nudge", "promise_due", "price_drop", "checkin_due",
+  "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "promise_due", "price_drop", "checkin_due",
 ]);
 
 export function draftParams({ model, system, user, schema, effort = "medium" }) {
@@ -1998,6 +1998,20 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // The agent's own clock (shared/agent-pulse.js): every ~3 weeks for an
+  // agent who has written back, about a fresh listing of theirs, the house
+  // they had with us, or what's coming up. Its switches are
+  // outreachAutopilot.pulse, checked by the runner; not on the playbook grid.
+  // `onlyFloats` with nothing floated: ANY number in it holds the draft —
+  // not even a price from the book may ride along on a check-in.
+  agent_pulse: {
+    party: "agent",
+    enabled: () => true,
+    ready: ({ subject }) => (subject?.reason ? true : "no reason to check in"),
+    floats: () => [],
+    forbids: () => [],
+    onlyFloats: true,
+  },
 };
 
 const outboundLabel = (kind) => String(kind || "").replace(/_/g, " ");
@@ -2102,7 +2116,10 @@ export async function startProactive({
         job.finishedAt = new Date().toISOString();
         await recordError(store, { locationId, area: "proactive", err: e, context: { contactId, jobId: job.id, kind } });
         await note(client, contactId, `AI ${outboundLabel(kind)} could not be drafted — ${job.error}. Pick it up by hand if you like.`, job.warnings);
-      }),
+      })
+      // The caller's own bookkeeping once the text is drafted, held or failed
+      // (the agent pulse gives a seat back when nothing was drafted).
+      .finally(() => { try { deps.onSettled?.(job); } catch { /* the caller's problem */ } }),
     batched ? RA_MACHINE_CONCURRENT : RA_MAX_CONCURRENT,
   );
   return { skipped: null, job };
@@ -2222,6 +2239,15 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       street: String(offer.address || "").split(",")[0].trim(),
       requote: Boolean(subject?.requote) };
   }
+  if (kind === "agent_pulse") {
+    // shared/agent-pulse.js agentPulseSubject: a listing by street (never its
+    // price), a house by street and how it ended, and what we last talked
+    // about as colour.
+    const p = subject || {};
+    return { kind, address: String(p.address || ""), reason: p.reason || "general", segment: p.segment || "engaged",
+      listing: p.listing || null, house: p.house || null, dealsWithUs: Number(p.dealsWithUs) || 0, offersWithUs: Number(p.offersWithUs) || 0,
+      lastSummary: String(p.lastSummary || "").slice(0, 200), nextAction: String(p.nextAction || "").slice(0, 160), variant: Number(p.variant) || 0 };
+  }
   if (kind === "buyer_pulse") {
     // Context clues for a check-in with no deal in it (shared/buyer-pulse.js
     // pulseSubject). There is no property, so no address.
@@ -2278,6 +2304,10 @@ function outboundSummary({ kind, offer, outbound }) {
     case "outreach_open": return `First text: saw their listing at ${where}, asks if they have anything distressed.`;
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "buyer_pulse":   return `Checks in between deals: are they buying right now, and ${outbound.buyBox ? "is their buy box still right" : "what is their buy box"}.`;
+    case "agent_pulse":
+      if (outbound.reason === "fresh_listing") return `Checks in about their listing at ${outbound.listing?.street || where}: would the seller look at an as-is cash offer?`;
+      if (outbound.reason === "our_house") return `Checks back in on ${outbound.house?.street || where} (${outbound.house?.how || "it ended"}) and asks what else is coming up.`;
+      return "Checks in: anything coming up that needs work, or off market?";
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
     case "dataroom_nudge": return `Follows up on ${where} — they opened the package and went quiet${rung}.`;
     case "checkin_due":
@@ -2376,6 +2406,7 @@ async function runProactive(job, ctx) {
       ...(kind === "take_check" ? { arv: outbound.arv, rehab: outbound.rehab } : {}),
       ...(kind === "realm_check" ? { amount: offer.cashAmount, requote: outbound.requote } : {}),
       ...(outbound.step != null ? { step: outbound.step, steps: subject?.steps || [], stepLabel: outbound.stepLabel } : {}),
+      ...(kind === "agent_pulse" ? { segment: outbound.segment, reason: outbound.reason, listingKey: subject?.listingKey || null } : {}),
     },
     reply: draft.reply, intent: kind, confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
     usage: draft.usage || null, shadow: shadowRow(draft.shadow, gateFor),
@@ -3257,12 +3288,23 @@ async function runReply(job, ctx) {
     if (offersToSendDeals(job.message)) {
       checkInBooked = true;
       await addContactTags(client, job.contactId, ["deal-source"]).catch((e) => warnings.push(`tag: ${e.message}`));
-      await recordEvent({
-        store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
-        address: "", source: "conversation", ref: record.id,
-        dedupeKey: `checkin_requested:source:${job.contactId}`,
-        data: { kind: "source", phrase: "", dueAt: new Date(now + 7 * 86400000).toISOString(), left: 5 },
-      }).catch(() => {});
+      // A chain already running is left to run. Until 2026-09-29 the key was
+      // one per contact for all time, so an agent who offered deals a second
+      // time — months later — never got a check-in again.
+      const prior = await store.listContactEvents?.(locationId, job.contactId, { types: ["checkin_requested", "checkin_sent"], limit: 50 }).catch(() => []) || [];
+      const lastSource = prior.filter((e) => e.type === "checkin_requested" && e.data?.kind === "source").sort((x, y) => String(y.at).localeCompare(String(x.at)))[0];
+      // Running = its newest request is still waiting to go (a sent one writes
+      // the next; one they answered, or that aged out, is over).
+      const running = lastSource && !prior.some((e) => e.type === "checkin_sent" && e.data?.requestAt === lastSource.at)
+        && Date.parse(lastSource.data?.dueAt || "") > now - 8 * 86400000;
+      if (!running) {
+        await recordEvent({
+          store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
+          address: "", source: "conversation", ref: record.id,
+          dedupeKey: `checkin_requested:source:${job.contactId}:${new Date(now).toISOString().slice(0, 10)}`,
+          data: { kind: "source", phrase: "", dueAt: new Date(now + 7 * 86400000).toISOString(), left: 5 },
+        }).catch(() => {});
+      }
     }
   }
 
@@ -3888,6 +3930,15 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       await store.updateDataroomInvite?.(blast.invite.id, { sentAt: ts }).catch(() => {});
       await store.logDataroomEvent?.(blast.room.id, blast.invite.id, "sent", { via: "blast" }).catch(() => {});
     }
+  }
+  // The agent's check-in actually went: the cadence and the "unanswered"
+  // counts (shared/agent-pulse.js) read this, never the claim.
+  if (d.outbound?.kind === "agent_pulse") {
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "agent", type: "agent_pulse_texted", at: ts,
+      address: d.outbound.address || "", source: "conversation", ref: d.id, dedupeKey: `agent_pulse_texted:${d.id}`,
+      data: { draftId: d.id, auto: Boolean(auto), segment: d.outbound.segment || "", reason: d.outbound.reason || "", listingKey: d.outbound.listingKey || null },
+    }).catch(() => {});
   }
   if (d.outbound?.kind === "outreach_open") {
     await recordEvent({

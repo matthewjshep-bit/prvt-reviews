@@ -23,6 +23,7 @@
 // recorded to power the month-to-date meter in the UI.
 
 import express from "express";
+import { planAgentPulse, startAgentPulse, getAgentPulseJob, CURSOR_NAME as AGENT_PULSE_CURSOR } from "../agent-pulse.js";
 import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
@@ -50,6 +51,8 @@ import {
 
 const OUTREACH_TAG = process.env.OUTREACH_TAG || "agent-outreach";
 const OUTREACH_IMPORTS_ENABLED = process.env.OUTREACH_IMPORTS_ENABLED === "true";
+// The agent check-in sends only when the broker may send anything at all.
+const PULSE_SENDS_LIVE = process.env.CARD_SENDS_ENABLED === "true";
 
 // Contact custom fields written on import live in the shared registry so the
 // Fields Manager can visualize them alongside the offer + enrichment fields.
@@ -1064,6 +1067,41 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
 
   // Body: { dryRun }. The follow-up by hand: who is due, who wrote back, and
   // (live) into the follow-up workflow. Dry by default.
+  // The agent check-in (agent-pulse.js, shared/agent-pulse.js): who it would
+  // text today and why, what it did last, and whether it's on. Writes nothing.
+  router.get("/pulse", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const plan = await planAgentPulse({ locationId, saved, store });
+      const cursor = await store.getJobCursor?.(locationId, AGENT_PULSE_CURSOR).catch(() => null);
+      res.json({
+        ok: true, settings: plan.settings, counts: plan.counts, claimedToday: plan.claimedToday, seats: plan.seats, truncated: plan.truncated,
+        picks: plan.picks.map((p) => ({ contactId: p.contactId, name: p.name, segment: p.segment, reason: p.reason, address: p.subject?.address || "", subject: p.subject })),
+        sendsEnabled: PULSE_SENDS_LIVE, tz: WORK_TZ,
+        job: getAgentPulseJob(locationId),
+        lastRunAt: cursor?.at || null, last: cursor?.doc?.last || null, run: cursor?.doc?.run || null,
+        tries: Number(cursor?.doc?.tries) || 0, failed: Boolean(cursor?.doc?.failed), error: cursor?.doc?.error || null,
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Body: { dryRun, limit }. A dry run (the default) picks and reports; it
+  // claims nobody and drafts nothing.
+  router.post("/pulse/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const dryRun = req.body?.dryRun !== false;
+      const limit = req.body?.limit != null ? Number(req.body.limit) : null;
+      const job = startAgentPulse({
+        client, locationId, saved, store, sendsEnabled: PULSE_SENDS_LIVE, trigger: "manual", dryRun, limit,
+        deps: router.conversationDepsFor?.({ locationId, client, saved }) || {},
+      });
+      res.json({ ok: true, job });
+    } catch (err) { fail(res, err); }
+  });
+
   router.post("/autopilot/followup/run", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);

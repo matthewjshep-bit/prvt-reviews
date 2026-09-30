@@ -61,7 +61,8 @@ export const OUTBOUND_INTENTS = {
   // only by the nightly audit, which releases them itself (releaseForAudit),
   // so they never need a box on the playbook grid or a place in the autonomy
   // fingerprint. buyer_pulse likewise: the pulse check has its own two
-  // switches (dispoAutopilot.pulse) and the dial never touches it.
+  // switches (dispoAutopilot.pulse) and the dial never touches it — and so
+  // does agent_pulse (outreachAutopilot.pulse, shared/agent-pulse.js).
   agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "hot_push", "passed_checkin", "outreach_nudge", "call_followup", "promise_due", "price_drop", "checkin_due", "address_chase"],
   investor: ["blast_open", "blast_nudge", "dataroom_nudge", "call_followup"],
 };
@@ -73,6 +74,7 @@ export const INTENT_LABEL = {
     offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", take_ask: "asked for their read to finish our numbers", partner_answer: "your answer to a question the bot couldn't", passed_checkin: "checked back in on a passed offer", hot_push: "pushed an agreed price toward paper",
     outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text",
     call_followup: "text after a call", showing_ask: "asked for a buyer walkthrough window", promise_due: "kept our word on a number we owed", price_drop: "saw the list price come down", checkin_due: "the check-in they asked for", address_chase: "asked again for the address of a property they said was coming",
+    agent_pulse: "checked in on the relationship",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
     wants_call: "wants a call", scheduling: "scheduling", proof_of_funds: "proof of funds",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",

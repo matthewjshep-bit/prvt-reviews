@@ -37,6 +37,7 @@ import { maybeSweepCalls } from "./call-intake.js";
 import { recordError } from "./app-errors.js";
 import { maybeRunCoach } from "./coach.js";
 import { runLocationTick } from "./tick.js";
+import { maybeRunAgentPulse } from "./agent-pulse.js";
 import { startAiSpendMeter } from "./ai-spend.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -165,6 +166,7 @@ const outreachRouter = createOutreachRouter({
   },
 });
 app.use("/api/outreach", outreachRouter);
+outreachRouter.conversationDepsFor = offersRouter.conversationDepsFor;
 app.use("/api/dashboard", createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor }));
 const dispoRouter = createDispoRouter({ resolveLocation });
 app.use("/api/dispo", dispoRouter);
@@ -301,6 +303,13 @@ const TICK_JOBS = [
       deps: { ...offersRouter.conversationDepsFor({ locationId, client, saved }), book: (loc) => dispoRouter.scoredBook(loc, { status: "active" }) } })) {
       console.log(`buyer pulse started for ${locationId}`);
     }
+  } },
+  // Every agent on a clock (agent-pulse.js): the check-in every ~3 weeks for
+  // agents who have written back, and their fresh listings. Off until
+  // outreachAutopilot.pulse.enabled; drafts until pulse.autoSend.
+  { area: "agent-pulse", run: async ({ client, locationId, saved }) => {
+    if (await maybeRunAgentPulse({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) })) console.log(`agent check-in started for ${locationId}`);
   } },
   // The board, onto GHL's Opportunities. Every tick, bounded.
   { area: "mirror", run: async ({ client, locationId, saved }) => { await maybeMirror({ client, locationId, saved, store, log: console.log }); } },

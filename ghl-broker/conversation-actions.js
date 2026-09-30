@@ -58,6 +58,19 @@ const tagEvents = ({ store, locationId, contactId, draft, type, tags }) =>
     store, locationId, contactId, party: draft?.party || null, type, source: "conversation", ref: draft?.id || null, data: { tag },
   })));
 
+// Which GHL drip the app put someone in, on their timeline (2026-09-29). GHL
+// has no API to read a contact's workflows, so this is how the agent pulse
+// knows a workflow may be texting them (shared/agent-pulse.js agentOwner).
+async function noteWorkflowMove({ store, locationId, contactId, action, type }) {
+  if (!store || !locationId || !contactId || !action?.workflowId) return;
+  const day = new Date().toISOString().slice(0, 10);
+  await recordEvent({
+    store, locationId, contactId, type, source: "conversation", ref: String(action.workflowId),
+    dedupeKey: `${type}:${contactId}:${action.workflowId}:${day}`,
+    data: { workflowId: String(action.workflowId), workflowName: String(action.workflowName || "").slice(0, 80) },
+  }).catch(() => {});
+}
+
 const EXECUTORS = {
   async add_tags({ client, contactId, action, store, locationId, draft, deps }) {
     await addContactTags(client, contactId, action.tags);
@@ -88,19 +101,24 @@ const EXECUTORS = {
     }
     return `${action.key} = ${value.slice(0, 80)}`;
   },
-  async add_to_workflow({ client, contactId, action }) {
+  async add_to_workflow({ client, locationId, contactId, action, store }) {
     await addContactToWorkflow(client, contactId, action.workflowId);
+    await noteWorkflowMove({ store, locationId, contactId, action, type: "workflow_enrolled" });
     return `added to ${action.workflowName || action.workflowId}`;
   },
   // Leaving a workflow they were never in is a 4xx from GHL and not a
   // failure of ours — a tier move must not read as broken because the drip
   // had already finished.
-  async remove_from_workflow({ client, contactId, action }) {
+  async remove_from_workflow({ client, locationId, contactId, action, store }) {
     try {
       await removeContactFromWorkflow(client, contactId, action.workflowId);
+      await noteWorkflowMove({ store, locationId, contactId, action, type: "workflow_left" });
       return `removed from ${action.workflowName || action.workflowId}`;
     } catch (e) {
-      if (e?.status && e.status >= 400 && e.status < 500) return `not in ${action.workflowName || action.workflowId}`;
+      if (e?.status && e.status >= 400 && e.status < 500) {
+        await noteWorkflowMove({ store, locationId, contactId, action, type: "workflow_left" });
+        return `not in ${action.workflowName || action.workflowId}`;
+      }
       throw e;
     }
   },

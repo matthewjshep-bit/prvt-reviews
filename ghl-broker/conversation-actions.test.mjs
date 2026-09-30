@@ -332,3 +332,20 @@ test("a new property with no address waits for the address instead of underwriti
   await run({ intent: "deal_available", propertyAddress: "", inbound: "It's a project, needs a full remodel" });
   assert.equal(calls.length, 2);
 });
+
+// GHL has no API that says which workflows a contact is in, so the app writes
+// down every enrollment it makes (2026-09-29): the agent check-in leaves an
+// agent to a drip that may be texting them.
+test("putting someone in a GHL workflow, or taking them out, is on their timeline", async () => {
+  const { client } = recordingClient();
+  const rows = [];
+  const store = {
+    async getContactProfile() { return null; }, async upsertContactProfile() { return {}; },
+    async appendContactEvents(_loc, contactId, add) { rows.push(...add.map((e) => ({ ...e, contactId }))); return { inserted: add.length, skipped: 0 }; },
+  };
+  await runActions({ client, locationId: "LOC", contactId: "c1", store, draft: { id: "d1" }, actions: [
+    { id: "w1", type: "add_to_workflow", workflowId: "wf-tier2", workflowName: "TIER 2" },
+    { id: "w2", type: "remove_from_workflow", workflowId: "wf-tier1", workflowName: "TIER 1" },
+  ] });
+  assert.deepEqual(rows.map((e) => [e.type, e.data.workflowId]), [["workflow_enrolled", "wf-tier2"], ["workflow_left", "wf-tier1"]]);
+});
