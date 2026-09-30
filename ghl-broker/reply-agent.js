@@ -725,7 +725,7 @@ export function evaluateReplyGates({
 
   const known = [...(INTENTS[party] || INTENTS.agent), ...(OUTBOUND_INTENTS[party] || [])];
   if (never.includes(draft.intent) || !known.includes(draft.intent)) {
-    flags.push(`a ${String(draft.intent).replace(/_/g, " ")} is a person's call`);
+    flags.push(personsCall(draft.intent));
   }
   // The model's own "needs a human" is usually about an ACTION beside the
   // reply — "a person has to send the package" — not the reply itself. The
@@ -837,6 +837,15 @@ export function evaluateReplyGates({
   return { ok: flags.length === 0, flags, locked, clean: flags.filter((f) => f !== locked).length === 0, overOffer };
 }
 
+// Why a held draft waits, in words: "a counter is a person's call". The
+// catch-all intent reads "a reply the bot couldn't place", not "a other"
+// (Jeffrey Valcik's row, 2026-09-29).
+export function personsCall(intent = "") {
+  const what = String(intent || "").replace(/_/g, " ");
+  if (!what || what === "other") return "a reply the bot couldn't place is a person's call";
+  return `${/^[aeiou]/i.test(what) ? "an" : "a"} ${what} is a person's call`;
+}
+
 /**
  * decideAutoSend({ gate, party, intent, channel, config, sendsEnabled })
  *
@@ -856,7 +865,7 @@ export function decideAutoSend({ gate, party = "agent", intent = "other", channe
   // The one refusal the counter band may overturn — and the ONLY one. The
   // code is what releaseUnderGuard keys on, so a draft held for any other
   // reason can never be released by a guard passing.
-  if ((NEVER_AUTO[party] || []).includes(intent)) return { send: false, code: "never_auto", reason: `a ${intent.replace(/_/g, " ")} is a person's call` };
+  if ((NEVER_AUTO[party] || []).includes(intent)) return { send: false, code: "never_auto", reason: personsCall(intent) };
   if (!(playbook.autoSend.intents || []).includes(intent)) return { send: false, code: "not_allowlisted", reason: `${intent.replace(/_/g, " ")} is not on the ${party} auto-send list` };
   if (!(config.autoSend?.channels || []).includes(channel)) return { send: false, code: "channel", reason: `${channel} replies don't auto-send` };
   return { send: true, code: "", reason: "" };
