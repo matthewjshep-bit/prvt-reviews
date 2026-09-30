@@ -20,6 +20,8 @@ import {
   removeContactTags, createContactNote, findOrCreateCustomFieldByKey,
   customFieldIdKeyMap, contactCustomRecord,
 } from "./ghl.js";
+import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
+const NIGHTLY_WINDOW_HOURS = 3;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -64,7 +66,7 @@ export function publicSweepJob(job) {
 
 // Kicks off a sweep in the background and returns the job immediately.
 // Throws { http: 409 } if one is already running for the location.
-export function startSweep({ client, locationId, saved, store, sinceIso, windowLabel, types, maxContacts, repliesOnly, trigger }) {
+export function startSweep({ client, locationId, saved, store, sinceIso, windowLabel, types, maxContacts, repliesOnly, trigger, onDone = null }) {
   const existing = jobs.get(locationId);
   if (existing?.status === "running") {
     throw Object.assign(new Error("a sweep is already running for this location"), { http: 409 });
@@ -95,7 +97,7 @@ export function startSweep({ client, locationId, saved, store, sinceIso, windowL
     job.status = "error";
     job.error = String(e?.message || e).slice(0, 300);
     job.finishedAt = new Date().toISOString();
-  });
+  }).finally(() => onDone?.(job));
   return job;
 }
 
@@ -430,20 +432,20 @@ const NIGHTLY_MIN_GAP_MS = 20 * 3600 * 1000;
 // AI key is missing, or when any sweep ran recently.
 export const NIGHTLY_CURSOR = "enrichNightly";
 export async function maybeStartNightlySweep({ client, locationId, saved, store, utcHour, now = Date.now() }) {
-  if (new Date(now).getUTCHours() !== utcHour) return false;
+  const h = new Date(now).getUTCHours();
+  if (h < utcHour || h >= utcHour + NIGHTLY_WINDOW_HOURS) return false;
   if (!saved?.enrichSweepNightly) return false;
   if (!String(saved?.aiApiKey || "").trim()) return false;
-  const last = jobs.get(locationId);
-  if (last && (last.status === "running" || now - new Date(last.startedAt).getTime() < NIGHTLY_MIN_GAP_MS)) {
-    return false;
-  }
   // Durable, like the other sweeps: a redeploy inside the trigger hour used
   // to re-run the sweep and re-spend the model calls, because the only
-  // memory of "already ran" was this process's.
-  const cursor = await store.getJobCursor?.(locationId, NIGHTLY_CURSOR).catch(() => null);
-  if (cursor?.at && now - Date.parse(cursor.at) < NIGHTLY_MIN_GAP_MS) return false;
-  await store.setJobCursor?.(locationId, NIGHTLY_CURSOR, { at: new Date(now).toISOString(), doc: {} }).catch(() => {});
+  // memory of "already ran" was this process's. And a run a deploy killed
+  // comes back the same night (daily-gate.js) instead of losing the night.
+  const gate = await claimDailyRun({ store, locationId, cursorName: NIGHTLY_CURSOR, now, hourNow: h, startHour: utcHour,
+    windowHours: NIGHTLY_WINDOW_HOURS, running: jobs.get(locationId)?.status === "running", minGapMs: NIGHTLY_MIN_GAP_MS });
+  if (!gate.go) return false;
   startSweep({
+    onDone: (job) => closeDailyRun({ store, locationId, cursorName: NIGHTLY_CURSOR, failed: job.status === "error", error: job.error,
+      last: { id: job.id, status: job.status, total: job.total, done: job.done, counts: job.counts, finishedAt: job.finishedAt } }),
     client, locationId, saved, store,
     sinceIso: new Date(Date.now() - NIGHTLY_WINDOW_MS).toISOString(),
     windowLabel: "nightly · last 26h",

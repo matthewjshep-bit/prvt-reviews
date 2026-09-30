@@ -77,7 +77,7 @@ import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeG
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
 import { startFeedbackScan, getScanJob, publicScanJob } from "../feedback-scan.js";
 import {
-  startFollowUpSweep, getFollowUpJob, publicFollowUpJob, cancelFollowUpSweep,
+  startFollowUpSweep, getFollowUpJob, publicFollowUpJob, cancelFollowUpSweep, CURSOR_NAME as FOLLOW_UP_CURSOR,
   agentCandidates, investorCandidates,
 } from "../follow-up-sweep.js";
 import { attachNextFollowUps } from "../next-follow-up.js";
@@ -5334,7 +5334,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { locationId, client } = resolveLocation(req);
       const saved = (await store.getOfferSettings(locationId)) || {};
       const job = publicFollowUpJob(getFollowUpJob(locationId));
-      if (req.query.preview !== "1" && req.query.preview !== "true") return res.json({ ok: true, job, sendsEnabled: CARD_SENDS_ENABLED });
+      // The day's run as the durable cursor has it (daily-gate.js): what the
+      // last one did, whether it failed, how many tries today. Survives a
+      // redeploy, unlike `job`.
+      const cursor = await store.getJobCursor?.(locationId, FOLLOW_UP_CURSOR).catch(() => null);
+      const daily = cursor ? { at: cursor.at, tries: cursor.doc?.tries || null, running: Boolean(cursor.doc?.run), failed: Boolean(cursor.doc?.failed), error: cursor.doc?.error || null, last: cursor.doc?.last || null } : null;
+      if (req.query.preview !== "1" && req.query.preview !== "true") return res.json({ ok: true, job, daily, sendsEnabled: CARD_SENDS_ENABLED });
       const config = conversationConfig(saved);
       const now = Date.now();
       const [agents, investors] = await Promise.all([
@@ -5353,7 +5358,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         due.push({ contactId: c.contactId, party: c.party, kind: c.kind, address: c.address,
                    startedAt: c.startedAt, due: d.due, step: d.step ?? null, reason: d.reason || "" });
       }
-      res.json({ ok: true, job, sendsEnabled: CARD_SENDS_ENABLED, considered: due.length, candidates: due });
+      res.json({ ok: true, job, daily, sendsEnabled: CARD_SENDS_ENABLED, considered: due.length, candidates: due });
     } catch (err) { fail(res, err); }
   });
 

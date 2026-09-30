@@ -36,6 +36,7 @@ import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
 import { recordError } from "./app-errors.js";
 import { maybeRunCoach } from "./coach.js";
+import { runLocationTick } from "./tick.js";
 import { startAiSpendMeter } from "./ai-spend.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -204,107 +205,123 @@ checkObjectStore().then((r) => {
 const SWEEP_UTC_HOUR = Number(process.env.ENRICH_SWEEP_UTC_HOUR || 10);
 const sweepLocations = () =>
   [...new Set([...Object.keys(GHL_TOKENS), ...(ALLOWED_LOCATION ? [ALLOWED_LOCATION] : [])])];
+// Every job the tick runs for a location, in order. Each fails on its own
+// (tick.js): one that throws is recorded under `tick:<area>` and the rest
+// still run — they used to share one try/catch, and an early throw skipped
+// everything after it.
+const TICK_JOBS = [
+  { area: "enrich", run: async ({ client, locationId, saved }) => {
+    // Awaited: it is async, and an un-awaited rejection escaped the tick.
+    if (await maybeStartNightlySweep({ client, locationId, saved, store, utcHour: SWEEP_UTC_HOUR })) console.log(`nightly enrich sweep started for ${locationId}`);
+  } },
+  // The follow-up clock rides the same tick rather than a third timer: it is
+  // a once-a-day decision with the same gates. What it decides lands in the
+  // outbox, and the 30s scheduler below is what actually sends it.
+  { area: "follow-up", run: async ({ client, locationId, saved }) => {
+    const nudged = await maybeStartFollowUpSweep({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE, utcHour: FOLLOW_UP_UTC_HOUR,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
+    if (nudged) console.log(`follow-up sweep started for ${locationId}`);
+  } },
+  // The top of the funnel, same tick: pull, pick, import, say hello.
+  { area: "outreach", run: async ({ client, locationId, saved }) => {
+    if (await maybeStartOutreachSweep({ client, locationId, saved, store, deps: { runPull: outreachRouter.runPull, importAgents: outreachRouter.importAgents } })) {
+      console.log(`outreach sweep started for ${locationId}`);
+    }
+  } },
+  // The agents GHL texted and never heard back from, into the second workflow.
+  { area: "outreach-follow-up", run: async ({ client, locationId, saved }) => {
+    if (await maybeStartOutreachFollowUp({ client, locationId, saved, store })) console.log(`outreach follow-up started for ${locationId}`);
+  } },
+  // Clean offers that couldn't send themselves (after hours, sends paused) go
+  // the moment they can.
+  { area: "offer-sends", run: async ({ client, locationId }) => {
+    const resent = await offersRouter.retryPendingOfferSends?.({ client, locationId });
+    if (resent?.sent) console.log(`${resent.sent} held offer${resent.sent === 1 ? "" : "s"} sent for ${locationId}`);
+  } },
+  // "I'll get back to you with a number" — kept, or said so, every tick.
+  { area: "promises", run: async ({ client, locationId, saved }) => {
+    const promised = await maybeRunPromiseSweep({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
+    if (promised?.owed) console.log(`promise sweep for ${locationId}: ${promised.owed} owed, ${promised.kept} kept`);
+  } },
+  // Once a night, after the promise window closes: every thread touched
+  // today — answered where the dial allows, on a clock where it isn't, on
+  // Today either way.
+  { area: "audit", run: async ({ client, locationId, saved }) => {
+    if (await maybeRunConversationAudit({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) })) console.log(`conversation audit started for ${locationId}`);
+  } },
+  // The same fixes by day, every couple of hours, so a stalled thread doesn't
+  // wait for 7pm. Off until driver.daytime is switched on; by day it never
+  // releases a person's call or a freshly held reply.
+  { area: "daytime", run: async ({ client, locationId, saved }) => {
+    if (await maybeRunDaytimeDriver({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) })) console.log(`daytime pass started for ${locationId}`);
+  } },
+  // An hour behind it: what today's edits and dismissals say the bot should
+  // learn. Proposes; a person applies. Off until switched on.
+  { area: "coach", run: async ({ locationId, saved }) => {
+    if (await maybeRunCoach({ locationId, saved, store })) console.log(`coach started for ${locationId}`);
+  } },
+  // Once a day: list prices that moved on houses we priced.
+  { area: "price-watch", run: async ({ client, locationId, saved }) => {
+    const watched = await maybeRunPriceWatch({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
+    if (watched) console.log(`price watch for ${locationId}: ${JSON.stringify({ watched: watched.watched, checked: watched.checked, dropped: watched.dropped, offMarket: watched.offMarket, backOnMarket: watched.backOnMarket, texted: watched.texted, error: watched.error || null })}`);
+  } },
+  // Once a day: every agent's tier tag agrees with their Acquisitions card.
+  { area: "tier-check", run: async ({ client, locationId }) => {
+    const tiered = await maybeRunTierCheck({ client, locationId, store });
+    if (tiered) console.log(`tier check for ${locationId}: ${tiered.applied}/${tiered.planned} fixed of ${tiered.considered} cards${tiered.errors.length ? `, errors: ${tiered.errors[0]}` : ""}`);
+  } },
+  // Addresses that came in past the daily underwrite cap, once it resets.
+  { area: "underwrite-queue", run: async ({ client, locationId }) => {
+    const drained = await offersRouter.drainUnderwriteQueue?.({ client, locationId });
+    if (drained?.started || drained?.dropped) console.log(`underwrite queue for ${locationId}: started ${drained.started}, dropped ${drained.dropped}, waiting ${drained.left}`);
+  } },
+  // Runs a redeploy killed with nothing left behind, started again.
+  { area: "underwrite-restart", run: async ({ client, locationId }) => {
+    const revived = await offersRouter.restartVanishedUnderwrites?.({ client, locationId });
+    if (revived?.restarted) console.log(`underwrites restarted for ${locationId}: ${revived.restarted}`);
+  } },
+  // The second wave: deals blasted once, nobody committed, the delay past.
+  { area: "dispo-waves", run: async ({ client, locationId, saved }) => {
+    if (await maybeStartDispoSweep({ client, locationId, saved, store, utcHour: DISPO_SWEEP_UTC_HOUR,
+      deps: { matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp } })) console.log(`dispo second wave started for ${locationId}`);
+  } },
+  // The buyer book re-read from GHL once a night, ahead of the pulse that
+  // picks from it. Read-only; off until dispoAutopilot.bookSync.enabled.
+  { area: "book-sync", run: async ({ client, locationId, saved }) => {
+    if (await maybeRunBookSync({ client, locationId, saved, store, deps: { syncBook: dispoRouter.syncBook } })) console.log(`investor book sync started for ${locationId}`);
+  } },
+  // The check-in between deals: a few buyers a workday, never blasted. Off
+  // until dispoAutopilot.pulse.enabled; drafts until pulse.autoSend.
+  { area: "buyer-pulse", run: async ({ client, locationId, saved }) => {
+    if (await maybeRunBuyerPulse({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+      deps: { ...offersRouter.conversationDepsFor({ locationId, client, saved }), book: (loc) => dispoRouter.scoredBook(loc, { status: "active" }) } })) {
+      console.log(`buyer pulse started for ${locationId}`);
+    }
+  } },
+  // The board, onto GHL's Opportunities. Every tick, bounded.
+  { area: "mirror", run: async ({ client, locationId, saved }) => { await maybeMirror({ client, locationId, saved, store, log: console.log }); } },
+  // Calls that ended since the last look, read like inbound texts. No GHL
+  // trigger needed.
+  { area: "calls", run: async ({ client, locationId, saved }) => {
+    await maybeSweepCalls({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE, log: console.log,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
+  } },
+];
+
 setInterval(async () => {
   for (const locationId of sweepLocations()) {
     try {
       const token = getTokenFor(locationId);
       if (!token) continue;
       const saved = await store.getOfferSettings(locationId);
-      const started = maybeStartNightlySweep({
-        client: makeClient(token), locationId, saved, store, utcHour: SWEEP_UTC_HOUR,
-      });
-      if (started) console.log(`nightly enrich sweep started for ${locationId}`);
-      // The follow-up clock rides the same tick rather than a third timer:
-      // it is a once-a-day decision with the same four gates and the same
-      // per-location try/catch. What it decides lands in the outbox, and the
-      // 30s scheduler below is what actually sends it.
-      const nudged = await maybeStartFollowUpSweep({
-        client: makeClient(token), locationId, saved, store,
-        sendsEnabled: CONVERSATION_SENDS_LIVE, utcHour: FOLLOW_UP_UTC_HOUR,
-        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
-      });
-      if (nudged) console.log(`follow-up sweep started for ${locationId}`);
-      // The top of the funnel, same tick: pull, pick, import, say hello.
-      const pulled = await maybeStartOutreachSweep({
-        client: makeClient(token), locationId, saved, store,
-        deps: { runPull: outreachRouter.runPull, importAgents: outreachRouter.importAgents },
-      });
-      if (pulled) console.log(`outreach sweep started for ${locationId}`);
-      // The agents GHL texted and never heard back from, into the second workflow.
-      const followed = await maybeStartOutreachFollowUp({ client: makeClient(token), locationId, saved, store });
-      if (followed) console.log(`outreach follow-up started for ${locationId}`);
-      // Clean offers that couldn't send themselves (after hours, sends
-      // paused) go the moment they can.
-      const resent = await offersRouter.retryPendingOfferSends?.({ client: makeClient(token), locationId });
-      if (resent?.sent) console.log(`${resent.sent} held offer${resent.sent === 1 ? "" : "s"} sent for ${locationId}`);
-      // "I'll get back to you with a number" — kept, or said so, every tick.
-      const promised = await maybeRunPromiseSweep({
-        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
-        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
-      });
-      if (promised?.owed) console.log(`promise sweep for ${locationId}: ${promised.owed} owed, ${promised.kept} kept`);
-      // Once a night, after the promise window closes: every thread touched
-      // today — answered where the dial allows, on a clock where it isn't,
-      // on Today either way.
-      const audited = await maybeRunConversationAudit({
-        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
-        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
-      });
-      if (audited) console.log(`conversation audit started for ${locationId}`);
-      // The same fixes by day, every couple of hours, so a stalled thread
-      // doesn't wait for 7pm. Off until driver.daytime is switched on; by day
-      // it never releases a person's call or a freshly held reply.
-      const drove = await maybeRunDaytimeDriver({
-        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
-        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
-      });
-      if (drove) console.log(`daytime pass started for ${locationId}`);
-      // An hour behind it: what today's edits and dismissals say the bot
-      // should learn. Proposes; a person applies. Off until switched on.
-      if (await maybeRunCoach({ locationId, saved, store })) console.log(`coach started for ${locationId}`);
-      // Once a day: list prices that moved on houses we priced.
-      const watched = await maybeRunPriceWatch({
-        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
-        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
-      });
-      if (watched) console.log(`price watch for ${locationId}: ${JSON.stringify({ watched: watched.watched, checked: watched.checked, dropped: watched.dropped, offMarket: watched.offMarket, texted: watched.texted, error: watched.error || null })}`);
-      // Once a day: every agent's tier tag agrees with their Acquisitions card.
-      const tiered = await maybeRunTierCheck({ client: makeClient(token), locationId, store });
-      if (tiered) console.log(`tier check for ${locationId}: ${tiered.applied}/${tiered.planned} fixed of ${tiered.considered} cards${tiered.errors.length ? `, errors: ${tiered.errors[0]}` : ""}`);
-      // Addresses that came in past the daily underwrite cap, once it resets.
-      const drained = await offersRouter.drainUnderwriteQueue?.({ client: makeClient(token), locationId });
-      if (drained?.started || drained?.dropped) console.log(`underwrite queue for ${locationId}: started ${drained.started}, dropped ${drained.dropped}, waiting ${drained.left}`);
-      // Runs a redeploy killed with nothing left behind, started again.
-      const revived = await offersRouter.restartVanishedUnderwrites?.({ client: makeClient(token), locationId });
-      if (revived?.restarted) console.log(`underwrites restarted for ${locationId}: ${revived.rows.map((r) => `${r.contactName || r.contactId} ${r.address} (${r.status}${r.reason ? `: ${r.reason}` : ""})`).join("; ")}`);
-      // The second wave: deals blasted once, nobody committed, the delay past.
-      const waved = await maybeStartDispoSweep({
-        client: makeClient(token), locationId, saved, store, utcHour: DISPO_SWEEP_UTC_HOUR,
-        deps: { matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp },
-      });
-      if (waved) console.log(`dispo second wave started for ${locationId}`);
-      // The buyer book re-read from GHL once a night, ahead of the pulse that
-      // picks from it. Read-only; off until dispoAutopilot.bookSync.enabled.
-      if (await maybeRunBookSync({ client: makeClient(token), locationId, saved, store, deps: { syncBook: dispoRouter.syncBook } })) {
-        console.log(`investor book sync started for ${locationId}`);
-      }
-      // The check-in between deals: a few buyers a workday, never blasted.
-      // Off until dispoAutopilot.pulse.enabled; drafts until pulse.autoSend.
-      const pulsed = await maybeRunBuyerPulse({
-        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
-        deps: { ...offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }), book: (loc) => dispoRouter.scoredBook(loc, { status: "active" }) },
-      });
-      if (pulsed) console.log(`buyer pulse started for ${locationId}`);
-      // The board, onto GHL's Opportunities. Every tick, bounded.
-      await maybeMirror({ client: makeClient(token), locationId, saved, store, log: console.log });
-      // Calls that ended since the last look, read like inbound texts. No
-      // GHL trigger needed.
-      await maybeSweepCalls({
-        client: makeClient(token), locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE, log: console.log,
-        deps: offersRouter.conversationDepsFor({ locationId, client: makeClient(token), saved }),
-      });
+      await runLocationTick({ locationId, saved, client: makeClient(token) }, TICK_JOBS, { store, recordError });
     } catch (e) {
-      console.error(`nightly sweep check failed for ${locationId}: ${e.message}`);
+      // Only the settings read can land here now; every job fails on its own.
+      console.error(`tick failed for ${locationId}: ${e.message}`);
       await recordError(store, { locationId, area: "sweep", err: e });
     }
   }

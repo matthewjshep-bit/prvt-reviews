@@ -34,6 +34,7 @@ import { supersededIds, pricedAt } from "./shared/current-offer.js";
 import { localHour } from "./promise-sweep.js";
 import { followUpRows } from "./follow-up-sweep.js";
 import { waitingReason } from "./outbox-guard.js";
+import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 
 const DAY_MS = 86400000;
 export const WATCH_DAYS = 90;
@@ -173,10 +174,24 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
  * Once a day, from the watch hour on, with a durable cursor so a restart
  * doesn't pay for a second Zillow run.
  */
+const inFlight = new Set();
 export async function maybeRunPriceWatch({ client, locationId, saved = {}, store, sendsEnabled = false, deps = {}, now = Date.now() }) {
-  if (localHour(now) < WATCH_HOUR || localHour(now) >= 17) return null;
-  const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
-  if (cursor?.at && now - Date.parse(cursor.at) < MIN_GAP_MS) return null;
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: {} }).catch(() => {});
-  return runPriceWatch({ client, locationId, saved, store, sendsEnabled, deps, now });
+  // Once a day in the working day; a run a deploy killed comes back that
+  // afternoon instead of losing the day (daily-gate.js).
+  const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: localHour(now), startHour: WATCH_HOUR,
+    windowHours: 17 - WATCH_HOUR, running: inFlight.has(locationId), minGapMs: MIN_GAP_MS });
+  if (!gate.go) return null;
+  inFlight.add(locationId);
+  let r = null, error = null;
+  try {
+    r = await runPriceWatch({ client, locationId, saved, store, sendsEnabled, deps, now });
+    return r;
+  } catch (e) {
+    error = String(e?.message || e);
+    throw e;
+  } finally {
+    inFlight.delete(locationId);
+    await closeDailyRun({ store, locationId, cursorName: CURSOR_NAME, failed: Boolean(error), error,
+      last: r ? { watched: r.watched, checked: r.checked, dropped: r.dropped, offMarket: r.offMarket, backOnMarket: r.backOnMarket, texted: r.texted, skipped: r.skipped || null, error: r.error || null } : null });
+  }
 }

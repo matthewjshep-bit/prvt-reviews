@@ -23,6 +23,7 @@ import { recordEvent } from "./contact-record.js";
 import { addContactToWorkflow, getLastMessageDate, removeContactFromWorkflow } from "./ghl.js";
 import { normalizeOutreachAutopilot, isWorkday, workHour } from "./outreach-sweep.js";
 import { allEventsSince } from "./contact-events.js";
+import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 
 export const CURSOR_NAME = "outreachFollowUp";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -106,7 +107,7 @@ export function _resetJobs() { jobs.clear(); }
 /**
  * startOutreachFollowUp({ locationId, client, saved, store, trigger, dryRun, now }) → job
  */
-export function startOutreachFollowUp({ locationId, client, saved = {}, store = defaultStore, trigger = "manual", dryRun = false, now = Date.now(), paceMs = PACE_MS }) {
+export function startOutreachFollowUp({ locationId, client, saved = {}, store = defaultStore, trigger = "manual", dryRun = false, now = Date.now(), paceMs = PACE_MS, onDone = null }) {
   if (jobs.get(locationId)?.status === "running") {
     throw Object.assign(new Error("an outreach follow-up is already running for this location"), { http: 409 });
   }
@@ -119,7 +120,7 @@ export function startOutreachFollowUp({ locationId, client, saved = {}, store = 
   run(job, { locationId, client, saved, store, now, paceMs }).catch((e) => {
     job.status = "error";
     job.error = String(e?.message || e).slice(0, 300);
-  }).finally(() => { job.finishedAt = new Date().toISOString(); if (job.status === "running") job.status = "done"; });
+  }).finally(() => { job.finishedAt = new Date().toISOString(); if (job.status === "running") job.status = "done"; onDone?.(job); });
   return job;
 }
 
@@ -191,14 +192,18 @@ async function run(job, { locationId, client, saved, store, now, paceMs }) {
  * run in progress, and the durable cursor at least MIN_GAP_MS old.
  */
 export async function maybeStartOutreachFollowUp({ locationId, client, saved = {}, store = defaultStore, hour = OUTREACH_FOLLOWUP_HOUR, now = Date.now(), paceMs }) {
-  if (workHour(now) !== hour) return false;
+  const h = workHour(now);
+  if (h < hour || h >= hour + DAILY_WINDOW_HOURS) return false;
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
   if (!oa.enabled || !oa.followUpEnabled || !oa.followUpWorkflowId) return false;
   if (oa.weekdaysOnly && !isWorkday(now)) return false;
-  if (jobs.get(locationId)?.status === "running") return false;
-  const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
-  if (cursor?.at && now - Date.parse(cursor.at) < MIN_GAP_MS) return false;
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: {} }).catch(() => {});
-  startOutreachFollowUp({ locationId, client, saved, store, trigger: "daily", now, paceMs });
+  const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: h, startHour: hour,
+    windowHours: DAILY_WINDOW_HOURS, running: jobs.get(locationId)?.status === "running" });
+  if (!gate.go) return false;
+  startOutreachFollowUp({ locationId, client, saved, store, trigger: "daily", now, paceMs,
+    onDone: (job) => closeDailyRun({ store, locationId, cursorName: CURSOR_NAME, failed: job.status === "error", error: job.error,
+      last: { id: job.id, status: job.status, candidates: job.candidates, enrolled: job.enrolled, skipped: job.skipped, finishedAt: job.finishedAt } }) });
   return true;
 }
+// Pacific hours from the follow-up's hour in which a day may start or be retried.
+export const DAILY_WINDOW_HOURS = 5;

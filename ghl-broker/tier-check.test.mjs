@@ -102,6 +102,6 @@ test("once a day, from 7am PT", async () => {
   const eight = Date.parse("2026-09-15T15:00:00Z"); // 8am PT
   const r = await maybeRunTierCheck({ client: {}, locationId: "L", store, ghl: api, now: eight });
   assert.equal(r.applied, 1);
-  assert.equal((await store.getJobCursor("L", "tierCheck")).doc.applied, 1);
+  assert.equal((await store.getJobCursor("L", "tierCheck")).doc.last.applied, 1, "the summary is the day's `last`, like every daily job");
   assert.equal(await maybeRunTierCheck({ client: {}, locationId: "L", store, ghl: api, now: eight + 3600000 }), null);
 });
