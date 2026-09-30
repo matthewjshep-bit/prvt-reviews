@@ -23,7 +23,7 @@
 // recorded to power the month-to-date meter in the UI.
 
 import express from "express";
-import { planAgentPulse, startAgentPulse, getAgentPulseJob, CURSOR_NAME as AGENT_PULSE_CURSOR } from "../agent-pulse.js";
+import { planAgentPulse, startAgentPulse, getAgentPulseJob, previewAgentPulse, startLeaveDrips, getLeaveDripsJob, CURSOR_NAME as AGENT_PULSE_CURSOR } from "../agent-pulse.js";
 import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
@@ -1079,6 +1079,9 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         ok: true, settings: plan.settings, counts: plan.counts, claimedToday: plan.claimedToday, seats: plan.seats, truncated: plan.truncated,
         picks: plan.picks.map((p) => ({ contactId: p.contactId, name: p.name, segment: p.segment, reason: p.reason, address: p.subject?.address || "", subject: p.subject })),
         sendsEnabled: PULSE_SENDS_LIVE, tz: WORK_TZ,
+        // The GHL drips it replaces (the TIER 2/3 check-ins), and the one-time
+        // clean-up that takes everyone out of them.
+        drips: plan.drips || [], leaveDrips: getLeaveDripsJob(locationId),
         job: getAgentPulseJob(locationId),
         lastRunAt: cursor?.at || null, last: cursor?.doc?.last || null, run: cursor?.doc?.run || null,
         tries: Number(cursor?.doc?.tries) || 0, failed: Boolean(cursor?.doc?.failed), error: cursor?.doc?.error || null,
@@ -1099,6 +1102,38 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         deps: router.conversationDepsFor?.({ locationId, client, saved }) || {},
       });
       res.json({ ok: true, job });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Body: { limit } (1–5, default 3). The next check-ins as the drafter
+  // would write them now — no claim, no draft row, nothing sent. One model
+  // call each.
+  router.post("/pulse/preview", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const r = await previewAgentPulse({ client, locationId, saved, store, limit: req.body?.limit ?? 3 });
+      res.json({ ok: true, ...r });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The clean-up's progress (and which drips), without running the planner.
+  router.get("/pulse/leave-drips", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ ok: true, job: getLeaveDripsJob(locationId) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Body: { dryRun }. Everyone tagged tier-2/tier-3, out of the drips the
+  // check-in replaces. A dry run (the default) only counts; live needs the
+  // check-in on. Progress on GET /pulse → leaveDrips.
+  router.post("/pulse/leave-drips", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const job = startLeaveDrips({ client, locationId, saved, store, dryRun: req.body?.dryRun !== false });
+      res.status(202).json({ ok: true, job });
     } catch (err) { fail(res, err); }
   });
 

@@ -101,7 +101,13 @@ const EXECUTORS = {
     }
     return `${action.key} = ${value.slice(0, 80)}`;
   },
-  async add_to_workflow({ client, locationId, contactId, action, store }) {
+  async add_to_workflow({ client, locationId, contactId, action, store, deps }) {
+    // A drip the agent check-in replaces (the TIER 2/3 check-ins, while the
+    // check-in is on — shared/agent-pulse.js tierDrips): the tier tag still
+    // goes on and the stage still follows it, but nobody is put in the drip.
+    if ((deps?.replacedWorkflowIds || []).includes(String(action.workflowId))) {
+      return `kept out of ${action.workflowName || action.workflowId}: the agent check-in keeps in touch with them now`;
+    }
     await addContactToWorkflow(client, contactId, action.workflowId);
     await noteWorkflowMove({ store, locationId, contactId, action, type: "workflow_enrolled" });
     return `added to ${action.workflowName || action.workflowId}`;

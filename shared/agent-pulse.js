@@ -51,7 +51,13 @@ export const AGENT_PULSE_DEFAULTS = {
   coldEveryDays: 60, coldMaxUnanswered: 3, engagedMaxUnanswered: 6,
   hour: 12, weekdaysOnly: true,
   ghlWorkflowDays: 21, quietWorkflowIds: [],
+  // The GHL drips this check-in replaces. Empty: the TIER 2 and TIER 3
+  // workflows the playbook's tier rules enroll agents in (tierDrips).
+  replacesWorkflowIds: [],
+  // Matt's own notes on how the check-in should sound, handed to the drafter.
+  voice: "",
 };
+export const AGENT_PULSE_VOICE_MAX = 600;
 export const AGENT_PULSE_MAX_DAILY_CAP = 100;
 
 /**
@@ -65,8 +71,9 @@ export const AGENT_PULSE_MAX_DAILY_CAP = 100;
 export function normalizeAgentPulse(v = {}) {
   const o = v && typeof v === "object" ? v : {};
   const D = AGENT_PULSE_DEFAULTS;
-  const ids = (Array.isArray(o.quietWorkflowIds) ? o.quietWorkflowIds : String(o.quietWorkflowIds || "").split(/[\s,]+/))
-    .map((x) => String(x || "").trim()).filter(Boolean).slice(0, 20);
+  const idList = (v) => [...new Set((Array.isArray(v) ? v : String(v || "").split(/[\s,]+/))
+    .map((x) => String(x || "").trim()).filter(Boolean))].slice(0, 20);
+  const ids = idList(o.quietWorkflowIds);
   return {
     enabled: o.enabled === true,
     autoSend: o.autoSend === true,
@@ -81,7 +88,9 @@ export function normalizeAgentPulse(v = {}) {
     hour: clamp(o.hour, D.hour, 8, 17),
     weekdaysOnly: o.weekdaysOnly !== false,
     ghlWorkflowDays: clamp(o.ghlWorkflowDays, D.ghlWorkflowDays, 0, 90),
-    quietWorkflowIds: [...new Set(ids)],
+    quietWorkflowIds: ids,
+    replacesWorkflowIds: idList(o.replacesWorkflowIds),
+    voice: String(o.voice || "").trim().slice(0, AGENT_PULSE_VOICE_MAX),
   };
 }
 
@@ -202,8 +211,9 @@ export function agentOwner({ offers = [], drafts = [], events = [], config = {},
   const fu = byTime.filter((e) => e.type === "outreach_enrolled" && e.data?.kind === "followup").at(-1);
   if (fu && after(fu, left) && now - (ms(fu.at) ?? 0) < s.ghlWorkflowDays * DAY_MS) return "the outreach follow-up workflow";
   if (first && !fu && after(first, left) && now - (ms(first.at) ?? 0) < (outreachFollowUpDays + 2) * DAY_MS) return "the outreach workflow";
-  // Any other GHL workflow the app put them in, unless it's known not to text.
-  const quiet = new Set(s.quietWorkflowIds);
+  // Any other GHL workflow the app put them in, unless it's known not to text
+  // or it's a drip this check-in replaces (the TIER 2/3 check-ins).
+  const quiet = new Set([...s.quietWorkflowIds, ...s.replacesWorkflowIds]);
   for (const w of byTime.filter((e) => e.type === "workflow_enrolled" && !quiet.has(String(e.data?.workflowId || "")))) {
     const out = byTime.some((e) => e.type === "workflow_left" && e.data?.workflowId === w.data?.workflowId && after(e, w.at));
     if (!out && now - (ms(w.at) ?? 0) < s.ghlWorkflowDays * DAY_MS) return `a GHL workflow${w.data?.workflowName ? ` (${String(w.data.workflowName).slice(0, 40)})` : ""}`;
@@ -365,7 +375,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   const picks = due.slice(0, cap).map(({ agent, verdict }) => ({
     contactId: agent.contactId, name: agent.name || "", segment: verdict.segment, reason: verdict.pulseReason,
     listingKey: verdict.listing?.listingKey || null,
-    subject: agentPulseSubject({ agent, verdict }),
+    subject: agentPulseSubject({ agent, verdict, now }),
   }));
   return { picks, counts };
 }
@@ -377,17 +387,44 @@ const factValue = (facts, key) => {
   return Array.isArray(list) && list.length ? String([...list].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0]?.value || "") : "";
 };
 
+// A list fact, newest first, with how long ago each was said: something from
+// last spring must never read as if it were yesterday.
+const factList = (facts, key, now, max = 3) => {
+  const list = Array.isArray(facts?.[key]) ? facts[key] : [];
+  const seen = new Set();
+  return [...list].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))
+    .map((f) => ({ what: String(f?.value || "").trim().slice(0, 120), daysAgo: ms(f?.at) != null ? Math.max(0, Math.floor((now - ms(f.at)) / DAY_MS)) : null }))
+    .filter((f) => f.what && !seen.has(f.what.toLowerCase()) && seen.add(f.what.toLowerCase()))
+    .slice(0, max);
+};
+
+// How a house of theirs ended, in the words a text would use.
+const HOUSE_HOW = {
+  passed: "passed", no_response: "never heard back", we_passed: "we passed on it", sent: "we sent an offer",
+  countered: "they countered", accepted: "we agreed a price", new: "we looked at it",
+};
+function houseHow(o) {
+  if (o?.deal) return o.deal.stage === "closed" || o.deal.stage === "assigned" ? "closed" : o.deal.stage === "fell_through" ? "fell through" : "under contract";
+  return HOUSE_HOW[effectiveStatus(o)] || "";
+}
+
 /**
- * agentPulseSubject({ agent, verdict }) → what the text may lean on
+ * agentPulseSubject({ agent, verdict, now }) → what the text may lean on
  *
  * The listing by street, city, days on market, whether it was cut and what
- * kind — never its price. The house by street and how it ended. What we last
- * talked about, as colour. Nothing else.
+ * kind — never its price. The house by street and how it ended; the newest
+ * house we've had with them. What we last talked about, what they've told us
+ * about themselves and the areas they work, each with how long ago. Nothing
+ * else, and never a number: the check-in's money guard holds any.
  */
-export function agentPulseSubject({ agent = {}, verdict = {} } = {}) {
+export function agentPulseSubject({ agent = {}, verdict = {}, now = Date.now() } = {}) {
   const l = verdict.listing?.doc || null;
   const h = verdict.house || null;
   const how = !h ? "" : h.deal ? (h.deal.stage === "closed" ? "closed" : "fell through") : effectiveStatus(h) === "no_response" ? "never heard back" : "passed";
+  const at = (o) => o?.statusAt || o?.createdAt || "";
+  const newest = (agent.offers || []).filter((o) => o && o.address && effectiveStatus(o) !== "draft")
+    .sort((a, b) => String(at(b)).localeCompare(String(at(a))))[0] || null;
+  const areas = factList(agent.facts, "agent_market_area", now).map((f) => f.what);
   return {
     reason: verdict.pulseReason,
     segment: verdict.segment,
@@ -398,5 +435,35 @@ export function agentPulseSubject({ agent = {}, verdict = {} } = {}) {
     offersWithUs: (agent.offers || []).length,
     lastSummary: factValue(agent.facts, "last_convo_summary").slice(0, 200),
     nextAction: factValue(agent.facts, "suggested_next_action").slice(0, 160),
+    lastHouse: newest ? { street: street(newest.address), how: houseHow(newest), daysAgo: ms(at(newest)) != null ? Math.max(0, Math.floor((now - ms(at(newest))) / DAY_MS)) : null } : null,
+    aboutThem: factList(agent.facts, "personal_details", now),
+    areas,
   };
+}
+
+/**
+ * tierDrips({ pulse, conversationAi }) → [{ id, name }]
+ *
+ * The GHL drips this check-in replaces (Matt, 2026-09-30: "make sure the tier
+ * 2/3 workflow that checks in is being replaced"). A list set by hand wins;
+ * without one, every TIER 2 or TIER 3 workflow the agent playbook's rules or
+ * its catch-all enroll people in. Names come from the playbook where it
+ * knows them. Pure; works on the saved or the normalized config.
+ */
+const TIER_DRIP_RX = /^\s*tier[\s_-]*[23]\b/i;
+export function tierDrips({ pulse = {}, conversationAi = null } = {}) {
+  const agentPb = conversationAi?.parties?.agent || {};
+  const actions = [
+    ...Object.values(agentPb.intentRules || {}).flatMap((r) => (Array.isArray(r?.actions) ? r.actions : [])),
+    ...(Array.isArray(agentPb.fallback?.actions) ? agentPb.fallback.actions : []),
+  ].filter((a) => a && (a.type === "add_to_workflow" || a.type === "remove_from_workflow") && a.workflowId);
+  const nameOf = new Map(actions.map((a) => [String(a.workflowId), String(a.workflowName || "")]));
+  const set = normalizeAgentPulse(pulse).replacesWorkflowIds;
+  if (set.length) return set.map((id) => ({ id, name: nameOf.get(id) || "" }));
+  const out = [];
+  for (const a of actions) {
+    const id = String(a.workflowId);
+    if (a.type === "add_to_workflow" && TIER_DRIP_RX.test(String(a.workflowName || "")) && !out.some((d) => d.id === id)) out.push({ id, name: String(a.workflowName || "") });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
