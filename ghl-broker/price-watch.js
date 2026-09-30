@@ -14,8 +14,15 @@
 //                                    look at cash closer to ours now?" It may
 //                                    restate our number; it never raises it.
 //   off the market (sold/pending) → `listing_off_market`, and no text.
+//   back on the market             → `listing_back_on_market` (2026-09-29):
+//                                    off-market is no longer forever, and a
+//                                    relisted house is the best moment there is
+//                                    (followUp.relist starts its check-ins over).
 //
 // Claimed per offer and price, so a second run on the same price never texts.
+// A drop found while their text (or your own draft) is waiting in the outbox
+// is kept on the offer (`priceWatch.dropOwed`) and texted on a later run —
+// measured from where it started, because the baseline moves every run.
 
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
@@ -25,6 +32,8 @@ import { addressKey } from "./shared/us-address.js";
 import { effectiveStatus } from "./shared/offer-status.js";
 import { supersededIds, pricedAt } from "./shared/current-offer.js";
 import { localHour } from "./promise-sweep.js";
+import { followUpRows } from "./follow-up-sweep.js";
+import { waitingReason } from "./outbox-guard.js";
 
 const DAY_MS = 86400000;
 export const WATCH_DAYS = 90;
@@ -53,13 +62,19 @@ export const stillForSale = (status) => !status || /for[_\s-]?sale|active|coming
  *   → { watched, checked, dropped, offMarket, texted, results }
  */
 export async function runPriceWatch({ client, locationId, saved = {}, store, sendsEnabled = false, deps = {}, now = Date.now() }) {
-  const out = { watched: 0, checked: 0, dropped: 0, offMarket: 0, texted: 0, results: [] };
+  const out = { watched: 0, checked: 0, dropped: 0, offMarket: 0, backOnMarket: 0, texted: 0, results: [] };
   const token = String(saved?.apifyToken || "").trim();
   if (!token) return { ...out, skipped: "no Apify token" };
   const config = conversationConfig(saved || {});
   if (!config.enabled) return { ...out, skipped: "Conversation AI is off" };
 
-  const rows = await store.listOffersForFollowUp(locationId, { statuses: WATCH_STATUSES, limit: 300 }).catch(() => []);
+  // Only the window it watches, all of it: the read used to take the oldest
+  // 300 rows of all time and then keep the last 90 days, so as the book grew
+  // the houses it was meant to watch were the ones it never read.
+  // A number floated by text and never sent is watched too, with the switch.
+  const watchFloated = Boolean(config.parties?.agent?.followUp?.watchFloated);
+  const statuses = watchFloated ? [...WATCH_STATUSES, "new"] : WATCH_STATUSES;
+  const rows = await followUpRows(store, locationId, { statuses, since: iso(now - WATCH_DAYS * DAY_MS) });
   // One watch per house, on the agent's current offer there (shared/
   // current-offer.js): the price-drop text quotes its number, and a row the
   // house moved past would quote one we've left. Across agents, the row whose
@@ -69,6 +84,8 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
   const byHouse = new Map();
   for (const o of rows) {
     if (!o?.id || !o.address || !o.contactId || o.deal || replaced.has(o.id)) continue;
+    if (!statuses.includes(effectiveStatus(o))) continue;
+    if (effectiveStatus(o) === "new" && !o.proactive?.realmCheckAt) continue;   // nothing of ours in front of them yet
     const t = Date.parse(o.statusAt || o.createdAt || "");
     if (!(t >= now - WATCH_DAYS * DAY_MS)) continue;
     const k = addressKey(o.address);
@@ -92,12 +109,24 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
     if (!full) continue;
     out.checked++;
     const seen = full.priceWatch || {};
-    const from = Math.round(Number(seen.listPrice ?? full.askingPrice ?? full.calc?.inputs?.askingPrice) || 0);
+    // A drop we still owe them is measured from where it started.
+    const from = Math.round(Number(seen.dropOwed?.from ?? seen.listPrice ?? full.askingPrice ?? full.calc?.inputs?.askingPrice) || 0);
     const to = Math.round(Number(hit.listPrice) || 0);
     const onMarket = stillForSale(hit.status);
-    full.priceWatch = { ...seen, listPrice: to || from || null, status: hit.status || null, checkedAt: iso(now),
-      ...(onMarket ? {} : { offMarketAt: seen.offMarketAt || iso(now) }) };
+    const back = onMarket && seen.offMarketAt ? seen.offMarketAt : null;
+    const { offMarketAt: _off, ...rest } = seen;
+    full.priceWatch = { ...(onMarket ? rest : seen), listPrice: to || from || null, status: hit.status || null, checkedAt: iso(now),
+      ...(onMarket ? {} : { offMarketAt: seen.offMarketAt || iso(now) }),
+      ...(back ? { backOnMarketAt: iso(now) } : {}) };
     await store.updateOffer(full.id, full).catch(() => {});
+
+    if (back) {
+      out.backOnMarket++;
+      await recordEvent({ store, locationId, contactId: full.contactId, party: "agent", type: "listing_back_on_market", at: iso(now),
+        address: full.address, offerId: full.id, source: "sweep", dedupeKey: `listing_back_on_market:${full.id}:${String(back).slice(0, 10)}`,
+        data: { status: hit.status || null, listPrice: to || null, offMarketAt: back } });
+      out.results.push({ offerId: full.id, address: full.address, status: "back_on_market", listing: hit.status });
+    }
 
     if (!onMarket) {
       if (!seen.offMarketAt) {
@@ -110,8 +139,20 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
       continue;
     }
     const drop = evaluateDrop({ from, to });
-    if (!drop.dropped) continue;
+    if (!drop.dropped) {
+      // The price came back up past the drop we owed: nothing to say now.
+      if (seen.dropOwed) { const { dropOwed: _d, ...pw } = full.priceWatch; full.priceWatch = pw; await store.updateOffer(full.id, full).catch(() => {}); }
+      continue;
+    }
     out.dropped++;
+    const waiting = await waitingReason({ store, locationId, contactId: full.contactId });
+    if (waiting) {
+      full.priceWatch = { ...full.priceWatch, dropOwed: { from, to, at: seen.dropOwed?.at || iso(now) } };
+      await store.updateOffer(full.id, full).catch(() => {});
+      out.results.push({ offerId: full.id, address: full.address, status: "dropped", from, to, reason: `kept for later: ${waiting}` });
+      continue;
+    }
+    if (seen.dropOwed) { const { dropOwed: _d, ...pw } = full.priceWatch; full.priceWatch = pw; await store.updateOffer(full.id, full).catch(() => {}); }
     const claim = await recordEvent({ store, locationId, contactId: full.contactId, party: "agent", type: "price_dropped", at: iso(now),
       address: full.address, offerId: full.id, source: "sweep", dedupeKey: `price_dropped:${full.id}:${to}`,
       data: { from, to, pct: drop.pct, ourNumber: Math.round(Number(full.cashAmount) || 0) } });

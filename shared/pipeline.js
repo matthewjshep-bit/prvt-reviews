@@ -79,6 +79,7 @@ export const ACTION_KINDS = [
   { key: "stage_lag",         label: "Stage is behind" },
   { key: "gone_quiet",        label: "Gone quiet" },
   { key: "underwrite_failed", label: "Underwrites that failed" },
+  { key: "underwrite_dropped", label: "Underwrites that never ran" },
 ];
 
 // Investor state on a deal card, and its precedence. A buyer who committed
@@ -98,7 +99,7 @@ export const ACTION_GROUPS = [
   { key: "machine", label: "The machine is on it" },
   { key: "stuck",   label: "Stuck" },
 ];
-const STUCK_KINDS = new Set(["hot_stalled", "underwrite_held", "underwrite_failed", "ladder_exhausted", "gone_quiet"]);
+const STUCK_KINDS = new Set(["hot_stalled", "underwrite_held", "underwrite_failed", "underwrite_dropped", "ladder_exhausted", "gone_quiet"]);
 
 /**
  * groupFor(action) → "yours" | "machine" | "stuck"
@@ -471,6 +472,25 @@ export function buildPipeline({
           ...(j.contactId && j.offerId ? [{ key: "open_editor", label: "Open what loaded", intent: "secondary" }] : []),
         ] });
     }
+  }
+
+  /* --- underwrites that left the queue without running --- */
+  // An address that waited past the daily cap and never ran
+  // (auto-underwrite.js drainUnderwriteQueue). Until 2026-09-29 that was a
+  // console line: the house was simply never priced. The row stays for a week,
+  // or until this agent has an offer on that house made after the drop.
+  for (const e of events) {
+    if (e?.type !== "underwrite_dropped" || !e.contactId) continue;
+    const dropped = ms(e.at);
+    if (dropped == null || now - dropped > 7 * DAY_MS) continue;
+    const key = e.address ? addressKey(e.address) : "";
+    const priced = offers.some((o) => o?.contactId === e.contactId && (!key || addressKey(o.address || "") === key) && (ms(o.createdAt) ?? 0) > dropped);
+    if (priced) continue;
+    push({ id: `underwrite_dropped:${e.contactId}:${key}:${e.at}`, kind: "underwrite_dropped", severity: "soon",
+      contactId: e.contactId, contactName: contactNames[e.contactId] || "", address: e.address || "", offerId: null, askingPrice: 0,
+      title: `Never underwrote ${String(e.address || "an address").split(",")[0]}`,
+      detail: String(e.data?.reason || "it left the underwrite queue without running").slice(0, 160),
+      ops: e.address ? [{ key: "rerun_held", label: "Run it now", intent: "primary" }] : [] });
   }
 
   /* --- drafts: waiting, scheduled, and the hand-offs riding on them --- */

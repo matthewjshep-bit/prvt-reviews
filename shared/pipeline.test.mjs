@@ -668,3 +668,19 @@ test("a deal's most urgent closing item shows on Today when it's overdue or due 
   assert.equal(kinds(calm).includes("closing_task_due"), false);
   assert.equal(kinds(build({ offers: [deal({}, { stage: "closed" })] })).includes("closing_task_due"), false);
 });
+
+/* ---------- underwrites that never ran (2026-09-29) ---------- */
+
+test("an address that left the underwrite queue is on Today until the house is priced", () => {
+  const dropped = { type: "underwrite_dropped", contactId: "c9", at: new Date(NOW - 3600000).toISOString(), address: "3 C St, Kent, WA",
+    data: { reason: "waited more than 3 days past the daily cap" } };
+  const p = buildPipeline({ events: [dropped], contactNames: { c9: "Dana" }, now: NOW });
+  const row = p.actions.find((a) => a.kind === "underwrite_dropped");
+  assert.ok(row, "a row, not a console line");
+  assert.equal(row.group, "stuck");
+  assert.match(row.title, /Never underwrote 3 C St/);
+  assert.deepEqual(row.ops.map((o) => o.key), ["rerun_held"]);
+  const priced = { id: "o9", contactId: "c9", address: "3 C St, Kent, WA", cashAmount: 250000, status: "new", createdAt: new Date(NOW - 60000).toISOString() };
+  assert.equal(buildPipeline({ offers: [priced], events: [dropped], now: NOW }).actions.some((a) => a.kind === "underwrite_dropped"), false);
+  assert.equal(buildPipeline({ events: [dropped], now: NOW + 8 * 86400000 }).actions.some((a) => a.kind === "underwrite_dropped"), false, "a week on, it goes");
+});

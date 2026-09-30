@@ -82,7 +82,7 @@ export function lastActivityQuery({ locationId, types = null, limit = 5000 }) {
 // The status/status_at columns this reads are a mirror of `doc`, kept for the
 // index. The sweep re-checks effectiveStatus on the full row before it acts,
 // so a stale mirror costs a missed nudge and never a wrong send.
-export function followUpQuery({ locationId, statuses = [...OPEN_STATUSES], before, limit = 200 }) {
+export function followUpQuery({ locationId, statuses = [...OPEN_STATUSES], before, since = null, limit = 200, offset = 0 }) {
   const params = [locationId];
   const ph = (v) => `$${params.push(v)}`;
   const lean = `coalesce((select jsonb_object_agg(k, v) from jsonb_each(doc) as e(k, v)
@@ -92,12 +92,65 @@ export function followUpQuery({ locationId, statuses = [...OPEN_STATUSES], befor
   // column and has no statusAt in its doc either) is a candidate, not a
   // silent omission — the sweep will read it properly and decide.
   if (before) where.push(`(status_at is null or status_at <= ${ph(before)})`);
+  if (since) where.push(`(status_at is null or status_at >= ${ph(since)})`);
+  // `id` breaks ties so a page edge never repeats or drops a row: the sweep
+  // pages through the whole book (follow-up-sweep.js followUpRows).
+  const page = Math.max(0, Math.round(Number(offset) || 0));
   return {
     text: `select ${lean} from offers
             where ${where.join(" and ")}
-            order by status_at asc nulls first limit ${ph(limit)}`,
+            order by status_at asc nulls first, id asc limit ${ph(limit)}${page ? ` offset ${ph(page)}` : ""}`,
     params,
   };
+}
+
+// The window read, newest first so a limit cuts the OLDEST rows; one extra
+// row tells keepNewest whether anything was cut. Exported so the SQL gets a
+// unit test without a database, like offerListQuery.
+const EVENT_COLUMNS = `id, contact_id as "contactId", party, type, at, address, offer_id as "offerId", deal_id as "dealId", source, ref,
+              dedupe_key as "dedupeKey", data, created_at as "createdAt"`;
+function eventWindowWhere({ locationId, sinceIso, types, notParty }) {
+  const params = [locationId, sinceIso];
+  let where = "";
+  if (Array.isArray(types) && types.length) { params.push(types); where = ` and type = any($${params.length}::text[])`; }
+  if (notParty) { params.push(notParty); where += ` and (party is null or party <> $${params.length})`; }
+  return { params, where };
+}
+export function eventsSinceQuery({ locationId, sinceIso, types = null, notParty = null, limit = 5000 }) {
+  const { params, where } = eventWindowWhere({ locationId, sinceIso, types, notParty });
+  params.push(Math.max(1, Math.round(Number(limit) || 0)) + 1);
+  return {
+    text: `select ${EVENT_COLUMNS}
+         from contact_events where location_id = $1 and at >= $2${where}
+         order by at desc, id desc limit $${params.length}`,
+    params,
+  };
+}
+export function eventsPageQuery({ locationId, sinceIso, types = null, notParty = null, after = null, limit = 2000 }) {
+  const { params, where } = eventWindowWhere({ locationId, sinceIso, types, notParty });
+  let keyset = "";
+  if (after?.at && after?.id) {
+    params.push(after.at); const a = params.length;
+    params.push(after.id); const b = params.length;
+    keyset = ` and (at, id) > ($${a}::timestamptz, $${b}::uuid)`;
+  }
+  params.push(Math.max(1, Math.round(Number(limit) || 0)));
+  return {
+    text: `select ${EVENT_COLUMNS}
+         from contact_events where location_id = $1 and at >= $2${where}${keyset}
+         order by at asc, id asc limit $${params.length}`,
+    params,
+  };
+}
+// Newest-first rows (limit + 1 of them) → oldest first, trimmed to `limit`
+// from the old end, with `truncated` set (not enumerable, so it never leaks
+// into JSON) when a row had to go.
+export function keepNewest(newestFirst = [], limit = 5000) {
+  const cap = Math.max(1, Math.round(Number(limit) || 0));
+  const cut = newestFirst.length > cap;
+  const out = newestFirst.slice(0, cap).reverse();
+  Object.defineProperty(out, "truncated", { value: cut, enumerable: false });
+  return out;
 }
 
 /* ============================================================= *
@@ -217,8 +270,8 @@ const pgStore = {
   },
   // See followUpQuery. Lean rows, oldest-first; the caller re-reads the full
   // doc before acting on any of them.
-  async listOffersForFollowUp(locationId, { statuses, before = null, limit = 200 } = {}) {
-    const { text, params } = followUpQuery({ locationId, statuses, before, limit });
+  async listOffersForFollowUp(locationId, { statuses, before = null, since = null, limit = 200, offset = 0 } = {}) {
+    const { text, params } = followUpQuery({ locationId, statuses, before, since, limit, offset });
     const { rows } = await query(text, params);
     return rows.map((r) => toListOffer(r.doc));
   },
@@ -693,7 +746,7 @@ const pgStore = {
     }
     return { created, updated };
   },
-  async listInvestors(locationId, { status = null, limit = 2000 } = {}) {
+  async listInvestors(locationId, { status = null, limit = 50000 } = {}) {
     const { rows } = status
       ? await query(
           `select contact_id as "contactId", name, status, buybox_text as "buyboxText",
@@ -792,7 +845,7 @@ const pgStore = {
     );
     return rows[0];
   },
-  async listContactProfiles(locationId, { party = null, limit = 5000 } = {}) {
+  async listContactProfiles(locationId, { party = null, limit = 20000 } = {}) {
     const params = [locationId];
     let where = "";
     if (party) { params.push(party); where = ` and party = $${params.length}`; }
@@ -854,20 +907,24 @@ const pgStore = {
   // `notParty` drops one side's events (a null party is kept) — the buyer
   // book reads talk events with notParty "agent", so the agents' far larger
   // share can't fill the limit.
+  //
+  // Past `limit`, the NEWEST rows are kept and the array says so
+  // (`rows.truncated`). Until 2026-09-29 it kept the oldest: a busy window
+  // cut exactly the week every clock was asking about.
   async listContactEventsSince(locationId, sinceIso, { types = null, limit = 5000, notParty = null } = {}) {
-    const params = [locationId, sinceIso];
-    let where = "";
-    if (Array.isArray(types) && types.length) { params.push(types); where = ` and type = any($${params.length}::text[])`; }
-    if (notParty) { params.push(notParty); where += ` and (party is null or party <> $${params.length})`; }
-    params.push(limit);
-    const { rows } = await query(
-      `select id, contact_id as "contactId", party, type, at, address, offer_id as "offerId", deal_id as "dealId", source, ref,
-              dedupe_key as "dedupeKey", data, created_at as "createdAt"
-         from contact_events where location_id = $1 and at >= $2${where}
-         order by at asc limit $${params.length}`,
-      params
-    );
-    return rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at }));
+    const { text, params } = eventsSinceQuery({ locationId, sinceIso, types, notParty, limit });
+    const { rows } = await query(text, params);
+    return keepNewest(rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at })), limit);
+  },
+  // One page of the same window, oldest first, after the (at, id) of the last
+  // row of the page before. `next` is null on the last page. What
+  // contact-events.js allEventsSince walks when a caller needs all of it.
+  async listContactEventsPage(locationId, sinceIso, { types = null, notParty = null, after = null, limit = 2000 } = {}) {
+    const { text, params } = eventsPageQuery({ locationId, sinceIso, types, notParty, after, limit });
+    const { rows } = await query(text, params);
+    const out = rows.map((r) => ({ ...r, at: r.at instanceof Date ? r.at.toISOString() : r.at }));
+    const last = out.at(-1);
+    return { rows: out, next: out.length >= limit && last ? { at: last.at, id: last.id } : null };
   },
   // The newest communication per contact — see lastActivityQuery for why it
   // has no window.
@@ -1201,6 +1258,13 @@ const fileStore = (() => {
     }
     return data;
   };
+  // One location's events in a window, unordered: listContactEventsSince and
+  // listContactEventsPage sort and cut it their own ways.
+  const jsonEventWindow = (locationId, sinceIso, { types = null, notParty = null } = {}) =>
+    Object.entries(data.contactEvents)
+      .filter(([k]) => k.startsWith(`${locationId}|`))
+      .flatMap(([, list]) => list)
+      .filter((e) => e.at >= sinceIso && (!types?.length || types.includes(e.type)) && (!notParty || !e.party || e.party !== notParty));
   // Adopt pre-batch rows (no batchId) into one "Earlier pulls" batch per
   // location, re-keying "<loc>|<key>" entries to "<loc>|<batchId>|<key>".
   const adoptLegacyOutreachRows = () => {
@@ -1271,14 +1335,16 @@ const fileStore = (() => {
     },
     // The file backend has no columns to mirror, so it filters the docs the
     // Postgres index exists to avoid scanning. Same answer, same order.
-    async listOffersForFollowUp(locationId, { statuses = [...OPEN_STATUSES], before = null, limit = 200 } = {}) {
+    async listOffersForFollowUp(locationId, { statuses = [...OPEN_STATUSES], before = null, since = null, limit = 200, offset = 0 } = {}) {
       ensure();
       const want = new Set(statuses);
+      const at = (o) => o.statusAt || o.createdAt || "";
       return Object.values(data.offers)
         .filter((o) => o.locationId === locationId && want.has(effectiveStatus(o)))
-        .filter((o) => !before || !(o.statusAt || o.createdAt) || (o.statusAt || o.createdAt) <= before)
-        .sort((a, b) => String(a.statusAt || a.createdAt || "").localeCompare(String(b.statusAt || b.createdAt || "")))
-        .slice(0, limit)
+        .filter((o) => !before || !at(o) || at(o) <= before)
+        .filter((o) => !since || !at(o) || at(o) >= since)
+        .sort((a, b) => String(at(a)).localeCompare(String(at(b))) || String(a.id || "").localeCompare(String(b.id || "")))
+        .slice(Math.max(0, offset), Math.max(0, offset) + limit)
         .map(toListOffer);
     },
     // Nothing to fill: the file backend reads status off the doc every time.
@@ -1789,7 +1855,7 @@ const fileStore = (() => {
       persist();
       return { created, updated };
     },
-    async listInvestors(locationId, { status = null, limit = 2000 } = {}) {
+    async listInvestors(locationId, { status = null, limit = 50000 } = {}) {
       ensure();
       return Object.values(data.investors)
         .filter((i) => i.locationId === locationId && (!status || i.status === status))
@@ -1858,7 +1924,7 @@ const fileStore = (() => {
       persist();
       return row;
     },
-    async listContactProfiles(locationId, { party = null, limit = 5000 } = {}) {
+    async listContactProfiles(locationId, { party = null, limit = 20000 } = {}) {
       ensure();
       return Object.values(data.contactProfiles)
         .filter((p) => p.locationId === locationId && (!party || p.party === party))
@@ -1895,12 +1961,23 @@ const fileStore = (() => {
     },
     async listContactEventsSince(locationId, sinceIso, { types = null, limit = 5000, notParty = null } = {}) {
       ensure();
-      return Object.entries(data.contactEvents)
-        .filter(([k]) => k.startsWith(`${locationId}|`))
-        .flatMap(([, list]) => list)
-        .filter((e) => e.at >= sinceIso && (!types?.length || types.includes(e.type)) && (!notParty || !e.party || e.party !== notParty))
-        .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+      const newestFirst = jsonEventWindow(locationId, sinceIso, { types, notParty })
+        .sort((a, b) => String(b.at).localeCompare(String(a.at)) || String(b.id || "").localeCompare(String(a.id || "")));
+      return keepNewest(newestFirst.slice(0, Math.max(1, Math.round(Number(limit) || 0)) + 1), limit);
+    },
+    async listContactEventsPage(locationId, sinceIso, { types = null, notParty = null, after = null, limit = 2000 } = {}) {
+      ensure();
+      const key = (e) => [String(e.at), String(e.id || "")];
+      const rows = jsonEventWindow(locationId, sinceIso, { types, notParty })
+        .sort((a, b) => String(a.at).localeCompare(String(b.at)) || String(a.id || "").localeCompare(String(b.id || "")))
+        .filter((e) => {
+          if (!after?.at) return true;
+          const [at, id] = key(e);
+          return at > String(after.at) || (at === String(after.at) && id > String(after.id || ""));
+        })
         .slice(0, limit);
+      const last = rows.at(-1);
+      return { rows, next: rows.length >= limit && last ? { at: last.at, id: last.id } : null };
     },
     async lastContactActivity(locationId, { types = null, limit = 5000 } = {}) {
       ensure();

@@ -111,3 +111,48 @@ test("the watch runs once a day, in the morning, and not without an Apify token"
   const noKey = await runPriceWatch({ locationId: "LOC", saved: { ...SAVED, apifyToken: "" }, store, now: NOW, deps });
   assert.equal(noKey.skipped, "no Apify token");
 });
+
+/* ---------- off the market is not forever; a drop can wait (2026-09-29) ---------- */
+
+test("a house back on the market is written down and no longer counts as gone", async () => {
+  const off = new Date(NOW - 10 * DAY).toISOString();
+  const store = fakeStore([lisa({ priceWatch: { listPrice: 715000, status: "PENDING", offMarketAt: off, checkedAt: new Date(NOW - DAY).toISOString() } })]);
+  const r = await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW,
+    deps: { ...starter(), fetchListings: listings([["10511 Moller Dr, Gig Harbor, WA", { listPrice: 699000, status: "FOR_SALE" }]]) } });
+  assert.equal(r.backOnMarket, 1);
+  const pw = store.map.get("o1").priceWatch;
+  assert.equal(pw.offMarketAt, undefined);
+  assert.equal(pw.backOnMarketAt, new Date(NOW).toISOString());
+  assert.ok(store.events.some((e) => e.type === "listing_back_on_market"), "the relist is on the record");
+});
+
+test("the drop text waits while their reply is held and goes on a later run, from where it started", async () => {
+  const store = fakeStore([lisa({ priceWatch: { listPrice: 715000, status: "FOR_SALE", checkedAt: new Date(NOW - DAY).toISOString() } })]);
+  const held = [{ id: "h1", contactId: "c1", status: "draft", inbound: "any movement on your end?", reply: "..." }];
+  store.listReplyDrafts = async (_l, { contactId, status } = {}) => held.filter((d) => (!contactId || d.contactId === contactId) && (!status || d.status === status));
+  const s = starter();
+  const fetch = listings([["10511 Moller Dr, Gig Harbor, WA", { listPrice: 675000, status: "FOR_SALE" }]]);
+  const first = await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, fetchListings: fetch } });
+  assert.equal(s.calls.length, 0, "not over their text");
+  assert.match(first.results[0].reason, /kept for later: their text is waiting on you/);
+  assert.deepEqual(store.map.get("o1").priceWatch.dropOwed.from, 715000);
+
+  held[0].status = "sent";
+  await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW + DAY, deps: { ...s, fetchListings: fetch } });
+  assert.equal(s.calls.length, 1, "it goes once the reply is dealt with");
+  assert.equal(s.calls[0].subject.from, 715000, "measured from the price before the drop, not today's baseline");
+  assert.equal(store.map.get("o1").priceWatch.dropOwed, undefined);
+});
+
+test("a number we floated but never sent is watched only with the switch on", async () => {
+  const floated = lisa({ status: "new", sends: [], proactive: { realmCheckAt: new Date(NOW - 5 * DAY).toISOString() } });
+  const fetch = listings([["10511 Moller Dr, Gig Harbor, WA", { listPrice: 715000, status: "FOR_SALE" }]]);
+  const off = await runPriceWatch({ locationId: "LOC", saved: SAVED, store: fakeStore([floated]), now: NOW, deps: { ...starter(), fetchListings: fetch } });
+  assert.equal(off.watched, 0);
+  const on = { ...SAVED, conversationAi: normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, watchFloated: true } } } }) };
+  const r = await runPriceWatch({ locationId: "LOC", saved: on, store: fakeStore([floated]), now: NOW, deps: { ...starter(), fetchListings: fetch } });
+  assert.equal(r.watched, 1);
+  const never = lisa({ status: "new", sends: [] });
+  const r2 = await runPriceWatch({ locationId: "LOC", saved: on, store: fakeStore([never]), now: NOW, deps: { ...starter(), fetchListings: fetch } });
+  assert.equal(r2.watched, 0, "nothing of ours in front of them, nothing to watch");
+});

@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  startFollowUpSweep, maybeStartFollowUpSweep, agentCandidates, investorCandidates,
+  startFollowUpSweep, maybeStartFollowUpSweep, agentCandidates, investorCandidates, passedCandidates,
   publicFollowUpJob, cancelFollowUpSweep, _resetJobs, CURSOR_NAME, FOLLOW_UP_UTC_HOUR, isTheOfferToAskAbout,
 } from "./follow-up-sweep.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
@@ -531,7 +531,8 @@ test("the hot push ignores the weekly cap, but never goes twice inside twenty ho
   const store = fakeStore({ offers: [...others, hotOffer({ statusAt: at(3), hot: { at: at(3), by: "conversation", signal: "writing_up" }, realm: { answer: "yes", ts: at(3) } })] });
   const { started } = hotSweep(store, T0 + 4.2 * DAY);
   await settle();
-  assert.deepEqual(started.map((x) => x.kind), ["offer_nudge", "offer_nudge", "hot_push"], "two other nudges this week do not hold up an agreed price");
+  // The push goes first (2026-09-29: a run's quota must never hold up an agreed price) and doesn't count against the week's nudges.
+  assert.deepEqual(started.map((x) => x.kind), ["hot_push", "offer_nudge", "offer_nudge"], "two other nudges this week do not hold up an agreed price");
   _resetJobs();
   const touched = { id: "t", contactId: "c1", status: "sent", intent: "checkin_due", outbound: { kind: "checkin_due" }, inbound: "", reply: "hi", createdAt: at(1.0), updatedAt: at(1.0) };
   const again = hotSweep(fakeStore({ offers: [hotOffer()], drafts: [touched] }), T0 + 1.2 * DAY);
@@ -684,4 +685,65 @@ test("an offer nothing went out on is not nudged; a number floated by text is, f
   const list = await agentCandidates({ store: fakeStore({ offers: [unsent, floated] }), locationId: "LOC", config: cfg, now: T0 + 6 * DAY });
   assert.deepEqual(list.map((c) => c.offerId), ["f1"], "the unsent one is the float timer's");
   assert.equal(list[0].startedAt, at(1), "counted from the float, not from when it was priced");
+});
+
+/* ---------- the whole book, a page at a time (2026-09-29) ---------- */
+
+// The reads stopped at the oldest 200 open offers (400 for check-ins): as the
+// book grew, the newest offers were the ones never asked about.
+const pagedStore = (offers) => {
+  const s = fakeStore({ offers });
+  s.listOffersForFollowUp = async (_loc, { statuses = [...OPEN_STATUSES], before = null, limit = 200, offset = 0 } = {}) => {
+    const want = new Set(statuses);
+    return [...s.offers.values()]
+      .filter((o) => want.has(effectiveStatus(o)) && (!before || (o.statusAt || o.createdAt) <= before))
+      .sort((a, b) => String(a.statusAt || a.createdAt).localeCompare(String(b.statusAt || b.createdAt)) || a.id.localeCompare(b.id))
+      .slice(offset, offset + limit);
+  };
+  return s;
+};
+const olderBook = (n) => Array.from({ length: n }, (_, i) => anOffer({ id: `old${String(i).padStart(3, "0")}`, contactId: `a${i}`,
+  address: `${i + 100} Old Rd, Kent, WA`, statusAt: at(-30), createdAt: at(-30), sends: [{ ts: at(-30) }] }));
+
+test("the newest open offer is still nudged when two hundred older ones are ahead of it", async () => {
+  const store = pagedStore([...olderBook(250), anOffer({ id: "newest", contactId: "cN", address: "1 New St, Kent, WA" })]);
+  const list = await agentCandidates({ store, locationId: "LOC", config: configWith(), now: T0 + 4 * DAY });
+  assert.ok(list.some((c) => c.offerId === "newest"), `the newest offer is a candidate (${list.length} read)`);
+});
+
+test("a fresh yes gets its push to paper however many open offers are older", async () => {
+  const store = pagedStore([...olderBook(250), hotOffer({ id: "yes", contactId: "cY", address: "2 Yes St, Kent, WA" })]);
+  const list = await hotCandidates({ store, locationId: "LOC", config: HOT_SAVED.conversationAi, now: T0 + 1.2 * DAY });
+  assert.deepEqual(list.map((c) => c.offerId), ["yes"]);
+});
+
+test("a backlog the paging uncovers goes out over days, hot pushes first", async () => {
+  _resetJobs();
+  const store = pagedStore([...olderBook(170), hotOffer({ id: "yes", contactId: "cY", address: "2 Yes St, Kent, WA", statusAt: at(3), realm: { answer: "yes", ts: at(3) }, hot: { at: at(3), by: "conversation", signal: "writing_up" } })]);
+  const { job, started } = spySweep(store, { now: T0 + 4.2 * DAY, opts: { saved: HOT_SAVED } });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(job.status, "done", job.error);
+  assert.equal(started.length, 150);
+  assert.equal(started[0].kind, "hot_push", "the agreed price is first in line");
+  assert.ok(job.results.some((r) => /this one goes on the next run/.test(r.reason || "")));
+});
+
+/* ---------- a relisted house (2026-09-29) ---------- */
+
+test("a house back on the market starts its check-ins over from the relist, when switched on", async () => {
+  const passed = anOffer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }], followUps: [{ kind: "passed_checkin", step: 10, at: at(10) }] });
+  const events = [
+    { contactId: "c1", type: "listing_off_market", at: at(12), offerId: "o1", data: { status: "PENDING" } },
+    { contactId: "c1", type: "listing_back_on_market", at: at(30), offerId: "o1", data: {} },
+  ];
+  const plain = configWith({ agent: { followUp: { enabled: true, ladders: { passed_checkin: { enabled: true, steps: [10, 20, 30] } } } } });
+  const [c] = await passedCandidates({ store: fakeStore({ offers: [passed], events }), locationId: "LOC", config: plain, now: T0 + 31 * DAY });
+  assert.equal(c.offMarketAt, null, "off the market is no longer forever");
+  assert.equal(c.relisted, false, "switch off: the old ladder simply resumes");
+  const relist = configWith({ agent: { followUp: { enabled: true, relist: true, ladders: { passed_checkin: { enabled: true, steps: [10, 20, 30] } } } } });
+  const [r] = await passedCandidates({ store: fakeStore({ offers: [passed], events }), locationId: "LOC", config: relist, now: T0 + 41 * DAY });
+  assert.equal(r.relisted, true);
+  assert.equal(r.startedAt, at(30));
+  assert.match(r.subjectId, /^o1@relist-/);
+  assert.deepEqual(r.sentSteps, [], "rungs from before the relist belong to the old ladder");
 });

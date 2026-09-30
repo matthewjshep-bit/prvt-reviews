@@ -4258,13 +4258,25 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // there's room. Same call the conversation makes, without re-queuing.
   router.drainUnderwriteQueue = async ({ client, locationId, now = Date.now() }) => {
     const saved = (await store.getOfferSettings(locationId)) || {};
-    return drainUnderwriteQueue({
+    const r = await drainUnderwriteQueue({
       store, locationId, saved, now,
       start: (item) => startUnderwrite({
         client, locationId, saved, store, contactId: item.contactId, message: item.message, address: item.address,
         askingPrice: 0, dryRun: !AUTO_UNDERWRITE_ENABLED, deps: underwriteDeps({ client, locationId, saved }),
       }),
     });
+    // An address that left the line without running is written down, and
+    // Today shows it (shared/pipeline.js underwrite_dropped) until an offer on
+    // that house exists or someone runs it.
+    for (const d of r.droppedItems || []) {
+      if (!d.contactId) continue;
+      await recordEvent({
+        store, locationId, contactId: d.contactId, party: "agent", type: "underwrite_dropped", at: new Date(now).toISOString(),
+        address: d.address || "", source: "sweep", dedupeKey: `underwrite_dropped:${d.contactId}:${addressKey(d.address || "")}:${d.at}`,
+        data: { reason: String(d.reason || "").slice(0, 160), queuedAt: d.at },
+      }).catch(() => {});
+    }
+    return r;
   };
 
   // Runs a redeploy killed mid-flight, started again from the draft that

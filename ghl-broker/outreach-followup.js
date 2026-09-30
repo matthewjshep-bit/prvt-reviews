@@ -22,6 +22,7 @@ import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
 import { addContactToWorkflow, getLastMessageDate, removeContactFromWorkflow } from "./ghl.js";
 import { normalizeOutreachAutopilot, isWorkday, workHour } from "./outreach-sweep.js";
+import { allEventsSince } from "./contact-events.js";
 
 export const CURSOR_NAME = "outreachFollowUp";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -126,12 +127,27 @@ async function run(job, { locationId, client, saved, store, now, paceMs }) {
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
   if (!oa.followUpWorkflowId) throw new Error("no follow-up workflow picked — pick it in Settings");
 
-  const events = await store.listContactEventsSince(locationId, iso(now - WINDOW_DAYS * DAY_MS), { types: EVENT_TYPES, limit: 5000 });
-  const candidates = followUpCandidates(events, { days: oa.followUpDays, now });
+  // The enrollments, all of them in the window. Whether each agent has
+  // answered since is read from that agent's own timeline: until 2026-09-29
+  // one capped read of the whole location's replies and enrollments (oldest
+  // first) filled up with months of text summaries, and this month's
+  // enrollments fell off the end — their follow-ups quietly never came.
+  const { events: enrolled } = await allEventsSince(store, locationId, iso(now - WINDOW_DAYS * DAY_MS), { types: ["outreach_enrolled"] }, { ceiling: 100000 });
+  const due = followUpCandidates(enrolled, { days: oa.followUpDays, now });
+  const candidates = [];
+  let more = false;
+  for (const c of due) {
+    if (candidates.length >= MAX_PER_RUN) { more = true; break; }
+    const since = typeof store.listContactEvents === "function"
+      ? await store.listContactEvents(locationId, c.contactId, { types: [...ENDED_BY], since: c.enrolledAt, limit: 5 }).catch(() => [])
+      : [];
+    if ((since || []).some((e) => ENDED_BY.has(e.type) && String(e.at) > String(c.enrolledAt))) continue;
+    candidates.push(c);
+  }
   job.candidates = candidates.length;
-  if (candidates.length > MAX_PER_RUN) job.warnings.push(`${candidates.length} due — ${MAX_PER_RUN} today, the rest tomorrow`);
+  if (more) job.warnings.push(`more than ${MAX_PER_RUN} due — ${MAX_PER_RUN} today, the rest tomorrow`);
 
-  for (const c of candidates.slice(0, MAX_PER_RUN)) {
+  for (const c of candidates) {
     const result = { contactId: c.contactId, address: c.address, enrolledAt: c.enrolledAt };
     job.results.push(result);
     if (paceMs) await sleep(paceMs);

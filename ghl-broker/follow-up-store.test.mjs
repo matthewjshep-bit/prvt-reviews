@@ -63,3 +63,11 @@ test("backfilling never overwrites a status somebody typed", () => {
   // A clock must not walk "passed" back to "sent" because a send exists.
   assert.equal(effectiveStatus({ status: "passed", sends: [{ ts: "2026-09-01T00:00:00Z" }] }), "passed");
 });
+
+test("the follow-up query pages with a stable order and can read just a window", () => {
+  const { text, params } = followUpQuery({ locationId: "LOC", since: CUT, limit: 500, offset: 1000 });
+  assert.match(text, /order by status_at asc nulls first, id asc limit \$\d+ offset \$\d+/);
+  assert.match(text, /status_at is null or status_at >= \$\d+/);
+  assert.ok(params.includes(1000) && params.includes(500) && params.includes(CUT));
+  assert.doesNotMatch(followUpQuery({ locationId: "LOC" }).text, /offset/, "the first page has no offset");
+});

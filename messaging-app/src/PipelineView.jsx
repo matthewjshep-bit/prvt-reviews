@@ -123,7 +123,7 @@ export default function PipelineView({ section = "queue", settings = null }) {
         <div>
           {data?.counts?.eventsTruncated && (
             <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
-              More than the board reads in one go happened in the last 90 days — the newest buyer activity may be missing.
+              More than the board reads in one go happened in the last 90 days — the oldest activity in that window may be missing.
             </div>
           )}
           <div className="mb-2 flex flex-wrap items-center gap-2">

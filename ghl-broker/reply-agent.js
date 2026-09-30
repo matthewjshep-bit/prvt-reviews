@@ -2194,7 +2194,7 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     return { ...base, address: offer?.address || subject?.address || "", question: String(subject?.question || "").slice(0, 300), answer: String(subject?.answer || "").slice(0, 600) };
   }
   if (kind === "passed_checkin") {
-    return { ...base, quiet: offerStatus(offer) === "no_response", went: whatWentOut(offer) };
+    return { ...base, quiet: offerStatus(offer) === "no_response", went: whatWentOut(offer), relisted: Boolean(subject?.relisted) };
   }
   if (kind === "counter_nudge") {
     const theirs = Math.round(Number(offer?.counter?.amount) || 0);

@@ -85,9 +85,7 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
   if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
   const hotLadderOn = Boolean(pb.followUp.ladders?.hot_push?.enabled);
   const earliest = Math.min(...ladder.steps);
-  const rows = await store.listOffersForFollowUp(locationId, {
-    statuses: [...OPEN_STATUSES], before: iso(now - earliest * DAY_MS), limit: 200,
-  }).catch(() => []);
+  const rows = await followUpRows(store, locationId, { statuses: [...OPEN_STATUSES], before: iso(now - earliest * DAY_MS) });
 
   // One nudge per PROPERTY. The book holds duplicates — the same house
   // underwritten twice for one agent, or offered to a co-listing agent — and
@@ -142,6 +140,24 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
 
 const propertyKeyOf = (o) => (o?.address ? addressKey(o.address) : "");
 
+// Every offer in these statuses, a page at a time. The reads used to stop at
+// the oldest 200 (400 for check-ins) with superseded rows counting against
+// them, so as the book grew the NEWEST offers — a fresh yes among them — were
+// the ones never asked about.
+export const FOLLOW_UP_PAGE = 500;
+// The most texts one run starts. A constant, like the reply reserve.
+export const MAX_STARTS_PER_RUN = 150;
+export const FOLLOW_UP_MAX_ROWS = 5000;
+export async function followUpRows(store, locationId, { statuses, before = null, since = null } = {}) {
+  const seen = new Map();
+  for (let offset = 0; offset < FOLLOW_UP_MAX_ROWS; offset += FOLLOW_UP_PAGE) {
+    const page = await store.listOffersForFollowUp(locationId, { statuses, before, since, limit: FOLLOW_UP_PAGE, offset }).catch(() => []);
+    for (const o of page || []) if (o?.id && !seen.has(o.id)) seen.set(o.id, o);
+    if (!page || page.length < FOLLOW_UP_PAGE) break;
+  }
+  return [...seen.values()];
+}
+
 // The ids some newer row on the same house replaced, off the whole book. A
 // book that can't be read replaces nothing — the sweep behaves as before.
 async function replacedOffers(store, locationId) {
@@ -193,15 +209,16 @@ export async function passedCandidates({ store, locationId, config, now = Date.n
   const ladder = pb?.followUp?.ladders?.passed_checkin;
   if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
   const earliest = Math.min(...ladder.steps);
-  const rows = await store.listOffersForFollowUp(locationId, {
-    statuses: [...CHECKIN_STATUSES], before: iso(now - earliest * DAY_MS), limit: 400,
-  }).catch(() => []);
+  const rows = await followUpRows(store, locationId, { statuses: [...CHECKIN_STATUSES], before: iso(now - earliest * DAY_MS) });
   const replaced = await replacedOffers(store, locationId);
-  // The price watch writes this when the listing goes pending or sells. A
-  // check-in asking whether the seller has softened is pointless after that.
-  const offMarket = typeof store.listContactEventsSince === "function"
-    ? await store.listContactEventsSince(locationId, iso(now - 200 * DAY_MS), { types: ["listing_off_market"], limit: 2000 }).catch(() => [])
+  // The price watch writes these when the listing goes pending or sells, and
+  // when it comes back. A check-in asking whether the seller has softened is
+  // pointless while it's off the market; a relisted house is the best moment
+  // there is (2026-09-29: off-market used to be forever).
+  const marketEvents = typeof store.listContactEventsSince === "function"
+    ? await store.listContactEventsSince(locationId, iso(now - 200 * DAY_MS), { types: ["listing_off_market", "listing_back_on_market"], limit: 5000 }).catch(() => [])
     : [];
+  const relistOn = Boolean(pb.followUp.relist);
   const out = [];
   for (const o of rows) {
     if (!o?.contactId || !o.address || o.deal) continue;
@@ -210,12 +227,20 @@ export async function passedCandidates({ store, locationId, config, now = Date.n
     const passedAt = passedStart(o);
     if (!passedAt) continue;
     const key = propertyKeyOf(o);
-    const gone = offMarket.filter((e) => (e.offerId === o.id || (key && e.address && addressKey(e.address) === key)) && String(e.at) > String(passedAt))
-      .map((e) => e.at).sort().at(-1) || null;
+    const mine = marketEvents.filter((e) => (e.offerId === o.id || (key && e.address && addressKey(e.address) === key)) && String(e.at) > String(passedAt));
+    const lastOff = mine.filter((e) => e.type === "listing_off_market").map((e) => e.at).sort().at(-1) || null;
+    const lastBack = mine.filter((e) => e.type === "listing_back_on_market").map((e) => e.at).sort().at(-1) || null;
+    const gone = lastOff && !(lastBack && String(lastBack) > String(lastOff)) ? lastOff : null;
+    // Back on the market, with the switch on: the check-ins start again from
+    // the relist, under a subject id of their own so the new rungs get fresh
+    // claims. Without it, the old ladder simply resumes.
+    const relisted = relistOn && !gone && lastBack ? lastBack : null;
+    const startedAt = relisted || passedAt;
     out.push({
-      kind: "passed_checkin", party: "agent", contactId: o.contactId, subjectId: o.id,
-      offerId: o.id, address: o.address, startedAt: passedAt, offMarketAt: gone,
-      sentSteps: (o.followUps || []).filter((f) => f?.kind === "passed_checkin").map((f) => f.step),
+      kind: "passed_checkin", party: "agent", contactId: o.contactId,
+      subjectId: relisted ? `${o.id}@relist-${String(relisted).slice(0, 10)}` : o.id,
+      offerId: o.id, address: o.address, startedAt, offMarketAt: gone, relisted: Boolean(relisted),
+      sentSteps: (o.followUps || []).filter((f) => f?.kind === "passed_checkin" && (!relisted || String(f.at || "") > String(relisted))).map((f) => f.step),
       ladder,
     });
   }
@@ -235,7 +260,7 @@ export async function hotCandidates({ store, locationId, config, now = Date.now(
   const pb = config?.parties?.agent;
   const ladder = pb?.followUp?.ladders?.hot_push;
   if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
-  const rows = await store.listOffersForFollowUp(locationId, { statuses: [...OPEN_STATUSES], before: iso(now), limit: 200 }).catch(() => []);
+  const rows = await followUpRows(store, locationId, { statuses: [...OPEN_STATUSES], before: iso(now) });
   const replaced = await replacedOffers(store, locationId);
   const out = [];
   for (const o of rows) {
@@ -419,9 +444,11 @@ async function runSweep(job, ctx) {
     if (job.results.length > 200) job.results.shift();
   };
 
+  // An agreed price first: if the run's quota binds, the push to paper is
+  // the text that must not wait.
   const candidates = [
-    ...(await agentCandidates({ store, locationId, config, now })),
     ...(await hotCandidates({ store, locationId, config, now })),
+    ...(await agentCandidates({ store, locationId, config, now })),
     ...(await passedCandidates({ store, locationId, config, now })),
     ...(await outreachCandidates({ store, locationId, config, now })),
     ...(await investorCandidates({ store, locationId, config, now })),
@@ -587,6 +614,15 @@ async function runSweep(job, ctx) {
       continue;
     }
 
+    // A backlog never goes out as a burst (reading the whole book can
+    // surface one): past the run's quota, the rest go on the next runs. A
+    // ladder fires only its latest due rung, never the ones it missed.
+    if (job.started >= MAX_STARTS_PER_RUN) {
+      job.skipped++;
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: `today's ${MAX_STARTS_PER_RUN} follow-ups are out — this one goes on the next run` });
+      continue;
+    }
+
     // One voice at a time: their text (or your own draft) waiting in the
     // outbox holds the nudge, and the rung is not spent on it — it goes on a
     // later run, once that row is dealt with.
@@ -623,7 +659,7 @@ async function runSweep(job, ctx) {
         client, locationId, saved, store, contactId: c.contactId, kind: c.kind,
         offer: OFFER_KINDS.has(c.kind) ? offer : null,
         subject: { address: c.address, step: d.step, steps: c.ladder.steps,
-                   viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, lastTouchAt },
+                   viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, lastTouchAt, relisted: Boolean(c.relisted) },
         sendsEnabled, deps,
       });
       if (r?.skipped) {
@@ -631,7 +667,9 @@ async function runSweep(job, ctx) {
         push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: r.skipped });
       } else {
         job.started++;
-        weekCount.set(c.contactId, already + 1);
+        // The push to paper keeps its own floor and never counts against the
+        // week's nudges (it goes first, so it would otherwise crowd them out).
+        if (c.kind !== "hot_push") weekCount.set(c.contactId, already + 1);
         // The offer remembers its own rungs so History can show them without
         // reading the timeline. The event is still the authority.
         if (OFFER_KINDS.has(c.kind) && c.offerId) {
