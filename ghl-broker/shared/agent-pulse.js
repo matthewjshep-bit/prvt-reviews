@@ -39,7 +39,7 @@ import { effectiveStatus, OPEN_STATUSES, DEAD_STATUSES, dealIsOver, priceAgreed 
 import { threadTimes } from "./follow-up.js";
 import { nextFollowUp } from "./next-follow-up.js";
 import { IRRITATED_RX, PERSON_HAS_IT_DAYS, HAND_REPLY_EVENT } from "./thread-health.js";
-import { addressKey } from "./us-address.js";
+import { addressKey, sameStreet } from "./us-address.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -229,13 +229,13 @@ export function agentOwner({ offers = [], drafts = [], events = [], config = {},
 }
 
 /**
- * freshListingFor({ listings, pinged, houses, settings, now }) → listing | null
+ * freshListingFor({ listings, pinged, raised, houses, settings, now }) → listing | null
  *
  * The best distressed listing of theirs we first saw lately and they still
  * have up: not one we've raised with them, not a house we already have a
  * live offer on, not one we walked away from.
  */
-export function freshListingFor({ listings = [], pinged = new Set(), houses = {}, settings = {}, now = Date.now() } = {}) {
+export function freshListingFor({ listings = [], pinged = new Set(), raised = [], houses = {}, settings = {}, now = Date.now() } = {}) {
   const s = normalizeAgentPulse(settings);
   const live = houses.live || new Set();
   const walked = houses.walked || new Map();
@@ -246,6 +246,8 @@ export function freshListingFor({ listings = [], pinged = new Set(), houses = {}
     if (now - (ms(l.lastSeen) ?? 0) > s.listingSeenDays * DAY_MS) return false;
     const k = addressKey(l.doc?.address || "");
     if (!k || live.has(k)) return false;
+    // Spelled however the opener spelled it: same number, same street.
+    if ((raised || []).some((r) => sameStreet(r, l.doc?.address || ""))) return false;
     const w = walked.get(k);
     if (w && now - (ms(w) ?? 0) < 180 * DAY_MS) return false;
     return true;
@@ -307,7 +309,11 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
 
   const pinged = new Set(ledger.filter((e) => e.type === "listing_pinged").map((e) => e.data?.listingKey).filter(Boolean));
   for (const e of ledger) if (e.type === "listing_ping_voided" && e.data?.listingKey) pinged.delete(e.data.listingKey);
-  const listing = freshListingFor({ listings: agent.listings || [], pinged, houses, settings: s, now });
+  // A listing the outreach opener already asked them about (the workflow's
+  // first text, or the app's) is not news.
+  const raised = events.filter((e) => (e.type === "outreach_enrolled" && e.data?.kind !== "followup") || e.type === "outreach_sent")
+    .map((e) => String(e.address || "")).filter(Boolean);
+  const listing = freshListingFor({ listings: agent.listings || [], pinged, raised, houses, settings: s, now });
 
   if (segment === "cold" || downgraded) {
     const coldSeg = segment === "cold" ? "cold" : `${segment} gone quiet`;

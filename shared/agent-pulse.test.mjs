@@ -224,3 +224,23 @@ test("Matt's notes on how the check-in should sound are kept, trimmed and capped
   assert.equal(normalizeAgentPulse({ voice: "x".repeat(900) }).voice.length, 600);
   assert.deepEqual(normalizeAgentPulse({ replacesWorkflowIds: "a, b\nc" }).replacesWorkflowIds, ["a", "b", "c"]);
 });
+
+// 2026-09-30, the first samples: Brenton's "new listing" was 719 S Sprague
+// Ave — the listing our outreach workflow's first text had asked him about
+// nine days before. A listing the opener already raised isn't news.
+test("a listing the outreach opener already asked them about isn't raised again as new", () => {
+  // They answered the opener (so the app took them out of its workflow) and
+  // went quiet: the check-in has them, but not about the same listing.
+  const replied = (address, type = "outreach_enrolled") => [
+    { type, at: ago(30), address, ...(type === "outreach_enrolled" ? { data: { kind: "first" } } : {}) },
+    { type: "outreach_left", at: ago(29) },
+  ];
+  const opened = agent({ lastInboundAt: ago(29), listings: [listing()], events: replied("123 Main St, Kent, WA 98031") });
+  const v = evaluateAgent(opened, ctx());
+  assert.equal(v.status, "due", JSON.stringify(v));
+  assert.notEqual(v.pulseReason, "fresh_listing");
+  const byApp = agent({ lastInboundAt: ago(29), listings: [listing()], events: replied("123 Main Street, Kent, WA", "outreach_sent") });
+  assert.notEqual(evaluateAgent(byApp, ctx()).pulseReason, "fresh_listing", "the app's own opener counts too, however it spelled the street");
+  const other = agent({ lastInboundAt: ago(29), listings: [listing()], events: replied("9 Oak St, Kent, WA 98031") });
+  assert.equal(evaluateAgent(other, ctx()).pulseReason, "fresh_listing", "a different listing is still news");
+});
