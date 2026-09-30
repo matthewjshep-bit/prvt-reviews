@@ -45,6 +45,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // iMessage/Android reactions as GHL relays them: an emoji or a verb, then
 // the quoted text. Nothing to answer.
+const clipText = (t, n = 160) => { const x = String(t || "").replace(/\s+/g, " ").trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x; };
 export const isReaction = (body) => /^\s*(?:[\u{1F44D}\u{1F44E}\u{2764}\u{1F602}\u{203C}\u{2753}\u{1F60D}\u{1F64F}]\uFE0F?|Liked|Loved|Laughed at|Emphasized|Disliked|Questioned)\s*(?:to\s*)?[“"']/u.test(String(body || "").replace(/[\u200B\uFEFF]/g, ""));
 
 const jobs = new Map();
@@ -236,12 +237,22 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         // first, so the next night reported "drafting was tried … nothing
         // came of it" for a thumbs-up.
         if (!latest?.body) { row.status = "skipped"; row.reason = "no inbound text to answer"; continue; }
-        if (isReaction(latest.body)) { drop(f, row, "a reaction, not a text"); continue; }
-        if (isCloser(latest.body)) { drop(f, row, "a closer, not a question"); continue; }
+        // What they said is on the row, so Today shows it.
+        f.evidence = { ...(f.evidence || {}), inbound: clipText(latest.body) };
+        // Every text since our last one, not just the newest: a lead and then
+        // "Not really" is a lead (Shannon Honingford, 2026-09-29).
+        const texts = typeof deps.unansweredInbound === "function"
+          ? ((await deps.unansweredInbound(f.contactId).catch(() => null)) || [latest.body]) : [latest.body];
         // A plain no to our check-in ends it — unless our offer is out, when
         // the no may be their pass and the reply agent records it.
         const liveOffer = offers.some((o) => o?.contactId === f.contactId && ((o.deal && !dealIsOver(o.deal)) || (!o.deal && OPEN_STATUSES.has(effectiveStatus(o)))));
-        if (!liveOffer && isPlainNo(latest.body)) { drop(f, row, "a no to our check-in — nothing to answer"); continue; }
+        const ends = (t) => isReaction(t) || isCloser(t) || (!liveOffer && isPlainNo(t));
+        if (texts.length && texts.every(ends)) {
+          const why = texts.every((t) => isReaction(t)) ? "a reaction, not a text"
+            : texts.every((t) => isReaction(t) || isCloser(t)) ? "a closer, not a question" : "a no to our check-in — nothing to answer";
+          drop(f, row, why);
+          continue;
+        }
         // An earlier night already tried this text. If the bot stood down for
         // a reason (a bot-off tag, a live deal, "you have the thread"), that
         // reason is the row — not "nothing came of it". Otherwise try again,
@@ -249,8 +260,10 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         // by the next night.
         const h = redraftHistory(f);
         if (h.tries > 0) {
-          if (now - h.lastClaimAt < REDRAFT_RETRY_AFTER_MS && !h.outcome) { handToMatt(f, row, "a reply was started on an earlier run tonight"); continue; }
+          // Why it stood down comes first: "bot is off (tag: stop bot)" is the
+          // row, not "a reply was started" (Michael Lindekugel, 2026-09-29).
           if (h.held) { handToMatt(f, row, `the bot stood down: ${String(h.held.data?.reason || "held").slice(0, 160)}`); continue; }
+          if (now - h.lastClaimAt < REDRAFT_RETRY_AFTER_MS && !h.outcome) { handToMatt(f, row, "a reply was started on an earlier run tonight"); continue; }
           if (h.tries >= MAX_REDRAFT_TRIES) {
             handToMatt(f, row, `drafting was tried ${h.tries} nights running and produced no reply${h.outcome?.data?.reason ? ` (last: ${String(h.outcome.data.reason).slice(0, 120)})` : ""}`);
             continue;
