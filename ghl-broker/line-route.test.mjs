@@ -69,3 +69,23 @@ test("the audit's summary counts what fell off, not what waits on you", async ()
   assert.equal(s.deals, line.leaks.deals.total);
   assert.equal(s.total, line.leakTotal);
 });
+
+// What went wrong (2026-09-30, first read on prod): Postgres trims the offer
+// list to OFFER_LIST_FIELDS in SQL, which drops the ARV and the repairs, so
+// every deal without a written post-mortem scored as "no ARV" and fell out:
+// the Line showed 0 deals sold where Lessons showed 4. The JSON store keeps
+// them, which is why the test above passed.
+test("what buyers paid is read from the whole deal, not the offer list's trimmed row", async () => {
+  const { OFFER_LIST_FIELDS } = await import("./shared/offer-status.js");
+  const trim = (o) => Object.fromEntries(Object.entries(o || {}).filter(([k]) => OFFER_LIST_FIELDS.includes(k)));
+  const pgLike = new Proxy(store, {
+    get(t, k) {
+      if (k === "listOffers") return async (loc, opts = {}) => (await t.listOffers(loc, opts)).map((o) => (opts.lean ? trim(o) : o));
+      const v = t[k];
+      return typeof v === "function" ? v.bind(t) : v;
+    },
+  });
+  const line = await lineFor({ store: pgLike, locationId: LOC, saved: (await store.getOfferSettings(LOC)) || {} });
+  assert.deepEqual(line.pricing.sold, { n: 1, medianPct: 71 });
+  assert.deepEqual(line.pricing.rows.map((r) => r.street), ["3 Sold St"]);
+});
