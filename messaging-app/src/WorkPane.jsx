@@ -19,7 +19,7 @@ import { BTN, Pill, StatusMenu } from "./ui.jsx";
 import { RowOpsBar, SEV, feedbackItemOf, whenLabel } from "./RowOps.jsx";
 import { useOpenContact } from "./ContactLink.jsx";
 import { ghlContactUrl, setOfferStatus } from "./api.js";
-import { OfferPanelBody, useOfferSide, useRequote } from "./OfferPanel.jsx";
+import { OfferPanelBody, loadSiblings, siblingsKey, useOfferSide, useRequote } from "./OfferPanel.jsx";
 import ConversationPanel, { ConversationPanelBody } from "./ConversationPanel.jsx";
 import { IntentPill } from "./ConversationOutbox.jsx";
 import CoachIdeas, { coachKey, loadCoach } from "./CoachIdeas.jsx";
@@ -27,7 +27,7 @@ import CallButton from "./CallButton.jsx";
 import OfferEditorSheet from "./OfferEditorSheet.jsx";
 import { useRowFeedback } from "./RowFeedback.jsx";
 import { useLoad } from "./work-data.js";
-import { GROUP_LABEL, KEYS_HELP, KIND_LABEL, canDismissRow, groupOf, railLabel, teachRowId } from "./work-queue.js";
+import { GROUP_LABEL, KEYS_HELP, KIND_LABEL, canDismissRow, defaultOfferFor, groupOf, railLabel, teachRowId } from "./work-queue.js";
 
 const GROUP_CLS = { yours: "bg-blue-50 text-blue-800", stuck: "bg-amber-100 text-amber-800", machine: "bg-violet-100 text-violet-800" };
 const NAV = "rounded-lg border border-slate-300 bg-white p-1.5 text-slate-600 hover:bg-slate-50 disabled:cursor-default disabled:opacity-40";
@@ -160,6 +160,14 @@ export default function WorkPane({ item, targets, index, total, onPrev, onNext, 
   const [offerId, setOfferId] = useState(targets.offerId || null);
   const [editing, setEditing] = useState(null);     // { offer } | { offer: null } (a new one) | null
   const loaded = useOfferSide(bodies ? null : offerId);
+  // A row that names no offer (a reply to a text about nothing in
+  // particular) still has a person: show their offer, not "No offer yet".
+  const theirs = useLoad(bodies || targets.offerId || !targets.contactId ? null : siblingsKey(targets.contactId), loadSiblings(targets.contactId));
+  useEffect(() => {
+    if (offerId || !theirs.data) return;
+    const pick = defaultOfferFor(theirs.data, item.address || targets.draft?.propertyAddress || "");
+    if (pick) setOfferId(pick.id);
+  }, [theirs.data]);   // eslint-disable-line react-hooks/exhaustive-deps
   const fromBodies = bodies && (offerId === targets.offerId || !offerId ? bodies.offer : (bodies.siblings || []).find((o) => o.id === offerId) || null);
   const side = bodies
     ? { offer: fromBodies, siblings: bodies.siblings || [], replaced: null, loading: false, error: "", reload: () => {} }
@@ -213,7 +221,7 @@ export default function WorkPane({ item, targets, index, total, onPrev, onNext, 
       </div>
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <div className={`${tab === "offer" ? "block" : "hidden"} min-h-0 overflow-y-auto lg:block lg:border-r lg:border-slate-200`}>
-          <OfferPanelBody offer={side.offer} siblings={side.siblings} item={{ ...item, offerId }} loading={side.loading} error={side.error}
+          <OfferPanelBody offer={side.offer} siblings={side.siblings} item={{ ...item, offerId }} loading={side.loading || theirs.loading} error={side.error}
             replaced={side.replaced} onRequote={requote} requoting={requoting} onSelectOffer={setOfferId} onEdit={edit} />
         </div>
         <div className={`${tab === "conversation" ? "flex" : "hidden"} h-[65vh] min-h-0 flex-col lg:flex lg:h-auto`}>

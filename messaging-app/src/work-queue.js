@@ -8,6 +8,8 @@
 
 import { ACTION_GROUPS, ACTION_KINDS } from "@shared/pipeline.js";
 import { AUDIT_ACTION_KINDS } from "@shared/conversation-audit.js";
+import { annotateCurrent, houseKey } from "@shared/current-offer.js";
+import { OPEN_STATUSES, effectiveStatus } from "@shared/offer-status.js";
 
 export const GROUP_ORDER = ["yours", "stuck", "machine"];
 export const ALL_KINDS = [...ACTION_KINDS, ...AUDIT_ACTION_KINDS];
@@ -84,6 +86,26 @@ export function rowTargets(item, drafts = []) {
     draftId: draft?.id || null,
     draft,
   };
+}
+
+/**
+ * defaultOfferFor(offers, address) → offer | null
+ *
+ * The offer to show beside a row that doesn't name one: a held reply to "go
+ * through my business partner" carries no house, and the pane used to say
+ * "No offer yet" beside a thread about one of theirs (Jeffrey Valcik,
+ * 2026-09-29). Of their current offers: the one on the house the row names,
+ * else the most recently active live one, else the most recent of any.
+ * Drafts aren't offers.
+ */
+export function defaultOfferFor(offers = [], address = "") {
+  const current = annotateCurrent((offers || []).filter((o) => o && o.status !== "draft")).filter((o) => !o.supersededBy);
+  if (!current.length) return null;
+  const want = address ? houseKey(address) : "";
+  const named = want ? current.find((o) => houseKey(o.address || "") === want) : null;
+  if (named) return named;
+  const recent = [...current].sort((a, b) => String(b.statusAt || b.createdAt || "").localeCompare(String(a.statusAt || a.createdAt || "")));
+  return recent.find((o) => !o.deal && OPEN_STATUSES.has(effectiveStatus(o))) || recent[0];
 }
 
 // The Teach control's row id. A draft row is taught under its draft (the

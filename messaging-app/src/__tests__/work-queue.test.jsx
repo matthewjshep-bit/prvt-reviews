@@ -94,3 +94,33 @@ test("D dismisses the row, and draft and promise rows keep the Dismiss they alre
   expect(canDismissRow({ id: "draft_waiting:d1", kind: "draft_waiting", ops: [] })).toBe(false);
   expect(canDismissRow({ id: "promise:c1", kind: "promise_owed", ops: [{ key: "dismiss_promise" }] })).toBe(false);
 });
+
+/* ---------- a row with no offer on it still shows theirs (2026-09-29) ---------- */
+// Jeffrey Valcik's held reply ("go through my business partner") named no
+// house, so the row carried no offerId and the pane said "No offer yet" beside
+// a thread about 2002 1st Ave N.
+
+import { defaultOfferFor } from "../work-queue.js";
+import { OfferPanelBody } from "../OfferPanel.jsx";
+import { renderToStaticMarkup as markup } from "react-dom/server";
+import React from "react";
+
+const offerRow = (id, address, status, statusAt, over = {}) => ({ id, contactId: "c1", address, status, statusAt, createdAt: statusAt, cashAmount: 300000, ...over });
+
+test("a row with no offer shows the one on the house it names, else their liveliest", () => {
+  const book = [
+    offerRow("old", "2002 1st Ave N, Seattle, WA", "we_passed", "2026-09-28T17:00:00Z"),
+    offerRow("live", "9 Oak St, Kent, WA", "sent", "2026-09-20T17:00:00Z"),
+    offerRow("draft", "1 Elm St, Kent, WA", "draft", "2026-09-29T17:00:00Z"),
+  ];
+  expect(defaultOfferFor(book, "2002 1st Ave N").id).toBe("old");
+  expect(defaultOfferFor(book, "").id).toBe("live");
+  expect(defaultOfferFor([book[0]], "").id).toBe("old");
+  expect(defaultOfferFor([book[2]], "")).toBe(null);
+  expect(defaultOfferFor([], "")).toBe(null);
+});
+
+test("while their offers load, the pane doesn't say there are none", () => {
+  const html = markup(<OfferPanelBody offer={null} item={{ contactId: "c1" }} loading />);
+  expect(html).not.toContain("No offer yet");
+});

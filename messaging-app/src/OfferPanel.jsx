@@ -170,7 +170,8 @@ function OfferSwitcher({ book, selectedId, rowOfferId, name, onSelect }) {
  *   onRequote(offer, amount) → { error? }
  */
 export function OfferPanelBody({ offer, siblings = [], item = {}, loading = false, error = "", replaced = null, onRequote = null, requoting = false, onSelectOffer = null, onEdit = null }) {
-  if (!item.offerId && !offer) {
+  // Still looking for their offers (a row that names none): not "none" yet.
+  if (!item.offerId && !offer && !loading) {
     const startHref = item.contactId ? `${offerEditorUrl(null, { view: "new" })}&contact_id=${encodeURIComponent(item.contactId)}` : offerEditorUrl(null, { view: "new" });
     const cls = "mt-3 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700";
     return (
