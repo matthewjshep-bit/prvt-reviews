@@ -1138,6 +1138,60 @@ optional `at` (ISO, between the offer's creation and now) and `amount` (only
 with countered; it becomes `offer.counter`). A July pass marked in September
 keeps its July date, so its check-ins count from then.
 
+### One voice, a recorded yes, and room for replies (2026-09-29)
+
+**A machine text never talks over a reply that is waiting.** Until now every
+text the machine started (a nudge, a check-in, a float, a price drop, a
+promise) superseded whatever was in the contact's outbox, so a question held
+for you left Today and a canned text went out in its place. Now
+(`blockingDraft` in shared/follow-up.js, `draftWaitingOnYou` in
+ghl-broker/outbox-guard.js):
+
+- A reply to their text, or anything a person wrote (your check-in, your
+  answer on Today, the walkthrough ask, a queued deal text), holds every
+  machine-started text for that contact. The row's reason reads "their text
+  is waiting on you" or "your check-in to them is waiting in the outbox".
+- An older machine text nobody sent is still replaced by the next one.
+- A text that carries on from a reply may replace that reply and no other:
+  the realm check after their read, the re-quote on their numbers, and the
+  "never got a reply" check-in, which is the net under the draft it was made
+  for (`continues`).
+- A person pressing Float, or your answer on Today, replaces anything, as
+  before.
+- Every sweep asks before it claims its rung, so a text that waits spends
+  nothing and goes on a later run: the follow-up sweep, the promise, check-in
+  and address sweeps, the audit's nudges and re-quote, the held-underwrite
+  ask, the promise driver's float and the float timer. A float that waits is
+  not filed as skipped, so the timer floats it once the reply is dealt with.
+
+**A seller's yes at our number is an agreed price.** "The seller accepted"
+used to add the `seller-accepted` tag and warm the offer, and nothing else:
+the push to paper waits for an agreed price, so the offer kept its weekly
+"any update?". Now the reply agent checks the yes
+(`acceptanceAtOurNumber` in shared/auto-accept.js: sure, one house, no other
+number named, the thread's number is the offer's) and injects
+`mark_offer_agreed`, which is never wirable on a rule. It writes
+`offer.agreed {via: "acceptance"}` and a ledger line "accepted our offer — at
+N, not in writing yet". The price is locked, `hot_push` picks the offer up,
+and the Offers column says "Push to paper". A yes on an offer they passed on
+brings it back; a house we walked from is never brought back. It also writes
+`acceptanceSignal`, which the acceptance band's once-per-offer check had been
+reading while nothing wrote it.
+
+**Replies to people always have room.** `conversationAi.dailyCap` counts
+every draft of the day, but it only ever stopped replies. Machine-started
+texts now stop a reserve short of it (`REPLY_RESERVE_SHARE` 25%, at least
+`REPLY_RESERVE_MIN` 10): with the live cap of 400 the machine stops at 300 and
+the last 100 are for people who text us. Both constants are fixed, not
+settings. The day's count reads past the cap (it used to stop at 500 rows),
+and the band's daily count reads the whole day.
+
+**Nudges say only what's true.** An offer nothing went out on (no letter,
+nothing floated) is not nudged: the float timer owns it. A number floated by
+text is followed up from when it was floated, and the nudge, check-in and
+price-drop texts say "the number we floated", never "the offer we sent"
+(`whatWentOut` in reply-agent.js).
+
 ### Never more than our number (2026-09-28)
 
 Jesse, 39811 226th Ave SE, Enumclaw. Our offer was 550K, already over

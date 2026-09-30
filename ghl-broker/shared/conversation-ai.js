@@ -372,6 +372,9 @@ export const ACTION_LABEL = {
   requote_from_agent_numbers: "Re-run the numbers on what they told us",
   mark_offer_countered: "Mark their offer countered", mark_offer_passed: "Mark their offer passed",
   mark_offer_realm_yes: "Note on the offer that the number is in the realm",
+  // Injected by the reply agent only (never on a rule): the seller took our
+  // number, so the price is agreed and the push to paper starts.
+  mark_offer_agreed: "Note that the seller accepted our number",
   mark_investor_passed: "Mark them passed on the deal", mark_investor_committed: "Mark them the committed buyer",
   record_deal_feedback: "File what they said about the deal as feedback",
   revise_offer_to_counter: "Re-issue the offer at their number",

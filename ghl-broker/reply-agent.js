@@ -46,8 +46,9 @@ import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
-import { stepLabel, normalizeSteps } from "./shared/follow-up.js";
-import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN } from "./shared/auto-accept.js";
+import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
+import { draftWaitingOnYou } from "./outbox-guard.js";
+import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
@@ -181,16 +182,22 @@ const dayStartIso = (now = Date.now()) => {
   return d.toISOString();
 };
 
+// The share of the day's cap that only replies to people may use. Constants,
+// not settings: a save can't hand the machine the whole day.
+export const REPLY_RESERVE_SHARE = 0.25;
+export const REPLY_RESERVE_MIN = 10;
+
 // Drafts started today, from the STORE plus whatever is in flight — the same
 // shape as the underwriter's guard, for the same reason: a crash loop must not
 // hand a misconfigured workflow a fresh budget every restart.
-export async function countToday({ store, locationId, now = Date.now() }) {
+export async function countToday({ store, locationId, now = Date.now(), cap = 0 }) {
   const since = dayStartIso(now);
   const ids = new Set();
   for (const j of jobs.values()) {
     if (j.locationId === locationId && String(j.startedAt) >= since) ids.add(j.id);
   }
-  const rows = await store.listReplyDrafts(locationId, { since, limit: 500 }).catch(() => []);
+  // Newest first, so the read only has to reach past the cap to be exact.
+  const rows = await store.listReplyDrafts(locationId, { since, limit: Math.max(500, Math.round(Number(cap) || 0) + 1) }).catch(() => []);
   for (const d of rows) if (d?.jobId) ids.add(d.jobId);
   return ids.size;
 }
@@ -1029,7 +1036,9 @@ export async function prepareBooking({ client, store, locationId, contactId, par
 export async function bandReleasesToday({ store, locationId, now = Date.now(), kind = null }) {
   const d = new Date(now);
   const dayStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
-  const rows = await store.listReplyDrafts(locationId, { since: dayStart, limit: 500 }).catch(() => []);
+  // Every draft of the day: a blast day writes hundreds, and a release from
+  // the morning must still count against the band's cap in the evening.
+  const rows = await store.listReplyDrafts(locationId, { since: dayStart, limit: 5000 }).catch(() => []);
   // The investor band keeps its own daily count; the agent's count is
   // everything else, as it always was.
   return rows.filter((r) => r?.exception?.passed && (kind ? r.exception.kind === kind : r.exception.kind !== "investor_band")).length;
@@ -1108,11 +1117,7 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
   // as far as the arithmetic — see counterDollars. Same number, same rule,
   // both places; an acceptance that names one is still a counter, which is
   // what that check is for.
-  const shorthand = counterDollars(0, { message: job.message || "", reference: Math.round(Number(full?.cashAmount) || 0) });
-  const saidMoney = (t) => {
-    const out = moneyIn(t);
-    return shorthand > 0 && !out.includes(shorthand) ? [...out, shorthand] : out;
-  };
+  const saidMoney = moneySaidAgainst(job.message || "", full?.cashAmount);
   const args = { offer: full, draft, inboundMessage: job.message || "", settings: saved || {},
                  band, openOffers: open, releasedToday, now, moneyIn: saidMoney,
                  // A higher number we texted that the offer never moved to
@@ -1120,6 +1125,17 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
                  // a yes to the book (Jesse, 2026-09-25).
                  comeDown: full ? (ourComeDown(full, transcript) || ourMoveUp(full, transcript)) : null };
   return draft.intent === "acceptance" ? evaluateAcceptance(args) : evaluateCounterBand(args);
+}
+
+// Every figure they typed, read the way the counter band reads it: amounts
+// that look like money, plus a counter typed short ("go to 670") scaled
+// against our number. One reader for the band and for a recorded yes.
+function moneySaidAgainst(message = "", reference = 0) {
+  const shorthand = counterDollars(0, { message, reference: Math.round(Number(reference) || 0) });
+  return (t) => {
+    const out = moneyIn(t);
+    return shorthand > 0 && !out.includes(shorthand) ? [...out, shorthand] : out;
+  };
 }
 
 // Our number on the house a draft is about, from the offer book — the most
@@ -1674,7 +1690,7 @@ export async function startReply({
   // busy day — an operator who has decided to run without one gets to.
   const cap = config.dailyCap;
   if (cap > 0) {
-    const usedToday = await countToday({ store, locationId });
+    const usedToday = await countToday({ store, locationId, cap });
     if (usedToday >= cap) {
       return { skipped: `daily cap reached (${usedToday}/${cap})`, job: null };
     }
@@ -2007,7 +2023,7 @@ const outboundLabel = (kind) => String(kind || "").replace(/_/g, " ");
  */
 export async function startProactive({
   client, locationId, saved, store, contactId, kind = "realm_check",
-  offer = null, subject = null, sendsEnabled = false, deps = {}, personAsked = false,
+  offer = null, subject = null, sendsEnabled = false, deps = {}, personAsked = false, continues = null,
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
@@ -2018,6 +2034,27 @@ export async function startProactive({
   const playbook = config.parties?.[spec.party];
   if (!spec.enabled(playbook)) return { skipped: `${outboundLabel(kind)} is off for ${PARTY_LABEL[spec.party].toLowerCase()}s`, job: null };
   if (!contactId) return { skipped: "there is nobody to send it to", job: null };
+
+  // One voice at a time (outbox-guard.js). A text the machine starts never
+  // replaces a reply to their text, or a person's own draft, that is waiting
+  // in the outbox — only an older machine text, or the reply it carries on
+  // from (`continues`). `blocked` tells the caller it can try again once the
+  // waiting row is dealt with, rather than filing this as a dead end.
+  const machine = !personAsked && MACHINE_STARTED_KINDS.has(kind);
+  if (machine) {
+    const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues });
+    if (waiting) return { skipped: blockingReason(waiting), blocked: { draftId: waiting.id }, job: null };
+    // Replies to people always have room. The day's cap counts every draft,
+    // but was only ever enforced on replies — so a busy day of nudges and
+    // pulses could leave a person's text unanswered by evening. The machine
+    // stops a reserve short of the cap; a reply may use the whole of it.
+    const cap = Math.round(Number(config.dailyCap) || 0);
+    if (cap > 0) {
+      const reserve = Math.max(REPLY_RESERVE_MIN, Math.ceil(cap * REPLY_RESERVE_SHARE));
+      const used = await countToday({ store, locationId, cap });
+      if (used >= cap - reserve) return { skipped: `the rest of today's drafts are kept for people who text us (${used} of ${cap}; the last ${reserve} are theirs)`, job: null };
+    }
+  }
 
   // The realm check needs to know whether the agent has given us their read,
   // which lives on the contact's timeline rather than on the offer.
@@ -2058,7 +2095,7 @@ export async function startProactive({
   // person on the location's lane.
   const batched = Boolean(config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind));
   runOnLane(batched ? `${locationId}:machine` : locationId, () =>
-    runProactive(job, { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, subject, spec, config, dossier, deps: { ...deps, draft: deps.draft || draftReply } })
+    runProactive(job, { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, subject, spec, config, dossier, machine, continues, deps: { ...deps, draft: deps.draft || draftReply } })
       .catch(async (e) => {
         job.status = "error";
         job.error = String(e?.message || e).slice(0, 300);
@@ -2125,6 +2162,17 @@ export function leadsWithNumber({ offer = null, job = null, config = null } = {}
 
 // The descriptor the prompt reads for one outbound kind: everything the model
 // needs to write this particular message, and nothing about how it was chosen.
+// What of ours the agent actually has on a house: the letter ("paper"), a
+// number floated by text ("number"), or only our read of it ("read"). A nudge
+// on an offer that never went out used to say "we sent you an offer".
+export function whatWentOut(offer) {
+  if ((offer?.sends || []).some((s) => s?.ts)) return "paper";
+  if (offer?.proactive?.realmCheckAt) return "number";
+  if (offer?.proactive?.takeCheckAt) return "read";
+  // Marked sent by hand (it went outside the app): the letter.
+  return offer && offerStatus(offer) !== "new" ? "paper" : "";
+}
+
 function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
   const address = offer?.address || subject?.address || "the property";
   const step = subject?.step ?? null;
@@ -2146,7 +2194,7 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     return { ...base, address: offer?.address || subject?.address || "", question: String(subject?.question || "").slice(0, 300), answer: String(subject?.answer || "").slice(0, 600) };
   }
   if (kind === "passed_checkin") {
-    return { ...base, quiet: offerStatus(offer) === "no_response" };
+    return { ...base, quiet: offerStatus(offer) === "no_response", went: whatWentOut(offer) };
   }
   if (kind === "counter_nudge") {
     const theirs = Math.round(Number(offer?.counter?.amount) || 0);
@@ -2194,6 +2242,7 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
   }
   // The nudges. They carry what the message is ABOUT and no numbers at all.
   return { ...base,
+    ...(kind === "offer_nudge" || kind === "price_drop" ? { went: whatWentOut(offer) } : {}),
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
     lastTouchAt: subject?.lastTouchAt || null,
     ...(kind === "promise_due" ? { what: subject?.what || "answer", heldReason: subject?.heldReason || "", promisedText: subject?.promisedText || "", running: Boolean(subject?.running) } : {}),
@@ -2305,6 +2354,13 @@ async function runProactive(job, ctx) {
   for (const status of ["draft", "scheduled"]) {
     const rows = await store.listReplyDrafts(locationId, { contactId: job.contactId, status, limit: 5 }).catch(() => []);
     open.push(...rows);
+  }
+  // They may have texted while this was being written. Their reply, or a
+  // person's own draft, is never replaced by the machine's: stand down.
+  const blocker = ctx.machine ? blockingDraft(open, { continues: ctx.continues }) : null;
+  if (blocker) {
+    job.status = "held"; job.phase = ""; job.heldReason = blockingReason(blocker); job.finishedAt = new Date().toISOString();
+    return;
   }
   for (const old of open) {
     await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
@@ -2963,6 +3019,28 @@ async function runReply(job, ctx) {
     }
   }
 
+  // "The seller accepted", at our number: the price is agreed (routes/offers.js
+  // markOfferAgreed), which locks it and hands the offer to the push to paper.
+  // Until 2026-09-29 only the band and a realm yes wrote it, so a yes kept
+  // getting weekly "any update?" nudges. Not on a call (the transcript holds
+  // our side's numbers too), and not while the paper is held above.
+  if (party === "agent" && !isCall && !paperHold && draft.intent === "acceptance" && typeof deps.markOfferAgreed === "function") {
+    const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50 }).catch(() => []);
+    const open = currentOffers(rows).filter(isNegotiable);
+    const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
+    const yes = acceptanceAtOurNumber({
+      offer: picked, draft, inboundMessage: job.message || "", openOffers: open,
+      comeDown: picked ? (ourComeDown(picked, a.transcript) || ourMoveUp(picked, a.transcript)) : null,
+      moneyIn: moneySaidAgainst(job.message || "", picked?.cashAmount),
+    });
+    if (yes.ok) {
+      plan.auto.push({ id: `a-agreed-${job.id}`, type: "mark_offer_agreed", mode: "auto", status: "pending", party, offerId: picked.id,
+        why: "the seller accepted our number — the price is agreed and the push to paper starts" });
+    } else {
+      warnings.push(`the yes wasn't recorded as agreed: ${yes.reason}`);
+    }
+  }
+
   /* --- 3. nothing to say --- */
   if (draft.intent === "small_talk" && !draft.reply && !plan.auto.length && !plan.suggested.length) {
     job.status = "done";
@@ -3109,7 +3187,7 @@ async function runReply(job, ctx) {
     // unsaid, the realm check follows — the second half of "their read
     // before our price". The broker decides whether such an offer exists.
     if (typeof deps.afterAgentTake === "function") {
-      try { await deps.afterAgentTake({ contactId: job.contactId, address: draft.propertyAddress }); }
+      try { await deps.afterAgentTake({ contactId: job.contactId, address: draft.propertyAddress, draftId: record.id }); }
       catch (e) { warnings.push(`realm follow-up: ${String(e?.message || e).slice(0, 120)}`); }
     }
   }

@@ -180,9 +180,15 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
         const t = Math.max(r.due ? now : ms(r.at), touched == null ? 0 : touched + HOT_MIN_HOURS * HOUR_MS);
         candidates.push(out("hot_push", { at: sweepTime(t, sweepHour, weekends), label: rungText("Push to paper", r.step, ladders.hot_push.steps), who: whoFor("hot_push") }));
       } else ladderNote = "the push to paper ran out — the next move is a call";
-    } else if (ladders.offer_nudge?.enabled && ladders.offer_nudge.steps?.length) {
+    } else if (ladders.offer_nudge?.enabled && ladders.offer_nudge.steps?.length
+        // Nothing went out on it yet (no letter, nothing floated): not a
+        // nudge — the float below is its next move (follow-up-sweep.js
+        // agentCandidates skips it the same way).
+        && !(status === "new" && !(offer.sends || []).some((s) => s?.ts) && !offer.proactive?.realmCheckAt && !offer.proactive?.takeCheckAt)) {
       const L = ladders.offer_nudge;
-      const a = offerNudgeAnchor({ startedAt: offerNudgeStart(offer), lastInboundAt: times.lastInboundAt, lastHandledAt: times.lastHandledAt });
+      const onPaper = (offer.sends || []).some((s) => s?.ts);
+      const nudgeFrom = onPaper ? offerNudgeStart(offer) : (offer.proactive?.realmCheckAt || offer.proactive?.takeCheckAt || offerNudgeStart(offer));
+      const a = offerNudgeAnchor({ startedAt: nudgeFrom, lastInboundAt: times.lastInboundAt, lastHandledAt: times.lastHandledAt });
       if (a.waitingOnUs) ladderNote = "they replied and nothing has answered it";
       else {
         const sent = (offer.followUps || []).filter((f) => f?.kind === "offer_nudge" && (!a.reanchored || String(f.at || "") > a.startedAt)).map((f) => f.step);

@@ -69,7 +69,7 @@ import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../
 import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
-  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked,
+  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt } from "../shared/current-offer.js";
 import { planRequote } from "../shared/requote.js";
@@ -4153,14 +4153,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       client, locationId, saved: fresh, store, contactId: offer.contactId, kind,
       offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
     });
-    if (r.skipped) { console.log(`${kind} skipped for ${offer.id}: ${r.skipped}`); await markFloatSkipped(offer.id, kind, r.skipped); }
+    // A float that stood down because a reply is waiting on a person is not a
+    // dead end: it stays "priced, not floated", so the timers (or the driver)
+    // float it once that row is dealt with. Any other skip is filed with why.
+    if (r.skipped && r.blocked) console.log(`${kind} waiting for ${offer.id}: ${r.skipped}`);
+    else if (r.skipped) { console.log(`${kind} skipped for ${offer.id}: ${r.skipped}`); await markFloatSkipped(offer.id, kind, r.skipped); }
     else await markProactive(offer.id, kind);
     if (r.raise) {
       await createContactNote(client, offer.contactId, {
         body: `Underwrote ${offer.address} at ${fmtMoney(offer.cashAmount)}, above the ${fmtMoney(r.raise.amount)} we last texted there — nothing was texted. Yours to decide whether to go up (Float on the offer sends it).`,
       }).catch(() => {});
     }
-    return { skipped: r.skipped || null, kind, job: r.job || null };
+    return { skipped: r.skipped || null, blocked: r.blocked || null, kind, job: r.job || null };
   }
 
   // Every conversation's last message, newest first, straight from GHL — one
@@ -4345,14 +4349,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     },
     // The agent's read just came in. If an offer on that address had our
     // read floated and the price is still unsaid, the realm check goes now.
-    afterAgentTake: async ({ contactId, address }) => {
+    afterAgentTake: async ({ contactId, address, draftId = null }) => {
       const mine = (await currentOffersFor(locationId, contactId)).filter((o) => !o.deal && o.cashAmount > 0);
       const offer = pickDealByAddress(mine, address);
       if (!offer?.proactive?.takeCheckAt || offer.proactive?.realmCheckAt) return { started: false };
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
       const full = await store.getOffer(offer.id);
+      // The realm check IS the answer to the reply that carried their read, so
+      // it may take that reply's place (and no other waiting row's).
       const r = await startProactive({
-        client, locationId, saved: fresh, store, contactId, kind: "realm_check",
+        client, locationId, saved: fresh, store, contactId, kind: "realm_check", continues: draftId,
         offer: full || offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
       });
       if (r.skipped) { console.log(`realm check after take skipped for ${offer.id}: ${r.skipped}`); return { started: false, skipped: r.skipped }; }
@@ -4431,8 +4437,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // revision IS the record, exactly as it is for a hand-made one.
 
       let floated = false;
+      // The re-quote answers the reply that asked for it: it may replace that
+      // draft, never another row waiting in the outbox.
       const r = await startProactive({
-        client, locationId, saved: fresh, store, contactId, kind: "realm_check",
+        client, locationId, saved: fresh, store, contactId, kind: "realm_check", continues: draftId,
         offer: revised, subject: { requote: true, address: revised.address },
         sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
       });
@@ -4547,6 +4555,37 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         historyLine(ts, full.address, answer === "yes" ? "number in the realm" : "number not in the realm", dealStr(note, 120)),
         { type: answer === "yes" ? "realm_yes" : "realm_no", offerId: full.id, source: "conversation", at: ts });
       return { ok: true, address: full.address, answer: full.realm.answer };
+    },
+    // "The seller accepted": our number, agreed. The same lock a realm yes
+    // writes, so no re-quote or re-underwrite moves it and the push to paper
+    // (hot_push) picks the offer up. `acceptanceSignal` is what the acceptance
+    // band's once-per-offer check reads — until 2026-09-29 nothing wrote it.
+    // Only the reply agent injects this, after acceptanceAtOurNumber passed.
+    markOfferAgreed: async ({ contactId, offerId, draftId = null, note = "" }) => {
+      const full = offerId ? await store.getOffer(offerId) : null;
+      if (!full || full.locationId !== locationId || full.contactId !== contactId) return { ok: false, reason: "no such offer" };
+      if (full.deal) return { ok: false, reason: "it is already a deal" };
+      const status = effectiveStatus(full);
+      if (status === "we_passed" || status === "draft") return { ok: false, reason: `the offer is ${status.replace(/_/g, " ")}` };
+      const amount = Math.round(Number(full.cashAmount) || 0);
+      if (!(amount > 0)) return { ok: false, reason: "the offer has no number" };
+      const ts = new Date().toISOString();
+      if (priceLocked(full)) {
+        if (!full.acceptanceSignal?.at) { full.acceptanceSignal = { at: ts, draftId }; await store.updateOffer(full.id, full); }
+        const was = priceAgreed(full);
+        return { ok: true, unchanged: true, address: full.address, amount: Math.round(Number(was?.amount) || amount) };
+      }
+      full.agreed = { amount, at: ts, via: "acceptance", draftId };
+      full.acceptanceSignal = { at: ts, draftId };
+      // A yes to our number on an offer they had passed on, or gone quiet on,
+      // brings it back the way their counter would.
+      const revived = REVIVABLE_STATUSES.has(status);
+      if (revived) recordStatus(full, (full.sends || []).length ? "sent" : "new", "revived — they accepted our number", ts);
+      await store.updateOffer(full.id, full);
+      await appendDealHistory(client, locationId, contactId, "agent_deal_history",
+        historyLine(ts, full.address, STATUS_HISTORY_PHRASE.accepted, dealStr(`at ${fmtMoney(amount)}, not in writing yet${note ? ` — ${note}` : ""}`, 160)),
+        { type: "offer_accepted", offerId: full.id, source: "conversation", at: ts, data: { amount, via: "acceptance" } });
+      return { ok: true, address: full.address, amount, revived };
     },
     linkDealInterest: ({ contactId, addressHint }) =>
       linkInvestorInterest({ locationId, client, contactId, addressHint }),

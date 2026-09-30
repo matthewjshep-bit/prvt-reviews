@@ -381,3 +381,43 @@ test("with the driver switched on, the tick drives before it sweeps", async () =
   assert.equal(s.calls.length, 0, "the number went; 'still working on it' did not");
   assert.equal(r.driven, 1);
 });
+
+/* ---------- one voice: a waiting reply holds the machine (2026-09-29) ---------- */
+
+test("the 'never got a reply' check-in may take the place of the held reply it was the net for", async () => {
+  const store = fakeStore({
+    events: [request(48, { kind: "unanswered", phrase: "", dueAt: at(1), draftId: "d-held" })],
+    drafts: [{ id: "d-held", contactId: "c9", status: "draft", inbound: "any update on the house?", reply: "..." }],
+  });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 1, JSON.stringify(r.results));
+  assert.equal(s.calls[0].continues, "d-held", "it carries on from that draft, so it may replace it");
+});
+
+test("a check-in waits, unclaimed, while a different text of theirs is waiting on you", async () => {
+  const store = fakeStore({
+    events: [request(48, { kind: "unanswered", phrase: "", dueAt: at(1), draftId: "d-held" })],
+    drafts: [
+      { id: "d-held", contactId: "c9", status: "superseded", inbound: "any update on the house?" },
+      { id: "d-new", contactId: "c9", status: "draft", inbound: "also, is the 30 day close firm?", reply: "..." },
+    ],
+  });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0);
+  assert.match(r.results[0].reason, /their text is waiting on you/);
+  assert.equal(store.events.filter((e) => e.type === "checkin_sent").length, 0, "nothing claimed — the next tick looks again");
+});
+
+test("a promise we owe waits while their newer text is waiting on you", async () => {
+  const store = fakeStore({
+    events: [promise(6)],
+    drafts: [{ id: "d-in", contactId: "c1", status: "draft", inbound: "did you get a chance to run it?", reply: "..." }],
+  });
+  const s = starter();
+  const r = await runPromiseSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, listUnderwriteJobs: () => [] } });
+  assert.equal(s.calls.length, 0);
+  assert.equal(r.owed, 0, "not filed as owed while a person has the thread");
+  assert.match(r.results[0].reason, /their text is waiting on you/);
+});

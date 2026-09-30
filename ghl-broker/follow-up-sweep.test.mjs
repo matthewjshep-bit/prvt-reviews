@@ -625,3 +625,63 @@ test("an agent taking our number to the seller is nudged, not asked to write it 
   const yours = anOffer({ hot: { at: at(0), by: "operator", note: "close" } });
   assert.equal((await hotCandidates({ store: fakeStore({ offers: [yours] }), locationId: "LOC", config: cfg, now })).length, 1, "your flag is your call");
 });
+
+/* ---------- one voice: a waiting reply holds the machine (2026-09-29) ---------- */
+
+// Until this, the next machine text superseded whatever was waiting in the
+// outbox: a question held for a person left Today, and a canned check-in went
+// out in its place.
+const heldText = (over = {}) => ({ id: "h1", contactId: "c1", status: "draft", intent: "question",
+  inbound: "what would you do on the other one we talked about?", reply: "Let me look into it.", createdAt: at(5), updatedAt: at(5), ...over });
+
+test("a check-in waits while their text is held for you, and its rung isn't spent", async () => {
+  _resetJobs();
+  const passed = anOffer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }] });
+  const held = heldText();
+  const store = fakeStore({ offers: [passed], drafts: [held] });
+  const { job, started } = spySweep(store, { now: T0 + 10.2 * DAY, opts: { saved: CHECKIN_SAVED } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(started.length, 0, "nothing is drafted over their text");
+  assert.match(job.results.find((r) => r.kind === "passed_checkin").reason, /their text is waiting on you/);
+  assert.equal(store.events.filter((e) => e.type === "follow_up_sent").length, 0, "the rung is not claimed");
+
+  // Dealt with: the same rung goes on the next run.
+  held.status = "sent";
+  _resetJobs();
+  const again = spySweep(store, { now: T0 + 10.4 * DAY, opts: { saved: CHECKIN_SAVED } });
+  await settle();
+  assert.deepEqual(again.started.map((s) => [s.kind, s.subject.step]), [["passed_checkin", 10]]);
+});
+
+test("a check-in doesn't replace your own check-in waiting in the outbox", async () => {
+  _resetJobs();
+  const passed = anOffer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }] });
+  const mine = heldText({ id: "m1", inbound: "", intent: "check_in", outbound: { kind: "check_in", offerId: "o1", address: passed.address }, reply: "Any movement on 12 Elm?", createdAt: at(9), updatedAt: at(9) });
+  const store = fakeStore({ offers: [passed], drafts: [mine] });
+  const { job, started } = spySweep(store, { now: T0 + 10.2 * DAY, opts: { saved: CHECKIN_SAVED } });
+  await settle();
+  assert.equal(started.length, 0);
+  assert.match(job.results.find((r) => r.kind === "passed_checkin").reason, /your check-in to them is waiting in the outbox/);
+});
+
+test("an older machine nudge nobody sent doesn't hold the next one", async () => {
+  _resetJobs();
+  const passed = anOffer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }] });
+  const stale = heldText({ id: "n1", inbound: "", intent: "offer_nudge", outbound: { kind: "offer_nudge", offerId: "o1", address: passed.address }, reply: "Any update?", createdAt: at(-2), updatedAt: at(-2) });
+  const store = fakeStore({ offers: [passed], drafts: [stale] });
+  const { started } = spySweep(store, { now: T0 + 10.2 * DAY, opts: { saved: CHECKIN_SAVED } });
+  await settle();
+  assert.deepEqual(started.map((s) => [s.kind, s.subject.step]), [["passed_checkin", 10]]);
+});
+
+/* ---------- say only what's true about the offer (2026-09-29) ---------- */
+
+test("an offer nothing went out on is not nudged; a number floated by text is, from when it was floated", async () => {
+  const unsent = anOffer({ id: "u1", status: "new", sends: [], statusAt: at(0), createdAt: at(0) });
+  const floated = anOffer({ id: "f1", contactId: "c2", address: "40 Oak Ave, Kent, WA", status: "new", sends: [], statusAt: at(0), createdAt: at(0), proactive: { realmCheckAt: at(1) } });
+  const cfg = configWith();
+  const list = await agentCandidates({ store: fakeStore({ offers: [unsent, floated] }), locationId: "LOC", config: cfg, now: T0 + 6 * DAY });
+  assert.deepEqual(list.map((c) => c.offerId), ["f1"], "the unsent one is the float timer's");
+  assert.equal(list[0].startedAt, at(1), "counted from the float, not from when it was priced");
+});

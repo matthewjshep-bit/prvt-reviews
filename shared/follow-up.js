@@ -413,6 +413,48 @@ export function threadTimes(drafts = []) {
   };
 }
 
+/* ---------- one voice: the machine never talks over a waiting reply ---------- */
+
+// Every kind of text the machine starts on its own (ghl-broker/reply-agent.js
+// OUTBOUND_KINDS, less the answer a person types on Today). One of these may
+// replace an older one nobody sent: the next nudge standing in for the last
+// is still one voice. Anything else in the outbox answers THEM or is a
+// person's own: a reply to their text, your answer to a question the bot
+// couldn't field, your hand-written check-in, the walkthrough ask, a queued
+// deal text.
+export const MACHINE_STARTED_KINDS = new Set([
+  "outreach_open", "outreach_nudge", "take_check", "realm_check", "offer_nudge", "counter_nudge", "take_ask",
+  "hot_push", "passed_checkin", "promise_due", "price_drop", "checkin_due", "address_chase",
+  "blast_nudge", "dataroom_nudge", "buyer_pulse",
+]);
+
+// A draft that answers something they sent. Reply rows carry no outbound
+// kind — a photo-only text has an empty `inbound`, so the kind decides.
+export const answersInbound = (d) => !d?.outbound?.kind || Boolean(String(d?.inbound || "").trim());
+
+const OWN_DRAFT_WORD = { check_in: "check-in", partner_answer: "answer", showing_ask: "walkthrough ask", blast_open: "deal text" };
+
+/**
+ * blockingDraft(open, { continues }) → draft | null
+ *
+ * `open` is one contact's outbox. The row a machine-started text would talk
+ * over: waiting (draft or scheduled), not the machine's own, and not the
+ * reply this text carries on from — the re-quote that answers their numbers,
+ * the check-in that is the net under a held reply. Until 2026-09-29 every
+ * machine text superseded whatever was waiting, so a question held for a
+ * person left Today and a canned check-in went out in its place.
+ */
+export function blockingDraft(open = [], { continues = null } = {}) {
+  return (open || []).find((d) => d && (d.status === "draft" || d.status === "scheduled")
+    && d.id !== continues && !MACHINE_STARTED_KINDS.has(d.outbound?.kind)) || null;
+}
+
+/** Why the machine stood down, in the words a skipped row shows. */
+export function blockingReason(d) {
+  if (answersInbound(d)) return "their text is waiting on you — the machine won't talk over it";
+  return `your ${OWN_DRAFT_WORD[d?.outbound?.kind] || String(d?.outbound?.kind || "draft").replace(/_/g, " ")} to them is waiting in the outbox`;
+}
+
 /**
  * offerNudgeAnchor({ startedAt, lastInboundAt, lastHandledAt })
  *   → { startedAt, reanchored, waitingOnUs }

@@ -26,6 +26,7 @@ import { conversationConfig, startProactive as defaultStartProactive } from "./r
 import { recordEvent } from "./contact-record.js";
 import { getContact, searchOpportunities, listPipelines, createContactNote, removeContactTags, smsUnsubscribed } from "./ghl.js";
 import { UW_TAGS } from "./auto-underwrite.js";
+import { waitingReason } from "./outbox-guard.js";
 
 const iso = (t) => new Date(t).toISOString();
 const wait = (msec) => new Promise((r) => setTimeout(r, msec));
@@ -62,6 +63,12 @@ export async function carryOutHeldVerdict({ client, locationId, saved = {}, stor
   if (t?.action !== "rerun" && t?.action !== "ask") return { status: "skipped", reason: `nothing to carry out for "${t?.action}"`, jobId: null };
   const f = heldFinding(o, t, now);
   const contactId = o.contactId || "";
+  // The ask is a text the machine starts: it waits, unclaimed, while their
+  // text or your own draft is in the outbox.
+  if (t.action === "ask") {
+    const waiting = await waitingReason({ store, locationId, contactId });
+    if (waiting) return { status: "skipped", reason: waiting, jobId: null };
+  }
   const c = await recordEvent({
     store, locationId, contactId, party: "agent", type: "audit_action", at: iso(now), address: o.address || "", offerId: o.id,
     source: "sweep", dedupeKey: f.id, data: { kind: f.kind, action: f.action.type, why: t.reason, needs: t.needs || [] },

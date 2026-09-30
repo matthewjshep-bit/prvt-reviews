@@ -34,6 +34,7 @@ import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
 import { openPromises, resolvePromise, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
 import { threadHealth } from "./shared/thread-health.js";
 import { sameStreet } from "./shared/us-address.js";
+import { waitingReason } from "./outbox-guard.js";
 
 const HOUR_MS = 3600000;
 const iso = (ms) => new Date(ms).toISOString();
@@ -110,6 +111,12 @@ export async function driveOpenPromises({ client = null, locationId, saved = {},
         continue;
       }
 
+      // Floating the number is a text the machine starts: it waits, unclaimed,
+      // while their text or your own draft is in the outbox.
+      if (v.move === "send_number") {
+        const waiting = await waitingReason({ store, locationId, contactId: p.contactId });
+        if (waiting) { row.status = "waiting"; row.reason = waiting; continue; }
+      }
       // Claimed first, keyed on the promise: a second broker or the next tick
       // can never float or start it twice.
       const claim = await recordEvent({
