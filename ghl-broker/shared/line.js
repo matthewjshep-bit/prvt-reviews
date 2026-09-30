@@ -18,6 +18,7 @@
 // setting. Pure: every row and `now` are passed in.
 
 import { effectiveStatus, OPEN_STATUSES } from "./offer-status.js";
+import { offMarketStats } from "./off-market.js";
 
 const HOUR_MS = 3600000;
 const DAY_MS = 24 * HOUR_MS;
@@ -383,7 +384,7 @@ export function realizedPricing({ scorecards = [], settings = {} } = {}) {
 
 /**
  * buildLine({ week, month, offers, actions, agentPlan, buyerPlan, cursors, errors, scorecards, settings, targets, now })
- *   → { targets, stations, method, cycle, leaks, leakTotal, backlog, coverage, jobs, errors, pricing }
+ *   → { targets, stations, method, cycle, leaks, leakTotal, backlog, coverage, jobs, errors, pricing, sources }
  */
 export function buildLine({
   week = [], month = [], offers = [], actions = [], agentPlan = null, buyerPlan = null,
@@ -407,5 +408,8 @@ export function buildLine({
     jobs: lineJobs(cursors, { now }),
     errors: errorsByArea(errors),
     pricing: realizedPricing({ scorecards, settings }),
+    // Off-market vs listed (shared/off-market.js): our best deals, counted
+    // station by station — the last 90 days and all time.
+    sources: { days90: offMarketStats(offers, { now, days: 90 }), allTime: offMarketStats(offers, { now }) },
   };
 }

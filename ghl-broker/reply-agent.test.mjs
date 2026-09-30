@@ -4378,3 +4378,16 @@ test("an agent who offers deals again after the check-ins ended gets them again;
   const running = [{ type: "checkin_requested", at: iso(2 * 86400000), data: { kind: "source", dueAt: iso(-5 * 86400000), left: 3 } }];
   assert.equal((await run(running)).length, 0, "the chain already running keeps its own clock");
 });
+
+// Off-market (shared/off-market.js): an ask that actually went is written
+// down, whoever wrote it, so the next one waits a month.
+test("a sent text that asks an agent for off-market houses is recorded; a plain reply isn't", async () => {
+  const ask = { ...openDraft(), party: "agent", intent: "small_talk", reply: "Sounds good. If anything comes your way off market, I'd love a first look." };
+  const store = fakeStore([ask, { ...openDraft(), id: "d2", contactId: "c2", party: "agent", reply: "Thanks, talk soon." }]);
+  const client = { call: async () => ({ messageId: "m1" }) };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true });
+  const ev = await store.listContactEvents("LOC", "c1", { types: ["offmarket_asked"] });
+  assert.equal(ev.length, 1);
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", live: true });
+  assert.equal((await store.listContactEvents("LOC", "c2", { types: ["offmarket_asked"] })).length, 0);
+});

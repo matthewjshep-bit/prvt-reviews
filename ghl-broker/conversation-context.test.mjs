@@ -424,3 +424,13 @@ test("the offer book quotes one number per house and holds a superseded one", ()
   assert.ok(book.stale.includes(416500), "the July number is stale — a draft that says it is held");
   assert.ok(!book.amounts.includes(416500));
 });
+
+test("the agent context says when we last asked about off-market houses, and names one they brought us", () => {
+  const NOW2 = Date.parse("2026-09-30T20:00:00Z");
+  const fresh = buildAgentContext({ offers: [], custom: {}, now: NOW2, events: [] });
+  assert.match(fresh.text, /OFF-MARKET ASK: not asked in the last 30 days — you may ask once, lightly, at a natural close/);
+  const asked = buildAgentContext({ offers: [], custom: {}, now: NOW2, events: [{ type: "offmarket_asked", at: "2026-09-20T20:00:00Z" }] });
+  assert.match(asked.text, /OFF-MARKET ASK: we asked 10 days ago — don't ask again yet/);
+  const source = buildAgentContext({ offers: [{ id: "o1", address: "7022 NE 181st St, Kenmore, WA", status: "sent", cashAmount: 500000, createdAt: "2026-09-01T00:00:00Z", offMarket: { value: true, by: "you" } }], custom: {}, now: NOW2, events: [] });
+  assert.match(source.text, /They have brought us an off-market house before \(7022 NE 181st St\)/);
+});

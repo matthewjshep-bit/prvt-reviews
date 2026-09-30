@@ -2499,6 +2499,51 @@ switch between, rename, and delete from the batch picker (auto-named
    most recent batch (auto-creating one if none exists); pass `"batchId"` to
    target a specific batch.
 
+### Off-market first (2026-09-30)
+
+Matt: "our biggest success has been in agent-sourced off market properties…
+ask agents if they get off market properties please send our way, when we
+can ask them but not in an aggressive way… a way to mark offers as
+off-market and track those." The rules are `shared/off-market.js`.
+
+**The mark.** `offer.offMarket = { value, by: "you" | "machine", why, at }`,
+on the lean rows (`OFFER_LIST_FIELDS`).
+- You: the offer's status menu → "Off-market — an agent brought it to us" /
+  "Not off-market — it's listed" (`PATCH /api/offers/:id/off-market
+  { offMarket, note }`). Your mark always wins.
+- The machine, when an underwrite lands an offer (`offMarketSignals`): the
+  agent's own words — the text that started it or their recent lines — say
+  "pocket listing", "off market", "not listed yet", "coming soon", "hasn't
+  hit the MLS", "before it goes on the market", "private sale"; or Zillow
+  shows the house COMING_SOON or OFF_MARKET. Nothing said and a listing found
+  is left unmarked — never "listed" by guess. Our own lines never count.
+- The Offers tab: an "off-market" pill on the row and an Off-market filter.
+
+**Tracking.** Reports → Line → "Off-market vs listed": offers, in front of
+the agent, countered, price agreed, under contract, closed, and the share of
+offers that became contracts — last 90 days or all time, each house once —
+plus the agents who bring us off-market houses (`offMarketStats`).
+
+**Asking, gently.** At most once a month per agent (`OFF_MARKET_ASK_EVERY_DAYS`
+30), counted from `offmarket_asked` — written when a text that asks actually
+sends, from the bot (`sendReplyDraft`) or from you on Today (`hand-reply.js`),
+matched by `OFF_MARKET_ASK_RX` ("off market", "pocket listings", "before it
+hits the market", "first look").
+- The agent check-in's general and "the house they had with us" texts lean
+  their ask that way when one is due: "anything they come across before it
+  hits the market… we'd love a first look", as a favor, never a pitch.
+- Replies: the agent system prompt's OFF-MARKET block lets the bot ask once,
+  lightly, at a natural close (a house wasn't a fit, an offer died, they just
+  sent one, the thread winding down) — only when the context's OFF-MARKET ASK
+  line allows, never mid-negotiation, never claiming we have off-market deals.
+  The context also names an off-market house they brought us before.
+- The starter playbook's old rule "Never mention off-market deals" became
+  "never pitch 'off-market deals' or claim we have any… you may ask for those
+  lightly, at most once a month", and "Mention off-market deals" in the
+  agent's may-not list became "Claim we have off-market deals". The live
+  playbook needs the same two edits (Conversation AI tab), or its old rule
+  outvotes the ask.
+
 ### Every agent on a clock: the agent check-in (2026-09-29)
 
 Matt: "reach out to these agents proactively and frequently, every 3 weeks or

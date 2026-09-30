@@ -392,6 +392,8 @@ export const OFFER_LIST_FIELDS = [
   "statusHistory", "realm",
   // Heat (offerHeat): the hand-set flag and the agreed price it is derived from.
   "hot", "agreed", "pin", "paperHeld",
+  // Off-market (shared/off-market.js): {value, by, why, at} — our best deals.
+  "offMarket",
   // What the GHL Opportunities mirror last wrote ({ acquisitions, dispositions }),
   // so the reconcile can tell "unchanged" from a lean row.
   "mirror",

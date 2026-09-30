@@ -136,6 +136,18 @@ const COMMITMENTS = {
 // The records in the context are a memory of working together, not a file to
 // read back. This is what turns "we have your offer history" into "saw the
 // 123 Main offer didn't work out — anything else sitting that needs work?".
+// Matt, 2026-09-30: "our biggest success has been in agent-sourced off
+// market properties… ask agents if they get off market properties please
+// send our way, when we can ask them but not in an aggressive way". The
+// context's OFF-MARKET ASK line (conversation-context.js) says whether it's
+// been a month since we last asked.
+const OFF_MARKET_AGENT =
+  "OFF-MARKET: our best deals are houses agents bring us before they hit the market — off-market or pocket listings. " +
+  "Where it fits naturally — a house of theirs wasn't a fit, an offer of ours didn't work out, they just sent us one, or the " +
+  "thread is winding down warmly — you may ask once, lightly, whether they come across anything before it's listed, and say " +
+  "we'd love a first look. Only when the context's OFF-MARKET ASK line says you may; never mid-negotiation, never twice in a " +
+  "row, never as a pitch, and never claim we have off-market deals ourselves. What we buy is still houses that need work.";
+
 const CONTINUITY = {
   agent:
     "CONTINUITY: the offers and properties listed above are your memory of working with this person. They are a " +
@@ -219,6 +231,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     "if it were yesterday, and never anything that would read as surveillance or as a script."
   );
   if (CONTINUITY[party]) parts.push(CONTINUITY[party]);
+  if (party === "agent") parts.push(OFF_MARKET_AGENT);
   parts.push(COMMITMENTS[party] || COMMITMENTS.unknown);
   // The one commitment the calendar lets it keep. The times it may name are
   // handed to it per message under TIMES YOU MAY PROPOSE; the guard checks
@@ -673,13 +686,18 @@ export function outboundOpening(outbound) {
       const lh = o.lastHouse || null;
       const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
       const ago = (d) => (d == null ? "" : d <= 1 ? "a day ago" : `${d} days ago`);
+      // Off-market houses are our best deals: the ask leans that way, gently,
+      // at most once a month (shared/off-market.js offMarketAskDue).
+      const offAsk = o.offMarketAskDue
+        ? "anything they come across before it hits the market (off-market or a pocket listing) that needs work? We'd love a first look — ask it lightly, as a favor, never as a pitch."
+        : "anything coming up that needs work?";
       const why = o.reason === "fresh_listing" && l
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
           `Ask whether the seller would look at an as-is cash offer — we buy houses that need work. Name the street; never its price or any number.`
         : o.reason === "our_house" && h
         ? `Last time it was ${h.street}, which ${h.how === "closed" ? "closed" : h.how === "fell through" ? "fell through" : h.how === "never heard back" ? "we never heard back on" : "didn't work out"}. ` +
-          `Check in on THEM, not that house: anything else coming up that needs work, or anything off market?`
-        : `No house in particular. Check in: anything coming up that needs work, or anything off market they'd want a quick as-is buyer for?`;
+          `Check in on THEM, not that house: ${offAsk}`
+        : `No house in particular. Check in: ${offAsk}`;
       // What there is to mention, each with how long ago, so nothing old is
       // told as if it were last week.
       const material = cold ? [] : [

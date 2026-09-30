@@ -3308,6 +3308,23 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // Off-market (shared/off-market.js): mark a house as one the agent brought
+  // us off the market, or say it wasn't. Your mark always wins over the
+  // machine's, and the machine never overwrites it. Body: { offMarket: boolean, note? }.
+  router.patch("/:id/off-market", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { offer } = ctx;
+      const ts = new Date().toISOString();
+      const value = req.body?.offMarket !== false;
+      offer.offMarket = { value, by: "you", why: dealStr(req.body?.note, 160) || (value ? "you marked it off-market" : "you marked it listed"), at: ts };
+      offer.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer, offMarket: offer.offMarket });
+    } catch (err) { fail(res, err); }
+  });
+
   // Make this row the current offer on its house (shared/current-offer.js),
   // or hand the choice back to the rule. Body: { pin: true|false, note? }.
   // Pinning clears any pin on the agent's other rows on that house; a sibling

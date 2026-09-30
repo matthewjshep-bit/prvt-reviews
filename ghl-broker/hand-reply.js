@@ -16,6 +16,7 @@
 
 import { sendSms as defaultSendSms, removeContactTags as defaultRemoveContactTags } from "./ghl.js";
 import { recordEvent } from "./contact-record.js";
+import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { RA_TAGS } from "./reply-agent.js";
 import { HAND_REPLY_EVENT } from "./shared/thread-health.js";
 
@@ -59,5 +60,13 @@ export async function sendHandReply({ client = null, store, locationId, contactI
     source: "operator", ref: messageId, dedupeKey: `hand_reply:${who}:${messageId || ts}`,
     data: { messageId, chars: body.length, stoodAside: open.map((d) => d.id) },
   });
+  // You asked them for off-market houses yourself: the machine's next ask
+  // waits a month from yours (shared/off-market.js).
+  if (OFF_MARKET_ASK_RX.test(body)) {
+    await recordEvent({
+      store, locationId, contactId: who, party: "agent", type: "offmarket_asked", at: ts, source: "operator", ref: messageId,
+      dedupeKey: `offmarket_asked:${who}:${ts.slice(0, 10)}`, data: { by: "you" },
+    }).catch(() => {});
+  }
   return { ok: true, dryRun: false, standAside: open.length, messageId };
 }

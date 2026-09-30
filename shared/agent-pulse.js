@@ -37,6 +37,7 @@ import { threadTimes } from "./follow-up.js";
 import { nextFollowUp } from "./next-follow-up.js";
 import { IRRITATED_RX, PERSON_HAS_IT_DAYS, HAND_REPLY_EVENT } from "./thread-health.js";
 import { addressKey, sameStreet } from "./us-address.js";
+import { offMarketAskDue } from "./off-market.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -101,6 +102,7 @@ export const AGENT_PULSE_EVENT_TYPES = [
   "checkin_requested", "checkin_sent", "address_pending", "address_pending_closed", "subject_property_set", "address_chase_sent",
   "outreach_enrolled", "outreach_sent", "outreach_left", "workflow_enrolled", "workflow_left",
   "drive_stopped", "drive_resumed", "listing_off_market", "listing_back_on_market", "offer_sent",
+  "offmarket_asked",
 ];
 export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided"];
 // What counts as them having written back (store.lastContactActivity with
@@ -448,6 +450,8 @@ export function agentPulseSubject({ agent = {}, verdict = {}, now = Date.now() }
     lastHouse: newest ? { street: street(newest.address), how: houseHow(newest), daysAgo: ms(at(newest)) != null ? Math.max(0, Math.floor((now - ms(at(newest))) / DAY_MS)) : null } : null,
     aboutThem: factList(agent.facts, "personal_details", now),
     areas,
+    // Asked about off-market houses in the last month? Then not this time.
+    offMarketAskDue: offMarketAskDue(agent.events || [], now),
   };
 }
 

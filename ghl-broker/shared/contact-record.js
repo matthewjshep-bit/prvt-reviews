@@ -65,6 +65,9 @@ export const EVENT_TYPES = [
   // A GHL workflow the app put them in or took them out of (conversation
   // actions), so the pulse knows who a drip already has.
   "workflow_enrolled", "workflow_left",
+  // We asked an agent for off-market houses, in a text that went (bot or
+  // you) — the next ask waits a month (shared/off-market.js).
+  "offmarket_asked",
   // A new agent was put into a GHL outreach workflow by id — GHL sends the
   // texts, so this is the only record the app has that we reached out.
   // data.kind "first" (the import) or "followup" (outreach-followup.js).
@@ -109,6 +112,7 @@ export const EVENT_LABEL = {
   agent_pulse_sent: "a check-in was started", agent_pulse_texted: "we checked in", agent_pulse_voided: "a check-in drafted nothing",
   listing_pinged: "we asked about their listing", listing_ping_voided: "a listing text drafted nothing",
   workflow_enrolled: "added to a GHL workflow", workflow_left: "taken out of a GHL workflow",
+  offmarket_asked: "we asked about off-market houses",
   deal_promoted: "under contract", deal_stage: "deal stage changed",
   investor_evaluating: "evaluating the deal", investor_committed: "committed buyer", investor_passed: "passed on the deal",
   feedback: "feedback on the deal", row_feedback: "you told the bot what it should have done",
@@ -162,6 +166,7 @@ export const EVENT_ICON = {
   agent_pulse_sent: "BellRing", agent_pulse_texted: "MessageSquare", agent_pulse_voided: "Clock",
   listing_pinged: "Crosshair", listing_ping_voided: "Clock",
   workflow_enrolled: "Workflow", workflow_left: "LogOut",
+  offmarket_asked: "Crosshair",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

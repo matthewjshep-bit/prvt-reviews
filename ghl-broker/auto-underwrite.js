@@ -38,6 +38,7 @@ import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenova
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
 import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
+import { offMarketSignals } from "./shared/off-market.js";
 import { addressKey, completeAddress, sameStreet, sameHouse } from "./shared/us-address.js";
 import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed } from "./shared/offer-status.js";
 import { expandListingLinks } from "./listing-links.js";
@@ -1259,6 +1260,9 @@ async function runUnderwrite(job, ctx) {
       });
       transcript = t.text || "";
     } catch { /* missing conversations.readonly — the message alone usually carries the address */ }
+    // Their words about how it's being sold ("pocket listing", "not listed
+    // yet"), for the off-market mark on the offer this run lands.
+    job.offMarketCue = offMarketSignals({ message: job.message, transcript });
 
     extraction = { ...(await extractRequest({ message: job.message, transcript, aiApiKey })), source: "conversation" };
     // An asking price named in the workflow still wins: it comes off a field
@@ -1809,6 +1813,11 @@ async function runUnderwrite(job, ctx) {
     ...(rescued ? { basis: "agent_numbers", rescuedFrom: gate.held.slice(0, 4) } : {}),
     ...(nonCore ? { nonCore: true } : {}),
   };
+  // Off-market (shared/off-market.js): the agent said so, or Zillow shows it
+  // coming soon or not listed. Our best deals — marked the moment they land.
+  // A mark you set by hand is never overwritten.
+  const offSignal = job.offMarketCue || offMarketSignals({ listing: got.listing });
+  if (offSignal && offer.offMarket?.by !== "you") offer.offMarket = { ...offSignal, by: "machine", at: new Date().toISOString() };
   await store.updateOffer(offer.id, offer).catch(() => {});
   if (rescued) job.held = [rescued.basis];
 
