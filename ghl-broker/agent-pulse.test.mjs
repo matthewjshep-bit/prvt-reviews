@@ -201,3 +201,31 @@ test("a preview drafts the next check-ins without a claim, a draft row or a send
   assert.equal(events.some((e) => e.type === "agent_pulse_sent"), false, "nobody claimed");
   assert.deepEqual(await store.listReplyDrafts(loc, { contactId: "ag6", limit: 5 }), [], "nothing in the outbox");
 });
+
+test("an agent skipped before the claim (unsubscribed) hands the day's seat to the next in line", async () => {
+  _resetJobs();
+  const loc = "loc-ap-spare";
+  await repliedAgent(loc, "ag7a");
+  await repliedAgent(loc, "ag7b");
+  const started = [];
+  const job = startAgentPulse({ client, locationId: loc, saved: savedWith({ dailyCap: 1 }), store,
+    deps: {
+      getContact: async (id) => (id === "ag7a" ? { id, phone: "+12065550103", dndSettings: { SMS: { status: "permanent" } } } : { id, phone: "+12065550104", tags: [] }),
+      startProactive: async (args) => { started.push(args.contactId); return { job: { id: "j", draftId: "d" } }; },
+    } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(started, ["ag7b"], JSON.stringify(job.results));
+  assert.equal(job.started, 1);
+  assert.equal(job.results.find((r) => r.contactId === "ag7a").detail, "they unsubscribed");
+});
+
+test("a sample that would be skipped doesn't use up the samples", async () => {
+  _resetJobs();
+  const loc = "loc-ap-sample-skip";
+  await repliedAgent(loc, "ag8a");
+  await repliedAgent(loc, "ag8b");
+  const r = await previewAgentPulse({ client, locationId: loc, saved: savedTier({ dailyCap: 1 }), store, limit: 1,
+    deps: { previewProactive: async ({ contactId }) => (contactId === "ag8a" ? { skipped: "they unsubscribed (DND in GHL) — nothing is drafted" } : { contactName: "Agent", reply: "Hi, anything coming up that needs work?", held: false, flags: [] }) } });
+  assert.deepEqual(r.previews.map((p) => [p.contactId, Boolean(p.reply), p.skipped ? "skipped" : ""]), [["ag8a", false, "skipped"], ["ag8b", true, ""]]);
+});

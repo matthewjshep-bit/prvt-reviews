@@ -244,3 +244,14 @@ test("a listing the outreach opener already asked them about isn't raised again 
   const other = agent({ lastInboundAt: ago(29), listings: [listing()], events: replied("9 Oak St, Kent, WA 98031") });
   assert.equal(evaluateAgent(other, ctx()).pulseReason, "fresh_listing", "a different listing is still news");
 });
+
+// 2026-09-30, the second samples: one of three picks was unsubscribed in GHL.
+// The runner finds that out only when it reads the contact, before the claim;
+// the next agents in line wait as spares so the day's seat isn't wasted.
+test("the next agents due wait as spares beyond the day's seats", () => {
+  const due = ["ag-a", "ag-b", "ag-c"].map((id) => agent({ contactId: id, lastInboundAt: ago(60) }));
+  const r = pickPulseAgents({ agents: due, settings: S, config: CONFIG, houses: { live: new Set(), walked: new Map() }, seats: 1, now: NOW });
+  assert.deepEqual(r.picks.map((p) => p.contactId), ["ag-a"]);
+  assert.deepEqual(r.spares.map((p) => p.contactId), ["ag-b", "ag-c"]);
+  assert.equal(r.spares[0].subject.reason, "general");
+});

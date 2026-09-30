@@ -2588,6 +2588,14 @@ conversation summary. A stranger gets the listing. `pulse.voice` (Settings,
 drafts the next ones from their real threads with the saved settings —
 `reply-agent.js previewProactive`, which writes nothing and sends nothing.
 
+**Spares.** The plan keeps the next few agents due beyond the day's seats
+(`spares`). One skipped before its claim — unsubscribed in GHL, tagged off,
+no phone — hands its seat to the next in line, as the buyer check-in does; and
+a sample that wouldn't be drafted is shown with why while the next one is
+written in its place. A listing the outreach first text already asked about
+(`outreach_enrolled` / `outreach_sent` address, matched by number and street)
+is never raised again as new.
+
 **Turning it on.** Delete the text steps in the GHL TIER 2/3 workflows. Save
 your voice notes and read the samples. Tick "Check in with every agent", then
 Count and Take everyone out of the drips. Read a day of drafts, and only then
