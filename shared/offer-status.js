@@ -301,6 +301,23 @@ export function offerHeat(offer) {
 export const isHot = (offer) => Boolean(offerHeat(offer));
 
 /**
+ * pushesToPaper(offer) → boolean
+ *
+ * Whether the push-to-paper ladder may ask them to write it up. Hot is wider
+ * than that: "presenting" (they're taking our number to the seller) and
+ * "warm" put an offer in the Hot lane, but nobody has said yes, and asking an
+ * agent to write up an offer the seller hasn't seen is getting ahead of them
+ * (four offers, 2026-09-29). A yes is an agreed price, their saying they're
+ * writing it up, or your own flag. Until then the offer ladder keeps it.
+ */
+export function pushesToPaper(offer) {
+  const heat = offerHeat(offer);
+  if (!heat) return false;
+  if (heat.by === "you" || priceAgreed(offer)) return true;
+  return heat.signal === "writing_up";
+}
+
+/**
  * dealOutreachPaused(deal) → { status, name, contactId } | null
  *
  * Somebody is probably taking this one, so stop shopping it. Blasts, the

@@ -52,7 +52,7 @@ import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, mac
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, isHot, isNegotiable } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
 import { sameStreet } from "./shared/us-address.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
@@ -1856,7 +1856,7 @@ export const OUTBOUND_KINDS = {
     ready: ({ offer }) => {
       if (!offer?.address) return "no offer to push";
       if (offer.deal) return "it became a deal";
-      if (!isHot(offer)) return "no price is agreed on it";
+      if (!pushesToPaper(offer)) return "no price is agreed on it";
       return true;
     },
     floats: ({ offer }) => [Math.round(Number(offer?.cashAmount) || 0)].filter(Boolean),

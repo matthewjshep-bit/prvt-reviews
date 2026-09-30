@@ -21,7 +21,7 @@
 //   The dedupe key is still the real defence — the cursor just stops us
 //   spending model calls on drafts that would be superseded anyway.
 
-import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreachPausedReason, isHot, offerHeat } from "./shared/offer-status.js";
+import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreachPausedReason, pushesToPaper, offerHeat } from "./shared/offer-status.js";
 import { addressKey } from "./shared/us-address.js";
 import { sameStreet } from "./shared/us-address.js";
 import { supersededIds } from "./shared/current-offer.js";
@@ -115,8 +115,8 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     if (!OPEN_STATUSES.has(effectiveStatus(o))) continue;  // the mirror was stale
     if (!isTheOfferToAskAbout(o, byProperty.get(propertyKeyOf(o)) || [])) continue;
     // A price is agreed: the hot push has it, and two ladders would be two
-    // texts about one house.
-    if (hotLadderOn && isHot(o)) continue;
+    // texts about one house. Hot on "presenting" alone stays here until a yes.
+    if (hotLadderOn && pushesToPaper(o)) continue;
     // Its expiry date is not checked: the offer stands until they answer, and
     // asking about it is the follow-up, not a re-offer.
     // Count from the last time we actually put it in front of them.
@@ -218,8 +218,8 @@ export async function passedCandidates({ store, locationId, config, now = Date.n
  * hotCandidates({ store, locationId, config, now }) → [candidate]
  *
  * Open offers with an agreed price and no deal (shared/offer-status.js
- * isHot). The ladder counts from the later of when it went hot and when THEY
- * last wrote: a reply is the agent working it, so the push starts over from
+ * pushesToPaper — a yes, not just warmth). The ladder counts from the later
+ * of when it went hot and when THEY last wrote: a reply is the agent working it, so the push starts over from
  * there, with a subject id that carries the anchor day so the restarted
  * rungs get fresh claims. Rungs sent before the anchor belong to the old one.
  */
@@ -235,7 +235,7 @@ export async function hotCandidates({ store, locationId, config, now = Date.now(
     // A hot flag on a superseded row (13041 SE 208th St's July row was
     // flagged "writing it up") must not push a write-up at its number.
     if (replaced.has(o.id)) continue;
-    if (!OPEN_STATUSES.has(effectiveStatus(o)) || !isHot(o)) continue;
+    if (!OPEN_STATUSES.has(effectiveStatus(o)) || !pushesToPaper(o)) continue;
     const heat = offerHeat(o);
     const hotAt = heat?.at || o.counterBand?.acceptedAt || o.realm?.ts || o.statusAt || o.createdAt;
     if (!hotAt) continue;

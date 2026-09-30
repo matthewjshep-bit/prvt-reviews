@@ -35,6 +35,7 @@ import {
   toListOffer,
   INVESTOR_STATUSES, WORKING_INVESTOR_STATUSES, investorStatus,
   dealOutreachPaused, dealSpokenFor, outreachPausedReason, priceAgreed, priceLocked,
+  pushesToPaper,
 } from "./offer-status.js";
 
 const iso = (d) => d.toISOString();
@@ -351,4 +352,15 @@ test("on a deal means committed, or evaluating while nobody has committed yet â€
     { contactId: "e", status: "committed" },
   ];
   assert.deepEqual([...buyersInPlay(taken)], ["e"], "once a buyer commits, the others aren't evaluating any more");
+});
+
+test("only a yes pushes to paper: presenting is hot but waits", () => {
+  const at = "2026-09-29T17:00:00.000Z";
+  const base = { id: "o", status: "sent", cashAmount: 300000 };
+  assert.equal(pushesToPaper({ ...base, hot: { at, by: "conversation", signal: "presenting" } }), false);
+  assert.equal(pushesToPaper({ ...base, hot: { at, by: "conversation", signal: "warm" } }), false);
+  assert.equal(pushesToPaper({ ...base, hot: { at, by: "conversation", signal: "writing_up" } }), true);
+  assert.equal(pushesToPaper({ ...base, hot: { at, by: "operator" } }), true);
+  assert.equal(pushesToPaper({ ...base, realm: { answer: "yes", ts: at } }), true);
+  assert.equal(pushesToPaper({ ...base, status: "passed", hot: { at, by: "operator" } }), false, "a dead offer is cold");
 });

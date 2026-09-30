@@ -607,3 +607,21 @@ test("a passed house that sold stops getting check-ins", async () => {
   assert.equal(started.length, 0);
   assert.match(job.results.find((r) => r.kind === "passed_checkin").reason, /off the market/);
 });
+
+// 2026-09-29: four offers went hot the day the agent said they'd take our
+// number to the seller, and the push-to-paper ladder was about to ask each of
+// them to write it up — before the seller had said anything.
+test("an agent taking our number to the seller is nudged, not asked to write it up", async () => {
+  const now = T0 + 2 * DAY;
+  const presenting = anOffer({ hot: { at: at(0), by: "conversation", signal: "presenting", note: "taking it to the seller" } });
+  const cfg = HOT_SAVED.conversationAi;
+  assert.deepEqual(await hotCandidates({ store: fakeStore({ offers: [presenting] }), locationId: "LOC", config: cfg, now }), []);
+  const nudges = await agentCandidates({ store: fakeStore({ offers: [presenting] }), locationId: "LOC", config: cfg, now: T0 + 4 * DAY });
+  assert.deepEqual(nudges.map((c) => c.kind), ["offer_nudge"], "it stays on the offer ladder until there's a yes");
+  const yes = anOffer({ hot: presenting.hot, realm: { answer: "yes", ts: at(1) } });
+  assert.equal((await hotCandidates({ store: fakeStore({ offers: [yes] }), locationId: "LOC", config: cfg, now })).length, 1, "a yes starts the push");
+  const writing = anOffer({ hot: { at: at(0), by: "conversation", signal: "writing_up" } });
+  assert.equal((await hotCandidates({ store: fakeStore({ offers: [writing] }), locationId: "LOC", config: cfg, now })).length, 1, "writing it up is a yes");
+  const yours = anOffer({ hot: { at: at(0), by: "operator", note: "close" } });
+  assert.equal((await hotCandidates({ store: fakeStore({ offers: [yours] }), locationId: "LOC", config: cfg, now })).length, 1, "your flag is your call");
+});
