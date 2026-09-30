@@ -1241,6 +1241,12 @@ classification, post-mortems and the coach were never metered.
   `buybox_parse`, `buyer_rank`, `classify_party`, `post_mortem`, `coach`.
 - Read it at `GET /api/offers/automations/ai-spend?days=N`. The last section
   of `node scripts/ai-usage-report.mjs` prints it.
+- **Drafts moved to Sonnet 5** (`REPLY_MODEL`). The case for it was 420
+  drafts side by side with Opus 5: same intent 80%, same needs-a-person 87%,
+  42% of the cost, and every number above ours caught by the gates. Sonnet
+  has no server-side fallback, so `callDraftModel` writes a declined draft
+  once more on Opus 5 (`REFUSAL_RETRY_MODEL`). The shadow stops by itself,
+  because it only runs when its model differs from `REPLY_MODEL`.
 - `classifyParty` set `output_config` twice. The second one (format only)
   dropped effort "low", so the call ran at the default. It is one object now.
 

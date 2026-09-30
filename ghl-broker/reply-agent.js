@@ -266,7 +266,12 @@ export function shadowRow(shadow, gateFor) {
 
 // The model every real draft runs on. The shadow (config.ai) is how a cheaper
 // one earns this spot: on live traffic, beside it, before it replaces it.
-export const REPLY_MODEL = "claude-opus-5";
+// Sonnet 5 earned it on 2026-09-30: 420 drafts beside Opus 5 — same intent
+// 80%, same needs-a-person 87%, 42% of the cost, and every number above ours
+// caught by the gates. Matt: "do everything".
+export const REPLY_MODEL = "claude-sonnet-5";
+// Where a draft Sonnet declines goes: Opus, with its server-side fallback.
+export const REFUSAL_RETRY_MODEL = "claude-opus-5";
 export const SHADOW_GRACE_MS = 20_000;
 
 // Plain check-ins with no number, no negotiation and no terms in them — the
@@ -314,9 +319,15 @@ export async function callDraftModel(client, params, { batch = null } = {}) {
       console.log(`draft batch fell back to a direct call: ${String(e?.message || e).slice(0, 120)}`);
     }
   }
-  const response = withFallbacks(params.model)
-    ? await client.beta.messages.create({ ...params, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" })
-    : await client.messages.create(params);
+  const direct = (p) => (withFallbacks(p.model)
+    ? client.beta.messages.create({ ...p, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" })
+    : client.messages.create(p));
+  let response = await direct(params);
+  // Sonnet carries no server-side fallback, so a draft it declines would just
+  // fail. It is written once more on Opus, which has its own.
+  if (response?.stop_reason === "refusal" && !withFallbacks(params.model)) {
+    response = await direct({ ...params, model: REFUSAL_RETRY_MODEL });
+  }
   return { response, batched: false };
 }
 

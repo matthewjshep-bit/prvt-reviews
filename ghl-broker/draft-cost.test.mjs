@@ -32,9 +32,10 @@ test("a batched draft comes back marked batched; a failed or refused batch draft
   assert.equal(ok.batched, true);
   assert.equal(calls.length, 0);
 
-  const failed = await callDraftModel(fakeClient(calls), params(), { batch: { enqueue: async () => { throw new Error("batch not done in 15 min"); } } });
+  const opus = { ...params(), model: "claude-opus-5" };
+  const failed = await callDraftModel(fakeClient(calls), opus, { batch: { enqueue: async () => { throw new Error("batch not done in 15 min"); } } });
   assert.equal(failed.batched, false);
-  assert.deepEqual(calls.at(-1), ["beta", "claude-opus-5", true], "the direct call keeps the refusal fallback");
+  assert.deepEqual(calls.at(-1), ["beta", "claude-opus-5", true], "an Opus direct call keeps the refusal fallback");
 
   const refused = await callDraftModel(fakeClient(calls), params(), { batch: { enqueue: async () => ({ stop_reason: "refusal" }) } });
   assert.equal(refused.batched, false);
@@ -50,4 +51,22 @@ test("the shadow model is called plainly, and its draft is judged by the real ga
   assert.deepEqual(row.flags, ["too long"]);
   assert.deepEqual(shadowRow({ model: "claude-sonnet-5", error: "429" }, () => ({})), { model: "claude-sonnet-5", error: "429" });
   assert.equal(shadowRow(null, () => ({})), null);
+});
+
+// 2026-09-30: four days of Sonnet 5 beside Opus 5 on the same 420 messages —
+// same intent 80%, same needs-a-person 87%, 42% of the cost, every number
+// above ours caught by the gates. Matt: "do everything".
+test("drafts run on Sonnet 5, the model the side-by-side proved", () => {
+  assert.equal(REPLY_MODEL, "claude-sonnet-5");
+});
+
+test("a draft Sonnet declines is written again on Opus, with Opus's own fallback", async () => {
+  const calls = [];
+  const client = {
+    beta: { messages: { create: async (p) => { calls.push(["beta", p.model, Boolean(p.fallbacks)]); return { stop_reason: "end_turn", model: p.model, content: [], usage: {} }; } } },
+    messages: { create: async (p) => { calls.push(["plain", p.model]); return { stop_reason: "refusal", model: p.model, content: [], usage: {} }; } },
+  };
+  const r = await callDraftModel(client, params());
+  assert.deepEqual(calls, [["plain", "claude-sonnet-5"], ["beta", "claude-opus-5", true]]);
+  assert.equal(r.response.model, "claude-opus-5", "the usage row prices the call that answered");
 });
