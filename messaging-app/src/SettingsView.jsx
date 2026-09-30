@@ -8,7 +8,7 @@ import {
   CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
-import { getBuyerPulse, runBuyerPulse, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
+import { getBuyerPulse, runBuyerPulse, getAgentPulse, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
@@ -86,6 +86,46 @@ function BuyerPulsePreview() {
         <ul className="mt-2 space-y-0.5 text-xs text-slate-600">
           {state.job.results.map((r) => (
             <li key={r.contactId}><span className="font-medium text-slate-800">{r.name || r.contactId}</span> · {r.group === "conversed" ? "talked before" : "never replied"} · {clue(r.clues || {})}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+// The agent check-in's plan for today, straight from the broker: who, why,
+// and who it left alone. Nothing is drafted or sent.
+const PULSE_REASON_WORDS = { fresh_listing: "their new listing", our_house: "the house they had with us", general: "anything coming up" };
+function AgentPulsePreview() {
+  const [state, setState] = useState({ busy: false, error: "", plan: null });
+  const preview = async () => {
+    setState((s) => ({ ...s, busy: true, error: "" }));
+    try { setState({ busy: false, error: "", plan: await getAgentPulse() }); }
+    catch (e) { setState((s) => ({ ...s, busy: false, error: e.message || "preview failed" })); }
+  };
+  const c = state.plan?.counts;
+  const owned = c ? Object.values(c.owned || {}).reduce((a, b) => a + b, 0) : 0;
+  const stopped = c ? Object.values(c.stopped || {}).reduce((a, b) => a + b, 0) : 0;
+  return (
+    <div>
+      <button type="button" onClick={preview} disabled={state.busy}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium hover:bg-slate-50 disabled:opacity-50">
+        {state.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Preview today's check-ins
+      </button>
+      <span className="ml-2 text-xs text-slate-500">Uses the saved settings. Nothing is drafted or sent.</span>
+      {state.error ? <p className="mt-2 text-xs text-red-600">{state.error}</p> : null}
+      {c ? (
+        <p className="mt-2 text-xs text-slate-600">
+          {c.pool.toLocaleString()} agents: {c.bySegment.partner} you've done business with, {c.bySegment.engaged.toLocaleString()} who've written back, {c.bySegment.cold.toLocaleString()} who never have.
+          {" "}Due today: {c.due.fresh_listing} about a new listing, {c.due.our_house} about a house they had with us, {c.due.general} just checking in{c.dueNoSeat ? ` (${c.dueNoSeat} wait for a seat)` : ""}.
+          {" "}Left alone: {owned.toLocaleString()} another clock has, {c.notDue.toLocaleString()} not due, {stopped} stopped, {c.coldDropped} gone quiet for good.
+          {c.coverage?.pool ? ` ${Math.round((c.coverage.touched / c.coverage.pool) * 100)}% of the agents who've written back heard from us in the window.` : ""}
+        </p>
+      ) : null}
+      {state.plan?.picks?.length ? (
+        <ul className="mt-2 space-y-0.5 text-xs text-slate-600">
+          {state.plan.picks.map((p) => (
+            <li key={p.contactId}><span className="font-medium text-slate-800">{p.name || p.contactId}</span> · {p.segment} · {PULSE_REASON_WORDS[p.reason] || p.reason}{p.address ? ` (${p.address})` : ""}</li>
           ))}
         </ul>
       ) : null}
@@ -362,6 +402,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const setDispoAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), [k]: v } })); };
   const setPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), pulse: { ...(f.dispoAutopilot?.pulse || {}), [k]: v } } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
+  const setAgentPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), pulse: { ...(f.outreachAutopilot?.pulse || {}), [k]: v } } })); };
   // GHL workflows for the outreach pickers — only once the sweep is on.
   const [outreachWorkflows, setOutreachWorkflows] = useState(null);
   const outreachAutoOn = Boolean(form.outreachAutopilot?.enabled);
@@ -396,7 +437,12 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       // walk above never reaches them, and a string "10" would come back from
       // the server as a string forever.
       clean.psa = coerce(form.psa || {}, DEFAULT_OFFER_SETTINGS.psa);
-      if (form.outreachAutopilot) clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12, followUpDays: Number(form.outreachAutopilot.followUpDays) || 14 };
+      if (form.outreachAutopilot) {
+        const pulse = form.outreachAutopilot.pulse;
+        clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12, followUpDays: Number(form.outreachAutopilot.followUpDays) || 14,
+          ...(pulse ? { pulse: { ...pulse, dailyCap: Number(pulse.dailyCap) || 20, everyDays: Number(pulse.everyDays) || 21, coldEveryDays: Number(pulse.coldEveryDays) || 60,
+            coldMaxUnanswered: Number(pulse.coldMaxUnanswered) || 3, engagedMaxUnanswered: pulse.engagedMaxUnanswered === "" || pulse.engagedMaxUnanswered == null ? 6 : Number(pulse.engagedMaxUnanswered) } } : {}) };
+      }
       if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount", "minMatchScore", "secondWaveMinScore"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
       if (clean.dispoAutopilot?.pulse) clean.dispoAutopilot.pulse = { ...clean.dispoAutopilot.pulse, ...Object.fromEntries(["dailyCap", "everyDays", "quietDays", "conversedShare"].filter((k) => clean.dispoAutopilot.pulse[k] != null).map((k) => [k, Number(clean.dispoAutopilot.pulse[k])])) };
       const r = await saveSettings(clean);
@@ -834,6 +880,41 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
               )}
             </div>
           )}
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <label className="flex items-start gap-2 text-sm text-slate-700">
+              <input type="checkbox" className="mt-1" checked={Boolean(form.outreachAutopilot?.pulse?.enabled)}
+                onChange={(e) => setAgentPulse("enabled")(e.target.checked)} />
+              <span>
+                <span className="font-semibold">Check in with every agent</span>
+                <span className="block text-xs text-slate-500">
+                  Agents who have written back hear from us every few weeks — about a new distressed listing of theirs when there is one, the house
+                  they had with us once its follow-ups end, or what's coming up. Agents who never answered hear only about a new listing of theirs,
+                  and stop after a few with nothing back. Anyone another follow-up, a live offer, a deal or a waiting reply already has is left to it.
+                  Drafts land in the outbox until you let them send themselves.
+                </span>
+              </span>
+            </label>
+            {form.outreachAutopilot?.pulse?.enabled && (
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <Num label="Check-ins a day" value={form.outreachAutopilot?.pulse?.dailyCap ?? 20} onChange={setAgentPulse("dailyCap")} />
+                <Num label="Every" suffix="days" value={form.outreachAutopilot?.pulse?.everyDays ?? 21} onChange={setAgentPulse("everyDays")} />
+                <Num label="Never-answered agents, at most every" suffix="days" value={form.outreachAutopilot?.pulse?.coldEveryDays ?? 60} onChange={setAgentPulse("coldEveryDays")} />
+                <Num label="Stop never-answered agents after" suffix="texts" value={form.outreachAutopilot?.pulse?.coldMaxUnanswered ?? 3} onChange={setAgentPulse("coldMaxUnanswered")} />
+                <Num label="Agents gone quiet: listings only after" suffix="unanswered, 0 = never" value={form.outreachAutopilot?.pulse?.engagedMaxUnanswered ?? 6} onChange={setAgentPulse("engagedMaxUnanswered")} />
+                <label className="col-span-2 flex items-start gap-2 text-sm text-slate-700">
+                  <input type="checkbox" className="mt-1" checked={Boolean(form.outreachAutopilot?.pulse?.autoSend)}
+                    onChange={(e) => setAgentPulse("autoSend")(e.target.checked)} />
+                  <span>
+                    Let them send themselves
+                    <span className="block text-xs text-slate-500">
+                      A check-in that names no number and passes every check goes on its own, spread across the afternoon. Off: each waits in the outbox for you.
+                    </span>
+                  </span>
+                </label>
+                <div className="col-span-2"><AgentPulsePreview /></div>
+              </div>
+            )}
+          </div>
         </div>
       </section>
       </>)}

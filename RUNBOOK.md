@@ -2440,6 +2440,91 @@ switch between, rename, and delete from the batch picker (auto-named
    most recent batch (auto-creating one if none exists); pass `"batchId"` to
    target a specific batch.
 
+### Every agent on a clock: the agent check-in (2026-09-29)
+
+Matt: "reach out to these agents proactively and frequently, every 3 weeks or
+so, to see if they have any new listings or leads." Until this, every clock
+that texted an agent belonged to one thing (a first text, an offer, a phrase
+they used), and every one of them ended. The outreach follow-up enrolled once,
+passed-offer check-ins stopped at day 120, and "I'll send you deals"
+check-ins stopped after six weeks. After that the agent dropped off the line
+for good. The daily pull also skipped their next distressed listing, because
+they were "already in GHL".
+
+The agent check-in (`shared/agent-pulse.js` decides, `ghl-broker/agent-pulse.js`
+runs it) owns an agent when nothing else does:
+
+- **Who.** Every agent with a contact record, plus every GHL contact a pull
+  matched to a fresh listing. It sorts them into three groups:
+  - **partner**: a deal, an agreed price or a yes to a number, ever;
+  - **engaged**: they have written back (a text summary counts only when it
+    summarises THEIR text);
+  - **cold**: never answered.
+- **How often.** Partners and engaged agents every `everyDays` (21). Cold
+  agents only about a fresh listing of theirs, `coldEveryDays` (60) apart,
+  and never after `coldMaxUnanswered` (3) check-ins with nothing back. An
+  engaged agent `engagedMaxUnanswered` (6) check-ins into silence is treated
+  as cold (0 turns that off). These are Matt's cadence decisions (2026-09-29).
+- **What about**, in this order:
+  1. a fresh distressed listing of theirs. It must be one the pull first saw
+     within `freshDays` (14) and still saw within `listingSeenDays` (30);
+     distressed by the pull's own rule; not a house we have a live offer on;
+     not one we walked away from in the last 180 days. It goes once per
+     listing ever (`listing_pinged`), and may go before the 21 days are up,
+     but never within `quietDays` (7) of a touch.
+  2. the house they had with us, once its follow-ups have ended (passed and the
+     check-ins are done or it went off the market, or the deal closed or fell
+     through), but never one we walked away from.
+  3. otherwise: anything coming up that needs work, or off market?
+- **One voice.** An agent another clock owns is left to it. That covers:
+  - a live deal, an open offer, or a held underwrite under 14 days old;
+  - any follow-up the Offers column shows as coming;
+  - anything waiting in the outbox, a promise, a check-in they asked for, or
+    an address chase;
+  - the outreach first-text workflow (until its follow-up is due) or its
+    follow-up (`ghlWorkflowDays`, 21);
+  - any GHL workflow the app enrolled them in (now recorded as
+    `workflow_enrolled`) unless its id is in `quietWorkflowIds`;
+  - a thread you picked up in the last 3 days.
+
+  Opted out, a do-not-text or bot-off tag, a stop on the whole thread, or
+  sounding annoyed stops it altogether.
+- **The text** (prompt case `agent_pulse`) names a listing by street, city and
+  days on market, never its price. It never says a number or a link, and
+  `onlyFloats` holds any draft that does. A cold agent gets a one-clause intro;
+  a known one gets a continuation of the thread.
+
+**Running it.** Once a workday from `hour` (noon Pacific), with the daily gate
+(cursor `agentPulse`, retries if a deploy kills it), capped at `dailyCap` (20)
+a day: partners' and engaged agents' fresh listings first, then the most
+overdue, then cold listings. Each agent is checked in GHL first (unsubscribed
+is marked and skipped, tagged off or no phone is skipped), then claimed
+(`agent_pulse_sent`) before anything is drafted. A claim that drafted nothing
+is voided (`agent_pulse_voided`, and `listing_ping_voided`): the seat and the
+listing come back, and the agent is tried the next day. `agent_pulse_texted`
+is written when a check-in actually sends, and is what the cadence and the
+unanswered counts read.
+
+**Switches** (`settings.outreachAutopilot.pulse`, outside the autonomy dial,
+like the buyer pulse): `enabled` drafts the day's check-ins into the outbox,
+and `autoSend` lets a clean one send itself. Both ship off, and
+CARD_SENDS_ENABLED still gates every send. Settings → Agent Outreach → "Check
+in with every agent" has the numbers and a Preview.
+
+**Routes.** `GET /api/outreach/pulse` returns today's plan (counts by
+segment, who another clock owns and why, who's due and why, coverage) plus
+the last run; it writes nothing. `POST /api/outreach/pulse/run {dryRun, limit}`
+is a dry run unless `dryRun: false`.
+
+**Turning it on.** First trim the GHL TIER 2/3 workflows to tags and stage
+moves: the app can't see enrollments made before this. Then read
+`GET /api/outreach/pulse`, tick "Check in with every agent", read a day of
+drafts, and only then tick "Let them send themselves".
+
+**Also in this change.** The "I'll send you deals" check-ins can start again
+when an agent offers a second time (the key used to be one per contact,
+ever). While a chain is running, it keeps its own clock.
+
 ### The daily sweep (outreach autopilot)
 
 Settings → Agent Outreach → "Run outreach every day on its own". Once a

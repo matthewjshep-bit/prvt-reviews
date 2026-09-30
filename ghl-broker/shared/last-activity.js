@@ -36,6 +36,7 @@ export const INBOUND_EVENT_TYPES = ["text_summary", "call_summary"];
 // on their calendar, which is a conversation by any useful definition.
 export const OUTBOUND_EVENT_TYPES = [
   "outreach_sent", "outreach_enrolled", "follow_up_sent", "offer_sent", "offer_revised", "blast_sent", "dataroom_sent", "call_booked", "hand_reply",
+  "agent_pulse_texted",
 ];
 
 export const LAST_ACTIVITY_TYPES = [...INBOUND_EVENT_TYPES, ...OUTBOUND_EVENT_TYPES];

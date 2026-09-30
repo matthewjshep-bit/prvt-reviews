@@ -4317,3 +4317,64 @@ test("the cap counts every draft today, not the newest five hundred", async () =
   const released = { id: "band", createdAt: new Date(noon - 700_000).toISOString(), exception: { passed: true, kind: "counter_band" } };
   assert.equal(await bandReleasesToday({ store: pagedStore([...rows, released]), locationId: "LOC", now: noon }), 1);
 });
+
+/* ---------- the agent check-in (2026-09-29) ---------- */
+
+const AGENT_CHECKIN_SUBJECT = { reason: "general", segment: "engaged", address: "", listing: null, house: null };
+
+test("an agent check-in that names any number holds for you", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => [LANDED];
+  const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "agent_pulse", subject: AGENT_CHECKIN_SUBJECT, sendsEnabled: true,
+    deps: { releaseHeld: true, releaseReason: "test", draft: async () => ({ ...DRAFT, reply: "Hey Dana, still around 410k on 12 Elm if the seller moves. Anything else coming up?" }) } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft", "not even a number from the book rides on a check-in");
+  assert.equal(d.outbound.kind, "agent_pulse");
+});
+
+test("an agent check-in sends itself only with the pulse's own switch", async () => {
+  _resetJobs();
+  const clean = { ...DRAFT, reply: "Hey Dana, anything coming up that needs work, or anything off market?" };
+  const { client } = ghlStubFor(["agent"]);
+  const off = fakeStore();
+  const { job: j1 } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: off, contactId: "c1", kind: "agent_pulse", subject: AGENT_CHECKIN_SUBJECT, sendsEnabled: true,
+    deps: { draft: async () => clean } });
+  await settle();
+  assert.equal((await off.getReplyDraft(j1.draftId)).status, "draft", "without it: the outbox");
+  _resetJobs();
+  const on = fakeStore();
+  const { job: j2 } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: on, contactId: "c1", kind: "agent_pulse", subject: AGENT_CHECKIN_SUBJECT, sendsEnabled: true,
+    deps: { releaseHeld: true, releaseReason: "the agent check-in may send itself", draft: async () => clean, now: () => NOW, random: () => 0 } });
+  await settle();
+  assert.equal((await on.getReplyDraft(j2.draftId)).status, "scheduled", "with it: it goes on its own");
+});
+
+// Until 2026-09-29 the "I'll send you deals" check-in could be armed once per
+// contact, ever: an agent who offered again months later never heard from us.
+test("an agent who offers deals again after the check-ins ended gets them again; one still running is left to run", async () => {
+  const run = async (prior) => {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const store = fakeStore();
+    store.events.set("LOC|c1", [...prior]);
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+      message: "Nothing right now but I'll keep you in mind for fixers.",
+      deps: { draft: async () => ({ ...DRAFT, intent: "investor_open", confidence: "high", reply: "Appreciate it." }) },
+    });
+    for (let i = 0; i < 40 && job.status === "running"; i++) await settle();
+    assert.equal(job.status, "done", job.error);
+    return (await store.listContactEvents("LOC", "c1", { types: ["checkin_requested"] })).filter((e) => e.data?.kind === "source" && !prior.includes(e));
+  };
+  const ended = [
+    { type: "checkin_requested", at: iso(120 * 86400000), dedupeKey: "checkin_requested:source:c1", data: { kind: "source", dueAt: iso(113 * 86400000), left: 0 } },
+    { type: "checkin_sent", at: iso(113 * 86400000), data: { requestAt: iso(120 * 86400000), kind: "source" } },
+  ];
+  assert.equal((await run(ended)).length, 1, "a new chain starts");
+  const running = [{ type: "checkin_requested", at: iso(2 * 86400000), data: { kind: "source", dueAt: iso(-5 * 86400000), left: 3 } }];
+  assert.equal((await run(running)).length, 0, "the chain already running keeps its own clock");
+});
