@@ -33,6 +33,7 @@ import { threadHealth } from "./shared/thread-health.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
 import { waitingReason } from "./outbox-guard.js";
+import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 
 const DAY_MS = 86400000;
 // GHL's burst cap is 100 req / 10s per location; the same pace the enrichment
@@ -411,7 +412,7 @@ export async function investorCandidates({ store, locationId, config, now = Date
  * Returns synchronously; the work runs on its own. `deps.startProactive` and
  * `deps.setOfferStatus` are injected so the whole thing is exercisable offline.
  */
-export function startFollowUpSweep({ client, locationId, saved, store, sendsEnabled = false, now = Date.now(), deps = {}, trigger = "manual", dryRun = false }) {
+export function startFollowUpSweep({ client, locationId, saved, store, sendsEnabled = false, now = Date.now(), deps = {}, trigger = "manual", dryRun = false, onDone = null }) {
   const existing = jobs.get(locationId);
   if (existing?.status === "running") {
     throw Object.assign(new Error("a follow-up sweep is already running for this location"), { http: 409 });
@@ -428,7 +429,7 @@ export function startFollowUpSweep({ client, locationId, saved, store, sendsEnab
     job.status = "error";
     job.error = String(e?.message || e).slice(0, 300);
     job.finishedAt = new Date().toISOString();
-  });
+  }).finally(() => onDone?.(job));
   return job;
 }
 
@@ -705,7 +706,8 @@ async function runSweep(job, ctx) {
  * re-spend model calls the same hour.
  */
 export async function maybeStartFollowUpSweep({ client, locationId, saved, store, sendsEnabled = false, utcHour = FOLLOW_UP_UTC_HOUR, now = Date.now(), deps = {} }) {
-  if (new Date(now).getUTCHours() !== utcHour) return false;
+  const h = new Date(now).getUTCHours();
+  if (h < utcHour || h >= utcHour + DAILY_WINDOW_HOURS) return false;
   if (!String(saved?.aiApiKey || "").trim()) return false;
   const config = conversationConfig(saved);
   if (!config.enabled) return false;
@@ -714,10 +716,15 @@ export async function maybeStartFollowUpSweep({ client, locationId, saved, store
     return fu?.enabled && Object.values(fu.ladders || {}).some((l) => l.enabled && l.steps?.length);
   });
   if (!anyLadder) return false;
-  if (jobs.get(locationId)?.status === "running") return false;
-  const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
-  if (cursor?.at && now - Date.parse(cursor.at) < MIN_GAP_MS) return false;
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: {} }).catch(() => {});
-  startFollowUpSweep({ client, locationId, saved, store, sendsEnabled, now, deps, trigger: "daily" });
+  // Once a day, and back again the same morning if a deploy killed it
+  // (daily-gate.js). A finished day never runs twice.
+  const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: h, startHour: utcHour,
+    windowHours: DAILY_WINDOW_HOURS, running: jobs.get(locationId)?.status === "running" });
+  if (!gate.go) return false;
+  startFollowUpSweep({ client, locationId, saved, store, sendsEnabled, now, deps, trigger: "daily",
+    onDone: (job) => closeDailyRun({ store, locationId, cursorName: CURSOR_NAME, failed: job.status === "error", error: job.error,
+      last: { id: job.id, status: job.status, considered: job.considered, due: job.due, started: job.started, skipped: job.skipped, errors: job.errors, finishedAt: job.finishedAt } }) });
   return true;
 }
+// The morning's window for the sweep, from its hour.
+export const DAILY_WINDOW_HOURS = 3;

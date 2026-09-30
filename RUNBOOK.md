@@ -1236,6 +1236,39 @@ while their text (or your own draft) is waiting in the outbox is kept
 before the drop. With `followUp.watchFloated` on, a number floated by text
 and never sent is watched too. Both switches ship off.
 
+### The tick: every job on its own, every day comes back (2026-09-29)
+
+**One job can't stop the others.** The 15-minute tick ran every job for a
+location inside one try/catch, so a throw in an early job skipped everything
+after it: promises, the audit, the price watch, the waves, the pulse, the
+calls. The jobs are now a list (`TICK_JOBS` in broker.js), each run on its
+own by `runLocationTick` (ghl-broker/tick.js). A failure is logged as
+`tick:<area> failed` and recorded in `app_errors` under that area. The nightly
+enrich sweep is awaited now: it is async, and its rejection used to escape
+the tick entirely.
+
+**A daily run a deploy kills comes back the same day.** Every push to main
+redeploys the broker. A daily job that stamped its cursor and then died used
+to lose the day. The follow-up sweep, the outreach follow-up, the dispo
+second wave, the nightly enrich, the price watch and the tier check now share
+the audit's gating (`claimDailyRun` / `closeDailyRun` in
+ghl-broker/daily-gate.js):
+
+- the cursor carries `run` while the job goes and `last` when it's over;
+- a run still marked going after 45 minutes with nothing in memory behind it
+  is retried;
+- a failed run is retried up to four times a day, 20 minutes apart;
+- a new day may start anywhere in the job's window (follow-up sweep 16–19
+  UTC, outreach follow-up 11am–4pm PT, dispo waves 17–21 UTC, enrich 10–13
+  UTC, price watch 9am–5pm PT, tier check 7am–8pm PT), so a deploy across
+  the start hour doesn't skip it;
+- a cursor from before this change (only `at`) counts as the day's run.
+
+`GET /api/offers/automations/conversation/follow-ups` now returns `daily`: the
+cursor's tries, whether a run is going or failed, and `last`, which is what
+the day's run did. The tier check's summary moved into `last` on its cursor,
+like the others.
+
 ### Never more than our number (2026-09-28)
 
 Jesse, 39811 226th Ave SE, Enumclaw. Our offer was 550K, already over

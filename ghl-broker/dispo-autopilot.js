@@ -28,6 +28,7 @@ import { dealNumbers } from "./dataroom.js";
 import { dealOutreachPaused } from "./shared/offer-status.js";
 import { conversationConfig } from "./reply-agent.js";
 import { nextSendTime, spreadAcrossDay } from "./conversation-scheduler.js";
+import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 
 export const CURSOR_NAME = "dispo";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -191,7 +192,7 @@ export async function secondWaveCandidates({ store = defaultStore, locationId, s
  * `deps.matchForDeal(locationId, offer, { fit })` and `deps.blastFromApp(...)`
  * are the dispo router's own functions.
  */
-export function startDispoSweep({ locationId, client, saved = {}, store = defaultStore, deps = {}, trigger = "manual", now = Date.now() }) {
+export function startDispoSweep({ locationId, client, saved = {}, store = defaultStore, deps = {}, trigger = "manual", now = Date.now(), onDone = null }) {
   const existing = jobs.get(locationId);
   if (existing?.status === "running") throw Object.assign(new Error("a dispo sweep is already running"), { http: 409 });
   const job = { id: `ds-${Date.now().toString(36)}`, locationId, trigger, status: "running", startedAt: iso(now), finishedAt: null, deals: 0, blasted: 0, results: [], error: null };
@@ -213,18 +214,23 @@ export function startDispoSweep({ locationId, client, saved = {}, store = defaul
       }
     }
     job.status = "done"; job.finishedAt = new Date().toISOString();
-  })().catch((e) => { job.status = "error"; job.error = String(e?.message || e).slice(0, 300); job.finishedAt = new Date().toISOString(); });
+  })().catch((e) => { job.status = "error"; job.error = String(e?.message || e).slice(0, 300); job.finishedAt = new Date().toISOString(); })
+    .finally(() => onDone?.(job));
   return job;
 }
 
 export async function maybeStartDispoSweep({ locationId, client, saved = {}, store = defaultStore, deps = {}, utcHour = DISPO_SWEEP_UTC_HOUR, now = Date.now() }) {
-  if (new Date(now).getUTCHours() !== utcHour) return false;
+  const h = new Date(now).getUTCHours();
+  if (h < utcHour || h >= utcHour + DISPO_WINDOW_HOURS) return false;
   const da = normalizeDispoAutopilot(saved.dispoAutopilot);
   if (!da.autoBlastOnPromote) return false;
-  if (jobs.get(locationId)?.status === "running") return false;
-  const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
-  if (cursor?.at && now - Date.parse(cursor.at) < MIN_GAP_MS) return false;
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: {} }).catch(() => {});
-  startDispoSweep({ locationId, client, saved, store, deps, trigger: "daily", now });
+  // Once a day, and back the same morning if a deploy killed it (daily-gate.js).
+  const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: h, startHour: utcHour,
+    windowHours: DISPO_WINDOW_HOURS, running: jobs.get(locationId)?.status === "running" });
+  if (!gate.go) return false;
+  startDispoSweep({ locationId, client, saved, store, deps, trigger: "daily", now,
+    onDone: (job) => closeDailyRun({ store, locationId, cursorName: CURSOR_NAME, failed: job.status === "error", error: job.error,
+      last: { id: job.id, status: job.status, deals: job.deals, blasted: job.blasted, finishedAt: job.finishedAt } }) });
   return true;
 }
+export const DISPO_WINDOW_HOURS = 4;

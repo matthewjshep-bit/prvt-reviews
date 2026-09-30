@@ -19,6 +19,7 @@ import { listPipelines, addContactTags, removeContactTags, updateOpportunity } f
 import { acquisitionsPipeline } from "./ghl-mirror.js";
 import { recordEvent } from "./contact-record.js";
 import { localHour } from "./promise-sweep.js";
+import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 
 export const CURSOR_NAME = "tierCheck";
 export const CHECK_HOUR = 7;             // PT
@@ -150,19 +151,26 @@ export async function runTierCheck({ client, locationId, store = defaultStore, g
 }
 
 /** The tick's call: once a day from 7am PT. */
+const inFlight = new Set();
 export async function maybeRunTierCheck({ client, locationId, store = defaultStore, ghl = null, now = Date.now() }) {
-  if (localHour(now) < CHECK_HOUR || localHour(now) >= 20) return null;
-  const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
-  if (cursor?.at && now - Date.parse(cursor.at) < MIN_GAP_MS) return null;
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: {} }).catch(() => {});
+  // Once a day; a run a deploy killed, or one that failed, comes back later
+  // that day (daily-gate.js).
+  const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: localHour(now), startHour: CHECK_HOUR,
+    windowHours: 20 - CHECK_HOUR, running: inFlight.has(locationId), minGapMs: MIN_GAP_MS });
+  if (!gate.go) return null;
+  inFlight.add(locationId);
   try {
     const r = await runTierCheck({ client, locationId, store, ghl, now });
     const summary = { considered: r.considered, planned: r.planned, applied: r.applied, errors: r.errors.slice(0, 5),
       fixes: r.fixes.slice(0, 40).map((f) => ({ name: f.name, add: f.add, remove: f.remove, moved: !!f.moveTo, why: f.why })) };
-    await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: summary }).catch(() => {});
+    await closeDailyRun({ store, locationId, cursorName: CURSOR_NAME, last: summary });
     return r;
   } catch (e) {
-    return { considered: 0, planned: 0, applied: 0, fixes: [], errors: [String(e?.message || e).slice(0, 160)] };
+    const error = String(e?.message || e).slice(0, 160);
+    await closeDailyRun({ store, locationId, cursorName: CURSOR_NAME, failed: true, error });
+    return { considered: 0, planned: 0, applied: 0, fixes: [], errors: [error] };
+  } finally {
+    inFlight.delete(locationId);
   }
 }
 

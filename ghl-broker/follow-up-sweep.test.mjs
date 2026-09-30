@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   startFollowUpSweep, maybeStartFollowUpSweep, agentCandidates, investorCandidates, passedCandidates,
-  publicFollowUpJob, cancelFollowUpSweep, _resetJobs, CURSOR_NAME, FOLLOW_UP_UTC_HOUR, isTheOfferToAskAbout,
+  publicFollowUpJob, cancelFollowUpSweep, _resetJobs, CURSOR_NAME, FOLLOW_UP_UTC_HOUR, isTheOfferToAskAbout, DAILY_WINDOW_HOURS,
 } from "./follow-up-sweep.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { effectiveStatus, OPEN_STATUSES } from "./shared/offer-status.js";
@@ -379,14 +379,32 @@ test("the public job hides the cancel flag and says whether it is stopping", asy
 
 const hourNow = (h) => Date.parse(`2026-09-08T${String(h).padStart(2, "0")}:05:00.000Z`);
 
-test("the daily sweep runs in its hour and not in any other", async () => {
+// A day may start anywhere in the morning's window (2026-09-29): a deploy
+// across the start hour used to skip the day's follow-ups.
+test("the daily sweep runs in its morning window and not outside it", async () => {
+  _resetJobs();
+  const args = { client: {}, locationId: "LOC", saved: SAVED, deps: { startProactive: async () => ({ skipped: null, job: {} }) } };
+  assert.equal(await maybeStartFollowUpSweep({ ...args, store: fakeStore({ offers: [anOffer()] }), now: hourNow(FOLLOW_UP_UTC_HOUR - 1) }), false, "not before its hour");
+  assert.equal(await maybeStartFollowUpSweep({ ...args, store: fakeStore({ offers: [anOffer()] }), now: hourNow(FOLLOW_UP_UTC_HOUR + DAILY_WINDOW_HOURS) }), false, "not after its window");
+  _resetJobs();
+  assert.equal(await maybeStartFollowUpSweep({ ...args, store: fakeStore({ offers: [anOffer()] }), now: hourNow(FOLLOW_UP_UTC_HOUR + 1) }), true, "a boot that missed the first hour still gets the day");
+  await settle();
+});
+
+test("the morning follow-ups come back after a redeploy kills the sweep mid-run", async () => {
   _resetJobs();
   const store = fakeStore({ offers: [anOffer()] });
-  const args = { client: {}, locationId: "LOC", saved: SAVED, store, deps: { startProactive: async () => ({ skipped: null, job: {} }) } };
-  assert.equal(await maybeStartFollowUpSweep({ ...args, now: hourNow(FOLLOW_UP_UTC_HOUR + 1) }), false);
-  _resetJobs();
-  assert.equal(await maybeStartFollowUpSweep({ ...args, now: hourNow(FOLLOW_UP_UTC_HOUR) }), true);
+  const args = { client: {}, locationId: "LOC", saved: SAVED, store, deps: { paceMs: 0, startProactive: async () => ({ skipped: null, job: {} }) } };
+  // The claim a killed run leaves behind: the day stamped, a run "going", nothing in memory.
+  await store.setJobCursor("LOC", CURSOR_NAME, { at: new Date(hourNow(FOLLOW_UP_UTC_HOUR)).toISOString(),
+    doc: { tries: 1, lastDaily: new Date(hourNow(FOLLOW_UP_UTC_HOUR)).toISOString(), run: { startedAt: new Date(hourNow(FOLLOW_UP_UTC_HOUR)).toISOString() } } });
+  assert.equal(await maybeStartFollowUpSweep({ ...args, now: hourNow(FOLLOW_UP_UTC_HOUR) + 20 * 60000 }), false, "not while it might still be going");
+  assert.equal(await maybeStartFollowUpSweep({ ...args, now: hourNow(FOLLOW_UP_UTC_HOUR) + 50 * 60000 }), true, "stale: it runs again this morning, not tomorrow");
   await settle();
+  const doc = (await store.getJobCursor("LOC", CURSOR_NAME)).doc;
+  assert.equal(doc.tries, 2);
+  assert.equal(doc.run, undefined, "the finished run takes itself off the cursor");
+  assert.equal(doc.last.status, "done");
 });
 
 test("the cursor is written before the sweep runs so a redeploy cannot re-run it", async () => {
