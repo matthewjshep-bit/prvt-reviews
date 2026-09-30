@@ -168,8 +168,11 @@ const outreachRouter = createOutreachRouter({
 });
 app.use("/api/outreach", outreachRouter);
 outreachRouter.conversationDepsFor = offersRouter.conversationDepsFor;
-app.use("/api/dashboard", createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor }));
+const dashboardRouter = createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor });
+app.use("/api/dashboard", dashboardRouter);
 const dispoRouter = createDispoRouter({ resolveLocation });
+// The Line view reads the buyer pulse's plan, which ranks the scored book.
+dashboardRouter.buyerBook = (loc) => dispoRouter.scoredBook(loc, { status: "active" });
 app.use("/api/dispo", dispoRouter);
 dispoRouter.conversationDepsFor = offersRouter.conversationDepsFor;
 offersRouter.setDispoDeps({ matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp, rankBuyerForDeal: dispoRouter.rankBuyerForDeal });
@@ -252,7 +255,7 @@ const TICK_JOBS = [
   // Today either way.
   { area: "audit", run: async ({ client, locationId, saved }) => {
     if (await maybeRunConversationAudit({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
-      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) })) console.log(`conversation audit started for ${locationId}`);
+      deps: { ...offersRouter.conversationDepsFor({ locationId, client, saved }), buyerBook: (loc) => dispoRouter.scoredBook(loc, { status: "active" }) } })) console.log(`conversation audit started for ${locationId}`);
   } },
   // The same fixes by day, every couple of hours, so a stalled thread doesn't
   // wait for 7pm. Off until driver.daytime is switched on; by day it never

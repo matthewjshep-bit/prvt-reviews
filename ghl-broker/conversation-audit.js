@@ -356,11 +356,21 @@ export function startConversationAudit({ client, locationId, saved = {}, store =
     id: job.id, trigger, dryRun, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt,
     counts: job.counts, ghlRead: job.ghlRead ?? null, findings: job.findings.slice(0, 150), acted: job.acted.slice(0, 150),
     quietWins: (job.quietWins || []).slice(0, 100), error: job.error, reason: job.reason || "",
+    leaks: job.leaks ?? null,
   });
   stamp({ run: { id: job.id, trigger, startedAt: job.startedAt } })
     .then(() => runConversationAudit({ client, locationId, saved, store, sendsEnabled, deps, now, dryRun, job, pace, mode }))
     .then(async ({ result, acted, reason }) => {
       job.counts = result.counts; job.findings = result.findings; job.acted = acted; job.quietWins = result.quietWins; job.ghlRead = result.ghlRead; job.reason = reason;
+      // The night's leak count (the Line view's own arithmetic), for "Leaks
+      // last night" on Today. Best-effort: the audit is done either way.
+      if (mode !== "day") {
+        job.phase = "leaks";
+        try {
+          const { lineFor, leakSummary } = await import("./line.js");
+          job.leaks = leakSummary(await lineFor({ store, locationId, saved, buyerBook: deps.buyerBook || null }));
+        } catch { job.leaks = null; }
+      }
       job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
       await stamp({ run: null, last: summary() });
     })

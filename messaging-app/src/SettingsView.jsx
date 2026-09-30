@@ -10,6 +10,7 @@ import {
 } from "@shared/contract-template.js";
 import { getBuyerPulse, runBuyerPulse, getAgentPulse, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
+import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
 import ContactBackfill from "./ContactBackfill.jsx";
@@ -400,6 +401,8 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const setMirrorSide = (side, patch) => setMirror({ [side]: { ...((form.ghlMirror || {})[side] || {}), ...patch } });
   const setMirrorStage = (side, key, stageId) => setMirrorSide(side, { stages: { ...(((form.ghlMirror || {})[side] || {}).stages || {}), [key]: stageId } });
   const setDispoAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), [k]: v } })); };
+  const setLine = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, lineTargets: { ...(f.lineTargets || {}), [k]: v } })); };
+  const lineTargets = { ...LINE_TARGET_DEFAULTS, ...(form.lineTargets || {}) };
   const setPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), pulse: { ...(f.dispoAutopilot?.pulse || {}), [k]: v } } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
   const setAgentPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), pulse: { ...(f.outreachAutopilot?.pulse || {}), [k]: v } } })); };
@@ -444,6 +447,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             coldMaxUnanswered: Number(pulse.coldMaxUnanswered) || 3, engagedMaxUnanswered: pulse.engagedMaxUnanswered === "" || pulse.engagedMaxUnanswered == null ? 6 : Number(pulse.engagedMaxUnanswered) } } : {}) };
       }
       if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount", "minMatchScore", "secondWaveMinScore", "maxWaves"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
+      if (form.lineTargets) clean.lineTargets = normalizeLineTargets(Object.fromEntries(Object.entries(form.lineTargets).map(([k, v]) => [k, typeof v === "string" ? Number(v.replace(/[$,\s]/g, "")) : v])));
       if (clean.dispoAutopilot?.pulse) clean.dispoAutopilot.pulse = { ...clean.dispoAutopilot.pulse, ...Object.fromEntries(["dailyCap", "everyDays", "quietDays", "conversedShare"].filter((k) => clean.dispoAutopilot.pulse[k] != null).map((k) => [k, Number(clean.dispoAutopilot.pulse[k])])) };
       const r = await saveSettings(clean);
       onSaved?.(r.settings);
@@ -475,6 +479,22 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           deal below. "Classic 70% rule" only applies to the 70%-ARV mode. The <b>Blended</b> mode averages
           the back-stack, the 90%-ARV anchor and the 70% rule, so these figures reach it too.
         </p>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-1 text-sm font-bold">Line targets</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          What Reports → Line measures each station against. Targets only: nothing here sends, spends or changes an offer.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <Num label="New agents texted" suffix="a day" value={lineTargets.newAgentsPerDay} onChange={setLine("newAgentsPerDay")} />
+          <Num label="Offers out" suffix="a day" value={lineTargets.offersPerDay} onChange={setLine("offersPerDay")} />
+          <Num label="Offers to one contract" value={lineTargets.offersPerContract} onChange={setLine("offersPerContract")} />
+          <Num label="Deals" suffix="a month" value={lineTargets.dealsPerMonth} onChange={setLine("dealsPerMonth")} />
+          <Num label="Fee per deal" suffix="$" money value={lineTargets.feePerDeal} onChange={setLine("feePerDeal")} />
+          <Num label="Touch every agent who's replied" suffix="days" value={lineTargets.agentTouchDays} onChange={setLine("agentTouchDays")} />
+          <Num label="Touch every buyer" suffix="days" value={lineTargets.buyerTouchDays} onChange={setLine("buyerTouchDays")} />
+        </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
