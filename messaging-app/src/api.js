@@ -355,8 +355,14 @@ export const HOT_OFF = "__hot_off";
 // working from (shared/current-offer.js). Same menu, same { offer } back.
 export const MAKE_CURRENT = "__make_current";
 export const UNPIN_CURRENT = "__unpin_current";
+// Off-market (shared/off-market.js): how the house came to us — a fourth axis,
+// same menu, same { offer } back.
+export const OFF_MARKET_ON = "__off_market_on";
+export const OFF_MARKET_OFF = "__off_market_off";
 export const setOfferStatus = (id, status, note = "") =>
-  status === HOT_ON || status === HOT_OFF
+  status === OFF_MARKET_ON || status === OFF_MARKET_OFF
+    ? post(`/api/offers/${encodeURIComponent(id)}/off-market`, { offMarket: status === OFF_MARKET_ON, note }, "PATCH")
+  : status === HOT_ON || status === HOT_OFF
     ? post(`/api/offers/${encodeURIComponent(id)}/hot`, { hot: status === HOT_ON, note }, "PATCH")
     : status === MAKE_CURRENT || status === UNPIN_CURRENT
       ? post(`/api/offers/${encodeURIComponent(id)}/current`, { pin: status === MAKE_CURRENT, note }, "PATCH")

@@ -144,3 +144,13 @@ test("a buyer or agent waiting for a check-in seat is backlog, not a leak; with 
   assert.equal(off.backlog, 0);
   assert.equal(backlogTotal({}), 0);
 });
+
+test("the line compares off-market with listed, for the last 90 days and all time", () => {
+  const off = { id: "o1", contactId: "lori", contactName: "Lori", status: "sent", createdAt: D(10), sends: [{ ts: D(9) }], offMarket: { value: true, by: "you" }, deal: { stage: "under_contract" } };
+  const listed = { id: "l1", contactId: "sam", status: "sent", createdAt: D(200), sends: [{ ts: D(199) }] };
+  const line = buildLine({ now: NOW, offers: [off, listed] });
+  assert.equal(line.sources.days90.offMarket.contract, 1);
+  assert.equal(line.sources.days90.listed.offers, 0, "the listed one is older than 90 days");
+  assert.equal(line.sources.allTime.listed.offers, 1);
+  assert.deepEqual(line.sources.allTime.agents.map((a) => a.name), ["Lori"]);
+});

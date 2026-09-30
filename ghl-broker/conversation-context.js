@@ -12,6 +12,7 @@
 // The loaders do I/O; the builders are pure and tested.
 
 import { fmtMoney } from "./shared/offer-calc.js";
+import { isOffMarket, offMarketAskDaysAgo, OFF_MARKET_ASK_EVERY_DAYS } from "./shared/off-market.js";
 import { effectiveStatus, offerHeat, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused } from "./shared/offer-status.js";
 import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybox.js";
 import { dealToQuery } from "./dispo.js";
@@ -242,6 +243,18 @@ export function historyFromRecord(events = [], party, fallbackField) {
   return historyTail(fallbackField);
 }
 
+// Off-market (shared/off-market.js): whether it's been a month since we last
+// asked them for houses before they hit the market, and whether they've
+// brought us one — a proven source is treated like one.
+function offMarketLines({ offers = [], events = [], now = Date.now() }) {
+  const days = offMarketAskDaysAgo(events, now);
+  const ask = days == null || days >= OFF_MARKET_ASK_EVERY_DAYS
+    ? `OFF-MARKET ASK: not asked in the last ${OFF_MARKET_ASK_EVERY_DAYS} days — you may ask once, lightly, at a natural close.`
+    : `OFF-MARKET ASK: we asked ${days <= 1 ? "a day" : `${days} days`} ago — don't ask again yet.`;
+  const theirs = (offers || []).filter((o) => isOffMarket(o)).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  return [ask, theirs ? `They have brought us an off-market house before (${String(theirs.address || "").split(",")[0]}) — a proven source; thank them like one.` : ""].filter(Boolean).join("\n");
+}
+
 export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null, transcript = "" }) {
   const custom = recordOverCustom(rawCustom, facts);
   const book = summarizeOffers(offers, { now, showMath, transcript });
@@ -348,6 +361,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
     history.length ? `PROPERTIES THEY'VE SENT OR DISCUSSED WITH US BEFORE (oldest first):\n${history.map((l) => `- ${l}`).join("\n")}` : "",
     emailContextText(events),
     fields.length ? `WHAT WE KNOW ABOUT THEM:\n${fields.join("\n")}` : "",
+    offMarketLines({ offers, events, now }),
   ].filter(Boolean).join("\n\n");
   return {
     text, amounts: [...amounts].filter((n) => !book.stale.includes(n)), forbiddenAmounts: [], staleAmounts: book.stale, offers: book,

@@ -14,7 +14,8 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, Flame, Loader2, Pin, Search, X } from "lucide-react";
-import { HOT_ON, HOT_OFF, MAKE_CURRENT, UNPIN_CURRENT } from "./api.js";
+import { HOT_ON, HOT_OFF, MAKE_CURRENT, UNPIN_CURRENT, OFF_MARKET_ON, OFF_MARKET_OFF } from "./api.js";
+import { offMarketOf } from "@shared/off-market.js";
 import { paperHeldNow } from "@shared/current-offer.js";
 import {
   OFFER_STATUS, OFFER_STATUS_KEYS, SETTABLE_STATUSES, DEAD_STATUSES, effectiveStatus, offerHeat,
@@ -140,6 +141,19 @@ export function HotPill({ heat }) {
   );
 }
 
+// Off-market (shared/off-market.js): a house an agent brought us before (or
+// without) the market seeing it — our best deals. Says who marked it and why.
+export function OffMarketPill({ offer }) {
+  const m = offMarketOf(offer);
+  if (!m?.value) return null;
+  return (
+    <span title={`Off-market — ${m.why || "an agent brought it to us"}${m.by === "machine" ? " (marked by the machine)" : ""}`}
+      className="inline-flex items-center rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-700">
+      off-market
+    </span>
+  );
+}
+
 // Which row on a house is the number we're working from (shared/
 // current-offer.js). Said only when the house has more than one row: an
 // agent's only offer is current by definition, and a pill on every row is
@@ -212,6 +226,11 @@ export function StatusMenu({ offer, onSelect, busy, onDealNav }) {
       ? { key: HOT_OFF, label: "Not hot anymore", onSelect: () => onSelect?.(HOT_OFF) }
       : { key: HOT_ON, label: "🔥 Hot — close to a contract", onSelect: () => onSelect?.(HOT_ON) });
   }
+  // Off-market: how the house came to us, on any offer (a deal's is set from
+  // the offer before it was promoted).
+  items.push(offMarketOf(offer)?.value
+    ? { key: OFF_MARKET_OFF, label: "Not off-market — it's listed", onSelect: () => onSelect?.(OFF_MARKET_OFF) }
+    : { key: OFF_MARKET_ON, label: "Off-market — an agent brought it to us", onSelect: () => onSelect?.(OFF_MARKET_ON) });
   // Current: the row automation works from on this house. Only offered when
   // there's a choice to make (another row on the house), and never on a draft.
   if (offer.status !== "draft" && (offer.houseOffers || 1) > 1) {
@@ -225,6 +244,7 @@ export function StatusMenu({ offer, onSelect, busy, onDealNav }) {
         <span className="inline-flex items-center gap-0.5">
           {busy ? <Pill label="…" small /> : <StatusPill offer={offer} small />}
           {heat && !busy && <HotPill heat={heat} />}
+          {!busy && <OffMarketPill offer={offer} />}
           {!busy && <CurrentPill offer={offer} />}
           <ChevronDown size={12} className="text-slate-400" aria-hidden="true" />
         </span>

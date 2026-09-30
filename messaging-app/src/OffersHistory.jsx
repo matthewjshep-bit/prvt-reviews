@@ -15,6 +15,7 @@
 import React, { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
+import { isOffMarket } from "@shared/off-market.js";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
 import {
   DEAD_STATUSES, OFFER_STATUS, OFFER_STATUS_KEYS, effectiveStatus, isAiGenerated, isHot, needsAiReview,
@@ -80,6 +81,9 @@ const FILTERS = [
   // The funnel chips count each house once, by its current offer (shared/
   // current-offer.js): a superseded row is history, and "All" still has it.
   { key: "hot", label: "🔥 Hot", title: "Close to a contract — the price is agreed, or you flagged it", test: (o) => !o.supersededBy && isHot(o) },
+  // How the house came to us: off-market houses agents brought us are our
+  // best deals (shared/off-market.js). Deals included.
+  { key: "offmarket", label: "Off-market", title: "Houses an agent brought us off the market — marked by you, or by the machine from their words or Zillow", test: (o) => !o.supersededBy && o.status !== "draft" && isOffMarket(o) },
   { key: "unsent", label: "Not sent", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "new" && o.status !== "draft" },
   { key: "waiting", label: "Awaiting reply", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "sent" },
   { key: "countered", label: "Countered", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "countered" },

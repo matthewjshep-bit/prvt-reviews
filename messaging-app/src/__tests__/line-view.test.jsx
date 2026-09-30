@@ -43,3 +43,18 @@ test("buyers queued behind today's check-in seats show as backlog, apart from th
   expect(html).toContain("Backlog: <b>48</b>");
   expect(html).toContain("queued behind today&#x27;s seats (backlog)");
 });
+
+test("the Line shows off-market beside listed, and who brings them", () => {
+  const data = buildLine({
+    now: NOW,
+    offers: [
+      { id: "o1", contactId: "lori", contactName: "Lori Wright", status: "sent", createdAt: "2026-09-20T00:00:00Z", sends: [{ ts: "2026-09-21T00:00:00Z" }], offMarket: { value: true, by: "you" }, deal: { stage: "under_contract" } },
+      { id: "l1", contactId: "sam", status: "sent", createdAt: "2026-09-20T00:00:00Z", sends: [{ ts: "2026-09-21T00:00:00Z" }] },
+    ],
+  });
+  const html = renderToStaticMarkup(<LineBody data={data} />);
+  expect(html).toContain("Off-market vs listed");
+  expect(html).toContain("Lori Wright");
+  expect(html).toContain("1 under contract");
+  expect(html).toContain("100%");
+});

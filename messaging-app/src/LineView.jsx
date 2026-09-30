@@ -218,6 +218,61 @@ function Pricing({ pricing }) {
   );
 }
 
+// Off-market vs listed (shared/off-market.js): our best deals are houses an
+// agent brought us before the market saw them. Station by station, side by
+// side, and who brings them.
+function Sources({ sources }) {
+  const [span, setSpan] = useState("days90");
+  const d = sources?.[span];
+  if (!d) return null;
+  const rows = [["offers", "Offers"], ["sent", "In front of the agent"], ["countered", "Countered"], ["agreed", "Price agreed"], ["contract", "Under contract"], ["closed", "Closed"]];
+  return (
+    <Card title="Off-market vs listed" right={
+      <span className="inline-flex gap-1 text-[11px]">
+        {[["days90", "Last 90 days"], ["allTime", "All time"]].map(([k, label]) => (
+          <button key={k} type="button" onClick={() => setSpan(k)}
+            className={`rounded-md px-2 py-0.5 ${span === k ? "bg-slate-800 text-white" : "text-slate-500 hover:bg-slate-100"}`}>{label}</button>
+        ))}
+      </span>
+    }>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-wide text-slate-400">
+            <th className="py-1 pr-3 font-semibold" />
+            <th className="py-1 pr-3 text-right font-semibold text-violet-700">Off-market</th>
+            <th className="py-1 text-right font-semibold">Listed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([k, label]) => (
+            <tr key={k} className="border-t border-slate-100">
+              <td className="py-1 pr-3 text-slate-700">{label}</td>
+              <td className="py-1 pr-3 text-right tabular-nums font-semibold text-violet-800">{n(d.offMarket[k])}</td>
+              <td className="py-1 text-right tabular-nums">{n(d.listed[k])}</td>
+            </tr>
+          ))}
+          <tr className="border-t border-slate-200">
+            <td className="py-1 pr-3 text-slate-700">Offers that became contracts</td>
+            <td className="py-1 pr-3 text-right tabular-nums font-semibold text-violet-800">{pctText(d.offMarket.contractRate)}</td>
+            <td className="py-1 text-right tabular-nums">{pctText(d.listed.contractRate)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="mt-3 text-xs font-semibold text-slate-600">Agents who bring us off-market houses</div>
+      {d.agents?.length ? (
+        <ul className="mt-1 space-y-0.5 text-sm">
+          {d.agents.map((a) => (
+            <li key={a.contactId} className="text-slate-700">
+              <span className="font-medium">{a.name || "An agent"}</span>
+              <span className="text-slate-400"> · {n(a.offers)} {a.offers === 1 ? "house" : "houses"}{a.contracts ? ` · ${n(a.contracts)} under contract` : ""}</span>
+            </li>
+          ))}
+        </ul>
+      ) : <div className="mt-1 text-sm text-slate-400">None marked yet. Mark one from its status menu on the Offers tab.</div>}
+    </Card>
+  );
+}
+
 // The page under the toolbar, from one /line response. Its own export so it
 // renders without a fetch (the test renders it from buildLine's output).
 export function LineBody({ data }) {
@@ -225,6 +280,7 @@ export function LineBody({ data }) {
   return (
     <>
       <Leaks leaks={data.leaks} total={data.leakTotal} backlog={data.backlog} />
+      <Sources sources={data.sources} />
       <Stations stations={data.stations} method={data.method} />
       <div className="grid gap-4 lg:grid-cols-2">
         <Cycle cycle={data.cycle} />

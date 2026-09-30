@@ -48,6 +48,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
+import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
@@ -2275,6 +2276,7 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       aboutThem: list(p.aboutThem, 3).map((x) => ({ what: String(x?.what || "").slice(0, 120), daysAgo: x?.daysAgo ?? null })).filter((x) => x.what),
       areas: list(p.areas, 3).map((x) => String(x).slice(0, 60)),
       voice: normalizeAgentPulse(saved?.outreachAutopilot?.pulse).voice,
+      offMarketAskDue: p.offMarketAskDue !== false,
       variant: Number(p.variant) || 0 };
   }
   if (kind === "showing_reminder" || kind === "showing_followup") {
@@ -4014,6 +4016,14 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       await store.updateDataroomInvite?.(blast.invite.id, { sentAt: ts }).catch(() => {});
       await store.logDataroomEvent?.(blast.room.id, blast.invite.id, "sent", { via: "blast" }).catch(() => {});
     }
+  }
+  // An ask for off-market houses actually went (shared/off-market.js), in
+  // whatever text carried it: the next one waits a month.
+  if ((d.party || "agent") === "agent" && OFF_MARKET_ASK_RX.test(body)) {
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "agent", type: "offmarket_asked", at: ts, source: "conversation", ref: d.id,
+      dedupeKey: `offmarket_asked:${d.contactId}:${ts.slice(0, 10)}`, data: { draftId: d.id, auto: Boolean(auto) },
+    }).catch(() => {});
   }
   // The agent's check-in actually went: the cadence and the "unanswered"
   // counts (shared/agent-pulse.js) read this, never the claim.
