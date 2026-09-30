@@ -572,6 +572,9 @@ export const getDashboardFlow = (days = 7, end = "") =>
 // The records behind one Flow tile. Fetched on click, never polled.
 export const getDashboardFlowStage = (stage, days = 7, end = "") =>
   fetch(`${API_BASE}/api/dashboard/flow/stage?${locq()}&stage=${encodeURIComponent(stage)}&days=${days}${tzq()}${endq(end)}`).then(j);
+// The line, measured (shared/line.js). Cached a minute on the broker; fresh skips it.
+export const getDashboardLine = ({ fresh = false } = {}) =>
+  fetch(`${API_BASE}/api/dashboard/line?${locq()}${fresh ? "&fresh=1" : ""}`).then(j);
 export const getDashboardFunnel = (days = 30, end = "") =>
   fetch(`${API_BASE}/api/dashboard/funnel?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
 export const getDashboardTagCounts = (tags) =>

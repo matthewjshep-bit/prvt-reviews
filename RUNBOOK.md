@@ -2348,6 +2348,43 @@ route `GET /api/dashboard/flow?days=&end=&tz_offset=`, uncached local tier.
 The timeline renderer is `messaging-app/src/EventFeed.jsx`, shared with the
 contact drawer.
 
+## Line (Reports → Line, 2026-09-29)
+
+The whole business as one line, measured the way a factory floor is: is each station keeping pace, where does work wait, and what fell off with nothing scheduled. It only reads. Nothing on the page changes a setting.
+
+**Where it lives.** `GET /api/dashboard/line` is cached a minute per location, and `?fresh=1` skips the cache. The arithmetic is in `shared/line.js`; the reads are in `ghl-broker/line.js` `lineFor`. The tab is `LineView.jsx`.
+
+**Stations.** Flow's own counts (`buildFlow`) for the last 7 and 30 days, each station's rate a day, and its pace against a target.
+- Targets are in Settings → Line targets (`settings.lineTargets`, `normalizeLineTargets`). Defaults are the Agent Method's: 10 new agents a day, 10 offers a day, 120 offers to a contract, 2 deals a month, $15K a deal, every replied agent touched in 21 days, every buyer in 30.
+- The method line says what the month's offers should have made ("150 offers → 1.3 contracts expected") beside what they did.
+
+**Waiting between stations** (`cycleTimes`). Median and slowest-tenth days for each hop that *finished* in the last 30 days:
+- priced → in front of the agent (letter or float);
+- in front of them → their first answer;
+- in front of them → a price agreed;
+- agreed → contract;
+- contract → first wave;
+- contract → buyer committed;
+- contract → assigned or closed.
+
+**Leaks.** A leak is counted by the code that would have scheduled the work, so the Line and the machine never disagree:
+- **Offers** (`nextFollowUp` on the current row of each house):
+  - an open offer with nothing coming;
+  - a machine clock more than 26 hours past due, which means a missed sweep.
+  - Held replies, accepted offers waiting to be promoted, and floats the timer gave up on are shown as *waiting on you*. They aren't counted as leaks.
+  - Deliberate stops (opted out, stopped by you, we passed, off market) aren't leaks. Neither is a passed offer whose check-ins finished: its agent belongs to the agent check-in from there.
+- **Agents** (`planAgentPulse`): with the check-in on, agents due with no seat today; with it off, every agent it would text.
+- **Buyers** (`planBuyerPulse`): due beyond today's seats, and how many workdays one pass through the pool takes. It's flagged when that's longer than the buyer touch target.
+- **Deals** (the Today rows): nobody on it, blasted and nobody opened, buyers looked and nobody's committing, no buyer package, a stage lag, and a closing date or checklist item once it's *overdue*.
+
+**Coverage.** The share of agents who have written back that were touched inside the check-in cadence, and the share of reachable buyers inside theirs.
+
+**The jobs.** One row per durable job (`LINE_JOBS`, from `job_cursors` via `store.listJobCursors`, which reads only the run fields): when it last ran, whether it failed and why, or that it never ran. Whether a quiet job is switched off is the Autopilot page's to say. App errors from the last 7 days are grouped by area.
+
+**What buyers paid** (`realizedPricing`, read-only). All-in (contract price + fee + repairs) as a share of ARV. It shows the median for deals that sold (buyer found, assigned, closed) and for deals that died, beside the offer setting (`maoPctOfArv`). The 2026-09-10 post-mortem found the sold deals near 70% and the dead ones asking 74–82%. The page keeps that evidence current and changes nothing.
+
+**Last night's leaks on Today.** The nightly audit runs `lineFor` after its sweep and keeps `leakSummary` on its result (`audit.leaks`). Today's status strip shows "Leaks last night: N", linking to this tab. N counts what fell off, not what waits on you.
+
 ## Contact record (the app is the system of record; GHL is the digest)
 
 Every agent and investor has a record in the app: **facts** with provenance

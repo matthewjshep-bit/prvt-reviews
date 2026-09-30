@@ -994,6 +994,22 @@ const pgStore = {
     );
     return { at, doc };
   },
+  // Every job's cursor for the switchboard (shared/line.js lineJobs): when it
+  // last ran and whether it failed. Only those fields — the audit keeps its
+  // whole night's findings on its cursor.
+  async listJobCursors(locationId) {
+    const { rows } = await query(
+      `select name, at, jsonb_build_object(
+          'failed', doc->'failed', 'tries', doc->'tries', 'lastDaily', doc->'lastDaily', 'error', doc->'error',
+          'run', jsonb_build_object('startedAt', doc->'run'->'startedAt'),
+          'last', case when jsonb_typeof(doc->'last') = 'object' then jsonb_build_object(
+            'at', doc->'last'->'at', 'finishedAt', doc->'last'->'finishedAt', 'status', doc->'last'->'status', 'error', doc->'last'->'error') end
+        ) as doc
+         from job_cursors where location_id = $1 order by name`,
+      [locationId]
+    );
+    return rows.map((r) => ({ name: r.name, at: r.at instanceof Date ? r.at.toISOString() : r.at, doc: r.doc || {} }));
+  },
 
   /* ---- app errors (durable, deduped by fingerprint) ---- */
   async recordAppError(locationId, { fingerprint, area, message, context = {}, at = nowIso() }) {
@@ -2053,6 +2069,17 @@ const fileStore = (() => {
       data.jobCursors[`${locationId}|${name}`] = { at, doc };
       persist();
       return { at, doc };
+    },
+    async listJobCursors(locationId) {
+      ensure();
+      const pick = (d = {}) => ({
+        failed: d.failed, tries: d.tries, lastDaily: d.lastDaily, error: d.error, run: { startedAt: d.run?.startedAt },
+        last: d.last && typeof d.last === "object" ? { at: d.last.at, finishedAt: d.last.finishedAt, status: d.last.status, error: d.last.error } : null,
+      });
+      return Object.entries(data.jobCursors)
+        .filter(([k]) => k.startsWith(`${locationId}|`))
+        .map(([k, c]) => ({ name: k.slice(locationId.length + 1), at: c.at, doc: pick(c.doc) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
 
     async recordAppError(locationId, { fingerprint, area, message, context = {}, at = nowIso() }) {

@@ -29,7 +29,6 @@ import { addDismissal, removeDismissal, applyDismissals, TODAY_DISMISS_CURSOR } 
 import { answerPartnerQuestion, forgetAnswer } from "../partner-answer.js";
 import express from "express";
 import { store } from "../store.js";
-import { isDealRoom } from "./dataroom.js";
 import {
   countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
 } from "../ghl.js";
@@ -48,6 +47,7 @@ import { draftStats } from "../shared/conversation-ai.js";
 import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
 import { conversationConfig } from "../reply-agent.js";
 import { allEventsSince } from "../contact-events.js";
+import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, summarize as summarizeAudit } from "../shared/conversation-audit.js";
 import { startCoach, coachReport, coachForContact, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
@@ -197,18 +197,6 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   //
   // Local DB only — no GHL calls — so it stays in the fast tier beside
   // /summary and needs none of the caching the /ghl endpoints carry.
-  // Which live deals have a buyer package, for the "no buyer package" row.
-  // One small read per deal under contract (there are only ever a few); a
-  // read that fails counts as having one, so the row never guesses.
-  async function dealRoomIds(locationId, offers = []) {
-    const live = offers.filter((o) => o?.deal?.stage === "under_contract");
-    const ids = await Promise.all(live.map(async (o) => {
-      try { return (await store.listDatarooms(locationId, { offerId: o.id, limit: 10 })).some(isDealRoom) ? o.id : null; }
-      catch { return o.id; }
-    }));
-    return ids.filter(Boolean);
-  }
-
   router.get("/funnel", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -312,6 +300,29 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     "offer_no_response", "realm_yes", "realm_no", "deal_promoted", "deal_stage", "blast_sent", "dataroom_sent", "dataroom_viewed",
     "investor_evaluating", "investor_committed", "investor_passed", "feedback", "follow_up_sent", "call_booked", "agent_estimate",
   ];
+  // The line, measured (shared/line.js): each station against its target,
+  // the waits between stations, what fell off with nothing scheduled, the
+  // jobs and the errors, and what buyers paid all-in beside the offer
+  // setting. Reads only. Cached a minute a location: it runs both pulse
+  // planners. ?fresh=1 skips the cache.
+  const lineCache = new Map();
+  router.get("/line", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const hit = lineCache.get(locationId);
+      if (hit && Date.now() - hit.at < 60000 && req.query?.fresh !== "1") return res.json(hit.body);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const line = await lineFor({
+        store, locationId, saved,
+        flow: { eventTypes: FLOW_EVENT_TYPES, jobs: listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob) },
+        buyerBook: router.buyerBook || null,
+      });
+      const body = { ok: true, ...line };
+      lineCache.set(locationId, { at: Date.now(), body });
+      res.json(body);
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/flow", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -450,7 +461,8 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // have since given, and the triage of any held underwrite in the way.
       const sentDrafts = recentDrafts.filter((d) => d?.status === "sent");
       const heldTriageByOffer = await heldTriageForPromises({ store, locationId, offers, events, config, now }).catch(() => ({}));
-      const dealRooms = await dealRoomIds(locationId, offers);
+      // Which live deals have a buyer package, for the "no buyer package" row.
+      const dealRooms = await dealRoomIds({ store, locationId, offers });
       const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT, dealRooms });
       // Last night's audit: the rows that are Matt's join the queue under
       // "From last night"; the rest of the result rides along for the card.
@@ -485,7 +497,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       res.json({
         dismissedCount: dismissedRows.length,
         rowFeedback,
-        audit: audit ? { lastRunAt: auditCursor.at, run: auditCursor.doc?.run || null, counts: audit.counts, summary: summarizeAudit(audit), finishedAt: audit.finishedAt, trigger: audit.trigger, dryRun: audit.dryRun, error: audit.error, ghlRead: audit.ghlRead } : null,
+        audit: audit ? { lastRunAt: auditCursor.at, run: auditCursor.doc?.run || null, counts: audit.counts, summary: summarizeAudit(audit), finishedAt: audit.finishedAt, trigger: audit.trigger, dryRun: audit.dryRun, error: audit.error, ghlRead: audit.ghlRead, leaks: audit.leaks || null } : null,
         daytime: dayLast ? { finishedAt: dayLast.finishedAt, started: (dayLast.acted || []).filter((a) => ["started", "queued", "clocked"].includes(a.status)).length,
           stopped: (dayLast.acted || []).filter((a) => a.status === "stopped").length, error: dayLast.error || null } : null,
         ok: true,

@@ -22,7 +22,7 @@ const SIDES = [{ key: "all", label: "Everything" }, { key: "agent", label: "Acqu
 // One line above the work pane: the autopilot (links to its controls), the
 // two numbers that were tiles, and when the daytime pass last ran. The group
 // counts live on the rail's headings now, so the pane gets the height.
-function StatusStrip({ autopilot, working, liveDeals, daytime, refreshBtn }) {
+function StatusStrip({ autopilot, working, liveDeals, daytime, leaks, refreshBtn }) {
   const c = autopilot?.counts || {};
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
@@ -35,6 +35,11 @@ function StatusStrip({ autopilot, working, liveDeals, daytime, refreshBtn }) {
       )}
       <span><b className="tabular-nums text-slate-700">{working}</b> working offers</span>
       <span><b className="tabular-nums text-slate-700">{liveDeals}</b> live deals</span>
+      {leaks && (
+        <a href={appHref("/reports", "line")} className="rounded-md hover:text-blue-700" title="What fell off the line with nothing scheduled — the Line view">
+          Leaks last night: <b className={`tabular-nums ${leaks.total ? "text-amber-700" : "text-emerald-700"}`}>{leaks.total}</b>
+        </a>
+      )}
       {daytime && (
         <span>
           Daytime pass {new Date(daytime.finishedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: {daytime.started} started
@@ -113,7 +118,7 @@ export default function PipelineView({ section = "queue", settings = null }) {
 
       {section === "queue" && (
         <>
-          <StatusStrip autopilot={data?.autopilot} working={working} liveDeals={liveDeals} daytime={data?.daytime} refreshBtn={refreshBtn} />
+          <StatusStrip autopilot={data?.autopilot} working={working} liveDeals={liveDeals} daytime={data?.daytime} leaks={data?.audit?.leaks || null} refreshBtn={refreshBtn} />
           <WorkView actions={actions} drafts={drafts} rowFeedback={data?.rowFeedback || {}} sendsEnabled={data?.sendsEnabled}
             serverOffsetMs={offsetRef.current} onDone={refresh} settings={settings} />
         </>
