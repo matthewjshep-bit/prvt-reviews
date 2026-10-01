@@ -4684,8 +4684,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         { type: "offer_accepted", offerId: full.id, source: "conversation", at: ts, data: { amount, via: "acceptance" } });
       return { ok: true, address: full.address, amount, revived };
     },
-    linkDealInterest: ({ contactId, addressHint }) =>
-      linkInvestorInterest({ locationId, client, contactId, addressHint }),
+    linkDealInterest: ({ contactId, addressHint, status, reason, revive, addOnly, withinDays, note }) =>
+      linkInvestorInterest({ locationId, client, contactId, addressHint, status, reason, revive, addOnly, withinDays, note }),
     // The agent's offer outcome, from what they just said: a counter or a
     // pass. Same write the History table's status menu makes — ledger line,
     // tag reconcile and all — on their newest open offer, or the one whose
@@ -5702,7 +5702,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // "evaluating". Shared by the deal-interest webhook and the Conversation
   // AI's link_deal_evaluating action; the hint (a property the model read
   // out of the message) is tried before the transcript.
-  async function linkInvestorInterest({ locationId, client, contactId, addressHint = "" }) {
+  // A reply about a deal, filed on it (2026-10-01). Kenneth Patton asked
+  // about 1510 Maple Lane's land lease, size and photos and was on no deal:
+  // only "walk it" and "buy it" linked a buyer, and none of it ran while Matt
+  // was in the thread himself. Now any reply about a deal puts them on it.
+  //   status    "evaluating" (they're looking) or "passed" (they said no)
+  //   reason    the pass reason ({ code, note }), when there is one
+  //   revive    a buyer who had passed and is back is evaluating again (the
+  //             "walk it / buy it" behaviour); off, an existing link is left
+  //   addOnly   never change a buyer already on the deal — for a reply nobody
+  //             read but a rule, while Matt has the thread
+  //   withinDays  the deal must have come up in the thread this recently
+  //             when the reply doesn't name it; 0 = any time (and a lone open
+  //             deal needs no mention at all)
+  // A committed or soft-committed buyer is never moved from here.
+  async function linkInvestorInterest({ locationId, client, contactId, addressHint = "", status = "evaluating", reason = null,
+    revive = true, addOnly = false, withinDays = 0, note = "" }) {
     const OPEN_STAGES = new Set(["under_contract", "buyer_found"]);
     const open = (await store.listDeals(locationId)).filter((o) => OPEN_STAGES.has(o.deal?.stage));
     if (!open.length) return { ok: true, linked: false, reason: "no open deals" };
@@ -5715,7 +5730,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 80,
           maxChars: 15000, maxCallTranscripts: 0,
         });
-        text = t.text.toLowerCase();
+        text = (withinDays > 0 ? transcriptSince(t.text, Date.now() - withinDays * 86400000) : t.text).toLowerCase();
       } catch { /* missing scope or no messages — the single-deal fallback below still applies */ }
 
       // Most recently mentioned deal wins; a lone open deal needs no mention.
@@ -5728,35 +5743,62 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           if (pos > matchPos) { match = o; matchPos = pos; }
         }
       }
-      if (!match && open.length === 1) match = open[0];
+      if (!match && open.length === 1 && !(withinDays > 0)) match = open[0];
     }
     if (!match) return { ok: true, linked: false, reason: "no deal address in recent messages" };
 
     const offer = match;
     offer.deal.investors = offer.deal.investors || [];
     const ts = new Date().toISOString();
+    const want = status === "passed" ? "passed" : "evaluating";
     const existing = offer.deal.investors.find((i) => i.contactId === contactId);
+    let inv = existing;
     if (existing) {
       // Already on the deal. A buyer who passed and came back is evaluating
-      // again; anyone else is left exactly where a person put them.
+      // again; a "no" from someone looking at it is a pass; anyone else —
+      // and anyone committed — is left exactly where a person put them.
       const was = investorStatus(existing.status);
-      if (was !== "passed") return { ok: true, linked: true, unchanged: true, offerId: offer.id, address: offer.address, status: was };
-      existing.status = "evaluating";
+      const unchanged = { ok: true, linked: true, unchanged: true, offerId: offer.id, address: offer.address, status: was };
+      if (addOnly || was === want || was === "committed" || was === "soft_commit") return unchanged;
+      if (want === "evaluating" && (!revive || was !== "passed")) return unchanged;
+      existing.status = want;
       existing.updatedAt = ts;
     } else {
       let name = "";
       try { name = contactName(await getContact(client, contactId)) || contactId; }
       catch { name = contactId; }
-      offer.deal.investors.push({ contactId, name, status: "evaluating", addedAt: ts, updatedAt: ts });
+      inv = { contactId, name, status: want, addedAt: ts, updatedAt: ts };
+      offer.deal.investors.push(inv);
+    }
+    const said = want === "passed" ? normalizePassReason(reason) : null;
+    if (said) {
+      inv.reason = { ...said, at: ts };
+      recordFeedback(offer, { contactId, name: inv.name, code: said.code, note: said.note, status: want, ts });
     }
     offer.deal.updatedAt = ts;
     await store.updateOffer(offer.id, offer);
     await appendDealHistory(client, locationId, contactId, "investor_deal_history",
-      historyLine(ts, offer.address, "evaluating", "Conversation AI flagged interest"),
-      { type: "investor_evaluating", offerId: offer.id, dealId: offer.id, source: "conversation", at: ts });
+      historyLine(ts, offer.address, want, note || (want === "passed" ? (said ? feedbackPhrase(said) : "passed") : "Conversation AI flagged interest")),
+      { type: `investor_${want}`, offerId: offer.id, dealId: offer.id, source: "conversation", at: ts });
     await syncInvestorDealTag(client, locationId, contactId);
-    return { ok: true, linked: true, offerId: offer.id, address: offer.address, status: "evaluating" };
+    return { ok: true, linked: true, offerId: offer.id, address: offer.address, status: want };
   }
+
+  // The lines of a transcript ("[YYYY-MM-DD HH:MM] US sms: …") from a moment
+  // on; a call's transcript lines ride with the line that opened them.
+  function transcriptSince(text = "", sinceMs = 0) {
+    const out = [];
+    let keep = false;
+    for (const line of String(text || "").split("\n")) {
+      const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\]/.exec(line);
+      if (m) keep = Date.parse(`${m[1]}T${m[2]}:00Z`) >= sinceMs;
+      if (keep) out.push(line);
+    }
+    return out.join("\n");
+  }
+
+  // For the tests: the filing every reply about a deal goes through.
+  router.linkInvestorInterest = linkInvestorInterest;
 
   router.post("/automations/deal-interest", async (req, res) => {
     try {

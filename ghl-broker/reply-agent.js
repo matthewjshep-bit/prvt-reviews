@@ -49,6 +49,7 @@ import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
+import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
@@ -343,6 +344,54 @@ export async function callDraftModel(client, params, { batch = null } = {}) {
 
 // A buyer saying they want to see it or buy it (reply-agent runReply).
 const WARM_INTENTS = new Set(["wants_walkthrough", "wants_to_buy"]);
+
+// A reply about a deal puts them on it (2026-10-01). Kenneth Patton asked
+// about 1510 Maple Lane's land lease, its size and its photos and was on no
+// deal: only WARM_INTENTS linked a buyer, and a question never did. A
+// question, interest or a push on price is someone looking at it; a pass is
+// filed as a pass, with what they said.
+const DEAL_REPLY_INTENTS = new Set([...WARM_INTENTS, "interested", "question", "price_pushback", "wants_call"]);
+// A reply that doesn't name the house is about the deal last mentioned in the
+// thread — only if it came up this recently.
+export const DEAL_REPLY_DAYS = 14;
+// "Liked “…”", "ok", "thanks", an emoji: a reply, but nothing about the deal.
+const TAPBACK_RX = /^(liked|loved|laughed at|emphasized|questioned|disliked)\s+[“"']/i;
+const ACK_RX = /^(ok(ay)?|k|kk|thanks?|thank you|thx|ty|sounds good|got it|cool|great|nice|will do|👍|🙏|😁|😀|🙂|😊)[\s.!]*$/i;
+
+/**
+ * dealReplyFiling({ intent, propertyAddress, passReason, linkedDeals })
+ *   → { status, reason, revive, withinDays } | null
+ *
+ * How a reply the bot read is filed on a deal. Walking it or buying it, as
+ * before, from anyone (and a buyer who had passed is back). A question,
+ * interest, a price push or wanting a call: evaluating. A pass: passed, with
+ * the model's reason. Either of the last two only when the reply is about a
+ * deal — it names one, or a live deal was sent to them (`linkedDeals`, the
+ * investor context's deals they're on or were blasted).
+ */
+export function dealReplyFiling({ intent = "", propertyAddress = "", passReason = null, linkedDeals = [] } = {}) {
+  const status = intent === "passing" ? "passed" : DEAL_REPLY_INTENTS.has(intent) ? "evaluating" : null;
+  if (!status) return null;
+  const warm = WARM_INTENTS.has(intent);
+  if (!warm && !String(propertyAddress || "").trim() && !(linkedDeals || []).length) return null;
+  return { status, reason: status === "passed" ? passReason || null : null, revive: warm, withinDays: warm ? 0 : DEAL_REPLY_DAYS };
+}
+
+/**
+ * heldDealReplyFiling(message, linkedDeals) → the same, for a reply the bot
+ * stood aside from because Matt has the thread — nothing read it but this.
+ * Only someone not on the deal yet is added (never a status changed on a
+ * guess): passed when the words plainly say no (deal-feedback.js PASS_RE),
+ * otherwise evaluating. A tapback or a bare "ok" files nothing.
+ */
+export function heldDealReplyFiling(message = "", linkedDeals = []) {
+  const t = String(message || "").trim();
+  if (!t || !(linkedDeals || []).length || TAPBACK_RX.test(t) || ACK_RX.test(t)) return null;
+  // "No. I've seen this one… better as a teardown" (Kenneth Patton on 3511
+  // NE 153rd) opens on the no; PASS_RE looks for the reason words.
+  const passed = PASS_RE.test(t) || /^(no|nope|nah)\b/i.test(t);
+  return { status: passed ? "passed" : "evaluating", reason: passed ? inferReason(t) : null, revive: false, addOnly: true, withinDays: DEAL_REPLY_DAYS };
+}
 
 /**
  * walkthroughDealFor(deals, address) → the deal row a buyer's walkthrough
@@ -2622,6 +2671,17 @@ async function runReply(job, ctx) {
     job.status = "held";
     job.phase = "";
     job.heldReason = `you replied to them ${a.humanActive.minutesAgo} minute${a.humanActive.minutesAgo === 1 ? "" : "s"} ago — you have the thread`;
+    // The thread is Matt's, but what they said about the deal still goes on
+    // it: Kenneth Patton's four questions about 1510 Maple Lane (2026-10-01)
+    // came while Matt was answering him, and none of them reached the deal.
+    if (party === "investor" && deps.linkDealInterest) {
+      const filing = heldDealReplyFiling(job.originalMessage || job.message, context?.deals?.linked);
+      if (filing) {
+        const r = await deps.linkDealInterest({ contactId: job.contactId, addressHint: "", ...filing })
+          .catch((e) => { warnings.push(`not put on the deal: ${e.message}`); return null; });
+        if (r?.linked && !r.unchanged) job.filedOnDeal = { status: r.status, address: r.address };
+      }
+    }
     job.finishedAt = new Date().toISOString();
     await noteHeld(job.heldReason);
     return;
@@ -2870,11 +2930,17 @@ async function runReply(job, ctx) {
   // night" on 3511 NE 153rd St; the notice below returned before the
   // playbook's link ran, so he was the one interested buyer not on the deal.
   // Linking only records them — it sends nothing.
-  let linkedForInterest = false;
-  if (party === "investor" && WARM_INTENTS.has(draft.intent) && deps.linkDealInterest) {
-    const r = await deps.linkDealInterest({ contactId: job.contactId, addressHint: draft.propertyAddress || walkDeal?.address || "" })
+  //
+  // Since 2026-10-01 any reply about a deal does the same (dealReplyFiling):
+  // a question or interest puts them on it as evaluating, a pass as passed.
+  let filedOnDeal = null;
+  const filing = party === "investor"
+    ? dealReplyFiling({ intent: draft.intent, propertyAddress: draft.propertyAddress, passReason: draft.passReason, linkedDeals: context?.deals?.linked })
+    : null;
+  if (filing && deps.linkDealInterest) {
+    const r = await deps.linkDealInterest({ contactId: job.contactId, addressHint: draft.propertyAddress || walkDeal?.address || "", ...filing })
       .catch((e) => { warnings.push(`not put on the deal: ${e.message}`); return null; });
-    linkedForInterest = Boolean(r?.ok);
+    if (r?.ok) filedOnDeal = filing.status;
   }
 
   // A walkthrough, a call, a time: yours by design, and therefore a draft
@@ -2923,9 +2989,11 @@ async function runReply(job, ctx) {
   const bookingVerdict = guard?.kind === "booking" ? guard : null;
   const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
-  if (linkedForInterest) {
-    plan.auto = plan.auto.filter((x) => x.type !== "link_deal_evaluating");
-    plan.suggested = plan.suggested.filter((x) => x.type !== "link_deal_evaluating");
+  // Filed above: the playbook's own link or pass would only write it twice.
+  const filedAction = filedOnDeal === "evaluating" ? "link_deal_evaluating" : filedOnDeal === "passed" ? "mark_investor_passed" : null;
+  if (filedAction) {
+    plan.auto = plan.auto.filter((x) => x.type !== filedAction);
+    plan.suggested = plan.suggested.filter((x) => x.type !== filedAction);
   }
   // Number first: the reply promises numbers, so the underwrite runs whatever
   // the tier's rule carries (Tier 2 carries none) — replacing a held draft

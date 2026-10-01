@@ -4178,8 +4178,102 @@ test("a buyer who asks to walk a house is put on the deal even when the reply is
   });
   await settle();
   assert.equal(job.status, "done", job.error);
-  assert.deepEqual(linked, [{ contactId: "c1", addressHint: "2010 NE 54th St" }]);
+  assert.deepEqual(linked, [{ contactId: "c1", addressHint: "2010 NE 54th St", status: "evaluating", reason: null, revive: true, withinDays: 0 }]);
   assert.equal((await store.getReplyDraft(job.draftId)).status, "handled");
+});
+
+/* ---------- any reply about a deal goes on the deal (2026-10-01) ---------- */
+
+// Kenneth Patton, 1510 Maple Lane: "Is there a land lease?", "Is it a 3/2
+// 1440?", "You have pics?" — and he was on no deal. A question never linked
+// a buyer, and while Matt was answering him the bot read nothing at all.
+test("which replies go on a deal, and as what", async () => {
+  const { dealReplyFiling, heldDealReplyFiling, DEAL_REPLY_DAYS } = await import("./reply-agent.js");
+  const pitched = [{ address: "1510 Maple Lane, Kent, Washington 98030", offerId: "mh", stage: "under_contract", blasted: true }];
+  assert.deepEqual(dealReplyFiling({ intent: "question", linkedDeals: pitched }),
+    { status: "evaluating", reason: null, revive: false, withinDays: DEAL_REPLY_DAYS });
+  assert.equal(dealReplyFiling({ intent: "question", linkedDeals: [] }), null, "a question about nothing we sent them is not about a deal");
+  assert.equal(dealReplyFiling({ intent: "price_pushback", propertyAddress: "1510 Maple Lane" }).status, "evaluating");
+  assert.deepEqual(dealReplyFiling({ intent: "passing", passReason: { code: "area", note: "too far south" }, linkedDeals: pitched }),
+    { status: "passed", reason: { code: "area", note: "too far south" }, revive: false, withinDays: DEAL_REPLY_DAYS });
+  assert.equal(dealReplyFiling({ intent: "wants_to_buy" }).revive, true, "walk it / buy it links from anyone, as before");
+  for (const intent of ["looking_for_deals", "buybox_update", "small_talk", "status_check", "opt_out", "other"]) {
+    assert.equal(dealReplyFiling({ intent, linkedDeals: pitched }), null, intent);
+  }
+
+  assert.equal(heldDealReplyFiling("Is there a land lease?", pitched).status, "evaluating");
+  assert.equal(heldDealReplyFiling("Is there a land lease?", pitched).addOnly, true, "never changes someone already on it");
+  assert.equal(heldDealReplyFiling("Shoot. Too far south for me.", pitched).status, "passed");
+  assert.equal(heldDealReplyFiling("No. I've seen this one, better as a teardown", pitched).status, "passed");
+  assert.equal(heldDealReplyFiling("Liked “Good, that opens it up.”", pitched), null);
+  assert.equal(heldDealReplyFiling("ok", pitched), null);
+  assert.equal(heldDealReplyFiling("Is there a land lease?", []), null, "nothing was sent to them");
+});
+
+const MAPLE = { id: "mh", address: "1510 Maple Lane, Kent, Washington 98030", cashAmount: 71075,
+  calc: { inputs: { arv: 165000, repairs: 40000 } },
+  deal: { stage: "under_contract", contractPrice: 71075, assignmentFee: 5000, investors: [] } };
+
+test("a buyer's question about a deal they were sent puts them on it, and a pass is filed as a pass", async () => {
+  for (const [message, draft, want] of [
+    ["Is there a land lease?", { intent: "question", propertyAddress: "" }, { status: "evaluating", reason: null }],
+    ["Shoot. Too far south for me.", { intent: "passing", propertyAddress: "", passReason: { code: "area", note: "too far south" } }, { status: "passed", reason: { code: "area", note: "too far south" } }],
+  ]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["investor", "dispo-1510-maple-lane"]);
+    const store = fakeStore();
+    store.listDeals = async () => [MAPLE];
+    const linked = [];
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message,
+      deps: { linkDealInterest: async (x) => { linked.push(x); return { ok: true, linked: true, status: x.status }; },
+        draft: async () => ({ ...INVESTOR_DRAFT, reply: "Good question, let me check.", ...draft }) },
+    });
+    await settle();
+    assert.equal(job.status, "done", job.error);
+    assert.equal(linked.length, 1, message);
+    assert.deepEqual({ status: linked[0].status, reason: linked[0].reason, withinDays: linked[0].withinDays }, { ...want, withinDays: 14 });
+  }
+});
+
+test("while Matt has the thread, a buyer's question still goes on the deal — and a tapback doesn't", async () => {
+  const ago = (ms) => new Date(Date.now() - ms).toISOString();
+  const threadClient = (inbound) => {
+    const { client: base } = ghlStubFor(["investor", "dispo-1510-maple-lane"]);
+    return { call: async (path, opts = {}) => {
+      if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+      if (/^\/conversations\/cv1\/messages/.test(path)) {
+        return { messages: [
+          { id: "m1", dateAdded: ago(20 * 60000), direction: "outbound", messageType: "TYPE_SMS", body: "sorry typo its a manufactured home in a good park. Do you do mobile/manufactured?" },
+          { id: "m2", dateAdded: ago(60000), direction: "inbound", messageType: "TYPE_SMS", body: inbound },
+        ] };
+      }
+      return base.call(path, opts);
+    } };
+  };
+  for (const [inbound, want] of [["Is there a land lease?", "evaluating"], ["Liked “sorry typo”", null]]) {
+    _resetJobs();
+    const store = fakeStore();
+    store.listDeals = async () => [MAPLE];
+    const linked = [];
+    let drafted = 0;
+    const { job } = await startReply({
+      client: threadClient(inbound), locationId: "LOC", saved: SAVED, store, contactId: "c1", message: inbound,
+      deps: { linkDealInterest: async (x) => { linked.push(x); return { ok: true, linked: true, status: x.status }; },
+        draft: async () => { drafted++; return INVESTOR_DRAFT; } },
+    });
+    await settle();
+    assert.equal(job.status, "held", job.error);
+    assert.match(job.heldReason, /you have the thread/);
+    assert.equal(drafted, 0, "still no model call");
+    if (want) {
+      assert.equal(linked.length, 1, inbound);
+      assert.deepEqual({ status: linked[0].status, addOnly: linked[0].addOnly, revive: linked[0].revive }, { status: want, addOnly: true, revive: false });
+      assert.equal(job.filedOnDeal.status, want);
+    } else {
+      assert.equal(linked.length, 0, "a tapback is not a reply about the deal");
+    }
+  }
 });
 
 test("a held reply says why in plain words, never 'a other'", async () => {

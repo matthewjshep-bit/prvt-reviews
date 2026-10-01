@@ -3124,6 +3124,32 @@ Before this, wave 2 re-drafted every wave-1 buyer whose text was still sitting i
 
 `GET /api/dispo/waves/preview?offerId=` returns the deal's `asset` and each next buyer's `channel`.
 
+### A reply about a deal goes on the deal (2026-10-01)
+
+Kenneth Patton asked about 1510 Maple Lane's land lease, its size and its photos, and he was on no deal. There were two reasons:
+- Only "wants to walk it" and "wants to buy it" put a buyer on a deal. A question never did.
+- While Matt was in the thread, the bot held the reply before reading it, so nothing was filed.
+
+A sweep of the six live deals that day found 12 replies like that.
+
+**Now (`dealReplyFiling` / `heldDealReplyFiling` in `reply-agent.js`, filed by `linkInvestorInterest` in `routes/offers.js`):**
+- **When the bot reads the reply:**
+  - Interest, a question, a push on price or wanting a call puts the buyer on the deal as **evaluating**.
+  - A pass marks them **passed**, with the model's `passReason` on the deal and in its feedback.
+  - Walking it or buying it works as before, from anyone, and brings back a buyer who had passed.
+  - The playbook's own link or pass action for that reply is dropped, so nothing is written twice.
+- **When Matt has the thread** (the bot holds before the model call):
+  - A buyer who isn't on the deal yet is added.
+  - They go on as **passed** when the words plainly say no (`PASS_RE`, or opening on "no"), otherwise as evaluating.
+  - Someone already on the deal is never changed on a guess.
+  - A tapback ("Liked “…”") or a bare "ok" files nothing.
+- **Which deal:**
+  - The house the reply names.
+  - Otherwise the live deal mentioned last in the thread. For anything short of walking or buying, that mention must be within 14 days (`DEAL_REPLY_DAYS`).
+  - Either way, only for a buyer who was sent a live deal (on it, or carrying its blast tag) or who named one.
+- **Never moved:** a committed or soft-committed buyer.
+- Being on a deal as evaluating does not quiet the bot. Only a committed buyer holds it (`WORKING_INVESTOR_STATUSES`).
+
 ## Dataroom photos from a Google Drive folder
 
 The dataroom photo box takes a Drive **folder** link and imports everything in
