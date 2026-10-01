@@ -31,8 +31,13 @@
 
 /* ---------- vocabularies ---------- */
 
-// Mirrors INVESTOR_ENRICH_FIELDS.buybox_property_types.values.
-export const PROPERTY_TYPES = ["sfr", "townhouse", "condo", "multi_family", "land"];
+// Mirrors INVESTOR_ENRICH_FIELDS.buybox_property_types.values. `manufactured`
+// (2026-10-01) is a mobile or manufactured home — shared/asset-type.js says
+// which deals are one.
+export const PROPERTY_TYPES = ["sfr", "townhouse", "condo", "multi_family", "land", "manufactured"];
+
+// What a person (or the model) writes for a kind we already have a word for.
+const PROPERTY_TYPE_ALIASES = { single_family: "sfr", mobile: "manufactured", mobile_home: "manufactured", mobile_homes: "manufactured" };
 
 // Mirrors INVESTOR_ENRICH_FIELDS.rehab_appetite.values, ORDERED — the index is
 // the rank. Appetite is read as a CEILING ("the worst I'll take on"), so an
@@ -51,6 +56,7 @@ export const PROPERTY_TYPE_LABELS = {
   condo: "Condo",
   multi_family: "Multi-family",
   land: "Land",
+  manufactured: "Manufactured / mobile",
 };
 
 export const REHAB_APPETITE_LABELS = {
@@ -111,6 +117,7 @@ export function normalizeBuybox(custom = {}) {
   const areasRaw = String(c.buybox_areas || "").trim();
   const typesRaw = String(c.buybox_property_types || "").trim();
   const types = lowerSet(splitList(typesRaw).map((t) => t.replace(/[\s-]+/g, "_")))
+    .map((t) => PROPERTY_TYPE_ALIASES[t] || t)
     .filter((t) => PROPERTY_TYPES.includes(t));
   const appetite = String(c.rehab_appetite || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
   return {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { blastMessage, blastNote, dealFacts } from "./blast-text.js";
+import { blastMessage, blastNote, dealFacts, blastSubject } from "./blast-text.js";
 
 test("a blast text names the street, the work, the buyer price in k, and no dollar sign or link", () => {
   const t = blastMessage({ firstName: "Ravi Patel", address: "22018 76th Ave W, Edmonds, WA 98026", city: "Edmonds", price: 495000, beds: 3, baths: 2, sqft: 1480, rehab: "moderate", variant: 0 });
@@ -101,4 +101,45 @@ test("a blast with a walkthrough question ends on it, then the package link", ()
     assert.match(s, /When could you get out to walk it\?$/);
     assert.doesNotMatch(s, /Want the details|Interested\?|send the package/);
   }
+});
+
+/* ---------- the kind of house (2026-10-01) ---------- */
+
+// 1510 Maple Lane, Kent went out to flippers as "3bd 2ba 1,440 sqft" — a
+// mobile home in a park, and the text never said so.
+const MAPLE = {
+  address: "1510 Maple Lane, Kent, Washington 98030",
+  calc: { inputs: { arv: 165000, repairs: 40000 } },
+  snapshot: { subjectInfo: { beds: 3, baths: 2, sqft: 1440, homeType: "MANUFACTURED", yearBuilt: 1978 } },
+  asset: { type: "manufactured", land: "park", by: "you" },
+};
+
+test("a mobile home blast says mobile home in a park", () => {
+  const f = dealFacts(MAPLE, { price: 76000 });
+  assert.equal(f.kind, "mobile home in a park");
+  const t = blastMessage({ ...f, firstName: "Amanda W", variant: 0 });
+  assert.equal(t, "Hey Amanda, got 1510 Maple Lane in Kent under contract — mobile home in a park, 3bd 2ba 1,440 sqft, built 1978, " +
+    "heavy rehab. Buyer price 76k, ARV around 165k, rehab about 40k. Want the details?");
+  for (const v of [1, 2]) assert.match(blastMessage({ ...f, variant: v }), /mobile home in a park/);
+  // Zillow's word alone, before anyone picks the land.
+  assert.equal(dealFacts({ ...MAPLE, asset: undefined }, { price: 1 }).kind, "mobile home");
+});
+
+test("a single family blast reads exactly as before", () => {
+  const f = dealFacts({ ...UNDERWRITTEN, snapshot: { subjectInfo: { ...UNDERWRITTEN.snapshot.subjectInfo, homeType: "SINGLE_FAMILY" } } }, { price: 532000 });
+  assert.equal(f.kind, "");
+  assert.equal(blastMessage({ ...f, firstName: "Dmitriy Kozlov", variant: 0 }),
+    "Hey Dmitriy, got 23706 138th Dr SE in Snohomish under contract — 3bd 2.5ba 1,890 sqft, built 1978, " +
+    "moderate rehab. Buyer price 532k, ARV around 735k, rehab about 85k. Want the details?");
+});
+
+test("a buyer hearing from us for the first time is told how we found them, first", () => {
+  const f = dealFacts(MAPLE, { price: 76000 });
+  const t = blastMessage({ ...f, firstName: "Ashton K", variant: 0, intro: "found you through the WA real estate Facebook group" });
+  assert.match(t, /^Hey Ashton — found you through the WA real estate Facebook group\. Got 1510 Maple Lane in Kent under contract/);
+});
+
+test("an emailed deal has a subject that says what it is and the price", () => {
+  assert.equal(blastSubject(dealFacts(MAPLE, { price: 76000 })), "Mobile home in a park, Kent — under contract, 76k");
+  assert.equal(blastSubject(dealFacts(UNDERWRITTEN, { price: 532000 })), "23706 138th Dr SE, Snohomish — under contract, 532k");
 });

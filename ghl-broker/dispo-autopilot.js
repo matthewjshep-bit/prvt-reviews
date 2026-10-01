@@ -20,7 +20,7 @@
 //   offers router's deps; this file holds the settings and the queue.
 
 import { store as defaultStore } from "./store.js";
-import { blastMessage, blastNote, dealFacts } from "./shared/blast-text.js";
+import { blastMessage, blastNote, dealFacts, blastSubject } from "./shared/blast-text.js";
 import { normalizeBookSync } from "./investor-sync.js";
 import { normalizeBuyerPulse } from "./shared/buyer-pulse.js";
 import { walkthroughAsk } from "./shared/showing.js";
@@ -64,7 +64,50 @@ export function normalizeDispoAutopilot(v = {}) {
     bookSync: normalizeBookSync(o.bookSync),
     // The buyer walkthrough (shared/showing.js).
     showings: normalizeShowings(o.showings),
+    // A buyer with no phone gets the deal by email (2026-10-01: fourteen of
+    // the twenty mobile home buyers had only an email).
+    email: normalizeBlastEmail(o.email),
   };
+}
+
+/**
+ * normalizeBlastEmail(v) → { draft, autoSend }
+ *
+ * draft: a buyer with no phone and an email is in the wave, as an email
+ * draft. A draft waits for you, so on. autoSend: those emails send
+ * themselves like the texts do (same broker switches and allowlist). A send
+ * nobody pressed, so off until Matt turns it on.
+ */
+export function normalizeBlastEmail(v = {}) {
+  const o = v && typeof v === "object" ? v : {};
+  return { draft: o.draft !== false, autoSend: o.autoSend === true };
+}
+
+// How we found a buyer, said the first time we write them (Matt, 2026-09-28:
+// the Facebook group buyers are told where we found them). Keyed by source tag.
+const SOURCE_INTROS = { "dispo-source-fb-warei": "found you through the WA real estate Facebook group" };
+
+/** blastIntro({ tags, lastRepliedAt }) → the how-we-found-you line for a buyer who has never written back, or "". */
+export function blastIntro(inv = {}) {
+  if (inv.lastRepliedAt) return "";
+  const tags = (inv.tags || []).map((t) => String(t || "").toLowerCase());
+  for (const t of tags) if (SOURCE_INTROS[t]) return SOURCE_INTROS[t];
+  return tags.some((t) => t.startsWith("dispo-source-fb")) ? "found you through a real estate Facebook group" : "";
+}
+
+/**
+ * blastChannel(inv, da) → "sms" | "email" | ""
+ *
+ * A phone is texted. No phone and an email is emailed, when email drafting
+ * is on. A caller that knows neither (an older shortlist of ids and names)
+ * gets a text, as it always has; one that knows there is no way to reach
+ * them gets "" and the buyer is skipped.
+ */
+export function blastChannel(inv = {}, da = normalizeDispoAutopilot({})) {
+  if (inv.phone) return "sms";
+  if (inv.phone === undefined && inv.email === undefined) return "sms";
+  if (inv.email && da.email.draft) return "email";
+  return "";
 }
 
 /**
@@ -141,13 +184,19 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const contactId = inv.contactId;
     if (!contactId) continue;
     const name = inv.name || inv.doc?.name || "";
+    const channel = blastChannel(inv, da);
+    if (!channel) { rows.push({ contactId, name, status: "skipped", reason: "no phone, and email drafting is off", text: "" }); continue; }
+    // An email waits for you unless emailed deals may send themselves.
+    const schedule = willSchedule && (channel === "sms" || da.email.autoSend);
+    const intro = blastIntro(inv);
     const variant = i;
-    const text = blastMessage({ ...facts, firstName: name, variant, ask });
+    const text = blastMessage({ ...facts, firstName: name, variant, ask, intro });
+    const subject = channel === "email" ? blastSubject(facts) : "";
     if (i > 0) cursor += da.spreadSec * 1000 + Math.round(Math.random() * 15000);
     const sendAt = nextSendTime({ now: cursor, delayMs: 0, quietHours: config.autoSend.quietHours });
     cursor = Date.parse(sendAt);
     i++;
-    if (dryRun) { rows.push({ contactId, name, status: "would queue", sendAt: willSchedule ? sendAt : null, text }); continue; }
+    if (dryRun) { rows.push({ contactId, name, channel, status: "would queue", sendAt: schedule ? sendAt : null, text, ...(subject ? { subject } : {}) }); continue; }
     // One open blast per buyer per deal: a second click supersedes the first.
     const open = await store.listReplyDrafts(locationId, { contactId, status: ["draft", "scheduled"], limit: 5 }).catch(() => []);
     for (const old of open.filter((d) => d.outbound?.kind === "blast_open" && d.outbound?.offerId === offer.id)) {
@@ -155,18 +204,19 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     }
     const ts = iso(now);
     const record = await store.createReplyDraft({
-      locationId, contactId, contactName: name, status: willSchedule ? "scheduled" : "draft", channel: "sms", jobId: null,
-      inbound: "", outbound: { kind: "blast_open", offerId: offer.id, address: offer.address, label: label || "", variant, ...(ownLine ? { note: ownLine } : {}) },
+      locationId, contactId, contactName: name, status: schedule ? "scheduled" : "draft", channel, jobId: null,
+      inbound: "", outbound: { kind: "blast_open", offerId: offer.id, address: offer.address, label: label || "", variant, ...(ownLine ? { note: ownLine } : {}),
+        ...(intro ? { intro } : {}), ...(subject ? { subject } : {}) },
       reply: text, intent: "blast_open", confidence: "high", needsHuman: false, humanReason: "",
       summary: `Puts ${offer.address} in front of ${name || "a buyer"} at ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}.`,
       propertyAddress: offer.address || "", counterAmount: null, autoSendable: true, flags: [], party: "investor", partySource: "deal",
       matchedTags: { agent: [], investor: [] }, contextSummary: { deal: offer.id }, offersInContext: 0,
-      autoSend: { decided: willSchedule, reason: willSchedule ? "" : reason }, humanActive: null, actions: [],
+      autoSend: { decided: schedule, reason: schedule ? "" : (willSchedule ? "emailed deals wait for you (Settings → Dispositions)" : reason) }, humanActive: null, actions: [],
       supersededIds: open.map((o) => o.id), warnings: [], noteOnAutoSend: config.notes?.onAutoSend !== false, promptVersion: 3,
-      ...(willSchedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
+      ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
     });
-    if (willSchedule) queued++; else drafted++;
-    rows.push({ contactId, name, status: willSchedule ? "scheduled" : "draft", draftId: record.id, sendAt: willSchedule ? sendAt : null, text });
+    if (schedule) queued++; else drafted++;
+    rows.push({ contactId, name, channel, status: schedule ? "scheduled" : "draft", draftId: record.id, sendAt: schedule ? sendAt : null, text, ...(subject ? { subject } : {}) });
   }
   return { queued, drafted, dryRun: Boolean(dryRun), scheduled: willSchedule, reason, rows, price: facts.price };
 }

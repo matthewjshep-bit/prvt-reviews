@@ -20,7 +20,7 @@
 import express from "express";
 import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
 import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickWave, blastedTo } from "../shared/buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickWave, blastedTo, isManufacturedTarget } from "../shared/buyer-score.js";
 import { relationshipOf, TALK_EVENT_TYPES } from "../shared/talked-to.js";
 import { buyersInPlay } from "../shared/offer-status.js";
 import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
@@ -31,7 +31,7 @@ import { buyboxCustom, investorProfileText, refreshInvestorRow } from "../invest
 import { CURSOR_NAME as BOOK_SYNC_CURSOR } from "../investor-sync.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { queueBlastDrafts, normalizeDispoAutopilot, nextWave } from "../dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, blastChannel } from "../dispo-autopilot.js";
 import { planBuyerPulse, startBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
 import { runShowingSweep } from "../showing-sweep.js";
 import { dealOutreachPaused, outreachPausedReason } from "../shared/offer-status.js";
@@ -741,11 +741,11 @@ export default function createDispoRouter({ resolveLocation }) {
       const saved = await getSettings(locationId);
       const da = normalizeDispoAutopilot(saved.dispoAutopilot);
       const next = nextWave(offer.deal, da);
-      const { ranked } = await rankedForDeal(locationId, offer);
-      const wouldGet = pickWave(ranked, { wave: 2, floor: da.secondWaveMinScore, exclude: "blasted" }).slice(0, da.secondWaveCount)
-        .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons }));
+      const { ranked, target } = await rankedForDeal(locationId, offer);
+      const wouldGet = pickWave(ranked, { wave: 2, floor: da.secondWaveMinScore, exclude: "blasted", ...waveOptions(target, da) }).slice(0, da.secondWaveCount)
+        .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons, channel: blastChannel(i, da) }));
       res.json({
-        ok: true, offerId: offer.id, address: offer.address, stage: offer.deal.stage || null,
+        ok: true, offerId: offer.id, address: offer.address, stage: offer.deal.stage || null, asset: target.asset || null,
         autoBlastOnPromote: da.autoBlastOnPromote, maxWaves: da.maxWaves, waveHours: da.secondWaveHours,
         waves: (offer.deal.blasts || []).map((b, i) => ({ wave: b.wave || i + 1, at: b.at, count: b.count ?? (b.contactIds || []).length, via: b.via || "app" })),
         ghlTags: offer.deal.blastTags || [],
@@ -1073,7 +1073,9 @@ export default function createDispoRouter({ resolveLocation }) {
         const investors = [];
         for (const contactId of contactIds) {
           const row = await store.getInvestor(locationId, contactId);
-          if (row) investors.push({ contactId, name: row.name || row.doc?.name || "" });
+          // How to reach them (a text, or an email when there's no phone)
+          // and whether they've ever written back (the how-we-found-you line).
+          if (row) { const i = hydrate(row); investors.push({ contactId, name: i.name, ...reachOf(i) }); }
         }
         // `note`: the operator's one line about the deal for this blast, in
         // place of the package headline. `wave`: which wave this is, for the record.
@@ -1193,20 +1195,26 @@ export default function createDispoRouter({ resolveLocation }) {
    * ranking the page, the autopilot waves and the dataroom guard all read.
    */
   async function rankedForDeal(locationId, offer) {
-    const q = dealToQuery(offer).query;
+    const dq = dealToQuery(offer);
+    const q = dq.query;
     const areas = addressAreas(offer.address);
     const city = areas.find((a) => !/^\d{5}$/.test(a)) || "";
     const zip = areas.find((a) => /^\d{5}$/.test(a)) || "";
     const target = dealTarget({ city, zip, priceMin: q.priceMin, priceMax: q.priceMax, rehabAppetite: q.rehabAppetite,
-      propertyTypes: q.propertyTypes || [], lotMin: q.lotMin ?? null });
+      propertyTypes: q.propertyTypes || [], lotMin: q.lotMin ?? null, asset: dq.asset });
     const linked = new Set((offer.deal?.investors || []).map((i) => i.contactId));
     const blasted = blastedTo(offer, {
       events: await store.listContactEventsSince(locationId, new Date(Date.now() - 365 * 86400000).toISOString(), { types: ["blast_sent"], limit: 20000 }).catch(() => []),
       drafts: await store.listReplyDrafts(locationId, { status: ["draft", "scheduled", "sending"], limit: 5000 }).catch(() => []),
     });
+    // A buyer carrying one of the deal's blast tags has had it, whether or not
+    // anything else recorded it — 1510 Maple Lane's eighteen mobile home
+    // buyers were emailed by a script on 9/28 that left the tag and nothing else.
+    const dealTags = new Set((offer.deal?.blastTags || []).map((t) => String(t || "").toLowerCase()).filter(Boolean));
+    const tagged = (i) => dealTags.size > 0 && (i.tags || []).some((t) => dealTags.has(String(t || "").toLowerCase()));
     const book = (await scoredBook(locationId, { status: "active" })).filter((i) => !linked.has(i.contactId));
     const ranked = book
-      .map((i) => { const r = rankForDeal(i, target); return { ...i, rank: r.score, rankParts: r.parts, rankReasons: r.reasons, alreadyBlasted: blasted.has(i.contactId) }; })
+      .map((i) => { const r = rankForDeal(i, target); return { ...i, rank: r.score, rankParts: r.parts, rankReasons: r.reasons, alreadyBlasted: blasted.has(i.contactId) || tagged(i) }; })
       .sort((a, b) => b.rank - a.rank);
     return { target, linked, ranked, considered: book.length };
   }
@@ -1226,9 +1234,22 @@ export default function createDispoRouter({ resolveLocation }) {
     const da = normalizeDispoAutopilot(saved.dispoAutopilot);
     const { target, ranked } = await rankedForDeal(locationId, offer);
     const floor = wave === 1 ? da.minMatchScore : da.secondWaveMinScore;
-    const results = pickWave(ranked, { wave, floor, exclude })
-      .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons }));
+    const results = pickWave(ranked, { wave, floor, exclude, ...waveOptions(target, da) })
+      .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons, ...reachOf(i) }));
     return { results, target };
+  }
+
+  // What a wave needs to know beyond the floor: a mobile home goes by who
+  // buys them (shared/buyer-score.js pickWave), and a buyer with no phone may
+  // come in to be emailed when email drafting is on.
+  function waveOptions(target, da) {
+    return { manufactured: isManufacturedTarget(target), email: da.email.draft };
+  }
+
+  // How to reach a buyer, carried onto a wave's shortlist so the queue can
+  // pick the channel and the how-we-found-you line (dispo-autopilot.js).
+  function reachOf(i = {}) {
+    return { phone: i.phone || "", email: i.email || "", tags: i.tags || [], lastRepliedAt: i.lastRepliedAt || "" };
   }
 
   /** rankBuyerForDeal(locationId, offer, contactId) → { rank, tier } | null — for the dataroom guard. */

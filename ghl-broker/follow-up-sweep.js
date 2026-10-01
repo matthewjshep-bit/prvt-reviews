@@ -384,7 +384,9 @@ export async function investorCandidates({ store, locationId, config, now = Date
       .filter((k) => live.includes(k))
       .map((kind) => {
         const type = FOLLOW_UP_KINDS[kind].trigger;
-        const ev = list.filter((e) => e.type === type).at(-1);
+        // A nudge is a text. A deal we emailed to a buyer with no phone
+        // (dispo-autopilot.js blastChannel) has no text to follow it with.
+        const ev = list.filter((e) => e.type === type && !(type === "blast_sent" && e.data?.channel === "email")).at(-1);
         return ev ? { kind, ev } : null;
       })
       .find(Boolean);

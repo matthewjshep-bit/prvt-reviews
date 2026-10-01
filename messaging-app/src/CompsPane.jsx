@@ -71,7 +71,7 @@ const ADJ_PRESETS = [
   { key: "cell_tower", label: "Cell tower / substation", pct: -3 },
 ];
 
-export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqft: setSubjectSqft, onSubjectInfo, initialState, onStateChange }) {
+export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSqft, setSqft: setSubjectSqft, onSubjectInfo, initialState, onStateChange }) {
   const [state, setState] = useState(initialState?.result || null); // { subject:{lat,lng}, info, comps, estimate, enabled }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -138,6 +138,8 @@ export default function CompsPane({ address, onUseArv, sqft: subjectSqft, setSqf
           months,
           beds: Number(beds) > 0 ? Number(beds) : undefined,
           baths: Number(baths) > 0 ? Number(baths) : undefined,
+          // A mobile home comps against mobile homes (the offer's property type).
+          homeType,
         }),
       ]);
       // Prefer the data provider's subject coordinates; fall back to geocode.

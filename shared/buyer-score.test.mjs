@@ -150,3 +150,69 @@ test("wave 2 never re-texts a wave-1 buyer whose draft hasn't sent", () => {
   });
   assert.deepEqual([...sent].sort(), ["appSent", "ghlStreet", "ghlTag", "midSend", "onWave1", "queued", "waiting"]);
 });
+
+/* ---------- the kind of house (2026-10-01) ---------- */
+
+// 1510 Maple Lane, Kent: a mobile home in a park. The blast on promote went to
+// twenty-five Kent flippers and none of the twenty buyers tagged mobile-home,
+// because the deal had no kind and the waves needed a city match and a phone.
+const maple = dealTarget({ city: "Kent", zip: "98030", priceMin: 64000, priceMax: 88000,
+  asset: { type: "manufactured", land: "park" }, propertyTypes: ["manufactured"] });
+const rankRow = (id, over, t = maple) => {
+  const i = { contactId: id, name: id, phone: "+1", tier: "cold", markets: { cities: [], regions: [], types: [] }, buybox: {}, ...over };
+  const r = rankForDeal(i, t, { now: NOW });
+  return { ...i, rank: r.score, rankParts: r.parts, rankReasons: r.reasons };
+};
+
+test("a mobile home goes to buyers who buy mobile homes, not to flippers in the same city", () => {
+  const ranked = [
+    rankRow("kent-flipper-vip", { tier: "vip", markets: { cities: ["kent"], regions: ["south-king"], types: ["flip"] }, flips: { largest: 80000, lastAt: monthsBack(1) } }),
+    rankRow("mobile-home-buyer", { markets: { cities: [], regions: [], types: ["mobile-home"] } }),
+  ];
+  const picked = pickWave(ranked, { wave: 1, floor: 50, manufactured: true }).map((i) => i.contactId);
+  assert.deepEqual(picked, ["mobile-home-buyer"]);
+  assert.ok(ranked[1].rankReasons.includes("buys mobile homes"));
+});
+
+test("a mobile home buyer with no area on file still makes the wave, cold or not", () => {
+  const ranked = [rankRow("cold-no-area", { tier: "cold", markets: { cities: [], regions: [], types: ["mobile-home"] } })];
+  assert.equal(ranked[0].rankParts.location, 0);
+  assert.deepEqual(pickWave(ranked, { wave: 1, floor: 50, manufactured: true }).map((i) => i.contactId), ["cold-no-area"]);
+});
+
+test("a mobile home buyer whose areas are all elsewhere is left off", () => {
+  const ranked = [
+    rankRow("north", { markets: { cities: ["arlington"], regions: ["snohomish"], types: ["mobile-home"] } }),
+    rankRow("south-king", { markets: { cities: ["auburn"], regions: ["south-king"], types: ["mobile-home"] } }),
+  ];
+  assert.deepEqual(pickWave(ranked, { wave: 1, floor: 50, manufactured: true }).map((i) => i.contactId), ["south-king"]);
+});
+
+test("a buyer who said no park homes never gets a park deal, even tagged mobile-home", () => {
+  const ranked = [rankRow("mark", { markets: { cities: [], regions: [], types: ["mobile-home"] },
+    buybox: { propertyTypes: ["sfr", "multi_family"], exclusions: "no manufactured homes in parks" } })];
+  assert.equal(ranked[0].rankParts.typeRefused, true);
+  assert.deepEqual(pickWave(ranked, { wave: 1, floor: 0, manufactured: true }), []);
+});
+
+test("a buyer with only an email makes the wave when email is allowed, and not otherwise", () => {
+  const ranked = [rankRow("email-only", { phone: "", email: "buyer@example.com", markets: { cities: [], regions: [], types: ["mobile-home"] } })];
+  assert.deepEqual(pickWave(ranked, { wave: 1, manufactured: true }), []);
+  assert.deepEqual(pickWave(ranked, { wave: 1, manufactured: true, email: true }).map((i) => i.contactId), ["email-only"]);
+});
+
+test("a mobile-homes-only buyer is never sent a house", () => {
+  const house = dealTarget({ city: "Kent", zip: "98031", priceMin: 300000, priceMax: 340000, asset: { type: "sfr" } });
+  const ranked = [rankRow("mh-only", { tier: "vip", markets: { cities: ["kent"], regions: ["south-king"], types: ["mobile-home"] },
+    buybox: { exclusions: "manufactured homes only, no site-built homes" } }, house)];
+  assert.equal(ranked[0].rankParts.typeRefused, true);
+  assert.deepEqual(pickWave(ranked, { wave: 1, floor: 0 }), []);
+});
+
+test("a deal with no kind ranks exactly as before", () => {
+  const t = dealTarget({ city: "Kent", priceMin: 300000, priceMax: 340000 });
+  const r = rankForDeal({ tier: "vip", markets: { cities: ["kent"], regions: ["south-king"], types: ["flip"] }, buybox: {} }, t, { now: NOW });
+  assert.equal(r.parts.type, 0);
+  assert.equal(r.parts.typeRefused, false);
+  assert.equal(r.score, 35 + 20 + 10, "location + tier + strategy, nothing else");
+});

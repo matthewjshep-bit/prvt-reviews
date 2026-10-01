@@ -26,6 +26,7 @@ import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey
 import { emailContextText } from "./shared/gmail.js";
 import { showingContextLines } from "./shared/showing.js";
 import { accessFor, accessLines } from "./shared/deal-access.js";
+import { assetOf, assetPhrase } from "./shared/asset-type.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -487,7 +488,10 @@ const dealLine = (d) => {
   // The walkthrough (shared/showing.js): the window buyers are invited to,
   // how they get in, and where this buyer stands on it.
   const walk = (d.showing || []).length ? `\n    ${d.showing.join("\n    ")}` : "";
-  return `- ${d.address}: ${money}${status}${said}${stage}${invite}${walk}`;
+  // The kind of house, first: a mobile home in a park is not a house, and a
+  // buyer who asks "what is it?" gets the truth (shared/asset-type.js).
+  const kind = d.kind ? `${d.kind} — ` : "";
+  return `- ${d.address}: ${kind}${money}${status}${said}${stage}${invite}${walk}`;
 };
 
 /**
@@ -568,7 +572,7 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
       address: offer.address || "a property", stage: offer.deal.stage,
       linkStatus: link ? investorStatus(link.status) : (blasted ? "blasted" : null), blasted,
       price: n.price, agreed: Boolean(n.agreed), arv: n.arv, repairs: n.repairs, invite: room ? inviteByRoom.get(room.id) || null : null,
-      offerId: offer.id, reason: reasonWords(link?.reason),
+      offerId: offer.id, reason: reasonWords(link?.reason), kind: assetPhrase(assetOf(offer)),
       // Only a deal we hold the house on has a walkthrough to invite them to.
       showing: [
         ...(offer.deal.stage === "under_contract" ? showingContextLines(offer.deal.showing, { contactId, now }) : []),

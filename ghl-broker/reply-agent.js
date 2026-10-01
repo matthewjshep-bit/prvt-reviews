@@ -69,7 +69,7 @@ import {
   SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutInTranscript, optOutActions, normalizePassReason, normalizeDraftFeedback,
 } from "./shared/conversation-ai.js";
 import {
-  getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail, smsUnsubscribed, DND_TAG,
+  getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail, smsUnsubscribed, emailUnsubscribed, DND_TAG,
 } from "./ghl.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { endsWithQuestionToThem } from "./shared/promise-resolver.js";
@@ -3930,7 +3930,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   // nobody can send. Dismissed instead, and the contact is flagged.
   if (auto) {
     const contact = await getContact(client, d.contactId).catch(() => null);
-    if (smsUnsubscribed(contact)) {
+    if (d.channel === "email" ? emailUnsubscribed(contact) : smsUnsubscribed(contact)) {
       const ts = new Date(now).toISOString();
       await store.updateReplyDraft(d.id, {
         ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
@@ -3982,7 +3982,9 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
 
   let result;
   if (d.channel === "email") {
-    const subject = d.propertyAddress ? `Re: ${d.propertyAddress}` : "Re: your message";
+    // A deal sent by email is a new message, not a reply: it says what the
+    // house is and the price (shared/blast-text.js blastSubject).
+    const subject = blast?.subject || d.outbound?.subject || (d.propertyAddress ? `Re: ${d.propertyAddress}` : "Re: your message");
     const html = body.split(/\n{2,}/).map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
     result = await sendEmail(client, { contactId: d.contactId, subject, html });
   } else {
@@ -4009,7 +4011,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       store, locationId, contactId: d.contactId, party: "investor", type: "blast_sent", at: ts,
       address: d.outbound.address || d.propertyAddress || "", offerId: d.outbound.offerId || null, source: "blast", ref: d.id,
       dedupeKey: `blast:${d.outbound.offerId || "deal"}:${d.contactId}`,
-      data: { draftId: d.id, auto: Boolean(auto), label: d.outbound.label || "", via: "app" },
+      data: { draftId: d.id, auto: Boolean(auto), label: d.outbound.label || "", via: "app", channel: d.channel === "email" ? "email" : "sms" },
     }).catch(() => {});
     await store.setInvestorStatus?.(locationId, d.contactId, { lastBlastAt: ts }).catch(() => {});
     if (blast?.invite) {

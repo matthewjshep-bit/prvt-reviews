@@ -238,3 +238,12 @@ test("removeChip: dropping a chip widens the query", () => {
   assert.deepEqual(removeChip(q, { field: "areas", value: "Tacoma" }).areas, ["Kent"]);
   assert.equal(removeChip(q, { field: "price" }).priceMax, null);
 });
+
+test("manufactured survives the buy box, however they wrote it", () => {
+  // 2026-10-01: the vocabulary had no word for a mobile home, so a buyer who
+  // said "I buy mobile homes" was filed as nothing at all.
+  assert.deepEqual(normalizeBuybox({ buybox_property_types: "manufactured, sfr" }).propertyTypes.sort(), ["manufactured", "sfr"]);
+  assert.deepEqual(normalizeBuybox({ buybox_property_types: "Mobile Home" }).propertyTypes, ["manufactured"]);
+  const m = matchBuybox(normalizeBuybox({ buybox_property_types: "manufactured" }), { propertyTypes: ["manufactured"] });
+  assert.deepEqual(m.matched, ["propertyTypes"]);
+});

@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronUp, ExternalLink, FileSignature, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Sparkles, Trash2, X } from "lucide-react";
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import { buyerCeiling } from "@shared/post-mortem.js";
+import { ASSET_TYPES, ASSET_TYPE_LABELS, MH_LAND, MH_LAND_LABELS, assetFromHomeType } from "@shared/asset-type.js";
 import {
   addContactNote, cancelUnderwrite, createOffer, getContactDetail, getContactNotes, getUnderwrite,
   ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, runUnderwrite, saveDraft,
@@ -780,6 +781,17 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     setUwOverrides((s) => ({ ...s, [k]: e.target.value.replace(/[^\d.]/g, "") }));
   const [subjectSqft, setSubjectSqft] = useState(snap?.subjectSqft || ""); // shared: comps $/sqft + rehab per-sqft items
   const [subjectInfo, setSubjectInfo] = useState(snap?.subjectInfo || null); // beds/baths from the comps subject record
+  // The kind of house you picked (shared/asset-type.js), or null to go by
+  // what Zillow said on the subject record. Kept in the workspace so a draft
+  // reopens on it; a pick already saved on the offer is the starting point.
+  const [assetPick, setAssetPick] = useState(() => snap?.assetPick
+    || (fromOffer?.asset?.by === "you" ? { type: fromOffer.asset.type, land: fromOffer.asset.land || "" } : null));
+  const zillowAsset = assetFromHomeType(subjectInfo?.homeType);
+  const assetType = assetPick?.type || zillowAsset || "";
+  const pickAssetType = (type) => setAssetPick(type ? { type, land: type === "manufactured" ? (assetPick?.land || "") : "" } : null);
+  const pickLand = (land) => setAssetPick({ type: "manufactured", land });
+  // Comps for a mobile home are mobile homes (the pull keeps to houses otherwise).
+  const compsHomeType = assetType === "manufactured" ? "MANUFACTURED" : assetType === "multi_family" ? "MULTI_FAMILY" : undefined;
   const [scope, setScope] = useState(snap?.scope || fromOffer?.scope || []); // applied rehab line items
   const [draftId, setDraftId] = useState(restore?.status === "draft" ? restore.id : null);
   const [savingDraft, setSavingDraft] = useState(false);
@@ -1111,7 +1123,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   // The whole form, in one place. Create, save and autosave all send this — a
   // second copy of the field list is how the three quietly drift apart.
   const formSnapshot = () => ({
-    mode, contact, newContact, inputs, subjectSqft, subjectInfo, scope, underwriteMode, feeOverride, uwOverrides, letterTerms, offerExpires,
+    mode, contact, newContact, inputs, subjectSqft, subjectInfo, assetPick, scope, underwriteMode, feeOverride, uwOverrides, letterTerms, offerExpires,
     rehab: rehabStateRef.current,
     comps: compsStateRef.current,
   });
@@ -1129,6 +1141,8 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         draftId,
         // Full form snapshot so History → Edit restores comps + rehab intact.
         snapshot: formSnapshot(),
+        // The kind of house, when you picked one (otherwise Zillow's word).
+        ...(assetPick ? { asset: assetPick } : {}),
       });
       setResult(r);
       setPreview(null);
@@ -1164,7 +1178,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     )) return;
     setError(""); setSaving(true);
     try {
-      const r = await updateOffer(id, { inputs, settings: effSettings, scope, snapshot: formSnapshot() });
+      const r = await updateOffer(id, { inputs, settings: effSettings, scope, snapshot: formSnapshot(), ...(assetPick ? { asset: assetPick } : {}) });
       // The offer of record just moved; the "not saved" notices read from here.
       setSavedInputs(r.offer?.calc?.inputs || {});
       setSaveWarnings(r.warnings || []);
@@ -1585,12 +1599,34 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
           <Field label="Asking price ($, optional)">
             <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={setMoney("askingPrice")} placeholder="for %-of-asking context" />
           </Field>
+          <div>
+            <Field label="Property type">
+              <select className={INPUT_CLS} value={assetPick?.type || ""} onChange={(e) => pickAssetType(e.target.value)}>
+                <option value="">{zillowAsset ? `${ASSET_TYPE_LABELS[zillowAsset]} (from Zillow)` : "Not set"}</option>
+                {ASSET_TYPES.map((t) => <option key={t} value={t}>{ASSET_TYPE_LABELS[t]}</option>)}
+              </select>
+            </Field>
+            {assetType === "manufactured" && (
+              <div className="mt-2">
+                <Field label="Land">
+                  <select className={INPUT_CLS} value={assetPick?.land || ""} onChange={(e) => pickLand(e.target.value)}>
+                    <option value="">Not sure yet</option>
+                    {MH_LAND.map((l) => <option key={l} value={l}>{MH_LAND_LABELS[l]}</option>)}
+                  </select>
+                </Field>
+              </div>
+            )}
+            {assetType === "manufactured" && (
+              <p className="mt-1 text-xs text-slate-500">Goes to buyers who said they buy mobile homes, not to every flipper in the area.</p>
+            )}
+          </div>
         </div>
       </div>
 
       <CompsPane
         key={`comps-${paneInit.nonce}`}
         address={inputs.address}
+        homeType={compsHomeType}
         sqft={subjectSqft}
         setSqft={setSubjectSqft}
         onSubjectInfo={setSubjectInfo}

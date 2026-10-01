@@ -22,6 +22,7 @@ import { TALK_EVENT_TYPES, isTalkEvent } from "./talked-to.js";
 import { matchBuybox } from "./buybox.js";
 import { isBlockedBuyer } from "./buyer-pulse.js";
 import { sameStreet } from "./us-address.js";
+import { normalizeAsset, buyerTypeFit } from "./asset-type.js";
 
 export const TIERS = { vip: "VIP", active: "Active", cold: "Cold" };
 // VIP: committed on a deal before, or scores at least this. Active: 40+, or replied in the last 3 months.
@@ -82,16 +83,23 @@ export function scoreBuyer(i = {}, { now = Date.now() } = {}) {
 }
 
 /**
- * dealTarget({ address, city, priceMin, priceMax, rehabAppetite }) → the deal as rankForDeal reads it
+ * dealTarget({ address, city, priceMin, priceMax, rehabAppetite, asset }) → the deal as rankForDeal reads it
+ *
+ * `asset` is the kind of house (shared/asset-type.js). A mobile home is its
+ * own strategy, so a buyer tagged dispo-type-mobile-home reads as one.
  */
-export function dealTarget({ city = "", zip = "", priceMin = null, priceMax = null, rehabAppetite = null, propertyTypes = [], lotMin = null } = {}) {
+export function dealTarget({ city = "", zip = "", priceMin = null, priceMax = null, rehabAppetite = null, propertyTypes = [], lotMin = null, asset = null } = {}) {
   const slug = citySlug(city);
   const mid = priceMin != null && priceMax != null ? (priceMin + priceMax) / 2 : priceMax ?? priceMin ?? null;
-  const strategy = rehabAppetite === "full_gut" ? "new-construction" : "flip";
-  return { city: slug, zip: /^\d{5}$/.test(String(zip || "")) ? String(zip) : "", region: slug ? regionFor(city) : null, price: mid, strategy,
+  const kind = normalizeAsset(asset);
+  const strategy = kind?.type === "manufactured" ? "mobile-home" : rehabAppetite === "full_gut" ? "new-construction" : "flip";
+  return { city: slug, zip: /^\d{5}$/.test(String(zip || "")) ? String(zip) : "", region: slug ? regionFor(city) : null, price: mid, strategy, asset: kind,
     // What the buy box can rule in or out beyond place and price.
     box: { propertyTypes: propertyTypes || [], rehabAppetite: rehabAppetite || null, lotMin: lotMin ?? null } };
 }
+
+/** isManufacturedTarget(target) → true for a mobile home deal, whose waves go by who buys them, not by city. */
+export const isManufacturedTarget = (t) => t?.asset?.type === "manufactured";
 
 // A buyer spoken for elsewhere (committed or soft-committed on another live
 // deal). A buyer only weighing another deal is NOT: the hottest buyers are
@@ -144,8 +152,20 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
 
   // The kind of project.
   let strategy = 0;
-  if (mk.types?.includes(t.strategy)) { strategy = 10; reasons.push(t.strategy === "flip" ? "flips" : "builds"); }
+  if (mk.types?.includes(t.strategy)) { strategy = 10; if (t.strategy !== "mobile-home") reasons.push(t.strategy === "flip" ? "flips" : "builds"); }
   else if (mk.types?.length) strategy = 3;
+
+  // The kind of house (shared/asset-type.js). A mobile home goes to the
+  // buyers who told us they buy them — 1510 Maple Lane went to twenty-five
+  // Kent flippers instead (2026-10-01). A stated no ("no park homes",
+  // "mobile homes only") keeps them off it altogether (pickWave).
+  const fit = buyerTypeFit(i, t.asset);
+  let type = 0;
+  if (fit.refuses) { type = -30; reasons.push(`won't take it (${fit.reason})`); }
+  else if (fit.wants && t.asset?.type === "manufactured") { type = 30; reasons.push(fit.reason); }
+  // Whether we know where they buy at all — a mobile home buyer with no area
+  // on file is still a buyer; one whose areas are all elsewhere is not.
+  const areaKnown = Boolean(mk.cities?.length || mk.regions?.length || rawAreas.length);
 
   // Their buy box on the rest — the kind of house, how much work, the lot.
   // A documented fit earns a little; a documented contradiction costs a lot
@@ -164,32 +184,42 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   const talking = i.relationship === "talking" ? 8 : 0;
   if (talking) reasons.push("we're talking with them");
 
-  let score = location + price + recency + tierPts + strategy + box + talking;
+  let score = location + price + recency + tierPts + strategy + box + talking + type;
   if (spokenFor(i)) { score -= 10; reasons.push("committed to another live deal"); }
   return {
     score: Math.max(0, Math.min(100, Math.round(score))),
-    parts: { location, price, recency, tier: tierPts, strategy, box, talking },
+    parts: { location, price, recency, tier: tierPts, strategy, box, talking, type, typeRefused: fit.refuses, areaKnown },
     reasons,
   };
 }
 
 /**
- * pickWave(ranked, { wave, floor, exclude }) → the buyers an automatic wave texts
+ * pickWave(ranked, { wave, floor, exclude, manufactured, email }) → the buyers an automatic wave reaches
  *
- * `ranked` rows carry rank, rankParts, tier, phone, onLiveDeal, alreadyBlasted.
+ * `ranked` rows carry rank, rankParts, tier, phone, email, onLiveDeal, alreadyBlasted.
  * A buyer must buy where the deal is (city or region): tier and price alone
  * clear the floor, and 7034 S K St, Tacoma went to fifteen Snohomish and
  * Eastside VIPs that way (2026-09-28). Wave 1 is VIP and Active, VIPs first;
  * later waves take anyone at the floor, best fit first.
+ *
+ * A mobile home (`manufactured`) goes by who buys them instead: only buyers
+ * who said they do, in any area unless every area they gave is elsewhere,
+ * whatever their tier or score — the twenty who told us are mostly cold and
+ * mostly have no area on file. A buyer who refuses the kind is never picked.
+ * `email` lets a buyer with no phone in, to be emailed rather than texted.
  */
-export function pickWave(ranked = [], { wave = 1, floor = 0, exclude = "blasted" } = {}) {
+export function pickWave(ranked = [], { wave = 1, floor = 0, exclude = "blasted", manufactured = false, email = false } = {}) {
   const tierOrder = { vip: 0, active: 1, cold: 2 };
+  const reachable = (i) => Boolean(i.phone || (email && i.email));
+  const fits = manufactured
+    ? (i) => (i.rankParts?.type || 0) > 0 && !(i.rankParts?.areaKnown && !(i.rankParts?.location > 0))
+    : (i) => i.rank >= floor && (i.rankParts?.location || 0) > 0;
   return ranked
-    .filter((i) => i.phone && !isBlockedBuyer(i) && !spokenFor(i) && i.rank >= floor)
-    .filter((i) => (i.rankParts?.location || 0) > 0)
+    .filter((i) => reachable(i) && !isBlockedBuyer(i) && !spokenFor(i) && !i.rankParts?.typeRefused)
+    .filter(fits)
     .filter((i) => exclude !== "blasted" || !i.alreadyBlasted)
-    .filter((i) => wave !== 1 || i.tier === "vip" || i.tier === "active")
-    .sort((a, b) => wave === 1 ? ((tierOrder[a.tier] ?? 3) - (tierOrder[b.tier] ?? 3)) || (b.rank - a.rank) : b.rank - a.rank);
+    .filter((i) => manufactured || wave !== 1 || i.tier === "vip" || i.tier === "active")
+    .sort((a, b) => wave === 1 && !manufactured ? ((tierOrder[a.tier] ?? 3) - (tierOrder[b.tier] ?? 3)) || (b.rank - a.rank) : b.rank - a.rank);
 }
 
 // A blast draft that is going out, or about to.

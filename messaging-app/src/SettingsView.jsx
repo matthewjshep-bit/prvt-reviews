@@ -1200,7 +1200,19 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           </div>
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.autoBlastOnPromote)} onChange={(e) => setDispoAuto("autoBlastOnPromote")(e.target.checked)} />
-            <span><span className="font-semibold">Blast on promote</span><span className="block text-xs text-slate-500">When an offer becomes a deal, blast the top-ranked VIP and Active buyers for it (where they buy, price, recency, engagement), VIPs first. With nobody committed after the delay, the next-ranked buyers who haven't been sent it. Only buyers with a phone who aren't on another live deal.</span></span>
+            <span><span className="font-semibold">Blast on promote</span><span className="block text-xs text-slate-500">When an offer becomes a deal, blast the top-ranked VIP and Active buyers for it (where they buy, price, recency, engagement), VIPs first. With nobody committed after the delay, the next-ranked buyers who haven't been sent it. Never to a buyer on another live deal. A mobile home goes only to buyers who said they buy them, wherever they are on file, whatever their tier.</span></span>
+          </label>
+          {/* A buyer with no phone (2026-10-01: fourteen of the twenty mobile
+              home buyers had only an email). Drafting is on; sending is yours. */}
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={form.dispoAutopilot?.email?.draft !== false}
+              onChange={(e) => setDispoAuto("email")({ ...(form.dispoAutopilot?.email || {}), draft: e.target.checked })} />
+            <span><span className="font-semibold">Email the deal to buyers with no phone</span><span className="block text-xs text-slate-500">A buyer who fits a wave but has only an email gets the deal by email: a subject line with what it is and the price, the same facts as the text, their package link. They wait in the outbox for you.</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-sm pl-6">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.email?.autoSend)}
+              onChange={(e) => setDispoAuto("email")({ ...(form.dispoAutopilot?.email || {}), autoSend: e.target.checked })} />
+            <span><span className="font-semibold">Emailed deals send themselves</span><span className="block text-xs text-slate-500">Off: each one waits for you to press Send. On: they go out staggered like the texts, under the same switches.</span></span>
           </label>
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.dataroomOnPromote)} onChange={(e) => setDispoAuto("dataroomOnPromote")(e.target.checked)} />

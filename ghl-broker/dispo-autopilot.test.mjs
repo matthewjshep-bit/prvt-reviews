@@ -60,6 +60,51 @@ test("the operator's one line for a blast rides in the text and on the draft, so
   assert.equal(d.outbound.note, "3bd 1952 rambler on a quarter acre with an 840 sqft garage, ADU upside");
 });
 
+test("a buyer with no phone is emailed the deal as a draft that waits for you; a phone is still texted", async () => {
+  // 1510 Maple Lane (2026-10-01): fourteen of the twenty mobile home buyers
+  // have only an email, and a blast could only text.
+  const store = fakeStore();
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } } };
+  const maple = { id: "o2", address: "1510 Maple Lane, Kent, Washington 98030", cashAmount: 71075, arv: 165000, repairs: 40000,
+    asset: { type: "manufactured", land: "park", by: "you" },
+    snapshot: { subjectInfo: { beds: 3, baths: 2, sqft: 1440, homeType: "MANUFACTURED" } },
+    deal: { stage: "under_contract", contractPrice: 71075, assignmentFee: 5000, investors: [] } };
+  const r = await queueBlastDrafts({ store, locationId: "L", offer: maple, now: NOW, sendsEnabled: true, blastsEnabled: true, saved, investors: [
+    { contactId: "t1", name: "Moises G", phone: "+12065550100", email: "", tags: ["dispo-type-mobile-home"] },
+    { contactId: "e1", name: "Gizelle P", phone: "", email: "g@example.com", tags: ["dispo-type-mobile-home", "dispo-source-fb-warei"], lastRepliedAt: "" },
+    { contactId: "x1", name: "Nobody", phone: "", email: "" },
+  ] });
+  const [text, mail] = [...store.rows.values()];
+  assert.equal(text.channel, "sms");
+  assert.equal(text.status, "scheduled");
+  assert.match(text.reply, /mobile home in a park/);
+  assert.equal(mail.channel, "email");
+  assert.equal(mail.status, "draft", "an emailed deal waits for you");
+  assert.match(mail.autoSend.reason, /emailed deals wait for you/);
+  assert.equal(mail.outbound.subject, "Mobile home in a park, Kent — under contract, 76k");
+  assert.match(mail.reply, /^Hey Gizelle — found you through the WA real estate Facebook group\. /);
+  assert.equal(mail.outbound.intro, "found you through the WA real estate Facebook group");
+  assert.equal(r.rows.find((x) => x.contactId === "x1").status, "skipped");
+  assert.equal(r.queued, 1);
+  assert.equal(r.drafted, 1);
+
+  // With emailed deals allowed to send themselves, it is scheduled like a text.
+  const store2 = fakeStore();
+  await queueBlastDrafts({ store: store2, locationId: "L", offer: maple, now: NOW, sendsEnabled: true, blastsEnabled: true,
+    saved: { ...saved, dispoAutopilot: { email: { autoSend: true } } }, investors: [{ contactId: "e1", name: "G", phone: "", email: "g@example.com" }] });
+  assert.equal([...store2.rows.values()][0].status, "scheduled");
+
+  // And with email drafting off, a buyer with no phone is left out.
+  const off = await queueBlastDrafts({ store: fakeStore(), locationId: "L", offer: maple, now: NOW, saved: { ...saved, dispoAutopilot: { email: { draft: false } } },
+    investors: [{ contactId: "e1", name: "G", phone: "", email: "g@example.com" }], dryRun: true });
+  assert.equal(off.rows[0].status, "skipped");
+});
+
+test("email settings default to drafting on, sending off", () => {
+  assert.deepEqual(normalizeDispoAutopilot().email, { draft: true, autoSend: false });
+  assert.deepEqual(normalizeDispoAutopilot({ email: { draft: false, autoSend: "yes" } }).email, { draft: false, autoSend: false });
+});
+
 test("without the intent on the allowlist it is drafts only, and says why; a dry run writes nothing", async () => {
   const store = fakeStore();
   const saved = { conversationAi: { enabled: true } };

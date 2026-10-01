@@ -124,6 +124,7 @@ import { mirrorAgent, followTierStage, tierTagsToDrop } from "../ghl-mirror.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
+import { normalizeAsset, assetFromSnapshot, assetOf } from "../shared/asset-type.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
 import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType, propertyDossier } from "../shared/contact-record.js";
 import { issueDataroomInvite } from "../dataroom.js";
@@ -1525,6 +1526,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const sqft = parseInt(req.query.sqft, 10) || 0;
       const beds = Math.max(0, parseInt(req.query.beds, 10) || 0);
       const baths = Math.max(0, parseFloat(req.query.baths) || 0);
+      // The kind of house in Zillow's words (MANUFACTURED…), from the editor's
+      // type: a mobile home comps against mobile homes. Without it the pull
+      // keeps to houses, which drops every manufactured sale (2026-10-01).
+      const homeType = /^(SINGLE_FAMILY|MULTI_FAMILY|MANUFACTURED)$/.test(String(req.query.homeType || "")) ? String(req.query.homeType) : null;
 
       let data;
       let geo = null;
@@ -1548,6 +1553,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           bedTolerance: UW_POOL_BEDS_TOLERANCE,
           bathTolerance: UW_POOL_BATHS_TOLERANCE,
           sqftPct: UW_POOL_SQFT_PCT,
+          homeType,
         });
         // The facts a search row doesn't carry — the subject's own year built,
         // lot, beds/baths/size (so the pane fills them in again, as the
@@ -1568,7 +1574,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             data = {
               ...data,
               comps: mergeFacts(data.comps || [], facts),
-              subject: mine ? { ...(data.subject || {}), yearBuilt: mine.yearBuilt, lotSqft: mine.lotSqft,
+              subject: mine ? { ...(data.subject || {}), yearBuilt: mine.yearBuilt, lotSqft: mine.lotSqft, homeType: data.subject?.homeType ?? mine.homeType ?? null,
                 beds: data.subject?.beds ?? mine.beds, baths: data.subject?.baths ?? mine.baths, sqft: data.subject?.sqft ?? mine.sqft,
                 lastSalePrice: mine.lastSoldPrice, lastSaleDate: mine.lastSoldDate } : data.subject,
               enriched: ranked.length,
@@ -2082,6 +2088,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       snapshotWarnings.push("the workspace didn't fit — kept the comps and rehab state already on the offer");
     }
 
+    // The kind of house (shared/asset-type.js): what you picked in the editor;
+    // else a pick already on the offer, which a re-save never undoes; else
+    // what Zillow said on this underwrite. Stored, not only derived, because
+    // the lean list rows never carry the snapshot it is read from.
+    const picked = body.asset ? normalizeAsset({ ...body.asset, by: "you", at: new Date().toISOString() }) : null;
+    const asset = picked
+      || (existing?.asset?.by === "you" ? normalizeAsset(existing.asset) : null)
+      || assetFromSnapshot({ snapshot })
+      || normalizeAsset(existing?.asset);
+
     // 1. Resolve the contact (existing id, or find/create by phone). A revision
     //    keeps the contact it was written for — the route refuses a swap, so
     //    the old agent's fields and tag can't end up pointing at someone
@@ -2219,6 +2235,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       scope,
       snapshot,
       calc,
+      ...(asset ? { asset } : {}),
     };
     let offer;
     if (revising) {
@@ -2434,8 +2451,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { locationId } = resolveLocation(req);
       const limit = Math.min(500, parseInt(req.query.limit, 10) || 200);
       const deals = await store.listDeals(locationId, { limit });
-      // The Deals tab needs none of the fat calc/snapshot blobs.
-      res.json({ deals: deals.map(({ snapshot, calc, ...rest }) => rest) });
+      // The Deals tab needs none of the fat calc/snapshot blobs. The kind of
+      // house is read off the snapshot first, for a deal older than the field.
+      res.json({ deals: deals.map((o) => { const { snapshot, calc, ...rest } = o; const asset = assetOf(o); return asset ? { ...rest, asset } : rest; }) });
     } catch (err) { fail(res, err); }
   });
 
@@ -3098,8 +3116,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       if (!da.autoBlastOnPromote || !dispoDeps) return;
       const m = await dispoDeps.matchForDeal(locationId, offer, { wave: 1, exclude: "blasted" });
-      const picked = (m.results || []).slice(0, da.autoBlastCount).map((r) => ({ contactId: r.contactId, name: r.name }));
-      if (!picked.length) { console.log(`auto-blast: no VIP/Active buyers score ${da.minMatchScore}+ for ${offer.address}`); return; }
+      // Each pick carries how to reach them (a text, or an email with no phone).
+      const picked = (m.results || []).slice(0, da.autoBlastCount);
+      if (!picked.length) { console.log(`auto-blast: no buyers fit ${offer.address} (${m.target?.asset?.type === "manufactured" ? "nobody who buys mobile homes is left" : `no VIP/Active buyers score ${da.minMatchScore}+`})`); return; }
       const vips = (m.results || []).slice(0, da.autoBlastCount).filter((r) => r.tier === "vip").length;
       // The deal is minted before its fee is typed in (7034 S K St went out
       // at the default 30k fee four seconds after promote). The first text
@@ -3322,6 +3341,33 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       offer.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
       res.json({ ok: true, offer, offMarket: offer.offMarket });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The kind of house (shared/asset-type.js): single family, multi-family, or
+  // a manufactured home and whether it sits in a park or on its own lot. Set
+  // from the offer editor or the Deals modal — the deal lives on the offer, so
+  // it is the deal's kind too — and yours from then on: a later underwrite
+  // never overwrites it. Body: { type, land? }; { type: "" } hands it back to
+  // what Zillow said.
+  router.patch("/:id/asset", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { offer } = ctx;
+      const ts = new Date().toISOString();
+      const type = String(req.body?.type || "").trim();
+      if (type) {
+        const picked = normalizeAsset({ type, land: req.body?.land, by: "you", at: ts });
+        if (!picked) return res.status(400).json({ error: "type must be sfr, multi_family or manufactured" });
+        offer.asset = picked;
+      } else {
+        const fromZillow = assetFromSnapshot(offer);
+        if (fromZillow) offer.asset = fromZillow; else delete offer.asset;
+      }
+      offer.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer, asset: assetOf(offer) });
     } catch (err) { fail(res, err); }
   });
 

@@ -896,7 +896,7 @@ export function profileSchemaFor(party = "agent") {
     ...base,
     priceMin: { type: "integer", description: "Lowest purchase price they stated, dollars; 0 if not stated" },
     priceMax: { type: "integer", description: "Highest purchase price they stated, dollars; 0 if not stated" },
-    propertyTypes: { type: "string", description: "Comma-joined from: sfr, townhouse, condo, multi_family, land; empty if not stated" },
+    propertyTypes: { type: "string", description: "Comma-joined from: sfr, townhouse, condo, multi_family, land, manufactured (a mobile or manufactured home); empty if not stated" },
     rehabAppetite: { type: "string", enum: ["", "cosmetic_only", "moderate", "heavy", "full_gut"] },
     exclusions: { type: "string", description: "Must-haves or dealbreakers they stated; empty if none" },
   };

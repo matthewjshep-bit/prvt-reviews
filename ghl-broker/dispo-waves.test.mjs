@@ -63,3 +63,41 @@ test("the wave preview shows the next wave, and never offers a buyer whose wave-
   const missing = await fetch(`${base}/waves/preview?offerId=nope`);
   assert.equal(missing.status, 404);
 });
+
+test("a mobile home's wave goes to the buyers who buy them, by email when there's no phone, and skips anyone it already went to", async () => {
+  // 1510 Maple Lane, Kent (2026-10-01): promoted, and the wave went to Kent
+  // flippers; the mobile home buyers — mostly email only, mostly no area on
+  // file, eighteen already emailed by a script that left only the deal's tag —
+  // were never in it.
+  const loc = "LOC-mobile";
+  const app2 = express();
+  app2.use(express.json());
+  app2.use("/api/dispo", createDispoRouter({ resolveLocation: () => ({ locationId: loc, client: null }) }));
+  const srv = app2.listen(0);
+  const base2 = `http://127.0.0.1:${srv.address().port}/api/dispo`;
+  try {
+    await store.saveOfferSettings(loc, { dispoAutopilot: { autoBlastOnPromote: true, secondWaveMinScore: 35, minMatchScore: 50 } });
+    const row = (contactId, doc) => ({ contactId, name: contactId, doc: { name: contactId, tags: ["investor"], custom: {}, ...doc }, buyboxText: "" });
+    await store.upsertInvestors(loc, [
+      row("kent-flipper", { phone: "+12065550101", tags: ["investor", "dispo-city-kent", "dispo-region-south-king", "dispo-type-flip"] }),
+      row("mh-texter", { phone: "+12065550102", tags: ["investor", "dispo-type-mobile-home"] }),
+      row("mh-emailer", { email: "mh@example.com", tags: ["investor", "dispo-type-mobile-home", "dispo-source-fb-warei"] }),
+      row("mh-emailed-already", { email: "done@example.com", tags: ["investor", "dispo-type-mobile-home", "dispo-1510-maple-lane"] }),
+      row("mh-no-parks", { phone: "+12065550103", tags: ["investor", "dispo-type-mobile-home"], custom: { buybox_exclusions: "no manufactured homes in parks" } }),
+    ]);
+    const offer = await store.createOffer({
+      id: crypto.randomUUID(), locationId: loc, contactId: "agent-2", address: "1510 Maple Lane, Kent, Washington 98030", cashAmount: 71075, status: "accepted",
+      statusHistory: [],
+      asset: { type: "manufactured", land: "park", by: "you" },
+      snapshot: { subjectInfo: { homeType: "MANUFACTURED", beds: 3, baths: 2, sqft: 1440 } },
+      deal: { stage: "under_contract", investors: [], stageHistory: [], contractPrice: 71075, assignmentFee: 5000,
+        createdAt: new Date(Date.now() - 80 * HOUR).toISOString(), blastTags: ["dispo-1510-maple-lane"],
+        blasts: [{ at: new Date(Date.now() - 50 * HOUR).toISOString(), count: 0, via: "app", wave: 1, contactIds: [] }] },
+    });
+    const r = await (await fetch(`${base2}/waves/preview?offerId=${offer.id}`)).json();
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.asset.type, "manufactured");
+    assert.deepEqual(r.wouldGet.map((i) => [i.contactId, i.channel]).sort(), [["mh-emailer", "email"], ["mh-texter", "sms"]], JSON.stringify(r.wouldGet));
+    assert.equal(r.alreadySent, 1, "the buyer carrying the deal's tag already has it");
+  } finally { srv.close(); }
+});

@@ -27,6 +27,8 @@ import ContactSearch from "./ContactSearch.jsx";
 import DealTimeline from "./DealTimeline.jsx";
 import DealParties from "./DealParties.jsx";
 import DealAccess from "./DealAccess.jsx";
+import DealKind from "./DealKind.jsx";
+import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
 import { resolveChecklist, dueWords } from "@shared/deal-checklist.js";
 import { resolveParties } from "@shared/deal-parties.js";
 import {
@@ -298,6 +300,14 @@ const DEAL_TABS = [
 ];
 const STAGE_ORDER = ["under_contract", "buyer_found", "assigned", "closed"];
 
+// A house that isn't single family says so on its row: a mobile home in a
+// park sells to a different list (shared/asset-type.js).
+function KindBadge({ asset }) {
+  const a = normalizeAsset(asset);
+  if (!a || a.type === "sfr") return null;
+  return <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 align-middle text-[11px] font-semibold text-violet-900">{assetLabel(a)}</span>;
+}
+
 function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignment, onDataroom, onEdit, onEnrich }) {
   const deal = offer.deal;
   // Derived, never stored: change a buyer's standing and the banner and the
@@ -431,6 +441,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 offer.contactName || "—"
               )}
               {" · "}under contract since {shortDate(deal.createdAt)}
+              {normalizeAsset(offer.asset) && normalizeAsset(offer.asset).type !== "sfr" && <>{" · "}<span className="font-semibold text-slate-700">{assetLabel(offer.asset)}</span></>}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -506,6 +517,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
           <div className="grid gap-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
             <DealTimeline key={offer.id} offer={offer} parties={parties} onUpdated={onUpdated} />
             <div className="space-y-6">
+              <DealKind offer={offer} onUpdated={onUpdated} />
               <DealAccess key={`access-${offer.id}`} offer={offer} onUpdated={onUpdated} />
               <DealParties offer={offer} settings={settings} onUpdated={onUpdated} />
             </div>
@@ -851,7 +863,10 @@ export default function DealsView({ settings, onEdit }) {
                     <tr key={o.id} {...rowActivation(() => setSelectedId(o.id))}
                       aria-label={`${o.address || "Deal"} — ${STAGE[d.stage]?.label || d.stage}`}
                       className="group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                      <td className="max-w-[24rem] truncate px-4 py-2.5 font-medium" title={o.address || undefined}>{o.address || "—"}</td>
+                      <td className="max-w-[24rem] truncate px-4 py-2.5 font-medium" title={o.address || undefined}>
+                        {o.address || "—"}
+                        <KindBadge asset={o.asset} />
+                      </td>
                       <td className="whitespace-nowrap px-4 py-2.5">
                         {o.contactId ? (
                           <ContactLink contactId={o.contactId} name={o.contactName || o.contactId} party="agent" stopPropagation>

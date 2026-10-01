@@ -394,6 +394,9 @@ export const OFFER_LIST_FIELDS = [
   "hot", "agreed", "pin", "paperHeld",
   // Off-market (shared/off-market.js): {value, by, why, at} — our best deals.
   "offMarket",
+  // The kind of house (shared/asset-type.js): {type, land, by, at}, so the
+  // Offers and Deals rows can say "Manufactured · in a park".
+  "asset",
   // What the GHL Opportunities mirror last wrote ({ acquisitions, dispositions }),
   // so the reconcile can tell "unchanged" from a lean row.
   "mirror",

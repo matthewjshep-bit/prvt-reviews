@@ -237,6 +237,14 @@ export function smsUnsubscribed(contact) {
   return status === "active" || status === "permanent";
 }
 
+// The same, for email: an emailed blast to a buyer who opted out of email.
+export function emailUnsubscribed(contact) {
+  if (!contact) return false;
+  if (contact.dnd === true) return true;
+  const status = String(contact.dndSettings?.Email?.status || "").toLowerCase();
+  return status === "active" || status === "permanent";
+}
+
 export async function getContact(client, contactId) {
   const data = await client.call(`/contacts/${encodeURIComponent(contactId)}`);
   return data.contact || data;
