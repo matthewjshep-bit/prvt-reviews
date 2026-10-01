@@ -150,12 +150,15 @@ test("signing does not reflow the document", async () => {
 test("the script font is embedded only when there is a signature to draw", async () => {
   const unsigned = await render({ mode: "standard" });
   const signed = await render({ mode: "standard", signature: SIGNATURE });
-  assert.ok(signed.length > unsigned.length, "a signed file carries the embedded face");
+  assert.ok(signed.length > unsigned.length + 1000, "a signed file carries the embedded face (a ~6KB subset of it)");
   // A blank or whitespace name is not a signature — and must not drag a 450KB
-  // font into every offer that isn't being signed.
+  // font into every offer that isn't being signed. Within a few bytes, not
+  // equal: the creation timestamp sits in a compressed object stream, so the
+  // same document is 18,096–18,098 bytes depending on the second it was
+  // written (CI failed on b35996e, 2026-10-01, with 18097 against 18096).
   for (const name of ["", "   ", null, undefined]) {
     const buf = await render({ mode: "standard", signature: { name, date: "August 21, 2026" } });
-    assert.equal(buf.length, unsigned.length, `name ${JSON.stringify(name)} should render as unsigned`);
+    assert.ok(Math.abs(buf.length - unsigned.length) < 64, `name ${JSON.stringify(name)} should render as unsigned (${buf.length} vs ${unsigned.length})`);
   }
 });
 
