@@ -3150,6 +3150,27 @@ A sweep of the six live deals that day found 12 replies like that.
 - **Never moved:** a committed or soft-committed buyer.
 - Being on a deal as evaluating does not quiet the bot. Only a committed buyer holds it (`WORKING_INVESTOR_STATUSES`).
 
+### Single-family focus (2026-10-01)
+
+Matt: focus the app on single-family residences. Multi-family stays a kind an offer can carry (it will be expanded into later), but it isn't priced on its own yet. Neither are townhouses, condos, mobile homes or land.
+
+- **`settings.focusKinds`** (default `["sfr"]`, `normalizeFocusKinds` in `shared/asset-type.js`) lists the kinds the auto-underwrite prices on its own. Set it in Settings → Auto-underwrite → "Houses the auto-underwrite prices on its own". Multi-family and mobile/manufactured can be ticked there later.
+- **The hold** (`kindHold`, `auto-underwrite.js` step 2):
+  - It runs right after the subject's Zillow lookup, before the comps and the photo scan are bought.
+  - Any `homeType` outside the focus is held as `not our kind of house — a townhouse (single-family only right now)`.
+  - A house Zillow can't type goes ahead.
+  - A run started from the offer form (`fill`) skips the hold, so "Underwrite anyway" prices it.
+- **Today:**
+  - The held draft shows as "Not single-family: <address>" with **Pass on it** (drop) and **Underwrite anyway** (open the editor).
+  - The nightly triage calls it a person's call (`shared/held-underwrites.js`) and retires it after 14 quiet days like any hold. Nobody is asked for numbers on it.
+- **The agent bot** reads `agentFocusRule` beside its other rules: we buy single-family houses only. A house that is plainly a condo, townhouse, mobile home, multi-family or land gets a kind no and an ask for single-family fixers, never "let me run numbers".
+- **Outreach:** the autopilot's default types are `Single Family` only (`DEFAULT_PROPERTY_TYPES`). The live setting was already that. The Agent Outreach page already defaulted to it.
+- **Seeing it:**
+  - A **Single family** chip on Offers.
+  - A **Single family only** toggle on Deals.
+  - On Line, a **Single family vs other kinds** card: the funnel by kind, with houses nobody typed in their own column (`kindStats` in `shared/line.js`, built on `funnelBy` in `shared/off-market.js`).
+  - Lean list rows carry the kind: stored on the offer, else Zillow's `homeType`. Postgres returns `subjectHomeType` in the lean SQL for that, so older offers sort into it with no backfill.
+
 ## Dataroom photos from a Google Drive folder
 
 The dataroom photo box takes a Drive **folder** link and imports everything in

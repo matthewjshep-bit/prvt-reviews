@@ -104,8 +104,10 @@ export function runsLeftInMonth(now = Date.now(), { weekdaysOnly = true, tz = WO
 
 // RentCast's property types, spelled its way.
 export const PROPERTY_TYPES = ["Single Family", "Multi-Family", "Manufactured", "Townhouse", "Condo", "Apartment", "Land"];
-// Flips: houses, small multis, manufactured, townhomes. Condos and land are not the deal.
-export const DEFAULT_PROPERTY_TYPES = ["Single Family", "Multi-Family", "Manufactured", "Townhouse"];
+// Single-family houses only (Matt, 2026-10-01: focus on SFR). Multi-family,
+// manufactured and townhouses can still be ticked in Settings; they aren't
+// the default, and the auto-underwrite holds them anyway (settings.focusKinds).
+export const DEFAULT_PROPERTY_TYPES = ["Single Family"];
 export const DEFAULT_MIN_DAYS_ON_MARKET = 45;
 // The most a hook listing may ask. Above it the agent is not our buyer's
 // market, however stale the listing. 0 = no cap.

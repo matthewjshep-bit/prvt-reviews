@@ -33,6 +33,7 @@ import { pullZillowComps, filterByUnits, streetKey, mergeFacts } from "./comps-z
 import { gradeComps } from "./comps-grade.js";
 import { recordError } from "./app-errors.js";
 import { fetchZillowPhotos, fetchListingPhotos, fetchZillowFacts, MAX_FACT_LOOKUPS, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
+import { kindHold } from "./shared/asset-type.js";
 import { deriveArv, timeTrend, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
@@ -1419,6 +1420,25 @@ async function runUnderwrite(job, ctx) {
   got.photosCount = photosCount;
   if (!photos.length) {
     warnings.push(`no listing photos for ${extraction.address} — the scope of work can't be scanned`);
+  }
+
+  // Not our kind of house (shared/asset-type.js kindHold). Matt, 2026-10-01:
+  // single-family houses only for now. A mobile home, a townhouse, a condo, a
+  // multi-family or land is held here — before the comps and the photo scan
+  // are paid for — as a person's call on Today ("Open and fix" underwrites it
+  // anyway: a run from the editor is a fill run and skips this).
+  const kindHeld = job.fill ? "" : kindHold(facts?.homeType, saved?.focusKinds);
+  if (kindHeld) {
+    const subjectOnly = {
+      lat: resolved?.lat ?? null, lng: resolved?.lng ?? null,
+      beds: facts?.beds ?? null, baths: facts?.baths ?? null, sqft: facts?.sqft ?? null, yearBuilt: facts?.yearBuilt ?? null,
+      lotSqft: facts?.lotSqft ?? null, homeType: facts?.homeType ?? null, units: facts?.units ?? null,
+      stories: null, subdivision: null, material: null,
+    };
+    got.subject = subjectOnly;
+    return finishHeld(job, ctx, { extraction, held: [kindHeld], partial: {
+      compsData: null, subject: subjectOnly, subjectSqft: Number(facts?.sqft) || 0, grades: {}, rehabbed: null, arv: null, rehabState: null, scope: [], repairs: null,
+    } });
   }
 
   /* --- 3. comps --- */

@@ -38,9 +38,14 @@ const uuid = () => crypto.randomUUID();
 export function offerListQuery({ locationId, contactId = null, limit = 50, lean = false }) {
   const params = [locationId];
   const ph = (v) => `$${params.push(v)}`; // bind v, return its placeholder
+  // `subjectHomeType` rides along so a row with no kind stored can still say
+  // what Zillow called it (shared/asset-type.js) — the snapshot it lives in
+  // is the weight this trim exists to drop.
   const col = lean
-    ? `coalesce((select jsonb_object_agg(k, v) from jsonb_each(doc) as e(k, v)
-                  where k = any(${ph(OFFER_LIST_FIELDS)}::text[])), '{}'::jsonb) as doc`
+    ? `(coalesce((select jsonb_object_agg(k, v) from jsonb_each(doc) as e(k, v)
+                  where k = any(${ph(OFFER_LIST_FIELDS)}::text[])), '{}'::jsonb)
+        || jsonb_build_object('subjectHomeType', coalesce(doc #>> '{snapshot,subjectInfo,homeType}',
+             doc #>> '{snapshot,comps,result,info,homeType}', doc #>> '{draft,subjectInfo,homeType}'))) as doc`
     : "doc";
   const where = contactId ? ` and contact_id = ${ph(contactId)}` : "";
   return {

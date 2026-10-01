@@ -81,6 +81,34 @@ const blank = () => ({ offers: 0, sent: 0, countered: 0, agreed: 0, contract: 0,
 const pct = (n, d) => (d > 0 ? Math.round((n / d) * 1000) / 10 : null);
 
 /**
+ * funnelBy(offers, sideOf, { now, days, sides }) → { [side]: { offers, sent, countered, agreed, contract, closed, contractRate } }
+ *
+ * The house-by-house funnel, split by whatever `sideOf(offer)` says — off-
+ * market or listed, single family or another kind (shared/line.js). Each
+ * house once (its current row; a draft never), created inside the window.
+ */
+export function funnelBy(offers = [], sideOf = () => "all", { now = Date.now(), days = null, sides = [] } = {}) {
+  const from = days ? now - days * DAY_MS : -Infinity;
+  const out = Object.fromEntries(sides.map((k) => [k, blank()]));
+  for (const o of offers || []) {
+    if (!o || o.status === "draft" || o.supersededBy || o.isCurrent === false) continue;
+    if ((ms(o.createdAt) ?? 0) < from) continue;
+    const key = sideOf(o);
+    const side = out[key] || (out[key] = blank());
+    const seen = new Set((o.statusHistory || []).map((h) => h?.status));
+    const status = effectiveStatus(o);
+    side.offers++;
+    if ((o.sends || []).some((s) => s?.ts) || o.proactive?.realmCheckAt || seen.has("sent") || status !== "new") side.sent++;
+    if (seen.has("countered") || o.counter || status === "countered") side.countered++;
+    if (o.deal || priceAgreed(o) || seen.has("accepted") || status === "accepted") side.agreed++;
+    if (o.deal) side.contract++;
+    if (o.deal && ["closed", "assigned"].includes(o.deal.stage)) side.closed++;
+  }
+  for (const side of Object.values(out)) side.contractRate = pct(side.contract, side.offers);
+  return out;
+}
+
+/**
  * offMarketStats(offers, { now, days }) → { offMarket, listed, agents }
  *
  * Each house once (its current row; a draft never), created inside the
@@ -90,22 +118,13 @@ const pct = (n, d) => (d > 0 ? Math.round((n / d) * 1000) / 10 : null);
  * most first, with how many became contracts.
  */
 export function offMarketStats(offers = [], { now = Date.now(), days = null, names = {} } = {}) {
+  const out = funnelBy(offers, (o) => (isOffMarket(o) ? "offMarket" : "listed"), { now, days, sides: ["offMarket", "listed"] });
   const from = days ? now - days * DAY_MS : -Infinity;
-  const out = { offMarket: blank(), listed: blank() };
   const agents = new Map();
   for (const o of offers || []) {
     if (!o || o.status === "draft" || o.supersededBy || o.isCurrent === false) continue;
     if ((ms(o.createdAt) ?? 0) < from) continue;
     const off = isOffMarket(o);
-    const side = off ? out.offMarket : out.listed;
-    const seen = new Set((o.statusHistory || []).map((h) => h?.status));
-    const status = effectiveStatus(o);
-    side.offers++;
-    if ((o.sends || []).some((s) => s?.ts) || o.proactive?.realmCheckAt || seen.has("sent") || status !== "new") side.sent++;
-    if (seen.has("countered") || o.counter || status === "countered") side.countered++;
-    if (o.deal || priceAgreed(o) || seen.has("accepted") || status === "accepted") side.agreed++;
-    if (o.deal) side.contract++;
-    if (o.deal && ["closed", "assigned"].includes(o.deal.stage)) side.closed++;
     if (off && o.contactId) {
       const a = agents.get(o.contactId) || { contactId: o.contactId, name: o.contactName || names[o.contactId] || "", offers: 0, contracts: 0 };
       a.offers++;
@@ -113,7 +132,6 @@ export function offMarketStats(offers = [], { now = Date.now(), days = null, nam
       agents.set(o.contactId, a);
     }
   }
-  for (const side of [out.offMarket, out.listed]) side.contractRate = pct(side.contract, side.offers);
   return {
     ...out,
     agents: [...agents.values()].sort((a, b) => b.contracts - a.contracts || b.offers - a.offers || a.name.localeCompare(b.name)).slice(0, 10),

@@ -218,6 +218,49 @@ function Pricing({ pricing }) {
   );
 }
 
+// Single family vs other kinds (shared/line.js kindStats). Matt, 2026-10-01:
+// we're buying single-family houses right now; this says whether the line
+// is actually made of them. A house nobody typed has its own column.
+function Kinds({ kinds }) {
+  const [span, setSpan] = useState("days90");
+  const d = kinds?.[span];
+  if (!d) return null;
+  const rows = [["offers", "Offers"], ["sent", "In front of the agent"], ["countered", "Countered"], ["agreed", "Price agreed"], ["contract", "Under contract"], ["closed", "Closed"]];
+  const cols = [["sfr", "Single family"], ["other", "Other kinds"], ["untyped", "Not typed"]];
+  return (
+    <Card title="Single family vs other kinds" right={
+      <span className="inline-flex gap-1 text-[11px]">
+        {[["days90", "Last 90 days"], ["allTime", "All time"]].map(([k, label]) => (
+          <button key={k} type="button" onClick={() => setSpan(k)}
+            className={`rounded-md px-2 py-0.5 ${span === k ? "bg-slate-800 text-white" : "text-slate-500 hover:bg-slate-100"}`}>{label}</button>
+        ))}
+      </span>
+    }>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-wide text-slate-400">
+            <th className="py-1 pr-3 font-semibold" />
+            {cols.map(([k, label], i) => <th key={k} className={`py-1 ${i < cols.length - 1 ? "pr-3" : ""} text-right font-semibold ${k === "sfr" ? "text-emerald-700" : ""}`}>{label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([k, label]) => (
+            <tr key={k} className="border-t border-slate-100">
+              <td className="py-1 pr-3 text-slate-700">{label}</td>
+              {cols.map(([c], i) => <td key={c} className={`py-1 ${i < cols.length - 1 ? "pr-3" : ""} text-right tabular-nums ${c === "sfr" ? "font-semibold text-emerald-800" : ""}`}>{n(d[c]?.[k])}</td>)}
+            </tr>
+          ))}
+          <tr className="border-t border-slate-200">
+            <td className="py-1 pr-3 text-slate-700">Offers that became contracts</td>
+            {cols.map(([c], i) => <td key={c} className={`py-1 ${i < cols.length - 1 ? "pr-3" : ""} text-right tabular-nums ${c === "sfr" ? "font-semibold text-emerald-800" : ""}`}>{pctText(d[c]?.contractRate)}</td>)}
+          </tr>
+        </tbody>
+      </table>
+      <div className="mt-2 text-[11px] text-slate-400">The auto-underwrite holds anything but a single-family house for you on Today.</div>
+    </Card>
+  );
+}
+
 // Off-market vs listed (shared/off-market.js): our best deals are houses an
 // agent brought us before the market saw them. Station by station, side by
 // side, and who brings them.
@@ -280,6 +323,7 @@ export function LineBody({ data }) {
   return (
     <>
       <Leaks leaks={data.leaks} total={data.leakTotal} backlog={data.backlog} />
+      <Kinds kinds={data.kinds} />
       <Sources sources={data.sources} />
       <Stations stations={data.stations} method={data.method} />
       <div className="grid gap-4 lg:grid-cols-2">

@@ -30,6 +30,7 @@ import { showingSummary } from "./showing.js";
 import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
 import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
 import { accessFor } from "./deal-access.js";
+import { KIND_HOLD } from "./asset-type.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -344,9 +345,14 @@ export function buildPipeline({
     /* actions on this card */
     const base = { offerId: o.id, contactId: card.contactId, contactName: card.contactName, address: card.address };
     if (aiHeld) {
+      // Not our kind of house (shared/asset-type.js): single-family only for
+      // now, so the question is whether to price it at all.
+      const kindHeld = held.find((h) => KIND_HOLD.test(String(h || "")));
       card.actionIds.push(push({ ...base, kind: "underwrite_held", severity: "soon",
-        title: `Underwrite held on ${card.address}`, detail: held.join(" · "),
-        ops: [{ key: "open_editor", label: "Open and fix", intent: "primary" }, { key: "drop", label: "Drop it", intent: "danger" }] }));
+        title: kindHeld ? `Not single-family: ${card.address}` : `Underwrite held on ${card.address}`, detail: held.join(" · "),
+        ops: kindHeld
+          ? [{ key: "open_editor", label: "Underwrite anyway", intent: "secondary" }, { key: "drop", label: "Pass on it", intent: "primary" }]
+          : [{ key: "open_editor", label: "Open and fix", intent: "primary" }, { key: "drop", label: "Drop it", intent: "danger" }] }));
     }
     if (lane === "ready" && card.ai.made && !(o.sends || []).length) {
       card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon",

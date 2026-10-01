@@ -28,7 +28,7 @@ const fmtTyped = (v) => {
 
 // RentCast's property types (mirrors PROPERTY_TYPES in ghl-broker/outreach-sweep.js).
 const OUTREACH_PROPERTY_TYPES = ["Single Family", "Multi-Family", "Manufactured", "Townhouse", "Condo", "Apartment", "Land"];
-const OUTREACH_DEFAULT_TYPES = ["Single Family", "Multi-Family", "Manufactured", "Townhouse"];
+const OUTREACH_DEFAULT_TYPES = ["Single Family"];
 
 // A GHL workflow by name, or a pasted id/builder URL when the list can't load
 // (the token lacks workflows.readonly).
@@ -816,6 +816,32 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           The spend ceiling. A misconfigured workflow that fires on every inbound text stops here
           rather than at your Apify balance. Blank uses the default of 25; 0 means no cap.
         </p>
+        {/* What we're buying right now (shared/asset-type.js). Single family
+            since 2026-10-01; multi-family is a kind an offer can carry and
+            will be switched on here when it's time. */}
+        <div className="mt-4">
+          <span className="block text-xs font-medium text-slate-600">Houses the auto-underwrite prices on its own</span>
+          <div className="mt-1 flex flex-wrap gap-x-5 gap-y-1">
+            {[["sfr", "Single family"], ["multi_family", "Multi-family (2-4 units)"], ["manufactured", "Mobile / manufactured"]].map(([k, label]) => {
+              const on = (form.focusKinds?.length ? form.focusKinds : ["sfr"]).includes(k);
+              return (
+                <label key={k} className="flex items-center gap-1.5 text-sm">
+                  <input type="checkbox" checked={on} onChange={(e) => {
+                    const cur = form.focusKinds?.length ? form.focusKinds : ["sfr"];
+                    const next = e.target.checked ? [...new Set([...cur, k])] : cur.filter((x) => x !== k);
+                    set("focusKinds")(next.length ? next : ["sfr"]);
+                  }} />
+                  {label}
+                </label>
+              );
+            })}
+          </div>
+          <p className="mt-1 text-xs text-slate-400">
+            Anything else an agent texts (a townhouse, a condo, land, or a kind not ticked here) is held before
+            comps are bought and shows on Today as "Not single-family" with Underwrite anyway / Pass on it. The
+            bot tells agents what we buy. A house Zillow can't type goes ahead.
+          </p>
+        </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">

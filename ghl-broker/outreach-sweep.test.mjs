@@ -11,7 +11,7 @@ test("settings coerce to safe defaults", () => {
   assert.deepEqual(normalizeOutreachAutopilot(undefined), {
     enabled: false, dailyCap: 12, weekdaysOnly: true, firstTouch: "app", requireDistress: true,
     workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14,
-    minDaysOnMarket: 45, propertyTypes: ["Single Family", "Multi-Family", "Manufactured", "Townhouse"], maxYearBuilt: 0, reserveRequests: 2,
+    minDaysOnMarket: 45, propertyTypes: ["Single Family"], maxYearBuilt: 0, reserveRequests: 2,
     maxListPrice: 1500000,
   });
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: 0 }).maxListPrice, 0, "0 = no cap");
@@ -121,7 +121,7 @@ test("workflow ids and counties come in pasted however", () => {
 });
 
 test("the query asks RentCast for stale houses, not everything", () => {
-  assert.deepEqual(pullQuery(normalizeOutreachAutopilot({})), { daysOld: "45:*", propertyType: "Single Family|Multi-Family|Manufactured|Townhouse", maxPrice: 1500000, distressRule: "cut-or-cheap", metro: true });
+  assert.deepEqual(pullQuery(normalizeOutreachAutopilot({})), { daysOld: "45:*", propertyType: "Single Family", maxPrice: 1500000, distressRule: "cut-or-cheap", metro: true });
   assert.deepEqual(pullQuery(normalizeOutreachAutopilot({ minDaysOnMarket: 0, propertyTypes: [], maxYearBuilt: 1995, maxListPrice: 0, requireDistress: false })), { daysOld: "1:*", yearBuilt: "*:1995", metro: true });
   assert.deepEqual(normalizeOutreachAutopilot({ propertyTypes: "condo|bogus|Condo" }).propertyTypes, ["Condo"]);
 });
@@ -151,7 +151,7 @@ test("walks a county page by page across runs, then the next county; a dry run k
   const place = () => store.cursors.get(`loc-pg|${PAGES_CURSOR}`)?.doc;
 
   const j1 = await run({ nextOffset: 1000, totalCount: 1400, requestsUsed: 2 });
-  assert.deepEqual(bodies[0], { daysOld: "45:*", propertyType: "Single Family|Multi-Family|Manufactured|Townhouse", maxPrice: 1500000, distressRule: "cut-or-cheap", metro: true, maxRequests: 2, county: "King", state: "WA", offset: 0 },
+  assert.deepEqual(bodies[0], { daysOld: "45:*", propertyType: "Single Family", maxPrice: 1500000, distressRule: "cut-or-cheap", metro: true, maxRequests: 2, county: "King", state: "WA", offset: 0 },
     "46 spendable over 22 runs = 2 requests");
   assert.equal(j1.county, "King, WA");
   assert.deepEqual(j1.budget, { used: 0, budget: 48, reserve: 2, runsLeft: 22, perRun: 2 });

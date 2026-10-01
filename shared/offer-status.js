@@ -23,6 +23,9 @@
 //   to record an acceptance instead of two that can disagree.
 
 // Display order is also funnel order: earliest state first, terminal last.
+// The one dependency: asset-type.js, itself pure and import-free.
+import { assetOf } from "./asset-type.js";
+
 export const OFFER_STATUSES = [
   { key: "draft", label: "Draft", cls: "bg-blue-100 text-blue-800", dot: "bg-blue-500" },
   { key: "new", label: "Not sent", cls: "bg-slate-100 text-slate-600", dot: "bg-slate-400" },
@@ -433,6 +436,12 @@ export function toListOffer(offer) {
   for (const k of OFFER_LIST_FIELDS) if (offer[k] !== undefined) row[k] = offer[k];
   const at = offerExpiresAt(offer);
   if (at) row.expiresAt = at.toISOString();
+  // The kind of house (shared/asset-type.js): stored, else what Zillow said
+  // — off the snapshot here, or the one field the lean SQL carries for it.
+  if (!row.asset) {
+    const derived = assetOf(offer) || (offer.subjectHomeType ? assetOf({ snapshot: { subjectInfo: { homeType: offer.subjectHomeType } } }) : null);
+    if (derived) row.asset = derived;
+  }
   // askingPrice  the list price lives at calc.inputs.askingPrice, inside the
   //              calc blob this trim drops. The reply agent quotes it to an
   //              agent who just named it, and its money guard flags any number

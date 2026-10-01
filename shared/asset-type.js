@@ -71,7 +71,8 @@ export function normalizeAsset(v) {
 // The subject record the underwrite saved — the same place the blast and the
 // dataroom read beds and baths from.
 const subjectHomeType = (offer = {}) => {
-  const snap = offer?.snapshot || {};
+  // A held draft keeps its workspace under `draft`, a priced offer under `snapshot`.
+  const snap = offer?.snapshot || offer?.draft || {};
   return snap.subjectInfo?.homeType || snap.comps?.result?.info?.homeType || "";
 };
 
@@ -170,4 +171,62 @@ export function buyerTypeFit(buyer = {}, asset = null) {
   const wants = types.includes(a.type);
   if (said.mobileOnly) return { wants: false, refuses: true, reason: "buys mobile homes only" };
   return { wants, refuses: false, reason: "" };
+}
+
+/* ---------- what we're buying right now ---------- */
+
+// Matt, 2026-10-01: "focus on Single Family Residences." Multi-family stays
+// a kind an offer can carry — it will be expanded into later — but it is not
+// underwritten on its own yet, and neither is a townhouse, a condo, a mobile
+// home or land. `settings.focusKinds` lists what the auto-underwrite prices;
+// anything else is held for a person ("not our kind of house").
+export const FOCUS_KINDS_DEFAULT = ["sfr"];
+
+/** normalizeFocusKinds(v) → the kinds the machine underwrites; never empty. */
+export function normalizeFocusKinds(v) {
+  const out = (Array.isArray(v) ? v : []).map(asType).filter(Boolean);
+  return out.length ? [...new Set(out)] : [...FOCUS_KINDS_DEFAULT];
+}
+
+// Zillow's word for a house we don't have a kind for, in plain English.
+const OTHER_HOME_WORDS = { TOWNHOUSE: "a townhouse", CONDO: "a condo", LOT: "land", APARTMENT: "an apartment", COOPERATIVE: "a co-op" };
+const KIND_WORDS = { sfr: "a single-family house", multi_family: "a multi-family", manufactured: "a mobile home" };
+
+// What every not-our-kind hold reason starts with (held-underwrites.js keys on it).
+export const KIND_HOLD_PREFIX = "not our kind of house";
+export const KIND_HOLD = /^not our kind of house\b/i;
+
+/**
+ * kindHold(homeType, focusKinds) → the hold reason, or "" to go ahead.
+ *
+ * Unknown (Zillow didn't say) goes ahead: a house we can't type is more
+ * likely a house than not, and holding every untyped listing would hold most
+ * of what comes in by text.
+ */
+export function kindHold(homeType, focusKinds = FOCUS_KINDS_DEFAULT) {
+  const raw = String(homeType || "").trim().toUpperCase().replace(/[\s-]+/g, "_");
+  if (!raw) return "";
+  const kind = assetFromHomeType(raw);
+  const focus = normalizeFocusKinds(focusKinds);
+  if (kind && focus.includes(kind)) return "";
+  const word = kind ? KIND_WORDS[kind] : OTHER_HOME_WORDS[raw] || `a ${raw.toLowerCase().replace(/_/g, " ")}`;
+  const want = focus.length === 1 && focus[0] === "sfr" ? "single-family only right now" : `buying ${focus.map((k) => ASSET_TYPE_LABELS[k].toLowerCase()).join(", ")} right now`;
+  return `${KIND_HOLD_PREFIX} — ${word} (${want})`;
+}
+
+/**
+ * agentFocusRule(focusKinds) → the line the agent-side bot reads about what
+ * we buy. Single-family only (the default): a condo, a townhouse, a mobile
+ * home, a multi-family or land is said no to plainly, and the agent is asked
+ * for single-family fixers instead — never strung along with "let me run
+ * numbers" on a house the underwrite will hold.
+ */
+export function agentFocusRule(focusKinds = FOCUS_KINDS_DEFAULT) {
+  const focus = normalizeFocusKinds(focusKinds);
+  const buy = focus.map((k) => ({ sfr: "single-family houses", multi_family: "multi-family (2-4 units)", manufactured: "mobile homes" }[k])).join(" and ");
+  const skip = ["condos", "townhouses", ...(focus.includes("manufactured") ? [] : ["mobile or manufactured homes"]),
+    ...(focus.includes("multi_family") ? [] : ["multi-family"]), "land"].join(", ");
+  return `WHAT WE BUY RIGHT NOW: ${buy} only. If the agent's house is plainly one of these — ${skip} — don't promise numbers on it: ` +
+    `say kindly that we're only buying ${buy} right now and ask if they have any ${focus.includes("sfr") ? "single-family fixers" : buy} coming up. ` +
+    "If you can't tell what kind of house it is, treat it as a house.";
 }
