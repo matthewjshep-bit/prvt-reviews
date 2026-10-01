@@ -275,6 +275,23 @@ test("a workspace that didn't fit never eats the one already saved", async () =>
   assert.ok(r.json.warnings.some((w) => /kept the comps/.test(w)), JSON.stringify(r.json.warnings));
 });
 
+test("the kind of house is saved with the offer: Zillow's when nobody picked, yours once you do, and a re-save never undoes yours", async () => {
+  // 1510 Maple Lane (2026-10-01): a mobile home whose offer had no kind.
+  const zillow = { ...WORKSPACE, subjectInfo: { homeType: "MANUFACTURED", beds: 3 } };
+  const created = await req("POST", "/api/offers", { location_id: LOC, contactId: "contact-1", inputs: INPUTS, settings: SETTINGS, snapshot: zillow });
+  assert.equal(created.status, 200, JSON.stringify(created.json).slice(0, 300));
+  const o = await store.getOffer(created.json.offer.id);
+  assert.deepEqual(o.asset, { type: "manufactured", land: "", by: "underwrite" });
+
+  const r = await save(o.id, { snapshot: zillow, asset: { type: "manufactured", land: "park" } });
+  assert.equal(r.status, 200, JSON.stringify(r.json).slice(0, 300));
+  const picked = await store.getOffer(o.id);
+  assert.deepEqual({ type: picked.asset.type, land: picked.asset.land, by: picked.asset.by }, { type: "manufactured", land: "park", by: "you" });
+
+  await save(o.id, { snapshot: { ...WORKSPACE, subjectInfo: { homeType: "SINGLE_FAMILY" } } });
+  assert.equal((await store.getOffer(o.id)).asset.land, "park", "a later underwrite never overwrites your pick");
+});
+
 test("what a save refuses", async () => {
   const offer = await seedOffer();
 

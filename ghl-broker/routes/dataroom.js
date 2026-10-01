@@ -847,6 +847,7 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
             baths: d.baths,
             sqft: d.sqft,
             yearBuilt: d.yearBuilt,
+            kind: d.kind || "",
             price: d.price,
             arv: d.arv,
             rehab: d.rehab,

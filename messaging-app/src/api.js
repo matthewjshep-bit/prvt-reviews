@@ -143,13 +143,14 @@ export const geocode = (query) =>
   fetch(`${API_BASE}/api/offers/geocode?${locq()}&query=${encodeURIComponent(query)}`)
     .then(j)
     .then((r) => r.result);
-export const getComps = (address, { sqft, months, beds, baths } = {}) => {
+export const getComps = (address, { sqft, months, beds, baths, homeType } = {}) => {
   const p = new URLSearchParams(locq());
   p.set("address", address);
   if (sqft) p.set("sqft", sqft);
   if (months) p.set("months", months);
   if (beds) p.set("beds", beds);
   if (baths) p.set("baths", baths);
+  if (homeType) p.set("homeType", homeType);
   return fetch(`${API_BASE}/api/offers/comps?${p}`).then(j);
 };
 
@@ -351,6 +352,11 @@ export const deleteOffer = (id) =>
 // caller patches its copy exactly as it does for a status.
 export const HOT_ON = "__hot_on";
 export const HOT_OFF = "__hot_off";
+// The kind of house (shared/asset-type.js) on an offer or its deal: { type,
+// land? }, type "" to go back to what Zillow said. Returns { offer, asset }.
+export const setOfferAsset = (id, { type = "", land = "" } = {}) =>
+  post(`/api/offers/${encodeURIComponent(id)}/asset`, { type, land }, "PATCH");
+
 // "Current" is the third axis: which row on a house is the number we're
 // working from (shared/current-offer.js). Same menu, same { offer } back.
 export const MAKE_CURRENT = "__make_current";

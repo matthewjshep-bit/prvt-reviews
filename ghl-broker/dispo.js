@@ -26,6 +26,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ENRICH_MODEL, INVESTOR_ENRICH_FIELDS, enrichFieldDefs } from "./enrich.js";
 import { normalizeUsAddress } from "./shared/us-address.js";
+import { assetOf } from "./shared/asset-type.js";
 import { mapPool } from "./map-pool.js";
 import {
   PROPERTY_TYPES, REHAB_APPETITES, PROPERTY_TYPE_LABELS, REHAB_APPETITE_LABELS,
@@ -98,7 +99,8 @@ const PARSE_SYSTEM =
   "- areas: cities, neighborhoods, or zip codes, exactly as written. 'the south end' is an area; 'nearby' is not.\n" +
   "- priceMin / priceMax: dollars. 'under 400k' is priceMax 400000 with priceMin null. 'around 300k' is a band " +
   "  (270000-330000). A single price with no qualifier is the deal's price — set BOTH bounds to it.\n" +
-  `- propertyTypes: ${PROPERTY_TYPES.join(", ")}. 'duplex', 'triplex', 'fourplex', and 'apartment' are all multi_family.\n` +
+  `- propertyTypes: ${PROPERTY_TYPES.join(", ")}. 'duplex', 'triplex', 'fourplex', and 'apartment' are all multi_family. ` +
+  "'mobile home', 'manufactured', 'single-wide', 'double-wide' and 'trailer' are manufactured.\n" +
   `- rehabAppetite: how much work the DEAL needs, not what the buyer prefers. ${REHAB_APPETITES.join(", ")}. ` +
   "  'gut job' / 'teardown' / 'full rehab' = full_gut; 'heavy' / 'major work' = heavy; 'needs updating' = moderate; " +
   "  'turnkey' / 'paint and carpet' = cosmetic_only.\n" +
@@ -264,11 +266,13 @@ function describeTarget(target = {}) {
 // An offer/deal -> the same query shape a typed question produces, so deal
 // matching and free-text search share one filter and one ranker.
 //
-// Only three of the five criteria are derivable from a saved offer: area
-// (parsed off the address), price, and rehab level. The offer record carries
-// no property type or lot size — the comps subject has beds/baths/sqft but
-// not those — so both stay empty, which abstains rather than guessing a type
-// and silently filtering out half the book.
+// Four of the five criteria come off a saved offer: area (parsed off the
+// address), price, rehab level, and the kind of house — what the offer says
+// it is, else what Zillow said on its underwrite (shared/asset-type.js
+// assetOf). An offer with no kind leaves the type empty, which abstains
+// rather than guessing and silently filtering out half the book. Lot size
+// stays empty. (Until 2026-10-01 the kind was empty too, and a mobile home
+// in a park went to twenty-five Kent flippers.)
 //
 // The price we match on is what the INVESTOR would pay — contract price plus
 // our assignment fee — not our cost basis. Matching a buyer's band against
@@ -280,6 +284,7 @@ export function dealToQuery(offer = {}) {
   // Before a contract price is entered, fall back to the offer we made — a
   // deal with no numbers yet should still match on area and rehab.
   const buyerPrice = (contract && contract + fee) || Number(offer.cashAmount) || null;
+  const asset = assetOf(offer);
 
   return {
     query: normalizeQuery({
@@ -288,13 +293,14 @@ export function dealToQuery(offer = {}) {
       // ceiling is $380k is still worth a call on a $400k deal.
       priceMin: buyerPrice ? Math.round(buyerPrice * 0.85) : null,
       priceMax: buyerPrice ? Math.round(buyerPrice * 1.15) : null,
-      propertyTypes: [],
+      propertyTypes: asset ? [asset.type] : [],
       lotMin: null,
       rehabAppetite: rehabAppetiteFor(offer),
       keywords: [],
     }),
     address: offer.address || "",
     assignmentFee: fee || null,
+    asset,
   };
 }
 

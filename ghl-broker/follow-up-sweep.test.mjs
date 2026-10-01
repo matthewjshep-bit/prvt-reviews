@@ -253,6 +253,18 @@ test("an investor blasted two days ago who never replied gets one nudge", async 
   assert.equal(started[0].subject.address, "9 Oak Ave");
 });
 
+test("a buyer we emailed the deal to, with no phone, is never sent a text nudge", async () => {
+  // 1510 Maple Lane (2026-10-01): fourteen of the twenty mobile home buyers
+  // have only an email. A nudge is a text, and there is no number to send it to.
+  _resetJobs();
+  const store = fakeStore({ events: [
+    { contactId: "i1", type: "blast_sent", at: at(0), address: "1510 Maple Lane", offerId: "d1", data: { channel: "email" } },
+  ] });
+  const { started } = spySweep(store, { now: T0 + 2 * DAY });
+  await settle();
+  assert.equal(started.length, 0);
+});
+
 test("a blast on a deal that found its buyer is never nudged to anyone else", async () => {
   _resetJobs();
   const store = fakeStore({

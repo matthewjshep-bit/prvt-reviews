@@ -21,6 +21,7 @@ import { fmtMoney } from "./shared/offer-calc.js";
 import { brandMarkSvg } from "./shared/brand-mark.js";
 import { recordEvent } from "./contact-record.js";
 import { zillowUrl } from "./shared/us-address.js";
+import { assetOf, assetPhrase } from "./shared/asset-type.js";
 
 export const DEFAULT_EXPIRY_DAYS = 14;
 
@@ -171,6 +172,7 @@ export function teaserSections(room) {
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const clean = (v, max = 200) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+const capitalize = (s) => { const t = String(s || ""); return t ? t.charAt(0).toUpperCase() + t.slice(1) : ""; };
 
 export const MAX_LINKS = 12;
 
@@ -406,6 +408,9 @@ export function buildSnapshot({ offer, settings = {}, sections, headline = "", n
       sqft: Math.round(num(subject?.sqft) || num(snap?.subjectSqft)) || null,
       yearBuilt: Math.round(num(subject?.yearBuilt)) || null,
       zillow: zillowUrl(inputs.address || offer?.address || "") || "",
+      // "Mobile home in a park" — the first thing a buyer of one asks
+      // (shared/asset-type.js). Empty for a single family house.
+      kind: capitalize(assetPhrase(assetOf(offer))),
     },
     numbers: pinned.numbers,
     overrides: pinned.overrides,
@@ -949,6 +954,7 @@ export function dealCard(room) {
     baths: p.baths ?? null,
     sqft: p.sqft || null,
     yearBuilt: p.yearBuilt || null,
+    kind: p.kind || "",
     price, arv, rehab, spread,
     // Dimensions are the ORIGINAL's, not the thumbnail's. The downscale keeps
     // the aspect ratio, which is all a client needs to reserve the right box
@@ -965,6 +971,7 @@ export function renderPortfolio({ rooms = [], company = {} }) {
   const card = (r) => {
     const d = dealCard(r);
     const bits = [
+      d.kind || "",
       d.beds != null ? `${d.beds} bd` : "",
       d.baths != null ? `${d.baths} ba` : "",
       d.sqft ? `${d.sqft.toLocaleString()} sqft` : "",
@@ -1267,6 +1274,7 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
   const equity = num(n.arv) - num(n.investorPrice) - num(n.repairs);
 
   const propBits = [
+    p.kind || "",
     p.beds != null ? `${p.beds} bd` : "",
     p.baths != null ? `${p.baths} ba` : "",
     p.sqft ? `${p.sqft.toLocaleString()} sqft` : "",

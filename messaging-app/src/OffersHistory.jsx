@@ -16,6 +16,7 @@ import React, { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { isOffMarket } from "@shared/off-market.js";
+import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
 import {
   DEAD_STATUSES, OFFER_STATUS, OFFER_STATUS_KEYS, effectiveStatus, isAiGenerated, isHot, needsAiReview,
@@ -635,6 +636,9 @@ export default function OffersHistory({ onEdit, onDeal }) {
                   <span className="flex items-center gap-1.5">
                     <span className="truncate" title={o.address || undefined}>{o.address || "—"}</span>
                     <AiPill offer={o} />
+                    {normalizeAsset(o.asset) && normalizeAsset(o.asset).type !== "sfr" && (
+                      <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-900">{assetLabel(o.asset)}</span>
+                    )}
                   </span>
                   {old && (
                     <span className="block text-[11px] text-slate-400">

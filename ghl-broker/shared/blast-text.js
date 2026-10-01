@@ -17,6 +17,8 @@
 // dealFacts reads the offer's own ARV/repairs and the price it is handed, and
 // touches deal.contractPrice and deal.assignmentFee at no point.
 
+import { assetOf, assetPhrase } from "./asset-type.js";
+
 const kText = (n) => {
   const v = Math.round(Number(n) || 0);
   if (!v) return "";
@@ -40,7 +42,7 @@ export function blastNote(text = "", max = 90) {
 
 /**
  * blastMessage({ firstName, address, city, price, beds, baths, sqft, yearBuilt,
- *                rehab, arv, repairs, note, variant, link }) → string
+ *                rehab, arv, repairs, note, variant, link, kind, intro }) → string
  *
  * `rehab` is a REHAB_APPETITES key or "". `link` is the buyer's own package
  * link; with it the text ends on the link rather than offering to send the
@@ -49,19 +51,35 @@ export function blastNote(text = "", max = 90) {
  * the caller rotates it per recipient. Every fact is optional — a deal with
  * nothing filled in still sends the street, the work and the price, which is
  * what this used to be.
+ *
+ * `kind` is the kind of house in words ("mobile home in a park",
+ * shared/asset-type.js assetPhrase); a single family house has none, so its
+ * text reads as it always has. `intro` is how we found them, for a buyer
+ * hearing from us for the first time ("found you through the WA real estate
+ * Facebook group") — it goes first.
  */
 export function blastMessage({
   firstName = "", address = "", city = "", price = 0, beds = 0, baths = 0, sqft = 0,
-  yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", variant = 0, link = "", ask = "",
+  yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", variant = 0, link = "", ask = "", kind = "", intro = "",
 } = {}) {
   const first = String(firstName || "").trim().split(/\s+/)[0] || "";
+  const how = String(intro || "").replace(/[.!?\s]+$/, "").trim();
+  const text = blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind });
+  if (!how) return text;
+  const hi = first ? `Hey ${first}, ` : "Hey, ";
+  const rest = text.slice(hi.length);
+  return `${first ? `Hey ${first}` : "Hey"} — ${how}. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
+}
+
+function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind }) {
   const hi = first ? `Hey ${first}, ` : "Hey, ";
   const street = String(address || "").split(",")[0].trim() || "a house";
   const where = city ? ` in ${city}` : "";
-  // What it is: size, then age. "3bd 2ba 1,480 sqft, built 1978".
+  // What it is: the kind, size, then age. "mobile home in a park, 3bd 2ba
+  // 1,440 sqft, built 1978".
   const size = [beds ? `${beds}bd` : "", baths ? `${baths}ba` : "", sqft ? `${Math.round(sqft).toLocaleString("en-US")} sqft` : ""].filter(Boolean).join(" ");
   const built = Number(yearBuilt) > 1500 ? `built ${Math.round(yearBuilt)}` : "";
-  const spec = [size, built].filter(Boolean).join(", ");
+  const spec = [String(kind || "").trim(), size, built].filter(Boolean).join(", ");
   const work = REHAB_WORDS[rehab] ? `${REHAB_WORDS[rehab]} rehab` : "needs work";
   // What it costs and what it's worth — the ask first, because that is the
   // number they decide on, then the two that say whether it's a deal.
@@ -132,5 +150,20 @@ export function dealFacts(offer = {}, { price = 0, note = "" } = {}) {
     yearBuilt: Number(subject.yearBuilt || subject.year) || 0,
     arv, repairs, rehab,
     note: String(note || ""),
+    // The kind of house in words — "" for a single family house.
+    kind: assetPhrase(assetOf(offer)),
   };
+}
+
+/**
+ * blastSubject(facts) → the subject line when the deal goes by email:
+ * "Mobile home in a park, Kent — under contract, 76k". A house without a
+ * kind is named by its street.
+ */
+export function blastSubject({ address = "", city = "", price = 0, kind = "" } = {}) {
+  const street = String(address || "").split(",")[0].trim();
+  const what = String(kind || "").trim();
+  const head = what ? `${what.charAt(0).toUpperCase()}${what.slice(1)}` : street || "A new deal";
+  const priceText = kText(price);
+  return `${head}${city ? `, ${city}` : ""} — under contract${priceText ? `, ${priceText}` : ""}`;
 }

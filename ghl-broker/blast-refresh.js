@@ -9,7 +9,7 @@
 // carries the buyer's own tracked package link, issued at that moment so a
 // held or dismissed text never mints one.
 
-import { blastMessage, dealFacts } from "./shared/blast-text.js";
+import { blastMessage, blastSubject, dealFacts } from "./shared/blast-text.js";
 import { dealNumbers, applyNumberOverrides, issueDataroomInvite } from "./dataroom.js";
 import { walkthroughAsk } from "./shared/showing.js";
 
@@ -29,7 +29,11 @@ export function blastVariant(draft = {}) {
 
 /**
  * refreshBlastText({ store, client, locationId, draft, baseUrl })
- *   → { text, price, invite, room } | null
+ *   → { text, subject, price, invite, room } | null
+ *
+ * `subject` is set for an emailed blast: the kind of house, the city and
+ * the price as they stand now. The how-we-found-you line the draft was
+ * queued with (`outbound.intro`) stays.
  *
  * null when there is no deal to read (the queued text goes as written).
  * Throws when the deal is there but its price can't be put together — the
@@ -66,6 +70,7 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
   // (dispoAutopilot.showings.askInBlast, on unless switched off — read here
   // rather than through dispo-autopilot.js, which imports reply-agent.js.)
   const ask = settings?.dispoAutopilot?.showings?.askInBlast === false ? "" : walkthroughAsk({ showing: offer.deal?.showing || null });
-  const text = blastMessage({ ...facts, firstName: draft.contactName || "", variant: blastVariant(draft), link, ask });
-  return { text, price, invite, room };
+  const text = blastMessage({ ...facts, firstName: draft.contactName || "", variant: blastVariant(draft), link, ask, intro: draft.outbound?.intro || "" });
+  const subject = draft.channel === "email" ? blastSubject(facts) : "";
+  return { text, subject, price, invite, room };
 }

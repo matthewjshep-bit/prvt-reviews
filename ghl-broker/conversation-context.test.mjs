@@ -66,6 +66,23 @@ test("only live deals are candidates, only if they fit, and never more than five
   assert.equal(ctx.summary.matchingDeals, 5);
 });
 
+test("the bot is told a mobile home is a mobile home, and a houses-only buyer is never offered one", () => {
+  // 1510 Maple Lane (2026-10-01): six flippers were texted about it as a
+  // "3bd 2ba" house. When one writes back, the bot has to know what it is.
+  const maple = deal({ id: "mh", address: "1510 Maple Lane, Kent, Washington 98030", cashAmount: 71075,
+    asset: { type: "manufactured", land: "park", by: "you" },
+    deal: { stage: "under_contract", contractPrice: 71075, assignmentFee: 5000, investors: [{ contactId: "c1", status: "evaluating" }] } });
+  const on = buildInvestorContext({ investor: INVESTOR, deals: [{ offer: maple }], contactId: "c1", now: NOW });
+  assert.match(on.text, /- 1510 Maple Lane, Kent, Washington 98030: mobile home in a park — buyer price \$76,075/);
+
+  const free = deal({ ...maple, deal: { ...maple.deal, investors: [] } });
+  const housesOnly = { ...INVESTOR, buybox: { ...INVESTOR.buybox, areas: ["Kent"], priceMin: 50000, priceMax: 500000, propertyTypes: ["sfr"] } };
+  const pitched = buildInvestorContext({ investor: housesOnly, deals: [{ offer: free }], contactId: "c2", now: NOW });
+  assert.equal(pitched.text.includes("1510 Maple"), false, "their buy box says houses");
+  const mhBuyer = { ...housesOnly, buybox: { ...housesOnly.buybox, propertyTypes: ["manufactured"] } };
+  assert.match(buildInvestorContext({ investor: mhBuyer, deals: [{ offer: free }], contactId: "c3", now: NOW }).text, /1510 Maple Lane.*mobile home in a park/);
+});
+
 test("a deal with no fee doesn't forbid the one number the model may quote", () => {
   const offer = deal({ deal: { stage: "under_contract", contractPrice: 445000, assignmentFee: 0, investors: [] }, cashAmount: 445000 });
   const ctx = buildInvestorContext({ investor: INVESTOR, deals: [{ offer }], contactId: "c1", now: NOW });

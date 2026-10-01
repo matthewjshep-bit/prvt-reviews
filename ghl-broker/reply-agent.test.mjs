@@ -3947,6 +3947,35 @@ test("a blast text quotes the deal's price when it sends, not the price when it 
   assert.equal(calls2.find(([p]) => p === "/conversations/messages")[1].body.message, "Alex, call me about K St.");
 });
 
+test("a deal emailed to a buyer with no phone goes with its own subject, not as a reply, and the send says it was an email", async () => {
+  // 1510 Maple Lane (2026-10-01): the mobile home buyers are mostly email
+  // only. An emailed deal used to be impossible; a reply email's "Re: <address>"
+  // would read as an answer to something they never sent.
+  const open = { ...openDraft(), status: "draft", channel: "email", party: "investor", intent: "blast_open", contactName: "Gizelle P", inbound: "",
+    reply: "Hey Gizelle — found you through the WA real estate Facebook group. Got 1510 Maple Lane in Kent under contract — mobile home in a park. Buyer price 101k. Want the details?",
+    outbound: { kind: "blast_open", offerId: "o9", address: "1510 Maple Lane, Kent, Washington 98030", label: "dispo-1510-maple-lane",
+      intro: "found you through the WA real estate Facebook group", subject: "Mobile home in a park, Kent — under contract, 101k" },
+    propertyAddress: "1510 Maple Lane, Kent, Washington 98030" };
+  const store = fakeStore([open]);
+  store.getOffer = async () => ({ id: "o9", locationId: "LOC", address: "1510 Maple Lane, Kent, Washington 98030",
+    asset: { type: "manufactured", land: "park", by: "you" }, calc: { inputs: { arv: 165000, repairs: 40000 } },
+    deal: { stage: "under_contract", contractPrice: 71075, assignmentFee: 5000 } });
+  store.getOfferSettings = async () => ({});
+  store.listDatarooms = async () => [];
+  const events = [];
+  store.insertContactEvent = async (e) => { events.push(e); return { inserted: true }; };
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m9" }; } };
+
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true });
+
+  const body = calls.find(([p, o]) => p === "/conversations/messages" && o?.body?.type === "Email")?.[1]?.body;
+  assert.ok(body, "it went as an email");
+  assert.equal(body.subject, "Mobile home in a park, Kent — under contract, 76k", "the price as it stands when it sends");
+  assert.match(body.html, /found you through the WA real estate Facebook group\. Got 1510 Maple Lane in Kent under contract — mobile home in a park/);
+  assert.match(body.html, /Buyer price 76k/);
+});
+
 // Matt, 2026-09-29: the goal of every buyer text is a time they'll walk the
 // house. "Can I see it Saturday?" on a deal we hold used to get a GHL note
 // and no reply at all (wants_walkthrough is notify-only); now the answer is

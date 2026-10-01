@@ -2887,11 +2887,14 @@ feedback package and the second wave need no scan. The deal's own blast tag
 is still applied for GHL filtering; `deal.blasts` records each wave.
 `POST /api/dispo/blast` with `sendWith: "app"` and `offerId`.
 
-**Blast on promote.** When an offer becomes a deal, the strong buy-box fits
-(documented buy box, not on a live deal, not already pitched this deal) are
-blasted, up to the first-wave cap. With nobody committed after the wave
+**Blast on promote.** When an offer becomes a deal, the top-ranked buyers
+for it (`rankForDeal` + `pickWave` in `shared/buyer-score.js`: where they buy,
+price, recency, tier, the kind of house) are blasted, VIP and Active first, up
+to the first-wave cap, ten minutes after promote. A buyer must buy where the
+deal is — except on a mobile home, which goes by who buys them (see "House
+type and mobile home buyers" below). With nobody committed after the wave
 delay, the daily dispo sweep (`DISPO_SWEEP_UTC_HOUR`, default 17,
-`job_cursors` row `dispo`) blasts the *possible* fits. Off by default.
+`job_cursors` row `dispo`) sends the next wave. Off by default.
 
 **Dataroom link on its own.** `suggest_dataroom_invite` stays ask-only. A
 separate `send_dataroom_invite` action — which no rule can carry — is
@@ -3076,6 +3079,50 @@ Before this, wave 2 re-drafted every wave-1 buyer whose text was still sitting i
 - **Switches.** `dispoAutopilot.showings.remindDayBefore`, `.followUpAfter` and `.autoSend`, all off. The texts are drafts until `autoSend` is on, and even then only with `CARD_SENDS_ENABLED` and `DISPO_BLASTS_ENABLED`. They aren't on the playbook grid, and the dial never touches them.
 - Confirming a buyer's time is still yours: `wants_walkthrough` stays in `NEVER_AUTO`.
 - `GET /api/dispo/showings/preview` lists who is owed a walkthrough text right now, as the tick would see it.
+
+### House type and mobile home buyers (2026-10-01)
+
+1510 Maple Lane, Kent was a 1978 mobile home in a park. The offer had no kind, so the deal had none, and the blast on promote went to 25 Kent flippers as a "3bd 2ba" house. None of the 20 buyers tagged `dispo-type-mobile-home` was in it: the wave needed a city match and a phone, and most of them have neither.
+
+**The kind of house** lives in `shared/asset-type.js`:
+- `offer.asset` is `{ type, land, by, at }`. `type` is `sfr`, `multi_family` or `manufactured`. `land` is `park` or `own_lot` and applies to a manufactured home only. `by` is `you` or `underwrite`.
+- `assetOf(offer)` reads `offer.asset`, and falls back to Zillow's `homeType` on the underwrite's subject record. A deal older than the field still has a kind.
+- A save writes what you picked. Failing that it writes Zillow's word, so the lean rows carry it. A later underwrite never overwrites your pick.
+- **Where you set it:**
+  - the offer editor's Property card (Property type, then Land for a mobile home);
+  - the Deals modal → Overview → Property type;
+  - `PATCH /api/offers/:id/asset { type, land }`. `{ type: "" }` hands it back to Zillow.
+- Offers and Deals rows show a badge for anything that isn't single family.
+
+**Where it goes:**
+- `dealToQuery` puts it in the deal's `propertyTypes`. A deal with no kind still abstains, as before.
+- The buy-box vocabulary has `manufactured`. "Mobile home", "single-wide" and "trailer" all file as it.
+- The blast text says it ("got 1510 Maple Lane in Kent under contract — mobile home in a park, 3bd 2ba…"). Single family adds nothing, so a house's text is unchanged.
+- The buyer package and the public feed show it first.
+- The reply bot's deal line leads with it, and a houses-only buy box is never offered a mobile home.
+- The Comps pane pulls manufactured comps when the type says so. Without it the pull keeps to houses and drops every manufactured sale.
+
+**Who gets a mobile home** (`buyerTypeFit`, `pickWave({ manufactured })`):
+- **Who counts as wanting one:** a buyer with the `dispo-type-mobile-home` tag, or `manufactured` in their buy box, or "manufactured homes only" in their exclusions.
+- Location, tier and the score floor don't apply. A buyer with no area on file is in. A buyer whose areas are all elsewhere is out.
+- **A stated no keeps a buyer off:**
+  - "no mobile homes";
+  - "no … park" on a park deal;
+  - on a mobile home, a buy-box list of other kinds from someone with no tag.
+  - "Manufactured homes only" or "no site-built" keeps that buyer off every house.
+  - On a house, a list that leaves the kind out stays the buy box's −20, as before.
+- A buyer carrying one of the deal's `blastTags` already has it, whether or not anything else recorded it. The script emails of 9/28 left only the tag.
+
+**Email for buyers with no phone** (`dispoAutopilot.email`):
+- **`draft`**, on by default: a buyer in a wave with no phone and an email gets a `channel: "email"` blast draft.
+  - Subject: "Mobile home in a park, Kent — under contract, 76k" (`blastSubject`).
+  - The body is the same text, rewritten at send time like the texts.
+- **`autoSend`**, off by default: emailed deals schedule themselves under the same switches as texts (`CARD_SENDS_ENABLED`, `DISPO_BLASTS_ENABLED`, `blast_open` on the allowlist). Off, they wait in the outbox for you.
+- An auto-sent email checks the contact's email opt-out, not SMS.
+- `blast_sent` records `channel`. A buyer who was only emailed never starts the text-only `blast_nudge` ladder.
+- A buyer tagged `dispo-source-fb-warei` who has never written back gets "found you through the WA real estate Facebook group" first.
+
+`GET /api/dispo/waves/preview?offerId=` returns the deal's `asset` and each next buyer's `channel`.
 
 ## Dataroom photos from a Google Drive folder
 
