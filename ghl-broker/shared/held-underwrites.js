@@ -38,6 +38,7 @@
 import { addressKey, sameStreet } from "./us-address.js";
 import { propertyDossier } from "./contact-record.js";
 import { aiHoldReasons, effectiveStatus, DEAD_STATUSES } from "./offer-status.js";
+import { KIND_HOLD } from "./asset-type.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -180,7 +181,13 @@ export function triageHeldUnderwrite({
     return { ...base, action: "retire", status: "we_passed", reason: "we asked for their read a week ago and heard nothing" };
   }
 
-  /* --- 3. re-run on their numbers --- */
+  /* --- 3. not our kind of house (2026-10-01: single-family only) --- */
+  // Nothing the agent could tell us clears it: whether to price a mobile
+  // home or a townhouse anyway is a person's call, said in full.
+  const kind = held.find((h) => KIND_HOLD.test(String(h || "")));
+  if (kind) return { ...base, action: "yours", reason: String(kind) };
+
+  /* --- 4. re-run on their numbers --- */
   if (cls.rescuable) {
     // The dossier keys on the exact address; the agent's take often carries a
     // unit the draft doesn't ("2500 Alder St, Unit 15" — Helen Hendricks,
@@ -204,7 +211,7 @@ export function triageHeldUnderwrite({
       return { ...base, action: "yours", needs, reason: `their numbers didn't clear it either (${heldReason})` };
     }
 
-    /* --- 4. ask for the missing piece --- */
+    /* --- 5. ask for the missing piece --- */
     const missing = needs.filter((n) => !have[n]);
     if (asked != null && (lastIn == null || lastIn < asked)) return { ...base, action: "wait", needs: missing, reason: `asked ${Math.floor((now - asked) / DAY_MS)}d ago, waiting on them` };
     const alive = (lastIn != null && now - lastIn <= ALIVE_DAYS * DAY_MS) || heldDays <= 3;
@@ -216,7 +223,7 @@ export function triageHeldUnderwrite({
     return { ...base, action: "ask", needs: missing, reason: `${heldReason} — ask what ${missing.map((n) => (n === "value" ? "it's worth fixed up" : "the work would run")).join(" and ")}` };
   }
 
-  /* --- 5. a person's call --- */
+  /* --- 6. a person's call --- */
   return { ...base, action: "yours", reason: heldReason };
 }
 

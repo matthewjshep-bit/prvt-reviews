@@ -779,6 +779,9 @@ export default function DealsView({ settings, onEdit }) {
     try { return new URLSearchParams(window.location.search).get("deal_id") || null; } catch { return null; }
   });
   const [showTerminal, setShowTerminal] = useState(false);
+  // Single family only (Matt, 2026-10-01: focus on SFR). Off by default so a
+  // deal of another kind already under contract never drops out of sight.
+  const [sfrOnly, setSfrOnly] = useState(false);
   const [assigning, setAssigning] = useState(null);
   const [dataroom, setDataroom] = useState(null); // offer whose investor dataroom is open
   const [enriching, setEnriching] = useState(null); // { contactId, name } investor in EnrichModal
@@ -811,7 +814,8 @@ export default function DealsView({ settings, onEdit }) {
   const closed = deals.filter((o) => o.deal.stage === "closed");
   const fell = deals.filter((o) => o.deal.stage === "fell_through");
   const potentialFees = active.reduce((s, o) => s + (Number(o.deal.assignmentFee) || 0), 0);
-  const shown = showTerminal ? deals : active;
+  const isSfr = (o) => normalizeAsset(o.asset)?.type === "sfr";
+  const shown = (showTerminal ? deals : active).filter((o) => !sfrOnly || isSfr(o));
   const selected = selectedId ? deals.find((o) => o.id === selectedId) : null;
 
   const kpis = [
@@ -931,6 +935,12 @@ export default function DealsView({ settings, onEdit }) {
             <button type="button" onClick={() => setShowTerminal((v) => !v)}
               className="mt-2 text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-900">
               {showTerminal ? "Hide" : "Show"} closed & fell-through ({closed.length + fell.length})
+            </button>
+          )}
+          {deals.some((o) => !isSfr(o)) && (
+            <button type="button" onClick={() => setSfrOnly((v) => !v)} aria-pressed={sfrOnly}
+              className="ml-4 mt-2 text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-900">
+              {sfrOnly ? "Show every kind of house" : `Single family only (${(showTerminal ? deals : active).filter(isSfr).length})`}
             </button>
           )}
         </>

@@ -50,6 +50,7 @@ import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blocki
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
+import { agentFocusRule } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
@@ -1693,7 +1694,9 @@ export async function assembleConversation({
 
   const playbook = config.parties?.[party] || null;
   const base = playbook ? playbook.instructions : config.routing.genericInstructions;
-  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE, AGENT_HONESTY_RULE].filter(Boolean).join("\n") : base;
+  // What we buy right now (shared/asset-type.js): single-family only since
+  // 2026-10-01, so a condo or a mobile home gets a plain no, not a promise.
+  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE, AGENT_HONESTY_RULE, agentFocusRule(saved?.focusKinds)].filter(Boolean).join("\n") : base;
   const signer = config.persona.name || saved?.company?.signer || saved?.company?.name || "";
   // Ours to hand out when asked — an agent who asks "what's your email?" got
   // "I'll text it over shortly" until 2026-09-12, because we never sent it.

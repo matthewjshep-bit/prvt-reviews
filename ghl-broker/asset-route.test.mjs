@@ -56,3 +56,16 @@ test("a deal with no kind reads as what Zillow said, a pick by hand is yours, an
   const back = await patch(o.id, { type: "" });
   assert.deepEqual(back.asset, { type: "manufactured", land: "", by: "underwrite" }, "clearing it hands it back to Zillow");
 });
+
+test("an offer from before the field still says what it is on the list rows, from Zillow's word", async () => {
+  // Single-family focus (2026-10-01): the Offers, Deals and Line filters read
+  // the kind off the lean rows, and three hundred offers predate it.
+  const loc = "loc-asset-lean";
+  await store.createOffer({ id: crypto.randomUUID(), locationId: loc, contactId: "a", address: "9 Elm St, Kent, WA 98030", cashAmount: 300000, status: "sent",
+    statusHistory: [], snapshot: { subjectInfo: { homeType: "SINGLE_FAMILY" } } });
+  await store.createOffer({ id: crypto.randomUUID(), locationId: loc, contactId: "a", address: "1 Untyped Rd, Kent, WA 98030", cashAmount: 300000, status: "sent", statusHistory: [] });
+  const rows = await store.listOffers(loc, { limit: 5, lean: true });
+  const byAddr = Object.fromEntries(rows.map((r) => [r.address, r.asset || null]));
+  assert.deepEqual(byAddr["9 Elm St, Kent, WA 98030"], { type: "sfr", land: "", by: "underwrite" });
+  assert.equal(byAddr["1 Untyped Rd, Kent, WA 98030"], null);
+});

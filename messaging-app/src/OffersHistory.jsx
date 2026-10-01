@@ -85,6 +85,9 @@ const FILTERS = [
   // How the house came to us: off-market houses agents brought us are our
   // best deals (shared/off-market.js). Deals included.
   { key: "offmarket", label: "Off-market", title: "Houses an agent brought us off the market — marked by you, or by the machine from their words or Zillow", test: (o) => !o.supersededBy && o.status !== "draft" && isOffMarket(o) },
+  // The kind of house we're buying right now (shared/asset-type.js): single
+  // family, as Zillow or you typed it. Deals included.
+  { key: "sfr", label: "Single family", title: "Single-family houses — what we're buying right now", test: (o) => !o.supersededBy && o.status !== "draft" && normalizeAsset(o.asset)?.type === "sfr" },
   { key: "unsent", label: "Not sent", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "new" && o.status !== "draft" },
   { key: "waiting", label: "Awaiting reply", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "sent" },
   { key: "countered", label: "Countered", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "countered" },

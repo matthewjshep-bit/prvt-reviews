@@ -118,3 +118,14 @@ test("latestInbound reads drafts and summaries", () => {
   assert.equal(latestInbound([inbound("x", { createdAt: ago(3) })], [{ type: "text_summary", at: ago(1) }]), Date.parse(ago(1)));
   assert.equal(latestInbound([], []), null);
 });
+
+test("a house that isn't single-family is a person's call, said in full, until it goes stale", async () => {
+  const { triageHeldUnderwrite } = await import("./held-underwrites.js");
+  const now = Date.parse("2026-10-01T20:00:00Z");
+  const offer = { id: "h1", address: "1510 Maple Lane, Kent, WA 98030", contactId: "a1", status: "draft", createdAt: "2026-10-01T19:00:00Z",
+    autoUnderwrite: { finishedAt: "2026-10-01T19:00:00Z", held: ["not our kind of house — a mobile home (single-family only right now)"] } };
+  const t = triageHeldUnderwrite({ offer, now });
+  assert.equal(t.action, "yours");
+  assert.equal(t.reason, "not our kind of house — a mobile home (single-family only right now)");
+  assert.equal(triageHeldUnderwrite({ offer, now: now + 15 * 86400000 }).action, "retire", "two quiet weeks retire it like any hold");
+});

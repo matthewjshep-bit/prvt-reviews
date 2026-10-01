@@ -154,3 +154,20 @@ test("the line compares off-market with listed, for the last 90 days and all tim
   assert.equal(line.sources.allTime.listed.offers, 1);
   assert.deepEqual(line.sources.allTime.agents.map((a) => a.name), ["Lori"]);
 });
+
+test("the line splits the funnel by kind of house: single family, other kinds, and houses nobody typed", async () => {
+  const { kindStats } = await import("./line.js");
+  const now = Date.parse("2026-10-01T20:00:00Z");
+  const at = new Date(now - 86400000).toISOString();
+  const offers = [
+    { id: "a", status: "sent", createdAt: at, asset: { type: "sfr" }, sends: [{ ts: at }], deal: { stage: "under_contract" } },
+    { id: "b", status: "sent", createdAt: at, asset: { type: "sfr" }, sends: [{ ts: at }] },
+    { id: "c", status: "sent", createdAt: at, asset: { type: "manufactured", land: "park" }, sends: [{ ts: at }], deal: { stage: "under_contract" } },
+    { id: "d", status: "new", createdAt: at },
+    { id: "e", status: "draft", createdAt: at, asset: { type: "sfr" } },
+  ];
+  const k = kindStats(offers, { now, days: 90 });
+  assert.deepEqual([k.sfr.offers, k.sfr.contract, k.sfr.contractRate], [2, 1, 50]);
+  assert.deepEqual([k.other.offers, k.other.contract], [1, 1]);
+  assert.equal(k.untyped.offers, 1);
+});

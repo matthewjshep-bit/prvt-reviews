@@ -79,3 +79,26 @@ test("a flipper nobody asked about mobile homes neither wants nor refuses one; a
 test("a buy box that says manufactured wants one", () => {
   assert.equal(buyerTypeFit({ buybox: { propertyTypes: ["manufactured"] } }, { type: "manufactured" }).wants, true);
 });
+
+test("only single-family houses are underwritten on their own; everything else is held, and an untyped house goes ahead", async () => {
+  const { kindHold, normalizeFocusKinds, KIND_HOLD } = await import("./asset-type.js");
+  assert.equal(kindHold("SINGLE_FAMILY"), "");
+  assert.equal(kindHold("MANUFACTURED"), "not our kind of house — a mobile home (single-family only right now)");
+  assert.equal(kindHold("TOWNHOUSE"), "not our kind of house — a townhouse (single-family only right now)");
+  assert.equal(kindHold("MULTI_FAMILY"), "not our kind of house — a multi-family (single-family only right now)");
+  assert.equal(kindHold("CONDO"), "not our kind of house — a condo (single-family only right now)");
+  assert.equal(kindHold(null), "", "Zillow didn't say");
+  assert.ok(KIND_HOLD.test(kindHold("LOT")));
+  // Multi-family is a kind an offer can carry; underwriting it is a setting away.
+  assert.equal(kindHold("MULTI_FAMILY", ["sfr", "multi_family"]), "");
+  assert.deepEqual(normalizeFocusKinds(undefined), ["sfr"]);
+  assert.deepEqual(normalizeFocusKinds([]), ["sfr"]);
+});
+
+test("the agent bot is told we buy single-family houses only, and what to say about the rest", async () => {
+  const { agentFocusRule } = await import("./asset-type.js");
+  const r = agentFocusRule();
+  assert.match(r, /single-family houses only/);
+  assert.match(r, /condos, townhouses, mobile or manufactured homes, multi-family, land/);
+  assert.match(agentFocusRule(["sfr", "multi_family"]), /single-family houses and multi-family \(2-4 units\) only/);
+});

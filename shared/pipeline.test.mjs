@@ -38,6 +38,14 @@ test("a held underwrite draft lands in needs_review and produces an underwrite_h
   assert.deepEqual(a.ops.map((o) => o.key), ["open_editor", "drop"]);
 });
 
+test("a house that isn't single-family asks whether to price it at all: pass, or underwrite anyway", () => {
+  const r = build({ offers: [offer({ status: "draft", sends: [], address: "1510 Maple Lane, Kent, WA",
+    autoUnderwrite: { jobId: "j1", held: ["not our kind of house — a mobile home (single-family only right now)"], finishedAt: D(0) } })] });
+  const a = r.actions.find((x) => x.kind === "underwrite_held");
+  assert.equal(a.title, "Not single-family: 1510 Maple Lane, Kent, WA");
+  assert.deepEqual(a.ops.map((o) => [o.key, o.label]), [["open_editor", "Underwrite anyway"], ["drop", "Pass on it"]]);
+});
+
 test("a held draft a person published is a priced offer, not a look nobody took", () => {
   const r = build({ offers: [offer({ status: "new", cashAmount: 429000, sends: [], proactive: { realmCheckAt: D(1) },
     autoUnderwrite: { jobId: "j1", held: ["only 1 listing photo to scan"], finishedAt: D(1), publishedAt: D(1) } })] });
