@@ -244,7 +244,7 @@ export async function draftReply({
   const shadowOn = shadowModel ?? shadowModelFor(cfg.ai, now);
   const shadowRun = shadowOn && shadowOn !== REPLY_MODEL
     ? callDraftModel(client, { ...params, model: shadowOn })
-      .then(({ response, batched }) => ({ model: shadowOn, ...parseDraft(response, intents, cfg), usage: meterAi("draft_shadow", response, { model: shadowOn, batched }) }))
+      .then(({ response, batched }) => ({ model: shadowOn, ...parseDraft(response, intents, cfg, outbound), usage: meterAi("draft_shadow", response, { model: shadowOn, batched }) }))
       .catch((e) => ({ model: shadowOn, error: String(e?.message || e).slice(0, 160) }))
     : null;
 
@@ -263,7 +263,7 @@ export async function draftReply({
     : null;
   clearTimeout(graceTimer);
   const usage = meterAi(outbound ? "draft_machine" : "draft_reply", response, { model: REPLY_MODEL, batched });
-  return { ...parseDraft(response, intents, cfg), usage, ...(shadow ? { shadow } : {}) };
+  return { ...parseDraft(response, intents, cfg, outbound), usage, ...(shadow ? { shadow } : {}) };
 }
 
 // The shadow's draft as the row keeps it, judged by the same gates as the
@@ -451,7 +451,10 @@ export function claimsAccess(reply = "", { vacantOk = false } = {}) {
   return "";
 }
 
-function parseDraft(response, intents, cfg) {
+// `outbound`: a machine-started text is always its own kind, whatever the
+// model wrote in the field (its schema no longer lists the one value — see
+// schemaFor).
+export function parseDraft(response, intents, cfg, outbound = null) {
   if (response.stop_reason === "max_tokens") {
     throw Object.assign(new Error("reply drafting was truncated"), { http: 502 });
   }
@@ -461,7 +464,7 @@ function parseDraft(response, intents, cfg) {
   const raw = response.content.find((b) => b.type === "text")?.text || "{}";
   const p = JSON.parse(raw);
   return {
-    intent: intents.includes(p.intent) ? p.intent : "other",
+    intent: outbound?.kind || (intents.includes(p.intent) ? p.intent : "other"),
     confidence: CONFIDENCES.includes(p.confidence) ? p.confidence : "low",
     reply: scrubReply(String(p.reply || "").trim(), cfg.style),
     needsHuman: Boolean(p.needsHuman),

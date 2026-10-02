@@ -1377,6 +1377,14 @@ on Opus 5, at ~100–130 drafts a day and ~5–8¢ each. What changed:
 - **The system prompt caches for an hour.** Drafts arrive every few minutes.
   The 5-minute cache missed about half of them, and each miss re-wrote ~5K
   tokens at 1.25x.
+- **The output format is part of that cache, so it is one format per party
+  for every machine text** (2026-10-02). Each kind used to carry a
+  one-value intent list naming itself, so each kind (realm check, check-in,
+  pulse, nudge…) had its own cache entry and re-wrote it at 2x: 46 writes in
+  158 machine texts over two days. The kind is named in the text's
+  instructions ("Set intent to …") and `parseDraft` stamps it on the draft.
+  Replies to a person keep their own format and their intent list. A test in
+  `draft-cache.test.mjs` fails if two kinds' formats ever differ again.
 - **Sweep texts go through the Batch API at half price.** These are the
   `BATCHABLE_KINDS` in `reply-agent.js`: nudges, check-ins, pulse, hot push,
   promise and price-drop texts, first outreach.
