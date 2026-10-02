@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   startFollowUpSweep, maybeStartFollowUpSweep, agentCandidates, investorCandidates, passedCandidates,
-  publicFollowUpJob, cancelFollowUpSweep, _resetJobs, CURSOR_NAME, FOLLOW_UP_UTC_HOUR, isTheOfferToAskAbout, DAILY_WINDOW_HOURS,
+  publicFollowUpJob, cancelFollowUpSweep, _resetJobs, CURSOR_NAME, FOLLOW_UP_UTC_HOUR, isTheOfferToAskAbout, DAILY_WINDOW_HOURS, getFollowUpJob,
 } from "./follow-up-sweep.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { effectiveStatus, OPEN_STATUSES } from "./shared/offer-status.js";
@@ -17,7 +17,15 @@ import { followUpDedupeKey } from "./shared/follow-up.js";
 const DAY = 86400000;
 const T0 = Date.parse("2026-09-01T17:00:00.000Z");
 const at = (d) => new Date(T0 + d * DAY).toISOString();
-const settle = () => new Promise((r) => setTimeout(r, 20));
+// Until the sweep is done, not a fixed beat. On a cold CI runner the file's
+// first sweep took 76ms and a 20ms wait read it mid-run ("running" !==
+// "done"), failing main on 2026-10-01 and 10-02 with nothing broken.
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+const settle = async () => {
+  await pause(20);
+  const until = Date.now() + 5000;
+  while (getFollowUpJob("LOC")?.status === "running" && Date.now() < until) await pause(5);
+};
 
 /* ---------- fakes ---------- */
 
