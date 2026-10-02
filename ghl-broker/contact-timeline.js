@@ -9,6 +9,7 @@
 
 import { dealMoments } from "./shared/deal-moments.js";
 import { nextFollowUp } from "./shared/next-follow-up.js";
+import { focusOf } from "./shared/agent-focus.js";
 import { botHold, paceOf, mergeEvents } from "./shared/bot-hold.js";
 import { annotateCurrent } from "./shared/current-offer.js";
 import { botEventsFor } from "./bot-hold.js";
@@ -55,7 +56,7 @@ export async function contactTimeline({ store, locationId, contactId, offerId = 
   const { moments, total } = dealMoments({ contactId, offer, events, drafts: theirDrafts, now });
   const agentsOffer = offer && offer.contactId === contactId && party !== "investor";
   const next = agentsOffer
-    ? nextFollowUp({ offer, drafts: theirDrafts.slice(0, 20), events, config, now, sweepHour: FOLLOW_UP_UTC_HOUR })
+    ? nextFollowUp({ offer, drafts: theirDrafts.slice(0, 20), events, config, now, sweepHour: FOLLOW_UP_UTC_HOUR, focus: focusOf(mine, { contactId }) })
     : null;
 
   const hold = botHold({ events, now });

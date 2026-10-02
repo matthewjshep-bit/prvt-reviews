@@ -187,3 +187,24 @@ test("the column moves the nudge out when you check in less, and in when you che
   assert.ok(days(plain) >= 2.9 && days(plain) <= 4, `normal: about day 3, got ${days(plain)}`);
   assert.ok(days(more) < days(plain), `more: sooner than day 3, got ${days(more)}`);
 });
+
+/* ---------- one house at a time (2026-10-02) ---------- */
+
+test("a house they passed on says it rides on the live offer's nudge, not a check-in of its own", () => {
+  const passed = offer({ id: "mil", address: "28422 Military Rd S, Federal Way, WA 98003", status: "passed", statusAt: at(-25), statusHistory: [{ status: "passed", ts: at(-25) }] });
+  const live = offer({ id: "auburn", address: "10625 SE 304th Way, Auburn, WA 98092" });
+  const n = next(passed, { focus: live });
+  assert.equal(n.kind, "rides");
+  assert.equal(n.label, "Rides on the 10625 SE 304th Way nudge");
+  assert.equal(n.at, null);
+  assert.equal(n.who, "machine");
+  assert.equal(next(passed).kind, "passed_checkin", "nothing live: its own check-in");
+  assert.equal(next(live, { focus: live }).kind, "offer_nudge", "the live offer keeps its nudge");
+});
+
+test("a nudge the audit already sent counts as that rung on the column too", () => {
+  const audit = { id: "a1", contactId: "c1", status: "sent", inbound: "", reply: "…", outbound: { kind: "offer_nudge", offerId: "o1" }, createdAt: at(3.5), updatedAt: at(3.6), sentAt: at(3.6) };
+  const n = nextFollowUp({ offer: offer(), config: CONFIG, now: T0 + 4 * DAY, drafts: [audit] });
+  assert.equal(n.kind, "offer_nudge");
+  assert.match(n.label, /step 2 of 3/, "day three was the audit's; day seven is next");
+});

@@ -1192,6 +1192,60 @@ text is followed up from when it was floated, and the nudge, check-in and
 price-drop texts say "the number we floated", never "the offer we sent"
 (`whatWentOut` in reply-agent.js).
 
+### One agent, one house at a time (2026-10-02)
+
+**Why.** Every house kept its own clock, and nothing looked at the agent as
+one person. One listing agent got six machine texts from 9/19 to 9/30 about
+three houses: the live offer's nudges, a ten-day check-in on a house they had
+passed on in August, and one on an old row of a house that had sold. On 9/21
+the passed-house check-in went out *instead of* the nudge on the live offer:
+both were due that morning, and the later draft replaced the earlier one.
+The weekly cap (`maxPerContactPerWeek`) only counted the morning's run, so
+three texts in five days each looked like the first. The nightly audit's
+"floated, never heard back" nudge wasn't counted as a rung either, so the
+sweep asked the same thing again two days later.
+
+**Matt's rule** (`shared/agent-focus.js`):
+
+- **The live offer is what we text about.** `focusOf` picks one house per
+  agent from the current rows: a deal still closing, then an agreed price,
+  an acceptance, a counter, and otherwise the open offer whose number moved
+  last. A priced row nobody floated isn't live.
+- **A house they passed on gets a light touch.** While a live offer is out,
+  its check-in doesn't go on its own. When it's due it is held without being
+  claimed, and rides on the live offer's nudge as one closing line: "still
+  around if it ever shakes loose". It's a statement, not a question, with no
+  number, at most once every `LIGHT_TOUCH_DAYS` (30). Its rung is then
+  claimed (`follow_up_sent` with `data.aside`), and its `followUps` entry
+  carries `aside: true`. A house we passed on never comes up. With nothing
+  live, the check-in goes on its own as before.
+- **One text a morning per agent.** The push to paper goes first, then the
+  live offer's nudge, and the rest wait for another day.
+- **Three days apart, two a week.** `minHoursBetween` now defaults to 72
+  (was 40). The weekly cap counts what actually went out to them, sent or
+  queued (`spacingHolds`, `machineTexts`). It covers the unprompted kinds:
+  offer and counter nudges, passed check-ins, the agent check-in and the
+  outreach texts. It never holds a reply, a number they're waiting on
+  (realm/take check, take ask), a promise (promise due, call follow-up), a
+  check-in they asked for, an address chase, a price drop, or the push to
+  paper (which keeps its 20-hour floor).
+- **A nudge another path sent is that day's rung** (`rungsCovered` and
+  `nudgeTimes` in shared/follow-up.js). That covers the audit's nudge and a
+  Float pressed by hand. The Offers column reads it the same way.
+- **A ladder that keeps asking has no "last check".** With `repeatEvery` on,
+  the day-14 nudge used to say "I'll leave it alone" a week before the next
+  one. Repeat rungs are now worded as repeats.
+
+**Where it's enforced.** The follow-up sweep asks before it claims, so a
+held text spends nothing. `startProactive` asks again for every other door
+(`agentTurnReason` in ghl-broker/agent-focus.js): the audit's nudges, the
+agent check-in, outreach. A refusal there comes back as `{ skipped, spaced:
+true }`. The Offers column and the work pane show a passed house as "Rides on
+the <street> nudge".
+
+**Live setting.** The saved config keeps whatever `minHoursBetween` it has.
+Prod had 40 on 2026-10-02, so set it to 72 when this merges.
+
 ### Reads that keep the newest (2026-09-29)
 
 Several reads stopped at a fixed number of rows and kept the OLDEST, so on a

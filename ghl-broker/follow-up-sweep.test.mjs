@@ -561,8 +561,15 @@ test("the hot push ignores the weekly cap, but never goes twice inside twenty ho
   const store = fakeStore({ offers: [...others, hotOffer({ statusAt: at(3), hot: { at: at(3), by: "conversation", signal: "writing_up" }, realm: { answer: "yes", ts: at(3) } })] });
   const { started } = hotSweep(store, T0 + 4.2 * DAY);
   await settle();
-  // The push goes first (2026-09-29: a run's quota must never hold up an agreed price) and doesn't count against the week's nudges.
-  assert.deepEqual(started.map((x) => x.kind), ["hot_push", "offer_nudge", "offer_nudge"], "two other nudges this week do not hold up an agreed price");
+  // The push goes first (2026-09-29: a run's quota must never hold up an
+  // agreed price). The same agent's other houses wait for another morning
+  // (2026-10-02, one text a morning): they never hold the push up.
+  assert.deepEqual(started.map((x) => x.kind), ["hot_push"], "the agreed price goes, and is the only text that morning");
+  _resetJobs();
+  const busy = { id: "b", contactId: "c1", status: "sent", intent: "offer_nudge", outbound: { kind: "offer_nudge", offerId: "o2" }, inbound: "", reply: "hi", createdAt: at(2.9), updatedAt: at(2.9), sentAt: at(2.9) };
+  const spaced = hotSweep(fakeStore({ offers: [hotOffer({ statusAt: at(3), hot: { at: at(3), by: "conversation", signal: "writing_up" }, realm: { answer: "yes", ts: at(3) } })], drafts: [busy] }), T0 + 4.2 * DAY);
+  await settle();
+  assert.deepEqual(spaced.started.map((x) => x.kind), ["hot_push"], "a text 31 hours ago holds a nudge three days, never an agreed price");
   _resetJobs();
   const touched = { id: "t", contactId: "c1", status: "sent", intent: "checkin_due", outbound: { kind: "checkin_due" }, inbound: "", reply: "hi", createdAt: at(1.0), updatedAt: at(1.0) };
   const again = hotSweep(fakeStore({ offers: [hotOffer()], drafts: [touched] }), T0 + 1.2 * DAY);
@@ -816,4 +823,115 @@ test("a stop older than their newest 300 events still holds", async () => {
   const { started } = spySweep(store);
   await settle();
   assert.equal(started.length, 0);
+});
+
+/* ---------- one agent, one house at a time (2026-10-02) ---------- */
+
+// The Auburn listing agent, 9/19–9/30: six machine texts in eleven days about three
+// houses. On 9/21 a check-in on a house they'd passed on in August went out
+// INSTEAD of the nudge on their live offer; on 9/23 the lead was a house that
+// had sold. Matt: the live offer is what we text about; a house they passed on
+// gets one line on its nudge, once a month; never a house we passed on.
+const FOCUS_SAVED = CHECKIN_SAVED;
+const passedOn = (over = {}) => anOffer({
+  id: "mil", address: "28422 Military Rd S, Federal Way, WA 98003", cashAmount: 165150, status: "passed",
+  statusAt: at(-27), createdAt: at(-40), sends: [{ ts: at(-40) }], statusHistory: [{ status: "passed", ts: at(-27) }], ...over,
+});
+// The house that sold: its August row was "passed", the September re-offer "we passed".
+const soldOld = anOffer({ id: "sh-old", address: "4621 S Sheridan Ave, Tacoma, WA 98408", cashAmount: 126270, status: "passed",
+  statusAt: at(-27), createdAt: at(-45), sends: [{ ts: at(-45) }], statusHistory: [{ status: "passed", ts: at(-27) }] });
+const soldNew = anOffer({ id: "sh-new", address: "4621 S Sheridan Ave, Tacoma, WA 98408", cashAmount: 237499, status: "we_passed",
+  statusAt: at(-5), createdAt: at(-6), sends: [{ ts: at(-6) }] });
+const machineText = (id, day, kind = "passed_checkin", offerId = "elsewhere") => ({ id, contactId: "c1", status: "sent", intent: kind,
+  outbound: { kind, offerId }, inbound: "", reply: "…", createdAt: at(day - 0.05), updatedAt: at(day), sentAt: at(day) });
+
+test("an agent with a live offer gets the nudge on it, not a check-in on a house they passed on", async () => {
+  _resetJobs();
+  const store = fakeStore({ offers: [anOffer(), passedOn(), soldOld, soldNew] });
+  const { job, started } = spySweep(store, { now: T0 + 3.2 * DAY, opts: { saved: FOCUS_SAVED } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(started.map((s) => [s.kind, s.offer.id, s.subject.step]), [["offer_nudge", "o1", 3]], "one text, about the live offer");
+  assert.deepEqual(started[0].subject.aside, { address: "28422 Military Rd S, Federal Way, WA 98003", quiet: false }, "the passed house rides on it as one line");
+  const fold = store.events.find((e) => e.type === "follow_up_sent" && e.data.kind === "passed_checkin");
+  assert.equal(fold.dedupeKey, followUpDedupeKey({ kind: "passed_checkin", subjectId: "mil", step: 30 }), "its rung is spent, so its ladder moves on");
+  assert.equal(fold.data.aside, true);
+  assert.deepEqual(store.offers.get("mil").followUps.map((f) => [f.kind, f.step, f.aside]), [["passed_checkin", 30, true]]);
+  assert.equal(store.events.filter((e) => e.type === "follow_up_sent" && /sh-/.test(e.dedupeKey)).length, 0, "the house we passed on never comes up");
+});
+
+test("a house they passed on comes up on the live offer's nudge at most once a month", async () => {
+  _resetJobs();
+  const touched = passedOn({ followUps: [{ kind: "passed_checkin", step: 20, at: at(-10), aside: true }] });
+  const store = fakeStore({ offers: [anOffer(), touched] });
+  const { job, started } = spySweep(store, { now: T0 + 3.2 * DAY, opts: { saved: FOCUS_SAVED } });
+  await settle();
+  assert.deepEqual(started.map((s) => s.kind), ["offer_nudge"]);
+  assert.equal(started[0].subject.aside, undefined, "mentioned thirteen days ago");
+  assert.equal(store.events.filter((e) => e.type === "follow_up_sent" && e.data.kind === "passed_checkin").length, 0, "its rung isn't spent");
+  assert.match(job.results.find((r) => r.kind === "passed_checkin").reason, /one house at a time/);
+});
+
+test("a check-in on a passed house waits while a live offer is out, even on a morning with no nudge due", async () => {
+  _resetJobs();
+  const store = fakeStore({ offers: [anOffer(), passedOn({ statusAt: at(-29), statusHistory: [{ status: "passed", ts: at(-29) }] })] });
+  const { job, started } = spySweep(store, { now: T0 + 1.2 * DAY, opts: { saved: FOCUS_SAVED } });
+  await settle();
+  assert.equal(started.length, 0);
+  assert.equal(store.events.filter((e) => e.type === "follow_up_sent").length, 0, "nothing claimed: it goes on a later nudge");
+  assert.match(job.results.find((r) => r.kind === "passed_checkin").reason, /the live offer on 12 Elm St/);
+});
+
+test("once nothing is live, the passed house gets its check-in on its own again", async () => {
+  _resetJobs();
+  const settled = anOffer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }] });
+  const store = fakeStore({ offers: [settled, passedOn()] });
+  const { started } = spySweep(store, { now: T0 + 3.2 * DAY, opts: { saved: FOCUS_SAVED } });
+  await settle();
+  assert.deepEqual(started.map((s) => [s.kind, s.offer.id, s.subject.step]), [["passed_checkin", "mil", 30]]);
+});
+
+test("one text a morning per agent: the house they're on goes, the other waits", async () => {
+  _resetJobs();
+  const older = anOffer({ id: "o2", address: "9 Oak Ave, Kent, WA 98031", createdAt: at(-0.5), statusAt: at(-0.5), sends: [{ ts: at(-0.5) }] });
+  const store = fakeStore({ offers: [older, anOffer()] });
+  const { job, started } = spySweep(store, { now: T0 + 3.7 * DAY, opts: { saved: FOCUS_SAVED } });
+  await settle();
+  assert.deepEqual(started.map((s) => s.offer.id), ["o1"], "the newer offer is the one they're on");
+  assert.match(job.results.find((r) => r.address.startsWith("9 Oak")).reason, /one text a morning — the nudge on their live offer went to them first/);
+});
+
+test("the weekly cap counts the texts already sent this week, not just this morning's", async () => {
+  _resetJobs();
+  const store = fakeStore({ offers: [anOffer()], drafts: [machineText("m1", -3.0), machineText("m2", 0.15)] });
+  const { job, started } = spySweep(store, { now: T0 + 3.2 * DAY, opts: { saved: FOCUS_SAVED } });
+  await settle();
+  assert.equal(started.length, 0);
+  assert.match(job.results[0].reason, /they've had 2 texts from us this week/);
+});
+
+test("unprompted texts to one agent are three days apart", async () => {
+  _resetJobs();
+  const store = fakeStore({ offers: [anOffer()], drafts: [machineText("m1", 1.4)] });
+  const { started } = spySweep(store, { now: T0 + 3.2 * DAY, opts: { saved: FOCUS_SAVED } });
+  await settle();
+  assert.equal(started.length, 0, "a check-in went out 43 hours ago");
+  _resetJobs();
+  const later = spySweep(store, { now: T0 + 4.5 * DAY, opts: { saved: FOCUS_SAVED } });
+  await settle();
+  assert.deepEqual(later.started.map((s) => [s.kind, s.subject.step]), [["offer_nudge", 3]]);
+});
+
+test("a nudge the nightly audit already sent on the offer counts as that day's rung", async () => {
+  _resetJobs();
+  const audit = machineText("a1", 3.6, "offer_nudge", "o1");
+  const store = fakeStore({ offers: [anOffer()], drafts: [audit] });
+  const { job, started } = spySweep(store, { now: T0 + 6.7 * DAY, opts: { saved: FOCUS_SAVED } });
+  await settle();
+  assert.equal(started.length, 0, "day three was the audit's");
+  assert.match(job.results[0].reason, /day 7 hasn't come round yet/);
+  _resetJobs();
+  const next = spySweep(store, { now: T0 + 7.2 * DAY, opts: { saved: FOCUS_SAVED } });
+  await settle();
+  assert.deepEqual(next.started.map((s) => [s.kind, s.subject.step]), [["offer_nudge", 7]]);
 });
