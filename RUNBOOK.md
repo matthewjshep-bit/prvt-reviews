@@ -2086,6 +2086,32 @@ thread, lessons and timeline are read ahead (`work-data.js`).
 - Offer and Conversation become two tabs.
 - The KPI tiles are now a one-line strip; the group counts are on the rail.
 
+**The same pane on Offers (2026-10-01).** Matt: getting context on an offer
+took two or three pages — the offer window had no conversation, and its agent
+name went out to GHL. Now a click on an offer row (not a draft — drafts still
+open the editor) opens **the split** (`OffersHistory.jsx`, `OfferRail.jsx`,
+`OfferPane.jsx`, `offers-split.js`):
+
+- The table shrinks to a **rail** of the rows it was showing, in its order:
+  street, agent, our number, status, next follow-up. The rail is frozen when
+  it opens (recording an outcome doesn't renumber it) and re-frozen when the
+  filter, search or sort changes. Chips and search stay; the KPI tiles, the
+  underwrite strip, the bulk bar and the table step aside.
+- The **pane** is Today's (`PaneParts.jsx`): the person and the house with
+  the strip, Status · Bot · Edit offer · Call · Coach · ⋯, the offer on the
+  left, the conversation and a reply box on the right (their open draft comes
+  from `GET /automations/conversation?contact_id=`). Its own buttons: n of N,
+  ‹ ›, ✕ back to the table, **Details** (the full offer window: documents,
+  PSA, contract, assignment, net sheet) and **Send**.
+- Keys: J/K walk the rail, R the reply box, T feedback, O the editor, Esc back
+  to the table. Nothing fires while a window or menu is open over the page.
+- The open offer is kept in `?offer=<id>` (not `?offer_id=`, the editor's
+  deep link). Opened from a link, an offer outside the current filter switches
+  the chips to All once. Back in the table, the agent's group is open and the
+  row is scrolled into view.
+- A status, a send or a Bot press re-reads that person's rows (with their next
+  follow-up) rather than the whole book; a deal opens in the Deals view.
+
 **The hand reply** (`POST /api/contacts/:id/reply`, `ghl-broker/hand-reply.js`).
 This is the one new send, for a person typing when the bot has nothing open.
 

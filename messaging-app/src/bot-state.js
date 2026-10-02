@@ -47,6 +47,8 @@ export const shortDate = (iso) => {
 const NO_DATE = new Set(["stopped", "none", "deal", "we_passed", "superseded", "draft"]);
 export function nextWords(next, now = Date.now()) {
   if (!next?.kind) return null;
+  // Their text is the next move, and it is yours: no date to wait for.
+  if (next.kind === "reply_owed") return { text: "waiting on you", who: "you", title: next.reason || next.label || "" };
   if (NO_DATE.has(next.kind) || !next.at) return { text: next.label || "", who: next.kind === "stopped" ? "you" : null, title: next.reason || "" };
   const when = dayWord(next.at, now);
   const what = String(next.label || "").replace(/\s*·.*$/, "").toLowerCase();

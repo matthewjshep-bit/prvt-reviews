@@ -330,7 +330,7 @@ export default function OfferApp() {
         )}
         {view === "history" && (
           <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }}
-            onDeal={() => setView("deals")} />
+            onDeal={() => setView("deals")} settings={settings} />
         )}
         {view === "deals" && (
           <DealsView settings={settings}
