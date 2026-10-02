@@ -30,6 +30,8 @@ import { mapPool } from "../map-pool.js";
 import { scoreListing, medianPricePerSqft, distressSignals, medianIndex } from "../outreach-score.js";
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
+import { fetchZillowAgentContacts } from "../rehab-scan.js";
+import { streetKey } from "../comps-zillow.js";
 import { OUTREACH_FIELDS } from "../field-registry.js";
 import { SUBJECT_PROPERTY_FIELD, seedSubjectProperty } from "../enrich.js";
 import {
@@ -71,6 +73,10 @@ const normPhone = (s) => {
   const d = String(s || "").replace(/\D/g, "");
   return d.length >= 10 ? d.slice(-10) : "";
 };
+// The same person on Zillow's page as on RentCast's listing: the same last name.
+const lastNameOf = (s) => String(s || "").toLowerCase().replace(/[^a-z\s'-]/g, " ").trim().split(/\s+/).filter(Boolean).at(-1) || "";
+export const sameLastName = (a, b) => Boolean(lastNameOf(a)) && lastNameOf(a) === lastNameOf(b);
+
 const slug = (s) =>
   String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
@@ -291,6 +297,13 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     return { zips, county, city, state, daysOld, propertyType, yearBuilt, offset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule };
   }
 
+  // The Zillow phone lookup for one sweep pull: on or off, how many, and the
+  // Apify token — `budget.left` is shared by every county the pull files.
+  function zillowFor(settings) {
+    const z = normalizeOutreachAutopilot(settings.outreachAutopilot).zillowLookup;
+    return z.enabled ? { enabled: true, token: String(settings.apifyToken || "").trim(), budget: { left: z.perRun } } : null;
+  }
+
   /**
    * fetchListings({ locationId, apiKey, targets, common, startOffset, maxRequests, paging, warnings })
    *   → { listings, requestsUsed, cached, nextOffset, totalCount }
@@ -367,7 +380,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * without it, the pull's own median (a county or zip pull is one market).
    */
   async function ingestCohort({ locationId, client, batch, listings, params, medianFor = null, warnings }) {
-    const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false } = params;
+    const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false, zillow = null } = params;
     const isDistressed = (sig) => (distressRule === "cut-or-cheap" ? sig.priced : sig.any);
     // Cohort medians come from the FULL pull (pre-filter) so they describe the
     // market, not the filtered slice.
@@ -531,6 +544,30 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       if (filled) warnings.push(`${filled} agent(s) with no phone on these listings got the phone we already had for them`);
     }
 
+    // Still no phone: the agent's own listing on Zillow (2026-10-02,
+    // outreachAutopilot.zillowLookup, off by default, the sweep's pulls only).
+    // A phone is taken only when Zillow's agent has our agent's last name.
+    if (zillow?.enabled && zillow.token && zillow.budget?.left > 0) {
+      const need = agentRows.filter((r) => !r.doc.phone && r.doc.name && r.doc.hook?.address).slice(0, zillow.budget.left);
+      if (need.length) {
+        zillow.budget.left -= need.length;
+        try {
+          const found = await fetchZillowAgentContacts(need.map((r) => r.doc.hook.address), zillow.token);
+          let got = 0;
+          for (const r of need) {
+            const z = found.get(streetKey(r.doc.hook.address));
+            const phone = normPhone(z?.phone);
+            if (!phone || !sameLastName(r.doc.name, z.name)) continue;
+            r.doc.phone = phone;
+            r.doc.phoneFrom = "zillow";
+            if (!r.doc.email && normEmail(z.email)) r.doc.email = normEmail(z.email);
+            got++;
+          }
+          warnings.push(`Zillow had a phone for ${got} of ${need.length} agent(s) with none`);
+        } catch (e) { warnings.push(`Zillow agent lookup: ${String(e?.message || e).slice(0, 120)}`); }
+      }
+    }
+
     // GHL is asked about an agent once a week, not every pull — a ten-county
     // run would otherwise make thousands of lookups — and never about one we
     // have no phone for, who can't be texted anyway. The import asks again,
@@ -627,6 +664,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     const medianFor = medianIndex(inside, { min: STATEWIDE_ZIP_MEDIAN_MIN, countyOf: (l) => countyOf.get(l) });
 
     const out = [];
+    const zillow = zillowFor(settings);
     for (const c of counties) {
       const batch = await store.getOutreachBatch(locationId, String(c.batchId));
       if (!batch) { warnings.push(`${c.key}: no batch to file into`); continue; }
@@ -636,7 +674,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const r = await ingestCohort({
         locationId, client, batch, listings: mine, warnings: w, medianFor,
         params: { maxPrice: p.maxPrice, maxYearBuilt: p.maxYearBuilt, distressOnly: p.distressOnly, distressRule: p.distressRule,
-          staleDom: p.staleDom, priceBandPct: 0, sweep: true },
+          staleDom: p.staleDom, priceBandPct: 0, sweep: true, zillow },
       });
       warnings.push(...w.filter((x) => !/kept \d+ of/.test(x)).map((x) => `${c.key}: ${x}`));
       out.push({ key: c.key, batchId: batch.id, batchName: batch.name, listingsFetched: mine.length, listingsKept: r.pool.length,
@@ -741,7 +779,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
 
     const { pool, agentRows, agentsNew, medianPpsf, medianPrice } = await ingestCohort({
       locationId, client, batch, listings, warnings,
-      params: { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep: body.metro === true || body.metro === "true" },
+      params: { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep: body.metro === true || body.metro === "true",
+        zillow: body.metro === true || body.metro === "true" ? zillowFor(settings) : null },
     });
     await store.recordOutreachPull(locationId, {
       batchId: batch.id,
@@ -1188,6 +1227,33 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
   });
 
   /* ---------- autopilot: the daily sweep, read and run by hand ---------- */
+
+  // Before the Zillow lookup is switched on: run it on a few agents we have no
+  // phone for and say what Zillow's rows carried — field names and yes/no,
+  // never a name or a number. Spends one Apify run (a fraction of a cent).
+  router.post("/zillow-agents/preview", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const settings = await getSettings(locationId);
+      const token = String(settings.apifyToken || "").trim();
+      if (!token) return res.status(400).json({ error: "no Apify token in Settings" });
+      const limit = Math.min(5, Math.max(1, parseInt(req.body?.limit, 10) || 3));
+      const rows = [];
+      for (const b of (await store.listOutreachBatches(locationId)).filter((x) => /^autopilot\b/i.test(x.name))) {
+        for (const r of await store.listOutreachAgents(locationId, { batchId: b.id, status: "new", limit: 500 })) {
+          if (!r.doc?.phone && r.doc?.name && r.doc?.hook?.address) rows.push(r);
+          if (rows.length >= limit) break;
+        }
+        if (rows.length >= limit) break;
+      }
+      if (!rows.length) return res.json({ ok: true, checked: 0, results: [] });
+      const found = await fetchZillowAgentContacts(rows.map((r) => r.doc.hook.address), token);
+      res.json({ ok: true, checked: rows.length, results: rows.map((r) => {
+        const z = found.get(streetKey(r.doc.hook.address));
+        return { foundListing: Boolean(z), fields: z?.fields || [], hasName: Boolean(z?.name), sameName: Boolean(z && sameLastName(r.doc.name, z.name)), hasPhone: Boolean(z?.phone), hasEmail: Boolean(z?.email) };
+      }) });
+    } catch (err) { fail(res, err); }
+  });
 
   router.get("/autopilot", async (req, res) => {
     try {

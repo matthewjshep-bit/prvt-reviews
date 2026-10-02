@@ -250,6 +250,51 @@ export async function fetchZillowListings(addresses = [], apifyToken) {
 }
 
 /**
+ * zillowAgentFrom(item) → { name, phone, email, fields }
+ *
+ * The listing agent a Zillow detail row names. RentCast leaves the phone off
+ * some listings; Zillow's own page usually carries it under
+ * `attributionInfo`. The field names were not checked against a live row
+ * when this was written (2026-10-02) — `fields` lists what the row actually
+ * had, and the outreach preview route shows it before anyone turns this on.
+ */
+export function zillowAgentFrom(item) {
+  const at = item?.attributionInfo && typeof item.attributionInfo === "object" ? item.attributionInfo : {};
+  const pick = (...vals) => vals.map((v) => String(v ?? "").trim()).find(Boolean) || "";
+  return {
+    name: pick(at.agentName, at.listingAgentName, item?.listingAgent?.name),
+    phone: pick(at.agentPhoneNumber, at.agentPhone, at.listingAgentPhone, item?.listingAgent?.phone),
+    email: pick(at.agentEmail, at.listingAgentEmail, item?.listingAgent?.email),
+    fields: Object.keys(at).sort(),
+  };
+}
+
+/**
+ * fetchZillowAgentContacts(addresses, apifyToken) → Map(streetKey → zillowAgentFrom(item))
+ *
+ * One detail-actor run over listing addresses, for the agent's contact on
+ * Zillow's page. About a fifth of a cent a listing.
+ */
+export async function fetchZillowAgentContacts(addresses = [], apifyToken) {
+  const list = [...new Set(addresses.filter(Boolean))].slice(0, MAX_LISTING_LOOKUPS);
+  const out = new Map();
+  if (!list.length || !apifyToken) return out;
+  const r = await fetch(
+    `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}&timeout=180`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: list }), signal: AbortSignal.timeout(200000) }
+  );
+  if (!r.ok) throw new Error(`Zillow agent lookup failed (Apify ${r.status})`);
+  const items = await r.json();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || item.isValid === false) continue;
+    const a = item.address && typeof item.address === "object" ? item.address : null;
+    const key = streetKey(a?.streetAddress || item.streetAddress || item.addressOrUrlFromInput || "");
+    if (key) out.set(key, zillowAgentFrom(item));
+  }
+  return out;
+}
+
+/**
  * fetchZillowFacts(addresses, apifyToken) → Map(streetKey → facts | null)
  *
  *   facts: { yearBuilt, lotSqft, sqft, beds, baths, homeType, units,
