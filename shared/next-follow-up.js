@@ -16,6 +16,7 @@
 // Pure. `now` is passed in.
 
 import { effectiveStatus, OPEN_STATUSES, pushesToPaper, offerHeat, aiHoldReasons } from "./offer-status.js";
+import { paperWent } from "./paper-follows.js";
 import {
   nextRungAt, offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, stepLabel, normalizeSteps,
   CHECKIN_STATUSES, HOT_MIN_HOURS, rungsCovered, nudgeTimes,
@@ -194,9 +195,10 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
         // Nothing went out on it yet (no letter, nothing floated): not a
         // nudge — the float below is its next move (follow-up-sweep.js
         // agentCandidates skips it the same way).
-        && !(status === "new" && !(offer.sends || []).some((s) => s?.ts) && !offer.proactive?.realmCheckAt && !offer.proactive?.takeCheckAt)) {
+        && !(status === "new" && !paperWent(offer) && !offer.proactive?.realmCheckAt && !offer.proactive?.takeCheckAt)) {
       const L = ladders.offer_nudge;
-      const onPaper = (offer.sends || []).some((s) => s?.ts);
+      // A send that failed on every channel is in the ledger but isn't paper.
+      const onPaper = paperWent(offer);
       const nudgeFrom = onPaper ? offerNudgeStart(offer) : (offer.proactive?.realmCheckAt || offer.proactive?.takeCheckAt || offerNudgeStart(offer));
       const a = offerNudgeAnchor({ startedAt: nudgeFrom, lastInboundAt: times.lastInboundAt, lastHandledAt: times.lastHandledAt });
       if (a.waitingOnUs) ladderNote = "they replied and nothing has answered it";

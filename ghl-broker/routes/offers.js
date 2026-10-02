@@ -72,6 +72,7 @@ import {
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt } from "../shared/current-offer.js";
+import { paperAfterSilenceDue, paperWent, PAPER_FLOAT_MAX_DAYS } from "../shared/paper-follows.js";
 import { planRequote } from "../shared/requote.js";
 import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
@@ -4347,6 +4348,72 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     return { sent, checked: pending.length };
   };
 
+  // The written offer after a float nobody answered (shared/paper-follows.js).
+  // Matt, 2026-10-02: "send them our offer in the official email text form so
+  // that they have it in front of them" — 114 numbers floated in 30 days, 35
+  // put in writing. After `afterFloat.silenceHours` working hours of silence
+  // the letter goes by text and email "for your records": once per offer,
+  // inside the auto-send hours, at most `dailyCap` a day, never to a stopped
+  // thread, and only on the house's current offer. The claim is written before
+  // the send so a crash or a second tick can't send it twice.
+  const PAPER_CURSOR = "paperAfterFloat";
+  router.sendPaperAfterSilence = async ({ client, locationId, now = Date.now(), limit = 5 }) => {
+    const fresh = (await store.getOfferSettings(locationId)) || {};
+    const cfg = conversationConfig(fresh);
+    const af = cfg.parties.agent.sendOffer.afterFloat;
+    if (!cfg.enabled || !af?.enabled || !CARD_SENDS_ENABLED) return { sent: 0, checked: 0 };
+    const dueAt = nextSendTime({ now, delayMs: 0, quietHours: cfg.autoSend.quietHours });
+    if (Date.parse(dueAt) - now > 60000) return { sent: 0, checked: 0 };
+    const day = new Date(now).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+    const cur = await store.getJobCursor?.(locationId, PAPER_CURSOR).catch(() => null);
+    let today = cur?.doc?.day === day ? Number(cur.doc.count) || 0 : 0;
+    if (today >= af.dailyCap) return { sent: 0, checked: 0, capped: true };
+    const oldest = now - (PAPER_FLOAT_MAX_DAYS + 1) * 86400000;
+    const book = await store.listOffers(locationId, { limit: 300 });
+    const candidates = currentOffers(book).filter((o) => !o.deal && !o.paperAfterFloat && !paperWent(o)
+      && Date.parse(o.proactive?.realmCheckAt || "") > oldest && ["new", "sent"].includes(effectiveStatus(o)));
+    let sent = 0;
+    let checked = 0;
+    for (const offer of candidates) {
+      if (sent >= limit || today >= af.dailyCap) break;
+      checked++;
+      const [drafts, events] = await Promise.all([
+        store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 30 }).catch(() => []),
+        store.listContactEvents(locationId, offer.contactId, { limit: 200 }).catch(() => []),
+      ]);
+      const due = paperAfterSilenceDue({ offer, drafts, events, silenceHours: af.silenceHours, now });
+      if (!due.due) continue;
+      // They unsubscribed, or a person stopped the bot on them (shared/bot-hold.js): nothing goes.
+      if (events.some((e) => e?.type === "unsubscribed")) continue;
+      if ((await holdFor({ store, locationId, contactId: offer.contactId, offerId: offer.id, now })).held) continue;
+      const claim = { at: new Date(now).toISOString(), floatAt: due.floatAt, status: "sending" };
+      const before = await store.getOffer(offer.id);
+      if (!before || before.paperAfterFloat) continue;
+      await store.updateOffer(before.id, { ...before, paperAfterFloat: claim });
+      const r = await conversationDeps({ client, locationId, saved: fresh }).sendOfferDocs({
+        contactId: offer.contactId, addressHint: offer.address, offerId: offer.id, unattended: true,
+        channels: ["sms", "email"], forRecord: true, by: "after_float",
+      }).catch((e) => ({ ok: false, reason: String(e?.message || e) }));
+      const status = r.ok ? (r.dryRun ? "dry" : r.unchanged ? "already" : "sent") : r.held ? "held" : "refused";
+      // Read again: the send wrote its ledger onto the offer.
+      const after = await store.getOffer(offer.id);
+      // A thread GHL wouldn't read is a hiccup, not an answer: try again next tick.
+      const retry = !r.ok && /couldn't read the thread/.test(String(r.reason || ""));
+      if (after) {
+        const { paperAfterFloat: _claim, ...rest } = after;
+        await store.updateOffer(after.id, retry ? rest : { ...rest, paperAfterFloat: { ...claim, status, ...(r.reason ? { reason: dealStr(r.reason, 160) } : {}), channels: r.channels || [] } });
+      }
+      if (status !== "sent") { console.log(`paper after float on ${offer.id}: ${status}${r.reason ? ` (${r.reason})` : ""}`); continue; }
+      sent++;
+      today++;
+      await store.setJobCursor?.(locationId, PAPER_CURSOR, { at: new Date(now).toISOString(), doc: { day, count: today } }).catch(() => {});
+      await createContactNote(client, offer.contactId, {
+        body: `Sent our written offer on ${offer.address} (${fmtMoney(offer.cashAmount)}) by ${(r.channels || []).join(" and ")} for their records — a working day after the number went out with no answer.`,
+      }).catch(() => {});
+    }
+    return { sent, checked };
+  };
+
   // Underwrites that arrived past the daily cap, started on the tick once
   // there's room. Same call the conversation makes, without re-queuing.
   router.drainUnderwriteQueue = async ({ client, locationId, now = Date.now() }) => {
@@ -4826,7 +4893,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await markPaperHeld(offer, check, draftId);
       return { ok: true };
     },
-    sendOfferDocs: async ({ contactId, addressHint = "", channels = null, docs = null, draftId = null, afterCounter = false, emailTo = "", emailCc = [], transcript = null, unattended = false }) => {
+    // `offerId` pins the send to that offer (a timer knows which one it means;
+    // it must still be the house's current open offer). `forRecord`: the
+    // written offer goes "for your records" — after a float nobody answered,
+    // or with the reply to a no — in its own words. `by` is who sent it, for
+    // the timeline and Flow.
+    sendOfferDocs: async ({ contactId, addressHint = "", offerId = null, channels = null, docs = null, draftId = null, afterCounter = false, emailTo = "", emailCc = [], transcript = null, unattended = false, forRecord = false, by = "" }) => {
       // Nobody pressed anything (a clean underwrite, the retry): a person
       // who stopped the bot gets no letter by itself (shared/bot-hold.js).
       // A person pressing "Do it" on the draft is deciding, and it goes.
@@ -4839,7 +4911,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const open = (await currentOffersFor(locationId, contactId))
         .filter((o) => o.status !== "draft" && !o.deal && o.cashAmount > 0 && OPEN_STATUSES.has(effectiveStatus(o)));
       if (!open.length) return { ok: false, reason: "no open offer to send" };
-      const picked = pickDealByAddress(open, addressHint);
+      const pinned = offerId ? open.find((o) => o.id === offerId) : null;
+      if (offerId && !pinned) return { ok: false, reason: "that offer isn't the current open offer on the house" };
+      const picked = pinned || pickDealByAddress(open, addressHint);
       if (!picked && open.length > 1) return { ok: false, reason: "more than one open offer and the message named no address" };
       const lean = picked || open[0];
       const offer = await store.getOffer(lean.id);
@@ -4869,7 +4943,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const dk = Array.isArray(docs) && docs.length ? docs : so.docs;
       let r;
       try {
-        r = await sendOfferDocs({ locationId, client, offer, channels: ch, docKeys: dk, live: CARD_SENDS_ENABLED, emailTo, emailCc });
+        r = await sendOfferDocs({ locationId, client, offer, channels: ch, docKeys: dk, live: CARD_SENDS_ENABLED, emailTo, emailCc, template: forRecord ? "for_record" : "" });
       } catch (e) {
         if (e.http === 502) return { ok: false, reason: `send failed — ${e.detail}` };
         return { ok: false, reason: e.message };
@@ -4882,7 +4956,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await recordEvent({
         store, locationId, contactId, party: "agent", type: "offer_sent", at: new Date().toISOString(),
         address: offer.address, offerId: offer.id, source: "conversation", ref: draftId,
-        data: { channels: ch, docs: dk, by: draftId ? "conversation" : "underwrite", amount: offer.cashAmount || null, ...(emailTo ? { emailTo } : {}) },
+        data: { channels: ch, docs: dk, by: by || (draftId ? "conversation" : "underwrite"), amount: offer.cashAmount || null, ...(forRecord ? { forRecord: true } : {}), ...(emailTo ? { emailTo } : {}) },
       }).catch(() => {});
       return { ok: true, address: offer.address, channels: ch, results: r.results, emailTo: r.results?.email?.to || "" };
     },
@@ -6149,7 +6223,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
    * channel failed.
    */
   const validEmail = (v) => { const m = String(v || "").trim().match(/^[^\s@<>",;]+@[^\s@<>",;]+\.[a-z]{2,}$/i); return m ? m[0] : ""; };
-  async function sendOfferDocs({ locationId, client, offer, message = "", emailSubject = "", channels = ["sms"], docKeys = ["image"], live = false, emailTo = "", emailCc = [] }) {
+  async function sendOfferDocs({ locationId, client, offer, message = "", emailSubject = "", channels = ["sms"], docKeys = ["image"], live = false, emailTo = "", emailCc = [], template = "" }) {
       // Requested documents, filtered to what this offer actually has.
       const DOC_DEFS = [
         ["pdf", "Offer letter (PDF)", offer.pdfUrl],
@@ -6180,10 +6254,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const firstName = (offer.contactName || "").split(" ")[0] || "there";
       // Kept in step with defaultSendMessage() in the app's SendModal — this
       // is the fallback for callers that send no message of their own.
-      const text = message ||
-        `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
-        `${fmtMoney(offer.cashAmount)} cash, as-is, close on your timeline (attached).` +
-        ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?`;
+      // "for_record": the written offer after a float nobody answered, or with
+      // the reply to a no — so the agent has our number on file in writing.
+      const text = message || (template === "for_record"
+        ? `Hi ${firstName}, sending our written offer on ${offer.address || "your property"} over so you have it on file — ` +
+          `${fmtMoney(offer.cashAmount)} cash, as-is, close on your timeline (attached).` +
+          ` If the seller's open to it, we'd be glad to have you represent us and write it up on NWMLS forms.`
+        : `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
+          `${fmtMoney(offer.cashAmount)} cash, as-is, close on your timeline (attached).` +
+          ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?`);
 
       // The agent page — our arithmetic, the comps, the scope and what the
       // seller nets, at one link. An operator's message already carries it

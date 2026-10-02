@@ -41,7 +41,7 @@ export function machineDid(ev) {
   const d = ev?.data || {};
   if (d.auto === true) return true;
   if (d.auto === false) return false;
-  if (ev.type === "offer_sent") return d.by === "conversation" || d.by === "underwrite";
+  if (ev.type === "offer_sent") return ["conversation", "underwrite", "after_float", "for_record"].includes(d.by);
   // The daily outreach autopilot imports into its own batch, "Autopilot ·
   // King, WA", and stamps nothing else — so every agent it found read as
   // found by hand (Matt, 2026-09-14: "why does it say 0 by machine").
@@ -284,7 +284,9 @@ export function feedDetail(e) {
     case "follow_up_sent": return `${String(d.kind || "").replace(/_/g, " ")}${d.step ? ` · day ${d.step}` : ""}`;
     case "blast_sent": return d.label ? String(d.label).replace(/^dispo-/, "") : "";
     case "offer_countered": return d.amount ? `at $${Number(d.amount).toLocaleString("en-US")}` : "";
-    case "offer_sent": return [d.channels?.join(" + "), d.by === "underwrite" ? "after a clean underwrite" : d.by === "conversation" ? "from a reply" : ""].filter(Boolean).join(" · ");
+    case "offer_sent": return [d.channels?.join(" + "),
+      d.by === "underwrite" ? "after a clean underwrite" : d.by === "conversation" ? "from a reply"
+        : d.by === "after_float" ? "for their records, a working day after the number" : d.by === "for_record" ? "for their records, with the reply to a no" : ""].filter(Boolean).join(" · ");
     case "deal_stage": return String(d.stage || "").replace(/_/g, " ");
     case "call_booked": return d.label || "";
     case "dataroom_viewed": return d.viewCount > 1 ? `view ${d.viewCount}` : "first view";

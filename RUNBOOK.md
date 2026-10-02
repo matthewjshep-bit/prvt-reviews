@@ -2436,6 +2436,46 @@ won't build never blocks the paper. A send that carries the operator's own
 message is untouched — SendModal already appends the link there, and unticking
 that box is a decision the server must not undo.
 
+### The written offer follows the float (2026-10-02)
+
+Matt: "send them our offer in the official email text form so that they have
+it in front of them … floating and actually sending the offer should be more
+in line." In the 30 days to 10/2, 114 numbers were floated by text and 35 got
+the written offer. The float stays — it asks the agent's read before paper —
+but silence no longer leaves the offer unwritten.
+
+Playbooks → Agents → "Send the written offer after a quiet float"
+(`parties.agent.sendOffer.afterFloat`: `enabled` off by default,
+`silenceHours` 24, `dailyCap` 20; `onPushback` is the reply half). On the
+15-minute tick (`paper-after-float`, `router.sendPaperAfterSilence`), inside the
+auto-send hours, the letter goes by text and email in its own words ("sending
+our written offer on … over so you have it on file") when, per
+`paperAfterSilenceDue` in shared/paper-follows.js:
+
+- the offer is the house's current one, `new` or `sent`, not a deal, with a number;
+- our number went out by text — a SENT realm-check draft for that offer
+  (`proactive.realmCheckAt` is stamped when the float is drafted, which can
+  be long before it leaves) — within the last 14 days; a take-check names
+  no number and doesn't count;
+- it's a number we'd put in writing unasked: a person's own, a clean
+  underwrite, or a held one a person published — never `agent_numbers`;
+- nothing came back since: no inbound text the bot drafted for, no text
+  summary, no call;
+- `silenceHours` working hours have passed (weekday clock hours, Pacific —
+  a Friday 2pm float is papered Monday 2pm);
+- no paper went yet (`paperWent`: at least one channel succeeded), and it
+  hasn't been tried (`offer.paperAfterFloat`, claimed before the send).
+
+Never to a contact who unsubscribed or that a person stopped the bot on. The
+send goes through the conversation's `sendOfferDocs` pinned to that offer
+(`offerId`), so `paperCheck`/`stale_number` still holds a number the thread
+has moved past. The timeline's `offer_sent` carries `by: "after_float"`,
+`forRecord: true`; Flow counts it as the machine's. A send whose every
+channel failed is in the ledger but isn't paper: `whatWentOut`, the
+follow-up sweep and the Next follow-up column read `paperWent` now, so a
+nudge never says "we sent you an offer" after one. The nudge clock restarts
+from the paper.
+
 ### Walking away (2026-09-16)
 
 Matt: "be quicker to pass on ones that aren't in our buy box and move on. If
