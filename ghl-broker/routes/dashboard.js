@@ -45,7 +45,9 @@ import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR } from "../ghl-mirror.j
 import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_UNDERWRITE_ENABLED } from "../auto-underwrite.js";
 import { draftStats } from "../shared/conversation-ai.js";
 import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
-import { conversationConfig } from "../reply-agent.js";
+import { conversationConfig, standDownForHold } from "../reply-agent.js";
+import { holdFor } from "../bot-hold.js";
+import { holdLine, pauseUntil } from "../shared/bot-hold.js";
 import { allEventsSince } from "../contact-events.js";
 import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
@@ -592,22 +594,42 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       res.json({ ok: true, ...r });
     } catch (err) { fail(res, err); }
   });
-  // Stop / Resume on a row the machine is driving (shared/thread-health.js
-  // reads these). Body: { contactId, offerId?, address?, reason? }. A stop with
-  // no offerId is the whole thread.
+  // Stop / Pause / Resume on a person (shared/bot-hold.js; every sender
+  // reads it). Body: { contactId, party?, offerId?, address?, reason?,
+  // preset?: "1w" | "2w" | "1m", until? }. A stop with no offerId is the
+  // whole person: what was waiting to go to them stops now
+  // (standDownForHold), and nothing goes by itself until Resume or the
+  // pause's date. Their texts still get drafts, which wait for you.
+  // party is written only when given, so a stop on a buyer leaves a buyer.
+  const PARTIES = new Set(["agent", "investor"]);
+  const publicHold = (h) => ({ held: Boolean(h?.held), kind: h?.kind || null, since: h?.since || null, until: h?.until || null, reason: h?.reason || "" });
   for (const [path, type] of [["/drive/stop", "drive_stopped"], ["/drive/resume", "drive_resumed"]]) {
     router.post(path, async (req, res) => {
       try {
-        const { locationId } = resolveLocation(req);
-        const contactId = String(req.body?.contactId || "").slice(0, 64);
+        const { locationId, client } = resolveLocation(req);
+        const b = req.body || {};
+        const contactId = String(b.contactId || "").slice(0, 64);
         if (!contactId) return res.status(400).json({ error: "contactId is required" });
-        const at = new Date().toISOString();
+        const now = Date.now();
+        const at = new Date(now).toISOString();
+        const offerId = b.offerId ? String(b.offerId).slice(0, 64) : null;
+        let until = null;
+        if (type === "drive_stopped") {
+          const p = pauseUntil({ preset: b.preset || null, until: b.until || null, now });
+          if (p.error) return res.status(400).json({ error: p.error });
+          until = p.until;
+        }
         const r = await recordEvent({
-          store, locationId, contactId, party: "agent", type, at, address: String(req.body?.address || "").slice(0, 200),
-          offerId: req.body?.offerId ? String(req.body.offerId).slice(0, 64) : null, source: "operator",
-          dedupeKey: `${type}:${contactId}:${at}`, data: { reason: String(req.body?.reason || "").slice(0, 200) },
+          store, locationId, contactId, party: PARTIES.has(b.party) ? b.party : null, type, at, address: String(b.address || "").slice(0, 200),
+          offerId, source: "operator", dedupeKey: `${type}:${contactId}:${at}`,
+          data: { reason: String(b.reason || "").slice(0, 200), ...(until ? { until, ...(b.preset ? { preset: String(b.preset).slice(0, 8) } : {}) } : {}) },
         });
-        res.json({ ok: true, recorded: Boolean(r?.inserted) });
+        const hold = await holdFor({ store, locationId, contactId, offerId, now });
+        let stood = { pulled: [], held: [] };
+        if (type === "drive_stopped" && !offerId) {
+          stood = await standDownForHold({ client, store, locationId, contactId, why: holdLine(hold) || "you stopped the bot on them", now });
+        }
+        res.json({ ok: true, recorded: Boolean(r?.inserted), hold: publicHold(hold), pulled: stood.pulled, held: stood.held });
       } catch (err) { fail(res, err); }
     });
   }

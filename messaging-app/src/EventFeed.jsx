@@ -9,18 +9,19 @@ import React from "react";
 import {
   Send, RefreshCw, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
   MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download,
-  Calculator, ClipboardList, Circle, BellRing, CalendarCheck, Undo2, Mail,
+  Calculator, ClipboardList, Circle, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX,
 } from "lucide-react";
 import { EVENT_LABEL, EVENT_ICON, AI_SOURCES, FACT_KEYS, PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
 import { PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { fmtMoney } from "@shared/offer-calc.js";
+import { pauseDay } from "@shared/bot-hold.js";
 import ContactLink from "./ContactLink.jsx";
 import { offerEditorUrl } from "./api.js";
 
 const ICONS = {
   Send, RefreshCw, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
   MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download,
-  Calculator, ClipboardList, BellRing, CalendarCheck, Undo2, Mail,
+  Calculator, ClipboardList, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX,
 };
 export const EventIcon = ({ type, size = 13 }) => { const I = ICONS[EVENT_ICON[type]] || Circle; return <I size={size} className="shrink-0" />; };
 
@@ -53,6 +54,7 @@ export function eventLine(ev) {
     case "follow_up_sent": return `${String(d.kind || "").replace(/_/g, " ")}${d.step ? ` · day ${d.step}` : ""}`;
     case "blast_sent": return d.label ? String(d.label).replace(/^dispo-/, "") : "";
     case "call_booked": return d.label || "";
+    case "drive_stopped": return [d.until ? `paused until ${pauseDay(d.until)}` : "until you resume", d.reason ? `— ${d.reason}` : ""].filter(Boolean).join(" ");
     case "email_received":
     case "email_sent": return [d.subject ? `“${d.subject}”` : "(no subject)", d.attachments?.length ? `📎 ${d.attachments.slice(0, 3).join(", ")}` : ""].filter(Boolean).join(" · ");
     default: return d.note || "";

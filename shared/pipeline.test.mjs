@@ -549,6 +549,16 @@ test("a thread you stopped is your call again, and offers Resume", () => {
   assert.equal(resumed.group, "machine");
 });
 
+test("a promise row whose pause has ended goes back to the machine", () => {
+  const ready = offer({ status: "new", sends: [] });
+  const pause = { type: "drive_stopped", contactId: "a1", at: H(30), data: { until: H(2) } };
+  assert.equal(promiseRow(build({ config: DRIVING, offers: [ready], events: [owed(), pause] })).group, "machine");
+  const running = { ...pause, data: { until: new Date(NOW + 86400000).toISOString() } };
+  const row = promiseRow(build({ config: DRIVING, offers: [ready], events: [owed(), running] }));
+  assert.equal(row.group, "yours");
+  assert.match(row.detail, /paused until/);
+});
+
 test("the counts say how many are yours, the machine's and stuck", () => {
   const sendAt = new Date(NOW + 5 * 60000).toISOString();
   const r = build({ offers: [offer()], drafts: [draft({ id: "d1" }), draft({ id: "d2", status: "scheduled", sendAt })] });

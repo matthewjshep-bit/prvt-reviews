@@ -41,6 +41,7 @@ import { nextFollowUp } from "./next-follow-up.js";
 import { IRRITATED_RX, PERSON_HAS_IT_DAYS, HAND_REPLY_EVENT } from "./thread-health.js";
 import { addressKey, sameStreet } from "./us-address.js";
 import { offMarketAskDue } from "./off-market.js";
+import { botHold } from "./bot-hold.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -144,14 +145,14 @@ export function agentSegment({ offers = [], lastInboundAt = null } = {}) {
 }
 
 /**
- * agentStops({ drafts, events, tags, botOffTags }) → reason | null
+ * agentStops({ drafts, events, tags, botOffTags, now }) → reason | null
  *
  * What stops the pulse for good (until it changes): they opted out, you
  * stopped the thread, they sound annoyed, a do-not-text or bot-off tag. A
  * house they passed on, or one that sold, is not a reason to stop talking to
  * the agent — those are the house's.
  */
-export function agentStops({ drafts = [], events = [], tags = [], botOffTags = [] } = {}) {
+export function agentStops({ drafts = [], events = [], tags = [], botOffTags = [], now = Date.now() } = {}) {
   if ((events || []).some((e) => e?.type === "unsubscribed")) return "they opted out";
   const inbound = [
     ...(drafts || []).filter((d) => String(d?.inbound || "").trim()).map((d) => ({ at: d.createdAt, text: d.inbound, intent: d.intent })),
@@ -160,10 +161,10 @@ export function agentStops({ drafts = [], events = [], tags = [], botOffTags = [
   if (inbound.some((m) => m.intent === "opt_out")) return "they opted out";
   const tag = blockedByTags(tags, botOffTags);
   if (tag) return `tagged "${tag}"`;
-  // A stop on the whole thread (no house named), until Resume.
-  const toggle = (events || []).filter((e) => (e?.type === "drive_stopped" || e?.type === "drive_resumed") && !e.offerId)
-    .sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1);
-  if (toggle?.type === "drive_stopped") return "you stopped the thread";
+  // A stop on the whole thread (no house named), until Resume or the
+  // pause's date (shared/bot-hold.js).
+  const hold = botHold({ events, wholeThreadOnly: true, now });
+  if (hold.held) return hold.kind === "paused" ? "you paused the thread" : "you stopped the thread";
   if (inbound.slice(0, 3).some((m) => IRRITATED_RX.test(m.text))) return "they sound annoyed";
   return null;
 }
@@ -293,7 +294,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   const events = agent.events || [];
   const ledger = agent.ledger || [];
 
-  const stop = agentStops({ drafts, events, tags: agent.tags || [], botOffTags: config?.routing?.botOffTags || [] });
+  const stop = agentStops({ drafts, events, tags: agent.tags || [], botOffTags: config?.routing?.botOffTags || [], now });
   if (stop) return out("stopped", stop);
   const owner = agentOwner({ offers: agent.current || [], drafts, events, config, settings: s, outreachFollowUpDays, now });
   if (owner) return out("owned", owner);

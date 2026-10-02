@@ -29,6 +29,8 @@ import { dealOutreachPaused } from "./shared/offer-status.js";
 import { conversationConfig } from "./reply-agent.js";
 import { nextSendTime, spreadAcrossDay } from "./conversation-scheduler.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
+import { botEventsByContact } from "./bot-hold.js";
+import { botHold, holdLine } from "./shared/bot-hold.js";
 
 export const CURSOR_NAME = "dispo";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -172,6 +174,11 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
   } catch { /* the line is a courtesy, never the message */ }
   const facts = dealFacts(offer, { price: numbers.investorPrice, note });
   const ask = blastAsk(offer, saved, now);
+  // Buyers you stopped the bot on (shared/bot-hold.js): their deal text is
+  // drafted and waits for you. One read for the whole list; a read that
+  // fails holds every text rather than guess.
+  const stops = dryRun ? new Map() : await botEventsByContact({ store, locationId }).catch(() => null);
+  const holdOf = (cid) => (stops ? botHold({ events: stops.get(cid) || [], now }) : { held: true, kind: "unread" });
   const rows = [];
   let queued = 0, drafted = 0, i = 0;
   // Cumulative: each text lands at least `spreadSec` after the one before,
@@ -187,7 +194,8 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const channel = blastChannel(inv, da);
     if (!channel) { rows.push({ contactId, name, status: "skipped", reason: "no phone, and email drafting is off", text: "" }); continue; }
     // An email waits for you unless emailed deals may send themselves.
-    const schedule = willSchedule && (channel === "sms" || da.email.autoSend);
+    const hold = holdOf(contactId);
+    const schedule = !hold.held && willSchedule && (channel === "sms" || da.email.autoSend);
     const intro = blastIntro(inv);
     const variant = i;
     const text = blastMessage({ ...facts, firstName: name, variant, ask, intro });
@@ -211,7 +219,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
       summary: `Puts ${offer.address} in front of ${name || "a buyer"} at ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}.`,
       propertyAddress: offer.address || "", counterAmount: null, autoSendable: true, flags: [], party: "investor", partySource: "deal",
       matchedTags: { agent: [], investor: [] }, contextSummary: { deal: offer.id }, offersInContext: 0,
-      autoSend: { decided: schedule, reason: schedule ? "" : (willSchedule ? "emailed deals wait for you (Settings → Dispositions)" : reason) }, humanActive: null, actions: [],
+      autoSend: { decided: schedule, reason: schedule ? "" : hold.held ? `${holdLine(hold)} — it waits for you` : (willSchedule ? "emailed deals wait for you (Settings → Dispositions)" : reason) }, humanActive: null, actions: [],
       supersededIds: open.map((o) => o.id), warnings: [], noteOnAutoSend: config.notes?.onAutoSend !== false, promptVersion: 3,
       ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
     });

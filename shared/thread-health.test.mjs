@@ -81,6 +81,15 @@ test("a stop on one house does not stop another house with the same agent", () =
   assert.equal(health({ events: [{ ...stop, offerId: null }] }).drive, false, "a stop with no house is the whole thread");
 });
 
+test("a pause holds until its date and then the machine drives again", () => {
+  const pause = { type: "drive_stopped", contactId: "c1", at: ago(2), data: { until: new Date(NOW + 5 * 86400000).toISOString() } };
+  const h = health({ events: [pause] });
+  assert.equal(h.reason, "stopped_by_you");
+  assert.match(h.detail, /paused until Sep 22/);
+  const over = { ...pause, data: { until: ago(1) } };
+  assert.equal(health({ events: [over] }).drive, true, "a pause that has ended no longer stops the machine");
+});
+
 test("a person who answered has it", () => {
   const h = health({ drafts: [theirs("call me", 0.1, { status: "dismissed", answeredBy: "you", reply: "" })] });
   assert.equal(h.reason, "person_has_it");

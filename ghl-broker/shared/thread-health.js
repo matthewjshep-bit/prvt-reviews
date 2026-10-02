@@ -15,6 +15,7 @@
 
 import { DEAD_STATUSES, LIVE_DEAL_STAGES, effectiveStatus } from "./offer-status.js";
 import { OVER_PLAIN } from "./held-underwrites.js";
+import { botHold, holdLine } from "./bot-hold.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -85,14 +86,12 @@ export function threadHealth({ offer = null, drafts = [], events = [], now = Dat
   const opted = ins.find((d) => d.intent === "opt_out");
   if (opted) return stop("opted_out", "", opted.createdAt);
 
-  // Stop on Today, until Resume. A stop names a house or the whole thread.
-  const mine = (e) => !e.offerId || !offer?.id || e.offerId === offer.id;
-  const toggles = (events || []).filter((e) => (e?.type === "drive_stopped" || e?.type === "drive_resumed") && mine(e))
-    .sort((a, b) => String(a.at).localeCompare(String(b.at)));
-  const lastToggle = toggles.at(-1);
-  if (lastToggle?.type === "drive_stopped") {
-    const why = String(lastToggle.data?.reason || "").trim();
-    return stop("stopped_by_you", why ? `you stopped it: ${why.slice(0, 120)}` : "", lastToggle.at);
+  // Stop or Pause, until Resume or the pause's date (shared/bot-hold.js).
+  // A stop names a house or the whole thread.
+  const hold = botHold({ events, offerId: offer?.id || null, now });
+  if (hold.held) {
+    const detail = hold.kind === "paused" ? holdLine(hold) : hold.reason ? `you stopped it: ${hold.reason.slice(0, 120)}` : "";
+    return stop("stopped_by_you", detail, hold.since);
   }
 
   if (offer?.deal && (LIVE_DEAL_STAGES.has(offer.deal.stage) || effectiveStatus(offer) === "accepted")) return stop("live_deal");

@@ -4514,3 +4514,205 @@ test("a sent text that asks an agent for off-market houses is recorded; a plain 
   await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", live: true });
   assert.equal((await store.listContactEvents("LOC", "c2", { types: ["offmarket_asked"] })).length, 0);
 });
+
+/* ---------- you stopped the bot on them (shared/bot-hold.js, 2026-10-01) ---------- */
+// Matt: Stop on a thread means nothing goes to that person by itself — no
+// nudge, no check-in, no letter, no auto-reply — and their texts still get a
+// draft that waits for him. Before this, the stop was read by a few drivers
+// and the reply agent, the scheduler and the senders ignored it.
+
+const stopOn = (store, contactId = "c1", data = {}, at = new Date(NOW - 3600000).toISOString()) => {
+  const key = `LOC|${contactId}`;
+  store.events.set(key, [...(store.events.get(key) || []), { type: "drive_stopped", contactId, at, source: "operator", data: { reason: "", ...data } }]);
+  return store;
+};
+
+test("decideAutoSend names you stopping the bot before anything else, and nothing can release it", async () => {
+  const { HELD_FOR_A_PERSON, releaseForAudit } = await import("./reply-agent.js");
+  const cfg = conversationConfig(AUTO_SAVED);
+  const ok = { ok: true, flags: [] };
+  const stopped = { held: true, kind: "stopped", until: null };
+  const d = decideAutoSend({ gate: ok, party: "agent", intent: "question", config: cfg, sendsEnabled: true, hold: stopped });
+  assert.equal(d.send, false);
+  assert.equal(d.code, "bot_stopped");
+  assert.equal(d.reason, "you stopped the bot on them — it waits for you");
+  assert.equal(decideAutoSend({ gate: { ok: false, flags: ["x"] }, party: "agent", intent: "counter", config: cfg, sendsEnabled: true, hold: stopped }).code, "bot_stopped", "first, before the gates");
+  const paused = decideAutoSend({ gate: ok, party: "agent", intent: "question", config: cfg, sendsEnabled: true, hold: { held: true, kind: "paused", until: "2026-10-15T18:00:00Z" } });
+  assert.equal(paused.reason, "paused until Oct 15 — it waits for you");
+  // A stop is not a person's call on these words: no check-in clock, and
+  // neither the nightly audit nor the counter band can release it.
+  assert.equal(HELD_FOR_A_PERSON.has("bot_stopped"), false);
+  assert.equal(releaseForAudit({ auto: d, gate: ok, draft: { intent: "question", reply: "ok" }, deps: { releaseHeld: true } }).send, false);
+  assert.equal(releaseUnderGuard({ base: d, party: "agent", intent: "counter", config: cfg, guard: { kind: "band", passed: true } }).send, false);
+  assert.equal(decideAutoSend({ gate: ok, party: "agent", intent: "question", config: cfg, sendsEnabled: true, hold: { held: false } }).send, true, "not held: as before");
+});
+
+test("a reply to someone you stopped is drafted and waits — it never schedules itself, even on the auto-send list", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = stopOn(fakeStore());
+  store.listOffers = async () => OFFERS;
+  let drafted = 0;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: AUTO_SAVED, store, contactId: "c1", message: "still interested?", sendsEnabled: true,
+    deps: { draft: async () => { drafted++; return DRAFT; }, now: () => NOW, random: () => 0 },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(drafted, 1, "their text still gets a draft");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft");
+  assert.equal(d.autoSend.decided, false);
+  assert.equal(d.autoSend.reason, "you stopped the bot on them — it waits for you");
+  assert.equal(job.scheduledFor, null);
+});
+
+test("a stopped person's held reply starts no check-in clock — the machine would only be texting them later", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = stopOn(fakeStore());
+  store.listOffers = async () => [{ id: "o1", ...OFFERS[0], contactId: "c1" }];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: AUTO_SAVED, store, contactId: "c1", message: "would you do 425k?", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "counter", needsHuman: true, humanReason: "they named a number", counterAmount: 425000,
+      reply: "Let me run 425k by my partner and get back to you." }), now: () => NOW, random: () => 0 },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /you stopped the bot on them/);
+  const clocks = await store.listContactEvents("LOC", "c1", { types: ["checkin_requested"] });
+  assert.equal(clocks.length, 0);
+});
+
+test("nothing the machine starts is drafted for someone you stopped, and no model call is made", async () => {
+  _resetJobs();
+  const store = stopOn(withTheirTake(fakeStore()));
+  store.listOffers = async () => [LANDED];
+  let drafted = 0;
+  const r = await startProactive({
+    client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: LANDED, sendsEnabled: true,
+    deps: { draft: async () => { drafted++; return DRAFT; }, now: () => NOW },
+  });
+  assert.equal(r.job, null);
+  assert.equal(r.skipped, "you stopped the bot on them");
+  assert.equal(drafted, 0);
+  const paused = stopOn(withTheirTake(fakeStore()), "c1", { until: new Date(NOW + 5 * 86400000).toISOString() });
+  paused.listOffers = async () => [LANDED];
+  const p = await startProactive({ client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store: paused, contactId: "c1", kind: "realm_check", offer: LANDED, deps: { now: () => NOW } });
+  assert.equal(p.skipped, "paused until Sep 9");
+});
+
+test("a float you press yourself still drafts while the bot is stopped, and waits for your Send", async () => {
+  _resetJobs();
+  const on = { ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi, parties: { ...STARTER_SAVED.conversationAi.parties, agent: { ...STARTER_SAVED.conversationAi.parties.agent, autoSend: { enabled: true, intents: ["realm_check"] } } } } };
+  const { client } = ghlStubFor(["agent"]);
+  const store = stopOn(withTheirTake(fakeStore()));
+  store.listOffers = async () => [LANDED];
+  const { job } = await startProactive({
+    client, locationId: "LOC", saved: on, store, contactId: "c1", kind: "realm_check", offer: LANDED, sendsEnabled: true, personAsked: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "realm_check", reply: "We'd land around 410k as-is. In the realm for the seller?" }), now: () => NOW, random: () => 0 },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /you stopped the bot on them/);
+});
+
+test("a reply counting down when you pressed Stop goes back to waiting at send time, not left 'sending'", async () => {
+  const { client } = ghlStub();
+  const store = stopOn(fakeStore([{ ...openDraft(), status: "sending", sendingAt: iso(1000), party: "agent", intent: "question", inbound: "still interested?", flags: [], autoSend: { decided: true, reason: "" } }]));
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, now: NOW });
+  assert.equal(r.skipped, "you stopped the bot on them");
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.status, "draft");
+  assert.equal(d.sendAt, null);
+  assert.equal(d.sendingAt, null);
+  assert.match(d.flags.join(" "), /held: you stopped the bot on them/);
+  assert.equal(d.autoSend.decided, false);
+});
+
+test("a nudge counting down when you pressed Stop is binned at send time", async () => {
+  const { client } = ghlStub();
+  const store = stopOn(fakeStore([{ id: "d1", locationId: "LOC", contactId: "c1", status: "sending", channel: "sms", party: "agent", createdAt: iso(1000), flags: [],
+    reply: "Any word from the seller on 12 Elm?", inbound: "", outbound: { kind: "offer_nudge", offerId: "o1" } }]));
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, now: NOW });
+  assert.equal(r.skipped, "you stopped the bot on them");
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.status, "dismissed");
+  assert.match(d.flags.join(" "), /you stopped the bot on them — not sent/);
+});
+
+test("a person pressing Send still sends while the bot is stopped — a person is deciding", async () => {
+  const store = stopOn(fakeStore([{ ...openDraft(), party: "agent", intent: "question", flags: [] }]));
+  const client = { call: async () => ({ messageId: "m1" }) };
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, now: NOW });
+  assert.equal(r.draft.status, "sent");
+});
+
+test("while stopped, the offer letter waits on the draft as a suggestion and the reply keeps the model's own words", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = stopOn(fakeStore());
+  store.listOffers = async () => [{ id: "o1", ...OFFERS[0], contactId: "c1" }];
+  let sends = 0;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: AUTO_SAVED, store, contactId: "c1", message: "Thanks, I'll run it by my sellers and get back to you.", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", reply: "Sounds good, talk soon." }),
+      sendOfferDocs: async () => { sends++; return { ok: true, channels: ["sms"] }; }, now: () => NOW, random: () => 0 },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const send = d.actions.find((x) => x.type === "send_offer");
+  assert.ok(send, "the letter is still offered");
+  assert.equal(send.mode, "ask");
+  assert.match(send.why, /held:/);
+  assert.equal(sends, 0, "nothing sent the letter");
+  assert.equal(d.reply, "Sounds good, talk soon.", "not 'sent our letter of intent over'");
+  assert.equal(d.status, "draft");
+});
+
+test("while stopped, a drip workflow, a booking or a dataroom invite becomes a suggestion; tags still run", async () => {
+  const { holdActionsWhileStopped, HELD_WHILE_STOPPED } = await import("./reply-agent.js");
+  for (const t of ["send_offer", "send_dataroom_invite", "add_to_workflow", "requote_from_agent_numbers", "book_call", "revise_offer_to_counter", "agree_investor_price"]) {
+    assert.ok(HELD_WHILE_STOPPED.has(t), t);
+  }
+  const plan = { auto: [
+    { id: "a1", type: "add_tags", mode: "auto", tags: ["tier-1"] },
+    { id: "a2", type: "add_to_workflow", mode: "auto", workflowName: "TIER 1", why: "deal available" },
+    { id: "a3", type: "book_call", mode: "auto" },
+  ], suggested: [] };
+  const r = holdActionsWhileStopped(plan, "you stopped the bot on them");
+  assert.deepEqual(r.plan.auto.map((x) => x.id), ["a1"]);
+  assert.deepEqual(r.plan.suggested.map((x) => [x.id, x.mode]), [["a2", "ask"], ["a3", "ask"]]);
+  assert.equal(r.plan.suggested[0].why, "deal available — held: you stopped the bot on them");
+  assert.deepEqual(r.held.map((x) => x.id), ["a2", "a3"]);
+});
+
+test("Stop pulls back the machine's texts waiting to go and holds a reply that was about to send", async () => {
+  const { standDownForHold } = await import("./reply-agent.js");
+  const { client } = ghlStub();
+  const store = fakeStore([
+    { id: "d1", locationId: "LOC", contactId: "c1", status: "scheduled", party: "agent", createdAt: iso(3000), flags: [], reply: "x", inbound: "", outbound: { kind: "offer_nudge", offerId: "o1" }, sendAt: iso(-60000) },
+    { id: "d2", locationId: "LOC", contactId: "c1", status: "draft", party: "agent", createdAt: iso(2000), flags: [], reply: "x", inbound: "", outbound: { kind: "price_drop", offerId: "o2" } },
+    { id: "d3", locationId: "LOC", contactId: "c1", status: "scheduled", party: "agent", createdAt: iso(1000), flags: [], reply: "Sounds good.", inbound: "ok thanks", outbound: null, sendAt: iso(-60000), autoSend: { decided: true, reason: "" } },
+    { id: "d4", locationId: "LOC", contactId: "c1", status: "draft", party: "agent", createdAt: iso(900), flags: [], reply: "Yes.", inbound: "still on?", outbound: null },
+    { id: "d5", locationId: "LOC", contactId: "c1", status: "sending", party: "agent", createdAt: iso(800), flags: [], reply: "x", inbound: "", outbound: { kind: "offer_nudge" } },
+    { id: "d9", locationId: "LOC", contactId: "c2", status: "scheduled", party: "agent", createdAt: iso(800), flags: [], reply: "x", inbound: "", outbound: { kind: "offer_nudge" } },
+  ]);
+  const r = await standDownForHold({ client, store, locationId: "LOC", contactId: "c1", why: "you stopped the bot on them", now: NOW });
+  assert.deepEqual(r.pulled.sort(), ["d1", "d2"]);
+  assert.deepEqual(r.held, ["d3"]);
+  assert.equal((await store.getReplyDraft("d1")).status, "dismissed");
+  assert.match((await store.getReplyDraft("d1")).flags.join(" "), /you stopped the bot on them — not sent/);
+  const d3 = await store.getReplyDraft("d3");
+  assert.equal(d3.status, "draft");
+  assert.equal(d3.sendAt, null);
+  assert.match(d3.flags.join(" "), /held: you stopped the bot on them/);
+  assert.equal((await store.getReplyDraft("d4")).status, "draft", "a reply already waiting for you keeps waiting");
+  assert.equal((await store.getReplyDraft("d5")).status, "sending", "out of our hands");
+  assert.equal((await store.getReplyDraft("d9")).status, "scheduled", "someone else");
+});

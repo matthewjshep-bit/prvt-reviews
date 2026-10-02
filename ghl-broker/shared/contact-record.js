@@ -101,6 +101,11 @@ export const EVENT_TYPES = [
   "email_received", "email_sent",
   "enrich_run", "tag_added", "tag_removed",
   "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate", "property_details",
+  // Stop / Pause and Resume on the work pane (shared/bot-hold.js): while a
+  // stop holds, nothing goes to them by itself. data.until ends a pause.
+  "drive_stopped", "drive_resumed",
+  // They texted STOP, or GHL has them on DND (reply-agent markUnsubscribed).
+  "unsubscribed",
 ];
 
 export const EVENT_LABEL = {
@@ -134,6 +139,8 @@ export const EVENT_LABEL = {
   property_financed: "financed a property",
   email_received: "they emailed us",
   email_sent: "we emailed them",
+  drive_stopped: "you stopped the bot", drive_resumed: "the bot is back on",
+  unsubscribed: "they unsubscribed",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -167,6 +174,8 @@ export const EVENT_ICON = {
   listing_pinged: "Crosshair", listing_ping_voided: "Clock",
   workflow_enrolled: "Workflow", workflow_left: "LogOut",
   offmarket_asked: "Crosshair",
+  drive_stopped: "CirclePause", drive_resumed: "CirclePlay",
+  unsubscribed: "UserX",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

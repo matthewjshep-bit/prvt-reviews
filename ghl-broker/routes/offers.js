@@ -83,6 +83,8 @@ import {
 import { attachNextFollowUps } from "../next-follow-up.js";
 import { readSpend } from "../ai-spend.js";
 import { dueStep } from "../shared/follow-up.js";
+import { holdFor } from "../bot-hold.js";
+import { holdLine } from "../shared/bot-hold.js";
 import { autoAcceptCeiling } from "../shared/auto-accept.js";
 import { buyerCeiling, normalizeFellThroughCode, FELL_THROUGH_LABEL } from "../shared/post-mortem.js";
 import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, buildNetSheetDocument, moneyInWords } from "../offer-doc.js";
@@ -4164,7 +4166,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // An offer priced on the agent's own numbers (our comps were thin) is a
       // rough number to float, never paper that sends itself.
       const agentNumbers = offer.autoUnderwrite?.basis === "agent_numbers";
-      if (so.onClearUnderwrite && !leadWithNumber && !agentNumbers && cfg.enabled && CARD_SENDS_ENABLED && effectiveStatus(offer) === "new" && !offer.deal) {
+      // You stopped the bot on them (shared/bot-hold.js): the letter doesn't
+      // send itself and isn't queued for the retry. The float below waits
+      // too, so the offer stays "priced, not floated" until you Resume.
+      const stoppedHere = so.onClearUnderwrite && cfg.enabled && CARD_SENDS_ENABLED
+        ? await holdFor({ store, locationId, contactId: offer.contactId, offerId: offer.id }) : null;
+      if (stoppedHere?.held) console.log(`clean-underwrite send waiting for ${offer.id}: ${holdLine(stoppedHere)}`);
+      else if (so.onClearUnderwrite && !leadWithNumber && !agentNumbers && cfg.enabled && CARD_SENDS_ENABLED && effectiveStatus(offer) === "new" && !offer.deal) {
         const why = await (async () => {
           const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
           if (!drafts.some((d) => d.inbound)) return "they have never replied to us";
@@ -4173,7 +4181,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           return null;
         })();
         if (!why) {
-          const r = await conversationDeps({ client, locationId, saved: fresh }).sendOfferDocs({ contactId: offer.contactId, addressHint: offer.address });
+          const r = await conversationDeps({ client, locationId, saved: fresh }).sendOfferDocs({ contactId: offer.contactId, addressHint: offer.address, unattended: true });
           if (r.ok && !r.dryRun && !r.unchanged) {
             console.log(`offer ${offer.id} sent itself after a clean underwrite (${r.channels.join("+")})`);
             await createContactNote(client, offer.contactId, { body: `Sent our offer on ${offer.address} (${fmtMoney(offer.cashAmount)}) automatically after a clean underwrite — ${r.channels.join(" + ")}.` }).catch(() => {});
@@ -4230,7 +4238,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // A float that stood down because a reply is waiting on a person is not a
     // dead end: it stays "priced, not floated", so the timers (or the driver)
     // float it once that row is dealt with. Any other skip is filed with why.
-    if (r.skipped && r.blocked) console.log(`${kind} waiting for ${offer.id}: ${r.skipped}`);
+    // So is a stop (shared/bot-hold.js): it floats after Resume.
+    if (r.skipped && (r.blocked || r.held)) console.log(`${kind} waiting for ${offer.id}: ${r.skipped}`);
     else if (r.skipped) { console.log(`${kind} skipped for ${offer.id}: ${r.skipped}`); await markFloatSkipped(offer.id, kind, r.skipped); }
     else await markProactive(offer.id, kind);
     if (r.raise) {
@@ -4238,7 +4247,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         body: `Underwrote ${offer.address} at ${fmtMoney(offer.cashAmount)}, above the ${fmtMoney(r.raise.amount)} we last texted there — nothing was texted. Yours to decide whether to go up (Float on the offer sends it).`,
       }).catch(() => {});
     }
-    return { skipped: r.skipped || null, blocked: r.blocked || null, kind, job: r.job || null };
+    return { skipped: r.skipped || null, blocked: r.blocked || null, held: r.held || null, kind, job: r.job || null };
   }
 
   // Every conversation's last message, newest first, straight from GHL — one
@@ -4312,7 +4321,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!okStatus || now - Date.parse(offer.autoSendPending.at) > SEND_RETRY_DAYS * 86400000) { await clear(); continue; }
       const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
       if (!drafts.some((d) => d.inbound)) continue;
-      const r = await conversationDeps({ client, locationId, saved: fresh }).sendOfferDocs({ contactId: offer.contactId, addressHint: offer.address });
+      // Stopped (shared/bot-hold.js): it stays pending, and its week runs.
+      if ((await holdFor({ store, locationId, contactId: offer.contactId, offerId: offer.id, now })).held) continue;
+      const r = await conversationDeps({ client, locationId, saved: fresh }).sendOfferDocs({ contactId: offer.contactId, addressHint: offer.address, unattended: true });
       if (r.ok && r.dryRun) continue;
       if (r.ok) {
         await clear();
@@ -4807,7 +4818,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await markPaperHeld(offer, check, draftId);
       return { ok: true };
     },
-    sendOfferDocs: async ({ contactId, addressHint = "", channels = null, docs = null, draftId = null, afterCounter = false, emailTo = "", emailCc = [], transcript = null }) => {
+    sendOfferDocs: async ({ contactId, addressHint = "", channels = null, docs = null, draftId = null, afterCounter = false, emailTo = "", emailCc = [], transcript = null, unattended = false }) => {
+      // Nobody pressed anything (a clean underwrite, the retry): a person
+      // who stopped the bot gets no letter by itself (shared/bot-hold.js).
+      // A person pressing "Do it" on the draft is deciding, and it goes.
+      if (unattended) {
+        const hold = await holdFor({ store, locationId, contactId });
+        if (hold.held) return { ok: false, held: true, stopped: true, reason: holdLine(hold) };
+      }
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
       const so = conversationConfig(fresh).parties.agent.sendOffer;
       const open = (await currentOffersFor(locationId, contactId))

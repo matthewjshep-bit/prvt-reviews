@@ -222,6 +222,33 @@ test("a held holding-reply the guard passed is sent, not clocked; the gates, nee
   assert.equal(auditConversations({ config: careful, now: NOW, drafts: [held()], events: [], offers: [] }).findings[0].action?.type, "book_checkin", "careful mode clocks it");
 });
 
+// Matt, 2026-10-01: a stop means nothing goes to them by itself. The audit
+// used to release any held reply the guard passed, and only knew "you have
+// the thread" and "needs a person" as reasons not to.
+test("the nightly audit never releases a reply held because you stopped the bot, and sets no check-in clock", () => {
+  const stop = { type: "drive_stopped", contactId: "c1", at: ago(30), data: { reason: "" } };
+  const held = draft({ id: "h", status: "draft", createdAt: ago(4), sentAt: null, autoSendable: true, needsHuman: false,
+    autoSend: { decided: false, reason: "you stopped the bot on them — it waits for you" } });
+  const r = audit({ drafts: [held], events: [stop], offers: [] });
+  assert.equal(r.findings.some((f) => f.action?.type === "release" || f.action?.type === "book_checkin"), false, JSON.stringify(r.findings));
+  // A pause that has ended is not a stop: the old rules apply again.
+  const ended = { ...stop, data: { until: ago(1) } };
+  assert.deepEqual(audit({ drafts: [held], events: [ended], offers: [] }).findings[0].action, { type: "release", draftId: "h" });
+});
+
+test("the audit nudges no one you stopped the bot on — the row stays, the action doesn't", () => {
+  const stop = { type: "drive_stopped", contactId: "c1", at: ago(300), data: { reason: "" } };
+  const skipped = offer({ createdAt: ago(1200), statusAt: ago(1200), sends: [{ ts: ago(1200), results: { sms: { ok: true } } }] });
+  const live = auditConversations({ config: ladderOn, now: NOW, drafts: [], events: [], offers: [skipped], followUpCursorAt: ago(3) });
+  const nudged = live.findings.find((f) => f.action?.type === "nudge_offer");
+  assert.ok(nudged, "not stopped: nudged");
+  const r = auditConversations({ config: ladderOn, now: NOW, drafts: [], events: [stop], offers: [skipped], followUpCursorAt: ago(3) });
+  const f = r.findings.find((x) => x.kind === nudged.kind);
+  assert.ok(f, "the row stays");
+  assert.equal(f.action, null);
+  assert.match(f.why, /you stopped the bot on them/);
+});
+
 test("a stalled counter with nothing to re-run on is nudged; a realm-yes answered four minutes before its stamp is not a finding", () => {
   const o = offer({ status: "countered", counter: { amount: 850000, at: ago(140), source: "conversation" } });
   assert.deepEqual(audit({ drafts: [], events: [], offers: [o] }).findings[0].action, { type: "nudge_counter" });
