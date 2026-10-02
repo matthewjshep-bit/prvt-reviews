@@ -42,6 +42,7 @@ import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
+import { paperWent } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash } from "./shared/conversation-ai.js";
@@ -2309,7 +2310,8 @@ export function leadsWithNumber({ offer = null, job = null, config = null } = {}
 // number floated by text ("number"), or only our read of it ("read"). A nudge
 // on an offer that never went out used to say "we sent you an offer".
 export function whatWentOut(offer) {
-  if ((offer?.sends || []).some((s) => s?.ts)) return "paper";
+  // A send that failed on every channel is in the ledger but isn't paper.
+  if (paperWent(offer)) return "paper";
   if (offer?.proactive?.realmCheckAt) return "number";
   if (offer?.proactive?.takeCheckAt) return "read";
   // Marked sent by hand (it went outside the app): the letter.

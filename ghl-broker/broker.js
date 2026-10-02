@@ -244,6 +244,13 @@ const TICK_JOBS = [
     const resent = await offersRouter.retryPendingOfferSends?.({ client, locationId });
     if (resent?.sent) console.log(`${resent.sent} held offer${resent.sent === 1 ? "" : "s"} sent for ${locationId}`);
   } },
+  // A floated number nobody answered for a working day: the written offer
+  // follows it, for their records (shared/paper-follows.js). Off until
+  // sendOffer.afterFloat is switched on.
+  { area: "paper-after-float", run: async ({ client, locationId }) => {
+    const r = await offersRouter.sendPaperAfterSilence?.({ client, locationId });
+    if (r?.sent) console.log(`${r.sent} written offer${r.sent === 1 ? "" : "s"} sent after a quiet float for ${locationId}`);
+  } },
   // "I'll get back to you with a number" — kept, or said so, every tick.
   { area: "promises", run: async ({ client, locationId, saved }) => {
     const promised = await maybeRunPromiseSweep({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,

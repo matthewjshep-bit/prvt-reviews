@@ -461,7 +461,11 @@ const PLAYBOOK = () => ({
   // us, send the documents without a realm check — inside the auto-send
   // hours, never at night. The realm-yes path is an intent rule action
   // (send_offer) with its own ask/auto mode.
-  sendOffer: { onClearUnderwrite: false, channels: ["sms"], docs: ["image", "pdf"] },
+  // `afterFloat` (2026-10-02): the written offer follows a floated number —
+  // after `silenceHours` working hours with no answer, and (`onPushback`)
+  // with the reply to a no. Agents only, off until switched on.
+  sendOffer: { onClearUnderwrite: false, channels: ["sms"], docs: ["image", "pdf"],
+    afterFloat: { enabled: false, silenceHours: 24, onPushback: false, dailyCap: 20 } },
   // The first text to a listing agent the outreach page imported, drafted by
   // the bot from the hook listing instead of sent by a GHL workflow template.
   // Sends itself only if outreach_open is on the party's auto-send list.
@@ -774,7 +778,18 @@ function normalizePlaybook(p, party, seed = {}) {
       const so = src.sendOffer && typeof src.sendOffer === "object" ? src.sendOffer : {};
       const channels = list(so.channels, { max: 2, each: 10, lower: true }).filter((c) => CHANNELS.includes(c));
       const docs = list(so.docs, { max: 6, each: 20, lower: true }).filter((d) => OFFER_DOC_KEYS.includes(d));
-      return { onClearUnderwrite: bool(so.onClearUnderwrite, false), channels: channels.length ? channels : ["sms"], docs: docs.length ? docs : ["image", "pdf"] };
+      const af = so.afterFloat && typeof so.afterFloat === "object" ? so.afterFloat : {};
+      return {
+        onClearUnderwrite: bool(so.onClearUnderwrite, false), channels: channels.length ? channels : ["sms"], docs: docs.length ? docs : ["image", "pdf"],
+        // The written offer after a float (shared/paper-follows.js). An
+        // investor playbook never carries it switched on.
+        afterFloat: {
+          enabled: party === "agent" && bool(af.enabled, false),
+          silenceHours: int(af.silenceHours, 24, 4, 240),
+          onPushback: party === "agent" && bool(af.onPushback, false),
+          dailyCap: int(af.dailyCap, 20, 1, 200),
+        },
+      };
     })(),
     followUp: normalizeFollowUp(src.followUp, party),
     priceBand: {

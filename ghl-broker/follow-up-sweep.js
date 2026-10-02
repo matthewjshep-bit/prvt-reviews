@@ -22,6 +22,7 @@
 //   spending model calls on drafts that would be superseded anyway.
 
 import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreachPausedReason, pushesToPaper, offerHeat } from "./shared/offer-status.js";
+import { paperWent } from "./shared/paper-follows.js";
 import { addressKey } from "./shared/us-address.js";
 import { sameStreet } from "./shared/us-address.js";
 import { supersededIds } from "./shared/current-offer.js";
@@ -128,7 +129,7 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     // nothing to follow up: "we sent you an offer" would be false, and a
     // priced offer waiting to be floated is the float timer's. A number
     // floated by text is followed up from when it was floated.
-    const onPaper = (o.sends || []).some((s) => s?.ts);
+    const onPaper = paperWent(o);
     const floatedAt = o.proactive?.realmCheckAt || o.proactive?.takeCheckAt || null;
     if (!onPaper && !floatedAt && effectiveStatus(o) === "new") continue;
     // Count from the last time we actually put it in front of them.
