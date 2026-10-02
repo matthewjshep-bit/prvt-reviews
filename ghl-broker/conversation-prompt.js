@@ -476,10 +476,26 @@ const CONTINUE = "Reference the thread so it reads as a continuation.";
 function nudgePressure(outbound) {
   const i = Number(outbound?.stepIndex) || 1;
   const n = Number(outbound?.stepCount) || 1;
+  // A ladder that repeats has no last time. The Auburn listing agent, 2026-09-30: "Last
+  // check… I'll leave it alone", with the next nudge already set for a week on.
+  // A repeat rung isn't on the configured list, so its stepIndex is 0.
+  if (outbound?.repeats && (!Number(outbound?.stepIndex) || i >= n)) {
+    return "This is a repeat follow-up: keep it shorter than the last one and give them an easy out. " +
+      "Do NOT call it a last check or say you'll leave it alone — we will ask again.";
+  }
   if (i <= 1) return "This is the first follow-up: one short line, friendly, no pressure.";
   if (i >= n) return "This is the LAST follow-up — say so lightly, give them an easy way out " +
     "(\"if it's not one for you just say so and I'll leave it\"), and do not ask a second question.";
   return "This is a repeat follow-up: keep it shorter than the last one and give them an easy out.";
+}
+
+// One line about a house they passed on, riding on the live offer's nudge
+// (shared/agent-focus.js): the light touch, at most once a month.
+function nudgeAside(o) {
+  if (!o?.aside?.street) return "";
+  return `Then ONE short closing line about ${o.aside.street}, another house of theirs ${o.aside.quiet ? "we never heard back on" : "they passed on"}: ` +
+    `we're still around if it ever shakes loose. A statement, not a question. No number, nothing about price. ` +
+    `${o.address} stays the subject; that line is an afterthought. `;
 }
 
 export function outboundOpening(outbound) {
@@ -592,7 +608,7 @@ export function outboundOpening(outbound) {
       return `${START} ${what} and they haven't answered. ` +
         `${nudgePressure(o)} Check in on it in one or two lines. You may refer to ${it}, but do NOT ` +
         `name a number, sweeten it, or imply we'd go higher — that is a person's call. Asking ${asks} ` +
-        `${o.went === "number" || o.went === "read" ? "is" : "are all"} good. ${o.went === "number" || o.went === "read" ? "Do NOT say we sent an offer or anything in writing. " : ""}${CONTINUE} Set intent to offer_nudge.`;
+        `${o.went === "number" || o.went === "read" ? "is" : "are all"} good. ${o.went === "number" || o.went === "read" ? "Do NOT say we sent an offer or anything in writing. " : ""}${nudgeAside(o)}${CONTINUE} Set intent to offer_nudge.`;
     }
 
     // A price is agreed and nothing is on paper. One ask, said a different

@@ -496,7 +496,9 @@ const PLAYBOOK = () => ({
     ladders: {},                 // filled per party from DEFAULT_LADDERS
     maxPerContactPerWeek: 2,
     stopOnAnyInbound: true,      // anything they say ends the ladder
-    minHoursBetween: 40,         // never two nudges inside ~two days
+    // Unprompted texts to one person are three days apart (Matt, 2026-10-02:
+    // the Auburn listing agent got six in eleven days at the old 40 hours).
+    minHoursBetween: 72,
   },
 });
 
@@ -820,7 +822,7 @@ function normalizeFollowUp(src = {}, party = "agent") {
     ladders,
     maxPerContactPerWeek: int(f.maxPerContactPerWeek, 2, 1, 20),
     stopOnAnyInbound: bool(f.stopOnAnyInbound, true),
-    minHoursBetween: int(f.minHoursBetween, 40, 0, 720),
+    minHoursBetween: int(f.minHoursBetween, 72, 0, 720),
     // The price watch (ghl-broker/price-watch.js), both off (2026-09-29):
     // a house back on the market starts its passed-offer check-ins again
     // from the relist; a number floated by text but never sent is watched.

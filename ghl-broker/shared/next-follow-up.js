@@ -21,8 +21,9 @@
 import { effectiveStatus, OPEN_STATUSES, pushesToPaper, offerHeat, aiHoldReasons } from "./offer-status.js";
 import {
   nextRungAt, offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, stepLabel, normalizeSteps,
-  CHECKIN_STATUSES, HOT_MIN_HOURS,
+  CHECKIN_STATUSES, HOT_MIN_HOURS, rungsCovered, nudgeTimes,
 } from "./follow-up.js";
+import { streetOf } from "./agent-focus.js";
 import { threadHealth } from "./thread-health.js";
 import { botHold, pauseDay, paceOf, paceScale } from "./bot-hold.js";
 import { addressKey } from "./us-address.js";
@@ -48,6 +49,7 @@ export const NEXT_KINDS = {
   offer_nudge: "Nudge",
   hot_push:    "Push to paper",
   passed_checkin: "Check back in",
+  rides:       "Rides on the live offer's nudge",
   deal:        "Deal",
   we_passed:   "We passed",
   superseded:  "Superseded",
@@ -81,19 +83,20 @@ const rungText = (label, step, steps) => {
 };
 
 /**
- * nextFollowUp({ offer, drafts, events, config, now, sweepHour })
+ * nextFollowUp({ offer, drafts, events, config, now, sweepHour, focus })
  *   → { at, kind, label, who, reason, overdue }
  *
  *   offer   a list row, annotated by current-offer.js (isCurrent/supersededBy)
  *   drafts  this contact's reply drafts, any status
  *   events  this contact's timeline (promises, check-ins, off-market, stops)
  *   config  the normalised conversationAi settings
+ *   focus   the agent's live offer (shared/agent-focus.js focusOf), if any
  *
  * `at` null means nothing is coming; `reason` says why, in the operator's
  * words. `who` is "machine" (goes by itself), "you" (waits for a person), or
  * null. First match wins, in the order below.
  */
-export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now = Date.now(), sweepHour = SWEEP_UTC_HOUR } = {}) {
+export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now = Date.now(), sweepHour = SWEEP_UTC_HOUR, focus = null } = {}) {
   const out = (kind, { at = null, label = NEXT_KINDS[kind], who = null, reason = "", until = null } = {}) => ({
     at: at == null ? null : iso(at), kind, label, who, reason,
     overdue: at != null && at < now - HOUR_MS,
@@ -199,7 +202,9 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
       const a = offerNudgeAnchor({ startedAt: nudgeFrom, lastInboundAt: times.lastInboundAt, lastHandledAt: times.lastHandledAt });
       if (a.waitingOnUs) ladderNote = "they replied and nothing has answered it";
       else {
-        const sent = (offer.followUps || []).filter((f) => f?.kind === "offer_nudge" && (!a.reanchored || String(f.at || "") > a.startedAt)).map((f) => f.step);
+        const sent = [...(offer.followUps || []).filter((f) => f?.kind === "offer_nudge" && (!a.reanchored || String(f.at || "") > a.startedAt)).map((f) => f.step),
+          // A nudge the audit or a person already sent is that day's rung (follow-up-sweep.js reads it the same way).
+          ...rungsCovered({ steps: L.steps, repeatEvery: L.repeatEvery, startedAt: a.startedAt, texts: nudgeTimes(drafts, offer.id), pace })];
         const r = nextRungAt({ steps: L.steps, repeatEvery: L.repeatEvery, startedAt: a.startedAt, sentSteps: sent, now, pace });
         let brake = null;
         if (a.reanchored) {
@@ -236,6 +241,12 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
     const lastOff = mine.filter((e) => e.type === "listing_off_market").map((e) => e.at).sort().at(-1) || null;
     const lastBack = mine.filter((e) => e.type === "listing_back_on_market").map((e) => e.at).sort().at(-1) || null;
     if (lastOff && !(lastBack && String(lastBack) > String(lastOff))) return out("stopped", { label: "Stopped — listing went off market", reason: "pending or sold; the price watch saw it go" });
+    // One house at a time (shared/agent-focus.js): while another house of
+    // theirs is live, this one is a line on that nudge, at most once a month.
+    if (focus && focus.id !== offer.id) {
+      return out("rides", { label: `Rides on the ${streetOf(focus.address)} nudge`, who: whoFor("offer_nudge"),
+        reason: "one house at a time: a house they passed on gets one line on the live offer's nudge, at most once a month" });
+    }
     const relisted = fu.relist && lastBack ? lastBack : null;
     const start = relisted || passed;
     const r = nextRungAt({ steps: L.steps, repeatEvery: L.repeatEvery, startedAt: start, sentSteps: (offer.followUps || []).filter((f) => f?.kind === "passed_checkin" && (!relisted || String(f.at || "") > String(relisted))).map((f) => f.step), now, pace });

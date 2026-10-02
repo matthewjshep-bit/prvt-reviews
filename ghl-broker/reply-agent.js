@@ -53,6 +53,8 @@ import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { holdFor } from "./bot-hold.js";
+import { agentTurnReason } from "./agent-focus.js";
+import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
@@ -2170,6 +2172,13 @@ export async function startProactive({
     if (hold.held) return { skipped: holdLine(hold), held: { kind: hold.kind, until: hold.until }, job: null };
     const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues });
     if (waiting) return { skipped: blockingReason(waiting), blocked: { draftId: waiting.id }, job: null };
+    // One house at a time, three days apart, two a week (shared/agent-focus.js).
+    // The sweep asks before it claims; this is every other door asking too.
+    if (spec.party === "agent") {
+      const turn = await agentTurnReason({ store, locationId, contactId, kind, address: offer?.address || subject?.address || "", config,
+        now: typeof deps.now === "function" ? deps.now() : Date.now() });
+      if (turn) return { skipped: turn, spaced: true, job: null };
+    }
     // Replies to people always have room. The day's cap counts every draft,
     // but was only ever enforced on replies — so a busy day of nudges and
     // pulses could leave a person's text unanswered by evening. The machine
@@ -2302,11 +2311,12 @@ export function whatWentOut(offer) {
   return offer && offerStatus(offer) !== "new" ? "paper" : "";
 }
 
-function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
+export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
   const address = offer?.address || subject?.address || "the property";
   const step = subject?.step ?? null;
   const steps = subject?.steps || [];
-  const base = { kind, address, ...(step != null ? { step, stepLabel: stepLabel(step, steps), stepIndex: normalizeSteps(steps).indexOf(step) + 1, stepCount: normalizeSteps(steps).length } : {}) };
+  const base = { kind, address, ...(step != null ? { step, stepLabel: stepLabel(step, steps), stepIndex: normalizeSteps(steps).indexOf(step) + 1, stepCount: normalizeSteps(steps).length } : {}),
+    ...(Number(subject?.repeatEvery) > 0 ? { repeats: true } : {}) };
   if (kind === "take_check") {
     const n = offerNumbers(offer);
     return { ...base,
@@ -2396,6 +2406,8 @@ function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
   // The nudges. They carry what the message is ABOUT and no numbers at all.
   return { ...base,
     ...(kind === "offer_nudge" || kind === "price_drop" ? { went: whatWentOut(offer) } : {}),
+    // A passed house riding on this nudge as one line (follow-up-sweep.js).
+    ...(kind === "offer_nudge" && subject?.aside?.address ? { aside: { street: streetOf(subject.aside.address), quiet: Boolean(subject.aside.quiet) } } : {}),
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
     lastTouchAt: subject?.lastTouchAt || null,
     ...(kind === "promise_due" ? { what: subject?.what || "answer", heldReason: subject?.heldReason || "", promisedText: subject?.promisedText || "", running: Boolean(subject?.running) } : {}),
@@ -2420,7 +2432,7 @@ function outboundSummary({ kind, offer, outbound }) {
       return outbound.requote
         ? `Comes back on ${where} with ${fmtMoney(offer.cashAmount)} after re-running their numbers.`
         : `Floats ${fmtMoney(offer.cashAmount)} on ${where} as a rough first pass and asks if it's in the realm.`;
-    case "offer_nudge":   return `Follows up on our offer on ${where}${rung}.`;
+    case "offer_nudge":   return `Follows up on our offer on ${where}${rung}.${outbound.aside?.street ? ` One line: still around if ${outbound.aside.street} shakes loose.` : ""}`;
     case "counter_nudge": return `Their ${outbound.theirsK || "counter"} on ${where} sat ${outbound.days}d — asks if the seller has any room, names no number of ours.`;
     case "partner_answer": return "Your answer to a question the bot couldn't answer, in its voice.";
     case "hot_push": return `Pushes the agreed price on ${where} toward paper: asks them to write it up on NWMLS forms for us to sign${rung}.`;

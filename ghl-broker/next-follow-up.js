@@ -6,6 +6,7 @@
 // row — the book is a few hundred offers and the page loads it whole.
 
 import { nextFollowUp } from "./shared/next-follow-up.js";
+import { focusOf } from "./shared/agent-focus.js";
 import { conversationConfig } from "./reply-agent.js";
 import { FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.js";
 import { BOT_EVENT_TYPES, mergeEvents } from "./shared/bot-hold.js";
@@ -58,11 +59,16 @@ export async function attachNextFollowUps({ store, locationId, saved = {}, offer
   const draftsBy = groupBy(draftRows, DRAFTS_PER_CONTACT);
   const eventsBy = groupBy(mergeEvents(windowed, botEvents));
   const config = conversationConfig(saved || {});
+  // Each agent's live house (shared/agent-focus.js): their passed houses
+  // ride on its nudge instead of keeping a clock of their own.
+  const focusBy = new Map();
+  for (const [contactId, rows] of groupBy(offers)) focusBy.set(contactId, focusOf(rows, { contactId }));
   for (const o of offers) {
     if (!o) continue;
     o.nextFollowUp = nextFollowUp({
       offer: o, config, now, sweepHour: FOLLOW_UP_UTC_HOUR,
       drafts: draftsBy.get(o.contactId) || [], events: eventsBy.get(o.contactId) || [],
+      focus: focusBy.get(o.contactId) || null,
     });
   }
   return offers;
@@ -88,9 +94,10 @@ export async function attachNextFollowUpsFor({ store, locationId, saved = {}, co
   const drafts = (draftRows || []).filter((d) => d?.contactId === contactId).slice(0, DRAFTS_PER_CONTACT);
   const events = mergeEvents(windowed, bot);
   const config = conversationConfig(saved || {});
+  const focus = focusOf(offers, { contactId });
   for (const o of offers) {
     if (!o || o.contactId !== contactId) continue;
-    o.nextFollowUp = nextFollowUp({ offer: o, config, now, sweepHour: FOLLOW_UP_UTC_HOUR, drafts, events });
+    o.nextFollowUp = nextFollowUp({ offer: o, config, now, sweepHour: FOLLOW_UP_UTC_HOUR, drafts, events, focus });
   }
   return offers;
 }

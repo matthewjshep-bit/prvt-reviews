@@ -35,7 +35,7 @@ export const FOLLOW_UP_KINDS = {
 };
 
 // The hot push's own floor between texts. A constant, not a setting: it
-// ignores the shared 40-hour gap and the weekly cap on purpose, and this is
+// ignores the shared gap between texts and the weekly cap on purpose, and this is
 // what it keeps instead.
 export const HOT_MIN_HOURS = 20;
 
@@ -382,6 +382,40 @@ export function nextRungAt({ steps = [], repeatEvery = 0, startedAt, sentSteps =
   return next == null ? null : { at: new Date(started + next * unit).toISOString(), step: next, due: false };
 }
 
+/**
+ * rungsCovered({ steps, repeatEvery, startedAt, texts, pace }) → [step]
+ *
+ * A nudge some other path already sent on this offer — the nightly audit's
+ * "floated, never heard back", a Float pressed by hand — is that day's rung.
+ * The Auburn listing agent, 2026-09-19/21: the audit asked about Auburn on day 3 and
+ * the sweep asked again two days later, because only the sweep's own rungs
+ * were counted. `texts` are when those nudges went (ms or ISO). A text
+ * before the first rung's day is the first rung.
+ */
+export function rungsCovered({ steps = [], repeatEvery = 0, startedAt, texts = [], pace = 1 } = {}) {
+  const configured = normalizeSteps(steps);
+  const started = ms(startedAt);
+  if (!configured.length || started == null) return [];
+  const unit = DAY_MS * paceScale(pace).rung;
+  const out = new Set();
+  for (const t of texts || []) {
+    const at = typeof t === "number" ? t : ms(t);
+    if (at == null || at < started) continue;
+    const reached = rungsThrough(configured, repeatEvery, started, at, unit).filter((d) => started + d * unit <= at).at(-1);
+    out.add(reached ?? configured[0]);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+/** nudgeTimes(drafts, offerId) → [ISO] — when a nudge on this offer went out, or is queued to. */
+export function nudgeTimes(drafts = [], offerId = "") {
+  if (!offerId) return [];
+  return (drafts || [])
+    .filter((d) => d?.outbound?.kind === "offer_nudge" && d.outbound.offerId === offerId && ["sent", "scheduled", "sending"].includes(d.status))
+    .map((d) => (d.status === "sent" ? d.sentAt || d.updatedAt || d.createdAt : d.sendAt || d.createdAt))
+    .filter(Boolean);
+}
+
 /* ---------- where each offer ladder counts from ---------- */
 // The sweep (ghl-broker/follow-up-sweep.js) and the Offers tab's "Next
 // follow-up" column (shared/next-follow-up.js) both read these, so the day
@@ -403,7 +437,7 @@ export function offerNudgeStart(offer) {
  *   lastHandledAt       our last text out (a reply counts as much as a nudge),
  *                       or an inbound we chose to leave — "ok thanks" is
  *                       dismissed or skipped, not owed
- *   lastMachineTouchAt  our last machine-started text (the 40-hour gap)
+ *   lastMachineTouchAt  our last machine-started text (the gap between texts)
  *   heldSince           their newest text, when its reply is held for a person
  *   scheduled           replies queued to send, soonest first
  */

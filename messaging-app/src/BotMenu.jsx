@@ -22,7 +22,7 @@ const TONE = {
   slate: "border-slate-300 text-slate-600 hover:bg-slate-50",
   plain: "border-slate-300 text-slate-700 hover:bg-slate-50",
 };
-const PACE_DONE = { less: "Checking in half as often.", normal: "Back to the normal pace.", more: "Checking in twice as often — never closer than 40 hours apart." };
+const PACE_DONE = { less: "Checking in half as often.", normal: "Back to the normal pace.", more: "Checking in twice as often — never closer than three days apart." };
 
 /**
  * <BotMenu contactId party name bot onChanged />
@@ -71,7 +71,7 @@ export default function BotMenu({ contactId, party = null, name = "", bot = null
     { divider: true, key: "pace" },
     { key: "less", label: "Check in less", icon: <Gauge size={13} />, selected: current === "less", onSelect: () => pace("less"), title: "Half as often: nudges, check-ins and the three-week check-in stretch to twice the gap" },
     { key: "normal", label: "Normal pace", selected: current === "normal", onSelect: () => pace("normal") },
-    { key: "more", label: "Check in more", selected: current === "more", onSelect: () => pace("more"), title: "Twice as often, never closer than 40 hours apart" },
+    { key: "more", label: "Check in more", selected: current === "more", onSelect: () => pace("more"), title: "Twice as often, never closer than three days apart" },
   ];
   return (
     <span className="inline-flex items-center gap-1.5">

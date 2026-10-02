@@ -345,3 +345,27 @@ test("the check-in leans its ask toward off-market houses when an ask is due, an
   assert.doesNotMatch(recent, /before it hits the market/);
   assert.match(recent, /anything coming up that needs work/);
 });
+
+/* ---------- one house at a time (2026-10-02) ---------- */
+
+// The Auburn listing agent, 9/30: "Last check on 10625 SE 304th Way… just say so and
+// I'll leave it alone", with the next nudge already set for the week after.
+test("a nudge on a ladder that keeps asking never says it's the last check", () => {
+  const day14 = outboundOpening({ kind: "offer_nudge", address: "10625 SE 304th Way", went: "number", step: 14, stepIndex: 3, stepCount: 3, repeats: true });
+  assert.doesNotMatch(day14, /This is the LAST follow-up/);
+  assert.match(day14, /Do NOT call it a last check or say you'll leave it alone — we will ask again/);
+  const day21 = outboundOpening({ kind: "offer_nudge", address: "10625 SE 304th Way", went: "number", step: 21, stepIndex: 0, stepCount: 3, repeats: true });
+  assert.match(day21, /This is a repeat follow-up/, "a repeat rung isn't the first follow-up all over again");
+  const ends = outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper", step: 14, stepIndex: 3, stepCount: 3 });
+  assert.match(ends, /This is the LAST follow-up/, "a ladder that really ends still says so");
+});
+
+test("a house they passed on rides on the live offer's nudge as one line, never a number or a second question", () => {
+  const t = outboundOpening({ kind: "offer_nudge", address: "10625 SE 304th Way", went: "number", step: 7, stepIndex: 2, stepCount: 3,
+    aside: { street: "28422 Military Road South", quiet: false } });
+  assert.match(t, /Then ONE short closing line about 28422 Military Road South, another house of theirs they passed on/);
+  assert.match(t, /A statement, not a question\. No number, nothing about price\. 10625 SE 304th Way stays the subject/);
+  assert.match(t, /Set intent to offer_nudge\.$/);
+  assert.doesNotMatch(outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper" }), /closing line/);
+  assert.match(outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper", aside: { street: "3 Oak Ave", quiet: true } }), /we never heard back on/);
+});

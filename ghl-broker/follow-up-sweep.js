@@ -27,14 +27,15 @@ import { sameStreet } from "./shared/us-address.js";
 import { supersededIds } from "./shared/current-offer.js";
 import {
   dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor, HOT_MIN_HOURS,
-  offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, CHECKIN_STATUSES,
+  offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, CHECKIN_STATUSES, rungsCovered, nudgeTimes,
 } from "./shared/follow-up.js";
+import { focusOf, focusHolds, machineTexts, spacingHolds, lightTouchDue, pickAside } from "./shared/agent-focus.js";
 import { threadHealth } from "./shared/thread-health.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
 import { waitingReason } from "./outbox-guard.js";
 import { botEventsByContact } from "./bot-hold.js";
-import { botHold, holdLine, paceOf, MIN_PACE } from "./shared/bot-hold.js";
+import { botHold, holdLine, paceOf, paceScale, MIN_PACE } from "./shared/bot-hold.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 
 const DAY_MS = 86400000;
@@ -245,6 +246,7 @@ export async function passedCandidates({ store, locationId, config, now = Date.n
       kind: "passed_checkin", party: "agent", contactId: o.contactId,
       subjectId: relisted ? `${o.id}@relist-${String(relisted).slice(0, 10)}` : o.id,
       offerId: o.id, address: o.address, startedAt, offMarketAt: gone, relisted: Boolean(relisted),
+      quiet: effectiveStatus(o) === "no_response",
       sentSteps: (o.followUps || []).filter((f) => f?.kind === "passed_checkin" && (!relisted || String(f.at || "") > String(relisted))).map((f) => f.step),
       ladder,
     });
@@ -293,6 +295,8 @@ export async function hotCandidates({ store, locationId, config, now = Date.now(
 // Kinds that are about one of our offers: the offer rides into the draft
 // and the offer remembers its own rungs.
 const OFFER_KINDS = new Set(["offer_nudge", "passed_checkin", "hot_push"]);
+// "one text a morning — the push to paper went to them first"
+const KIND_WORD = { hot_push: "the push to paper", offer_nudge: "the nudge on their live offer", passed_checkin: "a check-in", outreach_nudge: "a follow-up" };
 // A passed offer's check-in isn't ended by them texting us about something
 // else — only paused while a conversation is actually live.
 const CHECKIN_QUIET_HOURS = 72;
@@ -451,12 +455,44 @@ async function runSweep(job, ctx) {
     if (job.results.length > 200) job.results.shift();
   };
 
+  // One house at a time (shared/agent-focus.js). The Auburn listing agent, 2026-09-21:
+  // a check-in on a house they'd passed on in August went out instead of the
+  // nudge on their live offer — both were due, and the later draft won. So a
+  // passed house of an agent with a live offer elsewhere is read BEFORE the
+  // nudges: if its check-in is due it is held, unclaimed, and rides on the
+  // live offer's nudge as one line (at most once a month). A book that can't
+  // be read has no focus, and the sweep behaves as before.
+  const book = typeof store.listOffers === "function"
+    ? await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => null)
+    : null;
+  const offersOf = new Map();
+  for (const o of book || []) {
+    if (!o?.contactId) continue;
+    if (!offersOf.has(o.contactId)) offersOf.set(o.contactId, []);
+    offersOf.get(o.contactId).push(o);
+  }
+  const focusCache = new Map();
+  const focusFor = (contactId) => {
+    if (!focusCache.has(contactId)) focusCache.set(contactId, focusOf(offersOf.get(contactId) || [], { contactId }));
+    return focusCache.get(contactId);
+  };
+  const riding = [];
+  const onTheirOwn = [];
+  for (const c of await passedCandidates({ store, locationId, config, now })) {
+    const why = focusHolds({ kind: c.kind, address: c.address, focus: focusFor(c.contactId) });
+    if (why) riding.push({ ...c, rides: why });
+    else onTheirOwn.push(c);
+  }
+
   // An agreed price first: if the run's quota binds, the push to paper is
   // the text that must not wait.
   const candidates = [
     ...(await hotCandidates({ store, locationId, config, now })),
-    ...(await agentCandidates({ store, locationId, config, now })),
-    ...(await passedCandidates({ store, locationId, config, now })),
+    ...riding,
+    // Two live offers due the same morning: the house they're on goes first.
+    ...(await agentCandidates({ store, locationId, config, now }))
+      .sort((a, b) => Number(focusFor(b.contactId)?.id === b.offerId) - Number(focusFor(a.contactId)?.id === a.offerId)),
+    ...onTheirOwn,
     ...(await outreachCandidates({ store, locationId, config, now })),
     ...(await investorCandidates({ store, locationId, config, now })),
   ];
@@ -467,9 +503,15 @@ async function runSweep(job, ctx) {
   // who is stopped doesn't text anyone.
   const stops = await botEventsByContact({ store, locationId });
 
-  // How many nudges this contact has already had this week, so one person
-  // working several of our properties doesn't get a text a day.
+  // How many nudges an investor has had this run. An agent's week is read
+  // off what actually went out (spacingHolds, below) — this count only ever
+  // saw the morning's run, so 9/19, 9/21 and 9/23 were each "the first".
   const weekCount = new Map();
+  // One text a morning per agent: the first to get here goes — the push to
+  // paper, then the live offer's nudge — and the rest wait for another day.
+  const startedFor = new Map();
+  // Passed houses whose check-in is due and rides on the live offer's nudge.
+  const asides = new Map();
   // Blasts sent by a GHL workflow carry only an address, so an investor
   // candidate is matched to its deal by street when there's no offer id.
   let dealList = null;
@@ -593,6 +635,13 @@ async function runSweep(job, ctx) {
     }
     // Check in less / more for this person (shared/bot-hold.js).
     const pace = paceOf({ events: stops.get(c.contactId) || [] }).factor;
+    // A nudge another path sent on this offer — the nightly audit's
+    // "floated, never heard back", a Float pressed by hand — is that day's
+    // rung, or the sweep asks the same thing again two days later.
+    if (c.kind === "offer_nudge") {
+      const covered = rungsCovered({ steps: c.ladder.steps, repeatEvery: c.ladder.repeatEvery, startedAt: c.startedAt, texts: nudgeTimes(agentDrafts, c.offerId), pace });
+      if (covered.length) c.sentSteps = [...new Set([...c.sentSteps, ...covered])];
+    }
     const d = dueStep({
       steps: c.ladder.steps, startedAt: c.startedAt, sentSteps: c.sentSteps,
       lastInboundAt, lastTouchAt, now, pace,
@@ -627,14 +676,36 @@ async function runSweep(job, ctx) {
       continue;
     }
 
-    job.due++;
-    const already = weekCount.get(c.contactId) || 0;
-    // An agreed price is not held up by this week's other nudges.
-    if (c.kind !== "hot_push" && already >= fu.maxPerContactPerWeek) {
+    // Due, but it rides on the live offer's nudge: held, not claimed, and
+    // picked up below if that nudge goes this morning.
+    if (c.rides) {
+      if (!asides.has(c.contactId)) asides.set(c.contactId, []);
+      asides.get(c.contactId).push({ ...c, step: d.step });
       job.skipped++;
-      push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: "they've had enough from us this week" });
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: c.rides });
       continue;
     }
+
+    job.due++;
+    if (c.party === "agent" && startedFor.has(c.contactId)) {
+      job.skipped++;
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: `one text a morning — ${startedFor.get(c.contactId)} went to them first` });
+      continue;
+    }
+    const already = weekCount.get(c.contactId) || 0;
+    // Three days apart and two a week, off what actually went out (shared/
+    // agent-focus.js). An agreed price is not held up by either.
+    const spaced = c.party === "agent"
+      ? spacingHolds({ kind: c.kind, sent: machineTexts(agentDrafts), now, minHours: fu.minHoursBetween, perWeek: fu.maxPerContactPerWeek, floor: paceScale(pace).floor })
+      : (c.kind !== "hot_push" && already >= fu.maxPerContactPerWeek ? "they've had enough from us this week" : null);
+    if (spaced) {
+      job.skipped++;
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: spaced });
+      continue;
+    }
+    // A passed house rides on this nudge as one line, at most once a month.
+    const aside = c.kind === "offer_nudge" && asides.has(c.contactId) && lightTouchDue({ offers: offersOf.get(c.contactId) || [], now })
+      ? pickAside(asides.get(c.contactId)) : null;
 
     // A backlog never goes out as a burst (reading the whole book can
     // surface one): past the run's quota, the rest go on the next runs. A
@@ -656,7 +727,8 @@ async function runSweep(job, ctx) {
     }
 
     if (job.dryRun) {
-      push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "would send" });
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "would send", ...(aside ? { aside: aside.address } : {}) });
+      if (c.party === "agent") startedFor.set(c.contactId, KIND_WORD[c.kind] || c.kind);
       continue;
     }
 
@@ -680,8 +752,9 @@ async function runSweep(job, ctx) {
       const r = await start({
         client, locationId, saved, store, contactId: c.contactId, kind: c.kind,
         offer: OFFER_KINDS.has(c.kind) ? offer : null,
-        subject: { address: c.address, step: d.step, steps: c.ladder.steps,
-                   viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, lastTouchAt, relisted: Boolean(c.relisted) },
+        subject: { address: c.address, step: d.step, steps: c.ladder.steps, repeatEvery: c.ladder.repeatEvery || 0,
+                   viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, lastTouchAt, relisted: Boolean(c.relisted),
+                   ...(aside ? { aside: { address: aside.address, quiet: Boolean(aside.quiet) } } : {}) },
         sendsEnabled, deps,
       });
       if (r?.skipped) {
@@ -692,6 +765,7 @@ async function runSweep(job, ctx) {
         // The push to paper keeps its own floor and never counts against the
         // week's nudges (it goes first, so it would otherwise crowd them out).
         if (c.kind !== "hot_push") weekCount.set(c.contactId, already + 1);
+        if (c.party === "agent") startedFor.set(c.contactId, KIND_WORD[c.kind] || c.kind);
         // The offer remembers its own rungs so History can show them without
         // reading the timeline. The event is still the authority.
         if (OFFER_KINDS.has(c.kind) && c.offerId) {
@@ -701,7 +775,26 @@ async function runSweep(job, ctx) {
             await store.updateOffer(full.id, full).catch(() => {});
           }
         }
-        push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "started", jobId: r?.job?.id || null });
+        push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "started", jobId: r?.job?.id || null, ...(aside ? { aside: aside.address } : {}) });
+        // The passed house's rung went out on the nudge: claimed now, so its
+        // ladder moves on and the month before the next mention starts here.
+        if (aside) {
+          const folded = await recordEvent({
+            store, locationId, contactId: c.contactId, party: "agent", type: "follow_up_sent",
+            at: iso(now), address: aside.address, offerId: aside.offerId, source: "conversation",
+            ref: `passed_checkin:${aside.subjectId}:${aside.step}`,
+            dedupeKey: followUpDedupeKey({ kind: "passed_checkin", subjectId: aside.subjectId, step: aside.step }),
+            data: { kind: "passed_checkin", step: aside.step, ladder: aside.ladder.steps, aside: true, on: c.offerId },
+          });
+          if (folded.inserted) {
+            const full = await store.getOffer(aside.offerId).catch(() => null);
+            if (full) {
+              full.followUps = [...(full.followUps || []), { kind: "passed_checkin", step: aside.step, at: iso(now), jobId: r?.job?.id || null, aside: true }];
+              await store.updateOffer(full.id, full).catch(() => {});
+            }
+            push({ contactId: c.contactId, address: aside.address, kind: "passed_checkin", step: aside.step, status: "started", reason: `one line on the nudge about ${c.address}`, jobId: r?.job?.id || null });
+          }
+        }
       }
     } catch (e) {
       // One contact's failure is not the sweep's. A credential that would fail
