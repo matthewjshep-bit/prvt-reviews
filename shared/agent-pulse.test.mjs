@@ -270,3 +270,15 @@ test("the next agents due wait as spares beyond the day's seats", () => {
   assert.deepEqual(r.spares.map((p) => p.contactId), ["ag-b", "ag-c"]);
   assert.equal(r.spares[0].subject.reason, "general");
 });
+
+test("checking in less doubles the three weeks; checking in more halves it but never goes inside the quiet days", () => {
+  const pace = (p) => ({ type: "cadence_set", at: ago(40), data: { pace: p } });
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30) }), ctx()).status, "due", "normal: 21 days");
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), events: [pace("less")] }), ctx()).status, "not_due", "less: 42 days");
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(43), events: [pace("less")] }), ctx()).status, "due");
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(12), events: [pace("more")] }), ctx()).status, "due", "more: 11 days");
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(12) }), ctx()).status, "not_due");
+  // A listing of theirs is a reason after the quiet days — which "more" never shortens.
+  const fresh = agent({ lastInboundAt: ago(5), listings: [listing()], events: [pace("more")] });
+  assert.notEqual(evaluateAgent(fresh, ctx()).pulseReason, "fresh_listing", "five days is inside the seven quiet days");
+});

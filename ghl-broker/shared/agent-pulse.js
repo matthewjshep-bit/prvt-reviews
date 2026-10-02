@@ -41,7 +41,7 @@ import { nextFollowUp } from "./next-follow-up.js";
 import { IRRITATED_RX, PERSON_HAS_IT_DAYS, HAND_REPLY_EVENT } from "./thread-health.js";
 import { addressKey, sameStreet } from "./us-address.js";
 import { offMarketAskDue } from "./off-market.js";
-import { botHold } from "./bot-hold.js";
+import { botHold, paceOf, paceScale } from "./bot-hold.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -308,6 +308,12 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   const lastPulseAt = latest(ledger.filter((e) => e.type === "agent_pulse_sent" && !voided.has(e.dedupeKey)).map((e) => e.at));
   const lastTouchAt = latest(events.filter((e) => OUR_TEXT_TYPES.has(e.type)).map((e) => e.at));
   const since = latest([lastTouchAt, agent.lastInboundAt, lastPulseAt]);
+  // Check in less / more with them (shared/bot-hold.js): the three weeks and
+  // the cold pings stretch or shrink; the quiet days after any text only grow.
+  const { rung, floor } = paceScale(paceOf({ events }).factor);
+  const everyDays = Math.round(s.everyDays * rung);
+  const coldEveryDays = Math.round(s.coldEveryDays * rung);
+  const quietDays = Math.round(s.quietDays * floor);
   const quietFor = (days) => !since || now - (ms(since) ?? 0) >= days * DAY_MS;
 
   const pinged = new Set(ledger.filter((e) => e.type === "listing_pinged").map((e) => e.data?.listingKey).filter(Boolean));
@@ -325,16 +331,16 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
     }
     if (!listing) return out("not_due", "only a new listing of theirs is a reason to text", { segment: coldSeg });
     const lastPing = latest(texted.map((e) => e.at));
-    if (lastPing && now - (ms(lastPing) ?? 0) < s.coldEveryDays * DAY_MS) return out("not_due", `pinged within ${s.coldEveryDays} days`, { segment: coldSeg });
-    if (!quietFor(s.quietDays)) return out("not_due", `touched within ${s.quietDays} days`, { segment: coldSeg });
+    if (lastPing && now - (ms(lastPing) ?? 0) < coldEveryDays * DAY_MS) return out("not_due", `pinged within ${coldEveryDays} days`, { segment: coldSeg });
+    if (!quietFor(quietDays)) return out("not_due", `touched within ${quietDays} days`, { segment: coldSeg });
     return out("due", "", { segment: coldSeg, pulseReason: "fresh_listing", listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
   }
 
   const tier = segment === "partner" ? 0 : 1;
-  if (listing && quietFor(s.quietDays)) {
+  if (listing && quietFor(quietDays)) {
     return out("due", "", { segment, pulseReason: "fresh_listing", listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
   }
-  if (!quietFor(s.everyDays)) return out("not_due", `talked within ${s.everyDays} days`, { segment });
+  if (!quietFor(everyDays)) return out("not_due", `talked within ${everyDays} days`, { segment });
   const house = ourHouseFor({ offers: agent.current || [], drafts, events, config, now });
   const overdue = since ? now - (ms(since) ?? 0) : Infinity;
   return out("due", "", { segment, pulseReason: house ? "our_house" : "general", house, priority: [2 + tier, -overdue] });

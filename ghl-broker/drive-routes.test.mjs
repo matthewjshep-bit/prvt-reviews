@@ -78,3 +78,18 @@ test("a pause needs a date in the next five weeks, and reads back as a pause", a
   const days = (Date.parse(ok.json.hold.until) - Date.now()) / 86400000;
   assert.ok(days > 13.9 && days < 14.1, String(days));
 });
+
+test("pace is saved and read back newest first; normal resets it; nonsense is refused", async () => {
+  const less = await req("POST", "/api/dashboard/drive/pace", { contactId: "c4", pace: "less" });
+  assert.equal(less.status, 200, JSON.stringify(less.json));
+  assert.equal(less.json.pace.pace, "less");
+  assert.equal(less.json.pace.factor, 2);
+  await new Promise((r) => setTimeout(r, 5));
+  const more = await req("POST", "/api/dashboard/drive/pace", { contactId: "c4", pace: "more" });
+  assert.equal(more.json.pace.pace, "more");
+  await new Promise((r) => setTimeout(r, 5));
+  const normal = await req("POST", "/api/dashboard/drive/pace", { contactId: "c4", pace: "normal" });
+  assert.equal(normal.json.pace.pace, "normal");
+  assert.equal(normal.json.pace.since, null);
+  assert.equal((await req("POST", "/api/dashboard/drive/pace", { contactId: "c4", pace: "ludicrous" })).status, 400);
+});

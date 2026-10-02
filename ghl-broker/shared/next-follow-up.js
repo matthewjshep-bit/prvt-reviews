@@ -24,7 +24,7 @@ import {
   CHECKIN_STATUSES, HOT_MIN_HOURS,
 } from "./follow-up.js";
 import { threadHealth } from "./thread-health.js";
-import { botHold, pauseDay } from "./bot-hold.js";
+import { botHold, pauseDay, paceOf, paceScale } from "./bot-hold.js";
 import { addressKey } from "./us-address.js";
 
 const HOUR_MS = 3600000;
@@ -166,9 +166,12 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
   }
 
   /* ---- the ladders ---- */
+  // Check in less / more (shared/bot-hold.js): the rungs move, the gaps only grow.
+  const pace = paceOf({ events }).factor;
+  const gapScale = paceScale(pace).floor;
   const machineGap = (t) => {
     const touched = ms(times.lastMachineTouchAt);
-    const floor = touched == null ? t : Math.max(t, touched + (Number(fu.minHoursBetween) || 0) * HOUR_MS);
+    const floor = touched == null ? t : Math.max(t, touched + (Number(fu.minHoursBetween) || 0) * gapScale * HOUR_MS);
     return floor;
   };
   let ladderNote = "";
@@ -179,10 +182,10 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
       const hotAt = heat?.at || offer.counterBand?.acceptedAt || offer.realm?.ts || offer.statusAt || offer.createdAt;
       const anchor = latest([hotAt, times.lastInboundAt]);
       const sent = (offer.followUps || []).filter((f) => f?.kind === "hot_push" && String(f.at || "") > anchor).map((f) => f.step);
-      const r = nextRungAt({ steps: ladders.hot_push.steps, repeatEvery: ladders.hot_push.repeatEvery, startedAt: anchor, sentSteps: sent, now });
+      const r = nextRungAt({ steps: ladders.hot_push.steps, repeatEvery: ladders.hot_push.repeatEvery, startedAt: anchor, sentSteps: sent, now, pace });
       if (r) {
         const touched = ms(times.lastMachineTouchAt);
-        const t = Math.max(r.due ? now : ms(r.at), touched == null ? 0 : touched + HOT_MIN_HOURS * HOUR_MS);
+        const t = Math.max(r.due ? now : ms(r.at), touched == null ? 0 : touched + HOT_MIN_HOURS * gapScale * HOUR_MS);
         candidates.push(out("hot_push", { at: sweepTime(t, sweepHour, weekends), label: rungText("Push to paper", r.step, ladders.hot_push.steps), who: whoFor("hot_push") }));
       } else ladderNote = "the push to paper ran out — the next move is a call";
     } else if (ladders.offer_nudge?.enabled && ladders.offer_nudge.steps?.length
@@ -197,7 +200,7 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
       if (a.waitingOnUs) ladderNote = "they replied and nothing has answered it";
       else {
         const sent = (offer.followUps || []).filter((f) => f?.kind === "offer_nudge" && (!a.reanchored || String(f.at || "") > a.startedAt)).map((f) => f.step);
-        const r = nextRungAt({ steps: L.steps, repeatEvery: L.repeatEvery, startedAt: a.startedAt, sentSteps: sent, now });
+        const r = nextRungAt({ steps: L.steps, repeatEvery: L.repeatEvery, startedAt: a.startedAt, sentSteps: sent, now, pace });
         let brake = null;
         if (a.reanchored) {
           const h = threadHealth({ offer, drafts, events, now });
@@ -235,7 +238,7 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
     if (lastOff && !(lastBack && String(lastBack) > String(lastOff))) return out("stopped", { label: "Stopped — listing went off market", reason: "pending or sold; the price watch saw it go" });
     const relisted = fu.relist && lastBack ? lastBack : null;
     const start = relisted || passed;
-    const r = nextRungAt({ steps: L.steps, repeatEvery: L.repeatEvery, startedAt: start, sentSteps: (offer.followUps || []).filter((f) => f?.kind === "passed_checkin" && (!relisted || String(f.at || "") > String(relisted))).map((f) => f.step), now });
+    const r = nextRungAt({ steps: L.steps, repeatEvery: L.repeatEvery, startedAt: start, sentSteps: (offer.followUps || []).filter((f) => f?.kind === "passed_checkin" && (!relisted || String(f.at || "") > String(relisted))).map((f) => f.step), now, pace });
     if (r) {
       // A live conversation pauses the check-in; it resumes three days after they last wrote.
       const talking = ms(times.lastInboundAt);

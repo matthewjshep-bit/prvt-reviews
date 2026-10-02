@@ -22,7 +22,7 @@ import { getContact, smsUnsubscribed } from "./ghl.js";
 import { workHour, isWorkday } from "./outreach-sweep.js";
 import { normalizeBuyerPulse, pickPulseBuyers } from "./shared/buyer-pulse.js";
 import { botEventsByContact } from "./bot-hold.js";
-import { botHold } from "./shared/bot-hold.js";
+import { botHold, paceOf, MAX_PACE } from "./shared/bot-hold.js";
 
 export const CURSOR_NAME = "buyerPulse";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -50,7 +50,9 @@ export const pulseSettings = (saved = {}) => normalizeBuyerPulse(saved?.dispoAut
 export async function planBuyerPulse({ locationId, saved = {}, store = defaultStore, deps = {}, now = Date.now() }) {
   const settings = pulseSettings(saved);
   const investors = await deps.book(locationId);
-  const lookback = Math.max(settings.everyDays, settings.quietEveryDays);
+  // × MAX_PACE: a buyer you asked to hear from less waits up to twice the
+  // cadence, and a pulse that old still has to count.
+  const lookback = Math.max(settings.everyDays, settings.quietEveryDays) * MAX_PACE;
   const events = await store.listContactEventsSince(locationId, iso(now - lookback * DAY_MS), { types: ["pulse_sent", "pulse_voided"], limit: 20000 }).catch(() => []);
   // A claim that drafted nothing (the bot stood down, a waiting reply, a
   // failure) is voided: it neither starts the buyer's cadence nor takes a
@@ -78,9 +80,14 @@ export async function planBuyerPulse({ locationId, saved = {}, store = defaultSt
   // Buyers you stopped the bot on (shared/bot-hold.js), with no time window.
   // Not caught: a plan that can't tell who is stopped texts no one.
   const stopped = new Set();
-  for (const [id, list] of await botEventsByContact({ store, locationId })) if (botHold({ events: list, now }).held) stopped.add(id);
+  const paceBy = new Map();
+  for (const [id, list] of await botEventsByContact({ store, locationId })) {
+    if (botHold({ events: list, now }).held) stopped.add(id);
+    const p = paceOf({ events: list });
+    if (p.pace !== "normal") paceBy.set(id, p.factor);
+  }
   // Tried today already (a voided claim): tomorrow, not twice today.
-  const plan = pickPulseBuyers({ investors: investors.filter((i) => !triedToday.has(i.contactId)), pulsedAt, openDraftIds, stopped, settings, now });
+  const plan = pickPulseBuyers({ investors: investors.filter((i) => !triedToday.has(i.contactId)), pulsedAt, openDraftIds, stopped, paceBy, settings, now });
   const line = [...plan.picks, ...(plan.spares || [])];
   return { picks: line.slice(0, left), spares: line.slice(left, left + Math.max(5, Math.ceil(settings.dailyCap / 2))), counts: { ...plan.counts, claimedToday, seatsLeft: left }, settings };
 }

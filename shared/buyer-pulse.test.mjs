@@ -141,3 +141,11 @@ test("a buyer you stopped the bot on is never picked for a check-in", () => {
   assert.deepEqual(picks.map((p) => p.contactId), ["b1"]);
   assert.equal(counts.stopped, 1);
 });
+
+test("checking in less with a buyer doubles their cadence; more halves it", () => {
+  const pulsed = new Map([["b1", ago(100)], ["b2", ago(50)]]);
+  const base = { now: NOW, settings: { dailyCap: 10, everyDays: 90, quietEveryDays: 90 }, investors: [buyer("b1"), buyer("b2")], pulsedAt: pulsed };
+  assert.deepEqual(pickPulseBuyers(base).picks.map((p) => p.contactId), ["b1"], "normal: 90 days");
+  assert.deepEqual(pickPulseBuyers({ ...base, paceBy: new Map([["b1", 2]]) }).picks.map((p) => p.contactId), [], "less: b1 waits for 180");
+  assert.deepEqual(pickPulseBuyers({ ...base, paceBy: new Map([["b2", 0.5]]) }).picks.map((p) => p.contactId).sort(), ["b1", "b2"], "more: b2 at 45");
+});
