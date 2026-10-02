@@ -728,9 +728,9 @@ test("a draft someone already turned into an offer is never overwritten by a ret
 
 /* ---------- widening only when thin ---------- */
 
-test("the radius ladder starts at half a mile and stops at a mile and a half", () => {
+test("comps never reach past a mile: half a mile first, then one mile", () => {
   assert.equal(UW_RADIUS_LADDER[0], UW_RADIUS_MILES);
-  assert.deepEqual(UW_RADIUS_LADDER, [0.5, 1.5], "no middle rung: each ring re-buys the whole disc");
+  assert.deepEqual(UW_RADIUS_LADDER, [0.5, 1], "no middle rung: each ring re-buys the whole disc");
 });
 
 test("a hold says the radius it actually searched, not always half a mile", () => {
