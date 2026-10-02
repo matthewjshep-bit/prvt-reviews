@@ -2962,6 +2962,23 @@ otherwise it passes to the county after the last one read. A run stamps
 measured from the last beat, so a long run isn't retried while it works.
 `last.tried` lists up to 12 counties with their pick counts.
 
+**Who the pick can reach (2026-10-02).** The pick reads
+`store.listOutreachPickable`: rows that are new, not in GHL (no contact id,
+no `doc.ghl.contactId`), have a phone, and aren't imported, skipped or matched
+under the same agent key in any other batch — most distressed first. It used
+to read the newest 1,000 "new" rows, which agents already in GHL and agents
+with no phone (both stay "new" forever) could fill. One phone is one person:
+two rows with the same phone are picked once a run.
+
+A pull fills a blank phone from what we already hold
+(`store.findOutreachPhones`): the same agent key in another pull, or the same
+name at the same office when no one else in the pull shares that name there.
+The row carries `doc.phoneFrom` ("another pull" / "name and office"), and a
+filled phone is never a source for another fill. The office's own phone
+(`officePhone`) is never used for texting. GHL is asked about an agent once a
+week (`GHL_RECHECK_DAYS`), not on every pull, and never about one with no
+phone; the import still asks again, one at a time, before it creates anyone.
+
 **The RentCast meter (2026-10-02).** Matt moved RentCast to the Foundation
 plan (1,000 requests a month) to find more agents. A run may spend what's
 left of the billing month, less the reserve, divided by the workdays left —
