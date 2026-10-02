@@ -42,7 +42,7 @@ import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
-import { paperWent } from "./shared/paper-follows.js";
+import { paperWent, paperWorthy, floatSentAt } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash } from "./shared/conversation-ai.js";
@@ -59,7 +59,7 @@ import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone } from "./shared/held-underwrites.js";
-import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
+import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName, lastQuoteOnHouse } from "./shared/current-offer.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
@@ -3259,6 +3259,44 @@ async function runReply(job, ctx) {
     }
   }
 
+  // A no still gets the paper (Matt, 2026-10-02: "even if it doesn't make
+  // sense for the agent or if the number they say they have some pushback on
+  // it … send them our offer … so that they have it in front of them"). A no
+  // to a number we floated — the first no, a plain no, their pass, a soft
+  // floor — sends the written offer with the reply, by text and email, for
+  // their records. It runs FIRST, ahead of anything that files the offer dead
+  // (the send only goes on an open offer). Never on a counter: that stays a
+  // person's call (NEVER_AUTO). Never on a house that sold, a number we never
+  // floated or wouldn't put in writing unasked (agent_numbers, a held draft),
+  // a house already on paper, a thread whose number has moved past the offer
+  // (paperCheck — skipped, never held), or while a re-quote is on its way.
+  // When the reply waits for a person, the paper waits with it as one click.
+  const afterFloat = config.parties.agent.sendOffer?.afterFloat;
+  if (party === "agent" && !isCall && !gone && afterFloat?.enabled && afterFloat.onPushback
+      && (draft.intent === "rejection" || softFloor)
+      && ![...plan.auto, ...plan.suggested].some((x) => x.type === "send_offer" || x.type === "requote_from_agent_numbers")) {
+    const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50 }).catch(() => []);
+    const open = currentOffers(rows).filter((o) => o && !o.deal && ["new", "countered"].includes(offerStatus(o)));
+    const offer = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
+    const mine = offer ? await store.listReplyDrafts(locationId, { contactId: job.contactId, limit: 30 }).catch(() => []) : [];
+    const floated = offer && (floatSentAt(mine, offer.id) || lastQuoteOnHouse(offer, a.transcript));
+    if (floated && !paperWent(offer) && paperWorthy(offer) && paperCheck({ offer, transcript: a.transcript }).ok) {
+      const action = { id: `a-record-send-${job.id}`, type: "send_offer", mode: "auto", status: "pending", party, offerId: offer.id,
+        channels: ["sms", "email"], via: "for record", forRecord: true,
+        why: "they pushed back on the number we floated — the written offer goes anyway, for their records" };
+      const line = "I'll send our written offer over anyway so you have it on file.";
+      const said = String(draft.reply || "").trim();
+      const withLine = /\bkeep me in mind\b/i.test(said) ? said.replace(/\b(keep me in mind)/i, `${line} $1`) : `${said}${said ? " " : ""}${line}`;
+      const next = { ...draft, replyBeforeSend: draft.replyBeforeSend ?? draft.reply, reply: withLine };
+      if (auto.send && gateFor(next).ok) {
+        plan.auto.unshift(action);
+        draft = next;
+      } else {
+        plan.suggested.push({ ...action, mode: "ask", why: `${action.why} — press it to send` });
+      }
+    }
+  }
+
   // Paper and the number on it (shared/current-offer.js). A draft that would
   // put our offer in front of them — send it, or call it in the realm — waits
   // for a person when the house's current offer isn't the number in the
@@ -3778,7 +3816,14 @@ async function runReply(job, ctx) {
       record = { ...record, flags: [...(record.flags || []), why], autoSend: { decided: false, reason: `needs a person: ${why}` } };
       holdForBooking = why;
     }
-    const sendFailed = done.find((x) => x.type === "send_offer" && x.via !== "counter band" && x.via !== "to seller"
+    // "I'll send our written offer over anyway" stands only if it went; a
+    // miss puts the model's words back and never holds the reply to a no.
+    const recordSend = done.find((x) => x.type === "send_offer" && x.via === "for record");
+    if (recordSend && record.replyBeforeSend
+      && (recordSend.status !== "done" || !/^(sent the offer|offer on .* already went out)/.test(String(recordSend.detail || "")))) {
+      record = { ...record, reply: record.replyBeforeSend, flags: [...(record.flags || []), `the written offer didn't go with it: ${recordSend.error || recordSend.detail || "unknown"}`] };
+    }
+    const sendFailed = done.find((x) => x.type === "send_offer" && x.via !== "counter band" && x.via !== "to seller" && x.via !== "for record"
       && (x.status !== "done" || !/^(sent the offer|offer on .* already went out)/.test(String(x.detail || ""))));
     if (sendFailed && !holdForBooking) {
       holdForBooking = `the offer didn't go out: ${sendFailed.error || sendFailed.detail || "unknown"}`;

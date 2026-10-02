@@ -849,6 +849,15 @@ export function PartyPlaybooks({ config, patch, workflows }) {
                 <p className={HINT}>When we've floated our number by text and the agent hasn't answered for {pb.sendOffer?.afterFloat?.silenceHours || 24} working hours (weekends don't count), the letter goes by text and email "so you have it on file". Once per offer, only a number we'd put in writing (a clean underwrite, or one you priced or published), never to someone who answered, unsubscribed or that you stopped the bot on. At most {pb.sendOffer?.afterFloat?.dailyCap || 20} a day.</p>
               </div>
             )}
+            {party === "agent" && (
+              <div>
+                <Toggle checked={pb.sendOffer?.afterFloat?.onPushback}
+                  onChange={(v) => setPb({ sendOffer: { ...(pb.sendOffer || {}), afterFloat: { ...(pb.sendOffer?.afterFloat || {}), onPushback: v } } })}>
+                  <span className="font-semibold">Send the written offer with the reply to a no</span>
+                </Toggle>
+                <p className={HINT}>When an agent pushes back on a number we floated — a no, "too low", a number far over ours — the reply adds "I'll send our written offer over anyway so you have it on file" and the letter goes by text and email before anything files the offer dead. Never on a counter you're deciding, a house that sold, or a number we never floated. If the reply waits for you, the letter waits with it as one click. Needs "Send the written offer after a quiet float" on too.</p>
+              </div>
+            )}
             <div>
               <Toggle checked={pb.showMath} onChange={(v) => setPb({ showMath: v })}>
                 <span className="font-semibold">Show the math</span>
