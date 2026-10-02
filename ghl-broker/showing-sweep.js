@@ -19,6 +19,8 @@ import { conversationConfig, startProactive, markUnsubscribed } from "./reply-ag
 import { getContact, smsUnsubscribed } from "./ghl.js";
 import { normalizeDispoAutopilot } from "./dispo-autopilot.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
+import { holdFor } from "./bot-hold.js";
+import { holdLine } from "./shared/bot-hold.js";
 import { showingTouches } from "./shared/showing.js";
 
 // Buyers are texted only when the broker may text buyers at all.
@@ -50,6 +52,9 @@ export async function runShowingSweep({ client, locationId, saved = {}, store = 
     const done = await store.listContactEvents(locationId, t.contactId, { types: [`${t.kind}_sent`], limit: 20 }).catch(() => null);
     if (done === null) { skip(t, "couldn't read their timeline"); continue; }
     if (done.some((e) => e.data?.key === t.key)) continue;
+    // You stopped the bot on them (shared/bot-hold.js): not now, not claimed.
+    const hold = await holdFor({ store, locationId, contactId: t.contactId, now });
+    if (hold.held) { skip(t, holdLine(hold)); continue; }
     // Their text is waiting on you: not now, and not claimed, so the next
     // tick tries again once it's answered.
     const waiting = await draftWaitingOnYou({ store, locationId, contactId: t.contactId }).catch(() => null);

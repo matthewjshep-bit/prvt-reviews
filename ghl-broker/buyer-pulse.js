@@ -21,6 +21,8 @@ import { conversationConfig, startProactive, markUnsubscribed } from "./reply-ag
 import { getContact, smsUnsubscribed } from "./ghl.js";
 import { workHour, isWorkday } from "./outreach-sweep.js";
 import { normalizeBuyerPulse, pickPulseBuyers } from "./shared/buyer-pulse.js";
+import { botEventsByContact } from "./bot-hold.js";
+import { botHold } from "./shared/bot-hold.js";
 
 export const CURSOR_NAME = "buyerPulse";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -73,8 +75,12 @@ export async function planBuyerPulse({ locationId, saved = {}, store = defaultSt
   // The cap is the DAY's, not the run's: a retry after a run that died half
   // way, or a second press of Run now, only gets the seats still empty.
   const left = Math.max(0, settings.dailyCap - claimedToday);
+  // Buyers you stopped the bot on (shared/bot-hold.js), with no time window.
+  // Not caught: a plan that can't tell who is stopped texts no one.
+  const stopped = new Set();
+  for (const [id, list] of await botEventsByContact({ store, locationId })) if (botHold({ events: list, now }).held) stopped.add(id);
   // Tried today already (a voided claim): tomorrow, not twice today.
-  const plan = pickPulseBuyers({ investors: investors.filter((i) => !triedToday.has(i.contactId)), pulsedAt, openDraftIds, settings, now });
+  const plan = pickPulseBuyers({ investors: investors.filter((i) => !triedToday.has(i.contactId)), pulsedAt, openDraftIds, stopped, settings, now });
   const line = [...plan.picks, ...(plan.spares || [])];
   return { picks: line.slice(0, left), spares: line.slice(left, left + Math.max(5, Math.ceil(settings.dailyCap / 2))), counts: { ...plan.counts, claimedToday, seatsLeft: left }, settings };
 }

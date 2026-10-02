@@ -47,7 +47,7 @@ import { draftStats } from "../shared/conversation-ai.js";
 import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
 import { conversationConfig, standDownForHold } from "../reply-agent.js";
 import { holdFor } from "../bot-hold.js";
-import { holdLine, pauseUntil } from "../shared/bot-hold.js";
+import { holdLine, pauseUntil, mergeEvents, BOT_EVENT_TYPES } from "../shared/bot-hold.js";
 import { allEventsSince } from "../contact-events.js";
 import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
@@ -441,7 +441,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const now = Date.now();
       const since = new Date(now - PIPELINE_EVENT_DAYS * DAY_MS).toISOString();
       const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
-      const [offers, drafts, events, saved, investors, recentDrafts, feedbackEvents] = await Promise.all([
+      const [offers, drafts, windowed, saved, investors, recentDrafts, feedbackEvents, botEvents] = await Promise.all([
         store.listOffers(locationId, { limit: 2000, lean: true }),
         store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }),
         store.listContactEventsSince(locationId, since, { types: PIPELINE_EVENT_TYPES, limit: PIPELINE_EVENT_LIMIT }).catch(() => []),
@@ -453,7 +453,11 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         store.listReplyDrafts(locationId, { since: gradSince, limit: 1000 }).catch(() => []),
         // What you said each row's bot should have done, so the row reads "noted".
         store.listContactEventsSince(locationId, new Date(now - ROW_FEEDBACK_DAYS * DAY_MS).toISOString(), { types: [ROW_FEEDBACK_EVENT], limit: 2000 }).catch(() => []),
+        // Stops, pauses and unsubscribes with no time window — one query
+        // (this route polls every 15s): a stop pressed in June still holds.
+        store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: BOT_EVENT_TYPES, limit: 20000 }).catch(() => []),
       ]);
+      const events = mergeEvents(windowed, botEvents);
       const config = conversationConfig(saved || {});
       const autopilot = autopilotFor({ saved, config, recentDrafts });
       const contactNames = {};
@@ -465,7 +469,9 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const heldTriageByOffer = await heldTriageForPromises({ store, locationId, offers, events, config, now }).catch(() => ({}));
       // Which live deals have a buyer package, for the "no buyer package" row.
       const dealRooms = await dealRoomIds({ store, locationId, offers });
-      const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT, dealRooms });
+      // The limit is the windowed read's: the stop events merged in on top
+      // must not read as "the read filled up".
+      const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT + (events.length - windowed.length), dealRooms });
       // Last night's audit: the rows that are Matt's join the queue under
       // "From last night"; the rest of the result rides along for the card.
       const auditCursor = await store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null);
@@ -484,8 +490,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // Last night is over by morning (shared/conversation-audit.js stillOwed):
       // a text answered or queued since isn't owed, and nothing that would
       // text someone who unsubscribed is a call to make.
-      const unsubscribed = new Set((await store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: ["unsubscribed"], limit: 20000 }).catch(() => []))
-        .map((e) => e.contactId).filter(Boolean));
+      const unsubscribed = new Set(botEvents.filter((e) => e?.type === "unsubscribed").map((e) => e.contactId).filter(Boolean));
       const fromLastNight = stillOwed(lastNight, { drafts: [...drafts, ...recentDrafts], unsubscribed });
       out.counts.actions.byGroup.yours += fromLastNight.length;
       const reachable = stillOwed(out.actions, { unsubscribed });

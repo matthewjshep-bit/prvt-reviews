@@ -33,6 +33,8 @@ import { threadHealth } from "./shared/thread-health.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
 import { waitingReason } from "./outbox-guard.js";
+import { botEventsByContact } from "./bot-hold.js";
+import { botHold, holdLine } from "./shared/bot-hold.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 
 const DAY_MS = 86400000;
@@ -458,6 +460,10 @@ async function runSweep(job, ctx) {
   ];
   job.considered = candidates.length;
   job.phase = "nudging";
+  // Who you stopped the bot on (shared/bot-hold.js), in one read with no
+  // time window. A read that fails fails the run: a sweep that can't tell
+  // who is stopped doesn't text anyone.
+  const stops = await botEventsByContact({ store, locationId });
 
   // How many nudges this contact has already had this week, so one person
   // working several of our properties doesn't get a text a day.
@@ -470,6 +476,15 @@ async function runSweep(job, ctx) {
     if (job.cancelRequested) break;
     const pb = config.parties[c.party];
     const fu = pb.followUp;
+
+    // Stopped or paused: the rung isn't claimed, so it goes after Resume,
+    // and an offer isn't marked "no response" while you hold the thread.
+    const hold = botHold({ events: stops.get(c.contactId) || [], offerId: c.offerId || null, now });
+    if (hold.held) {
+      job.skipped++;
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: holdLine(hold) });
+      continue;
+    }
 
     if (c.party === "investor") {
       let offer = c.offerId && typeof store.getOffer === "function" ? await store.getOffer(c.offerId).catch(() => null) : null;
@@ -629,7 +644,7 @@ async function runSweep(job, ctx) {
     // One voice at a time: their text (or your own draft) waiting in the
     // outbox holds the nudge, and the rung is not spent on it — it goes on a
     // later run, once that row is dealt with.
-    const waiting = await waitingReason({ store, locationId, contactId: c.contactId });
+    const waiting = await waitingReason({ store, locationId, contactId: c.contactId, hold: false });   // asked at the top of the loop
     if (waiting) {
       job.skipped++;
       push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: waiting });
