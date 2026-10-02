@@ -2476,6 +2476,29 @@ follow-up sweep and the Next follow-up column read `paperWent` now, so a
 nudge never says "we sent you an offer" after one. The nudge clock restarts
 from the paper.
 
+**With the reply to a no** ("Send the written offer with the reply to a
+no", `afterFloat.onPushback`, needs `afterFloat.enabled` too). Matt: "even if
+it doesn't make sense for the agent or if the number they say they have some
+pushback on it." In runReply, after the first-no block and before the paper
+hold: when the intent is a rejection (a first no, a plain no, their pass or
+walk-away) or a soft floor, on the house's current offer that is `new` or
+`countered`, not on paper (`paperWent`), a number we'd put in writing
+(`paperWorthy`), that we floated (a sent realm-check draft, or our price on
+that house in the thread — `lastQuoteOnHouse`) and whose number the thread
+still agrees with (`paperCheck` — a mismatch skips it, it never holds the
+reply). A `send_offer` with `via: "for record"`, `forRecord: true`, the
+offer's id and channels sms + email goes FIRST in the plan, ahead of
+`mark_offer_passed` (the send only goes on an open offer). The reply gains
+"I'll send our written offer over anyway so you have it on file." — before
+"Keep me in mind" on a goodbye — and keeps the model's words as
+`replyBeforeSend`; step 5 puts them back, with a flag, if the letter didn't go,
+and a failed for-record send never holds the reply. When the reply waits for
+a person, the send is a one-click suggestion instead and the reply is
+untouched. Never on a counter (NEVER_AUTO: Matt's call), a house that sold
+(`houseGone`), an opt-out, a we-passed house, or alongside a re-quote. A stop
+on the bot turns it into a suggestion like any send (step 4g). The timeline
+records `by: "for_record"`.
+
 ### Walking away (2026-09-16)
 
 Matt: "be quicker to pass on ones that aren't in our buy box and move on. If

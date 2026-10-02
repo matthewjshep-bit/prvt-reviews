@@ -4754,3 +4754,192 @@ test("Stop pulls back the machine's texts waiting to go and holds a reply that w
   assert.equal((await store.getReplyDraft("d5")).status, "sending", "out of our hands");
   assert.equal((await store.getReplyDraft("d9")).status, "scheduled", "someone else");
 });
+
+
+/* ---------- 2026-10-02: the written offer goes with a no ---------- */
+
+// Matt: "more proactively send out offers, even if it doesn't make sense for
+// the agent or if the number they say they have some pushback on it … so that
+// they have it in front of them." A no to a number we floated now carries the
+// written offer, for their records — before anything files the offer dead.
+const FLOATED_OFFER = { ...NEGOTIATION_OFFER, status: "new" };
+const floatSent = { id: "d-float", contactId: "c1", status: "sent", sentAt: new Date(Date.now() - 2 * 86400000).toISOString(),
+  outbound: { kind: "realm_check", offerId: "o1", address: "12 Elm St" }, inbound: "", reply: "Based on our analysis we can likely do around 300ish on 12 Elm" };
+const pushSaved = (afterFloat = { enabled: true, onPushback: true }) => ({
+  ...STARTER_SAVED,
+  conversationAi: { ...STARTER_SAVED.conversationAi, parties: { ...STARTER_SAVED.conversationAi.parties,
+    agent: { ...STARTER_SAVED.conversationAi.parties.agent,
+      sendOffer: { ...(STARTER_SAVED.conversationAi.parties.agent.sendOffer || {}), afterFloat } } } },
+});
+const floatedStore = (offer, drafts = [floatSent]) => {
+  const store = fakeStore(drafts);
+  store.listOffers = async () => [offer];
+  store.getOffer = async () => offer;
+  return store;
+};
+
+test("a first no on a floated number sends the written offer and still asks for their counter", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...FLOATED_OFFER };
+  const store = floatedStore(offer);
+  const order = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: pushSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: "too aggressive, they're not interested",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", needsHuman: false, reply: "Understood. Any chance they'd counter?", propertyAddress: "12 Elm St" }),
+      sendOfferDocs: async (args) => { order.push(["send", args]); return { ok: true, address: "12 Elm St", channels: ["sms", "email"] }; },
+      noteFirstDecline: async () => { order.push(["first no"]); offer.declinedOnce = { at: new Date().toISOString() }; return { ok: true, address: offer.address }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const send = order.find(([k]) => k === "send")?.[1];
+  assert.ok(send, `the written offer went: ${d.actions.map((a) => `${a.type}:${a.status}`)}`);
+  assert.equal(send.forRecord, true);
+  assert.equal(send.offerId, "o1");
+  assert.deepEqual(send.channels, ["sms", "email"]);
+  assert.equal(d.reply, "Understood. Any chance they'd counter? I'll send our written offer over anyway so you have it on file.");
+  assert.ok(d.actions.some((a) => a.type === "note_first_decline" && a.status === "done"), "still asks for their number");
+});
+
+test("their pass gets the written offer before the offer is filed passed", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...FLOATED_OFFER };
+  const store = floatedStore(offer);
+  const order = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: pushSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: "seller needs 600k firm",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: 600000, reply: "Let me check.", propertyAddress: "12 Elm St" }),
+      sendOfferDocs: async (args) => { order.push("send"); return { ok: true, address: "12 Elm St", channels: ["sms", "email"] }; },
+      setOfferStatus: async ({ status }) => { order.push(status); return { ok: true, address: offer.address, status }; },
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "rejection", d.summary);
+  assert.ok(order.includes("send"), `paper went: ${order}`);
+  if (order.includes("passed")) assert.ok(order.indexOf("send") < order.indexOf("passed"), `the paper before the pass: ${order}`);
+  assert.match(d.reply, /we're too far apart on the number\. .*I'll send our written offer over anyway so you have it on file\. Keep me in mind/);
+});
+
+test("a counter inside the pass line is left for Matt — no paper", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = floatedStore({ ...FLOATED_OFFER });
+  let sent = 0;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: pushSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: "could they do 310?",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: 310000, reply: "Let me check.", propertyAddress: "12 Elm St" }),
+      sendOfferDocs: async () => { sent++; return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.intent, "counter");
+  assert.equal(sent, 0);
+  assert.ok(!(d.actions || []).some((a) => a.via === "for record"));
+});
+
+test("we_passed, a house that sold and an opt-out get no paper", async () => {
+  for (const [label, offer, message, draft] of [
+    ["we passed", { ...FLOATED_OFFER, status: "we_passed" }, "no thanks", { intent: "rejection", reply: "Understood." }],
+    ["sold", { ...FLOATED_OFFER }, "that one already sold", { intent: "rejection", reply: "Got it, thanks for letting me know." }],
+    ["opt out", { ...FLOATED_OFFER }, "stop texting me", { intent: "opt_out", reply: "" }],
+  ]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const store = floatedStore(offer);
+    let sent = 0;
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: pushSaved(), store, contactId: "c1", sendsEnabled: true, message,
+      deps: {
+        draft: async () => ({ ...DRAFT, confidence: "high", needsHuman: false, propertyAddress: "12 Elm St", ...draft }),
+        sendOfferDocs: async () => { sent++; return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
+        setOfferStatus: async ({ status }) => ({ ok: true, address: offer.address, status }),
+        noteFirstDecline: async () => ({ ok: true, address: offer.address }),
+      },
+    });
+    await settle();
+    assert.equal(sent, 0, label);
+    const d = job.draftId ? await store.getReplyDraft(job.draftId) : null;
+    assert.ok(!(d?.actions || []).some((a) => a.via === "for record"), label);
+  }
+});
+
+test("a failed for-record send puts the model's words back without holding the reply", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...FLOATED_OFFER };
+  const store = floatedStore(offer);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: pushSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: "they're not interested at that number",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", needsHuman: false, reply: "Understood. Any chance they'd counter?", propertyAddress: "12 Elm St" }),
+      sendOfferDocs: async () => ({ ok: false, reason: "contact has no phone" }),
+      noteFirstDecline: async () => { offer.declinedOnce = { at: new Date().toISOString() }; return { ok: true, address: offer.address }; },
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.reply, "Understood. Any chance they'd counter?");
+  assert.ok(!/the offer didn't go out/.test(String(d.autoSend?.reason || "")), `not held for the paper: ${d.autoSend?.reason}`);
+  assert.ok((d.flags || []).some((f) => /written offer didn't go/.test(f)));
+});
+
+test("a held reply offers the paper as one click instead of sending it", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = floatedStore({ ...FLOATED_OFFER });
+  let sent = 0;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: pushSaved(), store, contactId: "c1", sendsEnabled: true,
+    message: "not interested, the seller is upset",
+    deps: {
+      // Low confidence: the reply waits for a person.
+      draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "low", needsHuman: false, reply: "Understood. Any chance they'd counter?", propertyAddress: "12 Elm St" }),
+      sendOfferDocs: async () => { sent++; return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
+      noteFirstDecline: async () => ({ ok: true, address: "12 Elm St" }),
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(sent, 0);
+  assert.equal(d.reply, "Understood. Any chance they'd counter?");
+  const ask = (d.actions || []).find((a) => a.via === "for record");
+  assert.equal(ask?.mode, "ask");
+  assert.equal(ask?.forRecord, true);
+});
+
+test("with the switch off, or no number ever floated, a no carries no paper", async () => {
+  for (const [label, saved, drafts] of [
+    ["switch off", pushSaved({ enabled: true, onPushback: false }), [floatSent]],
+    ["never floated", pushSaved(), []],
+  ]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const offer = { ...FLOATED_OFFER };
+    const store = floatedStore(offer, drafts);
+    let sent = 0;
+    const { job } = await startReply({
+      client, locationId: "LOC", saved, store, contactId: "c1", sendsEnabled: true, message: "not interested",
+      deps: {
+        draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", needsHuman: false, reply: "Understood. Any chance they'd counter?", propertyAddress: "12 Elm St" }),
+        sendOfferDocs: async () => { sent++; return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
+        noteFirstDecline: async () => ({ ok: true, address: offer.address }),
+      },
+    });
+    await settle();
+    assert.equal(sent, 0, label);
+    const d = await store.getReplyDraft(job.draftId);
+    assert.equal(d.reply, "Understood. Any chance they'd counter?", label);
+  }
+});
