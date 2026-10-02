@@ -253,3 +253,55 @@ test("opened is measured against buyers blasted and never passes one hundred", (
   assert.equal(stageOf(f, "opened").count, 3);
   assert.equal(stageOf(f, "opened").conversion, 75, "three of four buyers, not three of one deal");
 });
+
+/* ---------- 2026-10-02: tiles that read the way the work happens ---------- */
+
+// Matt's 30-day Flow read Offered 56 → Floated 114 "100%", and Replied 306 of
+// 389 found "79%". The float happens before the paper, so it now comes first
+// and Offered's arrow is the share of floated numbers that are on paper; the
+// Replied arrow is of the agents first-texted in the window, not every agent
+// who said anything.
+test("Floated comes before Offered and the arrow is the share of floats on paper", () => {
+  const keys = FLOW_STAGES.map((s) => s.key);
+  assert.ok(keys.indexOf("underwritten") < keys.indexOf("floated") && keys.indexOf("floated") < keys.indexOf("offered"));
+  const ok = { sms: { ok: true } };
+  const offers = [
+    { id: "f1", contactId: "c1", status: "sent", createdAt: at(50), proactive: { realmCheckAt: at(48) }, sends: [{ ts: at(20), results: ok }] },
+    { id: "f2", contactId: "c2", status: "new", createdAt: at(50), proactive: { realmCheckAt: at(47) }, sends: [{ ts: at(20), results: { sms: { ok: false } } }] },
+    { id: "f3", contactId: "c3", status: "passed", createdAt: at(50), proactive: { realmCheckAt: at(46) } },
+    { id: "f4", contactId: "c4", status: "new", createdAt: at(50), proactive: { takeCheckAt: at(45) } },
+    // Papered by hand, never floated: an Offered, not a float on paper.
+    { id: "h1", contactId: "c5", status: "sent", createdAt: at(50), sends: [{ ts: at(10), results: ok }] },
+  ];
+  const s = Object.fromEntries(buildFlow({ ...win, offers }).stages.map((x) => [x.key, x]));
+  assert.equal(s.floated.count, 4);
+  assert.equal(s.offered.count, 2);
+  assert.equal(s.offered.conversion, 25, "one of four floats is on paper");
+  assert.equal(s.offered.sub, "1 of 4 floats on paper");
+});
+
+test("a fresh-listing check-in shows under First text without counting as one", () => {
+  const events = [
+    { id: "o1", contactId: "a1", type: "outreach_enrolled", at: at(30), source: "import", data: { kind: "first" } },
+    { id: "p1", contactId: "k1", type: "agent_pulse_texted", at: at(20), source: "conversation", data: { reason: "fresh_listing", listingKey: "NWMLS:1" } },
+    { id: "p2", contactId: "k2", type: "agent_pulse_texted", at: at(19), source: "conversation", data: { reason: "fresh_listing", listingKey: "NWMLS:2" } },
+    { id: "p3", contactId: "k3", type: "agent_pulse_texted", at: at(18), source: "conversation", data: { reason: "general" } },
+  ];
+  const s = Object.fromEntries(buildFlow({ ...win, events }).stages.map((x) => [x.key, x]));
+  assert.equal(s.first_text.count, 1);
+  assert.equal(s.first_text.sub, "+2 known agents texted about a new listing");
+});
+
+test("the reply rate is of agents first-texted in the window", () => {
+  const first = (c, h) => ({ id: `f-${c}`, contactId: c, type: "outreach_enrolled", at: at(h), source: "import", data: { kind: "first" } });
+  const reply = (c, h) => ({ id: `r-${c}-${h}`, contactId: c, type: "text_summary", at: at(h), source: "conversation", data: { inbound: "maybe" } });
+  const events = [
+    first("a1", 100), first("a2", 100), first("a3", 100), first("a4", 100),
+    reply("a1", 90),                       // answered our first text
+    reply("old", 80), reply("older", 70),  // agents from months ago, still talking
+  ];
+  const s = Object.fromEntries(buildFlow({ ...win, events }).stages.map((x) => [x.key, x]));
+  assert.equal(s.replied.count, 3, "every agent who answered anything");
+  assert.equal(s.replied.conversion, 25, "one of the four we first texted");
+  assert.equal(s.replied.sub, "1 of 4 first-texted agents replied");
+});
