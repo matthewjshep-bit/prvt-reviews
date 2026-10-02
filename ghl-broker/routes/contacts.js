@@ -2,6 +2,7 @@
 //
 //   GET  /api/contacts/:id/record         everything the app knows about one person
 //   GET  /api/contacts/:id/thread         the latest texts/calls/emails with them, from GHL
+//   GET  /api/contacts/:id/timeline       the work pane's header: this house's moments, what's next, the Bot menu's state
 //   POST /api/contacts/:id/reply          a text typed on Today's work pane (no bot draft); dry-run unless CARD_SENDS_ENABLED
 //   POST /api/contacts/:id/facts          an operator adds or removes facts; GHL is re-projected
 //   POST /api/contacts/:id/events         an operator adds a note or a call summary
@@ -20,6 +21,7 @@ import { FACT_KEYS } from "../shared/contact-record.js";
 import { searchConversations, listConversationMessages, getContact } from "../ghl.js";
 import { syncContactGmail, contactEmails } from "../gmail-sync.js";
 import { sendHandReply } from "../hand-reply.js";
+import { contactTimeline } from "../contact-timeline.js";
 
 // The same switch every other send reads (routes/offers.js).
 const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
@@ -46,6 +48,19 @@ export default function createContactsRouter({ resolveLocation }) {
     if (code >= 500) console.error("contacts error:", code, err.message, err.detail || "");
     res.status(code).json({ error: err.message, detail: err.detail });
   };
+
+  // The work pane's header (ghl-broker/contact-timeline.js). ?offerId= is
+  // the offer the pane shows; ?party=investor for a buyer. Reads one person.
+  router.get("/:id/timeline", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const contactId = str(req.params.id, 64);
+      if (!contactId) return res.status(400).json({ error: "contact id is required" });
+      const offerId = str(req.query.offerId, 64) || null;
+      const party = ["agent", "investor"].includes(req.query.party) ? req.query.party : null;
+      res.json({ ok: true, ...(await contactTimeline({ store, locationId, contactId, offerId, party })) });
+    } catch (err) { fail(res, err); }
+  });
 
   router.get("/:id/record", async (req, res) => {
     try {
