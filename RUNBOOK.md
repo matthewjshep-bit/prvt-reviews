@@ -1828,7 +1828,65 @@ starts by itself between rungs.
 
 **Stop / Resume.** `POST /api/dashboard/drive/stop` and `/drive/resume` write
 `drive_stopped` / `drive_resumed`. A stop from Today is the whole thread with
-that agent, until Resume; a stopped promise row moves back to Your call.
+that agent, until Resume; a stopped promise row moves back to Your call. Since
+2026-10-01 a stop holds every sender, not only the drivers — see "Stop and
+pause — one person".
+
+### Stop and pause — one person (2026-10-01)
+
+Matt: Stop on a thread means nothing goes to that person by itself. Until
+this date the stop was read by the promise driver, the hot push and a few
+daytime moves; the reply agent drafted and auto-sent, scheduled texts went,
+the nightly audit released held replies, the first offer-nudge ladder, passed
+check-ins and price drops ran, and a clean underwrite could send the letter.
+The toast said "It is yours until you press Resume" all the same.
+
+**What a stop means now.** While it holds, nothing reaches them unless a
+person presses Send (or a suggestion's button):
+
+- Their texts still get a draft. It waits on Today with "you stopped the bot
+  on them — it waits for you" (`decideAutoSend` code `bot_stopped`, checked
+  first). It is not a person's call on the words, so it starts no check-in
+  clock, keeps no older reply scheduled, and neither the audit nor the
+  counter band can release it.
+- Nothing the machine starts is drafted (`startProactive`, before any model
+  call; jobs already on the lane stand down in `runProactive`). A Float a
+  person presses still drafts, and waits.
+- On a draft, the actions that reach them become suggestions: the letter,
+  a dataroom invite, a GHL drip, a booking, a re-quote, a counter, an agreed
+  investor price (`HELD_WHILE_STOPPED`). Tags and statuses still run. A reply
+  rewritten to say "sent our letter over" goes back to the model's words.
+- The send-time backstop (`sendReplyDraft`, auto path): a machine text that
+  was counting down is binned ("… — not sent"); a reply goes back to wait.
+  The draft is written before the skip returns, so the scheduler never
+  leaves it "sending".
+- The letter never sends itself (`sendOfferDocs({ unattended })` on a clean
+  underwrite and the retry tick); the offer stays "priced, not floated" so it
+  floats after Resume. A blast to a stopped buyer is queued as a draft.
+- The nightly audit leaves them alone: a held reply is not released, no
+  clock is booked, and nudge / re-quote / letter actions are dropped from
+  the row (`STOPPED_REFUSES`). A redraft still runs — its draft waits.
+
+**Pressing Stop** (`POST /api/dashboard/drive/stop { contactId, party?,
+preset?: "1w" | "2w" | "1m", until?, reason? }`) also stands down what is
+already waiting (`standDownForHold`): open machine texts are binned, a
+scheduled reply goes back to draft, a row already sending is left alone.
+A pause is a stop with an end date, at most five weeks out; it ends by
+itself, with no event. `party` is written only when given (it used to be
+forced to "agent", which would have turned a buyer into an agent). Resume
+re-sends nothing: what was held waits for Send.
+
+**One reading.** `shared/bot-hold.js` `botHold` is the only reader of the
+toggle (thread health, the column, the agent pulse and Today's promise rows
+all ask it). `ghl-broker/bot-hold.js` reads the events with no time window,
+so a stop pressed months ago still holds; a read that fails holds rather
+than sends. Skip lines and flags carry `holdLine` ("you stopped the bot on
+them", "paused until Oct 15"), never the reason a person typed.
+
+**What it can't stop.** GHL workflows that fire on tags the app sets can
+still text a stopped person; only GHL's DND or the stop-bot tag stops those.
+The app never writes the stop-bot tag for a Stop: that tag stops drafting
+too, and a stop keeps the drafts.
 
 ### Rows that were never a decision (2026-09-18)
 

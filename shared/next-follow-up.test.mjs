@@ -142,6 +142,17 @@ test("offers with nothing coming by design say why, and never show a date", () =
   assert.equal(stopped.kind, "stopped");
 });
 
+test("a paused person reads 'Paused until' the day, not a nudge date, and the nudge comes back after", () => {
+  const pause = { type: "drive_stopped", at: at(0.05), data: { until: at(14) } };
+  const n = next(offer(), { events: [pause] });
+  assert.equal(n.kind, "stopped");
+  assert.equal(n.label, "Paused until Sep 15");
+  assert.equal(n.until, at(14));
+  assert.equal(n.at, null, "a hold is not a gap in the follow-ups");
+  const after = nextFollowUp({ offer: offer(), config: CONFIG, now: T0 + 15 * DAY, events: [pause] });
+  assert.notEqual(after.kind, "stopped");
+});
+
 test("with the ladders off, a live offer reads 'None scheduled' and says why", () => {
   const off = normalizeConversationAi({ enabled: true });
   const n = nextFollowUp({ offer: offer(), config: off, now: T0 });

@@ -52,6 +52,8 @@ import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
+import { holdFor } from "./bot-hold.js";
+import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
 import { usageOf } from "./shared/ai-cost.js";
@@ -922,14 +924,18 @@ export function personsCall(intent = "") {
 }
 
 /**
- * decideAutoSend({ gate, party, intent, channel, config, sendsEnabled })
+ * decideAutoSend({ gate, party, intent, channel, config, sendsEnabled, humanActive, hold })
  *
  * The page's switches, on top of the gates. Returns { send, reason } with the
  * FIRST reason it won't, in the operator's words — that line is stored on the
  * draft and shown on the row, so "why didn't it send itself?" is answered
  * before it is asked.
  */
-export function decideAutoSend({ gate, party = "agent", intent = "other", channel = "sms", config, sendsEnabled = false, humanActive = null }) {
+export function decideAutoSend({ gate, party = "agent", intent = "other", channel = "sms", config, sendsEnabled = false, humanActive = null, hold = null }) {
+  // You stopped the bot on them (shared/bot-hold.js): their text gets a
+  // draft, and the draft waits for you. First, so nothing below — the gates
+  // passing, a guard, the audit — reads as "it could have gone".
+  if (hold?.held) return { send: false, code: "bot_stopped", reason: `${holdLine(hold)} — it waits for you` };
   if (!gate?.ok && !(gate?.locked && gate?.clean)) return { send: false, code: "gates", reason: gate?.flags?.[0] ? `needs a person: ${gate.flags[0]}` : "the gates did not pass" };
   if (!config?.enabled) return { send: false, code: "bot_off", reason: "Conversation AI is switched off" };
   if (humanActive) return { send: false, code: "human_active", reason: `you replied to them ${humanActive.minutesAgo} minute${humanActive.minutesAgo === 1 ? "" : "s"} ago — you have the thread` };
@@ -957,7 +963,9 @@ export function decideAutoSend({ gate, party = "agent", intent = "other", channe
 // send, we don't know who they are. Nothing is automated in any of those, an
 // operator is working the outbox by hand, and a clock we set would be a text
 // they never asked us to send. `human_active` is the clearest of all: a person
-// has the thread right now.
+// has the thread right now. So is `bot_stopped`: you stopped the bot on them,
+// and a check-in clock, a kept-scheduled reply or an audit release would each
+// be the machine texting them anyway.
 export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed", "not_allowlisted", "stale_number"]);
 
 // The nightly audit's loosening (Matt, 2026-09-16: "fire where it can"). A
@@ -981,6 +989,27 @@ export function releaseForAudit({ auto, gate, draft, deps }) {
   const clean = Boolean(gate?.ok || (gate?.locked && gate?.clean));
   if (!clean || draft?.needsHuman || RELEASE_QUIET.has(draft?.intent) || !String(draft?.reply || "").trim()) return auto;
   return { ...auto, send: true, code: "", reason: deps.releaseReason || "released by the nightly audit — a holding reply, nothing committed", released: true };
+}
+
+// What reaches the person (or puts our name on paper) and so waits while you
+// have stopped the bot on them: the letter, a dataroom invite, a GHL drip, a
+// booking, a re-quote, a counter, an agreed investor price. Bookkeeping —
+// tags, an offer's status, an underwrite — still runs.
+export const HELD_WHILE_STOPPED = new Set([
+  "send_offer", "send_dataroom_invite", "add_to_workflow", "requote_from_agent_numbers", "book_call", "revise_offer_to_counter", "agree_investor_price",
+]);
+
+/**
+ * holdActionsWhileStopped(plan, why) → { plan, held }
+ * The plan's automatic actions that reach them become suggestions ("ask"),
+ * each saying why, for a person to press on the draft.
+ */
+export function holdActionsWhileStopped(plan, why) {
+  const auto = plan?.auto || [];
+  const held = auto.filter((x) => HELD_WHILE_STOPPED.has(x.type))
+    .map((x) => ({ ...x, mode: "ask", why: `${x.why ? `${x.why} — ` : ""}held: ${why}` }));
+  if (!held.length) return { plan, held: [] };
+  return { plan: { ...plan, auto: auto.filter((x) => !HELD_WHILE_STOPPED.has(x.type)), suggested: [...(plan.suggested || []), ...held] }, held };
 }
 
 /**
@@ -1630,6 +1659,9 @@ export async function assembleConversation({
   const dealHold = light ? null : await liveDealHold({
     store, locationId, contactId, mode: config.routing.holdOnLiveDeal,
   }).catch(() => null);
+  // Stop / Pause on the work pane (shared/bot-hold.js): the bot still drafts
+  // for them, and nothing it writes goes by itself. A read that fails holds.
+  const hold = light || !contactId ? null : await holdFor({ store, locationId, contactId, now });
   const typed = fakeThread ? renderFakeThread(fakeThread, channel) : "";
   const transcript = [real, typed].filter(Boolean).join("\n");
 
@@ -1708,7 +1740,7 @@ export async function assembleConversation({
     : null;
 
   return {
-    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dnd, dealHold, humanActive,
+    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dnd, dealHold, humanActive, hold,
     playbook, contact, contactName: name, tags, custom, transcript, context, underwriting, instructions, signer, companyContact,
   };
 }
@@ -2131,6 +2163,11 @@ export async function startProactive({
   // waiting row is dealt with, rather than filing this as a dead end.
   const machine = !personAsked && MACHINE_STARTED_KINDS.has(kind);
   if (machine) {
+    // You stopped the bot on them (shared/bot-hold.js): nothing the machine
+    // starts is drafted, and no model call is spent finding that out. A
+    // person pressing Float has decided — that drafts, and waits for Send.
+    const hold = await holdFor({ store, locationId, contactId, offerId: offer?.id || null, now: typeof deps.now === "function" ? deps.now() : Date.now() });
+    if (hold.held) return { skipped: holdLine(hold), held: { kind: hold.kind, until: hold.until }, job: null };
     const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues });
     if (waiting) return { skipped: blockingReason(waiting), blocked: { draftId: waiting.id }, job: null };
     // Replies to people always have room. The day's cap counts every draft,
@@ -2497,6 +2534,12 @@ async function runProactive(job, ctx) {
     job.heldReason = `they asked to be left alone on ${askedOff.at} — nothing is drafted`;
     return;
   }
+  // Stopped after this was queued on the lane (shared/bot-hold.js). A float
+  // a person pressed still drafts; decideAutoSend keeps it waiting.
+  if (ctx.machine && a.hold?.held) {
+    job.status = "held"; job.phase = ""; job.heldReason = holdLine(a.hold); job.finishedAt = new Date().toISOString();
+    return;
+  }
   const { context } = a;
   const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier });
 
@@ -2514,7 +2557,7 @@ async function runProactive(job, ctx) {
   job.summary = draft.summary;
   const gateFor = outboundGateFor({ spec, offer, subject, context, config, party, a });
   const gate = gateFor(draft);
-  let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive });
+  let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   auto = releaseForAudit({ auto, gate, draft, deps });
 
   job.phase = "saving";
@@ -2968,7 +3011,7 @@ async function runReply(job, ctx) {
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
   });
   const gate = gateFor(draft);
-  let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive });
+  let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   // The text after a call is its own allowlist slot on top of the intent's:
   // a question asked on the phone still needs "text after a call" ticked.
   if (isCall && base.send && !(config.parties?.[party]?.autoSend?.intents || []).includes("call_followup")) {
@@ -3197,7 +3240,9 @@ async function runReply(job, ctx) {
       const check = paperCheck({ offer: cur, transcript: a.transcript });
       if (!check.ok) {
         paperHold = { offerId: cur.id, ...check };
-        auto = { send: false, code: "stale_number", reason: `needs a person: ${check.reason}` };
+        // A stop stays the reason it waits: stale_number is a person's call,
+        // which would set a check-in clock the stop exists to prevent.
+        if (!a.hold?.held) auto = { send: false, code: "stale_number", reason: `needs a person: ${check.reason}` };
         const moved = plan.auto.filter((x) => PAPER_ACTIONS.has(x.type)).map((x) => ({ ...x, mode: "ask", why: `${x.why ? `${x.why} — ` : ""}held: ${check.reason}` }));
         plan.auto = plan.auto.filter((x) => !PAPER_ACTIONS.has(x.type));
         plan.suggested.push(...moved);
@@ -3596,6 +3641,28 @@ async function runReply(job, ctx) {
     }
   }
 
+  /* --- 4g. you stopped the bot on them: nothing that reaches them runs by itself --- */
+  // After every step above that adds an action (the to-seller letter, the
+  // band, a booking, the dataroom invite, Tier 1 re-entry), before any runs.
+  // The draft offers each one; a person presses it. The reply keeps the
+  // model's own words — "sent our letter of intent over" would not be true.
+  if (a.hold?.held) {
+    const why = holdLine(a.hold);
+    const { plan: kept, held } = holdActionsWhileStopped(plan, why);
+    if (held.length || record.replyBeforeSend) {
+      plan.auto = kept.auto;
+      plan.suggested = kept.suggested;
+      const asked = new Map(held.map((x) => [x.id, x]));
+      record = {
+        ...record,
+        actions: (record.actions || []).map((x) => (asked.has(x.id) && x.status === "pending" ? { ...x, mode: "ask", why: asked.get(x.id).why } : x)),
+        ...(record.replyBeforeSend ? { reply: record.replyBeforeSend } : {}),
+        updatedAt: new Date().toISOString(),
+      };
+      await store.updateReplyDraft(record.id, record).catch(() => {});
+    }
+  }
+
   /* --- 4e. re-quote before anything that files the offer dead --- */
   // Actions run in plan order, and the re-quote is appended last — so on a no
   // "mark passed" ran first, the offer closed, and the re-quote found "no open
@@ -3902,7 +3969,7 @@ export async function previewConversation({
     ourAmount: ourNumberFor(context.offers?.numbers, draft.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),
   });
-  const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive });
+  const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
   if (a.stampTag) plan.auto.unshift({ type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", why: "routed by the message" });
   if (!plan.auto.length && !plan.suggested.length && playbook?.fallback?.actions?.length &&
@@ -3953,6 +4020,36 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
 
   if (!live) {
     return { ok: true, dryRun: true, preview: { channel: d.channel, to: d.contactId, message: body } };
+  }
+
+  // You stopped the bot on them while this counted down (shared/bot-hold.js).
+  // Nothing goes by itself until Resume or the pause's date: a text the
+  // machine started is binned, a reply goes back to wait for your Send. The
+  // draft is written before returning — the scheduler has already marked it
+  // "sending", and a bare skip would leave it there to be "recovered" as
+  // interrupted. Only the auto path: a person pressing Send is deciding.
+  if (auto) {
+    const hold = await holdFor({ store, locationId, contactId: d.contactId, offerId: d.outbound?.offerId || null, now });
+    if (hold.held) {
+      const ts = new Date(now).toISOString();
+      const line = holdLine(hold);
+      // A read that failed never bins anything: it waits instead.
+      const machine = hold.kind !== "unread" && MACHINE_STARTED_KINDS.has(d.outbound?.kind) && !String(d.inbound || "").trim();
+      if (machine) {
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+          flags: [...(d.flags || []), `${line} — not sent`],
+        });
+        await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      } else {
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+          flags: [...(d.flags || []), `held: ${line}`],
+          autoSend: { ...(d.autoSend || {}), decided: false, reason: `${line} — it waits for you` },
+        });
+      }
+      return { ok: true, skipped: line };
+    }
   }
 
   // A deal can end while a text about it counts down (drafted Monday, marked
@@ -4163,6 +4260,46 @@ export async function stopMachineTextsForOffer({ client, store, locationId, offe
   }
   if (stopped.length && client) await removeContactTags(client, offer.contactId, [RA_TAGS.draft]).catch(() => {});
   return stopped;
+}
+
+/**
+ * standDownForHold({ client, store, locationId, contactId, why, now }) → { pulled, held }
+ *
+ * Stop (or Pause) pressed on a person. What was waiting to go to them stops
+ * now rather than at its send time: every open text the machine started (a
+ * nudge, a check-in, a price drop) is binned, "… — not sent"; a reply that
+ * was counting down goes back to wait for a person's Send. A reply already
+ * waiting for you keeps waiting, and a row already sending is out of our
+ * hands. Resume re-sends nothing — what was held waits for Send.
+ */
+export async function standDownForHold({ client, store, locationId, contactId, why = "you stopped the bot on them", now = Date.now() }) {
+  if (!contactId) return { pulled: [], held: [] };
+  const open = [];
+  for (const status of ["draft", "scheduled"]) {
+    open.push(...await store.listReplyDrafts(locationId, { contactId, status, limit: 50 }).catch(() => []));
+  }
+  const ts = new Date(now).toISOString();
+  const pulled = [];
+  const held = [];
+  for (const d of open) {
+    if (!d || d.contactId !== contactId) continue;
+    const machine = MACHINE_STARTED_KINDS.has(d.outbound?.kind) && !String(d.inbound || "").trim();
+    if (machine) {
+      await store.updateReplyDraft(d.id, { ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts, flags: [...(d.flags || []), `${why} — not sent`] });
+      pulled.push(d.id);
+    } else if (d.status === "scheduled") {
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "draft", sendAt: null, heldAt: ts, updatedAt: ts, flags: [...(d.flags || []), `held: ${why}`],
+        autoSend: { ...(d.autoSend || {}), decided: false, reason: `${why} — it waits for you` },
+      });
+      held.push(d.id);
+    }
+  }
+  // Nothing left open for them: the draft tag comes off, as on a dismiss.
+  if (pulled.length && open.every((d) => pulled.includes(d.id)) && client) {
+    await removeContactTags(client, contactId, [RA_TAGS.draft]).catch(() => {});
+  }
+  return { pulled, held };
 }
 
 export async function dismissReplyDraft({ client, store, locationId, draftId, reason = null }) {

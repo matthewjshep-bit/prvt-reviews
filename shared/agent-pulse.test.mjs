@@ -135,6 +135,9 @@ test("opted out, stopped, annoyed or tagged off: the pulse stays away", () => {
   assert.equal(agentStops({ tags: ["DNC"] }), 'tagged "DNC"');
   assert.equal(agentStops({ events: [{ type: "drive_stopped", at: ago(2) }] }), "you stopped the thread");
   assert.equal(agentStops({ events: [{ type: "drive_stopped", at: ago(2), offerId: "o9" }] }), null, "a stop on one house is that house's");
+  const pause = { type: "drive_stopped", at: ago(2), data: { until: new Date(NOW + 5 * DAY).toISOString() } };
+  assert.equal(agentStops({ events: [pause], now: NOW }), "you paused the thread", "a paused agent gets no check-in");
+  assert.equal(agentStops({ events: [pause], now: NOW + 6 * DAY }), null, "until the pause ends");
   assert.equal(agentStops({ events: [{ type: "text_summary", at: ago(9), data: { inbound: "please stop texting me" } }] }), "they sound annoyed");
   assert.equal(agentStops({ events: [{ type: "text_summary", at: ago(9), data: { inbound: "that one sold, sorry" } }] }), null, "a house that sold is not the agent");
 });

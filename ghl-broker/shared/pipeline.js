@@ -28,6 +28,7 @@ import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js
 import { addressKey } from "./contact-record.js";
 import { openPromises, resolvePromise } from "./promise-resolver.js";
 import { UNANSWERED_LIMIT } from "./thread-health.js";
+import { botHold, holdLine } from "./bot-hold.js";
 import { groupHouses, resolveHouse } from "./current-offer.js";
 import { showingSummary } from "./showing.js";
 import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
@@ -636,9 +637,8 @@ export function buildPipeline({
     // underwrite or on them: the machine's. A move the driver will make when
     // it is switched on: the machine's, with Stop. A hold nobody's numbers
     // clear: stuck. Everything else: yours.
-    const toggle = events.filter((e) => (e?.type === "drive_stopped" || e?.type === "drive_resumed") && e.contactId === p.contactId)
-      .sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1);
-    const stopped = toggle?.type === "drive_stopped";
+    const hold = botHold({ events: events.filter((e) => e?.contactId === p.contactId), now });
+    const stopped = hold.held;
     const driving = Boolean(config?.enabled && config?.driver?.promises?.enabled) && Boolean(DRIVER_NEXT[v.move]);
     const group = stopped ? "yours" : v.move === "wait" || driving ? "machine" : v.move === "yours" && v.offerId ? "stuck" : "yours";
     const next = group === "machine" ? { what: v.move === "wait" ? (v.reason || "waiting") : DRIVER_NEXT[v.move], at: null } : null;
@@ -649,7 +649,7 @@ export function buildPipeline({
       address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0,
       draftId: null, fromDraftId: p.draftId || null, ...(question ? { question } : {}), group, ...(next ? { next } : {}),
       title: `${who}: we owe them ${p.what === "number" ? "a number" : "an answer"}${p.address ? ` on ${String(p.address).split(",")[0]}` : ""}`,
-      detail: [stopped ? `you stopped it${toggle.data?.reason ? `: ${String(toggle.data.reason).slice(0, 80)}` : ""}` : "", PROMISE_MOVE_LABEL[v.move] || "", heldReason ? `underwrite held: ${heldReason}` : "", p.text ? `we said "${String(p.text).slice(0, 90)}"` : ""].filter(Boolean).join(" · "),
+      detail: [stopped ? (hold.kind === "paused" ? holdLine(hold) : `you stopped it${hold.reason ? `: ${hold.reason.slice(0, 80)}` : ""}`) : "", PROMISE_MOVE_LABEL[v.move] || "", heldReason ? `underwrite held: ${heldReason}` : "", p.text ? `we said "${String(p.text).slice(0, 90)}"` : ""].filter(Boolean).join(" · "),
       // Settled some other way (a call, a no that never reached the offer):
       // the row can always be closed by hand, with why. Marking the offer
       // sent / passed closes it too.

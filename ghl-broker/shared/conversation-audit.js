@@ -21,6 +21,12 @@ import { OPEN_STATUSES, DEAD_STATUSES, effectiveStatus, dealIsOver } from "./off
 import { currentOffers, currentOfferFor } from "./current-offer.js";
 import { unansweredCheckIn, nextMorning } from "./follow-up.js";
 import { NEVER_AUTO } from "./conversation-ai.js";
+import { botHold, holdLine } from "./bot-hold.js";
+
+// What the audit may not do for someone you stopped the bot on
+// (shared/bot-hold.js): send, release, re-quote, queue a letter, or set a
+// clock that texts them later. A redraft still runs — the draft waits.
+const STOPPED_REFUSES = new Set(["release", "book_checkin", "queue_offer_send", "requote", "nudge_counter", "nudge_offer"]);
 
 export const AUDIT_WINDOW_HOURS = 24;
 export const HELD_AGING_HOURS = 24;
@@ -178,6 +184,8 @@ export function auditConversations({
   const ev = (c, type) => (eventsBy.get(c) || []).filter((e) => e.type === type);
   const last = (list) => (list.length ? list[list.length - 1] : null);
   const excluded = (c) => ev(c, "unsubscribed").length > 0 || (draftsBy.get(c) || []).some((d) => d.intent === "opt_out");
+  // You stopped the bot on them, or paused it, and it still holds.
+  const holdOf = (c) => botHold({ events: eventsBy.get(c) || [], now });
 
   // When they last spoke, and when we last did — from our own rows first,
   // GHL's list where we have it.
@@ -213,6 +221,12 @@ export function auditConversations({
   const findings = [];
   const seen = new Set();
   const add = (f) => {
+    // The row stays (it is still true); the action doesn't — nothing the
+    // audit does reaches someone you stopped the bot on.
+    if (f.contactId && f.action && STOPPED_REFUSES.has(f.action.type)) {
+      const hold = holdOf(f.contactId);
+      if (hold.held) f = { ...f, action: null, why: `${f.why || ""}${f.why ? " — " : ""}${holdLine(hold)}, so nothing goes` };
+    }
     const kind = AUDIT_KINDS.find((x) => x.key === f.kind);
     const row = { severity: kind?.severity || "fyi", action: null, evidence: {}, ...f, id: auditDedupeKey(f) };
     if (seen.has(row.id)) return; seen.add(row.id);
@@ -266,6 +280,9 @@ export function auditConversations({
       continue;
     }
     // (b) held for a person. Old: aging. New: make sure the clock is set.
+    // Held because you stopped the bot on them: the draft is on Today as
+    // it is, and neither a release nor a clock is the audit's to set.
+    if (newest.status === "draft" && !QUIET_INTENTS.has(newest.intent) && holdOf(c).held) continue;
     if (newest.status === "draft" && !QUIET_INTENTS.has(newest.intent)) {
       const clock = last(ev(c, "checkin_requested").filter((e) => (ms(e.at) ?? 0) >= (ms(newest.createdAt) ?? 0)));
       const age = hoursAgo(newest.createdAt);

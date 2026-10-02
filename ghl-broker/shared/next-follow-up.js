@@ -24,6 +24,7 @@ import {
   CHECKIN_STATUSES, HOT_MIN_HOURS,
 } from "./follow-up.js";
 import { threadHealth } from "./thread-health.js";
+import { botHold, pauseDay } from "./bot-hold.js";
 import { addressKey } from "./us-address.js";
 
 const HOUR_MS = 3600000;
@@ -93,9 +94,10 @@ const rungText = (label, step, steps) => {
  * null. First match wins, in the order below.
  */
 export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now = Date.now(), sweepHour = SWEEP_UTC_HOUR } = {}) {
-  const out = (kind, { at = null, label = NEXT_KINDS[kind], who = null, reason = "" } = {}) => ({
+  const out = (kind, { at = null, label = NEXT_KINDS[kind], who = null, reason = "", until = null } = {}) => ({
     at: at == null ? null : iso(at), kind, label, who, reason,
     overdue: at != null && at < now - HOUR_MS,
+    ...(until ? { until } : {}),
   });
   if (!offer) return out("none");
   const status = effectiveStatus(offer);
@@ -122,9 +124,12 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
   /* ---- the thread is stopped ---- */
   const unsub = (events || []).find((e) => e?.type === "unsubscribed") || drafts.find((d) => d?.intent === "opt_out" && String(d.inbound || "").trim());
   if (unsub) return out("stopped", { label: "Stopped — they opted out", reason: "they opted out" });
-  const toggle = (events || []).filter((e) => (e?.type === "drive_stopped" || e?.type === "drive_resumed") && mine(e))
-    .sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1);
-  if (toggle?.type === "drive_stopped") return out("stopped", { label: "Stopped by you", reason: String(toggle.data?.reason || "stopped on Today") });
+  const hold = botHold({ events, offerId: offer.id, now });
+  if (hold.held) {
+    return hold.kind === "paused"
+      ? out("stopped", { label: `Paused until ${pauseDay(hold.until)}`, until: hold.until, reason: hold.reason || "paused by you" })
+      : out("stopped", { label: "Stopped by you", reason: hold.reason || "stopped by you" });
+  }
 
   /* ---- something is already queued ---- */
   const queued = times.scheduled.find((d) => !d.outbound?.offerId || d.outbound.offerId === offer.id);

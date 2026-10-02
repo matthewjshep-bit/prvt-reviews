@@ -42,6 +42,25 @@ test("with the intent ticked and both gates on, a blast becomes staggered schedu
   assert.notEqual(drafts[0].reply, drafts[1].reply, "the phrasing rotates");
 });
 
+// Matt, 2026-10-01: a stop means nothing goes to them by itself — a deal
+// text to a buyer included.
+test("a blast to a buyer you stopped the bot on waits as a draft; the rest still go", async () => {
+  const store = fakeStore();
+  store.listContactEventsSince = async () => [{ type: "drive_stopped", contactId: "i2", at: new Date(NOW - 86400000).toISOString(), data: { reason: "" } }];
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } }, dispoAutopilot: { spreadSec: 60 } };
+  const r = await queueBlastDrafts({ store, locationId: "L", offer, investors: buyers, saved, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(r.queued, 2);
+  assert.equal(r.drafted, 1);
+  const mei = [...store.rows.values()].find((d) => d.contactId === "i2");
+  assert.equal(mei.status, "draft");
+  assert.equal(mei.autoSend.reason, "you stopped the bot on them — it waits for you");
+  // A read that fails holds every text rather than guess.
+  const broken = fakeStore();
+  broken.listContactEventsSince = async () => { throw new Error("db down"); };
+  const b = await queueBlastDrafts({ store: broken, locationId: "L", offer, investors: buyers, saved, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(b.queued, 0);
+});
+
 test("the blast on promote waits before its first text, so the fee can be set; each draft keeps its phrasing", async () => {
   const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } }, dispoAutopilot: { spreadSec: 60 } };
   const now0 = await queueBlastDrafts({ store: fakeStore(), locationId: "L", offer, investors: buyers, saved, now: NOW, sendsEnabled: true, blastsEnabled: true });

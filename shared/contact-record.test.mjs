@@ -36,6 +36,17 @@ test("every event type has a label and an icon, and every fact key names a party
   assert.ok(factKeysFor("investor").includes("buybox_areas") && factKeysFor("investor").includes("personal_details"));
 });
 
+test("the record has words and an icon for stop, pause, resume and an unsubscribe", () => {
+  for (const t of ["drive_stopped", "drive_resumed", "unsubscribed"]) {
+    assert.ok(EVENT_TYPES.includes(t), `${t} is in the vocabulary`);
+  }
+  assert.equal(EVENT_LABEL.drive_stopped, "you stopped the bot");
+  assert.equal(EVENT_LABEL.drive_resumed, "the bot is back on");
+  assert.equal(EVENT_ICON.drive_stopped, "CirclePause");
+  assert.equal(EVENT_ICON.drive_resumed, "CirclePlay");
+  assert.equal(EVENT_LABEL.unsubscribed, "they unsubscribed");
+});
+
 test("a ledger line round-trips, dashes in the note and all", () => {
   const line = "2026-09-05 | 22018 76th Ave W, Edmonds, WA 98026 | passed — Price too high: no meat - at 498";
   const p = parseHistoryLine(line);
