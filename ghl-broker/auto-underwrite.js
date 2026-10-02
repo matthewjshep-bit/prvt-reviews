@@ -1187,8 +1187,14 @@ async function runUnderwrite(job, ctx) {
   // A listing link in the message names the house outright — it is the
   // newest thing the agent sent, so it outranks a standing field. The last
   // link wins when there are several. See listing-links.js.
+  // A person pointing at one house — typed into the form, or "Underwrite
+  // anyway" on its row — has named it. Nothing below overrules them: on
+  // 2026-10-02 the referee would have taken Karamveer Tiwana's 13348 32nd Ave
+  // S row to 21902 29th Ave South, which the thread had moved on to, and
+  // written that house over the row's held draft.
+  const pinned = job.origin === "operator" || job.anyKind;
   let linked = null;
-  if (job.origin !== "operator" && job.message) {
+  if (!pinned && job.message) {
     const x = await expandListingLinks(job.message).catch(() => ({ links: [] }));
     linked = x.links?.length ? x.links[x.links.length - 1] : null;
   }
@@ -1198,7 +1204,7 @@ async function runUnderwrite(job, ctx) {
   // An address a person just typed into the form is the answer, full stop.
   // The referee exists for fields that can go stale; nothing is staler than
   // a thread overruling the operator who is looking at the house right now.
-  if (standing && job.origin !== "operator") {
+  if (standing && !pinned) {
     let recentText = "";
     try {
       const t = await buildTranscript(client, locationId, job.contactId, {
@@ -1245,6 +1251,14 @@ async function runUnderwrite(job, ctx) {
         confidence: "high",
         note: "Address typed into the offer form by the operator.",
         source: "operator",
+      }
+      : job.anyKind
+      ? {
+        address: job.suppliedAddress,
+        askingPrice: job.suppliedAskingPrice,
+        confidence: "high",
+        note: "The house on the held row \"Underwrite anyway\" was pressed on.",
+        source: "anyway",
       }
       : {
         address: job.suppliedAddress,
