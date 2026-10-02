@@ -48,6 +48,7 @@ const STATUS_MOMENT = {
   passed: ["passed", "them", () => "they passed"],
   no_response: ["went_quiet", "machine", () => "marked gone quiet"],
   we_passed: ["we_passed", "us", () => "we passed"],
+  unavailable: ["unavailable", "them", () => "no longer available"],
   accepted: ["accepted", "them", () => "accepted"],
 };
 const STAGE_LABEL = { under_contract: "under contract", assigned: "assigned", closed: "closed", fell_through: "fell through" };

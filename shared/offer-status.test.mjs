@@ -364,3 +364,16 @@ test("only a yes pushes to paper: presenting is hot but waits", () => {
   assert.equal(pushesToPaper({ ...base, realm: { answer: "yes", ts: at } }), true);
   assert.equal(pushesToPaper({ ...base, status: "passed", hot: { at, by: "operator" } }), false, "a dead offer is cold");
 });
+
+// Matt, 2026-10-02: "we passed is like we intentionally said no." A house
+// the agent says sold or came off the market is its own outcome.
+test("no longer available is its own dead end: nobody's pass, never revived, never chased, no tag", async () => {
+  const m = await import("./offer-status.js");
+  assert.equal(m.OFFER_STATUS.unavailable.label, "No longer available");
+  assert.ok(m.SETTABLE_STATUSES.includes("unavailable"), "a person can pick it");
+  assert.ok(m.DEAD_STATUSES.has("unavailable"));
+  assert.equal(m.OPEN_STATUSES.has("unavailable"), false);
+  assert.equal(m.REVIVABLE_STATUSES.has("unavailable"), false, "a counter doesn't bring a sold house back by itself");
+  assert.ok(m.STATUS_RANK.unavailable < m.STATUS_RANK.we_passed, "it says least about the agent");
+  assert.match(m.STATUS_HISTORY_PHRASE.unavailable, /no longer available/);
+});

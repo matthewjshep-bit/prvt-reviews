@@ -105,7 +105,7 @@ const FILTERS = [
   { key: "unsent", label: "Not sent", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "new" && o.status !== "draft" },
   { key: "waiting", label: "Awaiting reply", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "sent" },
   { key: "countered", label: "Countered", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "countered" },
-  { key: "dead", label: "Passed / no reply", test: (o) => !o.deal && DEAD_STATUSES.has(effectiveStatus(o)) },
+  { key: "dead", label: "Passed / gone", title: "They passed, we passed, no reply, or the house is no longer available", test: (o) => !o.deal && DEAD_STATUSES.has(effectiveStatus(o)) },
   { key: "deals", label: "Deals", test: (o) => Boolean(o.deal) },
   { key: "drafts", label: "Drafts", test: (o) => o.status === "draft" },
   // A live offer with no follow-up coming, or one that's late. Every offer
@@ -682,6 +682,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
             <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("no_response")}>Mark no response</button>
             <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("passed")}>They passed</button>
             <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("we_passed")}>We passed</button>
+            <button type="button" className={BTN} disabled={bulkBusy} onClick={() => bulkStatus("unavailable")}>No longer available</button>
             <button type="button" className={BTN_ICON} onClick={() => setPicked(new Set())} aria-label="Clear selection">
               <X size={15} />
             </button>

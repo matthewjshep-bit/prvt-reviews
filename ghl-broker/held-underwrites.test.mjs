@@ -67,10 +67,10 @@ test("junk is deleted, a closed conversation is retired with a status and a note
   const r = await run(store, client, d);
   assert.deepEqual(store.deleted, ["junk"]);
   const row = store.book.get("h1");
-  assert.equal(row.status, "we_passed", "a house that went pending is one we passed on");
-  assert.match(row.statusNote, /closed out by the nightly sweep — it's off the market \(they said "That property is already pending/);
+  assert.equal(row.status, "unavailable", "a house that went pending is no longer available — nobody passed");
+  assert.match(row.statusNote, /closed out by the nightly sweep — it's no longer available \(they said "That property is already pending/);
   assert.equal(row.retired.by, "held-sweep");
-  assert.ok(store.events.some((e) => e.type === "offer_we_passed" && e.dedupeKey === "held_retired:h1"));
+  assert.ok(store.events.some((e) => e.type === "offer_unavailable" && e.dedupeKey === "held_retired:h1"));
   assert.ok(client.log.some(([m, p]) => m === "POST" && p === "/contacts/c1/notes"), "a GHL note says why");
   assert.ok(client.log.some(([m, p]) => m === "DELETE" && p.includes("/contacts/c1/tags")), "uw-needs-review comes off");
   assert.deepEqual(r.counts, { held: 2, dropped: 1, retired: 1, reran: 0, asked: 0, waiting: 0, yours: 0 });

@@ -47,6 +47,7 @@ export const NEXT_KINDS = {
   passed_checkin: "Check back in",
   deal:        "Deal",
   we_passed:   "We passed",
+  unavailable: "No longer available",
   superseded:  "Superseded",
   draft:       "Draft",
   stopped:     "Stopped",
@@ -107,6 +108,7 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
   }
   if (offer.supersededBy) return out("superseded", { label: "See the current offer", reason: "a newer row on this house is the one we ask about" });
   if (status === "we_passed") return out("we_passed", { label: "We passed — no follow-up", reason: "our own pass is never chased" });
+  if (status === "unavailable") return out("unavailable", { label: "No longer available — no follow-up", reason: "the agent said it sold or came off the market" });
   if (status === "accepted") return out("deal", { label: "Accepted — promote to a deal", who: "you" });
 
   const pb = config?.parties?.agent || {};

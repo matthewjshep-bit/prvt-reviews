@@ -55,6 +55,7 @@ import { draftWaitingOnYou } from "./outbox-guard.js";
 import { holdFor } from "./bot-hold.js";
 import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
+import { houseGone } from "./shared/held-underwrites.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName } from "./shared/current-offer.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
@@ -3193,12 +3194,32 @@ async function runReply(job, ctx) {
     if (playbook.fallback.mode === "auto") plan.auto.push(...fb); else plan.suggested.push(...fb);
   }
 
+  // What a "no" wires: they passed, Tier 3.
+  const closes = (x) => x.type === "mark_offer_passed"
+    || (x.type === "add_tags" && (x.tags || []).some((t) => /^tier-3$/i.test(String(t))))
+    || (x.type === "add_to_workflow" && /tier\s*3/i.test(String(x.workflowName || "")));
+
+  // The house is gone — "that one sold", "it's pending now" (shared/
+  // held-underwrites.js houseGone). Nobody passed. Matt, 2026-10-02: "we
+  // passed is like we intentionally said no". The offer is marked no longer
+  // available and nothing chases it; what a no wires comes off (a house
+  // that sold says nothing about the agent); and the first-no ask — "what
+  // would the seller take?" — is never made on a house that sold. Not on a
+  // call: a transcript carries every house they talked about.
+  const gone = party === "agent" && !isCall && houseGone(job.message || "", draft.intent);
+  if (gone) {
+    plan.auto = plan.auto.filter((x) => !closes(x));
+    plan.suggested = plan.suggested.filter((x) => !closes(x));
+    plan.auto.push({ id: `a-gone-${job.id}`, type: "mark_offer_unavailable", mode: "auto", status: "pending", party,
+      why: "they said the house sold or came off the market — no longer available, nothing chases it" });
+  }
+
   // The first no on a live offer opens a negotiation; it doesn't end one.
   // The reply asks what the seller would take (COMMITMENTS), so the record
   // must not file the offer dead and tag them Tier 3 in the same breath.
   // The closing actions are held back once — the offer is stamped — and a
   // second no (or the offer ladder running out) closes it the usual way.
-  if (party === "agent" && draft.intent === "rejection") {
+  if (party === "agent" && draft.intent === "rejection" && !gone) {
     const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
     const open = currentOffers(rows).filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
     const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
@@ -3213,9 +3234,6 @@ async function runReply(job, ctx) {
     // A counter too far over to negotiate already told us their number — there
     // is nothing left to ask for, so it closes on the first message.
     if (full && !weMoved && draft.reclassifiedFrom !== "counter") {
-      const closes = (x) => x.type === "mark_offer_passed"
-        || (x.type === "add_tags" && (x.tags || []).some((t) => /^tier-3$/i.test(String(t))))
-        || (x.type === "add_to_workflow" && /tier\s*3/i.test(String(x.workflowName || "")));
       plan.auto = plan.auto.filter((x) => !closes(x));
       plan.suggested = plan.suggested.filter((x) => !closes(x));
       plan.auto.push({ id: `a-no1-${job.id}`, type: "note_first_decline", mode: "auto", status: "pending", party, offerId: full.id,
@@ -4081,9 +4099,9 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   // person pressing Send is a person deciding.
   if (auto && d.party !== "investor" && d.outbound?.kind && !String(d.inbound || "").trim()) {
     const offer = d.outbound?.offerId && store.getOffer ? await store.getOffer(d.outbound.offerId).catch(() => null) : null;
-    if (offer && offerStatus(offer) === "we_passed") {
+    if (offer && ["we_passed", "unavailable"].includes(offerStatus(offer))) {
       const ts = new Date(now).toISOString();
-      const why = `we passed on ${offer.address || "that house"}`;
+      const why = offerStatus(offer) === "unavailable" ? `${offer.address || "that house"} is no longer available` : `we passed on ${offer.address || "that house"}`;
       await store.updateReplyDraft(d.id, {
         ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
         flags: [...(d.flags || []), `${why} — not sent`],

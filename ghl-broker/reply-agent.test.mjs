@@ -2460,6 +2460,44 @@ test("the first no on a live offer asks for their number without filing it dead;
   assert.ok(!types2.includes("note_first_decline"));
 });
 
+// 4621 S Sheridan Ave (2026-09-15): "That one is already sold." was read as a
+// first no, and the offer stayed open until a person cleaned it up on 9/29.
+// Matt, 2026-10-02: a house that sold is no longer available — "we passed is
+// like we intentionally said no", and their pass is a no from the seller.
+test("an agent saying the house sold marks it no longer available — not their pass, and no 'what would the seller take?'", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...NEGOTIATION_OFFER };
+  const store = negotiationStore(offer);
+  const statuses = [];
+  const noted = [];
+  const deps = {
+    draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", reply: "Ah, we were too late on that one. What else is sitting that needs work?", propertyAddress: "12 Elm St" }),
+    noteFirstDecline: async ({ offerId }) => { noted.push(offerId); return { ok: true, address: offer.address }; },
+    setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status, stopped: 1 }; },
+  };
+  const { job } = await startReply({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "That one is already sold", deps });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  const types = d.actions.map((a) => a.type);
+  const gone = d.actions.find((a) => a.type === "mark_offer_unavailable");
+  assert.equal(gone?.status, "done", `${types}`);
+  assert.match(gone.detail || "", /marked no longer available — 1 queued text about it stopped/);
+  assert.ok(!types.includes("mark_offer_passed"), `not their pass: ${types}`);
+  assert.ok(!types.includes("note_first_decline"), "no 'any chance they'd counter?' on a house that sold");
+  assert.ok(!d.actions.some((a) => (a.tags || []).includes("tier-3")), "a house that sold says nothing about the agent");
+  assert.deepEqual(statuses, ["unavailable"]);
+  assert.deepEqual(noted, []);
+
+  // The seller saying no is still a no — the first one asks for their number.
+  _resetJobs();
+  const { job: j2 } = await startReply({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "too low, the seller isn't interested", deps });
+  await settle();
+  const d2 = await store.getReplyDraft(j2.draftId);
+  assert.ok(d2.actions.some((a) => a.type === "note_first_decline"), `${d2.actions.map((a) => a.type)}`);
+  assert.ok(!d2.actions.some((a) => a.type === "mark_offer_unavailable"));
+});
+
 // Matt, 2026-09-14: "if we counter and they say no, mark as 'they passed'."
 // Once we've come back with a new number, their no is the answer to it.
 for (const [what, moved] of [

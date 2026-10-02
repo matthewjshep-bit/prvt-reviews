@@ -44,7 +44,7 @@ export const shortDate = (iso) => {
 
 // What follows the strip: the next move, said plainly. Kinds with nothing
 // coming read as their label ("Stopped by you", "None scheduled").
-const NO_DATE = new Set(["stopped", "none", "deal", "we_passed", "superseded", "draft"]);
+const NO_DATE = new Set(["stopped", "none", "deal", "we_passed", "unavailable", "superseded", "draft"]);
 export function nextWords(next, now = Date.now()) {
   if (!next?.kind) return null;
   // Their text is the next move, and it is yours: no date to wait for.

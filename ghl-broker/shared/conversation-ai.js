@@ -379,6 +379,9 @@ export const ACTION_LABEL = {
   // Injected by the reply agent only (never on a rule): the seller took our
   // number, so the price is agreed and the push to paper starts.
   mark_offer_agreed: "Note that the seller accepted our number",
+  // Injected by the reply agent only: the agent said the house sold or came
+  // off the market (shared/held-underwrites.js houseGone).
+  mark_offer_unavailable: "Mark the house no longer available",
   mark_investor_passed: "Mark them passed on the deal", mark_investor_committed: "Mark them the committed buyer",
   record_deal_feedback: "File what they said about the deal as feedback",
   revise_offer_to_counter: "Re-issue the offer at their number",

@@ -147,6 +147,16 @@ const EXECUTORS = {
     if (!r?.ok) return r?.reason || "no open offer to mark";
     return r.unchanged ? `offer on ${r.address} was already passed` : `offer on ${r.address} marked passed`;
   },
+  // The agent said the house sold or came off the market (reply-agent.js,
+  // houseGone). Nobody passed: it is no longer available, and whatever the
+  // machine had queued about it is stopped. Injected only, never on a rule.
+  async mark_offer_unavailable({ deps, contactId, draft }) {
+    if (typeof deps?.setOfferStatus !== "function") throw new Error("offer status is not wired on this broker");
+    const r = await deps.setOfferStatus({ contactId, addressHint: draft?.propertyAddress || "", status: "unavailable", note: String(draft?.summary || "").slice(0, 200) });
+    if (!r?.ok) return r?.reason || "no offer to mark";
+    if (r.unchanged) return `${r.address} was already marked no longer available`;
+    return `${r.address} marked no longer available${r.stopped ? ` — ${r.stopped} queued text${r.stopped === 1 ? "" : "s"} about it stopped` : ""}`;
+  },
   async mark_offer_realm_yes({ deps, contactId, draft }) {
     if (typeof deps?.setOfferRealm !== "function") throw new Error("offer realm is not wired on this broker");
     const r = await deps.setOfferRealm({ contactId, addressHint: draft?.propertyAddress || "", answer: "yes", note: String(draft?.summary || "").slice(0, 200) });

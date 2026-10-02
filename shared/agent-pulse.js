@@ -270,7 +270,7 @@ export function ourHouseFor({ offers = [], drafts = [], events = [], config = {}
     const status = effectiveStatus(o);
     if (status === "we_passed" || !DEAD_STATUSES.has(status)) return false;
     const next = nextFollowUp({ offer: o, drafts, events, config, now });
-    return next.kind === "none" || next.kind === "stopped";
+    return next.kind === "none" || next.kind === "stopped" || next.kind === "unavailable";
   });
   return ended.sort((a, b) => String(b.statusAt || b.createdAt || "").localeCompare(String(a.statusAt || a.createdAt || "")))[0] || null;
 }
@@ -419,7 +419,7 @@ const factList = (facts, key, now, max = 3) => {
 
 // How a house of theirs ended, in the words a text would use.
 const HOUSE_HOW = {
-  passed: "passed", no_response: "never heard back", we_passed: "we passed on it", sent: "we sent an offer",
+  passed: "passed", no_response: "never heard back", we_passed: "we passed on it", unavailable: "it sold or came off the market", sent: "we sent an offer",
   countered: "they countered", accepted: "we agreed a price", new: "we looked at it",
 };
 function houseHow(o) {
