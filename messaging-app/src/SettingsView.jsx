@@ -967,12 +967,12 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                   hint="Only contacts the import creates are enrolled — anyone already in GHL is left alone." />
               )}
               <label className="col-span-2 block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Counties, one a day in turn</span>
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Counties, read in turn</span>
                 <textarea className={INPUT_CLS} rows={3} placeholder={"King, WA\nPierce, WA\nSnohomish, WA"}
                   value={Array.isArray(form.outreachAutopilot?.counties) ? form.outreachAutopilot.counties.map((c) => `${c.county}, ${c.state}`).join("\n") : form.outreachAutopilot?.counties || ""}
                   onChange={(e) => setOutreachAuto("counties")(e.target.value)} />
                 <span className="mt-1 block text-xs text-slate-500">
-                  One "County, ST" per line (no state = WA). Each run reads the next pages of one county, then moves to the next county once it's read to the end.
+                  One "County, ST" per line (no state = WA). Each run reads the counties in turn from where the last run stopped, and keeps going to the next county until it has the day's number or its requests for the day are spent.
                   Requests are spread over the billing month and stop at your plan's number (RentCast bills every request past it). Blank = the zips/city defaults above.
                 </span>
               </label>

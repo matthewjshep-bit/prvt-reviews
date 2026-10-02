@@ -334,10 +334,15 @@ export function startOutreachSweep({ locationId, client, saved = {}, store = def
     county: job.county, candidates: job.candidates, picked: job.picked, imported: job.imported, enrolled: job.enrolled,
     skippedExisting: job.skippedExisting || 0, requestsUsed: job.pull?.requestsUsed ?? null, error: job.error, warning: job.warnings[0] || "",
     // Which counties this run read before it found somebody (or gave up).
-    tried: (job.tried || []).slice(0, 6),
+    tried: (job.tried || []).slice(0, 12),
   });
-  stamp({ run: { id: job.id, trigger, startedAt: job.startedAt } })
-    .then(() => run(job, { locationId, client, saved, store, deps, now }))
+  // A long run (many counties, hundreds of one-at-a-time imports) says it's
+  // still alive after every pull and import, so the tick doesn't take it for
+  // a hung one and start a second.
+  const runDoc = { id: job.id, trigger, startedAt: job.startedAt };
+  const beat = () => stamp({ run: { ...runDoc, beatAt: new Date().toISOString() } });
+  stamp({ run: runDoc })
+    .then(() => run(job, { locationId, client, saved, store, deps, now, beat }))
     .then(async () => { await stamp({ run: null, last: summary() }); })
     .catch(async (e) => {
       job.status = "error";
@@ -349,7 +354,7 @@ export function startOutreachSweep({ locationId, client, saved = {}, store = def
   return job;
 }
 
-async function run(job, { locationId, client, saved, store, deps, now }) {
+async function run(job, { locationId, client, saved, store, deps, now, beat = async () => {} }) {
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
   if (typeof deps.runPull !== "function" || typeof deps.importAgents !== "function") {
     throw new Error("outreach sweep needs runPull and importAgents");
@@ -386,36 +391,52 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
   // it's read to the end. Without one: the saved market defaults. A cache
   // hit is free.
   //
-  // A county that yields nobody doesn't cost the day (2026-09-17: King's 844
-  // "new" rows were all already in GHL or had no phone, three runs running,
-  // while Pierce and Snohomish waited their turn): the run moves on to the
-  // next county, while requests last, until somebody is picked or every
-  // county has been tried. An empty county gives up its turn either way.
+  // The run fills the day (2026-10-02). It used to stop at the first county
+  // that yielded anyone — Pierce gave up one new agent and the day was over
+  // with requests unspent. Now it keeps going, county after county, while it
+  // has requests left and hasn't found the day's number (with room over, for
+  // the agents the import finds already in GHL). Each county is read at most
+  // once a run. An empty or failing county gives up its turn; only when every
+  // county fails does the run fail (and come back on the retry clock).
   const querySig = JSON.stringify(pullQuery(oa));
+  const n = Math.max(1, oa.counties.length);
+  const wanted = Math.ceil(oa.dailyCap * 1.5);
   let left = perRun;
-  let pull = null;
-  let picked = [];
-  job.tried = [];
-  const tries = Math.max(1, oa.counties.length);
-  for (let attempt = 0; attempt < tries; attempt++) {
-    job.phase = "pulling";
-    const query = { ...pullQuery(oa), maxRequests: Math.max(1, left) };
-    let pages = null;
-    let county = null;
-    let key = null;
+  let pages = null;
+  if (oa.counties.length) {
+    pages = (await store.getJobCursor?.(locationId, PAGES_CURSOR).catch(() => null))?.doc || {};
     // The saved places belong to the filters they were read with: a new price
     // cap or rule is a different result list, and an old offset would skip into it.
+    if (pages.query !== querySig) pages = { ...pages, offsets: {}, totals: {} };
+  }
+  const startTurn = (Number(pages?.turn) || 0) % n;
+  const savePages = async (doc) => {
+    if (job.dryRun) return;   // a preview leaves the place alone
+    pages = { ...doc, query: querySig };
+    await store.setJobCursor?.(locationId, PAGES_CURSOR, { at: iso(now), doc: pages })
+      .catch((e) => job.warnings.push(`page cursor: ${String(e?.message || e).slice(0, 120)}`));
+  };
+  const groups = [];          // [{ key, batchId, picked }] in the order read
+  const seenAgents = new Set();
+  let pickedTotal = 0;
+  let pulls = 0;
+  // The first county this run left with pages and people still in it: the
+  // next run starts there, whatever counties this one went on to.
+  let keepTurn = null;
+  job.tried = [];
+  for (let attempt = 0; attempt < n; attempt++) {
+    // Stop before a pull, not after it: a run with nothing left spends nothing.
+    if (attempt > 0 && (left <= 0 || pickedTotal >= wanted)) break;
+    job.phase = "pulling";
+    const query = { ...pullQuery(oa), maxRequests: Math.max(1, left) };
+    let county = null;
+    let key = null;
+    const turn = (startTurn + attempt) % n;
     if (oa.counties.length) {
-      pages = (await store.getJobCursor?.(locationId, PAGES_CURSOR).catch(() => null))?.doc || {};
-      if (pages.query !== querySig) pages = { ...pages, offsets: {}, totals: {} };
-      // A live run reads the turn it just saved; a preview saves nothing, so
-      // it steps through the counties on its own to show the same walk.
-      const turn = ((Number(pages.turn) || 0) + (job.dryRun ? attempt : 0)) % oa.counties.length;
       county = oa.counties[turn];
       key = `${county.county}, ${county.state}`;
       query.county = county.county; query.state = county.state;
       query.offset = Number(pages.offsets?.[key]) || 0;
-      pages = { ...pages, turn };
     }
     job.county = key;
     // Its own batch per market. Without a batchId the pull lands in the most
@@ -424,62 +445,75 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
     // it. The pick below reads the whole batch, so the batch IS the market.
     const batchId = await autopilotBatchId({ store, locationId, market: key || "saved market" }).catch(() => undefined);
     if (batchId) query.batchId = batchId;
-    // A county RentCast can't answer today is an empty county, not the end
-    // of the run: say so, pass the turn, try the next. Only when every county
-    // fails does the run fail (and come back on the retry clock).
+    let pull;
     try {
       pull = await deps.runPull(locationId, client, query, { maxRequestsCap: MAX_REQUESTS_PER_RUN });
     } catch (e) {
       const why = String(e?.message || e).slice(0, 120);
       job.tried.push({ county: key, error: why });
       job.warnings.push(`${key || "the saved market"}: the pull failed (${why}) — moving on`);
-      const last = attempt === tries - 1 || !county;
-      if (last && !job.tried.some((t) => !t.error)) throw e;
-      if (county && !job.dryRun) {
-        await store.setJobCursor?.(locationId, PAGES_CURSOR, { at: iso(now), doc: { ...pages, turn: (pages.turn + 1) % oa.counties.length, query: querySig } }).catch(() => {});
-      }
+      const last = attempt === n - 1 || !county;
+      if (last && !pulls) throw e;
+      if (county) await savePages({ ...pages, turn: (turn + 1) % n });
       if (last) break;
       continue;
     }
-    left -= Number(pull.requestsUsed) || 0;
-    job.pull = { batchId: pull.batchId, batchName: pull.batchName, requestsUsed: (job.pull?.requestsUsed || 0) + (Number(pull.requestsUsed) || 0), cached: pull.cached,
-      listingsFetched: pull.listingsFetched, listingsKept: pull.listingsKept, agentsTotal: pull.agentsTotal, agentsNew: pull.agentsNew,
-      offset: query.offset ?? 0, nextOffset: pull.nextOffset || 0, totalCount: pull.totalCount ?? null };
+    pulls++;
+    const used = Number(pull.requestsUsed) || 0;
+    left -= used;
+    const prev = job.pull;
+    job.pull = {
+      batchId: pull.batchId, batchName: pull.batchName, requestsUsed: (prev?.requestsUsed || 0) + used, cached: pull.cached,
+      listingsFetched: (prev?.listingsFetched || 0) + (Number(pull.listingsFetched) || 0),
+      listingsKept: (prev?.listingsKept || 0) + (Number(pull.listingsKept) || 0),
+      agentsTotal: (prev?.agentsTotal || 0) + (Number(pull.agentsTotal) || 0),
+      agentsNew: (prev?.agentsNew || 0) + (Number(pull.agentsNew) || 0),
+      // Where in the county the run read — only meaningful for one county.
+      ...(prev ? { offset: null, nextOffset: null, totalCount: null }
+        : { offset: query.offset ?? 0, nextOffset: pull.nextOffset || 0, totalCount: pull.totalCount ?? null }),
+    };
     job.warnings.push(...(pull.warnings || []).filter((w) => !/^county filter kept [1-9]/.test(w)).slice(0, 6));
+    await beat();
 
-    // 2. Who is new to us, and how many of them today.
-    job.phase = "picking";
-    const rows = await store.listOutreachAgents(locationId, { batchId: pull.batchId, status: "new", limit: 1000 });
-    job.candidates = rows.length;
-    // Ranked, and deliberately longer than the day's number: the import walks it
-    // one agent at a time, skips anyone already in GHL, and stops once
-    // `dailyCap` brand-new contacts exist. Handing it exactly `dailyCap` let a
-    // pull whose GHL check was rate-limited pass 10 existing contacts in 12.
+    // 2. Who is new to us in this county. Ranked, and deliberately longer than
+    // the day's number: the import walks it one agent at a time, skips anyone
+    // already in GHL, and stops once `dailyCap` brand-new contacts exist.
     // Pending/sold and condos are already out: the RentCast pull asks for Active
     // listings of the configured property types only. Turnkey can't be told
     // from RentCast, and those agents weed themselves out (a turnkey reply is Tier 2).
-    picked = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
-      maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null });
-    job.picked = picked.length;
-    job.tried.push({ county: key, candidates: rows.length, picked: picked.length, requestsUsed: Number(pull.requestsUsed) || 0 });
+    // An agent with listings in two counties is picked in the first one only.
+    job.phase = "picking";
+    const rows = await store.listOutreachAgents(locationId, { batchId: pull.batchId, status: "new", limit: 1000 });
+    job.candidates = (job.candidates || 0) + rows.length;
+    const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
+      maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null })
+      .filter((r) => !seenAgents.has(r.agentKey));
+    for (const r of fresh) seenAgents.add(r.agentKey);
+    if (fresh.length) groups.push({ key, batchId: pull.batchId, picked: fresh });
+    pickedTotal += fresh.length;
+    job.picked = pickedTotal;
+    job.tried.push({ county: key, candidates: rows.length, picked: fresh.length, requestsUsed: used,
+      ...(county ? { offset: query.offset ?? 0, nextOffset: Number(pull.nextOffset) || 0, totalCount: pull.totalCount ?? null } : {}) });
 
-    // Remember where this county stopped. A dry run leaves the place alone,
-    // so the live run after a preview reads the same pages (from the cache).
-    // The turn passes on when the county is read to the end — or came up empty.
-    if (county && !job.dryRun) {
+    // Remember where this county stopped. The turn stays on a county that
+    // still has pages and people in it (the run ran out of requests there);
+    // it passes on when the county is read to the end — or came up empty.
+    if (county) {
       const next = Number(pull.nextOffset) || 0;
-      await store.setJobCursor?.(locationId, PAGES_CURSOR, { at: iso(now), doc: {
-        turn: next && picked.length ? pages.turn : (pages.turn + 1) % oa.counties.length,
+      if (keepTurn == null && next && fresh.length) keepTurn = turn;
+      await savePages({
+        ...pages,
+        turn: keepTurn ?? (turn + 1) % n,
         offsets: { ...(pages.offsets || {}), [key]: next },
         totals: { ...(pages.totals || {}), [key]: pull.totalCount ?? null },
         lastCounty: key,
-        query: querySig,
-      } }).catch((e) => job.warnings.push(`page cursor: ${String(e?.message || e).slice(0, 120)}`));
+      });
     }
-    if (picked.length) break;
-    if (key) job.warnings.push(`${key}: nobody new to text (${rows.length} on file, all already in GHL, without a phone, or outside the rules) — moving on`);
-    if (!county || left <= 0) break;
+    if (!fresh.length && key) job.warnings.push(`${key}: nobody new to text (${rows.length} on file, all already in GHL, without a phone, or outside the rules) — moving on`);
+    if (!county) break;
   }
+  job.county = groups.map((g) => g.key).filter(Boolean).join(" · ") || job.county;
+  const picked = groups.flatMap((g) => g.picked);
   job.results = picked.map((r) => ({ agentKey: r.agentKey, name: r.doc?.name || "", hook: r.doc?.hook?.address || "", distressed: r.doc?.distressedCount || 0 }));
   if (!picked.length) {
     job.warnings.push("no county had anyone new to text today");
@@ -487,27 +521,43 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
     return;
   }
 
-  // 3. The import. Dry unless the env gate is on — importAgents applies the
-  // gate itself; passing dryRun through keeps a manual "show me" honest.
+  // 3. The import, county by county into each county's own batch, until the
+  // day's number of brand-new contacts exists. Dry unless the env gate is on —
+  // importAgents applies the gate itself; passing dryRun through keeps a
+  // manual "show me" honest.
   job.phase = "importing";
-  const r = await deps.importAgents({
-    locationId, client, agentKeys: picked.map((p) => p.agentKey), batchId: pull.batchId,
-    // "app": the bot says hello and the GHL trigger tag stays off, so the
-    // workflow template cannot text them as well. "ghl": the old way.
-    // "workflow": enrolled by id — only contacts the import CREATED, so
-    // nobody already in GHL (and so possibly mid-workflow) is enrolled.
-    applyTag: oa.firstTouch === "ghl", openWith: oa.firstTouch === "app" ? "app" : null,
-    enrollWorkflowId: oa.firstTouch === "workflow" ? oa.workflowId : null,
-    sessionSuffix: `auto-${iso(now).slice(0, 10)}`, dryRun: job.dryRun ? true : false,
-    newOnly: true, createLimit: oa.dailyCap,
-  });
-  job.imported = r.imported || 0;
-  job.opened = r.opened || 0;
-  job.enrolled = r.enrolled || 0;
-  job.skippedExisting = r.skippedExisting || 0;
-  job.dryRun = Boolean(r.dryRun);
-  job.warnings.push(...(r.warnings || []).slice(0, 10));
-  const byKey = new Map((r.results || []).map((x) => [x.agentKey, x]));
+  let made = 0;
+  let dry = false;
+  const outcomes = [];
+  for (const g of groups) {
+    const room = oa.dailyCap - made;
+    if (room <= 0) break;
+    await beat();
+    const r = await deps.importAgents({
+      locationId, client, agentKeys: g.picked.map((p) => p.agentKey), batchId: g.batchId,
+      // "app": the bot says hello and the GHL trigger tag stays off, so the
+      // workflow template cannot text them as well. "ghl": the old way.
+      // "workflow": enrolled by id — only contacts the import CREATED, so
+      // nobody already in GHL (and so possibly mid-workflow) is enrolled.
+      applyTag: oa.firstTouch === "ghl", openWith: oa.firstTouch === "app" ? "app" : null,
+      enrollWorkflowId: oa.firstTouch === "workflow" ? oa.workflowId : null,
+      sessionSuffix: `auto-${iso(now).slice(0, 10)}`, dryRun: job.dryRun ? true : false,
+      newOnly: true, createLimit: room,
+    });
+    const results = Array.isArray(r.results) ? r.results : [];
+    made += results.length
+      ? results.filter((x) => x.action === "created" || x.wouldCreate).length
+      : Number(r.imported) || 0;
+    job.imported = (job.imported || 0) + (r.imported || 0);
+    job.opened = (job.opened || 0) + (r.opened || 0);
+    job.enrolled = (job.enrolled || 0) + (r.enrolled || 0);
+    job.skippedExisting = (job.skippedExisting || 0) + (r.skippedExisting || 0);
+    dry = dry || Boolean(r.dryRun);
+    job.warnings.push(...(r.warnings || []).slice(0, 10));
+    outcomes.push(...results);
+  }
+  job.dryRun = dry;
+  const byKey = new Map(outcomes.map((x) => [x.agentKey, x]));
   // Only the agents the import actually reached and didn't skip as existing.
   const reached = byKey.size
     ? job.results.filter((x) => byKey.has(x.agentKey) && !byKey.get(x.agentKey).skipped)
@@ -552,7 +602,9 @@ export async function maybeStartOutreachSweep({ locationId, client, saved = {}, 
   const ranToday = cursor?.at && now - Date.parse(cursor.at) < MIN_GAP_MS;
   // The cursor says a run is going, and nothing in memory is: it hung, or
   // the process restarted under it. Either way the day isn't done.
-  const stale = doc.run?.startedAt && now - Date.parse(doc.run.startedAt) > STALE_RUN_MS;
+  // Measured from the run's last sign of life, not its start: a run that
+  // fills the day can rightly take longer than STALE_RUN_MS.
+  const stale = doc.run?.startedAt && now - Date.parse(doc.run.beatAt || doc.run.startedAt) > STALE_RUN_MS;
   let tries = 1;
   if (ranToday) {
     // Only a failed (or vanished) run comes back, spaced out and a few times at most.
