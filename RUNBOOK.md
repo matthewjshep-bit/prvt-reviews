@@ -2525,9 +2525,13 @@ at all. Two faults, both fixed:
   outreach, dispo second wave, the GHL mirror, and now the nightly
   enrichment sweep (`enrichNightly`) — a redeploy inside the trigger hour no
   longer re-spends model calls.
-- **RentCast budget.** The outreach sweep stands down at 45 of the free
-  tier's 50 requests for the month (`rentcastMonthlyBudget` in settings
-  overrides). The buttons keep the last five.
+- **RentCast budget.** Settings → Agent Outreach → "RentCast requests a
+  month" (`outreachAutopilot.monthlyRequests`, blank = 48, the free tier's
+  50 less two; the old top-level `rentcastMonthlyBudget` still counts when
+  it's blank) and "Plan renews on day" (`cycleDay`, Pacific). The sweep stops
+  at the plan's number less `reserveRequests` (kept for the Pull button).
+  Past a plan's number RentCast bills each request — it never refuses — so
+  raise the number only after the plan on the key is upgraded.
 - **Console smoke tests.** `cd messaging-app && npm test` (vitest, server
   rendered): the Autopilot card, the action queue, the playbooks/booking/
   auto-send cards on the shapes the broker actually sends.
@@ -2934,7 +2938,7 @@ on the broker's 15-minute tick, `job_cursors` row `outreach`; untick "Weekdays
 only" for every day) the broker pulls — with a county list, the next pages of
 one county at a time (`job_cursors` row `outreachPages`), filtered at RentCast
 to listings at least 45 days old of the chosen property types, with requests
-spread over the month to a hard stop of 48 — picks the most distressed
+spread over the billing month to the plan's number (below) — picks the most distressed
 agents nobody has talked to (status new, no GHL match, a phone, at least one
 distressed listing unless you untick that), imports up to the daily cap
 (default 12, max 500), and says hello the configured way.
@@ -2943,6 +2947,16 @@ The follow-up (`outreach-followup.js`, `OUTREACH_FOLLOWUP_HOUR`, default 11am
 Pacific, row `outreachFollowUp`) puts agents enrolled by the "GHL workflow"
 first touch who haven't answered in N days (default 14) into the follow-up
 workflow. It needs `conversations.readonly` to see who wrote back.
+
+**The RentCast meter (2026-10-02).** Matt moved RentCast to the Foundation
+plan (1,000 requests a month) to find more agents. A run may spend what's
+left of the billing month, less the reserve, divided by the workdays left —
+at least one, at most `MAX_REQUESTS_PER_RUN` (40). The month is counted
+from `cycleDay` in Pacific time and is summed by the store
+(`sumOutreachRequests`, every pull since the cycle began); it used to read
+the newest 200 pulls and undercount. The Pull button stays at ten requests a
+press. `GET /api/outreach/autopilot` returns `budget {used, budget, reserve,
+runsLeft, perRun, since}`; the Agents page meter reads the same numbers.
 
 **When it doesn't happen (2026-09-16).** The sweep started at 10:03,
 imported one agent at 10:08 and then sat "running" on a GHL request that

@@ -12,7 +12,7 @@ test("settings coerce to safe defaults", () => {
     enabled: false, dailyCap: 12, weekdaysOnly: true, firstTouch: "app", requireDistress: true,
     workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14,
     minDaysOnMarket: 45, propertyTypes: ["Single Family"], maxYearBuilt: 0, reserveRequests: 2,
-    maxListPrice: 1500000,
+    monthlyRequests: 0, cycleDay: 1, maxListPrice: 1500000,
   });
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: 0 }).maxListPrice, 0, "0 = no cap");
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: "900000" }).maxListPrice, 900000);

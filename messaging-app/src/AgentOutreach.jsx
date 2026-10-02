@@ -439,7 +439,8 @@ export default function AgentOutreach({ settings }) {
   if (!data) return <Spinner />;
 
   const usage = data.usage || {};
-  const meterAmber = (usage.requestsThisMonth || 0) >= 40;
+  const meterBudget = usage.budget || 48;
+  const meterAmber = (usage.requestsThisMonth || 0) >= meterBudget * 0.8;
 
   return (
     <div className="space-y-4">
@@ -524,7 +525,7 @@ export default function AgentOutreach({ settings }) {
         <div className="mb-3 flex items-center justify-between">
           <div className="text-sm font-bold">Pull listings</div>
           <div className={`text-xs ${meterAmber ? "font-semibold text-amber-600" : "text-slate-400"}`}>
-            {usage.requestsThisMonth || 0} / 50 RentCast requests this month
+            {usage.requestsThisMonth || 0} / {meterBudget} RentCast requests this month
           </div>
         </div>
 
