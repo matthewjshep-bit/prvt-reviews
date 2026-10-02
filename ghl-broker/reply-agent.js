@@ -57,7 +57,7 @@ import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, mac
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
 import { sameStreet } from "./shared/us-address.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
@@ -3975,6 +3975,20 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
       return { ok: true, skipped: why };
     }
+    // You stopped outreach on the deal since this was queued (Stop outreach
+    // on the deal pane). The machine's own text about it is dismissed; a
+    // reply to something the buyer said goes back to you to send or not.
+    if (dealOutreachStopped(offer?.deal)) {
+      const ts = new Date(now).toISOString();
+      const street = String(offer.address || "the deal").split(",")[0].trim();
+      const why = `you stopped outreach on ${street}`;
+      const hold = stoppedDealAction(d) === "hold";
+      await store.updateReplyDraft(d.id, hold
+        ? { ...d, status: "draft", sendAt: null, sendingAt: null, updatedAt: ts, flags: [...(d.flags || []), `${why} — waiting for you`] }
+        : { ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts, flags: [...(d.flags || []), `${why} — not sent`] });
+      if (!hold) await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      return { ok: true, skipped: why, held: hold };
+    }
   }
 
   // We walked away since (marked "we passed" while a check-in counted
@@ -4163,6 +4177,48 @@ export async function stopMachineTextsForOffer({ client, store, locationId, offe
   }
   if (stopped.length && client) await removeContactTags(client, offer.contactId, [RA_TAGS.draft]).catch(() => {});
   return stopped;
+}
+
+/**
+ * stoppedDealAction(draft) → "dismiss" | "hold"
+ *
+ * What stopping outreach on a deal does to an open text about it: one the
+ * machine started (a blast, a nudge, a walkthrough text — an outbound kind
+ * and nothing they said) is dismissed; a reply to a buyer goes back to you.
+ */
+export const stoppedDealAction = (d) => (d?.outbound?.kind && !String(d.inbound || "").trim() ? "dismiss" : "hold");
+
+/**
+ * stopDealOutreach({ client, store, locationId, offer }) → { dismissed: [id], held: [id] }
+ *
+ * The moment you stop outreach on a deal, every buyer text about it already
+ * queued is pulled back rather than left to be caught at its send time (the
+ * guard in sendReplyDraft): the machine's own are dismissed, from the outbox
+ * too; a reply counting down goes back to a draft. A reply already waiting
+ * for you stays as it is. The listing agent's thread is not a buyer's and is
+ * left alone.
+ */
+export async function stopDealOutreach({ client, store, locationId, offer, now = Date.now() }) {
+  const out = { dismissed: [], held: [] };
+  if (!offer?.id) return out;
+  const open = await store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 5000 }).catch(() => []);
+  const ts = new Date(now).toISOString();
+  const why = `you stopped outreach on ${String(offer.address || "the deal").split(",")[0].trim()}`;
+  for (const d of open) {
+    if (d?.party !== "investor" || !["draft", "scheduled"].includes(d.status)) continue;
+    const about = d.outbound?.offerId ? d.outbound.offerId === offer.id
+      : Boolean(offer.address && sameStreet(d.outbound?.address || d.propertyAddress || "", offer.address));
+    if (!about) continue;
+    if (stoppedDealAction(d) === "dismiss") {
+      await store.updateReplyDraft(d.id, { ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts, flags: [...(d.flags || []), `${why} — not sent`] });
+      if (client) await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      out.dismissed.push(d.id);
+    } else if (d.status === "scheduled") {
+      await store.updateReplyDraft(d.id, { ...d, status: "draft", sendAt: null, sendingAt: null, updatedAt: ts, flags: [...(d.flags || []), `${why} — waiting for you`] });
+      out.held.push(d.id);
+    }
+  }
+  return out;
 }
 
 export async function dismissReplyDraft({ client, store, locationId, draftId, reason = null }) {

@@ -333,19 +333,40 @@ export function pushesToPaper(offer) {
  * only stops new outreach, and it is derived, so putting the buyer back to
  * evaluating (or their passing) starts it again with no second switch to
  * remember.
+ *
+ * The one stored switch is yours: Stop outreach on the deal pane
+ * (`deal.outreachStopped`). It wins over everything here and holds for every
+ * buyer, the committed one included (no contactId), until you resume it.
  */
 export const OUTREACH_PAUSING_STATUSES = new Set(["soft_commit", "committed"]);
 export function dealOutreachPaused(deal) {
   if (!deal) return null;
+  const stopped = dealOutreachStopped(deal);
+  if (stopped) return { status: "stopped", name: "", contactId: "", at: stopped.at };
   const hit = (deal.investors || []).find((i) => OUTREACH_PAUSING_STATUSES.has(investorStatus(i?.status)));
   if (hit) return { status: investorStatus(hit.status), name: hit.name || "", contactId: hit.contactId || "" };
   if (deal.stage === "buyer_found") return { status: "committed", name: "", contactId: "" };
   return null;
 }
 
+/**
+ * dealOutreachStopped(deal) → { at, by } | null
+ *
+ * You stopped outreach on this deal (Matt, 2026-10-01, 5232 S Yakima: "stop
+ * outreach on this one completely"). Nothing goes to a buyer about the house
+ * by itself — no wave, blast, nudge, package link or walkthrough text — and a
+ * buyer's reply about it waits for you instead of sending itself.
+ */
+export function dealOutreachStopped(deal) {
+  const s = deal?.outreachStopped;
+  return s && s.at ? { at: s.at, by: s.by || "you" } : null;
+}
+
 // The line an operator reads when something refused to go out because of it.
 export const outreachPausedReason = (p, address = "") =>
-  !p ? "" : p.status === "committed"
+  !p ? "" : p.status === "stopped"
+    ? `you stopped outreach on ${address || "this deal"}`
+    : p.status === "committed"
     ? `${address || "this deal"} has a committed buyer${p.name ? ` (${p.name})` : ""}`
     : `${address || "this deal"} is soft-committed${p.name ? ` to ${p.name}` : ""} — outreach is paused until that clears`;
 

@@ -243,7 +243,7 @@ export function nextWave(d = {}, da = normalizeDispoAutopilot({}), now = Date.no
   if (blasts.length >= da.maxWaves) return none(`all ${da.maxWaves} wave${da.maxWaves === 1 ? "" : "s"} sent`);
   // Committed, or somebody probably taking it: the wave is new outreach.
   const paused = dealOutreachPaused(d);
-  if (paused) return none(paused.status === "committed" ? "a buyer committed" : "a buyer is probably taking it");
+  if (paused) return none(paused.status === "stopped" ? "you stopped outreach" : paused.status === "committed" ? "a buyer committed" : "a buyer is probably taking it");
   const at = Date.parse(blasts[blasts.length - 1].at || "");
   if (!Number.isFinite(at)) return none("the last wave has no time on it");
   const dueMs = at + da.secondWaveHours * 3600000;
