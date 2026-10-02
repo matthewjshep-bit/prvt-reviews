@@ -11,6 +11,8 @@
 
 import { store as defaultStore } from "./store.js";
 import { auditConversations, auditDedupeKey, isCloser, isPlainNo, AUDIT_EVENT_TYPES, HELD_SWEEP_KINDS, MAX_REDRAFT_TRIES, REDRAFT_RETRY_AFTER_MS } from "./shared/conversation-audit.js";
+import { botEventsByContact } from "./bot-hold.js";
+import { mergeEvents } from "./shared/bot-hold.js";
 import { effectiveStatus, OPEN_STATUSES, dealIsOver } from "./shared/offer-status.js";
 import { buildPipeline } from "./shared/pipeline.js";
 import { conversationConfig, startReply as defaultStartReply } from "./reply-agent.js";
@@ -79,13 +81,18 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
 
   phase("reading");
   const since48 = iso(now - 48 * 3600000);
-  const [recent, open, events, offers, fuCursor] = await Promise.all([
+  const [recent, open, windowed, offers, fuCursor, stops] = await Promise.all([
     store.listReplyDrafts(locationId, { since: since48, limit: 2000 }).catch(() => []),
     store.listReplyDrafts(locationId, { status: ["draft", "scheduled", "handled"], limit: 1000 }).catch(() => []),
     store.listContactEventsSince(locationId, iso(now - EVENTS_DAYS * 86400000), { types: AUDIT_EVENT_TYPES, limit: 5000 }).catch(() => []),
     store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []),
     store.getJobCursor?.(locationId, "followUp").catch(() => null),
+    // Stops with no time window (shared/bot-hold.js): this read keeps 45
+    // days, and a stop pressed in June still holds. Not caught — an audit
+    // that can't tell who is stopped acts on no one.
+    botEventsByContact({ store, locationId }),
   ]);
+  const events = mergeEvents(windowed, [...stops.values()].flat());
   const byId = new Map();
   for (const d of [...recent, ...open]) if (d?.id) byId.set(d.id, d);
   const drafts = [...byId.values()];

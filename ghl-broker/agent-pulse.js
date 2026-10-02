@@ -22,6 +22,8 @@ import { conversationConfig, startProactive, previewProactive, markUnsubscribed 
 import { getContact, smsUnsubscribed, removeContactFromWorkflow, searchAllContactsByTags, listWorkflows } from "./ghl.js";
 import { workHour, isWorkday, normalizeOutreachAutopilot } from "./outreach-sweep.js";
 import { allEventsSince } from "./contact-events.js";
+import { botEventsByContact } from "./bot-hold.js";
+import { mergeEvents } from "./shared/bot-hold.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 import { annotateCurrent } from "./shared/current-offer.js";
 import { effectiveStatus, OPEN_STATUSES, dealIsOver } from "./shared/offer-status.js";
@@ -108,7 +110,10 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
   const settings = agentPulseSettings(saved);
   const config = conversationConfig(saved);
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
-  const [profiles, investors, offers, evRead, ledgerRead, openDrafts, recentDrafts, inbound, listings] = await Promise.all([
+  // The stop events come with no time window (ghl-broker/bot-hold.js): the
+  // pulse's own read keeps 130 days, and a stop pressed in May still holds.
+  // Not caught — a plan that can't tell who is stopped texts no one.
+  const [profiles, investors, offers, evRead, ledgerRead, openDrafts, recentDrafts, inbound, listings, stops] = await Promise.all([
     store.listContactProfiles(locationId, { party: "agent", limit: 20000 }).catch(() => []),
     store.listContactProfiles(locationId, { party: "investor", limit: 20000 }).catch(() => []),
     store.listOffers(locationId, { limit: 5000, lean: true }).catch(() => []),
@@ -120,12 +125,14 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
     typeof store.listFreshAgentListings === "function"
       ? store.listFreshAgentListings(locationId, { since: iso(now - settings.freshDays * DAY_MS), seenSince: iso(now - settings.listingSeenDays * DAY_MS) }).catch(() => [])
       : [],
+    botEventsByContact({ store, locationId }),
   ]);
 
   const annotated = annotateCurrent(offers || []).filter(Boolean);
   const houses = housesFrom(annotated);
   const offersBy = byContact(annotated);
   const eventsBy = byContact(evRead.events);
+  for (const [id, list] of stops) eventsBy.set(id, mergeEvents(eventsBy.get(id) || [], list));
   const ledgerBy = byContact(ledgerRead.events);
   const seenDraft = new Set((openDrafts || []).map((d) => d.id));
   const draftsBy = byContact([...(openDrafts || []), ...(recentDrafts || []).filter((d) => !seenDraft.has(d.id))]);

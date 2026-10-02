@@ -191,7 +191,9 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
 
     // Their text (or your own draft) is waiting in the outbox: whoever answers
     // it keeps the promise or says so. Nothing is claimed; the next tick looks again.
-    const waitingOn = await waitingReason({ store, locationId, contactId });
+    // A stop is not asked here: the claim is what puts "we owe them" on
+    // Today, and the text after it is refused at startProactive.
+    const waitingOn = await waitingReason({ store, locationId, contactId, hold: false });
     if (waitingOn) { out.waiting++; out.results.push({ contactId, address, status: "waiting", reason: waitingOn }); continue; }
 
     const claim = await recordEvent({

@@ -777,3 +777,42 @@ test("a house back on the market starts its check-ins over from the relist, when
   assert.match(r.subjectId, /^o1@relist-/);
   assert.deepEqual(r.sentSteps, [], "rungs from before the relist belong to the old ladder");
 });
+
+/* ---------- you stopped the bot on them (shared/bot-hold.js, 2026-10-01) ---------- */
+
+test("a stopped person's rung is not claimed, so it goes after Resume", async () => {
+  _resetJobs();
+  const stop = { type: "drive_stopped", contactId: "c1", at: at(1), data: { reason: "" } };
+  const store = fakeStore({ offers: [anOffer()], events: [stop] });
+  const { job, started } = spySweep(store);
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(started.length, 0);
+  assert.equal(job.results[0].reason, "you stopped the bot on them");
+  assert.equal(store.events.filter((e) => e.type === "follow_up_sent").length, 0, "no rung claimed");
+  store.events.push({ type: "drive_resumed", contactId: "c1", at: at(3.5), data: {} });
+  _resetJobs();
+  const again = spySweep(store);
+  await settle();
+  assert.equal(again.started.length, 1, "the same rung goes after Resume");
+  assert.equal(again.started[0].subject.step, 3);
+});
+
+test("a paused offer isn't marked no response while the pause holds", async () => {
+  _resetJobs();
+  const pause = { type: "drive_stopped", contactId: "c1", at: at(15), data: { until: at(25) } };
+  const store = fakeStore({ offers: [anOffer({ followUps: [{ kind: "offer_nudge", step: 3 }, { kind: "offer_nudge", step: 7 }, { kind: "offer_nudge", step: 14 }] })], events: [pause] });
+  const { job, statuses } = spySweep(store, { now: T0 + 20 * DAY });
+  await settle();
+  assert.equal(statuses.length, 0);
+  assert.match(job.results[0].reason, /paused until/);
+});
+
+test("a stop older than their newest 300 events still holds", async () => {
+  _resetJobs();
+  const busy = Array.from({ length: 400 }, (_, i) => ({ type: "text_summary", contactId: "c1", at: at(2 + i / 1000), data: {} }));
+  const store = fakeStore({ offers: [anOffer()], events: [{ type: "drive_stopped", contactId: "c1", at: at(1), data: {} }, ...busy] });
+  const { started } = spySweep(store);
+  await settle();
+  assert.equal(started.length, 0);
+});

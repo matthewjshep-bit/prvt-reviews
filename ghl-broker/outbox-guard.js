@@ -11,6 +11,8 @@
 // Its own module so the sweeps can use it without importing reply-agent.js.
 
 import { blockingDraft, blockingReason } from "./shared/follow-up.js";
+import { holdFor } from "./bot-hold.js";
+import { holdLine } from "./shared/bot-hold.js";
 
 /**
  * draftWaitingOnYou({ store, locationId, contactId, continues }) → draft | null
@@ -27,8 +29,20 @@ export async function draftWaitingOnYou({ store, locationId, contactId, continue
   return blockingDraft(open, { continues });
 }
 
-/** The reason a skipped row shows, or "" when nothing is waiting. */
-export async function waitingReason(args) {
+/**
+ * waitingReason({ store, locationId, contactId, continues, hold, now }) → reason | ""
+ *
+ * The reason a skipped row shows, or "" when nothing is waiting. You having
+ * stopped the bot on them (shared/bot-hold.js) is asked first: every caller
+ * asks before it claims, so a stop spends no rung, no check-in and no ask —
+ * they go after Resume. `hold: false` for a caller that wants its claim
+ * written anyway (the promise sweep: Today carries what we owe them).
+ */
+export async function waitingReason({ hold = true, now = Date.now(), ...args } = {}) {
+  if (hold && args.contactId) {
+    const h = await holdFor({ store: args.store, locationId: args.locationId, contactId: args.contactId, now });
+    if (h.held) return holdLine(h);
+  }
   const d = await draftWaitingOnYou(args);
   return d ? blockingReason(d) : "";
 }

@@ -135,3 +135,9 @@ test("the plan says how long one pass through the book takes at this cap", () =>
   const investors = Array.from({ length: 95 }, (_, i) => buyer(`b${i}`));
   assert.equal(pickPulseBuyers({ now: NOW, investors, settings: { dailyCap: 30 } }).counts.passWorkdays, 4);
 });
+
+test("a buyer you stopped the bot on is never picked for a check-in", () => {
+  const { picks, counts } = pickPulseBuyers({ now: NOW, settings: { dailyCap: 10 }, investors: [buyer("b1"), buyer("b2")], stopped: new Set(["b2"]) });
+  assert.deepEqual(picks.map((p) => p.contactId), ["b1"]);
+  assert.equal(counts.stopped, 1);
+});

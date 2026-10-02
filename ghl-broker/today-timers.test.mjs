@@ -111,3 +111,25 @@ test("a float waits, unclaimed, while their text is held for you, and goes once 
   await run(store, s.deps, { now: NOW + 2 * 3600000 });
   assert.deepEqual(s.calls.float, [{ offerId: "o1" }], "nothing was claimed, so the next pass floats it");
 });
+
+// Matt, 2026-10-01: a stop means nothing goes to them by itself.
+test("the float timer leaves a stopped person's offer alone and keeps its once-ever claim for after Resume", async () => {
+  const stop = { type: "drive_stopped", contactId: "c1", at: ago(30), data: { reason: "" } };
+  const store = fakeStore({ offers: [ready()], events: [stop] });
+  const s = spies();
+  const r = await run(store, s.deps);
+  assert.deepEqual(s.calls.float, []);
+  assert.equal(r.results[0].status, "stopped");
+  assert.equal(r.results[0].reason, "you stopped the bot on them");
+  assert.equal(store.events.some((e) => e.type === "audit_action"), false, "not claimed");
+  store.events.push({ type: "drive_resumed", contactId: "c1", at: ago(1), data: {} });
+  await run(store, s.deps);
+  assert.deepEqual(s.calls.float, [{ offerId: "o1" }], "floats after Resume");
+});
+
+test("a quiet offer isn't marked no response while you've stopped the bot on them", async () => {
+  const store = fakeStore({ offers: [quiet()], events: [{ type: "drive_stopped", contactId: "c2", at: ago(100), data: { reason: "" } }] });
+  const s = spies();
+  await run(store, s.deps);
+  assert.deepEqual(s.calls.status, []);
+});

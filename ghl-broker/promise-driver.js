@@ -35,6 +35,7 @@ import { openPromises, resolvePromise, PROMISE_WINDOW_HOURS } from "./shared/pro
 import { threadHealth } from "./shared/thread-health.js";
 import { sameStreet } from "./shared/us-address.js";
 import { waitingReason } from "./outbox-guard.js";
+import { withBotEvents } from "./bot-hold.js";
 
 const HOUR_MS = 3600000;
 const iso = (ms) => new Date(ms).toISOString();
@@ -76,7 +77,9 @@ export async function driveOpenPromises({ client = null, locationId, saved = {},
       const [offers, drafts, timeline] = await Promise.all([
         store.listOffers(locationId, { contactId: p.contactId, limit: 50, lean: true }).catch(() => []),
         store.listReplyDrafts(locationId, { contactId: p.contactId, limit: 40 }).catch(() => []),
-        store.listContactEvents(locationId, p.contactId, { limit: 300 }).catch(() => []),
+        // The newest 300, plus their stops however old (ghl-broker/bot-hold.js).
+        store.listContactEvents(locationId, p.contactId, { limit: 300 }).catch(() => [])
+          .then((events) => withBotEvents({ store, locationId, contactId: p.contactId, events })),
       ]);
       // The brake (shared/thread-health.js): opted out, stopped on Today, they
       // passed, the house is gone, they sound annoyed, a person has the

@@ -8,6 +8,7 @@
 import { nextFollowUp } from "./shared/next-follow-up.js";
 import { conversationConfig } from "./reply-agent.js";
 import { FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.js";
+import { BOT_EVENT_TYPES, mergeEvents } from "./shared/bot-hold.js";
 
 const DAY_MS = 86400000;
 // Far enough back for the check-in ladder's last rung (day 120) to still see
@@ -42,14 +43,19 @@ const groupBy = (rows, cap = Infinity) => {
  */
 export async function attachNextFollowUps({ store, locationId, saved = {}, offers = [], drafts = null, now = Date.now() }) {
   const since = new Date(now - NEXT_WINDOW_DAYS * DAY_MS).toISOString();
-  const [draftRows, events] = await Promise.all([
+  const [draftRows, windowed, botEvents] = await Promise.all([
     drafts || store.listReplyDrafts(locationId, { since, limit: 4000 }).catch(() => []),
     typeof store.listContactEventsSince === "function"
       ? store.listContactEventsSince(locationId, since, { types: NEXT_EVENT_TYPES, limit: 20000 }).catch(() => [])
       : [],
+    // Stops and pauses with no time window (shared/bot-hold.js): one pressed
+    // five months ago still reads "Stopped by you".
+    typeof store.listContactEventsSince === "function"
+      ? store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: BOT_EVENT_TYPES, limit: 20000 }).catch(() => [])
+      : [],
   ]);
   const draftsBy = groupBy(draftRows, DRAFTS_PER_CONTACT);
-  const eventsBy = groupBy(events);
+  const eventsBy = groupBy(mergeEvents(windowed, botEvents));
   const config = conversationConfig(saved || {});
   for (const o of offers) {
     if (!o) continue;

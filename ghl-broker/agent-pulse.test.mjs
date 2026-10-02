@@ -239,3 +239,14 @@ test("a sample that would be skipped doesn't use up the samples", async () => {
     deps: { previewProactive: async ({ contactId }) => (contactId === "ag8a" ? { skipped: "they unsubscribed (DND in GHL) — nothing is drafted" } : { contactName: "Agent", reply: "Hi, anything coming up that needs work?", held: false, flags: [] }) } });
   assert.deepEqual(r.previews.map((p) => [p.contactId, Boolean(p.reply), p.skipped ? "skipped" : ""]), [["ag8a", false, "skipped"], ["ag8b", true, ""]]);
 });
+
+// Matt, 2026-10-01: a stop holds however long ago it was pressed — the
+// pulse's own read keeps 130 days.
+test("an agent you stopped the bot on months ago is still not checked in on", async () => {
+  _resetJobs();
+  const loc = "loc-ap-old-stop";
+  await repliedAgent(loc, "ag9");
+  await recordEvent({ store, locationId: loc, contactId: "ag9", type: "drive_stopped", at: new Date(Date.now() - 200 * DAY).toISOString(), source: "operator", data: { reason: "" } });
+  const plan = await planAgentPulse({ locationId: loc, saved: savedWith(), store });
+  assert.equal(plan.picks.length, 0);
+});

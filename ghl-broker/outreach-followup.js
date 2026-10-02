@@ -24,6 +24,8 @@ import { addContactToWorkflow, getLastMessageDate, removeContactFromWorkflow } f
 import { normalizeOutreachAutopilot, isWorkday, workHour } from "./outreach-sweep.js";
 import { allEventsSince } from "./contact-events.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
+import { botEventsByContact } from "./bot-hold.js";
+import { botHold, holdLine } from "./shared/bot-hold.js";
 
 export const CURSOR_NAME = "outreachFollowUp";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -147,10 +149,15 @@ async function run(job, { locationId, client, saved, store, now, paceMs }) {
   }
   job.candidates = candidates.length;
   if (more) job.warnings.push(`more than ${MAX_PER_RUN} due — ${MAX_PER_RUN} today, the rest tomorrow`);
+  // Agents you stopped the bot on (shared/bot-hold.js): no drip, and not
+  // claimed, so it can go after Resume. One read, no time window.
+  const stops = await botEventsByContact({ store, locationId });
 
   for (const c of candidates) {
     const result = { contactId: c.contactId, address: c.address, enrolledAt: c.enrolledAt };
     job.results.push(result);
+    const hold = botHold({ events: stops.get(c.contactId) || [], now });
+    if (hold.held) { result.skipped = holdLine(hold); job.skipped++; continue; }
     if (paceMs) await sleep(paceMs);
 
     let last;

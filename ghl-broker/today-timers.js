@@ -26,6 +26,8 @@ import { listJobs as listUnderwriteJobs, publicJob } from "./auto-underwrite.js"
 import { buildPipeline, timerMoves } from "./shared/pipeline.js";
 import { threadHealth } from "./shared/thread-health.js";
 import { blockingDraft, blockingReason } from "./shared/follow-up.js";
+import { holdFor } from "./bot-hold.js";
+import { holdLine } from "./shared/bot-hold.js";
 
 const iso = (ms) => new Date(ms).toISOString();
 const CLAIM_KEY = {
@@ -57,6 +59,13 @@ export async function runTodayTimers({ client = null, locationId, saved = {}, st
     out.results.push(row);
     try {
       if (!m.due) { row.status = "waiting"; row.reason = `due ${m.dueAt}`; continue; }
+      // You stopped the bot on them (shared/bot-hold.js): nothing floats, and
+      // the offer isn't marked "no response" while you hold the thread. Not
+      // claimed — each claim is once ever — so it happens after Resume.
+      if (m.contactId && (m.move === "float" || m.move === "mark_no_response")) {
+        const hold = await holdFor({ store, locationId, contactId: m.contactId, offerId: m.offerId || null, now });
+        if (hold.held) { row.status = "stopped"; row.reason = holdLine(hold); continue; }
+      }
       if (m.move === "float") {
         const [theirs, timeline] = await Promise.all([
           store.listReplyDrafts(locationId, { contactId: m.contactId, limit: 40 }).catch(() => []),

@@ -1867,6 +1867,19 @@ person presses Send (or a suggestion's button):
   clock is booked, and nudge / re-quote / letter actions are dropped from
   the row (`STOPPED_REFUSES`). A redraft still runs — its draft waits.
 
+**Before a claim, not after.** The scheduled jobs claim before they draft
+(a rung, a check-in, an ask, a pulse seat), so a stop read only at the door
+would spend the claim and lose the text. Each asks first and claims nothing
+while you hold the thread; it goes after Resume. `waitingReason`
+(outbox-guard.js) asks the hold by default — the promise driver, held
+underwrites, the audit's nudges, the price watch (kept as `dropOwed`), the
+check-in sweep and the address chase all use it. The follow-up sweep, the
+outreach follow-up and both pulses read everyone's stops once per run; the
+timers hold the float and "gone quiet → no response"; the showing sweep asks
+per buyer. A paused offer is never marked "no response" while the pause
+holds. The promise sweep is the one that still claims: `promise_owed` is
+what puts "we owe them a number" on Today; the text after it is refused.
+
 **Pressing Stop** (`POST /api/dashboard/drive/stop { contactId, party?,
 preset?: "1w" | "2w" | "1m", until?, reason? }`) also stands down what is
 already waiting (`standDownForHold`): open machine texts are binned, a

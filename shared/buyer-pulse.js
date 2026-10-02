@@ -116,14 +116,16 @@ export function pulseSubject(inv = {}, { now = Date.now() } = {}) {
  * theirs, never less than one a day while any are waiting, longest-silent
  * first. Either line's unused seats go to the other.
  */
-export function pickPulseBuyers({ investors = [], pulsedAt = new Map(), openDraftIds = new Set(), settings = {}, now = Date.now() } = {}) {
+export function pickPulseBuyers({ investors = [], pulsedAt = new Map(), openDraftIds = new Set(), stopped = new Set(), settings = {}, now = Date.now() } = {}) {
   const s = normalizeBuyerPulse(settings);
-  const counts = { pool: investors.length, eligible: 0, friends: 0, quiet: 0, conversed: 0, noPhone: 0, blocked: 0, onDeal: 0, recentlyTexted: 0, openDraft: 0, pulsedRecently: 0 };
+  const counts = { pool: investors.length, eligible: 0, friends: 0, quiet: 0, conversed: 0, noPhone: 0, blocked: 0, stopped: 0, onDeal: 0, recentlyTexted: 0, openDraft: 0, pulsedRecently: 0 };
   const quiet = [], conversed = [], friends = [];
   for (const inv of investors) {
     if (!inv?.contactId || (inv.status && inv.status !== "active")) continue;
     if (!String(inv.phone || "").trim()) { counts.noPhone++; continue; }
     if (isBlockedBuyer(inv)) { counts.blocked++; continue; }
+    // You stopped the bot on them (shared/bot-hold.js): no check-in.
+    if (stopped.has(inv.contactId)) { counts.stopped++; continue; }
     if (inv.onLiveDeal) { counts.onDeal++; continue; }
     const last = Math.max(Date.parse(inv.lastMessageAt || "") || 0, Date.parse(inv.lastBlastAt || "") || 0, Date.parse(inv.lastRepliedAt || "") || 0);
     if (last && now - last < s.quietDays * DAY_MS) { counts.recentlyTexted++; continue; }
@@ -141,7 +143,7 @@ export function pickPulseBuyers({ investors = [], pulsedAt = new Map(), openDraf
   counts.conversed = conversed.length;
   // How long one pass through everyone reachable takes at this cap, in
   // workdays — the honest answer to "is everyDays achievable?".
-  const reachable = counts.pool - counts.noPhone - counts.blocked - counts.onDeal;
+  const reachable = counts.pool - counts.noPhone - counts.blocked - counts.stopped - counts.onDeal;
   counts.passWorkdays = s.dailyCap > 0 ? Math.ceil(Math.max(0, reachable) / s.dailyCap) : null;
   const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""));
   quiet.sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0) || byName(a, b));
