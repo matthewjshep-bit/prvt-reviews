@@ -104,6 +104,8 @@ export const EVENT_TYPES = [
   // Stop / Pause and Resume on the work pane (shared/bot-hold.js): while a
   // stop holds, nothing goes to them by itself. data.until ends a pause.
   "drive_stopped", "drive_resumed",
+  // Check in less / normal / more with them (data.pace).
+  "cadence_set",
   // They texted STOP, or GHL has them on DND (reply-agent markUnsubscribed).
   "unsubscribed",
 ];
@@ -139,7 +141,7 @@ export const EVENT_LABEL = {
   property_financed: "financed a property",
   email_received: "they emailed us",
   email_sent: "we emailed them",
-  drive_stopped: "you stopped the bot", drive_resumed: "the bot is back on",
+  drive_stopped: "you stopped the bot", drive_resumed: "the bot is back on", cadence_set: "you changed how often we check in",
   unsubscribed: "they unsubscribed",
 };
 
@@ -174,7 +176,7 @@ export const EVENT_ICON = {
   listing_pinged: "Crosshair", listing_ping_voided: "Clock",
   workflow_enrolled: "Workflow", workflow_left: "LogOut",
   offmarket_asked: "Crosshair",
-  drive_stopped: "CirclePause", drive_resumed: "CirclePlay",
+  drive_stopped: "CirclePause", drive_resumed: "CirclePlay", cadence_set: "Gauge",
   unsubscribed: "UserX",
 };
 

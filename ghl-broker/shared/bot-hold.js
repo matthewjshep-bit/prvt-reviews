@@ -32,6 +32,18 @@ export const PAUSE_PRESETS = { "1w": 7, "2w": 14, "1m": 30 };
 export const PAUSE_LABEL = { "1w": "1 week", "2w": "2 weeks", "1m": "1 month" };
 export const MAX_PAUSE_DAYS = 35;
 
+// Check in less / normal / more, per person (Matt, 2026-10-01). A pace
+// scales the TIME between our own unprompted texts — the offer nudge, the
+// passed check-in, the hot push, the pulses — never a rung's number (that is
+// its dedupe key) and never a count cap. "More" brings rungs sooner but never
+// shrinks a floor (the gap between texts, the hot push's 20 hours); "less"
+// stretches both. Their own asks, promises and price drops keep their days.
+export const PACES = ["less", "normal", "more"];
+export const PACE_FACTOR = { less: 2, normal: 1, more: 0.5 };
+export const MIN_PACE = 0.5;
+export const MAX_PACE = 2;
+export const PACE_LABEL = { less: "Checking in less", normal: "Normal pace", more: "Checking in more" };
+
 const NOT_HELD = Object.freeze({ held: false, kind: null, since: null, until: null, endedAt: null, reason: "" });
 
 /**
@@ -103,6 +115,27 @@ export function pauseUntil({ preset = null, until = null, now = Date.now() } = {
   if (at <= now + HOUR_MS) return { error: "pick a date in the future" };
   if (at > now + MAX_PAUSE_DAYS * DAY_MS) return { error: "pick a date in the next five weeks" };
   return { until: new Date(at).toISOString() };
+}
+
+/**
+ * paceOf({ events }) → { pace, factor, since }
+ * The newest Check in less / normal / more. Anything unreadable is normal.
+ */
+export function paceOf({ events = [] } = {}) {
+  const last = (events || []).filter((e) => e?.type === PACE_EVENT)
+    .sort((a, b) => String(a.at || "").localeCompare(String(b.at || ""))).at(-1);
+  const pace = PACES.includes(last?.data?.pace) ? last.data.pace : "normal";
+  return { pace, factor: PACE_FACTOR[pace], since: pace === "normal" ? null : last?.at || null };
+}
+
+/**
+ * paceScale(factor) → { rung, floor }
+ *   rung   multiplies the time to each rung (2 = half as often)
+ *   floor  multiplies a minimum gap: stretched by "less", never shrunk
+ */
+export function paceScale(factor = 1) {
+  const f = Math.min(MAX_PACE, Math.max(MIN_PACE, Number(factor) || 1));
+  return { rung: f, floor: Math.max(1, f) };
 }
 
 /**

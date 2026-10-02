@@ -175,3 +175,15 @@ test("an offer the agent is presenting shows a nudge, not a push to paper", () =
   const n = next(offer({ hot: { at: at(0), by: "conversation", signal: "presenting" } }));
   assert.equal(n.kind, "offer_nudge");
 });
+
+test("the column moves the nudge out when you check in less, and in when you check in more", () => {
+  const plain = next(offer());
+  assert.equal(plain.kind, "offer_nudge");
+  const less = next(offer(), { events: [{ type: "cadence_set", at: at(0.05), data: { pace: "less" } }] });
+  const more = next(offer(), { events: [{ type: "cadence_set", at: at(0.05), data: { pace: "more" } }] });
+  assert.equal(less.kind, "offer_nudge");
+  const days = (n) => (Date.parse(n.at) - T0) / DAY;
+  assert.ok(days(less) >= 5.9 && days(less) <= 7, `less: about day 6, got ${days(less)}`);
+  assert.ok(days(plain) >= 2.9 && days(plain) <= 4, `normal: about day 3, got ${days(plain)}`);
+  assert.ok(days(more) < days(plain), `more: sooner than day 3, got ${days(more)}`);
+});

@@ -751,7 +751,8 @@ test("a backlog the paging uncovers goes out over days, hot pushes first", async
   _resetJobs();
   const store = pagedStore([...olderBook(170), hotOffer({ id: "yes", contactId: "cY", address: "2 Yes St, Kent, WA", statusAt: at(3), realm: { answer: "yes", ts: at(3) }, hot: { at: at(3), by: "conversation", signal: "writing_up" } })]);
   const { job, started } = spySweep(store, { now: T0 + 4.2 * DAY, opts: { saved: HOT_SAVED } });
-  await new Promise((r) => setTimeout(r, 200));
+  // 150 starts: wait for the run to finish rather than a fixed 200ms.
+  for (let i = 0; i < 150 && job.status === "running"; i++) await new Promise((r) => setTimeout(r, 20));
   assert.equal(job.status, "done", job.error);
   assert.equal(started.length, 150);
   assert.equal(started[0].kind, "hot_push", "the agreed price is first in line");

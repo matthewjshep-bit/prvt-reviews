@@ -83,8 +83,8 @@ import {
 import { attachNextFollowUps } from "../next-follow-up.js";
 import { readSpend } from "../ai-spend.js";
 import { dueStep } from "../shared/follow-up.js";
-import { holdFor } from "../bot-hold.js";
-import { holdLine } from "../shared/bot-hold.js";
+import { holdFor, botEventsByContact } from "../bot-hold.js";
+import { holdLine, botHold, paceOf } from "../shared/bot-hold.js";
 import { autoAcceptCeiling } from "../shared/auto-accept.js";
 import { buyerCeiling, normalizeFellThroughCode, FELL_THROUGH_LABEL } from "../shared/post-mortem.js";
 import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, buildNetSheetDocument, moneyInWords } from "../offer-doc.js";
@@ -5445,18 +5445,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (req.query.preview !== "1" && req.query.preview !== "true") return res.json({ ok: true, job, daily, sendsEnabled: CARD_SENDS_ENABLED });
       const config = conversationConfig(saved);
       const now = Date.now();
-      const [agents, investors] = await Promise.all([
+      const [agents, investors, stops] = await Promise.all([
         agentCandidates({ store, locationId, config, now }),
         investorCandidates({ store, locationId, config, now }),
+        botEventsByContact({ store, locationId }).catch(() => new Map()),
       ]);
       const due = [];
       for (const c of [...agents, ...investors]) {
         const fu = config.parties[c.party].followUp;
-        const d = dueStep({
+        // Stopped, paused or paced (shared/bot-hold.js), as the sweep reads it.
+        const theirs = stops.get(c.contactId) || [];
+        const hold = botHold({ events: theirs, offerId: c.offerId || null, now });
+        const d = hold.held ? { due: false, reason: holdLine(hold) } : dueStep({
           steps: c.ladder.steps, startedAt: c.startedAt, sentSteps: c.sentSteps,
           lastInboundAt: c.lastInboundAt || null, lastTouchAt: c.lastTouchAt || null, now,
           stopOnAnyInbound: fu.stopOnAnyInbound, minHoursBetween: fu.minHoursBetween,
-          repeatEvery: c.ladder.repeatEvery,
+          repeatEvery: c.ladder.repeatEvery, pace: paceOf({ events: theirs }).factor,
         });
         due.push({ contactId: c.contactId, party: c.party, kind: c.kind, address: c.address,
                    startedAt: c.startedAt, due: d.due, step: d.step ?? null, reason: d.reason || "" });

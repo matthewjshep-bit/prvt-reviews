@@ -46,8 +46,8 @@ import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_
 import { draftStats } from "../shared/conversation-ai.js";
 import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
 import { conversationConfig, standDownForHold } from "../reply-agent.js";
-import { holdFor } from "../bot-hold.js";
-import { holdLine, pauseUntil, mergeEvents, BOT_EVENT_TYPES } from "../shared/bot-hold.js";
+import { holdFor, botEventsFor } from "../bot-hold.js";
+import { holdLine, pauseUntil, mergeEvents, BOT_EVENT_TYPES, PACES, paceOf } from "../shared/bot-hold.js";
 import { allEventsSince } from "../contact-events.js";
 import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
@@ -638,6 +638,24 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       } catch (err) { fail(res, err); }
     });
   }
+  // Check in less / normal / more with a person (shared/bot-hold.js): how
+  // far apart our own unprompted texts to them are. Body: { contactId,
+  // pace: "less" | "normal" | "more", party? }. "normal" resets it.
+  router.post("/drive/pace", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const b = req.body || {};
+      const contactId = String(b.contactId || "").slice(0, 64);
+      if (!contactId) return res.status(400).json({ error: "contactId is required" });
+      if (!PACES.includes(b.pace)) return res.status(400).json({ error: "pace is less, normal or more" });
+      const at = new Date().toISOString();
+      await recordEvent({
+        store, locationId, contactId, party: PARTIES.has(b.party) ? b.party : null, type: "cadence_set", at,
+        source: "operator", dedupeKey: `cadence_set:${contactId}:${at}`, data: { pace: b.pace },
+      });
+      res.json({ ok: true, pace: paceOf({ events: await botEventsFor({ store, locationId, contactId }) }) });
+    } catch (err) { fail(res, err); }
+  });
 
   // A question the bot couldn't answer, answered from Today's answer box:
   // drafted to them in our voice (it waits in the outbox for Send), kept as a

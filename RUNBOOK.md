@@ -1829,10 +1829,10 @@ starts by itself between rungs.
 **Stop / Resume.** `POST /api/dashboard/drive/stop` and `/drive/resume` write
 `drive_stopped` / `drive_resumed`. A stop from Today is the whole thread with
 that agent, until Resume; a stopped promise row moves back to Your call. Since
-2026-10-01 a stop holds every sender, not only the drivers — see "Stop and
-pause — one person".
+2026-10-01 a stop holds every sender, not only the drivers — see "Stop,
+pause and pace — one person".
 
-### Stop and pause — one person (2026-10-01)
+### Stop, pause and pace — one person (2026-10-01)
 
 Matt: Stop on a thread means nothing goes to that person by itself. Until
 this date the stop was read by the promise driver, the hot push and a few
@@ -1895,6 +1895,19 @@ all ask it). `ghl-broker/bot-hold.js` reads the events with no time window,
 so a stop pressed months ago still holds; a read that fails holds rather
 than sends. Skip lines and flags carry `holdLine` ("you stopped the bot on
 them", "paused until Oct 15"), never the reason a person typed.
+
+**Check in less / normal / more** (`POST /api/dashboard/drive/pace
+{ contactId, pace }`, a `cadence_set` event, newest wins). Per person. It
+scales the time between our own unprompted texts: the offer nudge, the
+passed check-in, the hot push, the outreach / blast / dataroom nudges and
+both pulses. "Less" doubles the time to each rung (the agent pulse's three
+weeks become six); "more" halves it. The rungs keep their numbers — a rung's
+day is its dedupe key — so changing pace mid-ladder never re-sends one.
+"More" never shrinks a floor (the 40 hours between texts, the hot push's 20,
+the pulses' quiet days); "less" stretches those too. Untouched: their own
+asks, promises, price drops, timers, showing texts, every count cap, the
+two-unanswered brake. Pace never switches on a ladder that is off. The
+Offers column and the follow-up preview show the paced dates.
 
 **What it can't stop.** GHL workflows that fire on tags the app sets can
 still text a stopped person; only GHL's DND or the stop-bot tag stops those.

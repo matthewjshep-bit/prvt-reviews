@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   dueStep, exhausted, followUpDedupeKey, normalizeSteps, stepLabel,
-  kindsFor, DEFAULT_LADDERS, FOLLOW_UP_KINDS,
+  kindsFor, DEFAULT_LADDERS, FOLLOW_UP_KINDS, nextRungAt,
 } from "./follow-up.js";
 
 const DAY = 86400000;
@@ -214,4 +214,50 @@ test("the hot push is an agent ladder, tight, off by default, and stops when it 
   assert.ok(kindsFor("agent").includes("hot_push"));
   assert.deepEqual(DEFAULT_LADDERS.hot_push, { enabled: false, steps: [1, 3, 6, 10], repeatEvery: 0, onExhausted: "stop" });
   assert.equal(HOT_MIN_HOURS, 20);
+});
+
+/* ---------- check in less / more (shared/bot-hold.js pace, 2026-10-01) ---------- */
+
+test("checking in less puts every rung twice as far out and the rung keeps its own number", () => {
+  const base = { steps: LADDER, startedAt: SENT, sentSteps: [] };
+  assert.equal(dueStep({ ...base, now: at(4) }).step, 3, "normal: day 3 is due on day 4");
+  assert.equal(dueStep({ ...base, now: at(4), pace: 2 }).due, false, "less: day 3 waits until day 6");
+  const d = dueStep({ ...base, now: at(6.1), pace: 2 });
+  assert.equal(d.due, true);
+  assert.equal(d.step, 3, "the rung is still 'day 3' — its dedupe key never moves");
+  assert.deepEqual(nextRungAt({ ...base, now: at(1), pace: 2 }), { at: new Date(at(6)).toISOString(), step: 3, due: false });
+  assert.equal(exhausted({ ...base, sentSteps: [3, 7, 14], now: at(20), pace: 2 }), false, "less: the last rung is day 28");
+  assert.equal(exhausted({ ...base, sentSteps: [3, 7, 14], now: at(29), pace: 2 }), true);
+});
+
+test("checking in more brings rungs sooner but never inside the forty-hour gap", () => {
+  const base = { steps: LADDER, startedAt: SENT, sentSteps: [] };
+  const d = dueStep({ ...base, now: at(1.6), pace: 0.5 });
+  assert.equal(d.due, true, "more: day 3 is due after a day and a half");
+  assert.equal(d.step, 3);
+  // Day 7 lands on day 3.5 at this pace, but we texted them on day 2.5: the
+  // 40 hours between texts still stand.
+  const tooSoon = dueStep({ ...base, sentSteps: [3], now: at(3.6), pace: 0.5, lastTouchAt: new Date(at(2.5)).toISOString(), minHoursBetween: 40 });
+  assert.equal(tooSoon.due, false, "more never goes inside the forty-hour gap");
+  assert.match(tooSoon.reason, /too soon/);
+  const less = dueStep({ ...base, sentSteps: [3], now: at(14.5), pace: 2, lastTouchAt: new Date(at(12)).toISOString(), minHoursBetween: 40 });
+  assert.equal(less.due, false, "less stretches the gap too: 80 hours");
+});
+
+test("a repeating ladder repeats at the paced interval", () => {
+  const base = { steps: [3, 7], repeatEvery: 7, startedAt: SENT, sentSteps: [3, 7] };
+  assert.equal(nextRungAt({ ...base, now: at(8) }).step, 14);
+  assert.equal(nextRungAt({ ...base, now: at(8) }).at, new Date(at(14)).toISOString());
+  assert.equal(nextRungAt({ ...base, now: at(8), pace: 2 }).at, new Date(at(28)).toISOString(), "less: every other week");
+  assert.equal(nextRungAt({ ...base, sentSteps: [3], now: at(4), pace: 0.5 }).at, new Date(at(3.5)).toISOString(), "more: day 7 lands on day 3.5");
+});
+
+test("changing pace mid-ladder never re-sends a sent rung", () => {
+  // Sent day 3 at normal pace; switched to "more" on day 5: day 7's rung is
+  // due now (3.5 days in), day 3 is never sent again.
+  const d = dueStep({ steps: LADDER, startedAt: SENT, sentSteps: [3], now: at(5), pace: 0.5 });
+  assert.equal(d.due, true);
+  assert.equal(d.step, 7);
+  // Switched to "less" on day 8 after day 7 went: nothing is due until day 28.
+  assert.equal(dueStep({ steps: LADDER, startedAt: SENT, sentSteps: [3, 7], now: at(8), pace: 2 }).due, false);
 });

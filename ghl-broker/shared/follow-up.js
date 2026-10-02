@@ -18,6 +18,8 @@
 //
 // Pure. No I/O, no clock of its own — `now` is always passed in.
 
+import { paceScale } from "./bot-hold.js";
+
 export const FOLLOW_UP_KINDS = {
   // The cold cadence. Until this existed the twelve touches after a first
   // text lived in a GHL workflow the app could not see, so "gone quiet" on a
@@ -245,11 +247,13 @@ export const MAX_REPEAT_DAYS = 60;
 // configured days, then — for a repeating ladder — one more every
 // `repeatEvery` days after the last. A repeat rung's step is its day offset
 // like any other, so its dedupe key is as stable as a configured one.
-function rungsThrough(ladder, repeatEvery, started, now) {
+// `unit` is a paced day (shared/bot-hold.js): the rungs keep their numbers,
+// only the time to each one stretches or shrinks.
+function rungsThrough(ladder, repeatEvery, started, now, unit = DAY_MS) {
   const every = Math.round(Number(repeatEvery) || 0);
   if (!(every > 0) || !ladder.length) return ladder;
   const out = [...ladder];
-  const daysIn = Math.floor((now - started) / DAY_MS);
+  const daysIn = Math.floor((now - started) / unit);
   for (let d = ladder[ladder.length - 1] + every; d <= daysIn + every; d += every) out.push(d);
   return out;
 }
@@ -276,8 +280,12 @@ export function normalizeSteps(v) {
 
 /**
  * dueStep({ steps, startedAt, sentSteps, lastInboundAt, lastTouchAt, now,
- *           stopOnAnyInbound, minHoursBetween })
+ *           stopOnAnyInbound, minHoursBetween, repeatEvery, pace })
  *   → { due: true, step, dayOffset } | { due: false, reason }
+ *
+ * `pace` (shared/bot-hold.js): 2 checks in half as often, 0.5 twice as
+ * often. It scales the time to each rung; the gap between texts only ever
+ * grows with it.
  *
  * `step` is the day offset itself, so it is stable if the operator reorders
  * or inserts a rung: step 7 means "the day-7 touch" forever, and a ladder
@@ -288,13 +296,15 @@ export function normalizeSteps(v) {
  */
 export function dueStep({
   steps = [], startedAt, sentSteps = [], lastInboundAt = null, lastTouchAt = null,
-  now = Date.now(), stopOnAnyInbound = true, minHoursBetween = 0, repeatEvery = 0,
+  now = Date.now(), stopOnAnyInbound = true, minHoursBetween = 0, repeatEvery = 0, pace = 1,
 } = {}) {
   const configured = normalizeSteps(steps);
   if (!configured.length) return { due: false, reason: "no ladder" };
   const started = ms(startedAt);
   if (started == null) return { due: false, reason: "nothing to count from" };
-  const ladder = rungsThrough(configured, repeatEvery, started, now);
+  const { rung, floor } = paceScale(pace);
+  const unit = DAY_MS * rung;
+  const ladder = rungsThrough(configured, repeatEvery, started, now, unit);
 
   // They answered. That is the whole point of the ladder and it ends here —
   // whatever they said, a person or the reply agent is now in a conversation,
@@ -316,15 +326,15 @@ export function dueStep({
   //   sweep stood aside — day 7 does not come back round on day 20. Same rule
   //   protects an operator who inserts a day-1 rung into a ladder mid-flight:
   //   it applies to the next conversation, not retroactively to this one.
-  const overdue = ladder.filter((d) => started + d * DAY_MS <= now);
+  const overdue = ladder.filter((d) => started + d * unit <= now);
   const pick = overdue.length ? overdue[overdue.length - 1] : null;
   if (pick == null || done.has(pick)) {
-    const next = ladder.find((d) => !done.has(d) && started + d * DAY_MS > now);
+    const next = ladder.find((d) => !done.has(d) && started + d * unit > now);
     return { due: false, reason: next == null ? "ladder finished" : `day ${next} hasn't come round yet` };
   }
 
   const touched = ms(lastTouchAt);
-  if (minHoursBetween > 0 && touched != null && now - touched < minHoursBetween * 3600000) {
+  if (minHoursBetween > 0 && touched != null && now - touched < minHoursBetween * floor * 3600000) {
     const hrs = Math.round((now - touched) / 3600000);
     return { due: false, reason: `we texted them ${hrs}h ago — too soon` };
   }
@@ -338,7 +348,7 @@ export function dueStep({
  * rung to have been sent: a ladder whose middle step was skipped (they were
  * on a live deal that week) is still over when its last day goes by.
  */
-export function exhausted({ steps = [], sentSteps = [], startedAt, now = Date.now(), repeatEvery = 0 } = {}) {
+export function exhausted({ steps = [], sentSteps = [], startedAt, now = Date.now(), repeatEvery = 0, pace = 1 } = {}) {
   // A repeating ladder never runs out: it asks until they answer.
   if (Math.round(Number(repeatEvery) || 0) > 0) return false;
   const ladder = normalizeSteps(steps);
@@ -346,8 +356,8 @@ export function exhausted({ steps = [], sentSteps = [], startedAt, now = Date.no
   const started = ms(startedAt);
   if (started == null) return false;
   const last = ladder[ladder.length - 1];
-  if (started + last * DAY_MS > now) return false;
-  return !dueStep({ steps: ladder, startedAt, sentSteps, now, stopOnAnyInbound: false }).due;
+  if (started + last * DAY_MS * paceScale(pace).rung > now) return false;
+  return !dueStep({ steps: ladder, startedAt, sentSteps, now, stopOnAnyInbound: false, pace }).due;
 }
 
 /**
@@ -359,19 +369,20 @@ export function exhausted({ steps = [], sentSteps = [], startedAt, now = Date.no
  * ladder is finished. Inbound, the gap between texts and the weekly cap are
  * the caller's (they aren't a property of the ladder).
  */
-export function nextRungAt({ steps = [], repeatEvery = 0, startedAt, sentSteps = [], now = Date.now() } = {}) {
+export function nextRungAt({ steps = [], repeatEvery = 0, startedAt, sentSteps = [], now = Date.now(), pace = 1 } = {}) {
   const configured = normalizeSteps(steps);
   const started = ms(startedAt);
   if (!configured.length || started == null) return null;
+  const unit = DAY_MS * paceScale(pace).rung;
   // Far enough ahead that a repeating ladder always has a rung after `now`.
   const every = Math.round(Number(repeatEvery) || 0);
-  const ladder = rungsThrough(configured, every, started, now + Math.max(every, 1) * DAY_MS);
+  const ladder = rungsThrough(configured, every, started, now + Math.max(every, 1) * unit, unit);
   const done = new Set(sentSteps.map((s) => Math.round(Number(s))).filter(Number.isFinite));
-  const overdue = ladder.filter((d) => started + d * DAY_MS <= now);
+  const overdue = ladder.filter((d) => started + d * unit <= now);
   const pick = overdue.at(-1);
-  if (pick != null && !done.has(pick)) return { at: new Date(started + pick * DAY_MS).toISOString(), step: pick, due: true };
-  const next = ladder.find((d) => !done.has(d) && started + d * DAY_MS > now);
-  return next == null ? null : { at: new Date(started + next * DAY_MS).toISOString(), step: next, due: false };
+  if (pick != null && !done.has(pick)) return { at: new Date(started + pick * unit).toISOString(), step: pick, due: true };
+  const next = ladder.find((d) => !done.has(d) && started + d * unit > now);
+  return next == null ? null : { at: new Date(started + next * unit).toISOString(), step: next, due: false };
 }
 
 /* ---------- where each offer ladder counts from ---------- */

@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { botHold, holdLine, pauseUntil, pauseDay, mergeEvents, BOT_EVENT_TYPES, MAX_PAUSE_DAYS } from "./bot-hold.js";
+import { botHold, holdLine, pauseUntil, pauseDay, mergeEvents, BOT_EVENT_TYPES, MAX_PAUSE_DAYS, paceOf, paceScale, PACE_FACTOR } from "./bot-hold.js";
 
 const NOW = Date.parse("2026-10-01T18:00:00Z");
 const DAY = 86400000;
@@ -84,4 +84,24 @@ test("one timeline from two reads keeps each event once", () => {
 
 test("the stop is read from the stop, resume, pace and unsubscribe events", () => {
   assert.deepEqual(BOT_EVENT_TYPES, ["drive_stopped", "drive_resumed", "cadence_set", "unsubscribed"]);
+});
+
+test("the newest pace wins, and anything unreadable is normal", () => {
+  const pace = (p, d) => ({ type: "cadence_set", contactId: "c1", at: ago(d), data: { pace: p } });
+  assert.deepEqual(paceOf({ events: [] }), { pace: "normal", factor: 1, since: null });
+  assert.equal(paceOf({ events: [pace("less", 3)] }).factor, 2);
+  assert.equal(paceOf({ events: [pace("less", 3), pace("more", 1)] }).pace, "more");
+  assert.equal(paceOf({ events: [pace("more", 1), pace("less", 3)] }).pace, "more", "time decides, not order");
+  assert.equal(paceOf({ events: [pace("more", 3), pace("normal", 1)] }).since, null, "normal resets it");
+  assert.equal(paceOf({ events: [pace("ludicrous", 1)] }).pace, "normal");
+  assert.deepEqual(PACE_FACTOR, { less: 2, normal: 1, more: 0.5 });
+});
+
+test("more brings rungs sooner but never shrinks a floor; less stretches both", () => {
+  assert.deepEqual(paceScale(0.5), { rung: 0.5, floor: 1 });
+  assert.deepEqual(paceScale(2), { rung: 2, floor: 2 });
+  assert.deepEqual(paceScale(1), { rung: 1, floor: 1 });
+  assert.deepEqual(paceScale(0.01), { rung: 0.5, floor: 1 }, "clamped");
+  assert.deepEqual(paceScale(9), { rung: 2, floor: 2 }, "clamped");
+  assert.deepEqual(paceScale(undefined), { rung: 1, floor: 1 });
 });

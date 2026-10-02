@@ -37,7 +37,8 @@ test("every event type has a label and an icon, and every fact key names a party
 });
 
 test("the record has words and an icon for stop, pause, resume and an unsubscribe", () => {
-  for (const t of ["drive_stopped", "drive_resumed", "unsubscribed"]) {
+  assert.equal(EVENT_ICON.cadence_set, "Gauge");
+  for (const t of ["drive_stopped", "drive_resumed", "cadence_set", "unsubscribed"]) {
     assert.ok(EVENT_TYPES.includes(t), `${t} is in the vocabulary`);
   }
   assert.equal(EVENT_LABEL.drive_stopped, "you stopped the bot");

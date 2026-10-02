@@ -15,6 +15,8 @@
 // Pure: who gets one today, in what order, and what the message may lean on.
 // The runner (ghl-broker/buyer-pulse.js) does the reading and the sending.
 
+import { paceScale } from "./bot-hold.js";
+
 export const DEFAULT_DAILY_CAP = 10;
 export const MAX_DAILY_CAP = 50;
 export const DEFAULT_EVERY_DAYS = 90;
@@ -119,7 +121,7 @@ export function pulseSubject(inv = {}, { now = Date.now() } = {}) {
  * theirs, never less than one a day while any are waiting, longest-silent
  * first. Either line's unused seats go to the other.
  */
-export function pickPulseBuyers({ investors = [], pulsedAt = new Map(), openDraftIds = new Set(), stopped = new Set(), settings = {}, now = Date.now() } = {}) {
+export function pickPulseBuyers({ investors = [], pulsedAt = new Map(), openDraftIds = new Set(), stopped = new Set(), paceBy = new Map(), settings = {}, now = Date.now() } = {}) {
   const s = normalizeBuyerPulse(settings);
   const counts = { pool: investors.length, eligible: 0, friends: 0, quiet: 0, conversed: 0, noPhone: 0, blocked: 0, stopped: 0, onDeal: 0, recentlyTexted: 0, openDraft: 0, pulsedRecently: 0 };
   const quiet = [], conversed = [], friends = [];
@@ -130,11 +132,14 @@ export function pickPulseBuyers({ investors = [], pulsedAt = new Map(), openDraf
     // You stopped the bot on them (shared/bot-hold.js): no check-in.
     if (stopped.has(inv.contactId)) { counts.stopped++; continue; }
     if (inv.onLiveDeal) { counts.onDeal++; continue; }
+    // Check in less / more with this buyer (shared/bot-hold.js): the cadence
+    // stretches or shrinks; the quiet days after any text only grow.
+    const { rung, floor } = paceScale(paceBy.get(inv.contactId) || 1);
     const last = Math.max(Date.parse(inv.lastMessageAt || "") || 0, Date.parse(inv.lastBlastAt || "") || 0, Date.parse(inv.lastRepliedAt || "") || 0);
-    if (last && now - last < s.quietDays * DAY_MS) { counts.recentlyTexted++; continue; }
+    if (last && now - last < s.quietDays * floor * DAY_MS) { counts.recentlyTexted++; continue; }
     if (openDraftIds.has(inv.contactId)) { counts.openDraft++; continue; }
     const pulsed = Date.parse(pulsedAt.get(inv.contactId) || "");
-    const cadence = hasConversed(inv) ? s.everyDays : s.quietEveryDays;
+    const cadence = (hasConversed(inv) ? s.everyDays : s.quietEveryDays) * rung;
     if (Number.isFinite(pulsed) && now - pulsed < cadence * DAY_MS) { counts.pulsedRecently++; continue; }
     counts.eligible++;
     // Bought from us before: a friend, first in line (2026-09-29).

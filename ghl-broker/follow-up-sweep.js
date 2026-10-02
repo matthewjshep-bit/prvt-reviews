@@ -34,7 +34,7 @@ import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
 import { waitingReason } from "./outbox-guard.js";
 import { botEventsByContact } from "./bot-hold.js";
-import { botHold, holdLine } from "./shared/bot-hold.js";
+import { botHold, holdLine, paceOf, MIN_PACE } from "./shared/bot-hold.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 
 const DAY_MS = 86400000;
@@ -88,7 +88,9 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
   if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
   const hotLadderOn = Boolean(pb.followUp.ladders?.hot_push?.enabled);
   const earliest = Math.min(...ladder.steps);
-  const rows = await followUpRows(store, locationId, { statuses: [...OPEN_STATUSES], before: iso(now - earliest * DAY_MS) });
+  // MIN_PACE: someone you asked to hear from more (shared/bot-hold.js) has
+  // their first rung at half its day, so their offer is a candidate sooner.
+  const rows = await followUpRows(store, locationId, { statuses: [...OPEN_STATUSES], before: iso(now - earliest * MIN_PACE * DAY_MS) });
 
   // One nudge per PROPERTY. The book holds duplicates — the same house
   // underwritten twice for one agent, or offered to a co-listing agent — and
@@ -212,7 +214,7 @@ export async function passedCandidates({ store, locationId, config, now = Date.n
   const ladder = pb?.followUp?.ladders?.passed_checkin;
   if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
   const earliest = Math.min(...ladder.steps);
-  const rows = await followUpRows(store, locationId, { statuses: [...CHECKIN_STATUSES], before: iso(now - earliest * DAY_MS) });
+  const rows = await followUpRows(store, locationId, { statuses: [...CHECKIN_STATUSES], before: iso(now - earliest * MIN_PACE * DAY_MS) });
   const replaced = await replacedOffers(store, locationId);
   // The price watch writes these when the listing goes pending or sells, and
   // when it comes back. A check-in asking whether the seller has softened is
@@ -589,9 +591,11 @@ async function runSweep(job, ctx) {
       push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: "we're talking to them right now" });
       continue;
     }
+    // Check in less / more for this person (shared/bot-hold.js).
+    const pace = paceOf({ events: stops.get(c.contactId) || [] }).factor;
     const d = dueStep({
       steps: c.ladder.steps, startedAt: c.startedAt, sentSteps: c.sentSteps,
-      lastInboundAt, lastTouchAt, now,
+      lastInboundAt, lastTouchAt, now, pace,
       // The hot push re-anchors on their reply instead of stopping on it,
       // and keeps its own floor between texts.
       stopOnAnyInbound: c.kind === "passed_checkin" || c.kind === "hot_push" || reanchored ? false : fu.stopOnAnyInbound,
@@ -604,7 +608,7 @@ async function runSweep(job, ctx) {
       // we actually said something into it. A ladder that only ever produced
       // drafts nobody sent proves nothing about the agent.
       if (c.kind === "offer_nudge" && c.ladder.onExhausted === "mark_no_response" && c.sentSteps.length
-          && exhausted({ steps: c.ladder.steps, sentSteps: c.sentSteps, startedAt: c.startedAt, now, repeatEvery: c.ladder.repeatEvery })) {
+          && exhausted({ steps: c.ladder.steps, sentSteps: c.sentSteps, startedAt: c.startedAt, now, repeatEvery: c.ladder.repeatEvery, pace })) {
         if (!job.dryRun && typeof deps.setOfferStatus === "function") {
           const r = await deps.setOfferStatus({
             contactId: c.contactId, addressHint: c.address, status: "no_response",
