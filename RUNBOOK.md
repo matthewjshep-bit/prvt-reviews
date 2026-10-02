@@ -2935,8 +2935,8 @@ ever). While a chain is running, it keeps its own clock.
 Settings → Agent Outreach → "Run outreach every day on its own". Once a
 weekday (the `OUTREACH_SWEEP_HOUR` hour in Pacific time, default 10 = 10–11am,
 on the broker's 15-minute tick, `job_cursors` row `outreach`; untick "Weekdays
-only" for every day) the broker pulls — with a county list, the next pages of
-one county at a time (`job_cursors` row `outreachPages`), filtered at RentCast
+only" for every day) the broker pulls — with a county list, the counties in
+turn from where the last run stopped (`job_cursors` row `outreachPages`), filtered at RentCast
 to listings at least 45 days old of the chosen property types, with requests
 spread over the billing month to the plan's number (below) — picks the most distressed
 agents nobody has talked to (status new, no GHL match, a phone, at least one
@@ -2947,6 +2947,20 @@ The follow-up (`outreach-followup.js`, `OUTREACH_FOLLOWUP_HOUR`, default 11am
 Pacific, row `outreachFollowUp`) puts agents enrolled by the "GHL workflow"
 first touch who haven't answered in N days (default 14) into the follow-up
 workflow. It needs `conversations.readonly` to see who wrote back.
+
+**The run fills the day (2026-10-02).** A run used to stop at the first
+county that yielded anyone: Pierce gave up one new agent and the day was over
+with requests unspent. Now a run reads county after county, each at most
+once, while it has requests left and fewer picks than 1.5 × the daily cap
+(room for the agents the import finds already in GHL). Each county's agents
+import into that county's own batch ("Autopilot · Pierce, WA"), the day's
+cap shared across them; an agent with listings in two counties is picked in
+the first. A run stops before a pull, not after one, once its requests are
+spent. The turn stays on the first county left with pages and people in it;
+otherwise it passes to the county after the last one read. A run stamps
+`run.beatAt` on the cursor after every pull and import, and a stale run is
+measured from the last beat, so a long run isn't retried while it works.
+`last.tried` lists up to 12 counties with their pick counts.
 
 **The RentCast meter (2026-10-02).** Matt moved RentCast to the Foundation
 plan (1,000 requests a month) to find more agents. A run may spend what's

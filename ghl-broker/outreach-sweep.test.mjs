@@ -157,23 +157,24 @@ test("walks a county page by page across runs, then the next county; a dry run k
   assert.deepEqual(j1.budget, { used: 0, budget: 48, reserve: 2, runsLeft: 22, perRun: 2 });
   assert.equal(place().offsets["King, WA"], 1000);
 
-  await run({ nextOffset: 500, totalCount: 1400 }, true);
+  // Every run spends its two requests in one county, as a real pull would.
+  await run({ nextOffset: 500, totalCount: 1400, requestsUsed: 2 }, true);
   assert.equal(bodies[1].offset, 1000);
   assert.equal(place().offsets["King, WA"], 1000, "a preview does not move the place");
 
-  await run({ nextOffset: 0, totalCount: 1400 });
+  await run({ nextOffset: 0, totalCount: 1400, requestsUsed: 2 });
   assert.equal(bodies[2].county, "King");
   assert.equal(bodies[2].offset, 1000);
   assert.equal(place().offsets["King, WA"], 0, "King read to the end starts over next time");
   assert.equal(place().turn, 1);
 
-  await run({ nextOffset: 0, totalCount: 300 });
+  await run({ nextOffset: 0, totalCount: 300, requestsUsed: 2 });
   assert.equal(bodies[3].county, "Pierce");
   assert.equal(bodies[3].offset, 0);
   assert.equal(place().turn, 0, "then round to King again");
 });
 
-test("a county with nobody new doesn't cost the day: the same run moves on to the next county, and the empty one gives up its turn", async () => {
+test("a county with nobody new doesn't cost the day: the run moves on, and the empty one gives up its turn", async () => {
   // 2026-09-17: King's 844 "new" rows were all in GHL already or had no phone; Pierce and Snohomish never got a turn.
   _resetJobs();
   const counties = [{ county: "King", state: "WA" }, { county: "Pierce", state: "WA" }, { county: "Snohomish", state: "WA" }];
@@ -188,10 +189,10 @@ test("a county with nobody new doesn't cost the day: the same run moves on to th
   };
   const job = startOutreachSweep({ locationId: "loc-mv", client: {}, saved, store, deps, now: Date.parse("2026-09-01T15:00:00Z") });
   await settle();
-  assert.deepEqual(pulled, ["King", "Pierce"], "stops at the first county with someone to text");
+  assert.deepEqual(pulled, ["King", "Pierce", "Snohomish"], "two picks don't fill the day: with a request left it reads Snohomish too");
   assert.equal(job.county, "Pierce, WA");
   assert.deepEqual(imported.agentKeys, ["p1", "p2"]);
-  assert.deepEqual(job.tried.map((t) => [t.county, t.picked]), [["King, WA", 0], ["Pierce, WA", 2]]);
+  assert.deepEqual(job.tried.map((t) => [t.county, t.picked]), [["King, WA", 0], ["Pierce, WA", 2], ["Snohomish, WA", 0]]);
   assert.ok(job.warnings.some((w) => /King, WA: nobody new to text/.test(w)));
   const place = store.cursors.get(`loc-mv|${PAGES_CURSOR}`)?.doc;
   assert.equal(place.turn, 1, "Pierce has more pages and people: it keeps the turn, King doesn't get it back first");
@@ -363,4 +364,116 @@ test("a failed day keeps coming back until the working day is out", async () => 
   _resetJobs();
   store.cursors.set(`loc-r|${CURSOR_NAME}`, { at: new Date(t0).toISOString(), doc: { tries: 1, failed: true, error: "timeout" } });
   assert.equal(await maybeStartOutreachSweep({ ...base, now: Date.parse("2026-09-17T00:30:00Z") }), false, "5:30pm is not");
+});
+
+
+/* ---------- 2026-10-02: the run fills the day ---------- */
+
+// Today's Pierce run had 261 agents on file, found one nobody had talked to,
+// and stopped there — the sweep broke out at the first county that yielded
+// anyone. Matt wants Found way up: a run keeps going county by county while
+// it has requests and hasn't found the day's number.
+const corridor = [{ county: "King", state: "WA" }, { county: "Pierce", state: "WA" }, { county: "Snohomish", state: "WA" }];
+const fillStore = (byBatch) => ({ ...fakeStore([]), listOutreachAgents: async (_l, { batchId }) => byBatch[batchId] || [] });
+const fillPull = (pulled, perCounty = {}) => async (_l, _c, b) => {
+  pulled.push(b.county);
+  return { batchId: `b-${b.county}`, warnings: [], nextOffset: 0, totalCount: 400, requestsUsed: 1, ...(perCounty[b.county] || {}) };
+};
+const madeAll = (calls) => async (a) => {
+  calls.push(a);
+  const keys = a.agentKeys.slice(0, a.createLimit || a.agentKeys.length);
+  return { imported: keys.length, enrolled: keys.length, results: keys.map((k) => ({ agentKey: k, ok: true, action: "created", contactId: `c-${k}` })) };
+};
+const paid = (extra = {}) => ({ outreachAutopilot: { enabled: true, counties: corridor, monthlyRequests: 1000, dailyCap: 10, ...extra } });
+const oct2 = Date.parse("2026-10-02T17:05:00Z");
+
+test("the sweep moves on to the next county when the first can't fill the day", async () => {
+  _resetJobs();
+  const pulled = [];
+  const calls = [];
+  const store = fillStore({ "b-King": [row("k1"), row("k2")], "b-Pierce": [row("p1"), row("p2"), row("p3")], "b-Snohomish": [row("s1")] });
+  const job = startOutreachSweep({ locationId: "loc-fill", client: {}, saved: paid(), store, deps: { runPull: fillPull(pulled), importAgents: madeAll(calls) }, now: oct2 });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(pulled, ["King", "Pierce", "Snohomish"]);
+  assert.equal(job.picked, 6);
+  assert.equal(job.imported, 6);
+  assert.equal(job.county, "King, WA · Pierce, WA · Snohomish, WA");
+  assert.deepEqual(job.tried.map((t) => [t.county, t.picked]), [["King, WA", 2], ["Pierce, WA", 3], ["Snohomish, WA", 1]]);
+});
+
+test("each county's agents import into that county's own batch, under one day's number", async () => {
+  _resetJobs();
+  const pulled = [];
+  const calls = [];
+  const store = fillStore({ "b-King": [row("k1"), row("k2")], "b-Pierce": [row("p1"), row("p2"), row("p3")], "b-Snohomish": [row("s1")] });
+  const job = startOutreachSweep({ locationId: "loc-batches", client: {}, saved: paid({ dailyCap: 4 }), store, deps: { runPull: fillPull(pulled), importAgents: madeAll(calls) }, now: oct2 });
+  await settle();
+  assert.deepEqual(calls.map((c) => [c.batchId, c.agentKeys, c.createLimit]), [
+    ["b-King", ["k1", "k2"], 4],
+    ["b-Pierce", ["p1", "p2", "p3"], 2],
+  ], "Pierce gets what King left of the day; Snohomish's one waits");
+  assert.equal(job.imported, 4);
+});
+
+test("an agent with listings in two counties is imported once", async () => {
+  _resetJobs();
+  const calls = [];
+  const store = fillStore({ "b-King": [row("both"), row("k1")], "b-Pierce": [row("both"), row("p1")] });
+  await startOutreachSweep({ locationId: "loc-dupe", client: {}, saved: paid(), store, deps: { runPull: fillPull([]), importAgents: madeAll(calls) }, now: oct2 });
+  await settle();
+  assert.deepEqual(calls.map((c) => c.agentKeys), [["both", "k1"], ["p1"]]);
+});
+
+test("the sweep stops pulling once the run's requests are spent", async () => {
+  _resetJobs();
+  const pulled = [];
+  // The free tier on Sep 1: 46 spendable over 22 runs = 2 a run. King spends both.
+  const store = fillStore({ "b-King": [row("k1")], "b-Pierce": [row("p1")] });
+  const saved = { outreachAutopilot: { enabled: true, counties: corridor } };
+  const job = startOutreachSweep({ locationId: "loc-spent", client: {}, saved, store,
+    deps: { runPull: fillPull(pulled, { King: { requestsUsed: 2, nextOffset: 1000 } }), importAgents: madeAll([]) }, now: Date.parse("2026-09-01T15:00:00Z") });
+  await settle();
+  assert.equal(job.budget.perRun, 2);
+  assert.deepEqual(pulled, ["King"], "not one more request for Pierce");
+  const place = store.cursors.get(`loc-spent|${PAGES_CURSOR}`)?.doc;
+  assert.equal(place.turn, 0, "King has more to read and people in it: tomorrow starts there");
+  assert.equal(place.offsets["King, WA"], 1000);
+});
+
+test("once the day's number is found, the sweep doesn't pull another county", async () => {
+  _resetJobs();
+  const pulled = [];
+  const many = Array.from({ length: 20 }, (_, i) => row(`k${i}`));
+  const store = fillStore({ "b-King": many, "b-Pierce": [row("p1")] });
+  const job = startOutreachSweep({ locationId: "loc-enough", client: {}, saved: paid(), store, deps: { runPull: fillPull(pulled), importAgents: madeAll([]) }, now: oct2 });
+  await settle();
+  assert.deepEqual(pulled, ["King"], "20 picks is more than 10 × 1.5");
+  assert.equal(job.imported, 10);
+});
+
+test("a run still importing after 45 minutes is not retried while it's alive", async () => {
+  _resetJobs();
+  const store = fakeStore([]);
+  const t0 = Date.parse("2026-10-02T17:03:00Z");
+  const base = { locationId: "loc-alive", client: {}, store, hour: 10, saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true } },
+    deps: { runPull: async () => ({ batchId: "b1", warnings: [] }), importAgents: async () => ({}) } };
+  const alive = { id: "oa-x", trigger: "daily", startedAt: new Date(t0).toISOString(), beatAt: new Date(t0 + 50 * 60000).toISOString() };
+  store.cursors.set(`loc-alive|${CURSOR_NAME}`, { at: new Date(t0).toISOString(), doc: { tries: 1, run: alive } });
+  assert.equal(await maybeStartOutreachSweep({ ...base, now: t0 + 60 * 60000 }), false, "it said it was working ten minutes ago");
+  assert.equal(await maybeStartOutreachSweep({ ...base, now: t0 + 50 * 60000 + STALE_RUN_MS + 60000 }), true, "silent for 45 minutes: retried");
+  await settle();
+});
+
+test("a running sweep keeps saying it's alive on the cursor", async () => {
+  _resetJobs();
+  const store = fillStore({ "b-King": [row("k1")] });
+  let beatAtImport = null;
+  const deps = {
+    runPull: fillPull([]),
+    importAgents: async (a) => { beatAtImport = store.cursors.get(`loc-beat|${CURSOR_NAME}`)?.doc?.run?.beatAt || null; return madeAll([])(a); },
+  };
+  startOutreachSweep({ locationId: "loc-beat", client: {}, saved: paid(), store, deps, now: oct2 });
+  await settle();
+  assert.ok(beatAtImport, "the cursor was stamped before the import began");
 });
