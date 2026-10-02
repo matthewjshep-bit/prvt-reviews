@@ -31,6 +31,8 @@ export function prefetch(key, fn, maxAgeMs = 60000) {
 }
 
 export function forget(...keys) { for (const k of keys) if (k) cache.delete(k); }
+/** Every key that starts with `prefix` ("timeline:<cid>:" — all of one person's). */
+export function forgetPrefix(prefix) { if (!prefix) return; for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k); }
 
 /**
  * useLoad(key, fn, { maxAgeMs, pollMs }) → { data, error, loading, reload }

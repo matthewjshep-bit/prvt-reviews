@@ -16,7 +16,7 @@
 // verdict (the coach reads the newest).
 
 import React, { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, X } from "lucide-react";
 import {
   ROW_FEEDBACK_ACTS, ROW_FEEDBACK_WORDS, ROW_FEEDBACK_LABEL, ROW_FEEDBACK_HINT, ROW_FEEDBACK_NOTE_MAX,
 } from "@shared/row-feedback.js";
@@ -79,14 +79,17 @@ const notedLine = (saved) => saved
   : null;
 
 /**
- * <PaneFeedback fb withWords taught /> — the work pane's version: one line
+ * <PaneFeedback fb withWords taught tucked /> — the work pane's version:
  * under the reply box, opened by a click or the T key.
  *   fb        useRowFeedback(…)
  *   withWords the row has a draft, so "what was wrong with the words" is asked
  *   taught    what you said on this person's other rows ({ eventId, label, note, at })
+ *   tucked    Matt, 2026-10-01: he never used it, so it takes no room until
+ *             asked for (T, or the pane's ⋯ menu); a saved verdict still
+ *             reads "noted · …" on one quiet line
  *   defaultOpen  start open (tests; nothing clicks in a server render)
  */
-export function PaneFeedback({ fb, withWords = false, taught = [], defaultOpen = false }) {
+export function PaneFeedback({ fb, withWords = false, taught = [], defaultOpen = false, tucked = false }) {
   const [open, setOpen] = useState(defaultOpen);
   const noteRef = useRef(null);
   const focusNote = useRef(false);
@@ -101,6 +104,17 @@ export function PaneFeedback({ fb, withWords = false, taught = [], defaultOpen =
   const hint = fb.error ? <span className="text-red-700">{fb.error}</span>
     : fb.category && fb.dirty ? <span className="text-slate-500">{ROW_FEEDBACK_HINT[fb.category]}{withWords ? " Goes with the draft if you Send or Dismiss it." : ""}</span>
     : null;
+  // Tucked and closed: nothing, unless a verdict was saved (or picked) here.
+  if (tucked && !open) {
+    if (!fb.saved && !fb.category) return null;
+    return (
+      <div className="border-t border-slate-100 px-3 py-1 text-xs" role="group" aria-label="Feedback for the bot">
+        <button type="button" onClick={() => setOpen(true)} className="max-w-full truncate text-left hover:underline" title="Change what you told the bot (T)">
+          {fb.saved ? notedLine(fb.saved) : <span className="text-blue-700">{ROW_FEEDBACK_LABEL[fb.category]} — not saved yet</span>}
+        </button>
+      </div>
+    );
+  }
   return (
     <div className="border-t border-slate-100 px-3 py-1.5 text-xs" role="group" aria-label="Feedback for the bot">
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
@@ -109,6 +123,11 @@ export function PaneFeedback({ fb, withWords = false, taught = [], defaultOpen =
         {!open && fb.saved && <span className="ml-1 truncate font-normal">{notedLine(fb.saved)}</span>}
         {!open && !fb.saved && fb.category && <span className="ml-1 font-normal text-blue-700">· {ROW_FEEDBACK_LABEL[fb.category]}</span>}
       </button>
+      {open && tucked && (
+        <button type="button" onClick={() => setOpen(false)} className="float-right rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close feedback">
+          <X size={12} />
+        </button>
+      )}
       {open && (
         <div className="mt-1.5 space-y-1.5">
           {withWords && (

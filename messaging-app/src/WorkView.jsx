@@ -13,6 +13,7 @@ import { REPLY_BOX_ID, loadThread, threadKey } from "./ConversationPanel.jsx";
 import { coachKey, loadCoach } from "./CoachIdeas.jsx";
 import { TEACH_EVENT } from "./RowFeedback.jsx";
 import { loadOffer, offerKey } from "./OfferPanel.jsx";
+import { loadTimeline, timelineKey } from "./PaneParts.jsx";
 import { forget, prefetch } from "./work-data.js";
 import { dismissTodayRow, restoreTodayRow } from "./api.js";
 import { GROUP_LABEL, KIND_LABEL, canDismissRow, keyIntent, neighborId, nextAfterRemoval, orderRows, railLabel, rowTargets, teachRowId } from "./work-queue.js";
@@ -92,6 +93,7 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
     if (t.contactId) {
       prefetch(threadKey(t.contactId), loadThread(t.contactId), 30000);
       prefetch(coachKey(t.contactId), loadCoach(t.contactId), 120000);
+      if (t.offerId) prefetch(timelineKey(t.contactId, t.offerId), loadTimeline(t.contactId, t.offerId, t.party), 60000);
     }
   }, [nextId]);   // eslint-disable-line react-hooks/exhaustive-deps
 

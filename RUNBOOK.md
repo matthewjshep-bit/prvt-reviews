@@ -2020,9 +2020,25 @@ all of that visible at once, and an easy way to go to the next row.
   Stuck, then The machine is on it (folded unless you are in it), and kind by
   kind inside each (`orderRows`, `messaging-app/src/work-queue.js`). It has a
   filter box. A tick marks a row you've taught.
-- **The header**: what the row is, why it's here (`detail`, "Stuck because",
-  "Next:"), and its own buttons. These are the same ops, confirms and toasts as
-  before, now in `RowOps.jsx`.
+- **The header**: what the row is, the person and the house, why it's here
+  (`detail`, "Stuck because", "Next:"), and its own buttons. These are the same
+  ops, confirms and toasts as before, now in `RowOps.jsx`. Since 2026-10-01
+  (`PaneParts.jsx`, shared with the Offers split):
+  - The person's **name opens their record** (the contact drawer). The Record
+    button is gone — Matt didn't know what it was.
+  - Under the name, **the strip** (`MomentStrip.jsx`): the house's last six
+    moments, oldest first — priced, sent, nudges that went, their texts,
+    counters, re-quotes, agreed, hot, calls, stop / pause / pace — each with a
+    dot for who (them slate, us blue, the machine violet), then the next move
+    ("next: nudge Thu", violet when it goes by itself, amber when it waits on
+    you) and **History**. `GET /api/contacts/:id/timeline` (Contact record).
+  - **Bot ▾** (`BotMenu.jsx`): its label is the state — Bot on (· less / more
+    often), Bot stopped, Paused until Oct 15, and read-only Bot off in GHL
+    (the stop-bot tag), Unsubscribed. Stop the bot on them, Pause 1 week /
+    2 weeks / 1 month, Resume; Check in less / Normal pace / Check in more.
+    See "Stop, pause and pace — one person". A stopped person's draft says
+    "The bot is stopped on them — this waits for your Send."
+  - **⋯**: Feedback for the bot (T), their record, Open in GHL.
 - **Offer** (left, `OfferPanel.jsx`):
   - Our offer, asking, their counter, the agreed price, ARV and repairs.
   - The **all-in % of ARV**: (price + repairs) / ARV, green up to 70, amber up
@@ -2034,16 +2050,17 @@ all of that visible at once, and an easy way to go to the next row.
 - **Conversation** (right, `ConversationPanel.jsx`): the whole GHL thread
   (100 messages), refreshed every 30s. Under it is the reply box:
   - When the bot has an open draft for this person, the box is that draft
-    (`DraftRow embedded`). Edits, reasons, Dismiss and Hold work as they do
-    everywhere, so the coach still sees them.
+    (`DraftComposer`). Edits, Dismiss and Hold work as they do everywhere, so
+    the coach still sees them.
   - A question the bot couldn't answer gets the answer box instead.
   - Otherwise it is a plain box (the hand reply, below).
-- **Coach** (bottom, `CoachPanel.jsx`):
-  - Teach it, always open.
-  - What you taught on this person's rows before.
-  - The nightly coach's open and applied proposals whose evidence is this
-    person's drafts or feedback on their rows. Apply and Reject work as on
-    the Learned card; nothing applies itself.
+  - **Feedback** (`PaneFeedback`, tucked): nothing shows until T or ⋯ opens
+    it; a verdict saved before reads "noted · …" on one quiet line. Matt never
+    used it (2026-10-01); the coach still learns from edits and dismissals.
+- **Coach ideas**: a "Coach · N ideas" header button (`CoachIdeas.jsx`) when
+  the nightly coach has open or applied proposals from this person's drafts
+  or feedback. Apply and Reject work as on the Learned card; nothing applies
+  itself.
 
 **Keys:**
 
@@ -2052,15 +2069,16 @@ all of that visible at once, and an easy way to go to the next row.
 | J / ↓ | next row |
 | K / ↑ | previous row |
 | R | the reply box |
-| T | the Teach note |
+| T | feedback for the bot (opens the tucked control) |
 | O | open the offer in the editor |
-| ⌘↵ | send (in the reply box) or save (in the Teach note) |
+| D | dismiss the row |
+| ⌘↵ | send (in the reply box) or save (in the feedback note) |
 | ? | show the list |
 
 Keys are ignored while typing, in a menu, or while the contact record is open.
 The open row is kept in `?row=<id>`. When the row you're on is resolved, the
 pane moves to the one after it ("Done — next: …"). The next row's offer,
-thread and lessons are read ahead (`work-data.js`).
+thread, lessons and timeline are read ahead (`work-data.js`).
 
 **Below laptop width:**
 
