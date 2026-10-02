@@ -142,6 +142,13 @@ test("offers with nothing coming by design say why, and never show a date", () =
   assert.equal(stopped.kind, "stopped");
 });
 
+test("a house that's no longer available has no follow-up, by design", () => {
+  const n = next(offer({ status: "unavailable", statusAt: at(-1) }));
+  assert.equal(n.kind, "unavailable");
+  assert.equal(n.at, null);
+  assert.match(n.label, /No longer available — no follow-up/);
+});
+
 test("a paused person reads 'Paused until' the day, not a nudge date, and the nudge comes back after", () => {
   const pause = { type: "drive_stopped", at: at(0.05), data: { until: at(14) } };
   const n = next(offer(), { events: [pause] });
@@ -186,11 +193,4 @@ test("the column moves the nudge out when you check in less, and in when you che
   assert.ok(days(less) >= 5.9 && days(less) <= 7, `less: about day 6, got ${days(less)}`);
   assert.ok(days(plain) >= 2.9 && days(plain) <= 4, `normal: about day 3, got ${days(plain)}`);
   assert.ok(days(more) < days(plain), `more: sooner than day 3, got ${days(more)}`);
-});
-
-test("a house that's no longer available has no follow-up, by design", () => {
-  const n = next(offer({ status: "unavailable", statusAt: at(-1) }));
-  assert.equal(n.kind, "unavailable");
-  assert.equal(n.at, null);
-  assert.match(n.label, /No longer available — no follow-up/);
 });
