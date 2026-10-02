@@ -9,6 +9,7 @@
 import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS, DEAL_SIGNALS, writeUpTermsText, CONVERSATION_AI_DEFAULTS } from "./shared/conversation-ai.js";
 import { heldInPlainWords } from "./shared/held-underwrites.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
+import { CARRIER_RULE } from "./shared/carrier-words.js";
 
 const LENGTH_RULE = {
   short: "One to three sentences.",
@@ -498,7 +499,22 @@ function nudgeAside(o) {
     `${o.address} stays the subject; that line is an afterthought. `;
 }
 
+// The machine texts that introduce us to someone — the first text, its nudge,
+// the agent and buyer check-ins. These are what the carriers blocked
+// (shared/carrier-words.js); a float or a reply to someone mid-conversation
+// went through.
+export const CARRIER_CHECKED_KINDS = new Set(["outreach_open", "outreach_nudge", "agent_pulse", "buyer_pulse"]);
+
 export function outboundOpening(outbound) {
+  const text = openingFor(outbound);
+  if (!text || !CARRIER_CHECKED_KINDS.has(outbound.kind)) return text;
+  const avoid = Array.isArray(outbound.avoid) && outbound.avoid.length
+    ? ` YOUR LAST DRAFT SAID ${outbound.avoid.map((w) => `"${w}"`).join(", ")}, WHICH THE CARRIERS BLOCK: write it again without them.`
+    : "";
+  return `${text} ${CARRIER_RULE}${avoid}`;
+}
+
+function openingFor(outbound) {
   if (!outbound?.kind) return "";
   const o = outbound;
   switch (o.kind) {
@@ -551,19 +567,22 @@ export function outboundOpening(outbound) {
     // the agent ever hears from us, and the failure mode is sounding like a
     // wholesaler blast. One specific listing, one plain question.
     case "outreach_open":
+      // No pitch (2026-10-02): "I buy houses as-is for cash" is what the
+      // carriers block. The workflow's own opener — a plain question about
+      // the listing — went through 99.9% of the time.
       return `${START} This is the FIRST text this listing agent has ever had from us. We found their listing at ` +
-        `${o.address}${o.hookDom ? ` (on the market ${o.hookDom} days)` : ""}. Two or three short lines, like a local ` +
-        `investor texting an agent they don't know yet: say you saw the listing on ${o.address.split(",")[0]}, that you ` +
-        `buy houses as-is for cash in the area and close fast, and ask ONE question — whether they've got anything ` +
-        `that needs work, or a seller who'd take a quick cash offer. Do NOT name a price, a number, a percentage, ` +
+        `${o.address}${o.hookDom ? ` (on the market ${o.hookDom} days)` : ""}. Two or three short lines, like someone ` +
+        `local texting an agent they don't know yet: say you came across the listing on ${o.address.split(",")[0]}, that ` +
+        `you're looking for your next project house in the area, and ask ONE question — whether this one is a bit of a ` +
+        `project or pretty turnkey, or whether they've got anything else that needs work. Do NOT name a price, a number, a percentage, ` +
         `or a link. Do NOT ask about this listing's price. Do NOT say "I'm reaching out" or "I hope this finds you ` +
         `well". Use their first name once if you have it. Set intent to outreach_open.`;
 
     case "outreach_nudge":
       return `${START} We texted this agent about their listing at ${o.address} and they never answered. ` +
         `${nudgePressure(o)} One or two lines. You may mention the listing again; do NOT name a number, and do NOT ` +
-        `repeat the first text's wording. A different angle each time: what we buy, that we're easy to work with, ` +
-        `that we can move quickly. Set intent to outreach_nudge.`;
+        `repeat the first text's wording. A different angle each time: the kind of house we're after (ones that need work), ` +
+        `that we're easy to work with, that we can move quickly. Set intent to outreach_nudge.`;
 
     // They countered, we went quiet. Keep it alive without moving: ask for
     // room, never a number of ours, never theirs read back.
@@ -671,12 +690,12 @@ export function outboundOpening(outbound) {
       ].filter(Boolean).join(" ");
       return `${START} There is NO deal in this message. It is a check-in with a buyer on our list, between deals. ` +
         `WHAT WE KNOW: ${clues} ` +
-        `WHAT TO WRITE: two to four short sentences, one text, the way one local investor texts another. ` +
+        `WHAT TO WRITE: two to four short sentences, one text, the way one local buyer texts another. ` +
         `(1) Their first name. (2) ${o.conversed
           ? "You have talked before — READ THE THREAD and pick up from it like someone who remembers (what they said they buy, what they passed on and why). Do NOT reintroduce yourself. "
           : o.dealsSent > 0
-            ? "Own it lightly that the deals we sent weren't a fit (\"sent you a couple deals, sorry they weren't a fit\") — once, no grovelling. Then one line on who you are: a Seattle investor who wholesales the deals you're too busy to do yourself. "
-            : "One line on who you are: a Seattle investor who wholesales the deals you're too busy to do yourself. "}` +
+            ? "Own it lightly that the deals we sent weren't a fit (\"sent you a couple deals, sorry they weren't a fit\") — once, no grovelling. Then one line on who you are: someone in Seattle who comes across more fixer deals than they can take on themselves. "
+            : "One line on who you are: someone in Seattle who comes across more fixer deals than they can take on themselves. "}` +
         `(3) The ask, as ONE question: are they looking to buy right now, and what's their buy box — so what you send is ` +
         `actually relevant to them. ` +
         `${PULSE_SHAPES[(Number(o.variant) || 0) % PULSE_SHAPES.length]} ` +
@@ -709,7 +728,7 @@ export function outboundOpening(outbound) {
         : "anything coming up that needs work?";
       const why = o.reason === "fresh_listing" && l
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
-          `Ask whether the seller would look at an as-is cash offer — we buy houses that need work. Name the street; never its price or any number.`
+          `Ask, plainly, whether it's a bit of a project — if it needs work it may be one we'd want to take a look at. Name the street; never its price or any number.`
         : o.reason === "our_house" && h
         ? `Last time it was ${h.street}, which ${h.how === "closed" ? "closed" : h.how === "fell through" ? "fell through" : h.how === "never heard back" ? "we never heard back on" : "didn't work out"}. ` +
           `Check in on THEM, not that house: ${offAsk}`
@@ -738,9 +757,9 @@ export function outboundOpening(outbound) {
       return `${START} There is NO offer in this message. It is a check-in with a listing agent${cold ? " who has not written back before" : " we know"}. ` +
         `${why} ` +
         `${reference}${material.length ? `NOTES FROM OUR HISTORY: ${material.join(" ")} ` : ""}` +
-        `TONE: friendly and professional — how a local investor who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
+        `TONE: friendly and professional — how someone local who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
         `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
-        `${cold ? "One clause on who you are: a local investor who buys houses that need work, as-is. " : "Do NOT reintroduce yourself. "}` +
+        `${cold ? "One clause on who you are: someone local who's always looking for the next project house. " : "Do NOT reintroduce yourself. "}` +
         `${shapes[(Number(o.variant) || 0) % shapes.length]} ` +
         `${o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}" ` : ""}` +
         `Do NOT name a price, a number, a percentage, an ARV or a link — a street address is fine, but never a dollar figure, and never a count of days, a time of day or a date ("sitting a while", not "84 days"; "a while back", not "that 4pm"). Do NOT promise an offer or say what we'd pay. ` +

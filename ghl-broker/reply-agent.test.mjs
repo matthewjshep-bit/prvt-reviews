@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { normalizeDispoAutopilot } from "./dispo-autopilot.js";
 import {
   evaluateReplyGates, callsThemOurName, moneyIn, summarizeOffers, countToday, startReply,
   sendReplyDraft, dismissReplyDraft, listJobs, _resetJobs,
@@ -3777,7 +3778,9 @@ test("'Earnest? Inspection?' answered with 'let me confirm with my partner' is h
 
 /* ---------- the check-in between deals (buyer-pulse.js) ---------- */
 
-const PULSE_TEXT = "Hey Dana, sent you a couple deals that weren't a fit, sorry about that. I'm a Seattle investor and wholesale the ones I'm too busy to do myself. Are you looking to buy right now, and what's your buy box? Want to make sure what I send is relevant.";
+// Without "investor" or "wholesale": those got the old wording blocked by the
+// carriers (2026-10-02, shared/carrier-words.js).
+const PULSE_TEXT = "Hey Dana, sent you a couple deals that weren't a fit, sorry about that. I'm in Seattle and come across more fixer deals than I can take on myself. Are you looking to buy right now, and what's your buy box? Want to make sure what I send is relevant.";
 const PULSE_SUBJECT = { dealsSent: 2, conversed: false, lastBuyCity: "Renton", lastBuyYear: 2025, cities: ["Renton"], types: ["flip"], buyBox: "" };
 
 test("a pulse check is the bot's own message to a buyer: their clues go to the model, and it waits as a draft", async () => {
@@ -4942,4 +4945,93 @@ test("with the switch off, or no number ever floated, a no carries no paper", as
     const d = await store.getReplyDraft(job.draftId);
     assert.equal(d.reply, "Understood. Any chance they'd counter?", label);
   }
+});
+
+
+/* ---------- 2026-10-02: links in deal texts get them blocked ---------- */
+
+// Fourteen days of our texts: a deal text carrying the package link was
+// blocked by the carriers (Error 30007) 32% of the time to a buyer who'd
+// never written back, 9% to one who had; the same texts without a link, 0 of
+// 121. With dispoAutopilot.blastLink "on_reply" the text asks if they want
+// the details and the link goes when they answer.
+const linkLaterBlast = () => {
+  const queued = "Hey Alex, new one in Tacoma: 7034 South K Street, moderate rehab. Buyer price 329k, ARV around 499k, rehab about 45k. Interested?";
+  const open = { ...openDraft(), status: "scheduled", party: "investor", intent: "blast_open", contactName: "Alex Buyer", inbound: "", reply: queued,
+    outbound: { kind: "blast_open", offerId: "o1", address: "7034 South K Street, Tacoma, Washington 98408", label: "dispo-7034-south-k-street" },
+    propertyAddress: "7034 South K Street, Tacoma, Washington 98408" };
+  const store = fakeStore([open]);
+  store.getOffer = async () => ({ id: "o1", locationId: "LOC", address: "7034 South K Street, Tacoma, Washington 98408",
+    calc: { inputs: { arv: 499000, repairs: 45000 } }, deal: { stage: "under_contract", contractPrice: 318000, assignmentFee: 11000 } });
+  store.getOfferSettings = async () => ({ wholesaleFee: 30000, dispoAutopilot: { blastLink: "on_reply" } });
+  store.listDatarooms = async () => [{ id: "r1", locationId: "LOC", offerId: "o1", status: "active", kind: "deal", snapshot: {} }];
+  const invites = [];
+  store.createDataroomInvite = async (doc) => { const row = { ...doc, id: `i${invites.length + 1}`, status: "active" }; invites.push(row); return row; };
+  store.logDataroomEvent = async () => {};
+  return { store, invites };
+};
+
+test("a deal text goes without its link when links wait for a reply — cold deal texts with a link were blocked by the carriers", async () => {
+  const { store, invites } = linkLaterBlast();
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "", dataroomBaseUrl: "https://deals.example" });
+  const sms = calls.find(([p]) => p === "/conversations/messages")[1].body.message;
+  assert.doesNotMatch(sms, /https?:/, sms);
+  assert.match(sms, /Buyer price 329k/);
+  assert.match(sms, /walk it\? Happy to send photos and numbers\.$/, "says the details are there for the asking");
+  assert.equal(invites.length, 0, "no link is minted for a text that doesn't carry one");
+  assert.equal((await store.getReplyDraft("d1")).blastWithoutLink, true);
+  assert.equal(normalizeDispoAutopilot({}).blastLink, "always");
+  assert.equal(normalizeDispoAutopilot({ blastLink: "on_reply" }).blastLink, "on_reply");
+});
+
+const sentWithoutLink = () => ({ ...openDraft(), id: "d-blast", status: "sent", sentAt: new Date(Date.now() - 3600000).toISOString(), party: "investor", intent: "blast_open",
+  inbound: "", blastWithoutLink: true, outbound: { kind: "blast_open", offerId: "o1", address: "7034 South K Street, Tacoma, Washington 98408" },
+  propertyAddress: "7034 South K Street, Tacoma, Washington 98408" });
+
+test("a buyer who answers a deal text that went without its link gets the link", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  client.call = ((orig) => async (path, opts) => {
+    if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Alex", lastName: "Buyer", tags: ["investor"] } };
+    return orig(path, opts);
+  })(client.call);
+  const store = fakeStore([sentWithoutLink()]);
+  const saved = { ...SAVED, conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["interested"] } } } } };
+  const invites = [];
+  const deps = {
+    draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Here you go.", propertyAddress: "", counterAmount: 0 }),
+    dataroomInviteGuard: async () => ({ ok: false, reason: "" }),
+    issueDataroomInvite: async (a) => { invites.push(a); return { sent: true, address: "7034 South K Street" }; },
+  };
+  const { job } = await startReply({ client, locationId: "LOC", saved, store, contactId: "c1", message: "yeah send it over", channel: "sms", sendsEnabled: true, deps });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const act = d.actions.find((a) => a.type === "send_dataroom_invite");
+  assert.ok(act, `the link was planned: ${d.actions.map((a) => a.type)}`);
+  assert.equal(act.mode, "auto");
+  assert.equal(act.status, "done");
+  assert.equal(invites[0]?.addressHint, "7034 South K Street, Tacoma, Washington 98408", "the deal the text was about, though they didn't name it");
+});
+
+test("a buyer who passes on it gets no link", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  client.call = ((orig) => async (path, opts) => {
+    if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Alex", lastName: "Buyer", tags: ["investor"] } };
+    return orig(path, opts);
+  })(client.call);
+  const store = fakeStore([sentWithoutLink()]);
+  const invites = [];
+  const { job } = await startReply({ client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "not for me, too far north", channel: "sms", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "passing", confidence: "high", reply: "Understood, thanks.", propertyAddress: "", counterAmount: 0 }),
+      issueDataroomInvite: async (a) => { invites.push(a); return { sent: true }; },
+    } });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(invites.length, 0);
+  assert.ok(!(d.actions || []).some((a) => a.type === "send_dataroom_invite"));
 });

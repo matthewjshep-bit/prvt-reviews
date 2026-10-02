@@ -258,7 +258,8 @@ test("a nudge on a number we only floated never says we sent an offer", () => {
 test("the listing check-in names the street, never the price", () => {
   const t = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "cold", listing: { street: "123 Main St", city: "Kent", dom: 64, cut: true } });
   assert.match(t, /123 Main St in Kent/);
-  assert.match(t, /as-is cash offer/);
+  assert.match(t, /whether it's a bit of a project/, "asks about the house, not for an as-is cash offer the carriers block");
+  assert.match(t, /Phone carriers block texts/);
   assert.match(t, /never its price or any number/);
   assert.match(t, /One clause on who you are/, "a cold agent gets a one-clause intro");
   const known = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", dealsWithUs: 1 });

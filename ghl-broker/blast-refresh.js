@@ -56,8 +56,13 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
   const price = Math.round(Number(numbers.investorPrice) || 0);
   if (!(price > 0)) throw new Error("the deal has no buyer price");
 
+  // Links wait for their answer (dispoAutopilot.blastLink "on_reply"): a link
+  // in a text is what the carriers block most, so the text asks if they want
+  // the details and the reply agent sends the link when they do. An email
+  // still carries it.
+  const linkLater = draft.channel !== "email" && settings?.dispoAutopilot?.blastLink === "on_reply";
   let invite = null, link = "";
-  if (room && baseUrl) {
+  if (room && baseUrl && !linkLater) {
     const out = await issueDataroomInvite({ store, client, room, contactId: draft.contactId, name: draft.contactName || "", baseUrl, send: false });
     invite = out.invite;
     link = out.link;
@@ -70,7 +75,7 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
   // (dispoAutopilot.showings.askInBlast, on unless switched off — read here
   // rather than through dispo-autopilot.js, which imports reply-agent.js.)
   const ask = settings?.dispoAutopilot?.showings?.askInBlast === false ? "" : walkthroughAsk({ showing: offer.deal?.showing || null });
-  const text = blastMessage({ ...facts, firstName: draft.contactName || "", variant: blastVariant(draft), link, ask, intro: draft.outbound?.intro || "" });
+  const text = blastMessage({ ...facts, firstName: draft.contactName || "", variant: blastVariant(draft), link, ask, intro: draft.outbound?.intro || "", linkOnReply: linkLater });
   const subject = draft.channel === "email" ? blastSubject(facts) : "";
-  return { text, subject, price, invite, room };
+  return { text, subject, price, invite, room, withoutLink: linkLater };
 }

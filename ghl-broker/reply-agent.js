@@ -87,8 +87,9 @@ import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts,
   investorFacingPrice, INVESTOR_DEAL_STAGES } from "./conversation-context.js";
 import {
-  buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext,
+  buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext, CARRIER_CHECKED_KINDS,
 } from "./conversation-prompt.js";
+import { carrierFlags } from "./shared/carrier-words.js";
 import { planActions, runActions } from "./conversation-actions.js";
 import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend } from "./conversation-scheduler.js";
 import { refreshBlastText, defaultDataroomBaseUrl } from "./blast-refresh.js";
@@ -797,10 +798,14 @@ const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", ourAmount = 0,
-  vacantOk = false,
+  vacantOk = false, carrierCheck = false,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
+  // A machine text that introduces us and reads like a we-buy-houses ad is
+  // what the carriers block (Error 30007; shared/carrier-words.js).
+  const blocked = carrierCheck && channel === "sms" ? carrierFlags(draft.reply) : [];
+  if (blocked.length) flags.push(`carriers block texts like this — it says ${blocked.map((w) => `"${w}"`).join(", ")}`);
   if (callsThemOurName(draft.reply, { selfName, contactName, signOff })) {
     flags.push(`the draft calls them "${firstNameOf(selfName)}", which is our name, not theirs`);
   }
@@ -1513,7 +1518,26 @@ export function emailRequest(message = "", transcript = "") {
   return theirs.length ? split(theirs.at(-1).replace(/^.*?\bTHEM\b[^:]*:/, "")) : null;
 }
 
-export const OUR_OFFER_TEXT_RX = /\bhere's our (written cash offer|letter of intent) on\b/i;
+// What a buyer says back to "want the details?" that gets the link.
+const LINK_ON_REPLY_INTENTS = new Set(["interested", "question", "wants_to_buy", "wants_walkthrough", "status_check", "price_pushback"]);
+const LINK_OWED_DAYS = 30;
+
+// The newest deal text we sent this buyer without its link, in the last
+// month, that no package link has followed since. null when there's none.
+async function linkOwed({ store, locationId, contactId, now = Date.now() }) {
+  const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 50 }).catch(() => []);
+  const blast = drafts
+    .filter((d) => d?.status === "sent" && d.blastWithoutLink && d.outbound?.kind === "blast_open"
+      && now - Date.parse(d.sentAt || d.updatedAt || "") < LINK_OWED_DAYS * 86400000)
+    .sort((x, y) => String(y.sentAt || "").localeCompare(String(x.sentAt || "")))[0];
+  if (!blast) return null;
+  const sentAt = String(blast.sentAt || "");
+  const linkedSince = drafts.some((d) => String(d.updatedAt || d.createdAt || "") > sentAt
+    && (d.actions || []).some((x) => x.type === "send_dataroom_invite" && x.status === "done"));
+  return linkedSince ? null : { address: blast.outbound.address || blast.propertyAddress || "", offerId: blast.outbound.offerId || null };
+}
+
+export const OUR_OFFER_TEXT_RX = /\b(?:here's our (?:written cash offer|letter of intent)|sending our written offer) on\b/i;
 
 // A book number said the way a person texts it: "1.144M" for $1,144,500
 // (Angela Jaeger, 2026-09-15, held as "not in the offer book"). It counts when
@@ -2473,7 +2497,7 @@ function outboundSummary({ kind, offer, outbound }) {
 // it may say, on top of the record book — and what it forbids is subtracted
 // even though the book has it. A nudge floats nothing, so its allowance is
 // exactly the book; `onlyFloats` (a check-in) allows nothing at all.
-function outboundGateFor({ spec, offer, subject, context, config, party, a }) {
+function outboundGateFor({ spec, offer, subject, context, config, party, a, kind = "" }) {
   const floats = spec.floats({ offer, subject }).filter(Boolean);
   const allowed = spec.onlyFloats ? floats : [...new Set([...(context.amounts || []), ...floats])];
   const extraForbidden = spec.forbids({ offer, subject }).filter(Boolean);
@@ -2482,7 +2506,26 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a }) {
     : context.forbiddenAmounts;
   return (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
-    vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address) });
+    vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind) });
+}
+
+/**
+ * writeAgainWithoutCarrierWords({ draft, kind, redraft }) → draft
+ *
+ * A machine text that introduces us and still says what the carriers block
+ * ("cash offer", "as-is", "investor", a link…) is written once more with
+ * those words named. The rewrite is kept only if it says fewer of them; the
+ * gate holds whatever is left. Other kinds, and clean drafts, never pay for a
+ * second call.
+ */
+export { CARRIER_CHECKED_KINDS };
+
+export async function writeAgainWithoutCarrierWords({ draft, kind, redraft }) {
+  if (!CARRIER_CHECKED_KINDS.has(kind) || typeof redraft !== "function") return draft;
+  const before = carrierFlags(draft?.reply);
+  if (!before.length) return draft;
+  const again = await redraft(before).catch(() => null);
+  return again?.reply && carrierFlags(again.reply).length < before.length ? again : draft;
 }
 
 /**
@@ -2514,13 +2557,18 @@ export async function previewProactive({ client, locationId, saved, store, conta
   if (askedOff) return { skipped: `they asked to be left alone on ${askedOff.at}`, contactName: a.contactName };
   const { context } = a;
   const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier: null });
-  const draft = await (deps.draft || draftReply)({
+  const previewArgs = {
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
     contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
     aiApiKey, party, config, context, channel: "sms", outbound, batch: null,
+  };
+  const draftWith = deps.draft || draftReply;
+  const draft = await writeAgainWithoutCarrierWords({
+    draft: await draftWith(previewArgs), kind,
+    redraft: (avoid) => draftWith({ ...previewArgs, outbound: { ...outbound, avoid } }),
   });
   draft.intent = kind;
-  const gate = outboundGateFor({ spec, offer, subject, context, config, party, a })(draft);
+  const gate = outboundGateFor({ spec, offer, subject, context, config, party, a, kind })(draft);
   const clean = Boolean(gate.ok || (gate.locked && gate.clean));
   return { contactName: a.contactName, reply: String(draft.reply || ""), summary: String(draft.summary || ""),
     held: !clean, flags: (gate.flags || []).filter((f) => f !== gate.locked) };
@@ -2563,18 +2611,23 @@ async function runProactive(job, ctx) {
   const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier });
 
   job.phase = "drafting";
-  const draft = await deps.draft({
+  const draftArgs = {
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
     contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
     aiApiKey, party, config, context, channel: "sms", outbound,
     // Nobody is waiting on a sweep's text: half price through the Batch API,
     // falling back to a direct call (draft-batch.js).
     batch: config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind) ? batcherFor(aiApiKey) : null,
+  };
+  // Still reads like an ad the carriers block: written once more without it.
+  const draft = await writeAgainWithoutCarrierWords({
+    draft: await deps.draft(draftArgs), kind,
+    redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),
   });
   draft.intent = kind;
   if (draft.shadow && !draft.shadow.error) draft.shadow.intent = kind;
   job.summary = draft.summary;
-  const gateFor = outboundGateFor({ spec, offer, subject, context, config, party, a });
+  const gateFor = outboundGateFor({ spec, offer, subject, context, config, party, a, kind });
   const gate = gateFor(draft);
   let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   auto = releaseForAudit({ auto, gate, draft, deps });
@@ -3198,6 +3251,19 @@ async function runReply(job, ctx) {
         plan.suggested.push({ id: `a-invite-${job.id}`, type: "suggest_dataroom_invite", mode: "ask", status: "pending", party, why: g.reason });
       }
     } catch (e) { warnings.push(`invite guard: ${String(e?.message || e).slice(0, 120)}`); }
+  }
+  // A deal text that went without its link said "want the details?"
+  // (dispoAutopilot.blastLink "on_reply"): when they answer it with interest
+  // or a question, the link goes — for the deal that text was about, named or
+  // not — whatever the buy-box guard above would say. A pass gets nothing.
+  if (party === "investor" && !isCall && LINK_ON_REPLY_INTENTS.has(draft.intent)
+      && !plan.auto.some((x) => x.type === "send_dataroom_invite")) {
+    const owed = await linkOwed({ store, locationId, contactId: job.contactId, now });
+    if (owed) {
+      plan.suggested = plan.suggested.filter((x) => x.type !== "suggest_dataroom_invite");
+      plan.auto.push({ id: `a-link-${job.id}`, type: "send_dataroom_invite", mode: "auto", status: "pending", party, addressHint: owed.address,
+        why: `they answered the deal text on ${String(owed.address).split(",")[0]} that offered the details` });
+    }
   }
   if (a.stampTag) {
     plan.auto.unshift({ id: `a-route-${job.id}`, type: "add_tags", tags: [a.stampTag], mode: "auto", status: "pending", party, why: "routed by the message" });
@@ -4244,7 +4310,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   const updated = {
     ...d, status: "sent", sentAt: ts, sentText: body, autoSent: Boolean(auto),
     edited: auto || blast ? false : body !== String(d.reply || "").trim(),
-    ...(blast ? { quotedPrice: blast.price, ...(blast.invite ? { dataroomInviteId: blast.invite.id } : {}) } : {}),
+    ...(blast ? { quotedPrice: blast.price, ...(blast.invite ? { dataroomInviteId: blast.invite.id } : {}), ...(blast.withoutLink ? { blastWithoutLink: true } : {}) } : {}),
     // Why a person changed it, when they said (the nightly coach reads this).
     ...(!auto && normalizeDraftFeedback(reason) ? { feedback: { ...normalizeDraftFeedback(reason), at: ts } } : {}),
     ghlMessageId: result?.messageId || result?.id || null, sendAt: null, sendingAt: null, updatedAt: ts,
