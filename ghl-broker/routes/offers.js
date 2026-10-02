@@ -4086,6 +4086,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   //
   //   POST { jobId }                                   → 202 { ok, jobId }
   //   POST { contactId, address, askingPrice, replaceOfferId }  (no job in memory)
+  //   … plus anyKind: true — Today's "Underwrite anyway" on a not-single-family
+  //   hold, which runs it past that one hold
   //
   // Jobs live in memory, so after a redeploy the strip's rows are gone but the
   // contact and address aren't; the second shape restarts from those. Gated by
@@ -4112,6 +4114,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           dryRun: wantsDryRun(b.dryRun),
           origin: "workflow",
           replaceOfferId: b.replaceOfferId ? String(b.replaceOfferId) : null,
+          anyKind: b.anyKind === true,
         };
         if (!args.contactId) return res.status(400).json({ error: "contactId or jobId required" });
       }

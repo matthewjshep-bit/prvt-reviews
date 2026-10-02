@@ -3398,9 +3398,9 @@ Matt: focus the app on single-family residences. Multi-family stays a kind an of
   - It runs right after the subject's Zillow lookup, before the comps and the photo scan are bought.
   - Any `homeType` outside the focus is held as `not our kind of house — a townhouse (single-family only right now)`.
   - A house Zillow can't type goes ahead.
-  - A run started from the offer form (`fill`) skips the hold, so "Underwrite anyway" prices it.
+  - A run started from the offer form (`fill`) skips the hold. So does an `anyKind` run, which is what "Underwrite anyway" starts.
 - **Today:**
-  - The held draft shows as "Not single-family: <address>" with **Pass on it** (drop) and **Underwrite anyway** (open the editor).
+  - The held draft shows as "Not single-family: <address>" with **Pass on it** (drop) and **Underwrite anyway**. That button starts the auto-underwrite again (`POST /automations/underwrite/retry` with `anyKind: true` and `replaceOfferId` set to the held draft). It skips only the kind hold. Every other gate and dedupe still applies, and the result replaces the held draft.
   - The nightly triage calls it a person's call (`shared/held-underwrites.js`) and retires it after 14 quiet days like any hold. Nobody is asked for numbers on it.
 - **The agent bot** reads `agentFocusRule` beside its other rules: we buy single-family houses only. A house that is plainly a condo, townhouse, mobile home, multi-family or land gets a kind no and an ask for single-family fixers, never "let me run numbers".
 - **Outreach:** the autopilot's default types are `Single Family` only (`DEFAULT_PROPERTY_TYPES`). The live setting was already that. The Agent Outreach page already defaulted to it.

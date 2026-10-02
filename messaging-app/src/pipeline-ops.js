@@ -66,6 +66,8 @@ export async function runOp(key, item, extra = null) {
     case "run_follow_ups":     return runFollowUps(false);
     case "dismiss_promise":    return dismissPromise(item.contactId, item.address, extra?.reason || null);
     case "rerun_held":         return rerunHeldUnderwrite(item);
+    // Not single-family: the same run, told to price it anyway.
+    case "underwrite_anyway":  return rerunHeldUnderwrite(item, { anyKind: true });
     case "retry_underwrite":   return retryUnderwrite(item.jobId);
     // A stop is the whole thread with this agent, not one house: the point is
     // that you are picking it up yourself.
@@ -95,6 +97,7 @@ export function describeResult(key, r) {
   if (key === "resume_drive") return "Back with the machine.";
   if (key === "retry_underwrite") return "Running it again.";
   if (key === "rerun_held") return "Running it again — the number lands in the outbox when it clears.";
+  if (key === "underwrite_anyway") return "Underwriting it — the number lands in the outbox when it clears.";
   if (key === "dismiss_promise") return r.settled ? "Cleared." : "Already cleared.";
   if (key === "apply") return r.action?.detail || "Done.";
   return "Done.";

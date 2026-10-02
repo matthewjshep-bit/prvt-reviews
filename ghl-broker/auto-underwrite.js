@@ -246,6 +246,7 @@ export function retryArgs(job) {
     dryRun: Boolean(job.dryRun),
     origin: job.origin,
     replaceOfferId: job.offerId || job.replaceOfferId || null,
+    anyKind: Boolean(job.anyKind),
     retryOf: job.id,
   };
 }
@@ -958,7 +959,7 @@ async function note(client, contactId, body, warnings) {
  */
 export async function startUnderwrite({
   client, locationId, saved, store, contactId, message, address, askingPrice, dryRun, deps, origin = "workflow", fill = false,
-  queueIfCapped = false, replaceOfferId = null, retryOf = null,
+  queueIfCapped = false, replaceOfferId = null, retryOf = null, anyKind = false,
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
@@ -1019,6 +1020,10 @@ export async function startUnderwrite({
     // place — it creates no offer and no draft, because the record it
     // belongs to is the one open on the operator's screen.
     fill: Boolean(fill),
+    // ANY KIND: a person pressed "Underwrite anyway" on a not-single-family
+    // hold. The run skips that one hold and nothing else — every other gate
+    // and dedupe still applies, and it makes the offer like any other run.
+    anyKind: Boolean(anyKind),
     snapshot: null,
     address: "",
     askingPrice: null,
@@ -1425,9 +1430,10 @@ async function runUnderwrite(job, ctx) {
   // Not our kind of house (shared/asset-type.js kindHold). Matt, 2026-10-01:
   // single-family houses only for now. A mobile home, a townhouse, a condo, a
   // multi-family or land is held here — before the comps and the photo scan
-  // are paid for — as a person's call on Today ("Open and fix" underwrites it
-  // anyway: a run from the editor is a fill run and skips this).
-  const kindHeld = job.fill ? "" : kindHold(facts?.homeType, saved?.focusKinds);
+  // are paid for — as a person's call on Today. "Underwrite anyway" there
+  // starts an anyKind run, and a run from the editor is a fill run; both skip
+  // this.
+  const kindHeld = job.fill || job.anyKind ? "" : kindHold(facts?.homeType, saved?.focusKinds);
   if (kindHeld) {
     const subjectOnly = {
       lat: resolved?.lat ?? null, lng: resolved?.lng ?? null,

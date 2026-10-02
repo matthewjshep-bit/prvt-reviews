@@ -43,7 +43,7 @@ test("a house that isn't single-family asks whether to price it at all: pass, or
     autoUnderwrite: { jobId: "j1", held: ["not our kind of house — a mobile home (single-family only right now)"], finishedAt: D(0) } })] });
   const a = r.actions.find((x) => x.kind === "underwrite_held");
   assert.equal(a.title, "Not single-family: 1510 Maple Lane, Kent, WA");
-  assert.deepEqual(a.ops.map((o) => [o.key, o.label]), [["open_editor", "Underwrite anyway"], ["drop", "Pass on it"]]);
+  assert.deepEqual(a.ops.map((o) => [o.key, o.label]), [["underwrite_anyway", "Underwrite anyway"], ["drop", "Pass on it"]]);
 });
 
 test("a held draft a person published is a priced offer, not a look nobody took", () => {
