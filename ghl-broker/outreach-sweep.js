@@ -38,8 +38,10 @@ export const DEFAULT_DAILY_CAP = 12;
 // A sanity ceiling, not a business rule: one RentCast page is 500 listings,
 // and the import paces GHL at two contacts at a time.
 export const MAX_DAILY_CAP = 500;
-// The hard stop: 48 of the free tier's 50. Past 50 RentCast does not refuse —
-// it bills $0.20 a request — so this line is the only thing that stops it.
+// The hard stop when no plan is set in Settings: 48 of the free tier's 50.
+// Past a plan's requests RentCast does not refuse — it bills each one — so the
+// budget is the only thing that stops it. A paid plan's number goes in
+// Settings (`outreachAutopilot.monthlyRequests`).
 export const RENTCAST_MONTHLY_BUDGET = 48;
 const OUTREACH_IMPORTS_ENABLED = process.env.OUTREACH_IMPORTS_ENABLED === "true";
 
@@ -92,14 +94,47 @@ export function isWorkday(now = Date.now(), tz = WORK_TZ) {
   return wd !== "Sat" && wd !== "Sun";
 }
 
-// Runs left this month, today included, in Pacific dates — what the month's
-// remaining RentCast requests get divided by.
-export function runsLeftInMonth(now = Date.now(), { weekdaysOnly = true, tz = WORK_TZ } = {}) {
-  const month = (t) => new Intl.DateTimeFormat("en-US", { month: "numeric", timeZone: tz }).format(new Date(t));
-  const m = month(now);
+// The calendar date in the work time zone.
+function zonedDate(t, tz = WORK_TZ) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { year: "numeric", month: "numeric", day: "numeric", timeZone: tz })
+    .formatToParts(new Date(t)).filter((x) => x.type !== "literal").map((x) => [x.type, Number(x.value)]));
+  return { y: p.year, m: p.month, d: p.day };
+}
+
+// Midnight of a calendar date in the work time zone, as epoch ms.
+function zonedMidnight(y, m, d, tz = WORK_TZ) {
+  const guess = Date.UTC(y, m - 1, d);
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", hourCycle: "h23", timeZone: tz })
+    .formatToParts(new Date(guess)).filter((x) => x.type !== "literal").map((x) => [x.type, Number(x.value)]));
+  // How far the zone's clock is from UTC at that moment.
+  return guess - (Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - guess);
+}
+
+/**
+ * rentcastCycle(now, cycleDay) → { start, end } (epoch ms)
+ *
+ * The billing month the requests count against. RentCast renews a plan on
+ * the day it was bought, not on the 1st; dates are Pacific, like the sweep.
+ */
+export function rentcastCycle(now = Date.now(), cycleDay = 1, tz = WORK_TZ) {
+  const day = Math.min(28, Math.max(1, Math.round(Number(cycleDay)) || 1));
+  const { y, m, d } = zonedDate(now, tz);
+  const [sy, sm] = d >= day ? [y, m] : m === 1 ? [y - 1, 12] : [y, m - 1];
+  const [ny, nm] = sm === 12 ? [sy + 1, 1] : [sy, sm + 1];
+  return { start: zonedMidnight(sy, sm, day, tz), end: zonedMidnight(ny, nm, day, tz) };
+}
+
+// Runs left in the billing month, today included, in Pacific dates — what the
+// month's remaining RentCast requests get divided by.
+export function runsLeftInCycle(now = Date.now(), { weekdaysOnly = true, cycleDay = 1, tz = WORK_TZ } = {}) {
+  const { end } = rentcastCycle(now, cycleDay, tz);
   let n = 0;
-  for (let t = now; month(t) === m; t += DAY_MS) if (!weekdaysOnly || isWorkday(t, tz)) n++;
+  for (let t = now; t < end; t += DAY_MS) if (!weekdaysOnly || isWorkday(t, tz)) n++;
   return Math.max(1, n);
+}
+
+export function runsLeftInMonth(now = Date.now(), { weekdaysOnly = true, tz = WORK_TZ } = {}) {
+  return runsLeftInCycle(now, { weekdaysOnly, cycleDay: 1, tz });
 }
 
 // RentCast's property types, spelled its way.
@@ -118,8 +153,10 @@ export const DEFAULT_MAX_LIST_PRICE = 1500000;
 export const SWEEP_DISTRESS_RULE = "cut-or-cheap";
 // Requests left for the Pull button, on top of what the sweep spends.
 export const DEFAULT_RESERVE_REQUESTS = 2;
-// The most one run may spend, however far behind the month is.
-export const MAX_REQUESTS_PER_RUN = 10;
+// The most one run may spend, however far behind the month is. Ten was the
+// free tier's world; on a paid plan the month's budget spread over the
+// workdays left is what really limits a run. The Pull button keeps ten.
+export const MAX_REQUESTS_PER_RUN = 40;
 export const PAGES_CURSOR = "outreachPages";
 
 /**
@@ -141,6 +178,8 @@ export function normalizeOutreachAutopilot(v = {}) {
   const year = Math.round(Number(o.maxYearBuilt));
   const reserve = Math.round(Number(o.reserveRequests));
   const maxPrice = Math.round(Number(o.maxListPrice));
+  const monthly = Math.round(Number(o.monthlyRequests));
+  const cycleDay = Math.round(Number(o.cycleDay));
   const types = (Array.isArray(o.propertyTypes) ? o.propertyTypes : String(o.propertyTypes ?? "").split("|"))
     .map((t) => PROPERTY_TYPES.find((p) => p.toLowerCase() === String(t).trim().toLowerCase())).filter(Boolean);
   return {
@@ -160,7 +199,11 @@ export function normalizeOutreachAutopilot(v = {}) {
       : Number.isFinite(minDom) && minDom > 0 ? Math.min(365, minDom) : DEFAULT_MIN_DAYS_ON_MARKET,
     propertyTypes: o.propertyTypes === undefined ? [...DEFAULT_PROPERTY_TYPES] : [...new Set(types)],
     maxYearBuilt: year >= 1800 && year <= 2100 ? year : 0,
-    reserveRequests: Number.isFinite(reserve) && reserve >= 0 ? Math.min(20, reserve) : DEFAULT_RESERVE_REQUESTS,
+    reserveRequests: Number.isFinite(reserve) && reserve >= 0 ? Math.min(100, reserve) : DEFAULT_RESERVE_REQUESTS,
+    // The RentCast plan: requests a month (0 = not set, the old budget
+    // applies) and the day of the month it renews.
+    monthlyRequests: Number.isFinite(monthly) && monthly > 0 ? Math.min(100000, monthly) : 0,
+    cycleDay: Number.isFinite(cycleDay) && cycleDay >= 1 ? Math.min(28, cycleDay) : 1,
     maxListPrice: o.maxListPrice === 0 || o.maxListPrice === "0" ? 0
       : Number.isFinite(maxPrice) && maxPrice > 0 ? maxPrice : DEFAULT_MAX_LIST_PRICE,
   };
@@ -211,6 +254,42 @@ export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, require
     (Number(b.doc?.hook?.score) || 0) - (Number(a.doc?.hook?.score) || 0) ||
     (Number(b.doc?.listingCount) || 0) - (Number(a.doc?.listingCount) || 0));
   return ok.slice(0, Math.max(0, cap));
+}
+
+/* ---------- the RentCast meter ---------- */
+
+// The month's requests: the plan in Settings, else the old top-level
+// override, else the free tier's 48.
+export function monthlyBudget(saved = {}, oa = normalizeOutreachAutopilot(saved.outreachAutopilot)) {
+  if (oa.monthlyRequests > 0) return oa.monthlyRequests;
+  return Number(saved.rentcastMonthlyBudget) > 0 ? Number(saved.rentcastMonthlyBudget) : RENTCAST_MONTHLY_BUDGET;
+}
+
+// Every request since the cycle began. Summed by the store, not from a page of
+// recent pulls — a page of 200 undercounted once a run recorded several pulls.
+async function requestsSince(store, locationId, sinceIso) {
+  if (typeof store.sumOutreachRequests === "function") return Number(await store.sumOutreachRequests(locationId, sinceIso)) || 0;
+  const since = Date.parse(sinceIso);
+  const pulls = await store.listOutreachPulls(locationId, { limit: 5000 });
+  return pulls.filter((p) => new Date(p.createdAt).getTime() >= since).reduce((s, p) => s + (Number(p.doc?.requestsUsed) || 0), 0);
+}
+
+/**
+ * rentcastBudget({ store, locationId, saved, now }) → { used, budget, reserve, runsLeft, perRun, since }
+ *
+ * What a run may spend: what's left this billing month, less the reserve for
+ * the Pull button, over the runs left — at least one, at most
+ * MAX_REQUESTS_PER_RUN, and 0 once nothing is left.
+ */
+export async function rentcastBudget({ store = defaultStore, locationId, saved = {}, now = Date.now() }) {
+  const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
+  const { start } = rentcastCycle(now, oa.cycleDay);
+  const used = await requestsSince(store, locationId, iso(start));
+  const budget = monthlyBudget(saved, oa);
+  const spendable = budget - used - oa.reserveRequests;
+  const runsLeft = runsLeftInCycle(now, { weekdaysOnly: oa.weekdaysOnly, cycleDay: oa.cycleDay });
+  const perRun = spendable > 0 ? Math.min(MAX_REQUESTS_PER_RUN, Math.max(1, Math.floor(spendable / runsLeft))) : 0;
+  return { used, budget, reserve: oa.reserveRequests, runsLeft, perRun, since: iso(start) };
 }
 
 /* ---------- job registry (in memory, like the other sweeps) ---------- */
@@ -276,22 +355,18 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
     throw new Error("outreach sweep needs runPull and importAgents");
   }
 
-  // 0. The RentCast meter. The free tier is 50 requests a month and overage
-  // is billed, not refused. Spend it evenly: what's left (less a reserve for
-  // the Pull button) over the runs left this month.
+  // 0. The RentCast meter. A plan's requests are billed past its number, not
+  // refused. Spend them evenly: what's left this billing month (less a
+  // reserve for the Pull button) over the runs left.
   job.phase = "budget";
   let perRun = 1;
   try {
-    const pulls = await store.listOutreachPulls(locationId, { limit: 200 });
-    const monthStart = new Date(now); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
-    const used = pulls.filter((p) => new Date(p.createdAt) >= monthStart).reduce((s, p) => s + (Number(p.doc?.requestsUsed) || 0), 0);
-    const budget = Number(saved.rentcastMonthlyBudget) > 0 ? Number(saved.rentcastMonthlyBudget) : RENTCAST_MONTHLY_BUDGET;
-    const spendable = budget - used - oa.reserveRequests;
-    const runsLeft = runsLeftInMonth(now, { weekdaysOnly: oa.weekdaysOnly });
-    perRun = Math.min(MAX_REQUESTS_PER_RUN, Math.max(1, Math.floor(spendable / runsLeft)));
-    job.budget = { used, budget, reserve: oa.reserveRequests, runsLeft, perRun: spendable > 0 ? perRun : 0 };
-    if (spendable <= 0) {
-      job.warnings.push(`RentCast budget: ${used} of ${budget} requests used this month (${oa.reserveRequests} kept for the Pull button) — the sweep is standing down until next month`);
+    const b = await rentcastBudget({ store, locationId, saved, now });
+    const { used, budget, reserve, runsLeft } = b;
+    perRun = b.perRun;
+    job.budget = { used, budget, reserve, runsLeft, perRun };
+    if (perRun <= 0) {
+      job.warnings.push(`RentCast budget: ${used} of ${budget} requests used this month (${reserve} kept for the Pull button) — the sweep is standing down until the plan renews`);
       job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
       return;
     }
@@ -353,7 +428,7 @@ async function run(job, { locationId, client, saved, store, deps, now }) {
     // of the run: say so, pass the turn, try the next. Only when every county
     // fails does the run fail (and come back on the retry clock).
     try {
-      pull = await deps.runPull(locationId, client, query);
+      pull = await deps.runPull(locationId, client, query, { maxRequestsCap: MAX_REQUESTS_PER_RUN });
     } catch (e) {
       const why = String(e?.message || e).slice(0, 120);
       job.tried.push({ county: key, error: why });

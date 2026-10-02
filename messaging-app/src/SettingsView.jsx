@@ -973,13 +973,15 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                   onChange={(e) => setOutreachAuto("counties")(e.target.value)} />
                 <span className="mt-1 block text-xs text-slate-500">
                   One "County, ST" per line (no state = WA). Each run reads the next pages of one county, then moves to the next county once it's read to the end.
-                  Requests are spread over the month to stop at 48 (RentCast bills $0.20 a request past 50). Blank = the zips/city defaults above.
+                  Requests are spread over the billing month and stop at your plan's number (RentCast bills every request past it). Blank = the zips/city defaults above.
                 </span>
               </label>
               <Num label="Listed at least" suffix="days ago" value={form.outreachAutopilot?.minDaysOnMarket ?? 45} onChange={setOutreachAuto("minDaysOnMarket")} />
               <Num label="Max list price, $ (0 = any)" value={form.outreachAutopilot?.maxListPrice ?? 1500000} onChange={setOutreachAuto("maxListPrice")} />
               <Num label="Built in or before (0 = any)" value={form.outreachAutopilot?.maxYearBuilt ?? 0} onChange={setOutreachAuto("maxYearBuilt")} />
               <Num label="Requests kept for the Pull button" value={form.outreachAutopilot?.reserveRequests ?? 2} onChange={setOutreachAuto("reserveRequests")} />
+              <Num label="RentCast requests a month (your plan; blank = 48)" value={form.outreachAutopilot?.monthlyRequests || ""} onChange={setOutreachAuto("monthlyRequests")} />
+              <Num label="Plan renews on day (1–28)" value={form.outreachAutopilot?.cycleDay ?? 1} onChange={setOutreachAuto("cycleDay")} />
               <div className="col-span-2">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Property types</span>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">

@@ -34,7 +34,7 @@ import { OUTREACH_FIELDS } from "../field-registry.js";
 import { SUBJECT_PROPERTY_FIELD, seedSubjectProperty } from "../enrich.js";
 import {
   startOutreachSweep, getOutreachJob, publicOutreachJob, normalizeOutreachAutopilot, workflowIdFrom, MAX_DAILY_CAP, PROPERTY_TYPES,
-  CURSOR_NAME as OUTREACH_CURSOR, OUTREACH_SWEEP_HOUR, WORK_TZ,
+  CURSOR_NAME as OUTREACH_CURSOR, OUTREACH_SWEEP_HOUR, WORK_TZ, rentcastBudget,
 } from "../outreach-sweep.js";
 import {
   startOutreachFollowUp, getOutreachFollowUpJob, CURSOR_NAME as FOLLOWUP_CURSOR, OUTREACH_FOLLOWUP_HOUR,
@@ -230,7 +230,11 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
 
   // Resolve pull targets from the request body, falling back to the location's
   // saved defaults so a future Render Cron can POST with just location_id.
-  function pullParams(body, settings) {
+  // The Pull button's ceiling. The daily sweep passes its own (a paid plan's
+  // month spread over the workdays left); a person pressing Pull keeps ten.
+  const PULL_BUTTON_MAX_REQUESTS = 10;
+
+  function pullParams(body, settings, maxRequestsCap = PULL_BUTTON_MAX_REQUESTS) {
     const zips = (Array.isArray(body.zipCodes) ? body.zipCodes.join(",") : String(body.zipCodes || settings.outreachZips || ""))
       .split(",").map((z) => z.trim()).filter((z) => /^\d{5}$/.test(z));
     const county = String(body.county ?? settings.outreachCounty ?? "").trim();
@@ -254,7 +258,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     const offset = Math.max(0, parseInt(body.offset, 10) || 0);
     // County pulls cover a whole market in 500-listing pages, so they get a
     // higher request ceiling and a bigger default than zip/city pulls.
-    const maxRequests = Math.min(10, Math.max(1, parseInt(body.maxRequests, 10) || (county && !zips.length ? 5 : 3)));
+    const maxRequests = Math.min(maxRequestsCap, Math.max(1, parseInt(body.maxRequests, 10) || (county && !zips.length ? 5 : 3)));
     // Post-fetch filters (applied to the cohort, not the RentCast query —
     // RentCast can't filter on price or days-on-market server-side).
     // distressOnly keeps listings with ANY distress signal (stale ≥ staleDom
@@ -280,13 +284,13 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     return { zips, county, city, state, daysOld, propertyType, yearBuilt, offset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule };
   }
 
-  async function runPull(locationId, client, body) {
+  async function runPull(locationId, client, body, { maxRequestsCap = PULL_BUTTON_MAX_REQUESTS } = {}) {
     const settings = await getSettings(locationId);
     const apiKey = String(settings.rentcastApiKey || "").trim();
     if (!apiKey) throw Object.assign(new Error("RentCast API key not configured — add it in Settings"), { http: 400 });
 
     const { zips, county, city, state, daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule } =
-      pullParams(body, settings);
+      pullParams(body, settings, maxRequestsCap);
     const isDistressed = (s) => (distressRule === "cut-or-cheap" ? s.priced : s.any);
     // Precedence: zips (one query each) → county (one circular query around
     // the county centroid, post-filtered to the county line) → city/state.
@@ -702,18 +706,14 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         };
       });
 
-      // Month-to-date RentCast request usage (free tier = 50/month).
-      const pulls = await store.listOutreachPulls(locationId, { limit: 50 });
-      const monthStart = new Date();
-      monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
-      const requestsThisMonth = pulls
-        .filter((p) => new Date(p.createdAt) >= monthStart)
-        .reduce((s, p) => s + (Number(p.doc?.requestsUsed) || 0), 0);
+      // RentCast requests used this billing month, against the plan in Settings.
+      const budget = await rentcastBudget({ store, locationId, saved: settings });
+      const pulls = await store.listOutreachPulls(locationId, { limit: 1 });
 
       res.json({
         enabled, agents, tag: OUTREACH_TAG, importsEnabled: OUTREACH_IMPORTS_ENABLED,
         batch: batch ? { id: batch.id, name: batch.name, tag: batchTagFor(batch) } : null,
-        usage: { requestsThisMonth, lastPullAt: pulls[0]?.createdAt || null },
+        usage: { requestsThisMonth: budget.used, budget: budget.budget, since: budget.since, lastPullAt: pulls[0]?.createdAt || null },
       });
     } catch (err) { fail(res, err); }
   });
@@ -1035,6 +1035,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         importsEnabled: OUTREACH_IMPORTS_ENABLED,
         hasKey: Boolean(String(saved.rentcastApiKey || "").trim()),
         firstTouchOn: Boolean(saved.conversationAi?.parties?.agent?.outreach?.enabled),
+        // This billing month's RentCast requests: used, the plan, what a run may spend.
+        budget: await rentcastBudget({ store, locationId, saved }).catch(() => null),
         hour: OUTREACH_SWEEP_HOUR, tz: WORK_TZ,
         lastRunAt: cursor?.at || null,
         job: publicOutreachJob(getOutreachJob(locationId)),
@@ -1148,7 +1150,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
 
   // For the daily outreach sweep (outreach-sweep.js): the same pull and
   // import the buttons run, without a request.
-  router.runPull = (locationId, client, body = {}) => runPull(locationId, client, body);
+  router.runPull = (locationId, client, body = {}, opts = {}) => runPull(locationId, client, body, opts);
   router.importAgents = importAgents;
   router.resolveBatch = resolveBatch;
 

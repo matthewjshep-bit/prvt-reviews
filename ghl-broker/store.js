@@ -747,6 +747,15 @@ const pgStore = {
     );
     return rows;
   },
+  // RentCast requests spent since a date — every pull, not a page of them.
+  async sumOutreachRequests(locationId, sinceIso) {
+    const { rows } = await query(
+      `select coalesce(sum(case when doc->>'requestsUsed' ~ '^[0-9]+$' then (doc->>'requestsUsed')::int else 0 end), 0)::int as n
+         from outreach_pulls where location_id = $1 and created_at >= $2`,
+      [locationId, sinceIso]
+    );
+    return Number(rows[0]?.n) || 0;
+  },
 
   /* ---- dispositions (investor book) ---- */
   // Sync-time upsert: replaces the mirrored GHL data but never the local
@@ -1874,7 +1883,8 @@ const fileStore = (() => {
     async recordOutreachPull(locationId, doc) {
       ensure();
       data.outreachPulls.push({ locationId, doc, createdAt: nowIso() });
-      if (data.outreachPulls.length > 200) data.outreachPulls = data.outreachPulls.slice(-200);
+      // Enough to cover a paid plan's month of pulls, so the meter adds them all.
+      if (data.outreachPulls.length > 5000) data.outreachPulls = data.outreachPulls.slice(-5000);
       persist();
     },
     async listOutreachPulls(locationId, { limit = 50 } = {}) {
@@ -1883,6 +1893,12 @@ const fileStore = (() => {
         .filter((p) => p.locationId === locationId)
         .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit);
+    },
+    async sumOutreachRequests(locationId, sinceIso) {
+      ensure();
+      return data.outreachPulls
+        .filter((p) => p.locationId === locationId && (p.createdAt || "") >= sinceIso)
+        .reduce((s, p) => s + (Number(p.doc?.requestsUsed) || 0), 0);
     },
 
     /* ---- dispositions (investor book) ---- */
