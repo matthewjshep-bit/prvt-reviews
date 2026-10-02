@@ -414,7 +414,7 @@ its `UW_ENRICH_CANDIDATES` (20) most similar comps in one detail run
 (`fetchZillowFacts` in `rehab-scan.js`: year built, lot, size, beds, baths,
 units, last sale), keeps the facts a day per street so a retry, the queue or
 the Comps pane pays nothing twice, and merges them onto the search rows without
-touching the price or the sale date (`mergeFacts`). The 1.5 mi ring only buys
+touching the price or the sale date (`mergeFacts`). The 1 mi ring only buys
 addresses the half-mile ring didn't. Cost: one detail run of ≤20 addresses per
 ring reached; a multifamily pays nothing extra. `UW_ENRICH_CANDIDATES = 0`
 switches it off and the run prices on the search rows alone, as before. The
@@ -440,7 +440,7 @@ honest:
   re-discover square footage.
 - It refuses when there are fewer than 6 priced comps among the candidates.
   Calling the best 3 of 3 "renovated" is circular, so the run widens to the
-  1.5 mi ring and, failing that, takes the gut check (2–5 priced comps, the top
+  1 mi ring (the widest since 2026-10-02; it was 1.5 mi) and, failing that, takes the gut check (2–5 priced comps, the top
   three by $/sqft, said in those words) or holds.
 
 The ARV set is then the best-matching four of the marked tier, size-fit first

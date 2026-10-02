@@ -68,7 +68,10 @@ export const UW_RADIUS_MILES = 0.5;        // "under half a mile", as asked
 // Half a mile, then straight to the last ring. Every ring is a fresh Apify
 // search of the WHOLE disc, so a middle rung re-buys the sales the next one
 // returns anyway — 2026-09-15, cutting it saves a pull on every widened run.
-export const UW_RADIUS_LADDER = [0.5, 1.5];
+// One mile at most (Matt, 2026-10-02): the last ring was 1.5 mi, and more than
+// half of all runs were reaching it. A thin house now gets a gut check or a
+// hold instead of comps from a mile and a half away.
+export const UW_RADIUS_LADDER = [0.5, 1];
 
 /**
  * shouldScanPhotos({ arv, theirArv, theirRehab, describedWork, fill }) → boolean
@@ -1667,7 +1670,7 @@ async function runUnderwrite(job, ctx) {
       })
     : null;
   // A widened search is said out loud wherever the ARV's basis is shown —
-  // the note, the offer, the editor — so nobody reads a 1.5-mile ARV as a
+  // the note, the offer, the editor — so nobody reads a one-mile ARV as a
   // half-mile one.
   if (arv && compsRadiusMiles > UW_RADIUS_MILES) arv.basis = `${arv.basis} — comps widened to ${compsRadiusMiles} mi`;
   if (arv && proxy?.gutCheck) arv.basis = `gut check on ${rehabbed.length} comps — ${arv.basis}`;

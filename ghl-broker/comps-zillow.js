@@ -219,7 +219,7 @@ export function unitsFromDetail(item) {
 }
 
 // Street line, loosely — enough to match a comp's search row to its detail
-// row inside a mile and a half.
+// row inside the widest comp ring.
 export const streetKey = (address = "") =>
   String(address || "").split(",")[0].toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
 

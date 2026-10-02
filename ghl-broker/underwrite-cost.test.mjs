@@ -17,7 +17,7 @@ test("the photo scope is skipped only when nothing could carry a number", () => 
 });
 
 test("the comp ladder has no middle rung — every ring re-buys the whole disc", () => {
-  assert.deepEqual(UW_RADIUS_LADDER, [0.5, 1.5]);
+  assert.deepEqual(UW_RADIUS_LADDER, [0.5, 1]);
 });
 
 // 2026-09-16: each ring reached also buys the facts (year built, lot) for its
