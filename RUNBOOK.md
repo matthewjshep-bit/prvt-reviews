@@ -2436,6 +2436,60 @@ won't build never blocks the paper. A send that carries the operator's own
 message is untouched — SendModal already appends the link there, and unticking
 that box is a decision the server must not undo.
 
+### Texts the carriers block (Error 30007, 2026-10-02)
+
+Matt's screenshot: "Jeff, noticed your listing at 1515 Lombard Ave has been
+sitting a while. I'm a local investor buying houses as-is, no repairs needed.
+Would the seller consider a cash offer?" — Error 30007, "Message blocked due
+to carrier policies". Fourteen days of outbound SMS (2,776, one number) read
+from GHL, by what they said:
+
+- check-ins and openers that pitched "as-is cash offer / I buy houses / local
+  investor": blocked 53% to agents who had never written back, 26% to ones who
+  had ("no repairs" 60%, "cash" 38%, "as-is" 24%, "investor" 21%);
+- deal texts with the package link: 32% cold, 9% warm; the same texts
+  without a link, 0 of 121. Blocks started 9/29, the day after the package
+  link went into deal texts;
+- buyer check-ins saying "a Seattle investor who wholesales…": 13% cold;
+- everything else the app sent (replies, floats, nudges): 0.6%; the GHL
+  workflow's own opener (a plain question about the listing): 0.1%.
+
+It is wording and links, not the number's registration. What changed:
+
+- **The prompts** for the four texts that introduce us
+  (`CARRIER_CHECKED_KINDS`: outreach_open, outreach_nudge, agent_pulse,
+  buyer_pulse) ask about the house in plain words ("is it a bit of a
+  project?") and say who we are without "investor" or "wholesale", and carry
+  `CARRIER_RULE` (shared/carrier-words.js): never cash, cash offer, as-is,
+  investor, buy houses, no repairs, quick close, wholesale or a link.
+- **One rewrite, then a hold.** A draft of those kinds that still says any of
+  them (`carrierFlags`) is drafted once more with the words named
+  (`writeAgainWithoutCarrierWords`, `outbound.avoid`); the rewrite is kept
+  only if it says fewer. `evaluateReplyGates({ carrierCheck })` flags what's
+  left, so it waits for a person instead of going. Floats and replies to
+  someone mid-conversation are not checked — they went through.
+- **The letter's text** says neither "cash" nor "as-is" (the attached letter
+  carries the terms) and carries no link when the email is going too: the
+  comps page link rides in the email, and the text says "The comps and
+  numbers are in your email."
+- **Deal texts** (`dispoAutopilot.blastLink`, Settings → Dispositions → "The
+  package link in a deal text"): `"on_reply"` sends the deal without the link
+  — ending "Happy to send photos and numbers." or "Want the details?" — and no
+  invite is minted (the draft carries `blastWithoutLink`). When the buyer
+  answers that text with interest, a question, a walkthrough ask, a status
+  check or price pushback, within 30 days and before any link has gone, the
+  reply agent sends the package link for THAT deal (`linkOwed`,
+  `send_dataroom_invite` with `addressHint`), whatever the buy-box guard
+  says; a pass gets nothing. Emailed deals always carry the link. Default
+  `"always"`.
+- `OUR_OFFER_TEXT_RX` also knows the for-the-record letter ("sending our
+  written offer on …"), so the thread reader never takes it for a person.
+
+To re-run the measurement: page `searchConversations` for the window, read
+each conversation's messages, and group outbound `TYPE_SMS` by the `Error
+NNNNN` in `error` — read gently (two at a time, back off on 429), the broker
+shares GHL's rate limit.
+
 ### The written offer follows the float (2026-10-02)
 
 Matt: "send them our offer in the official email text form so that they have

@@ -1239,6 +1239,17 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             </select>
           </label>
           <div className="grid grid-cols-2 gap-3">
+            <label className="col-span-2 block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">The package link in a deal text</span>
+              <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                value={form.dispoAutopilot?.blastLink || "always"} onChange={(e) => setDispoAuto("blastLink")(e.target.value)}>
+                <option value="on_reply">Send it when they answer (the text offers photos and numbers)</option>
+                <option value="always">In the first text</option>
+              </select>
+              <span className="mt-1 block text-xs text-slate-500">
+                Carriers block texts with links far more often: deal texts with the link were blocked about a third of the time to buyers who'd never written back, the same texts without it almost never. Emailed deals always carry the link.
+              </span>
+            </label>
             <Num label="Seconds between texts" value={form.dispoAutopilot?.spreadSec ?? 60} onChange={setDispoAuto("spreadSec")} />
             <Num label="Buyers on the first wave" value={form.dispoAutopilot?.autoBlastCount ?? 25} onChange={setDispoAuto("autoBlastCount")} />
             <Num label="Second wave after" suffix="hours" value={form.dispoAutopilot?.secondWaveHours ?? 48} onChange={setDispoAuto("secondWaveHours")} />

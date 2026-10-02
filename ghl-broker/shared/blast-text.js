@@ -61,17 +61,18 @@ export function blastNote(text = "", max = 90) {
 export function blastMessage({
   firstName = "", address = "", city = "", price = 0, beds = 0, baths = 0, sqft = 0,
   yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", variant = 0, link = "", ask = "", kind = "", intro = "",
+  linkOnReply = false,
 } = {}) {
   const first = String(firstName || "").trim().split(/\s+/)[0] || "";
   const how = String(intro || "").replace(/[.!?\s]+$/, "").trim();
-  const text = blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind });
+  const text = blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply });
   if (!how) return text;
   const hi = first ? `Hey ${first}, ` : "Hey, ";
   const rest = text.slice(hi.length);
   return `${first ? `Hey ${first}` : "Hey"} — ${how}. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
 }
 
-function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind }) {
+function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply = false }) {
   const hi = first ? `Hey ${first}, ` : "Hey, ";
   const street = String(address || "").split(",")[0].trim() || "a house";
   const where = city ? ` in ${city}` : "";
@@ -104,7 +105,9 @@ function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, 
       : v === 1
         ? `${hi}new one${where}: ${street}${spec ? `, ${spec}` : ""}, ${work}. `
         : `${hi}${street}${where} just went under contract${spec ? ` (${spec})` : ""}. ${work[0].toUpperCase()}${work.slice(1)}. `;
-    return `${opener}${money ? `${money}. ` : ""}${tail}${q}${url ? ` ${lead}: ${url}` : ""}`;
+    // The link waits for their answer (dispoAutopilot.blastLink "on_reply"):
+    // say it's there for the asking.
+    return `${opener}${money ? `${money}. ` : ""}${tail}${q}${url ? ` ${lead}: ${url}` : linkOnReply ? " Happy to send photos and numbers." : ""}`;
   }
   if (v === 0) {
     return `${hi}got ${street}${where} under contract${spec ? ` — ${spec}` : ""}, ${work}. ${money ? `${money}. ` : ""}${tail}${url ? `Photos and numbers: ${url}` : "Want the details?"}`;

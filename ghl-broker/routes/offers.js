@@ -6256,12 +6256,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // is the fallback for callers that send no message of their own.
       // "for_record": the written offer after a float nobody answered, or with
       // the reply to a no — so the agent has our number on file in writing.
+      // No "cash, as-is" in the text (2026-10-02): that is the wording the
+      // carriers block (shared/carrier-words.js). The letter itself, attached,
+      // carries the terms.
       const text = message || (template === "for_record"
         ? `Hi ${firstName}, sending our written offer on ${offer.address || "your property"} over so you have it on file — ` +
-          `${fmtMoney(offer.cashAmount)} cash, as-is, close on your timeline (attached).` +
+          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).` +
           ` If the seller's open to it, we'd be glad to have you represent us and write it up on NWMLS forms.`
         : `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
-          `${fmtMoney(offer.cashAmount)} cash, as-is, close on your timeline (attached).` +
+          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).` +
           ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?`);
 
       // The agent page — our arithmetic, the comps, the scope and what the
@@ -6278,9 +6281,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         pageLink = room?.shareToken ? `${publicBaseUrl}/o/${room.shareToken}` : "";
       }
 
-      // SMS: the message and the link, with the image as the MMS attachment.
-      // PDFs are email-only.
-      const smsText = pageLink ? `${text}\n\n${pageLink}` : text;
+      // SMS: the message, with the image as the MMS attachment. The page link
+      // rides in the email when one is going — a link in a text is what the
+      // carriers block most (2026-10-02) — and in the text only when it's the
+      // one way the agent would get it. PDFs are email-only.
+      const emailGoing = channels.includes("email") && Boolean(email);
+      const smsText = pageLink && !emailGoing ? `${text}\n\n${pageLink}` : pageLink ? `${text} The comps and numbers are in your email.` : text;
       const smsAttachments = imagePicked ? [offer.imageUrl] : [];
 
       // Email: every picked document attached as a file, short HTML body.
@@ -6298,7 +6304,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         `<p>${linkify(esc(message || `Hi ${firstName},`).replace(/\n/g, "<br>"))}</p>`,
         ...(message ? [] : [
           `<p>Please find our letter of intent on <strong>${esc(offer.address || "your property")}</strong> attached — ` +
-          `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, cash, as-is, close on your timeline. ` +
+          `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, as-is, close on your timeline. ` +
           `If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign? Happy to answer any questions.</p>`,
         ]),
         ...(pageLink ? [

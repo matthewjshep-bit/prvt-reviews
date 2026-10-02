@@ -323,9 +323,10 @@ const EXECUTORS = {
   // The same write as suggest_dataroom_invite, reached only through the
   // broker's guard (reply-agent.js) — it is not on any party's action list,
   // so a rule can never wire it.
-  async send_dataroom_invite({ deps, contactId, draft }) {
+  async send_dataroom_invite({ deps, contactId, draft, action }) {
     if (typeof deps?.issueDataroomInvite !== "function") throw new Error("dataroom invites are not wired on this broker");
-    const r = await deps.issueDataroomInvite({ contactId, addressHint: draft?.propertyAddress || "" });
+    // A link owed for a deal text names that deal, whether or not their reply did.
+    const r = await deps.issueDataroomInvite({ contactId, addressHint: action?.addressHint || draft?.propertyAddress || "" });
     return r?.sent ? `dataroom link texted for ${r.address}` : `dataroom link issued for ${r.address}${r?.reason ? ` — ${r.reason}` : ""}`;
   },
   async suggest_dataroom_invite({ deps, contactId, draft }) {

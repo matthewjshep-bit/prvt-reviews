@@ -56,6 +56,10 @@ export function normalizeDispoAutopilot(v = {}) {
     // buyers `secondWaveHours` after the second.
     maxWaves: n(o.maxWaves, 2, 1, 4),
     autoInvite: o.autoInvite === true,
+    // Whether a deal text carries the buyer's package link (2026-10-02). A
+    // link in a text is what the carriers block most: "on_reply" sends the
+    // deal without it ("want the details?") and the link when they answer.
+    blastLink: o.blastLink === "on_reply" ? "on_reply" : "always",
     // Build the buyer package (the dataroom) the moment an offer becomes a
     // deal, before any wave, so the blast's link has somewhere to go. Off.
     dataroomOnPromote: o.dataroomOnPromote === true,

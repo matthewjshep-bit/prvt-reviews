@@ -65,6 +65,12 @@ test("a floated number nobody answered gets the written offer, for their records
   const sms = sent.find((m) => m.contactId === "agent-quiet" && m.type === "SMS");
   assert.ok(sms, "a text went");
   assert.match(sms.message, /sending our written offer on .* over so you have it on file/);
+  // What the carriers block stays out of the text (2026-10-02): no "cash", no
+  // "as-is", and the page link rides in the email that's going too.
+  assert.doesNotMatch(sms.message, /\bcash\b|as-is|https?:/i, sms.message);
+  assert.match(sms.message, /comps and numbers are in your email/);
+  const mail = sent.find((m) => m.contactId === "agent-quiet" && m.type === "Email");
+  assert.match(String(mail?.html || ""), /\/o\//, "the page link is in the email");
   const after = await store.getOffer(offer.id);
   assert.equal(after.paperAfterFloat.status, "sent");
   assert.ok((after.sends || []).length, "the ledger has the send");
