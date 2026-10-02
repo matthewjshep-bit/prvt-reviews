@@ -3,7 +3,8 @@
 // Matt, 2026-10-01: focus on single-family residences. An agent who texts a
 // mobile home, a townhouse, a condo or a multi-family gets it held for a
 // person — before the comps and the photo scan are bought — instead of an
-// offer. A run started from the offer form ("Open and fix") prices it anyway.
+// offer. "Underwrite anyway" on Today runs it again past that hold, and a run
+// started from the offer form prices it anyway too.
 //
 //   node --test auto-underwrite-kind.test.mjs
 
@@ -79,4 +80,34 @@ test("a single-family house goes on to the comps, and so does anything run from 
       await until(() => job.status !== "running");
     } finally { restore(); }
   }
+});
+
+test("Underwrite anyway on a held mobile home runs the comps and replaces the held draft", async () => {
+  _resetJobs();
+  const { calls, restore } = stubFetch("MANUFACTURED");
+  try {
+    const held = (await startUnderwrite({ client, locationId: "LOC-kind-anyway", saved, store, contactId: "agent-3", address: ADDRESS,
+      deps: { createOffer: async () => { throw new Error("no offer for a mobile home"); } } })).job;
+    assert.ok(await until(() => held.status === "held"), `still ${held.status}/${held.phase}`);
+    assert.equal(calls.search, 0);
+
+    const { job } = await startUnderwrite({ client, locationId: "LOC-kind-anyway", saved, store, contactId: "agent-3", address: ADDRESS,
+      anyKind: true, replaceOfferId: held.offerId,
+      deps: { createOffer: async () => { throw new Error("not reached in this test"); } } });
+    assert.ok(job, "the run started");
+    assert.notEqual(job.id, held.id);
+    assert.equal(job.fill, false, "not a form fill: it makes the offer itself");
+    assert.ok(await until(() => ["held", "done", "error"].includes(job.status) || calls.search > 0), `still ${job.status}/${job.phase}`);
+    assert.ok(calls.search > 0, "it reached the comp search");
+    assert.ok(!(job.held || []).some((h) => KIND_HOLD.test(h)), "not held as not-our-kind again");
+    assert.equal(job.replaceOfferId, held.offerId, "the held draft is the one it replaces");
+    cancelJob(job.id);
+    await until(() => job.status !== "running");
+  } finally { restore(); }
+});
+
+test("a Retry of an Underwrite anyway run still prices it anyway", async () => {
+  const { retryArgs } = await import("./auto-underwrite.js");
+  assert.equal(retryArgs({ id: "uw-1", contactId: "c1", address: ADDRESS, anyKind: true, offerId: "draft1" }).anyKind, true);
+  assert.equal(retryArgs({ id: "uw-2", contactId: "c1", address: ADDRESS, offerId: "draft1" }).anyKind, false);
 });

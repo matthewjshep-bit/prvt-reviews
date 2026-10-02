@@ -350,12 +350,13 @@ export function buildPipeline({
     const base = { offerId: o.id, contactId: card.contactId, contactName: card.contactName, address: card.address };
     if (aiHeld) {
       // Not our kind of house (shared/asset-type.js): single-family only for
-      // now, so the question is whether to price it at all.
+      // now, so the question is whether to price it at all. "Underwrite
+      // anyway" runs the underwriter again past that hold.
       const kindHeld = held.find((h) => KIND_HOLD.test(String(h || "")));
       card.actionIds.push(push({ ...base, kind: "underwrite_held", severity: "soon",
         title: kindHeld ? `Not single-family: ${card.address}` : `Underwrite held on ${card.address}`, detail: held.join(" · "),
         ops: kindHeld
-          ? [{ key: "open_editor", label: "Underwrite anyway", intent: "secondary" }, { key: "drop", label: "Pass on it", intent: "primary" }]
+          ? [{ key: "underwrite_anyway", label: "Underwrite anyway", intent: "secondary" }, { key: "drop", label: "Pass on it", intent: "primary" }]
           : [{ key: "open_editor", label: "Open and fix", intent: "primary" }, { key: "drop", label: "Drop it", intent: "danger" }] }));
     }
     if (lane === "ready" && card.ai.made && !(o.sends || []).length) {

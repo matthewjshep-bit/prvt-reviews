@@ -256,8 +256,8 @@ export const retryUnderwrite = (jobId) =>
   post(`/api/offers/automations/underwrite/retry`, { jobId });
 // The same, for a held draft whose run is long out of memory: by contact and
 // house, replacing the draft it left.
-export const rerunHeldUnderwrite = ({ contactId, address, askingPrice = 0, offerId }) =>
-  post(`/api/offers/automations/underwrite/retry`, { contactId, address, askingPrice, replaceOfferId: offerId });
+export const rerunHeldUnderwrite = ({ contactId, address, askingPrice = 0, offerId }, { anyKind = false } = {}) =>
+  post(`/api/offers/automations/underwrite/retry`, { contactId, address, askingPrice, replaceOfferId: offerId, ...(anyKind ? { anyKind: true } : {}) });
 
 /* ---------- Conversation AI (inbound text -> drafted or auto-sent reply) ---------- */
 // Drafts are started by a GHL workflow webhook, not from here. The outbox
