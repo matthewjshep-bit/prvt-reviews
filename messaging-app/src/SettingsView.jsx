@@ -976,6 +976,17 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                   Requests are spread over the billing month and stop at your plan's number (RentCast bills every request past it). Blank = the zips/city defaults above.
                 </span>
               </label>
+              <label className="col-span-2 block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">How to read them</span>
+                <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                  value={form.outreachAutopilot?.coverage || "counties"} onChange={(e) => setOutreachAuto("coverage")(e.target.value)}>
+                  <option value="counties">One county at a time (a circle around each)</option>
+                  <option value="statewide">The whole state in one read, kept to these counties (best on a paid plan)</option>
+                </select>
+                <span className="mt-1 block text-xs text-slate-500">
+                  The whole-state read asks RentCast for every listing in the state and files each one under its county, so neighbouring counties don't overlap and rural edges aren't missed. Each county's agents still land in their own batch.
+                </span>
+              </label>
               <Num label="Listed at least" suffix="days ago" value={form.outreachAutopilot?.minDaysOnMarket ?? 45} onChange={setOutreachAuto("minDaysOnMarket")} />
               <Num label="Max list price, $ (0 = any)" value={form.outreachAutopilot?.maxListPrice ?? 1500000} onChange={setOutreachAuto("maxListPrice")} />
               <Num label="Built in or before (0 = any)" value={form.outreachAutopilot?.maxYearBuilt ?? 0} onChange={setOutreachAuto("maxYearBuilt")} />

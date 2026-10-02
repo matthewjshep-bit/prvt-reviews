@@ -2962,6 +2962,24 @@ otherwise it passes to the county after the last one read. A run stamps
 measured from the last beat, so a long run isn't retried while it works.
 `last.tried` lists up to 12 counties with their pick counts.
 
+**The whole state in one read (2026-10-02).** Settings → Agent Outreach →
+"How to read them" (`outreachAutopilot.coverage`, default `"counties"`).
+`"statewide"` asks RentCast for the counties' state (`state=WA`, no circle),
+paged from the `statewide` place on the `outreachPages` cursor, and files each
+listing under the county it names when that county is on the list
+(`listingInCounty`); the rest of the state is dropped. Each county's agents
+are ingested into its own "Autopilot · King, WA" batch, so Found attribution
+on Flow is unchanged. "Cheap" is measured against the listing's ZIP median
+when the ZIP has 15+ priced listings in the read, else its county's
+(`medianIndex` in outreach-score.js) — never one median for the whole read.
+One pull record carries the requests. A resumed lap starts 50 listings
+before the saved place (`STATEWIDE_STEP_BACK`) because listings come and go
+overnight; rows are keyed by listing and agent, so nothing is added twice. A
+lap read to the end starts over the next run. Sweep pulls refresh agents'
+last-message dates weekly, like the GHL match; the pull cache holds at most
+40,000 listings all together. `runPull` was split into `fetchListings` and
+`ingestCohort` for this; the button's pulls are unchanged.
+
 **Who the pick can reach (2026-10-02).** The pick reads
 `store.listOutreachPickable`: rows that are new, not in GHL (no contact id,
 no `doc.ghl.contactId`), have a phone, and aren't imported, skipped or matched
