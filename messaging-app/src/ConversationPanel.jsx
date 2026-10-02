@@ -9,7 +9,8 @@
 // bot couldn't answer gets the answer box here instead (drafted in the bot's
 // voice and kept for next time), with the plain box one click away.
 //
-// Under the box, one Feedback line for the whole row (RowFeedback.jsx).
+// Under the box, the Feedback control for the whole row (RowFeedback.jsx),
+// tucked away until T or the pane's ⋯ asks for it (Matt, 2026-10-01).
 
 import React, { useEffect, useRef, useState } from "react";
 import { ExternalLink, Loader2, RefreshCw, Send } from "lucide-react";
@@ -73,14 +74,16 @@ export function HandReply({ contactId, offerId, name, sendsEnabled, onSent }) {
  */
 export function ConversationPanelBody({
   item, targets, thread = null, threadError = "", loading = false, onReload,
-  sendsEnabled, serverOffsetMs = 0, onDone, onSent, fb = null, taught = [],
+  sendsEnabled, serverOffsetMs = 0, onDone, onSent, fb = null, taught = [], bot = null,
 }) {
   const bottom = useRef(null);
   const [typeInstead, setTypeInstead] = useState(false);
   const asked = Boolean(item.question && (item.ops || []).some((op) => op.key === "answer"));
   const count = thread?.messages?.length || 0;
   useEffect(() => { bottom.current?.scrollIntoView({ block: "end" }); }, [count, targets.contactId]);
-  const feedback = fb ? <PaneFeedback fb={fb} withWords={Boolean(targets.draft)} taught={taught} /> : null;
+  const feedback = fb ? <PaneFeedback fb={fb} withWords={Boolean(targets.draft)} taught={taught} tucked /> : null;
+  // You stopped the bot on them (the timeline's `bot`): the draft waits for you.
+  const holdNote = bot?.held ? "The bot is stopped on them — nothing goes by itself; this waits for your Send." : "";
   // When they last wrote: a draft older than that was written to an earlier message.
   const lastInboundAt = (thread?.messages || []).filter((m) => m.dir === "in" && m.at).map((m) => m.at).sort().at(-1) || null;
 
@@ -123,7 +126,7 @@ export function ConversationPanelBody({
       <div className="max-h-[60%] shrink-0 overflow-y-auto border-t border-slate-200 bg-white">
         {targets.draft
           ? <DraftComposer key={targets.draft.id} draft={targets.draft} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs}
-              onDone={onSent || onDone} textareaId={REPLY_BOX_ID} lastInboundAt={lastInboundAt} fb={fb} />
+              onDone={onSent || onDone} textareaId={REPLY_BOX_ID} lastInboundAt={lastInboundAt} fb={fb} holdNote={holdNote} />
           : asked && !typeInstead
           ? (
             <div className="px-3 py-2.5">
@@ -138,7 +141,7 @@ export function ConversationPanelBody({
   );
 }
 
-export default function ConversationPanel({ item, targets, sendsEnabled, serverOffsetMs, onDone, fb, taught }) {
+export default function ConversationPanel({ item, targets, sendsEnabled, serverOffsetMs, onDone, fb, taught, bot = null }) {
   const key = threadKey(targets.contactId);
   const t = useLoad(key, loadThread(targets.contactId), { maxAgeMs: THREAD_POLL_MS, pollMs: THREAD_POLL_MS });
   // After anything is sent: the thread is stale, and so is the queue. The old
@@ -146,6 +149,6 @@ export default function ConversationPanel({ item, targets, sendsEnabled, serverO
   const onSent = () => { t.reload(); onDone?.(); };
   return (
     <ConversationPanelBody item={item} targets={targets} thread={t.data} threadError={t.error} loading={t.loading}
-      onReload={t.reload} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} onSent={onSent} fb={fb} taught={taught} />
+      onReload={t.reload} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} onDone={onDone} onSent={onSent} fb={fb} taught={taught} bot={bot} />
   );
 }

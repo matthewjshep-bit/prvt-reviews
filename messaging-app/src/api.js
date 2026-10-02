@@ -105,6 +105,10 @@ export const getContactProfile = (id, { pull = false, party = "" } = {}) =>
   fetch(`${API_BASE}/api/contacts/${encodeURIComponent(id)}/record?${locq()}${pull ? "&pull=1" : ""}${party ? `&party=${party}` : ""}`).then(j);
 export const getContactThread = (id, limit = 30) =>
   fetch(`${API_BASE}/api/contacts/${encodeURIComponent(id)}/thread?${locq()}&limit=${limit}`).then(j);
+// The work pane's header: this house's moments, what the machine does next,
+// and the Bot menu's state (ghl-broker/contact-timeline.js). One person's reads.
+export const getContactTimeline = (id, { offerId = null, party = "" } = {}) =>
+  fetch(`${API_BASE}/api/contacts/${encodeURIComponent(id)}/timeline?${locq()}${offerId ? `&offerId=${encodeURIComponent(offerId)}` : ""}${party ? `&party=${encodeURIComponent(party)}` : ""}`).then(j);
 export const saveContactFacts = (id, { party, add = [], remove = [] }) =>
   post(`/api/contacts/${encodeURIComponent(id)}/facts`, { party, add, remove });
 export const addContactEvent = (id, body) =>
@@ -285,8 +289,9 @@ export const listCalendars = () =>
   fetch(`${API_BASE}/api/offers/automations/conversation/calendars?${locq()}`).then(j);
 export const listWorkflows = () =>
   fetch(`${API_BASE}/api/offers/automations/conversation/workflows?${locq()}`).then(j);
-export const getReplyDrafts = () =>
-  fetch(`${API_BASE}/api/offers/automations/conversation?${locq()}`).then(j);
+// { contactId }: one person's open drafts (the Offers work pane).
+export const getReplyDrafts = ({ contactId = null } = {}) =>
+  fetch(`${API_BASE}/api/offers/automations/conversation?${locq()}${contactId ? `&contact_id=${encodeURIComponent(contactId)}` : ""}`).then(j);
 export const getConversationHistory = (days = 30) =>
   fetch(`${API_BASE}/api/offers/automations/conversation/history?${locq()}&days=${encodeURIComponent(days)}`).then(j);
 // `reason` is { code, note } from DRAFT_FEEDBACK — optional, why it was changed or binned.
@@ -564,9 +569,15 @@ export const answerPartnerQuestion = ({ contactId, draftId = null, address = "",
   post(`/api/dashboard/answers`, { contactId, draftId, address, question, answer, saveAsFact });
 export const forgetStandingAnswer = (id) =>
   fetch(`${API_BASE}/api/dashboard/answers/${encodeURIComponent(id)}?${locq()}`, { method: "DELETE" }).then(j);
-// Stop / Resume on a row the machine is driving.
-export const stopDrive = ({ contactId, offerId = null, address = "", reason = "" }) => post(`/api/dashboard/drive/stop`, { contactId, offerId, address, reason });
-export const resumeDrive = ({ contactId, offerId = null, address = "" }) => post(`/api/dashboard/drive/resume`, { contactId, offerId, address });
+// Stop / Pause / Resume the bot on a person (shared/bot-hold.js): nothing goes
+// to them by itself while it holds; their texts still get drafts, which wait.
+// preset "1w" | "2w" | "1m" makes it a pause. party only when known.
+export const stopDrive = ({ contactId, offerId = null, address = "", reason = "", party = null, preset = null, until = null }) =>
+  post(`/api/dashboard/drive/stop`, { contactId, offerId, address, reason, ...(party ? { party } : {}), ...(preset ? { preset } : {}), ...(until ? { until } : {}) });
+export const resumeDrive = ({ contactId, offerId = null, address = "", party = null }) =>
+  post(`/api/dashboard/drive/resume`, { contactId, offerId, address, ...(party ? { party } : {}) });
+// Check in less / normal / more with a person.
+export const setDrivePace = ({ contactId, pace, party = null }) => post(`/api/dashboard/drive/pace`, { contactId, pace, ...(party ? { party } : {}) });
 export const runDashboardAudit = ({ dryRun = true } = {}) => post(`/api/dashboard/audit/run`, { dryRun });
 // The nightly coach: what it proposed from the day's edits and dismissals.
 export const getCoach = () => fetch(`${API_BASE}/api/dashboard/coach?${locq()}`).then(j);

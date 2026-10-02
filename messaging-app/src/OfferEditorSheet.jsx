@@ -14,11 +14,13 @@ import { offerEditorUrl } from "./api.js";
 const NewOffer = lazy(() => import("./NewOffer.jsx"));
 
 /**
- * <OfferEditorSheet offer settings contactId onClose onSaved onOpenOffer />
+ * <OfferEditorSheet offer settings contactId onClose onSaved onOpenOffer onDeal? />
+ *   onDeal  go to the deal once it's one: the Offers app passes its own view
+ *           switch; elsewhere (Today) it is the Deals page
  *   offer     the offer to edit; null starts a new one for contactId
  *   settings  the app's saved settings (OfferApp); null while they load
  */
-export default function OfferEditorSheet({ offer, settings, contactId = null, onClose, onSaved, onOpenOffer }) {
+export default function OfferEditorSheet({ offer, settings, contactId = null, onClose, onSaved, onOpenOffer, onDeal = null }) {
   const panel = useRef(null);
   const opener = useRef(typeof document !== "undefined" ? document.activeElement : null);
   useEffect(() => {
@@ -54,7 +56,7 @@ export default function OfferEditorSheet({ offer, settings, contactId = null, on
             <Suspense fallback={<div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 size={14} className="animate-spin" /> Opening the offer…</div>}>
               <NewOffer key={offer?.id || "new"} settings={settings} restore={offer} initialContactId={offer ? undefined : contactId || undefined}
                 onReset={onClose} onSettingsSaved={() => {}} onOpenOffer={onOpenOffer} onOfferSaved={onSaved}
-                onDeal={() => { window.location.href = `/deals${window.location.search}`; }} />
+                onDeal={onDeal || (() => { window.location.href = `/deals${window.location.search}`; })} />
             </Suspense>
           )}
         </div>

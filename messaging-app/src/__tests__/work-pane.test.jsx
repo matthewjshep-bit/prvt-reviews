@@ -2,6 +2,7 @@ import { test, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import WorkView from "../WorkView.jsx";
+import { ContactDrawerContext } from "../ContactLink.jsx";
 import { buildPipeline } from "@shared/pipeline.js";
 import { normalizeConversationAi } from "@shared/conversation-ai.js";
 
@@ -73,7 +74,9 @@ test("your calls come first on the rail; a machine row, opened, says what's next
   expect(html).not.toContain(">Stuck<");   // nothing is stuck, so there is no Stuck heading
 });
 
-test("every row on Today, a draft or not, has one Feedback control, and says what was noted", () => {
+// Matt, 2026-10-01: he never used Feedback, so it takes no room until T or
+// the ⋯ menu asks for it; a verdict saved before still reads "noted".
+test("Feedback stays out of the way until T or ⋯, and a saved verdict still reads 'noted'", () => {
   const r = owedNumber();
   const audit = { id: "audit:unanswered_inbound:c9:2026-09-19T19:09:53", kind: "audit_owed", severity: "now", group: "yours", contactId: "c9", contactName: "Melissa W", title: "Melissa W: Texts we never answered", detail: "not drafted: the cap", ops: [{ key: "open_contact", label: "Open the thread", intent: "primary" }],
     feedback: { category: "should_have_replied", label: "Should have replied itself", note: "", at: "2026-09-20T15:00:00Z" } };
@@ -84,18 +87,27 @@ test("every row on Today, a draft or not, has one Feedback control, and says wha
   const rowFeedback = { "draft:d1": { category: "right_to_hand_over", label: "Right to hand it to me", note: "", at: "2026-09-20T15:00:00Z" } };
   for (const a of actions) {
     const html = render({ actions, drafts: [draft], rowFeedback, initialRowId: a.id });
-    expect(html.match(/aria-label="Feedback for the bot"/g)?.length).toBe(1);
+    const saved = Boolean(a.feedback) || a.id === draftRow.id;
+    expect(html.match(/aria-label="Feedback for the bot"/g)?.length || 0).toBe(saved ? 1 : 0);
+    expect(html.match(/aria-label="More"/g)?.length).toBe(1);   // ⋯: Feedback (T), their record, GHL
     expect(html).not.toContain("Teach the bot");
     expect(html).not.toContain("What was wrong with it?");
+    expect(html).not.toContain("In your words");
   }
   expect(render({ actions, drafts: [draft], rowFeedback, initialRowId: audit.id })).toContain("noted · Should have replied itself");
   expect(render({ actions, drafts: [draft], rowFeedback, initialRowId: draftRow.id })).toContain("noted · Right to hand it to me");
 });
 
-test("the pane's own Record button stands in for the row's 'open the thread' button", () => {
+// Matt didn't know what Record was: the person's name is the way in now.
+test("the person's name opens their record; there is no Record button, and no 'open the thread' either", () => {
   const audit = { id: "audit:unanswered_inbound:c9:x", kind: "audit_owed", severity: "now", group: "yours", contactId: "c9", contactName: "Melissa W", title: "Melissa W: Texts we never answered", ops: [{ key: "open_contact", label: "Open the thread", intent: "primary" }] };
-  const html = render({ actions: [audit] });
-  expect(html).toContain("Record");
+  const html = renderToStaticMarkup(
+    <ContactDrawerContext.Provider value={{ open: () => {} }}>
+      <WorkView sendsEnabled onDone={() => {}} bodies={EMPTY} actions={[audit]} />
+    </ContactDrawerContext.Provider>,
+  );
+  expect(html).toMatch(/<h2[^>]*>.*title="Open their record"[^>]*>Melissa W<\/button>/s);
+  expect(html).not.toMatch(/>\s*Record\s*</);
   expect(html).not.toContain("Open the thread");
 });
 
@@ -118,16 +130,48 @@ test("the offer side shows our number against theirs and what a buyer would be i
   expect(html).not.toContain("Their other offers");
 });
 
-test("the header carries the offer's status menu, Edit offer and Record, and names the person and the house", () => {
+test("the header carries the offer's status menu, the Bot menu, Edit offer and Call, and names the person and the house", () => {
   const r = owedNumber();
   const offer = { id: "o1", contactId: "c1", contactName: "Dana", address: "12 Elm St, Renton, WA", cashAmount: 410000, status: "sent", sends: [{ ts: "2026-09-19T00:00:00Z" }] };
   const html = render({ actions: r.actions, bodies: { ...EMPTY, offer, siblings: [offer] } });
   expect(html).toContain("Change status (currently Sent)");
+  expect(html).toContain('aria-label="Bot: Bot"');   // no timeline yet: a plain Bot menu, Stop still works
   expect(html).toContain("Edit offer");
-  expect(html).toContain("Record");
   expect(html).toMatch(/> Call<\/button>/);
-  expect(html).toContain("Dana · 12 Elm St");
+  expect(html).toMatch(/<h2[^>]*>.*>Dana <svg.*<\/a><span> · 12 Elm St<\/span><\/h2>/s);
+  expect(html).not.toMatch(/>\s*Record\s*</);
   expect(html).not.toContain("Offers with");   // one offer: nothing to switch between
+});
+
+test("the header shows the last moments, what's next, and History", () => {
+  const r = owedNumber();
+  const offer = { id: "o1", contactId: "c1", contactName: "Dana", address: "12 Elm St, Renton, WA", cashAmount: 410000, status: "countered", sends: [{ ts: "2026-09-19T00:00:00Z" }] };
+  const timeline = {
+    moments: [
+      { at: "2026-09-12T17:00:00Z", kind: "priced", label: "priced 410K", who: "machine" },
+      { at: "2026-09-12T18:00:00Z", kind: "sent", label: "offer sent", who: "us" },
+      { at: "2026-09-16T18:00:00Z", kind: "they_wrote", label: "they wrote ×2", who: "them", count: 2 },
+      { at: "2026-09-18T18:00:00Z", kind: "countered", label: "countered 425K", who: "them" },
+    ],
+    total: 4,
+    next: { at: "2026-09-24T16:00:00Z", kind: "offer_nudge", label: "Nudge · day 7", who: "machine", reason: "" },
+    bot: { held: false, kind: null, pace: "less", conversationEnabled: true },
+  };
+  const html = render({ actions: r.actions, bodies: { ...EMPTY, offer, siblings: [offer], timeline } });
+  for (const s of ["priced 410K", "offer sent", "they wrote ×2", "countered 425K", "next: nudge", ">History<"]) expect(html).toContain(s);
+  expect(html.indexOf("priced 410K")).toBeLessThan(html.indexOf("countered 425K"));
+  expect(html).toContain('aria-label="Bot: Bot on · less often"');
+});
+
+test("a stopped person's draft says it waits for you, and the Bot menu says stopped", () => {
+  const r = owedNumber();
+  const open = { id: "d5", contactId: "c1", contactName: "Dana", status: "draft", intent: "question", party: "agent", inbound: "Any update?", reply: "Still running numbers, Dana.", createdAt: "2026-09-20T16:00:00Z",
+    autoSend: { decided: false, reason: "you stopped the bot on them — it waits for you" } };
+  const timeline = { moments: [], total: 0, next: { kind: "stopped", label: "Stopped by you", at: null }, bot: { held: true, kind: "stopped", pace: "normal", conversationEnabled: true } };
+  const html = render({ actions: r.actions, drafts: [open], bodies: { ...EMPTY, timeline } });
+  expect(html).toContain("The bot is stopped on them");
+  expect(html).toContain('aria-label="Bot: Bot stopped"');
+  expect(html).toContain("Stopped by you");
 });
 
 test("a row with no offer has no status menu to press", () => {

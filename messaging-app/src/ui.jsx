@@ -377,24 +377,34 @@ export function Menu({ trigger, items, align = "right", label = "Options" }) {
 
   useEffect(() => { if (open && pos) itemRefs.current[active]?.focus(); }, [open, pos, active]);
 
+  // A divider ({ divider: true }) is a line between groups: never focused,
+  // never chosen, and the arrow keys step over it.
+  const step = (from, dir) => {
+    for (let n = 1; n <= items.length; n++) {
+      const i = (from + dir * n + items.length * n) % items.length;
+      if (!items[i]?.divider) return i;
+    }
+    return from;
+  };
   const onKeyDown = (e) => {
     if (!open) return;
-    if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => (i + 1) % items.length); }
-    if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => (i - 1 + items.length) % items.length); }
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => step(i, 1)); }
+    if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => step(i, -1)); }
   };
 
   return (
     <span ref={wrapRef} className="inline-block" onKeyDown={onKeyDown}>
       <button type="button" aria-haspopup="menu" aria-expanded={open} aria-controls={menuId} aria-label={label}
-        onClick={(e) => { e.stopPropagation(); setActive(0); setOpen((v) => !v); }}>
+        onClick={(e) => { e.stopPropagation(); setActive(items[0]?.divider ? step(0, 1) : 0); setOpen((v) => !v); }}>
         {trigger}
       </button>
       {open && pos && createPortal(
         <div ref={panelRef} id={menuId} role="menu" style={{ top: pos.top, left: pos.left }}
           onClick={(e) => e.stopPropagation()}
           className="fixed z-50 min-w-[11rem] rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
-          {items.map((it, i) => (
-            <button key={it.key ?? i} type="button" role="menuitem" disabled={it.disabled}
+          {items.map((it, i) => (it.divider
+            ? <div key={it.key ?? `divider-${i}`} role="separator" className="my-1 border-t border-slate-100" />
+            : <button key={it.key ?? i} type="button" role="menuitem" disabled={it.disabled} title={it.title}
               ref={(el) => { itemRefs.current[i] = el; }}
               onClick={(e) => { e.stopPropagation(); setOpen(false); it.onSelect?.(); }}
               className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors disabled:opacity-40 ${

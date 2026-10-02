@@ -27,11 +27,12 @@ import { BTN, BTN_PRIMARY, Pill } from "./ui.jsx";
 export const draftReason = (fb) => (fb?.category && isWordFeedback(fb.category) ? { code: fb.category, note: String(fb.note || "").trim() } : null);
 
 /**
- * <DraftComposer draft offerId sendsEnabled serverOffsetMs onDone textareaId lastInboundAt fb />
+ * <DraftComposer draft offerId sendsEnabled serverOffsetMs onDone textareaId lastInboundAt fb holdNote />
  *   lastInboundAt  when they last wrote (from the thread), so a draft older than that says so
  *   fb             useRowFeedback(…) of this row, or null
+ *   holdNote       you stopped the bot on them: said above the box
  */
-export function DraftComposer({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, textareaId, lastInboundAt = null, fb = null }) {
+export function DraftComposer({ draft: d, sendsEnabled, serverOffsetMs = 0, onDone, textareaId, lastInboundAt = null, fb = null, holdNote = "" }) {
   const [text, setText] = useState(d.reply || "");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -82,6 +83,7 @@ export function DraftComposer({ draft: d, sendsEnabled, serverOffsetMs = 0, onDo
         {stale && <span className="inline-flex items-center gap-1 font-medium text-amber-800"><AlertTriangle size={12} /> they've written since — read it before sending</span>}
         {d.channel === "email" && <Pill label="email" small />}
       </div>
+      {holdNote && <div className="mt-1 text-xs font-medium text-amber-800">{holdNote}</div>}
 
       {scheduled && (
         <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
