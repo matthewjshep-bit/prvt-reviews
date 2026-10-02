@@ -15,6 +15,7 @@
 
 import { effectiveStatus, isAiGenerated, needsAiReview } from "./offer-status.js";
 import { EVENT_LABEL, AI_SOURCES } from "./contact-record.js";
+import { paperWent } from "./paper-follows.js";
 
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 const inWin = (t, a, b) => t != null && t >= a && t < b;
@@ -25,8 +26,11 @@ export const FLOW_STAGES = [
   { key: "first_text", side: "agent", label: "First text",     hint: "the cold open went out" },
   { key: "replied",    side: "agent", label: "Replied",        hint: "an agent answered, by text or call — the machine's when the bot answered on its own" },
   { key: "underwritten", side: "agent", label: "Underwritten", hint: "an auto-underwrite finished" },
-  { key: "offered",    side: "agent", label: "Offered",        hint: "the documents went to the agent" },
+  // The float comes before the paper (2026-10-02): a number goes by text,
+  // the written offer follows it. Offered's arrow is the share of the
+  // window's floats that are on paper now.
   { key: "floated",    side: "agent", label: "Floated",        hint: "our read or a soft number went out" },
+  { key: "offered",    side: "agent", label: "Offered",        hint: "the written offer went to the agent" },
   { key: "countered",  side: "agent", label: "Countered",      hint: "they came back with a number — the machine's when the counter band answered it" },
   { key: "contract",   side: "agent", label: "Under contract", hint: "promoted to a deal" },
   { key: "blasted",    side: "dispo", label: "Blasted",        hint: "deals put in front of buyers" },
@@ -106,6 +110,10 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   const blastedDeals = new Map(); const keylessBlasts = []; let blastedBuyers = 0;
   const openedBuyers = new Set();
   const outreachOpen = new Map(); // contactId → first outreach_sent ms
+  // Every time an agent answered, for the reply rate of the agents we first
+  // texted in the window (Replied itself counts anyone who said anything).
+  const replyTimes = new Map();   // contactId → [ms]
+  let listingPings = 0;           // known agents texted about a new listing
   // The first text of an autopilot import is a workflow enrollment written by
   // the same import, carrying its batch — the machine's, like the import.
   const autopilotBatches = new Set(events.filter((e) => e?.type === "import" && e.data?.batchId && machineDid(e)).map((e) => e.data.batchId));
@@ -122,7 +130,10 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
       case "import": bump("found", m, feedRow(e, names)); break;
       case "outreach_enrolled": if (e.data?.kind === "followup") break; // a second text, not a first
       // falls through — a workflow enrollment is the first text, sent by GHL
-      case "outreach_sent": bump("first_text", m || (e.type === "outreach_enrolled" && autopilotBatches.has(e.data?.batchId)), feedRow(e, names)); if (!outreachOpen.has(e.contactId)) outreachOpen.set(e.contactId, t); break;
+      case "outreach_sent": bump("first_text", m || (e.type === "outreach_enrolled" && autopilotBatches.has(e.data?.batchId)), feedRow(e, names)); if (!outreachOpen.has(e.contactId) || t < outreachOpen.get(e.contactId)) outreachOpen.set(e.contactId, t); break;
+      // The agent check-in about a fresh listing: a text to an agent we
+      // already know, so not a first text — said beside it.
+      case "agent_pulse_texted": if (e.data?.reason === "fresh_listing" || e.data?.listingKey) listingPings++; break;
       case "text_summary":
       case "call_summary": {
         // An AGENT answering us: never an investor (this is the acquisition
@@ -131,6 +142,7 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
         // Counted once per contact; the machine's when the bot answered it.
         const theirs = e.type === "call_summary" || Boolean(String(e.data?.inbound || "").trim());
         if (e.party === "investor" || !theirs) break;
+        if (e.contactId) replyTimes.set(e.contactId, [...(replyTimes.get(e.contactId) || []), t]);
         if (e.contactId && !replied.has(e.contactId)) { replied.add(e.contactId); bump("replied", botAnswered.has(e.contactId), feedRow(e, names)); }
         break;
       }
@@ -165,8 +177,14 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   if (!blastedDeals.size) for (const e of keylessBlasts) bump("blasted", machineDid(e), feedRow(e, names));
   if (counts.blasted.count) counts.blasted.sub = `${blastedBuyers} buyer${blastedBuyers === 1 ? "" : "s"}`;
 
+  if (listingPings) counts.first_text.sub = `+${listingPings} known agent${listingPings === 1 ? "" : "s"} texted about a new listing`;
+  // Of the agents first texted in the window, how many answered after it.
+  let cohortReplied = 0;
+  for (const [c, t0] of outreachOpen) if ((replyTimes.get(c) || []).some((t) => t >= t0)) cohortReplied++;
+  if (outreachOpen.size) counts.replied.sub = `${cohortReplied} of ${outreachOpen.size} first-texted agent${outreachOpen.size === 1 ? "" : "s"} replied`;
+
   /* --- offer-driven stages --- */
-  let held = 0, clear = 0, realmYes = 0;
+  let held = 0, clear = 0, realmYes = 0, floats = 0, floatsOnPaper = 0;
   const counteredInWin = (o) => (o.statusHistory || []).some((h) => h.status === "countered" && inWin(ms(h.ts), a, b))
     || (o.counter?.at && inWin(ms(o.counter.at), a, b));
   // A send that worked, on the offer's own ledger.
@@ -192,6 +210,8 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
     if (inWin(t, a, b) || inWin(r, a, b)) {
       const floatAt = [o.proactive?.takeCheckAt, o.proactive?.realmCheckAt].filter((x) => inWin(ms(x), a, b)).sort().at(-1);
       bump("floated", true, offerItem(o, floatAt, true));
+      floats++;
+      if (paperWent(o)) floatsOnPaper++;
     }
     if (o.realm?.answer === "yes" && inWin(ms(o.realm?.at), a, b)) realmYes++;
     if (counteredInWin(o)) {
@@ -205,6 +225,7 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   }
   if (counts.underwritten.count) counts.underwritten.sub = `${clear} clear · ${held} held`;
   if (realmYes) counts.floated.sub = `${realmYes} said the number works`;
+  if (floats) counts.offered.sub = `${floatsOnPaper} of ${floats} float${floats === 1 ? "" : "s"} on paper`;
   const running = jobs.filter((j) => j?.status === "running" || j?.status === "queued").length;
   if (running) counts.underwritten.sub = `${counts.underwritten.sub ? `${counts.underwritten.sub} · ` : ""}${running} running now`;
 
@@ -222,7 +243,13 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
     // Opened counts buyer–deal pairs and Blasted counts deals, so the share
     // is measured against the buyers blasted — it can't pass 100%.
     const base = s.key === "opened" ? { count: blastedBuyers } : prev;
-    const conversion = base && base.count > 0 ? Math.min(100, Math.round((c.count / base.count) * 100)) : null;
+    // Two arrows are cohorts, not tile over tile: Replied is the share of the
+    // agents first texted in the window who answered after it, and Offered is
+    // the share of the window's floats that are on paper.
+    const pct = (n, d) => (d > 0 ? Math.min(100, Math.round((n / d) * 100)) : null);
+    const conversion = s.key === "replied" && outreachOpen.size ? pct(cohortReplied, outreachOpen.size)
+      : s.key === "offered" && floats ? pct(floatsOnPaper, floats)
+        : base && base.count > 0 ? pct(c.count, base.count) : null;
     return { ...s, ...c, conversion };
   });
 

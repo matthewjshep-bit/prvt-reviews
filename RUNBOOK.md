@@ -2661,11 +2661,18 @@ Old links redirect: `/dashboard?view=flow|dashboard|conversation` →
 ## Flow (the Reports landing tab)
 
 `/reports?view=flow` — the river. Twelve stages in two rows (acquisition:
-found → first text → replied → underwritten → offered → floated → countered
+found → first text → replied → underwritten → floated → offered → countered
 → under contract; disposition: blasted → opened → buyer → assigned/closed),
 each with its count in the window, a bar split violet (the machine on its
 own) / grey (a person), and arrows carrying the share of the previous stage
-that reached this one. Under it "What moved": every movement in the window, newest first, filterable to
+that reached this one. Two arrows are cohorts (2026-10-02): **Replied** is the
+share of agents first texted in the window who answered after it ("N of M
+first-texted agents replied") — the tile itself still counts every agent who
+said anything, old threads included, which read as 79% on 389 found. **Offered**
+comes after Floated (the number goes by text, the written offer follows) and
+its arrow is the share of the window's floats now on paper (`paperWent`). First
+text's sub-line counts known agents texted about a new listing
+(`agent_pulse_texted`, reason fresh_listing) without adding them to the tile. Under it "What moved": every movement in the window, newest first, filterable to
 the machine / people / acquisition / disposition, with contact and offer
 links. Windows: today / 7 / 30 days, or a single past day. Polls every 30s
 while visible. Pure builder `shared/flow.js` (`buildFlow`, `machineDid`);
