@@ -1,7 +1,13 @@
 // OffersHistory.jsx — the landing view: every offer created for this location,
 // grouped by agent (contact), with its outcome. One collapsible row per agent,
-// individual offers nested under it. The contact links to the GHL contact
-// record; clicking an offer row opens the full offer detail.
+// individual offers nested under it. The agent's name opens their record.
+//
+// Clicking an offer opens the split (2026-10-01, Matt: the offer and the
+// person were "2-3 separate pages"): the table shrinks to a rail of the rows
+// it was showing, and the offer is worked in the same pane as a Today row —
+// the offer on the left, the conversation and a reply box on the right
+// (OfferPane.jsx). J/K walk the rail, Esc goes back to the table, Details
+// opens the full offer window. The open offer is kept in `?offer=<id>`.
 //
 // This is where the day is worked, so the table is organized around the one
 // question that matters at 10 offers a day: which of these is still alive?
@@ -12,8 +18,8 @@
 // Status lives in shared/offer-status.js; nothing here decides what a status
 // means, only how it looks and how you change it.
 
-import React, { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { isOffMarket } from "@shared/off-market.js";
 import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
@@ -36,6 +42,14 @@ import EnrichModal from "./EnrichModal.jsx";
 import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
 import UnderwriteStrip from "./UnderwriteStrip.jsx";
+import OfferRail from "./OfferRail.jsx";
+import OfferPane from "./OfferPane.jsx";
+import { railStep, readOfferParam, splitKey, writeOfferParam } from "./offers-split.js";
+import { OPEN_OFFER_EVENT } from "./PaneParts.jsx";
+import { REPLY_BOX_ID } from "./ConversationPanel.jsx";
+import { TEACH_EVENT } from "./RowFeedback.jsx";
+import { offerKey, siblingsKey } from "./OfferPanel.jsx";
+import { forget, forgetPrefix } from "./work-data.js";
 import NextFollowUp, { groupNext, needsFollowUp, nextSortKey } from "./NextFollowUp.jsx";
 import {
   ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
@@ -157,8 +171,15 @@ function byHouse(list) {
   return [...houses.values()].flatMap((rows) => rows.map((o, i) => [o, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([o]) => o));
 }
 
-export default function OffersHistory({ onEdit, onDeal }) {
+export default function OffersHistory({ onEdit, onDeal, settings: appSettings = null }) {
   const [offers, setOffers] = useState(null);
+  // The split: the offer open beside the rail, and the rail's rows — the
+  // table's order, frozen when it opened (re-frozen when the filter, search or
+  // sort changes) so recording an outcome doesn't renumber it under you.
+  const [openId, setOpenId] = useState(() => (typeof window !== "undefined" ? readOfferParam() : null));
+  const [railIds, setRailIds] = useState(null);
+  const [closedId, setClosedId] = useState(null);   // scroll back to it in the table
+  const liveRail = useRef([]);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(null); // the OPEN offer, hydrated (see openDetail)
   const [opening, setOpening] = useState(null);   // offer id being hydrated
@@ -204,10 +225,67 @@ export default function OffersHistory({ onEdit, onDeal }) {
   // can't see. Same rule Agent Outreach uses.
   useEffect(() => { setPicked(new Set()); }, [q, filter]);
 
+  /* ---------- the split ---------- */
+
+  // A new filter, search or sort while an offer is open: the rail is the new
+  // list (liveRail is the order the table would show, set during render).
+  // Not before the book is here: an empty rail would read as "frozen".
+  useEffect(() => { if (openId && offers) setRailIds(liveRail.current); }, [q, filter, sort.key, sort.dir]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Opened from a link (?offer=): once the book is here, freeze the rail —
+  // switching to All once if the offer isn't in the default filter — and let
+  // go of an offer that no longer exists.
+  useEffect(() => {
+    if (!openId || !offers || railIds !== null) return;
+    if (!offers.some((o) => o.id === openId)) { setOpenId(null); writeOfferParam(null); return; }
+    if (!liveRail.current.includes(openId) && filter !== "all") { setFilter("all"); return; }
+    setRailIds(liveRail.current);
+  }, [offers, openId, filter]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Back in the table: the row you left from, in view.
+  useEffect(() => {
+    if (!closedId || openId) return;
+    try { document.querySelector(`[data-offer-row="${CSS.escape(closedId)}"]`)?.scrollIntoView({ block: "center" }); } catch { /* old browser */ }
+  }, [closedId, openId]);
+
+  // The split's keys (offers-split.js splitKey): J/K walk the rail, R the
+  // reply box, T feedback, O the editor, Esc back to the table. Read through
+  // a ref: the rail and the open offer are worked out below the early returns.
+  const splitNav = useRef(null);
+  useEffect(() => {
+    function onKey(e) {
+      const nav = splitNav.current;
+      if (!nav) return;
+      const intent = splitKey(e, { blocked: nav.blocked });
+      if (!intent) return;
+      e.preventDefault();
+      if (intent === "next") nav.go(1);
+      else if (intent === "prev") nav.go(-1);
+      else if (intent === "close") nav.close();
+      else if (intent === "reply") document.getElementById(REPLY_BOX_ID)?.focus();
+      else if (intent === "teach") window.dispatchEvent(new Event(TEACH_EVENT));
+      else if (intent === "offer") window.dispatchEvent(new Event(OPEN_OFFER_EVENT));
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // One person's rows again, with what's next — after a send, a status, a
+  // Stop or a pace from the pane. The table keeps everything else.
+  async function refreshContact(contactId) {
+    if (!contactId) return;
+    try {
+      const rows = await listOffers({ contactId, lean: true, next: true, limit: 50 });
+      const byId = new Map((rows || []).map((o) => [o.id, o]));
+      setOffers((list) => (list || []).map((o) => (byId.has(o.id) ? { ...byId.get(o.id), lastActivity: o.lastActivity } : o)));
+    } catch { /* the column says "updates on reload" until then */ }
+  }
+
   // One patcher for every copy of an offer we're holding. The table keeps the
   // lean row it was loaded with; whatever is open keeps the whole document.
   function patchOffer(updated) {
     if (!updated) return;
+    // The split's pane reads its own copies (work-data.js): they're stale now.
+    forget(offerKey(updated.id), siblingsKey(updated.contactId));
+    forgetPrefix(`timeline:${updated.contactId}:`);
     const patch = (o) => (o && o.id === updated.id ? updated : o);
     // The per-request columns aren't on the document: keep the agent's last
     // activity, and say the schedule is recomputed on reload rather than show
@@ -460,17 +538,121 @@ export default function OffersHistory({ onEdit, onDeal }) {
 
   const clearFilters = () => { setQ(""); setFilter("all"); };
 
-  // Opening a row hands the popout the list it came out of, in the order the
-  // table is showing it, so its arrows walk the filter you are working. It is
-  // FROZEN at open: recording an outcome from inside the popout drops that
-  // offer out of "Awaiting reply", and a queue that re-derived itself would
-  // renumber under you and skip the row you were about to reach.
+  // Opening a row opens the split, whose rail is the list it came out of, in
+  // the order the table is showing it, so J/K walk the filter you are
+  // working. It is FROZEN at open: recording an outcome drops that offer out
+  // of "Awaiting reply", and a rail that re-derived itself would renumber
+  // under you and skip the row you were about to reach. (The full offer
+  // window, Details, no longer walks a queue of its own.)
   const rowsInOrder = groups.flatMap((g) => g.offers);
-  const openRow = (o) => { setQueueIds(rowsInOrder.map((x) => x.id)); openDetail(o); };
+  liveRail.current = rowsInOrder.map((o) => o.id);
   const closeDetail = () => { setSelected(null); setQueueIds(null); };
+  const openSplit = (o) => { setRailIds(rowsInOrder.map((x) => x.id)); setOpenId(o.id); setClosedId(null); writeOfferParam(o.id); };
+  const byIdAll = new Map(book.map((o) => [o.id, o]));
+  const openOffer = openId ? byIdAll.get(openId) || null : null;
+  const railRows = (railIds || liveRail.current).map((id) => byIdAll.get(id)).filter(Boolean);
+  const railIndex = openOffer ? railRows.findIndex((o) => o.id === openId) : -1;
+  const neighbor = (dir) => railStep(railRows, openId, dir);
+  const goTo = (id) => { if (id) { setOpenId(id); writeOfferParam(id); } };
+  const closeSplit = () => {
+    if (openOffer) setExpanded((prev) => new Set(prev).add(groupKeyOf(openOffer)));
+    setClosedId(openId); setOpenId(null); setRailIds(null); writeOfferParam(null);
+  };
+  splitNav.current = openOffer ? {
+    go: (dir) => goTo(neighbor(dir)),
+    close: closeSplit,
+    blocked: Boolean(selected || sending || psaing || contracting || assigning || netSheeting || enriching || offerPaging),
+  } : null;
   // Arrowing to another agent's offer opens their group underneath, so closing
   // the popout leaves you looking at the row you stopped on.
   const stepTo = (o) => { setExpanded((prev) => new Set(prev).add(groupKeyOf(o))); openDetail(o); };
+
+  // The windows the table and the split share (Details, Send, the generators).
+  const modals = (
+    <>
+      {selected && (() => {
+        // The agent's other offers, in the same newest-first order the table
+        // shows — unfiltered, because the popout is where you go to see the
+        // whole relationship, not the slice the current chip left standing.
+        // These are lean rows: the rail only shows address, date and status,
+        // and picking one re-enters through openDetail, which hydrates it.
+        const key = groupKeyOf(selected);
+        const siblings = annotateCurrent(offers).filter((o) => groupKeyOf(o) === key);
+        // The frozen queue, re-read off the live list so a status recorded in
+        // the popout shows on the row you'll arrow back to. A deleted offer
+        // simply falls out.
+        const byId = new Map(offers.map((o) => [o.id, o]));
+        const queue = (queueIds || []).map((id) => byId.get(id)).filter(Boolean);
+        return (
+          <OfferDetailModal offer={selected} siblings={siblings}
+            queue={queue.length > 1 ? queue : null}
+            queueLabel={activeFilter.key === "all" ? "" : activeFilter.label}
+            onSelect={stepTo}
+            onClose={closeDetail}
+            onEdit={(o) => { closeDetail(); onEdit?.(o); }}
+            onSend={(o) => setSending(o)}
+            onPsa={openPsa}
+            onContract={openContract}
+            onAssignment={openAssignment}
+            onNetSheet={openNetSheet}
+            onOfferPage={(o) => setOfferPaging(o)}
+            onPromote={(o) => { closeDetail(); promote(o); }}
+            onStatus={changeStatus}
+            onRequote={requote} requoting={requoting}
+            statusBusy={statusBusy === selected.id}
+            onDealNav={onDeal} />
+        );
+      })()}
+      {sending && <SendModal offer={sending} onClose={() => setSending(null)} onSent={handleSent} />}
+      {offerPaging && <OfferPageModal offer={offerPaging} onClose={() => setOfferPaging(null)} />}
+      {enriching && <EnrichModal contactId={enriching.contactId} contactName={enriching.contactName}
+        defaultType="agent" onClose={() => setEnriching(null)} />}
+      {psaing && <PsaModal offer={psaing} settings={settings}
+        onClose={() => setPsaing(null)} onGenerated={patchOffer} />}
+      {contracting && <ContractModal offer={contracting} settings={settings}
+        onClose={() => setContracting(null)} onGenerated={patchOffer} />}
+      {assigning && <AssignmentModal offer={assigning} settings={settings}
+        onClose={() => setAssigning(null)} onGenerated={patchOffer} />}
+      {netSheeting && <NetSheetModal offer={netSheeting} settings={settings}
+        onClose={() => setNetSheeting(null)} onGenerated={patchOffer} />}
+    </>
+  );
+
+  /* ---------- the split: the rail and the open offer ---------- */
+  if (openOffer) {
+    // Below laptop width the rail is a picker in the pane's header.
+    const picker = (
+      <select className="max-w-[10rem] rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs lg:hidden" aria-label="Pick an offer"
+        value={openId} onChange={(e) => goTo(e.target.value)}>
+        {railRows.map((o) => <option key={o.id} value={o.id}>{String(o.address || "Untitled").split(",")[0]} — {o.contactName || "No contact"}</option>)}
+      </select>
+    );
+    const prevId = neighbor(-1);
+    const nextId = neighbor(1);
+    return (
+      <>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <button type="button" className={BTN} onClick={closeSplit} title="Back to the table (Esc)"><ChevronLeft size={13} aria-hidden="true" /> Table</button>
+          <FilterChips value={filter} onChange={setFilter} options={chips} label="Filter offers by status" />
+          <SearchInput value={q} onChange={setQ} className="ml-auto min-w-[16rem] flex-1 sm:max-w-sm"
+            placeholder="Search by contact, address, amount, or date…" label="Search offers" />
+        </div>
+        {error && <div className="mb-3"><ErrorBar>{error}</ErrorBar></div>}
+        <div className="relative flex min-h-[560px] gap-3 lg:h-[calc(100vh-11rem)]">
+          <div className="hidden w-80 shrink-0 lg:block">
+            <OfferRail rows={railRows} selectedId={openId} onSelect={goTo} label={activeFilter.key === "all" ? "All offers" : activeFilter.label} />
+          </div>
+          <OfferPane key={openId} offer={openOffer} index={railIndex} total={railRows.length}
+            onPrev={prevId ? () => goTo(prevId) : null} onNext={nextId ? () => goTo(nextId) : null}
+            onClose={closeSplit} onDetails={(o) => openDetail(o)} onSend={(o) => setSending(o)}
+            onChanged={(o) => refreshContact(o?.contactId)}
+            onStatusChanged={(r) => { if (r?.offer) patchOffer(r.offer); if (r?.promoted) onDeal?.(); }}
+            onDeal={onDeal} settings={appSettings || settings} picker={picker} />
+        </div>
+        {modals}
+      </>
+    );
+  }
 
   return (
     <>
@@ -616,7 +798,8 @@ export default function OffersHistory({ onEdit, onDeal }) {
                     const old = Boolean(o.supersededBy);
                     return (
               <tr key={o.id}
-                {...rowActivation(() => (draft ? openEdit(o) : openRow(o)))}
+                {...rowActivation(() => (draft ? openEdit(o) : openSplit(o)))}
+                data-offer-row={o.id}
                 aria-label={`${o.address || "Offer"} — ${OFFER_STATUS[effectiveStatus(o)]?.label || ""}`}
                 aria-busy={opening === o.id || undefined}
                 className={`group cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 ${
@@ -721,51 +904,7 @@ export default function OffersHistory({ onEdit, onDeal }) {
         </table>
       </TableCard>
       )}
-      {selected && (() => {
-        // The agent's other offers, in the same newest-first order the table
-        // shows — unfiltered, because the popout is where you go to see the
-        // whole relationship, not the slice the current chip left standing.
-        // These are lean rows: the rail only shows address, date and status,
-        // and picking one re-enters through openDetail, which hydrates it.
-        const key = groupKeyOf(selected);
-        const siblings = annotateCurrent(offers).filter((o) => groupKeyOf(o) === key);
-        // The frozen queue, re-read off the live list so a status recorded in
-        // the popout shows on the row you'll arrow back to. A deleted offer
-        // simply falls out.
-        const byId = new Map(offers.map((o) => [o.id, o]));
-        const queue = (queueIds || []).map((id) => byId.get(id)).filter(Boolean);
-        return (
-          <OfferDetailModal offer={selected} siblings={siblings}
-            queue={queue.length > 1 ? queue : null}
-            queueLabel={activeFilter.key === "all" ? "" : activeFilter.label}
-            onSelect={stepTo}
-            onClose={closeDetail}
-            onEdit={(o) => { closeDetail(); onEdit?.(o); }}
-            onSend={(o) => setSending(o)}
-            onPsa={openPsa}
-            onContract={openContract}
-            onAssignment={openAssignment}
-            onNetSheet={openNetSheet}
-            onOfferPage={(o) => setOfferPaging(o)}
-            onPromote={(o) => { closeDetail(); promote(o); }}
-            onStatus={changeStatus}
-            onRequote={requote} requoting={requoting}
-            statusBusy={statusBusy === selected.id}
-            onDealNav={onDeal} />
-        );
-      })()}
-      {sending && <SendModal offer={sending} onClose={() => setSending(null)} onSent={handleSent} />}
-      {offerPaging && <OfferPageModal offer={offerPaging} onClose={() => setOfferPaging(null)} />}
-      {enriching && <EnrichModal contactId={enriching.contactId} contactName={enriching.contactName}
-        defaultType="agent" onClose={() => setEnriching(null)} />}
-      {psaing && <PsaModal offer={psaing} settings={settings}
-        onClose={() => setPsaing(null)} onGenerated={patchOffer} />}
-      {contracting && <ContractModal offer={contracting} settings={settings}
-        onClose={() => setContracting(null)} onGenerated={patchOffer} />}
-      {assigning && <AssignmentModal offer={assigning} settings={settings}
-        onClose={() => setAssigning(null)} onGenerated={patchOffer} />}
-      {netSheeting && <NetSheetModal offer={netSheeting} settings={settings}
-        onClose={() => setNetSheeting(null)} onGenerated={patchOffer} />}
+      {modals}
     </>
   );
 }

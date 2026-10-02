@@ -35,5 +35,6 @@ test("when the next move is, in plain words", () => {
   expect(dayWord("2026-10-20T17:00:00Z", NOW)).toBe("Oct 20");
   expect(nextWords({ at: "2026-10-05T16:00:00Z", kind: "offer_nudge", label: "Nudge · day 7", who: "machine" }, NOW).text).toBe("next: nudge Mon");
   expect(nextWords({ at: null, kind: "stopped", label: "Paused until Oct 15" }, NOW)).toEqual({ text: "Paused until Oct 15", who: "you", title: "" });
+  expect(nextWords({ at: "2026-10-01T17:00:00Z", kind: "reply_owed", label: "Reply held — waiting on you", who: "you" }, NOW).text).toBe("waiting on you");
   expect(nextWords(null, NOW)).toBe(null);
 });
