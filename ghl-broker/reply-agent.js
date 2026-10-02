@@ -1712,7 +1712,7 @@ export async function assembleConversation({
   if (light) {
     /* an opt-out needs the party and nothing else */
   } else if (party === "agent") {
-    context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath), transcript: real });
+    context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath), transcript: real, focusKinds: saved?.focusKinds });
     // The write-up terms' earnest money is a number the bot may say.
     if (config.writeUp?.earnestMoney) context = { ...context, amounts: [...new Set([...context.amounts, Math.round(config.writeUp.earnestMoney)])] };
     // The post-mortem digest rides along only when the switch is on AND a
@@ -1733,8 +1733,9 @@ export async function assembleConversation({
   const playbook = config.parties?.[party] || null;
   const base = playbook ? playbook.instructions : config.routing.genericInstructions;
   // What we buy right now (shared/asset-type.js): single-family only since
-  // 2026-10-01, so a condo or a mobile home gets a plain no, not a promise.
-  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE, AGENT_HONESTY_RULE, agentFocusRule(saved?.focusKinds)].filter(Boolean).join("\n") : base;
+  // 2026-10-01, so a condo or a mobile home gets a plain no, not a promise —
+  // except a house we chose to price anyway, which is named.
+  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE, AGENT_HONESTY_RULE, agentFocusRule(saved?.focusKinds, { pricedAnyway: context.pricedOutsideFocus || [] })].filter(Boolean).join("\n") : base;
   const signer = config.persona.name || saved?.company?.signer || saved?.company?.name || "";
   // Ours to hand out when asked — an agent who asks "what's your email?" got
   // "I'll text it over shortly" until 2026-09-12, because we never sent it.

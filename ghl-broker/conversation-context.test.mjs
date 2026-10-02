@@ -451,3 +451,20 @@ test("the agent context says when we last asked about off-market houses, and nam
   const source = buildAgentContext({ offers: [{ id: "o1", address: "7022 NE 181st St, Kenmore, WA", status: "sent", cashAmount: 500000, createdAt: "2026-09-01T00:00:00Z", offMarket: { value: true, by: "you" } }], custom: {}, now: NOW2, events: [] });
   assert.match(source.text, /They have brought us an off-market house before \(7022 NE 181st St\)/);
 });
+
+test("a duplex we priced anyway counts as chosen; a passed one, a held draft and a single-family house don't", async () => {
+  const { pricedOutsideFocus } = await import("./conversation-context.js");
+  const at = "2026-10-02T17:00:00Z";
+  const row = (address, homeType, over = {}) => ({ id: address, contactId: "c1", address, createdAt: at, status: "new", cashAmount: 300000,
+    snapshot: { subjectInfo: { homeType } }, ...over });
+  const offers = [
+    row("13348 32nd Ave S, Tukwila, WA 98168", "MULTI_FAMILY"),
+    row("1 Elm St, Kent, WA 98030", "SINGLE_FAMILY"),
+    row("2 Oak St, Kent, WA 98030", "CONDO", { status: "we_passed" }),
+    row("3 Pine St, Kent, WA 98030", "TOWNHOUSE", { status: "draft", cashAmount: null, snapshot: null, draft: { subjectInfo: { homeType: "TOWNHOUSE" } } }),
+    // A lean row carries the kind as subjectHomeType.
+    { id: "lean", contactId: "c1", address: "4 Ash St, Kent, WA 98030", createdAt: at, status: "sent", cashAmount: 90000, subjectHomeType: "MANUFACTURED" },
+  ];
+  assert.deepEqual(pricedOutsideFocus(offers, ["sfr"]).sort(), ["13348 32nd Ave S, Tukwila, WA 98168", "4 Ash St, Kent, WA 98030"]);
+  assert.deepEqual(pricedOutsideFocus(offers, ["sfr", "multi_family", "manufactured"]), [], "inside the focus, nothing to name");
+});

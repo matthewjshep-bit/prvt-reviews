@@ -102,3 +102,12 @@ test("the agent bot is told we buy single-family houses only, and what to say ab
   assert.match(r, /condos, townhouses, mobile or manufactured homes, multi-family, land/);
   assert.match(agentFocusRule(["sfr", "multi_family"]), /single-family houses and multi-family \(2-4 units\) only/);
 });
+
+test("a house we chose to price anyway is named, so the bot talks numbers on it instead of saying single-family only", async () => {
+  const { agentFocusRule } = await import("./asset-type.js");
+  const r = agentFocusRule(["sfr"], { pricedAnyway: ["13348 32nd Ave S, Tukwila, WA 98168"] });
+  assert.match(r, /single-family houses only/, "the rule still stands for every other house");
+  assert.match(r, /13348 32nd Ave S/);
+  assert.match(r, /talk numbers on it like any other house/);
+  assert.equal(agentFocusRule(["sfr"], { pricedAnyway: [] }), agentFocusRule(["sfr"]), "nothing priced anyway, nothing added");
+});

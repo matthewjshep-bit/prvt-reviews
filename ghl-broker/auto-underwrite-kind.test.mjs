@@ -106,6 +106,39 @@ test("Underwrite anyway on a held mobile home runs the comps and replaces the he
   } finally { restore(); }
 });
 
+test("Underwrite anyway prices the row's house even when the agent's thread has moved on to another one", async () => {
+  // Karamveer Tiwana, 2026-10-02: the held row was 13348 32nd Ave S, the
+  // newest texts were about 21902 29th Ave South, and the thread referee
+  // would have sent the run there and written it over the row's draft.
+  const { recordEvent } = await import("./contact-record.js");
+  const OTHER = "21902 29th Ave South, Des Moines, WA 98198";
+  const threadClient = { call: async (p) => {
+    if (p.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+    if (p.startsWith("/conversations/cv1/messages")) return { messages: { messages: [
+      { messageType: "TYPE_SMS", direction: "inbound", dateAdded: new Date().toISOString(), body: `Also have ${OTHER.split(",")[0]} if you want to look` },
+    ] } };
+    return {};
+  } };
+  for (const [anyKind, contactId] of [[false, "agent-4"], [true, "agent-5"]]) {
+    _resetJobs();
+    await recordEvent({ store, locationId: "LOC-kind-house", contactId, party: "agent", type: "property_details", address: OTHER, source: "test" });
+    const { restore } = stubFetch("SINGLE_FAMILY");
+    try {
+      const { job } = await startUnderwrite({ client: threadClient, locationId: "LOC-kind-house", saved, store, contactId, address: ADDRESS, anyKind,
+        deps: { createOffer: async () => { throw new Error("not reached in this test"); } } });
+      assert.ok(await until(() => Boolean(job.addressSource)), `still ${job.status}/${job.phase}`);
+      if (!anyKind) {
+        assert.equal(job.addressSource, "thread", "the test thread really does move an ordinary run");
+      } else {
+        assert.notEqual(job.addressSource, "thread");
+        assert.match(job.address, /^1510 Maple/i, "the row's house, not the thread's");
+      }
+      cancelJob(job.id);
+      await until(() => job.status !== "running");
+    } finally { restore(); }
+  }
+});
+
 test("a Retry of an Underwrite anyway run still prices it anyway", async () => {
   const { retryArgs } = await import("./auto-underwrite.js");
   assert.equal(retryArgs({ id: "uw-1", contactId: "c1", address: ADDRESS, anyKind: true, offerId: "draft1" }).anyKind, true);

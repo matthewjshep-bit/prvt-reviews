@@ -26,7 +26,7 @@ import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey
 import { emailContextText } from "./shared/gmail.js";
 import { showingContextLines } from "./shared/showing.js";
 import { accessFor, accessLines } from "./shared/deal-access.js";
-import { assetOf, assetPhrase } from "./shared/asset-type.js";
+import { assetOf, assetPhrase, kindHold, normalizeAsset } from "./shared/asset-type.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -392,10 +392,40 @@ export function lessonsContextText(digest = "") {
     d.split(/(?<=[.!?])\s+/).filter(Boolean).map((l) => `- ${l.trim()}`).join("\n");
 }
 
-export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "" }) {
+export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "", focusKinds = undefined }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   const { facts, events } = await loadRecord(store, locationId, contactId);
-  return buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript });
+  return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds) };
+}
+
+// Zillow's word for the house: the kind a person set on the offer first, then
+// what the underwrite read (a lean row carries it as subjectHomeType).
+const RAW_HOME_TYPE = { sfr: "SINGLE_FAMILY", multi_family: "MULTI_FAMILY", manufactured: "MANUFACTURED" };
+const homeTypeOf = (o = {}) => {
+  const set = normalizeAsset(o.asset);
+  if (set?.by === "you") return RAW_HOME_TYPE[set.type];
+  const snap = o.snapshot || o.draft || {};
+  return snap.subjectInfo?.homeType || snap.comps?.result?.info?.homeType || o.subjectHomeType || (set ? RAW_HOME_TYPE[set.type] : "");
+};
+const CLOSED_HOUSE = new Set(["passed", "expired", "withdrawn", "we_passed", "unavailable"]);
+
+/**
+ * pricedOutsideFocus(offers, focusKinds) → addresses
+ *
+ * This agent's houses outside what we buy (shared/asset-type.js kindHold)
+ * that we priced anyway — "Underwrite anyway" on Today, or an offer built by
+ * hand: the house's current offer has a number and the house isn't closed.
+ * The agent-side focus rule names them so the bot talks numbers on them
+ * instead of saying we only buy single-family (Matt, 2026-10-02).
+ */
+export function pricedOutsideFocus(offers = [], focusKinds = undefined) {
+  const out = [];
+  for (const list of groupHouses((offers || []).filter((o) => o && o.address)).values()) {
+    const { current } = resolveHouse(list);
+    if (!current || !(Number(current.cashAmount) > 0) || CLOSED_HOUSE.has(effectiveStatus(current))) continue;
+    if (kindHold(homeTypeOf(current), focusKinds)) out.push(current.address);
+  }
+  return out;
 }
 
 /* ---------- is this a deal you are working yourself? ---------- */

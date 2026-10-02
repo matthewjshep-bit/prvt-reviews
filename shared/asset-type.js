@@ -220,13 +220,22 @@ export function kindHold(homeType, focusKinds = FOCUS_KINDS_DEFAULT) {
  * home, a multi-family or land is said no to plainly, and the agent is asked
  * for single-family fixers instead — never strung along with "let me run
  * numbers" on a house the underwrite will hold.
+ *
+ * `pricedAnyway`: this agent's houses outside the focus that we priced on
+ * purpose ("Underwrite anyway" on Today, or an offer built by hand). Named, so
+ * the bot talks numbers on them instead of turning them down (Matt,
+ * 2026-10-02). See pricedOutsideFocus in ghl-broker/conversation-context.js.
  */
-export function agentFocusRule(focusKinds = FOCUS_KINDS_DEFAULT) {
+export function agentFocusRule(focusKinds = FOCUS_KINDS_DEFAULT, { pricedAnyway = [] } = {}) {
   const focus = normalizeFocusKinds(focusKinds);
   const buy = focus.map((k) => ({ sfr: "single-family houses", multi_family: "multi-family (2-4 units)", manufactured: "mobile homes" }[k])).join(" and ");
   const skip = ["condos", "townhouses", ...(focus.includes("manufactured") ? [] : ["mobile or manufactured homes"]),
     ...(focus.includes("multi_family") ? [] : ["multi-family"]), "land"].join(", ");
   return `WHAT WE BUY RIGHT NOW: ${buy} only. If the agent's house is plainly one of these — ${skip} — don't promise numbers on it: ` +
     `say kindly that we're only buying ${buy} right now and ask if they have any ${focus.includes("sfr") ? "single-family fixers" : buy} coming up. ` +
-    "If you can't tell what kind of house it is, treat it as a house.";
+    "If you can't tell what kind of house it is, treat it as a house." +
+    (pricedAnyway.length
+      ? ` EXCEPT: we chose to price ${pricedAnyway.slice(0, 3).map((a) => String(a).split(",")[0]).join(", ")} anyway — ` +
+        `${pricedAnyway.length === 1 ? "talk numbers on it" : "talk numbers on those"} like any other house.`
+      : "");
 }

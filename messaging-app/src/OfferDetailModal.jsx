@@ -73,6 +73,7 @@ export function AiProvenance({ offer }) {
           : uw.addressSource === "operator" ? "the offer form"
           : uw.addressSource === "subject_property" ? "the Subject Property field"
           : uw.addressSource === "listing_link" ? "a listing link the agent texted"
+          : uw.addressSource === "anyway" ? "the Today row you pressed Underwrite anyway on"
           : `the conversation (${uw.confidence || "?"} confidence)`}
       />
       <Row label="Comps used" value={uw.compsUsedCount != null ? `${uw.compsUsedCount} renovated` : "—"} />
