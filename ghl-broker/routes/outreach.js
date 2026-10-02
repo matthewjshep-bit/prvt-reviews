@@ -27,7 +27,7 @@ import { planAgentPulse, startAgentPulse, getAgentPulseJob, previewAgentPulse, s
 import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { scoreListing, medianPricePerSqft, distressSignals } from "../outreach-score.js";
+import { scoreListing, medianPricePerSqft, distressSignals, medianIndex } from "../outreach-score.js";
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
 import { OUTREACH_FIELDS } from "../field-registry.js";
@@ -191,6 +191,10 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
   // 24h pull cache: params → raw listings. A cache hit costs 0 RentCast requests.
   const pullCache = new Map();
   const PULL_TTL = 24 * 3600 * 1000;
+  const PULL_CACHE_MAX_LISTINGS = 40000;
+  // A ZIP needs this many priced listings in a statewide read to be its own
+  // market for "cheap"; a thinner one is measured against its county.
+  const STATEWIDE_ZIP_MEDIAN_MIN = 15;
 
   async function getSettings(locationId) {
     return (await store.getOfferSettings(locationId)) || {};
@@ -287,67 +291,15 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     return { zips, county, city, state, daysOld, propertyType, yearBuilt, offset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule };
   }
 
-  async function runPull(locationId, client, body, { maxRequestsCap = PULL_BUTTON_MAX_REQUESTS } = {}) {
-    const settings = await getSettings(locationId);
-    const apiKey = String(settings.rentcastApiKey || "").trim();
-    if (!apiKey) throw Object.assign(new Error("RentCast API key not configured — add it in Settings"), { http: 400 });
-
-    const { zips, county, city, state, daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule } =
-      pullParams(body, settings, maxRequestsCap);
-    const isDistressed = (s) => (distressRule === "cut-or-cheap" ? s.priced : s.any);
-    // Precedence: zips (one query each) → county (one circular query around
-    // the county centroid, post-filtered to the county line) → city/state.
-    // RentCast has no county search, but every listing it returns carries its
-    // county, so a bounding circle + exact filter is equivalent.
-    let countyMeta = null;
-    if (!zips.length && county) {
-      if (!state) throw Object.assign(new Error("county pulls need a state — set the state field"), { http: 400 });
-      countyMeta = findCounty(county, state);
-      if (!countyMeta)
-        throw Object.assign(new Error(`unknown county "${county}" in ${state} — check the spelling`), { http: 400 });
-    }
-    // The sweep asks for the county's metro circle instead (body.metro): the
-    // whole-county circle reaches deep into the neighbours, RentCast doesn't
-    // return nearest-first, and on 2026-09-17 the first 400 listings of the
-    // Pierce circle were all King County — two requests for nothing, on a
-    // query heavy enough that RentCast's gateway 504'd on it. The county-line
-    // filter below still applies; the hand-made Pull keeps the whole county.
-    const circle = (body.metro === true || body.metro === "true") && countyMeta && METRO_CIRCLES[countyMeta.geoid]
-      ? METRO_CIRCLES[countyMeta.geoid]
-      : countyMeta ? { lat: countyMeta.lat, lng: countyMeta.lng, radiusMi: countyMeta.radiusMi } : null;
-    const targets = zips.length
-      ? zips.map((z) => ({ zipCode: z }))
-      : countyMeta
-        ? [{ latitude: String(circle.lat), longitude: String(circle.lng), radius: String(circle.radiusMi) }]
-        : city && state
-          ? [{ city, state }]
-          : null;
-    if (!targets) throw Object.assign(new Error("no market configured — set zip codes, a county, or city/state"), { http: 400 });
-
-    // Every pull lands in a batch: explicit batchId, else most recent, else a
-    // fresh auto-named one. An untouched auto-named empty batch adopts this
-    // pull's market · date name.
-    const nameParts = { zips, county: countyMeta?.name, city, state };
-    const batch = await resolveBatch(locationId, body.batchId, {
-      createName: autoBatchName(nameParts),
-    });
-    if (batch.autoNamed) {
-      const existing = await store.listOutreachAgents(locationId, { batchId: batch.id, limit: 1 });
-      if (!existing.length) {
-        batch.name = autoBatchName(nameParts);
-        await store.renameOutreachBatch(locationId, batch.id, batch.name, { autoNamed: true });
-      }
-    }
-
-    const warnings = [];
-    const common = {
-      daysOld: String(daysOld), ...(propertyType ? { propertyType } : {}), ...(yearBuilt ? { yearBuilt } : {}),
-      ...(maxPrice ? { price: `*:${maxPrice}` } : {}),
-      includeTotalCount: "true",
-    };
-    const paging = startOffset > 0 || body.offset != null;
+  /**
+   * fetchListings({ locationId, apiKey, targets, common, startOffset, maxRequests, paging, warnings })
+   *   → { listings, requestsUsed, cached, nextOffset, totalCount }
+   *
+   * The RentCast pages for `targets`, from `startOffset`, within the request
+   * budget — or the cached copy of the same read.
+   */
+  async function fetchListings({ locationId, apiKey, targets, common, startOffset, maxRequests, paging, warnings }) {
     const cacheKey = `${locationId}|${JSON.stringify({ targets, common, startOffset, maxRequests: paging ? maxRequests : null })}`;
-
     let listings;
     let requestsUsed = 0;
     let cached = false;
@@ -390,31 +342,39 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       }
       if (listings.length) {
         pullCache.set(cacheKey, { ts: Date.now(), listings, nextOffset, totalCount });
-        if (pullCache.size > 20) pullCache.delete(pullCache.keys().next().value);
+        // At most 20 reads, and a ceiling on what they hold all together: one
+        // statewide read alone can be tens of thousands of listings.
+        let held = 0;
+        for (const v of pullCache.values()) held += v.listings.length;
+        while (pullCache.size > 1 && (pullCache.size > 20 || held > PULL_CACHE_MAX_LISTINGS)) {
+          const [oldest, v] = pullCache.entries().next().value;
+          held -= v.listings.length;
+          pullCache.delete(oldest);
+        }
       }
     }
 
-    // The circle over-covers by design — trim to the actual county line using
-    // the county each listing carries. Runs on cached pulls too (the cache
-    // stores the raw circle).
-    if (countyMeta) {
-      const before = listings.length;
-      const raw = listings;
-      listings = listings.filter((l) => listingInCounty(l, countyMeta));
-      warnings.push(`county filter kept ${listings.length} of ${before} circle listings inside ${countyMeta.name}`);
-      // Nearly nothing inside the county we centred on is a labelling problem,
-      // not a market: say what the listings called themselves.
-      if (before >= 20 && listings.length < before * 0.05) {
-        const seen = new Map();
-        for (const l of raw) { const k = `${l.county || "?"}/${l.stateFips || ""}${l.countyFips || ""}/${l.state || "?"}`; seen.set(k, (seen.get(k) || 0) + 1); }
-        const top = [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k}×${n}`).join(", ");
-        warnings.push(`county labels seen (county/fips/state): ${top} — wanted ${countyMeta.name} ${countyMeta.geoid}`);
-      }
-    }
+    return { listings, requestsUsed, cached, nextOffset, totalCount };
+  }
 
+  /**
+   * ingestCohort({ locationId, client, batch, listings, params, medianFor, warnings })
+   *   → { pool, agentRows, agentsNew, medianPpsf, medianPrice }
+   *
+   * Everything after the fetch: the cohort's medians, the filters, the agents
+   * and their best listing, phones we already hold, GHL matches — saved into
+   * `batch`. `medianFor(listing)` is the $/sqft a listing is measured against;
+   * without it, the pull's own median (a county or zip pull is one market).
+   */
+  async function ingestCohort({ locationId, client, batch, listings, params, medianFor = null, warnings }) {
+    const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false } = params;
+    const isDistressed = (sig) => (distressRule === "cut-or-cheap" ? sig.priced : sig.any);
     // Cohort medians come from the FULL pull (pre-filter) so they describe the
     // market, not the filtered slice.
     const medianPpsf = medianPricePerSqft(listings);
+    // What each listing's $/sqft is measured against: the pull's own median,
+    // or (statewide) its ZIP's or county's.
+    const ppsfOf = medianFor || (() => medianPpsf);
     const prices = listings.map((l) => Number(l.price)).filter((p) => p > 0).sort((a, b) => a - b);
     const medianPrice = prices.length
       ? prices.length % 2 ? prices[(prices.length - 1) / 2] : (prices[prices.length / 2 - 1] + prices[prices.length / 2]) / 2
@@ -443,11 +403,12 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     }
     if (distressOnly) {
       const before = pool.length;
-      pool = pool.filter((l) => isDistressed(distressSignals(l, { medianPpsf, staleDom })));
+      const medianWord = medianFor ? "its ZIP's (or county's) $/sqft median" : `$${Math.round(medianPpsf)}/sqft median`;
+      pool = pool.filter((l) => isDistressed(distressSignals(l, { medianPpsf: ppsfOf(l), staleDom })));
       warnings.push(
         distressRule === "cut-or-cheap"
-          ? `distress filter (price cut, or ≤90% of $${Math.round(medianPpsf)}/sqft median) kept ${pool.length} of ${before}`
-          : `distress filter (${staleDom}+ DOM, price cut, or ≤90% of $${Math.round(medianPpsf)}/sqft median) kept ${pool.length} of ${before}`
+          ? `distress filter (price cut, or ≤90% of ${medianWord}) kept ${pool.length} of ${before}`
+          : `distress filter (${staleDom}+ DOM, price cut, or ≤90% of ${medianWord}) kept ${pool.length} of ${before}`
       );
     }
     if (priceBandPct && medianPrice) {
@@ -467,8 +428,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     for (const l of listings) {
       const idc = agentIdentity(l);
       if (!idc.agentKey) { droppedNoAgent++; continue; }
-      const { score, components } = scoreListing(l, { medianPpsf });
-      const { stale, cut, cheap } = distressSignals(l, { medianPpsf, staleDom });
+      const { score, components } = scoreListing(l, { medianPpsf: ppsfOf(l) });
+      const { stale, cut, cheap } = distressSignals(l, { medianPpsf: ppsfOf(l), staleDom });
       const key = listingKey(l);
       const address = l.formattedAddress || [l.addressLine1, l.city, l.state, l.zipCode].filter(Boolean).join(", ");
       const docListing = {
@@ -596,7 +557,10 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     // already imported) — shown in the UI so recently-touched agents stand out.
     // Needs conversations.readonly; a 401/403 means the scope isn't granted.
     let convScopeMissing = false;
-    const withContact = agentRows.filter((r) => r.doc.ghl.contactId || r.stored?.contactId);
+    // The sweep's pulls (every county, every workday) refresh it weekly, like
+    // the GHL match; a pull from the button refreshes it every time.
+    const withContact = agentRows.filter((r) => (r.doc.ghl.contactId || r.stored?.contactId)
+      && !(sweep && r.doc.ghl.activityCheckedAt && Date.now() - Date.parse(r.doc.ghl.activityCheckedAt) < recheckMs));
     await mapPool(withContact, 3, async (r) => {
       if (convScopeMissing) return;
       try {
@@ -605,6 +569,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         );
         r.doc.ghl.lastMessageAt = lm?.at || null;
         r.doc.ghl.lastMessageDirection = lm?.direction || null;
+        r.doc.ghl.activityCheckedAt = new Date().toISOString();
       } catch (e) {
         if (e.status === 401 || e.status === 403) convScopeMissing = true;
       }
@@ -614,6 +579,170 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
 
     await store.upsertOutreachListings(locationId, batch.id, listingRows);
     await store.upsertOutreachAgents(locationId, batch.id, agentRows.map(({ agentKey, doc }) => ({ agentKey, doc })));
+    return { pool, agentRows, agentsNew, medianPpsf, medianPrice };
+  }
+
+  /**
+   * runStatewidePull(locationId, client, body, settings, maxRequestsCap) → result
+   *
+   * The sweep's read of a whole state (2026-10-02): one RentCast query by
+   * `state`, paged from `body.offset`, each listing filed under the county it
+   * names when that county is on `body.counties`, the rest dropped. Each
+   * county is ingested into its own batch (`body.batchIds["King, WA"]`) and
+   * every listing is measured against its ZIP's or county's $/sqft median.
+   * One pull record carries the requests, so the meter counts them once.
+   */
+  async function runStatewidePull(locationId, client, body, settings, maxRequestsCap) {
+    const apiKey = String(settings.rentcastApiKey || "").trim();
+    const p = pullParams({ ...body, zipCodes: "", county: "", city: "" }, settings, maxRequestsCap);
+    const state = String(body.state || "").trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(state)) throw Object.assign(new Error("a statewide pull needs a state"), { http: 400 });
+    const counties = (Array.isArray(body.counties) ? body.counties : [])
+      .map((c) => ({ key: `${c.county}, ${c.state || state}`, meta: findCounty(c.county, c.state || state), batchId: body.batchIds?.[`${c.county}, ${c.state || state}`] }))
+      .filter((c) => c.meta && c.batchId && (c.meta.state || state) === state);
+    if (!counties.length) throw Object.assign(new Error("a statewide pull needs its counties and their batches"), { http: 400 });
+
+    const warnings = [];
+    const common = {
+      daysOld: String(p.daysOld), ...(p.propertyType ? { propertyType: p.propertyType } : {}), ...(p.yearBuilt ? { yearBuilt: p.yearBuilt } : {}),
+      ...(p.maxPrice ? { price: `*:${p.maxPrice}` } : {}),
+      includeTotalCount: "true",
+    };
+    const { listings, requestsUsed, cached, nextOffset, totalCount } = await fetchListings({
+      locationId, apiKey, targets: [{ state }], common, startOffset: p.offset, maxRequests: p.maxRequests, paging: true, warnings,
+    });
+
+    // File each listing under its county; the rest of the state isn't ours.
+    const filed = new Map(counties.map((c) => [c.key, []]));
+    const countyOf = new Map();
+    let outside = 0;
+    for (const l of listings) {
+      const c = counties.find((x) => listingInCounty(l, x.meta));
+      if (!c) { outside++; continue; }
+      filed.get(c.key).push(l);
+      countyOf.set(l, c.key);
+    }
+    if (outside) warnings.push(`${outside} of ${listings.length} listings were outside the chosen counties`);
+    const inside = listings.filter((l) => countyOf.has(l));
+    const medianFor = medianIndex(inside, { min: STATEWIDE_ZIP_MEDIAN_MIN, countyOf: (l) => countyOf.get(l) });
+
+    const out = [];
+    for (const c of counties) {
+      const batch = await store.getOutreachBatch(locationId, String(c.batchId));
+      if (!batch) { warnings.push(`${c.key}: no batch to file into`); continue; }
+      const mine = filed.get(c.key);
+      if (!mine.length) { out.push({ key: c.key, batchId: batch.id, batchName: batch.name, listingsFetched: 0, listingsKept: 0, agentsTotal: 0, agentsNew: 0 }); continue; }
+      const w = [];
+      const r = await ingestCohort({
+        locationId, client, batch, listings: mine, warnings: w, medianFor,
+        params: { maxPrice: p.maxPrice, maxYearBuilt: p.maxYearBuilt, distressOnly: p.distressOnly, distressRule: p.distressRule,
+          staleDom: p.staleDom, priceBandPct: 0, sweep: true },
+      });
+      warnings.push(...w.filter((x) => !/kept \d+ of/.test(x)).map((x) => `${c.key}: ${x}`));
+      out.push({ key: c.key, batchId: batch.id, batchName: batch.name, listingsFetched: mine.length, listingsKept: r.pool.length,
+        agentsTotal: r.agentRows.length, agentsNew: r.agentsNew });
+    }
+
+    await store.recordOutreachPull(locationId, {
+      batchId: null,
+      params: { state, counties: counties.map((c) => c.key), daysOld: p.daysOld, propertyType: p.propertyType, yearBuilt: p.yearBuilt,
+        offset: p.offset, maxRequests: p.maxRequests, maxYearBuilt: p.maxYearBuilt, maxPrice: p.maxPrice, distressRule: p.distressRule },
+      requestsUsed, cached, listingsFetched: listings.length, listingsKept: out.reduce((s, c) => s + c.listingsKept, 0),
+      agentsTotal: out.reduce((s, c) => s + c.agentsTotal, 0), agentsNew: out.reduce((s, c) => s + c.agentsNew, 0),
+      counties: out,
+    });
+    return {
+      ok: true, cached, requestsUsed, offset: p.offset, nextOffset, totalCount,
+      listingsFetched: listings.length, listingsInside: inside.length, counties: out, warnings,
+    };
+  }
+
+  async function runPull(locationId, client, body, { maxRequestsCap = PULL_BUTTON_MAX_REQUESTS } = {}) {
+    const settings = await getSettings(locationId);
+    const apiKey = String(settings.rentcastApiKey || "").trim();
+    if (!apiKey) throw Object.assign(new Error("RentCast API key not configured — add it in Settings"), { http: 400 });
+    if (body.statewide === true) return runStatewidePull(locationId, client, body, settings, maxRequestsCap);
+
+    const { zips, county, city, state, daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule } =
+      pullParams(body, settings, maxRequestsCap);
+    // Precedence: zips (one query each) → county (one circular query around
+    // the county centroid, post-filtered to the county line) → city/state.
+    // RentCast has no county search, but every listing it returns carries its
+    // county, so a bounding circle + exact filter is equivalent.
+    let countyMeta = null;
+    if (!zips.length && county) {
+      if (!state) throw Object.assign(new Error("county pulls need a state — set the state field"), { http: 400 });
+      countyMeta = findCounty(county, state);
+      if (!countyMeta)
+        throw Object.assign(new Error(`unknown county "${county}" in ${state} — check the spelling`), { http: 400 });
+    }
+    // The sweep asks for the county's metro circle instead (body.metro): the
+    // whole-county circle reaches deep into the neighbours, RentCast doesn't
+    // return nearest-first, and on 2026-09-17 the first 400 listings of the
+    // Pierce circle were all King County — two requests for nothing, on a
+    // query heavy enough that RentCast's gateway 504'd on it. The county-line
+    // filter below still applies; the hand-made Pull keeps the whole county.
+    const circle = (body.metro === true || body.metro === "true") && countyMeta && METRO_CIRCLES[countyMeta.geoid]
+      ? METRO_CIRCLES[countyMeta.geoid]
+      : countyMeta ? { lat: countyMeta.lat, lng: countyMeta.lng, radiusMi: countyMeta.radiusMi } : null;
+    const targets = zips.length
+      ? zips.map((z) => ({ zipCode: z }))
+      : countyMeta
+        ? [{ latitude: String(circle.lat), longitude: String(circle.lng), radius: String(circle.radiusMi) }]
+        : city && state
+          ? [{ city, state }]
+          : null;
+    if (!targets) throw Object.assign(new Error("no market configured — set zip codes, a county, or city/state"), { http: 400 });
+
+    // Every pull lands in a batch: explicit batchId, else most recent, else a
+    // fresh auto-named one. An untouched auto-named empty batch adopts this
+    // pull's market · date name.
+    const nameParts = { zips, county: countyMeta?.name, city, state };
+    const batch = await resolveBatch(locationId, body.batchId, {
+      createName: autoBatchName(nameParts),
+    });
+    if (batch.autoNamed) {
+      const existing = await store.listOutreachAgents(locationId, { batchId: batch.id, limit: 1 });
+      if (!existing.length) {
+        batch.name = autoBatchName(nameParts);
+        await store.renameOutreachBatch(locationId, batch.id, batch.name, { autoNamed: true });
+      }
+    }
+
+    const warnings = [];
+    const common = {
+      daysOld: String(daysOld), ...(propertyType ? { propertyType } : {}), ...(yearBuilt ? { yearBuilt } : {}),
+      ...(maxPrice ? { price: `*:${maxPrice}` } : {}),
+      includeTotalCount: "true",
+    };
+    const paging = startOffset > 0 || body.offset != null;
+
+    const { listings: fetched, requestsUsed, cached, nextOffset, totalCount } =
+      await fetchListings({ locationId, apiKey, targets, common, startOffset, maxRequests, paging, warnings });
+    let listings = fetched;
+
+    // The circle over-covers by design — trim to the actual county line using
+    // the county each listing carries. Runs on cached pulls too (the cache
+    // stores the raw circle).
+    if (countyMeta) {
+      const before = listings.length;
+      const raw = listings;
+      listings = listings.filter((l) => listingInCounty(l, countyMeta));
+      warnings.push(`county filter kept ${listings.length} of ${before} circle listings inside ${countyMeta.name}`);
+      // Nearly nothing inside the county we centred on is a labelling problem,
+      // not a market: say what the listings called themselves.
+      if (before >= 20 && listings.length < before * 0.05) {
+        const seen = new Map();
+        for (const l of raw) { const k = `${l.county || "?"}/${l.stateFips || ""}${l.countyFips || ""}/${l.state || "?"}`; seen.set(k, (seen.get(k) || 0) + 1); }
+        const top = [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k}×${n}`).join(", ");
+        warnings.push(`county labels seen (county/fips/state): ${top} — wanted ${countyMeta.name} ${countyMeta.geoid}`);
+      }
+    }
+
+    const { pool, agentRows, agentsNew, medianPpsf, medianPrice } = await ingestCohort({
+      locationId, client, batch, listings, warnings,
+      params: { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep: body.metro === true || body.metro === "true" },
+    });
     await store.recordOutreachPull(locationId, {
       batchId: batch.id,
       params: { targets, ...(countyMeta ? { county: countyMeta.name } : {}), daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule },

@@ -84,3 +84,35 @@ export function medianPricePerSqft(listings) {
   const mid = Math.floor(vals.length / 2);
   return vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
 }
+
+const median = (vals) => {
+  const v = vals.slice().sort((a, b) => a - b);
+  if (!v.length) return 0;
+  const mid = Math.floor(v.length / 2);
+  return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+};
+
+/**
+ * medianIndex(listings, { min, countyOf }) → (listing) → $/sqft median
+ *
+ * For a read that spans many markets (the statewide sweep): what each
+ * listing's $/sqft is measured against. Its ZIP's median when the ZIP has at
+ * least `min` priced listings, else its county's — never the whole read's,
+ * where a Spokane house is cheap against Seattle and a Rainier Valley one
+ * against Bellevue. 0 when neither is known.
+ */
+export function medianIndex(listings, { min = 15, countyOf = (l) => l.county } = {}) {
+  const byZip = new Map();
+  const byCounty = new Map();
+  for (const l of listings) {
+    const v = Number(l.price) > 0 && Number(l.squareFootage) > 0 ? Number(l.price) / Number(l.squareFootage) : 0;
+    if (!v) continue;
+    const z = String(l.zipCode || "");
+    const c = String(countyOf(l) || "");
+    if (z) byZip.set(z, [...(byZip.get(z) || []), v]);
+    if (c) byCounty.set(c, [...(byCounty.get(c) || []), v]);
+  }
+  const zipMedian = new Map([...byZip].filter(([, v]) => v.length >= min).map(([k, v]) => [k, median(v)]));
+  const countyMedian = new Map([...byCounty].map(([k, v]) => [k, median(v)]));
+  return (l) => zipMedian.get(String(l.zipCode || "")) ?? countyMedian.get(String(countyOf(l) || "")) ?? 0;
+}

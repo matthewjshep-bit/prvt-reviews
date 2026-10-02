@@ -206,6 +206,9 @@ export function normalizeOutreachAutopilot(v = {}) {
     cycleDay: Number.isFinite(cycleDay) && cycleDay >= 1 ? Math.min(28, cycleDay) : 1,
     maxListPrice: o.maxListPrice === 0 || o.maxListPrice === "0" ? 0
       : Number.isFinite(maxPrice) && maxPrice > 0 ? maxPrice : DEFAULT_MAX_LIST_PRICE,
+    // "counties": a circle per county, one after another. "statewide": one
+    // read of the counties' state, filed by county (readState).
+    coverage: o.coverage === "statewide" ? "statewide" : "counties",
   };
 }
 
@@ -425,7 +428,39 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
   // next run starts there, whatever counties this one went on to.
   let keepTurn = null;
   job.tried = [];
-  for (let attempt = 0; attempt < n; attempt++) {
+
+  // 2. Who is new to us in a county's batch. Ranked, and deliberately longer
+  // than the day's number: the import walks it one agent at a time, skips
+  // anyone already in GHL, and stops once `dailyCap` brand-new contacts exist.
+  // Pending/sold and condos are already out: the RentCast pull asks for Active
+  // listings of the configured property types only. Turnkey can't be told
+  // from RentCast, and those agents weed themselves out (a turnkey reply is Tier 2).
+  // An agent with listings in two counties is picked in the first one only —
+  // and one phone is one person, whatever key each listing gave them.
+  const pickFrom = async (key, batchId) => {
+    job.phase = "picking";
+    // Only rows the pick can reach (new, not in GHL here or in another batch,
+    // with a phone): reading "new" rows newest-first let a county full of
+    // people we can't text crowd out the ones we can.
+    const rows = typeof store.listOutreachPickable === "function"
+      ? await store.listOutreachPickable(locationId, { batchId, limit: 1000 })
+      : await store.listOutreachAgents(locationId, { batchId, status: "new", limit: 1000 });
+    job.candidates = (job.candidates || 0) + rows.length;
+    const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
+      maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null })
+      .filter((r) => !seenAgents.has(r.agentKey) && !seenPhones.has(String(r.doc?.phone)));
+    for (const r of fresh) { seenAgents.add(r.agentKey); seenPhones.add(String(r.doc?.phone)); }
+    if (fresh.length) groups.push({ key, batchId, picked: fresh });
+    pickedTotal += fresh.length;
+    job.picked = pickedTotal;
+    if (!fresh.length && key) job.warnings.push(`${key}: nobody new to text (${rows.length} on file, all already in GHL, without a phone, or outside the rules) — moving on`);
+    return { rows, fresh };
+  };
+
+  if (oa.coverage === "statewide" && oa.counties.length) {
+    // One read of the state, filed county by county into each county's batch.
+    await readState({ oa, job, locationId, client, store, deps, now, left, querySig, pickFrom, beat });
+  } else for (let attempt = 0; attempt < n; attempt++) {
     // Stop before a pull, not after it: a run with nothing left spends nothing.
     if (attempt > 0 && (left <= 0 || pickedTotal >= wanted)) break;
     job.phase = "pulling";
@@ -476,29 +511,7 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     job.warnings.push(...(pull.warnings || []).filter((w) => !/^county filter kept [1-9]/.test(w)).slice(0, 6));
     await beat();
 
-    // 2. Who is new to us in this county. Ranked, and deliberately longer than
-    // the day's number: the import walks it one agent at a time, skips anyone
-    // already in GHL, and stops once `dailyCap` brand-new contacts exist.
-    // Pending/sold and condos are already out: the RentCast pull asks for Active
-    // listings of the configured property types only. Turnkey can't be told
-    // from RentCast, and those agents weed themselves out (a turnkey reply is Tier 2).
-    // An agent with listings in two counties is picked in the first one only —
-    // and one phone is one person, whatever key each listing gave them.
-    job.phase = "picking";
-    // Only rows the pick can reach (new, not in GHL here or in another batch,
-    // with a phone): reading "new" rows newest-first let a county full of
-    // people we can't text crowd out the ones we can.
-    const rows = typeof store.listOutreachPickable === "function"
-      ? await store.listOutreachPickable(locationId, { batchId: pull.batchId, limit: 1000 })
-      : await store.listOutreachAgents(locationId, { batchId: pull.batchId, status: "new", limit: 1000 });
-    job.candidates = (job.candidates || 0) + rows.length;
-    const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
-      maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null })
-      .filter((r) => !seenAgents.has(r.agentKey) && !seenPhones.has(String(r.doc?.phone)));
-    for (const r of fresh) { seenAgents.add(r.agentKey); seenPhones.add(String(r.doc?.phone)); }
-    if (fresh.length) groups.push({ key, batchId: pull.batchId, picked: fresh });
-    pickedTotal += fresh.length;
-    job.picked = pickedTotal;
+    const { rows, fresh } = await pickFrom(key, pull.batchId);
     job.tried.push({ county: key, candidates: rows.length, picked: fresh.length, requestsUsed: used,
       ...(county ? { offset: query.offset ?? 0, nextOffset: Number(pull.nextOffset) || 0, totalCount: pull.totalCount ?? null } : {}) });
 
@@ -516,7 +529,6 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
         lastCounty: key,
       });
     }
-    if (!fresh.length && key) job.warnings.push(`${key}: nobody new to text (${rows.length} on file, all already in GHL, without a phone, or outside the rules) — moving on`);
     if (!county) break;
   }
   job.county = groups.map((g) => g.key).filter(Boolean).join(" · ") || job.county;
@@ -576,6 +588,68 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
   });
 
   job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
+}
+
+// How far back a resumed statewide lap starts: listings come and go
+// overnight, so the list shifts under a saved offset. Rows are keyed by
+// listing and agent, so re-reading a few costs a little and duplicates none.
+export const STATEWIDE_STEP_BACK = 50;
+
+/**
+ * readState(...) — the statewide sweep's read (2026-10-02). One RentCast query
+ * for the counties' state, from where the last run stopped, filed by county
+ * into "Autopilot · King, WA" and friends, then each county's batch picked in
+ * the order the counties are listed. The place lives on the `outreachPages`
+ * cursor under `statewide` ({ offset, total, lapAt, query }); a lap read to
+ * the end starts over the next run.
+ */
+async function readState({ oa, job, locationId, client, store, deps, now, left, querySig, pickFrom, beat }) {
+  const state = oa.counties[0].state;
+  const counties = oa.counties.filter((c) => c.state === state);
+  if (counties.length < oa.counties.length) {
+    job.warnings.push(`statewide reads one state (${state}); ${oa.counties.length - counties.length} county(ies) in other states were left out`);
+  }
+  const cursor = (await store.getJobCursor?.(locationId, PAGES_CURSOR).catch(() => null))?.doc || {};
+  const place = cursor.statewide?.query === querySig ? cursor.statewide : {};
+  const saved = Number(place.offset) || 0;
+  const offset = saved > 0 ? Math.max(0, saved - STATEWIDE_STEP_BACK) : 0;
+  const batchIds = {};
+  for (const c of counties) {
+    const key = `${c.county}, ${c.state}`;
+    batchIds[key] = await autopilotBatchId({ store, locationId, market: key });
+  }
+  job.phase = "pulling";
+  job.county = state;
+  const pull = await deps.runPull(locationId, client, {
+    ...pullQuery(oa), statewide: true, state, counties, batchIds, offset, maxRequests: Math.max(1, left),
+  }, { maxRequestsCap: MAX_REQUESTS_PER_RUN });
+  const used = Number(pull.requestsUsed) || 0;
+  job.pull = {
+    requestsUsed: used, cached: pull.cached, listingsFetched: Number(pull.listingsFetched) || 0,
+    listingsKept: (pull.counties || []).reduce((s, c) => s + (Number(c.listingsKept) || 0), 0),
+    agentsTotal: (pull.counties || []).reduce((s, c) => s + (Number(c.agentsTotal) || 0), 0),
+    agentsNew: (pull.counties || []).reduce((s, c) => s + (Number(c.agentsNew) || 0), 0),
+    offset, nextOffset: Number(pull.nextOffset) || 0, totalCount: pull.totalCount ?? null,
+  };
+  job.warnings.push(...(pull.warnings || []).slice(0, 8));
+  await beat();
+  if (!job.dryRun) {
+    const next = Number(pull.nextOffset) || 0;
+    await store.setJobCursor?.(locationId, PAGES_CURSOR, { at: iso(now), doc: {
+      ...cursor,
+      statewide: { offset: next, total: pull.totalCount ?? null, query: querySig, ...(next ? { lapAt: place.lapAt || null } : { lapAt: iso(now) }) },
+    } }).catch((e) => job.warnings.push(`page cursor: ${String(e?.message || e).slice(0, 120)}`));
+  }
+  const byKey = new Map((pull.counties || []).map((c) => [c.key, c]));
+  for (const c of counties) {
+    const key = `${c.county}, ${c.state}`;
+    const got = byKey.get(key);
+    const batchId = got?.batchId || batchIds[key];
+    if (!batchId) continue;
+    const { rows, fresh } = await pickFrom(key, batchId);
+    job.tried.push({ county: key, candidates: rows.length, picked: fresh.length, listings: Number(got?.listingsFetched) || 0, agentsNew: Number(got?.agentsNew) || 0 });
+  }
+  return used;
 }
 
 // "Autopilot · King, WA" — found by name, created once, never auto-renamed
