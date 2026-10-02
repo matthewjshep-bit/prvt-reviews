@@ -57,6 +57,9 @@ const PULSE_SENDS_LIVE = process.env.CARD_SENDS_ENABLED === "true";
 // Contact custom fields written on import live in the shared registry so the
 // Fields Manager can visualize them alongside the offer + enrichment fields.
 
+// How long a "not in GHL" answer from a pull is trusted before it's asked again.
+const GHL_RECHECK_DAYS = 7;
+
 /* ---------- normalization ---------- */
 
 const normEmail = (s) => {
@@ -534,7 +537,46 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     if (agentsExcluded)
       warnings.push(`${agentsExcluded} agent(s) had no qualifying listing and were excluded`);
 
-    const unchecked = agentRows.filter((r) => !r.doc.ghl.contactId && r.stored?.status !== "imported");
+    // An agent this pull has no phone for may be one we already have a phone
+    // for — the same agent key in another pull, or the same name at the same
+    // office. A name two agents in this pull share can't be told apart, and
+    // the office's own phone is never used: a text to the front desk is not a
+    // text to the agent.
+    const noPhone = agentRows.filter((r) => !r.doc.phone);
+    if (noPhone.length && typeof store.findOutreachPhones === "function") {
+      const nameOffice = (d) => `${String(d.name || "").trim().toLowerCase()}|${String(d.brokerage || "").trim().toLowerCase()}`;
+      const inPull = new Map();
+      for (const r of agentRows) inPull.set(nameOffice(r.doc), (inPull.get(nameOffice(r.doc)) || 0) + 1);
+      const found = await store.findOutreachPhones(locationId, {
+        agentKeys: noPhone.map((r) => r.agentKey),
+        nameOffices: [...new Set(noPhone.filter((r) => r.doc.name).map((r) => nameOffice(r.doc)))],
+      }).catch(() => []);
+      const byKey = new Map();
+      const byName = new Map();
+      for (const f of found) {
+        if (!byKey.has(f.agentKey)) byKey.set(f.agentKey, f.phone);
+        if (!byName.has(f.nameOffice)) byName.set(f.nameOffice, new Set());
+        byName.get(f.nameOffice).add(f.phone);
+      }
+      let filled = 0;
+      for (const r of noPhone) {
+        const own = byKey.get(r.agentKey);
+        const named = byName.get(nameOffice(r.doc));
+        if (own) { r.doc.phone = own; r.doc.phoneFrom = "another pull"; filled++; }
+        else if (r.doc.name && inPull.get(nameOffice(r.doc)) === 1 && named?.size === 1) {
+          r.doc.phone = [...named][0]; r.doc.phoneFrom = "name and office"; filled++;
+        }
+      }
+      if (filled) warnings.push(`${filled} agent(s) with no phone on these listings got the phone we already had for them`);
+    }
+
+    // GHL is asked about an agent once a week, not every pull — a ten-county
+    // run would otherwise make thousands of lookups — and never about one we
+    // have no phone for, who can't be texted anyway. The import asks again,
+    // one at a time, before it creates anyone.
+    const recheckMs = GHL_RECHECK_DAYS * 86400000;
+    const unchecked = agentRows.filter((r) => !r.doc.ghl.contactId && r.stored?.status !== "imported" && r.doc.phone
+      && !(r.doc.ghl.checkedAt && Date.now() - Date.parse(r.doc.ghl.checkedAt) < recheckMs));
     await mapPool(unchecked, 3, async (r) => {
       try {
         const match = await withRetry(() =>

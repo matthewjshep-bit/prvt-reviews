@@ -640,6 +640,46 @@ const pgStore = {
         );
     return rows;
   },
+  // The rows the daily pick can actually reach: new, not in GHL (on the row
+  // or by a match), with a phone, and not imported, skipped or matched in any
+  // other batch. Most distressed first. Reading "new" rows newest-first let
+  // a county full of people we can't text crowd out the ones we can.
+  async listOutreachPickable(locationId, { batchId, limit = 1000 } = {}) {
+    const { rows } = await query(
+      `select a.agent_key as "agentKey", a.status, a.contact_id as "contactId",
+              a.imported_at as "importedAt", a.first_seen as "firstSeen", a.last_seen as "lastSeen", a.doc
+         from outreach_agents a
+        where a.location_id = $1 and a.batch_id = $2 and a.status = 'new' and a.contact_id is null
+          and coalesce(a.doc->'ghl'->>'contactId', '') = ''
+          and coalesce(a.doc->>'phone', '') <> ''
+          and not exists (
+            select 1 from outreach_agents o
+             where o.location_id = a.location_id and o.agent_key = a.agent_key and o.batch_id <> a.batch_id
+               and (o.status <> 'new' or o.contact_id is not null or coalesce(o.doc->'ghl'->>'contactId', '') <> ''))
+        order by case when a.doc->>'distressedCount' ~ '^[0-9]+$' then (a.doc->>'distressedCount')::int else 0 end desc,
+                 case when a.doc->'hook'->>'score' ~ '^-?[0-9.]+$' then (a.doc->'hook'->>'score')::numeric else 0 end desc,
+                 a.last_seen desc
+        limit $3`,
+      [locationId, batchId, limit]
+    );
+    return rows;
+  },
+  // Phones we already hold for agents a pull has none for: rows with the same
+  // agent key, or the same name at the same office, whose phone came from a
+  // listing (never one filled in from another row). Lower-cased name|office.
+  async findOutreachPhones(locationId, { agentKeys = [], nameOffices = [] } = {}) {
+    if (!agentKeys.length && !nameOffices.length) return [];
+    const { rows } = await query(
+      `select agent_key as "agentKey", doc->>'phone' as phone,
+              lower(trim(coalesce(doc->>'name', ''))) || '|' || lower(trim(coalesce(doc->>'brokerage', ''))) as "nameOffice"
+         from outreach_agents
+        where location_id = $1 and coalesce(doc->>'phone', '') <> '' and coalesce(doc->>'phoneFrom', '') = ''
+          and (agent_key = any($2::text[])
+               or lower(trim(coalesce(doc->>'name', ''))) || '|' || lower(trim(coalesce(doc->>'brokerage', ''))) = any($3::text[]))`,
+      [locationId, agentKeys, nameOffices]
+    );
+    return rows;
+  },
   async getOutreachAgent(locationId, batchId, agentKey) {
     const { rows } = await query(
       `select agent_key as "agentKey", status, contact_id as "contactId",
@@ -1801,6 +1841,31 @@ const fileStore = (() => {
         .filter((a) => a.locationId === locationId && a.batchId === batchId && (!status || a.status === status))
         .sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""))
         .slice(0, limit);
+    },
+    async listOutreachPickable(locationId, { batchId, limit = 1000 } = {}) {
+      ensure();
+      const all = Object.values(data.outreachAgents).filter((a) => a.locationId === locationId);
+      const elsewhere = new Set(all
+        .filter((o) => o.batchId !== batchId && (o.status !== "new" || o.contactId || o.doc?.ghl?.contactId))
+        .map((o) => o.agentKey));
+      const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+      return all
+        .filter((a) => a.batchId === batchId && a.status === "new" && !a.contactId && !a.doc?.ghl?.contactId
+          && String(a.doc?.phone || "") !== "" && !elsewhere.has(a.agentKey))
+        .sort((a, b) => num(b.doc?.distressedCount) - num(a.doc?.distressedCount)
+          || num(b.doc?.hook?.score) - num(a.doc?.hook?.score)
+          || (b.lastSeen || "").localeCompare(a.lastSeen || ""))
+        .slice(0, limit);
+    },
+    async findOutreachPhones(locationId, { agentKeys = [], nameOffices = [] } = {}) {
+      ensure();
+      const keys = new Set(agentKeys);
+      const names = new Set(nameOffices);
+      const nameOffice = (d) => `${String(d?.name || "").trim().toLowerCase()}|${String(d?.brokerage || "").trim().toLowerCase()}`;
+      return Object.values(data.outreachAgents)
+        .filter((a) => a.locationId === locationId && a.doc?.phone && !a.doc?.phoneFrom
+          && (keys.has(a.agentKey) || names.has(nameOffice(a.doc))))
+        .map((a) => ({ agentKey: a.agentKey, phone: a.doc.phone, nameOffice: nameOffice(a.doc) }));
     },
     async getOutreachAgent(locationId, batchId, agentKey) {
       ensure();

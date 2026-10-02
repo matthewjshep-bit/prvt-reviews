@@ -418,6 +418,7 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
   };
   const groups = [];          // [{ key, batchId, picked }] in the order read
   const seenAgents = new Set();
+  const seenPhones = new Set();
   let pickedTotal = 0;
   let pulls = 0;
   // The first county this run left with pages and people still in it: the
@@ -481,14 +482,20 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     // Pending/sold and condos are already out: the RentCast pull asks for Active
     // listings of the configured property types only. Turnkey can't be told
     // from RentCast, and those agents weed themselves out (a turnkey reply is Tier 2).
-    // An agent with listings in two counties is picked in the first one only.
+    // An agent with listings in two counties is picked in the first one only —
+    // and one phone is one person, whatever key each listing gave them.
     job.phase = "picking";
-    const rows = await store.listOutreachAgents(locationId, { batchId: pull.batchId, status: "new", limit: 1000 });
+    // Only rows the pick can reach (new, not in GHL here or in another batch,
+    // with a phone): reading "new" rows newest-first let a county full of
+    // people we can't text crowd out the ones we can.
+    const rows = typeof store.listOutreachPickable === "function"
+      ? await store.listOutreachPickable(locationId, { batchId: pull.batchId, limit: 1000 })
+      : await store.listOutreachAgents(locationId, { batchId: pull.batchId, status: "new", limit: 1000 });
     job.candidates = (job.candidates || 0) + rows.length;
     const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
       maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null })
-      .filter((r) => !seenAgents.has(r.agentKey));
-    for (const r of fresh) seenAgents.add(r.agentKey);
+      .filter((r) => !seenAgents.has(r.agentKey) && !seenPhones.has(String(r.doc?.phone)));
+    for (const r of fresh) { seenAgents.add(r.agentKey); seenPhones.add(String(r.doc?.phone)); }
     if (fresh.length) groups.push({ key, batchId: pull.batchId, picked: fresh });
     pickedTotal += fresh.length;
     job.picked = pickedTotal;

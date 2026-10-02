@@ -5,7 +5,9 @@ import {
 } from "./outreach-sweep.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
-const row = (k, doc = {}, extra = {}) => ({ agentKey: k, status: "new", contactId: null, doc: { name: k, phone: "2065550100", distressedCount: 1, distressRule: "cut-or-cheap", listingCount: 2, hook: { address: `${k} St`, score: 50, price: 400000 }, ghl: {}, ...doc }, ...extra });
+// One phone per agent: the pick treats one phone as one person.
+const phoneOf = (k) => `206${String([...String(k)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 9999991, 7)).padStart(7, "0")}`;
+const row = (k, doc = {}, extra = {}) => ({ agentKey: k, status: "new", contactId: null, doc: { name: k, phone: phoneOf(k), distressedCount: 1, distressRule: "cut-or-cheap", listingCount: 2, hook: { address: `${k} St`, score: 50, price: 400000 }, ghl: {}, ...doc }, ...extra });
 
 test("settings coerce to safe defaults", () => {
   assert.deepEqual(normalizeOutreachAutopilot(undefined), {

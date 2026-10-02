@@ -212,6 +212,9 @@ create unique index if not exists outreach_agents_batch_agent_uniq
 create unique index if not exists outreach_listings_batch_listing_uniq
   on outreach_listings (location_id, batch_id, listing_key);
 create index if not exists outreach_agents_batch_idx on outreach_agents (location_id, batch_id, last_seen desc);
+-- The daily pick's "not already taken in another batch" check, and the phone
+-- cross-fill, look agents up by key across batches (2026-10-02).
+create index if not exists outreach_agents_key_idx on outreach_agents (location_id, agent_key);
 create index if not exists outreach_listings_batch_idx2 on outreach_listings (location_id, batch_id, agent_key);
 
 -- Dispositions: the cash-buyer list, mirrored out of GHL so the whole book can
