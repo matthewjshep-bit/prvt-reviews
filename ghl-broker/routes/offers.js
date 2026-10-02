@@ -80,7 +80,7 @@ import {
   startFollowUpSweep, getFollowUpJob, publicFollowUpJob, cancelFollowUpSweep, CURSOR_NAME as FOLLOW_UP_CURSOR,
   agentCandidates, investorCandidates,
 } from "../follow-up-sweep.js";
-import { attachNextFollowUps } from "../next-follow-up.js";
+import { attachNextFollowUps, attachNextFollowUpsFor } from "../next-follow-up.js";
 import { readSpend } from "../ai-spend.js";
 import { dueStep } from "../shared/follow-up.js";
 import { holdFor, botEventsByContact } from "../bot-hold.js";
@@ -2482,8 +2482,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // back to empty: a column that can't load must not take the table down.
       const wantActivity = req.query.activity === "1" || req.query.activity === "true";
       const wantNext = req.query.next === "1" || req.query.next === "true";
+      // One person's next follow-up (the work pane) reads that person only.
+      const nextForOne = wantNext && Boolean(contactId) && !wantActivity;
       // Both columns read the reply drafts; one read serves both.
-      const drafts = wantActivity || wantNext
+      const drafts = wantActivity || (wantNext && !nextForOne)
         ? await store.listReplyDrafts(locationId, { limit: wantNext ? 4000 : 2000 }).catch(() => [])
         : null;
       if (wantActivity) {
@@ -2499,7 +2501,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // (shared/next-follow-up.js). Opt-in, like activity.
       if (wantNext) {
         const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
-        await attachNextFollowUps({ store, locationId, saved, offers, drafts }).catch((e) => {
+        await (nextForOne
+          ? attachNextFollowUpsFor({ store, locationId, saved, contactId, offers })
+          : attachNextFollowUps({ store, locationId, saved, offers, drafts })).catch((e) => {
           console.error(`offers: next follow-up failed loc=${locationId}:`, e?.message);
         });
       }
@@ -5564,10 +5568,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const { locationId } = resolveLocation(req);
       const saved = (await store.getOfferSettings(locationId)) || {};
+      // ?contact_id=: one person's open drafts (the Offers work pane). The
+      // location's list stops at 50 a status, so theirs could be missing.
+      const contactId = String(req.query.contact_id || "").slice(0, 64) || null;
       const drafts = [
-        ...(await store.listReplyDrafts(locationId, { status: "draft", limit: 50 })),
-        ...(await store.listReplyDrafts(locationId, { status: "scheduled", limit: 50 })),
-      ].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        ...(await store.listReplyDrafts(locationId, { status: "draft", limit: 50, ...(contactId ? { contactId } : {}) })),
+        ...(await store.listReplyDrafts(locationId, { status: "scheduled", limit: 50, ...(contactId ? { contactId } : {}) })),
+      ].filter((d) => !contactId || d?.contactId === contactId)
+        .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
       res.json({
         ok: true,
         now: new Date().toISOString(),

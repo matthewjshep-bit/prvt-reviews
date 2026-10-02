@@ -2524,6 +2524,18 @@ source chip: violet when the AI inferred them (a text, a call, the sweep),
 slate when a person stated them or a record produced them. Add a fact there
 and it projects into GHL the same way. "Pull from GHL" re-reads the contact.
 
+**The pane's strip** (2026-10-01). `GET /api/contacts/:id/timeline?offerId=&party=`
+(`ghl-broker/contact-timeline.js`) is the work pane's header: the house's
+moments (`shared/deal-moments.js` — priced, the letter going out, nudges
+that actually went, their texts, counters, re-quotes, agreed, hot, the deal,
+calls, stop / pause / pace; runs of the same moment collapse to "×N"), the
+next move (`nextFollowUp`), and the Bot menu's state (`botHold`, `paceOf`,
+the profile's stop-bot tag as last seen in GHL, an unsubscribe). One
+person's reads, no GHL call. A moment carries no message words, phone,
+email or typed reason. `GET /api/offers?contact_id=&next=1` reads one person
+too (`attachNextFollowUpsFor`), and `GET /automations/conversation?contact_id=`
+returns that person's open drafts.
+
 **Fill it once.** Settings → *Contact record* → **Fill the record** walks
 every offer, deal, draft and dataroom invite in the app (no GHL calls), then
 reads each contact from GHL once (150 ms apart) and files its fields and

@@ -9,6 +9,7 @@ import { nextFollowUp } from "./shared/next-follow-up.js";
 import { conversationConfig } from "./reply-agent.js";
 import { FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.js";
 import { BOT_EVENT_TYPES, mergeEvents } from "./shared/bot-hold.js";
+import { botEventsFor } from "./bot-hold.js";
 
 const DAY_MS = 86400000;
 // Far enough back for the check-in ladder's last rung (day 120) to still see
@@ -63,6 +64,33 @@ export async function attachNextFollowUps({ store, locationId, saved = {}, offer
       offer: o, config, now, sweepHour: FOLLOW_UP_UTC_HOUR,
       drafts: draftsBy.get(o.contactId) || [], events: eventsBy.get(o.contactId) || [],
     });
+  }
+  return offers;
+}
+
+/**
+ * attachNextFollowUpsFor({ store, locationId, saved, contactId, offers, now }) → offers
+ *
+ * One person's offers, read from that person's drafts and timeline only —
+ * the work pane asks about one person at a time, and the location-wide
+ * reads above are for the whole Offers table. Same rules, same answer.
+ */
+export async function attachNextFollowUpsFor({ store, locationId, saved = {}, contactId, offers = [], now = Date.now() }) {
+  if (!contactId) return offers;
+  const since = new Date(now - NEXT_WINDOW_DAYS * DAY_MS).toISOString();
+  const [draftRows, windowed, bot] = await Promise.all([
+    store.listReplyDrafts(locationId, { contactId, limit: DRAFTS_PER_CONTACT }).catch(() => []),
+    typeof store.listContactEvents === "function"
+      ? store.listContactEvents(locationId, contactId, { types: NEXT_EVENT_TYPES, since, limit: 500 }).catch(() => [])
+      : [],
+    botEventsFor({ store, locationId, contactId }).catch(() => []),
+  ]);
+  const drafts = (draftRows || []).filter((d) => d?.contactId === contactId).slice(0, DRAFTS_PER_CONTACT);
+  const events = mergeEvents(windowed, bot);
+  const config = conversationConfig(saved || {});
+  for (const o of offers) {
+    if (!o || o.contactId !== contactId) continue;
+    o.nextFollowUp = nextFollowUp({ offer: o, config, now, sweepHour: FOLLOW_UP_UTC_HOUR, drafts, events });
   }
   return offers;
 }
