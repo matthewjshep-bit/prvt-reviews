@@ -920,7 +920,7 @@ export function profileSchemaFor(party = "agent") {
 }
 
 export function schemaFor(party = "agent", { profile = true, outbound = null, booking = false } = {}) {
-  const intents = outbound ? [outbound.kind] : (INTENTS[party] || INTENTS.agent);
+  const intents = INTENTS[party] || INTENTS.agent;
   return {
     type: "object",
     additionalProperties: false,
@@ -933,7 +933,14 @@ export function schemaFor(party = "agent", { profile = true, outbound = null, bo
         offeredSlots: { type: "array", items: { type: "string" }, description: "ISO values of the TIMES YOU MAY PROPOSE that the reply names; empty if none" },
         chosenSlot: { type: "string", description: "ISO value of the previously offered time this message picked; empty if none" },
       } : {}),
-      intent: { type: "string", enum: intents },
+      // A machine-started text names its kind in its instructions ("Set
+      // intent to realm_check") and draftReply stamps it on after. Not a
+      // one-value enum: this schema is part of the cached prompt, so a
+      // per-kind enum gave every kind its own cache entry, re-written at 2x
+      // on most sends (2026-10-02). One format per party now caches.
+      intent: outbound
+        ? { type: "string", description: "The intent your instructions name" }
+        : { type: "string", enum: intents },
       confidence: { type: "string", enum: CONFIDENCES, description: "How sure you are of the intent AND that the reply is right" },
       reply: { type: "string", description: "The reply text, or empty when nothing should be sent" },
       needsHuman: { type: "boolean", description: "True when the message asks for anything that commits us" },
