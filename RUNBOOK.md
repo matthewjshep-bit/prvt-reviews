@@ -2997,6 +2997,21 @@ filled phone is never a source for another fill. The office's own phone
 week (`GHL_RECHECK_DAYS`), not on every pull, and never about one with no
 phone; the import still asks again, one at a time, before it creates anyone.
 
+**A phone from Zillow (2026-10-02, off by default).** Settings → Agent
+Outreach → "Find a phone on Zillow for agents RentCast has none for"
+(`outreachAutopilot.zillowLookup {enabled, perRun 25}`). On the sweep's pulls
+only, after the cross-fill, agents still without a phone have their hook
+listing read by the Apify Zillow detail actor (`fetchZillowAgentContacts` in
+rehab-scan.js, `apifyToken` from Settings, ~$0.002 a listing, at most
+`perRun` per pull — one budget across a statewide pull's counties). The phone
+is kept only when Zillow's agent has our agent's last name
+(`sameLastName`); an email is filled only when we had none. The row carries
+`phoneFrom: "zillow"`. The Zillow field names (`attributionInfo.agentName /
+agentPhoneNumber / agentEmail`) were not checked against a live row when this
+was built: before turning it on, `POST /api/outreach/zillow-agents/preview
+{limit}` runs it on up to five no-phone agents and returns only which fields
+came back and yes/no flags — never a name or a number.
+
 **The RentCast meter (2026-10-02).** Matt moved RentCast to the Foundation
 plan (1,000 requests a month) to find more agents. A run may spend what's
 left of the billing month, less the reserve, divided by the workdays left —

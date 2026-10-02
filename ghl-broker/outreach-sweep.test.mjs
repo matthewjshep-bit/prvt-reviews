@@ -15,6 +15,7 @@ test("settings coerce to safe defaults", () => {
     workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14,
     minDaysOnMarket: 45, propertyTypes: ["Single Family"], maxYearBuilt: 0, reserveRequests: 2,
     monthlyRequests: 0, cycleDay: 1, maxListPrice: 1500000, coverage: "counties",
+    zillowLookup: { enabled: false, perRun: 25 },
   });
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: 0 }).maxListPrice, 0, "0 = no cap");
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: "900000" }).maxListPrice, 900000);

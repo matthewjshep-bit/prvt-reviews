@@ -209,6 +209,12 @@ export function normalizeOutreachAutopilot(v = {}) {
     // "counties": a circle per county, one after another. "statewide": one
     // read of the counties' state, filed by county (readState).
     coverage: o.coverage === "statewide" ? "statewide" : "counties",
+    // Agents with no phone on their listings: Zillow's page for the listing,
+    // at most `perRun` a pull (routes/outreach.js ingestCohort). Off by default.
+    zillowLookup: {
+      enabled: o.zillowLookup?.enabled === true,
+      perRun: Math.min(40, Math.max(1, Math.round(Number(o.zillowLookup?.perRun)) || 25)),
+    },
   };
 }
 

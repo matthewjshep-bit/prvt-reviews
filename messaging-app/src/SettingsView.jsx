@@ -987,6 +987,16 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                   The whole-state read asks RentCast for every listing in the state and files each one under its county, so neighbouring counties don't overlap and rural edges aren't missed. Each county's agents still land in their own batch.
                 </span>
               </label>
+              <label className="col-span-2 flex items-start gap-2 text-sm text-slate-700">
+                <input type="checkbox" className="mt-1" checked={Boolean(form.outreachAutopilot?.zillowLookup?.enabled)}
+                  onChange={(e) => setOutreachAuto("zillowLookup")({ ...(form.outreachAutopilot?.zillowLookup || {}), enabled: e.target.checked })} />
+                <span>
+                  Find a phone on Zillow for agents RentCast has none for
+                  <span className="block text-xs text-slate-500">
+                    Reads the agent's own listing on Zillow (about a fifth of a cent each, up to {form.outreachAutopilot?.zillowLookup?.perRun || 25} a pull) and keeps the phone only when Zillow's agent has the same last name. Never the office line.
+                  </span>
+                </span>
+              </label>
               <Num label="Listed at least" suffix="days ago" value={form.outreachAutopilot?.minDaysOnMarket ?? 45} onChange={setOutreachAuto("minDaysOnMarket")} />
               <Num label="Max list price, $ (0 = any)" value={form.outreachAutopilot?.maxListPrice ?? 1500000} onChange={setOutreachAuto("maxListPrice")} />
               <Num label="Built in or before (0 = any)" value={form.outreachAutopilot?.maxYearBuilt ?? 0} onChange={setOutreachAuto("maxYearBuilt")} />
