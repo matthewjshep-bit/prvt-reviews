@@ -99,7 +99,7 @@ export function roughAmounts(amount) {
 
 const statusWord = (s) => ({
   draft: "draft (not sent)", new: "not sent yet", sent: "sent, waiting on the agent",
-  countered: "agent countered", no_response: "no response", passed: "agent passed", we_passed: "we passed on it (withdrawn)", accepted: "accepted",
+  countered: "agent countered", no_response: "no response", passed: "agent passed", we_passed: "we passed on it (withdrawn)", unavailable: "no longer available (sold or off the market, per the agent)", accepted: "accepted",
 }[s] || s || "unknown");
 
 // The offer book, newest first, capped, and every number here is a number the
@@ -146,7 +146,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     // A higher number we texted that the offer never moved to (Jesse,
     // 2026-09-25: "workable for us at 650" on a 550K offer). Not allowed, and
     // the model is told plainly so it neither repeats nor confirms it.
-    const up = !down && amount && !["passed", "expired", "withdrawn", "we_passed"].includes(status) ? ourMoveUp(o, transcript) : null;
+    const up = !down && amount && !["passed", "expired", "withdrawn", "we_passed", "unavailable"].includes(status) ? ourMoveUp(o, transcript) : null;
     const asking = Number(o.askingPrice ?? o.inputs?.askingPrice ?? o.calc?.inputs?.askingPrice) || 0;
     if (asking) amounts.add(asking);
     const lastSend = (o.sends || []).filter((s) => s && s.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0];
@@ -204,6 +204,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
         : "",
       `— status: ${statusWord(status)}`,
       status === "we_passed" ? "WE WALKED AWAY from this house: closed on our side, do not chase it or name its number" : "",
+      status === "unavailable" ? "THE HOUSE IS GONE (sold or off the market, per the agent): do not chase it or name its number; if it comes back, a person re-offers" : "",
       lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" ? "" : "not sent yet",
       // No expiry date: the offer stands until they answer, and a date here
       // is what had the bot telling agents an offer had lapsed.

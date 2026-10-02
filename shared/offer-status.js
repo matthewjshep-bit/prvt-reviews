@@ -40,6 +40,10 @@ export const OFFER_STATUSES = [
   // "we passed" says nothing about the agent at all.
   { key: "passed", label: "They passed", cls: "bg-rose-100 text-rose-700", dot: "bg-rose-400" },
   { key: "we_passed", label: "We passed", cls: "bg-stone-200 text-stone-700", dot: "bg-stone-500" },
+  // Nobody decided: the agent told us the house sold, went pending or came
+  // off the market. Matt, 2026-10-02: "we passed is like we intentionally
+  // said no". Not a pass on either side, and nothing chases it.
+  { key: "unavailable", label: "No longer available", cls: "bg-zinc-100 text-zinc-600", dot: "bg-zinc-400" },
   { key: "accepted", label: "Accepted", cls: "bg-emerald-100 text-emerald-800", dot: "bg-emerald-500" },
 ];
 
@@ -53,7 +57,7 @@ export const SETTABLE_STATUSES = OFFER_STATUS_KEYS.filter((k) => k !== "draft");
 // Still waiting on the agent: these are the offers that are actually working.
 export const OPEN_STATUSES = new Set(["new", "sent", "countered"]);
 // Nothing more will happen here without a new offer.
-export const DEAD_STATUSES = new Set(["no_response", "passed", "we_passed"]);
+export const DEAD_STATUSES = new Set(["no_response", "passed", "we_passed", "unavailable"]);
 // Dead on THEIR side, and the passed-offer check-in exists to bring these
 // back. An agent who answers it with a number is negotiating that offer
 // again — Pink Skulls Realtor, 2414 E Longfellow (2026-09-22): "they passed"
@@ -105,9 +109,10 @@ export function needsAiReview(offer) {
 // many offers into the single tag GHL can hold per contact — see the ordering
 // note in syncAgentOfferTag. Higher rank beats lower.
 // "we_passed" ranks below "passed": an agent who said no told us something
-// about themselves; an offer we walked away from did not.
+// about themselves; an offer we walked away from did not. A house that sold
+// says least of all, and carries no tag.
 export const STATUS_RANK = {
-  accepted: 6, countered: 5, sent: 4, new: 3, no_response: 2, passed: 1, we_passed: 0,
+  accepted: 6, countered: 5, sent: 4, new: 3, no_response: 2, passed: 1, we_passed: 0, unavailable: -1,
 };
 
 // The status of an offer that predates this field, without touching the row.
@@ -179,6 +184,7 @@ export const STATUS_HISTORY_PHRASE = {
   no_response: "no response",
   passed: "passed on our offer",
   we_passed: "we passed on the property",
+  unavailable: "no longer available — sold or off the market",
   accepted: "accepted our offer",
 };
 

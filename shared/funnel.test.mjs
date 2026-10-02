@@ -188,3 +188,15 @@ test("a follow-up with no reply counts as sent and not replied", () => {
   const r = followUpPerformance([fu("c1", "blast_nudge", 2, D(1))], []);
   assert.deepEqual([r[0].sent, r[0].replied, r[0].replyRate], [1, 0, 0]);
 });
+
+test("a house that sold out from under an offer is counted on its own, not as anyone's pass, and isn't open", () => {
+  const f = offerFunnel([
+    { id: "a", status: "unavailable", createdAt: "2026-09-14T00:00:00Z", statusHistory: [{ status: "sent", ts: "2026-09-14T00:00:00Z" }, { status: "unavailable", ts: "2026-09-15T00:00:00Z" }] },
+    { id: "b", status: "sent", createdAt: "2026-09-14T00:00:00Z", statusHistory: [{ status: "sent", ts: "2026-09-14T00:00:00Z" }] },
+  ]);
+  assert.equal(f.unavailable, 1);
+  assert.equal(f.passed, 0);
+  assert.equal(f.wePassed, 0);
+  assert.equal(f.open, 1, "only the live one is still working");
+  assert.equal(f.rates.deadOfSent, 50, "it ended, so it counts as dead");
+});

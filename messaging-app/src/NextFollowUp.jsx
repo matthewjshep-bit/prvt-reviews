@@ -10,7 +10,7 @@ import React from "react";
 
 const DAY_MS = 86400000;
 const TZ = "America/Los_Angeles";
-const BY_DESIGN = new Set(["deal", "we_passed", "superseded", "draft"]);
+const BY_DESIGN = new Set(["deal", "we_passed", "unavailable", "superseded", "draft"]);
 
 const pacificDay = (t) => new Date(t).toLocaleDateString("en-CA", { timeZone: TZ });
 

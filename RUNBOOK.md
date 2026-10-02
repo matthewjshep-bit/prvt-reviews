@@ -2212,6 +2212,46 @@ Dismiss bins the draft) and owed promises (their Dismiss asks why, for the coach
 
 Failures in the reply agent, proactive drafts, the underwriter, the 15-minute sweep and the coach used to live in Render's log or on an in-memory job a redeploy forgets. `recordError` (`ghl-broker/app-errors.js`) keeps them in `app_errors`, one row per distinct failure (fingerprint of area + message with ids and numbers flattened), counted. The message has phones and emails knocked out and the context is ids only. It never throws. The coach reads the night's rows; a repeated one becomes a `code_gap`.
 
+### No longer available — a house that sold isn't anyone's pass (2026-10-02)
+
+**Why.** "We passed" means we chose to walk away. "They passed" means the
+seller said no, and it gets a check-in every ten days, because a house still
+for sale can come back. A house the agent says sold or went pending is
+neither. It was filed as one or the other. 4621 S Sheridan Ave ("That one is
+already sold", 9/15) was read as a first no: the bot asked what the seller
+would take, and the offer stayed open until the 9/29 cleanup. 2617 Cottage
+Rd E's "already pending" was filed as their pass and got a check-in claimed
+on 9/27. Matt: "we passed is like we intentionally said no".
+
+**The status.** `unavailable`, shown as "No longer available"
+(shared/offer-status.js). It counts as dead and is never open, revivable or
+chased. It ranks lowest and carries no GHL tag, so a sold house never puts
+the agent in a "they passed" workflow. The funnel counts it on its own
+(`unavailable`, in "dead of sent"). The Offers column reads "No longer
+available — no follow-up". The bulk bar and the status menu can set it. The
+agent check-in may name it as how a house ended ("it sold").
+
+**Who sets it.**
+- The nightly held-underwrite sweep, on `GONE_TEXT` (above).
+- The reply agent, when the agent says the house is gone (`houseGone` in
+  shared/held-underwrites.js). On a no it reads the loose words (pending,
+  sold, under contract, off the market, no longer available, accepted another
+  offer, withdrawn). Otherwise it needs the strict `OVER_PLAIN` wording that
+  names the house. "Sold as is" and "a few went pending nearby" don't count.
+  Calls never set it.
+- When it fires, it injects `mark_offer_unavailable` and drops what a no
+  wires (they passed, Tier 3). It never makes the first-no ask.
+  `setOfferStatus` accepts `unavailable` from a reply because it's a fact the
+  agent told us, not a decision. It lands on the live offer, or on a house
+  they passed on whose check-in they're answering, never on a house we passed
+  on. It stops whatever the machine had queued about the house. `we_passed`
+  still can't be set by a reply.
+- A person, from the status menu or the bulk bar. That also stops queued
+  machine texts.
+
+**Not changed.** The price watch's own "went pending/sold" read still writes
+`listing_off_market` and stops check-ins; it doesn't set the status.
+
 ### Held underwrites — the nightly triage (2026-09-16)
 
 "Underwrites that need a look" held 49 rows and Matt wasn't going to get to
@@ -2234,8 +2274,13 @@ The verdicts, in order:
   a priced offer already on the same house.
 - **retire** (a status, a reason on the row, an `offer_*` event, a GHL note):
   they unsubscribed / bot-off tag / GHL opportunity lost or in a cold stage
-  (Tier 3, passed on offer) → `we_passed`; the agent said pending, sold, not
-  interested, under contract → `passed`; turnkey per the agent → `we_passed`;
+  (Tier 3, passed on offer) → `we_passed`; the agent said the house is gone —
+  pending, sold, under contract, off the market, no longer available,
+  accepted another offer, withdrawn (`GONE_TEXT`) → `unavailable` (2026-10-02:
+  2617 Cottage Rd E's "already pending" was filed as their pass, and a passed
+  house gets a check-in every ten days); the seller said no, not interested,
+  won't sell, or has other offers → `passed`, still for sale, so the check-in
+  may bring it back; turnkey per the agent → `we_passed`;
   held **14 days** with no word → `we_passed`; we asked for their read
   **7 days** ago and heard nothing → `we_passed`. The `uw-needs-review` tag
   comes off once nothing of theirs is held.

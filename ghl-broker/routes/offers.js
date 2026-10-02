@@ -61,7 +61,7 @@ import { driveOpenPromises } from "../promise-driver.js";
 import { agreeInvestorPrice } from "../investor-price.js";
 import { settlePromise } from "../promise-sweep.js";
 // An outcome that means we no longer owe them a number on that house.
-const PROMISE_SETTLING_STATUSES = new Set(["sent", "countered", "no_response", "passed", "we_passed"]);
+const PROMISE_SETTLING_STATUSES = new Set(["sent", "countered", "no_response", "passed", "we_passed", "unavailable"]);
 import express from "express";
 import crypto from "node:crypto";
 import { store } from "../store.js";
@@ -3300,9 +3300,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (PROMISE_SETTLING_STATUSES.has(status)) {
         await settlePromise({ store, locationId, contactId: offer.contactId, address: offer.address, offerId: offer.id, by: `offer_${status}` }).catch(() => {});
       }
-      // Our own pass ends the chasing: whatever the machine had queued about
-      // this house is dismissed. Their pass keeps its check-in ladder.
-      const stopped = status === "we_passed"
+      // Our own pass ends the chasing, and so does a house that's gone:
+      // whatever the machine had queued about it is dismissed. Their pass
+      // keeps its check-in ladder.
+      const stopped = status === "we_passed" || status === "unavailable"
         ? await stopMachineTextsForOffer({ client, store, locationId, offer }).catch(() => [])
         : [];
 
@@ -3477,7 +3478,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           if (PROMISE_SETTLING_STATUSES.has(status)) {
             await settlePromise({ store, locationId, contactId: offer.contactId, address: offer.address, offerId: offer.id, by: `offer_${status}` }).catch(() => {});
           }
-          if (status === "we_passed") await stopMachineTextsForOffer({ client, store, locationId, offer }).catch(() => []);
+          if (status === "we_passed" || status === "unavailable") await stopMachineTextsForOffer({ client, store, locationId, offer }).catch(() => []);
           offers.push(offer);
           if (offer.contactId) touchedContacts.add(offer.contactId);
           await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
@@ -4885,7 +4886,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     setOfferStatus: async ({ contactId, addressHint, status, note = "", amount = 0 }) => {
       // "we_passed" is deliberately absent: walking away from a property is
       // an operator's decision, never something a reply can trigger.
-      if (!["countered", "passed", "no_response"].includes(status)) return { ok: false, reason: `not a status this can set: ${status}` };
+      // "unavailable" is not a decision — the agent told us the house sold
+      // or came off the market (reply-agent.js houseGone).
+      if (!["countered", "passed", "no_response", "unavailable"].includes(status)) return { ok: false, reason: `not a status this can set: ${status}` };
       const offer = pickOfferForStatus(await currentOffersFor(locationId, contactId), addressHint, status);
       if (!offer?.id) return { ok: false, reason: offer?.reason || "no open offer to mark" };
       if (effectiveStatus(offer) === status) return { ok: true, unchanged: true, address: offer.address, status };
@@ -4905,7 +4908,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // would fork every key and duplicate the whole counter history.
         { type: `offer_${status}`, offerId: offer.id, source: "conversation", at: ts, ...(counter ? { data: { amount: counter } } : {}) });
       await syncAgentOfferTag(client, locationId, contactId);
-      return { ok: true, address: offer.address, status, amount: counter };
+      const stopped = status === "unavailable" ? await stopMachineTextsForOffer({ client, store, locationId, offer }).catch(() => []) : [];
+      return { ok: true, address: offer.address, status, amount: counter, stopped: stopped.length };
     },
     // A buyer's answer about the walkthrough, filed on the deal
     // (shared/showing.js recordRsvp). Read fresh: the reply may land while
@@ -5065,6 +5069,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     if (String(hint || "").trim()) {
       const closed = pickDealByAddress(live, hint);
       if (closed && (status === "countered" || effectiveStatus(closed) === status)) return closed;
+      // "It sold", in answer to a check-in on a house they passed on: it
+      // lands on that row. A house we walked away from stays ours.
+      if (closed && status === "unavailable" && REVIVABLE_STATUSES.has(effectiveStatus(closed))) return closed;
       // The house they named is ours and closed: what they said is about IT,
       // never about their other house (34418 54th Ave S, 2026-09-23: "your
       // price is firm" on the passed 54th made 28605 51st Pl S hot).

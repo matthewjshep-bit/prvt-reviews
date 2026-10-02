@@ -38,7 +38,7 @@ test("junk is dropped: no address, a test address, a dry run — and a draft a p
 
 test("the conversation closes it: pending/sold/no, turnkey, a passed event, an unsubscribe, a bot-off tag, a cold GHL stage", () => {
   let t = triage({ drafts: [inbound("That property is already pending now.", { intent: "rejection" })] });
-  assert.equal(t.action, "retire"); assert.equal(t.status, "passed"); assert.match(t.reason, /pending/);
+  assert.equal(t.action, "retire"); assert.equal(t.status, "unavailable"); assert.match(t.reason, /pending/);
   t = triage({ drafts: [inbound("This one is pretty turnkey with tenants in place.", { intent: "deal_available" })] });
   assert.equal(t.action, "retire"); assert.equal(t.status, "we_passed"); assert.match(t.reason, /turnkey/);
   t = triage({ events: [{ type: "property_details", address: "2500 Alder St, Milton, WA", at: ago(1), data: { condition: "turnkey, completely renovated" } }] });
@@ -53,10 +53,29 @@ test("the conversation closes it: pending/sold/no, turnkey, a passed event, an u
   assert.notEqual(triage({ drafts: [inbound("I'd have to see it to throw out numbers. A few went pending in the area recently.", { intent: "other" })] }).action, "retire");
   assert.notEqual(triage({ drafts: [inbound("It is being sold as is", { intent: "question" })] }).action, "retire");
   // …but plain words about this house are, whatever the intent read.
-  assert.equal(triage({ drafts: [inbound("That one is already pending", { intent: "other" })] }).status, "passed");
+  assert.equal(triage({ drafts: [inbound("That one is already pending", { intent: "other" })] }).status, "unavailable");
   // A "pending" about ANOTHER house does not close this one.
   t = triage({ drafts: [inbound("That one went pending", { intent: "rejection", propertyAddress: "99 Other Rd, Kent, WA" })] });
   assert.notEqual(t.action, "retire");
+});
+
+// 2617 Cottage Rd E (2026-09-15): "That property is already pending now."
+// closed the held underwrite as "they passed", and a passed house gets a
+// check-in every ten days — one was claimed on it 9/27. A house that went
+// pending or sold is no longer available: nobody's pass, nothing chases it.
+test("a house the agent says went pending or sold is no longer available, so it never gets a check-in", () => {
+  for (const text of ["That property is already pending now.", "It sold last week", "That one is under contract", "They already accepted an offer", "It's off the market", "Sorry, that one is no longer available"]) {
+    const t = triage({ drafts: [inbound(text, { intent: "rejection" })] });
+    assert.equal(t.action, "retire", text);
+    assert.equal(t.status, "unavailable", text);
+    assert.match(t.reason, /^it's no longer available \(they said "/, text);
+  }
+  for (const text of ["Seller is not interested", "They already have multiple offers", "The seller won't sell at that"]) {
+    const t = triage({ drafts: [inbound(text, { intent: "rejection" })] });
+    assert.equal(t.status, "passed", `${text} — still for sale, so a check-in may bring it back`);
+    assert.match(t.reason, /^they said "/);
+  }
+  assert.notEqual(triage({ drafts: [inbound("It is being sold as is", { intent: "rejection" })] }).status, "unavailable", "sold as is is still for sale");
 });
 
 test("stale: two weeks with no word retires it; a week after we asked with no answer retires it", () => {
@@ -128,4 +147,14 @@ test("a house that isn't single-family is a person's call, said in full, until i
   assert.equal(t.action, "yours");
   assert.equal(t.reason, "not our kind of house — a mobile home (single-family only right now)");
   assert.equal(triageHeldUnderwrite({ offer, now: now + 15 * 86400000 }).action, "retire", "two quiet weeks retire it like any hold");
+});
+
+test("the reply agent's read of a house that's gone: loose on a no, strict otherwise", async () => {
+  const { houseGone } = await import("./held-underwrites.js");
+  assert.equal(houseGone("Thats is sold already", "rejection"), true);
+  assert.equal(houseGone("That property is already pending now.", "other"), true, "names the house: whatever the intent");
+  assert.equal(houseGone("Sold for 267k", "question"), false, "loose words need a no around them");
+  assert.equal(houseGone("A few went pending in the area", "other"), false);
+  assert.equal(houseGone("It is being sold as is", "rejection"), false);
+  assert.equal(houseGone("Seller is not interested", "rejection"), false, "a no is theirs, not gone");
 });

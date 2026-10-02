@@ -71,3 +71,29 @@ test("a counter on a house they passed on reopens it, but only by address", asyn
   assert.equal(guessed.ok, false, "no address, no open offer: nothing is reopened on a guess");
 });
 
+
+// Matt, 2026-10-02: a house the agent says sold is "no longer available" —
+// not our pass and not theirs. A reply can record it (it's a fact they told
+// us, not a decision to walk away), on the live offer or on a house they
+// passed on whose check-in they're answering. Our own pass stays ours.
+test("an agent saying it sold marks the house no longer available, on the live offer or a house they passed on — never one we passed on", async () => {
+  const live = await mkOffer({ contactId: "a-sold", address: "70 Fir St, Kent, WA" });
+  let r = await deps.setOfferStatus({ contactId: "a-sold", addressHint: "70 Fir St", status: "unavailable", note: "they said it sold" });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal((await store.getOffer(live.id)).status, "unavailable");
+  assert.equal(r.stopped, 0, "nothing was queued about it");
+
+  const theirs = await mkOffer({ contactId: "a-sold", address: "80 Spruce St, Kent, WA", status: "passed" });
+  r = await deps.setOfferStatus({ contactId: "a-sold", addressHint: "80 Spruce St", status: "unavailable" });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal((await store.getOffer(theirs.id)).status, "unavailable", "the answer to a check-in on a house they passed on");
+
+  const ours = await mkOffer({ contactId: "a-sold", address: "90 Larch St, Kent, WA", status: "we_passed" });
+  r = await deps.setOfferStatus({ contactId: "a-sold", addressHint: "90 Larch St", status: "unavailable" });
+  assert.equal(r.ok, false);
+  assert.equal((await store.getOffer(ours.id)).status, "we_passed", "our own pass stays ours");
+
+  r = await deps.setOfferStatus({ contactId: "a-sold", addressHint: "", status: "we_passed" });
+  assert.equal(r.ok, false, "a reply still never walks us away from a house");
+  assert.match(r.reason, /not a status this can set/);
+});
