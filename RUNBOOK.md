@@ -2180,8 +2180,13 @@ The verdicts, in order:
   a priced offer already on the same house.
 - **retire** (a status, a reason on the row, an `offer_*` event, a GHL note):
   they unsubscribed / bot-off tag / GHL opportunity lost or in a cold stage
-  (Tier 3, passed on offer) → `we_passed`; the agent said pending, sold, not
-  interested, under contract → `passed`; turnkey per the agent → `we_passed`;
+  (Tier 3, passed on offer) → `we_passed`; the agent said the house is gone —
+  pending, sold, under contract, off the market, no longer available,
+  accepted another offer, withdrawn (`GONE_TEXT`) → `we_passed` (2026-10-02:
+  2617 Cottage Rd E's "already pending" was filed as their pass, and a passed
+  house gets a check-in every ten days); the seller said no, not interested,
+  won't sell, or has other offers → `passed`, still for sale, so the check-in
+  may bring it back; turnkey per the agent → `we_passed`;
   held **14 days** with no word → `we_passed`; we asked for their read
   **7 days** ago and heard nothing → `we_passed`. The `uw-needs-review` tag
   comes off once nothing of theirs is held.

@@ -106,6 +106,11 @@ const TEST_ADDRESS = /\btest\b|\bprobe\b/i;
 // retired both.
 export const OVER_TEXT = /\b(pending|sold(?!\s+as[- ]is)|under contract|off the market|no longer (available|for sale|on the market)|already (has|have|got|accepted) (an|another|multiple)? ?offers?|accepted (an|another) offer|not interested|won'?t sell|isn'?t selling|not (going to|gonna) sell|withdrawn|cancell?ed)\b/i;
 export const OVER_PLAIN = /\b(it'?s|it is|this (one|property|house|listing)|that (one|property|house|listing)|the (property|house|listing)|she'?s|he'?s|they'?re|seller is)\s+(is |was |went |has gone |are |went )?(already |now |just )?(pending|under contract|sold(?!\s+as[- ]is)|off the market|no longer (available|for sale)|not interested|withdrawn)\b/i;
+// Of those, the ones that say the house itself is gone. 2617 Cottage Rd E
+// (2026-09-15): "already pending" was filed as their pass, and a passed house
+// gets a check-in every ten days. Gone is ours — we passed, nothing chases
+// it. A seller's no, or "they have other offers", is still a house for sale.
+export const GONE_TEXT = /\b(pending|sold(?!\s+as[- ]is)|under contract|off the market|no longer (available|for sale|on the market)|accepted (an|another) offer|withdrawn)\b/i;
 const TURNKEY_TEXT = /\b(turn-?key|move-?in ready|fully (updated|renovated|remodeled)|completely (renovated|remodeled|updated)|not (really )?a fixer|isn'?t a fixer|no work needed)\b/i;
 const COLD_STAGE = /^tier\s*3\b|passed on offer|^lost\b|not a good deal/i;
 const CLOSED_OPP = /^(lost|abandoned|abandon)$/i;
@@ -165,7 +170,11 @@ export function triageHeldUnderwrite({
     .filter((d) => d && String(d.inbound || "").trim() && aboutThisHouse(d.propertyAddress) && after(d.createdAt))
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   const over = said.find((d) => (d.intent === "rejection" && OVER_TEXT.test(d.inbound)) || OVER_PLAIN.test(d.inbound));
-  if (over) return { ...base, action: "retire", status: "passed", reason: `they said "${clip(over.inbound)}"` };
+  if (over) {
+    return GONE_TEXT.test(over.inbound)
+      ? { ...base, action: "retire", status: "we_passed", reason: `it's off the market (they said "${clip(over.inbound)}")` }
+      : { ...base, action: "retire", status: "passed", reason: `they said "${clip(over.inbound)}"` };
+  }
   const turnkey = said.find((d) => TURNKEY_TEXT.test(d.inbound));
   if (turnkey) return { ...base, action: "retire", status: "we_passed", reason: `turnkey per the agent ("${clip(turnkey.inbound)}")` };
 
