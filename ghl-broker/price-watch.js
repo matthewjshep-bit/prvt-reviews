@@ -23,6 +23,12 @@
 // A drop found while their text (or your own draft) is waiting in the outbox
 // is kept on the offer (`priceWatch.dropOwed`) and texted on a later run —
 // measured from where it started, because the baseline moves every run.
+//
+// A drop that still sits at or above what their agent last asked us for is
+// recorded and not texted (521 Avenue C, 2026-09-24): she had asked us for
+// 580 the day before the list came down to 599,950, so the seller had moved
+// toward their own agent, not toward us, and "would they come closer to
+// ours?" told her we hadn't read the thread.
 
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
@@ -30,7 +36,7 @@ import { fetchZillowListings } from "./rehab-scan.js";
 import { streetKey } from "./comps-zillow.js";
 import { addressKey } from "./shared/us-address.js";
 import { effectiveStatus } from "./shared/offer-status.js";
-import { supersededIds, pricedAt } from "./shared/current-offer.js";
+import { supersededIds, pricedAt, houseKey } from "./shared/current-offer.js";
 import { localHour } from "./promise-sweep.js";
 import { followUpRows } from "./follow-up-sweep.js";
 import { waitingReason } from "./outbox-guard.js";
@@ -53,6 +59,33 @@ export function evaluateDrop({ from = 0, to = 0 } = {}) {
   const gap = a - b;
   const dropped = a > 0 && b > 0 && gap >= Math.max(MIN_DROP_DOLLARS, a * MIN_DROP_PCT);
   return { dropped, from: a, to: b, pct: a > 0 ? Math.round((gap / a) * 1000) / 10 : 0 };
+}
+
+const tsOf = (t) => { const n = Date.parse(t || ""); return Number.isFinite(n) ? n : 0; };
+
+// The last number their agent asked us for on the house: the newest counter
+// with an amount, on any of the agent's offers there (a counter can be filed
+// on a row the house has since moved past). Null when they never named one.
+export function theirLastAsk(rows = []) {
+  let best = null;
+  for (const o of rows) {
+    for (const h of o?.statusHistory || []) {
+      const n = Math.round(Number(h?.amount) || 0), at = tsOf(h?.ts);
+      if (h?.status === "countered" && n > 0 && (!best || at > best.at)) best = { amount: n, at };
+    }
+  }
+  return best?.amount || null;
+}
+
+// The last list price any of these offers saw, by when it was seen. Null
+// when none has looked yet.
+export function lastSeenListPrice(rows = []) {
+  let best = null;
+  for (const o of rows) {
+    const p = Math.round(Number(o?.priceWatch?.listPrice) || 0), at = tsOf(o?.priceWatch?.checkedAt);
+    if (p > 0 && (!best || at > best.at)) best = { price: p, at };
+  }
+  return best?.price || null;
 }
 
 // "FOR_SALE", "ACTIVE", "COMING_SOON" are still in play; anything else isn't.
@@ -110,8 +143,22 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
     if (!full) continue;
     out.checked++;
     const seen = full.priceWatch || {};
+    // The agent's other offers on this house. Only the current one is
+    // watched, but the others still carry what they asked us for, and the
+    // list prices they saw before this one became current.
+    const k = houseKey(full.address);
+    const siblings = (book || []).filter((o) => o?.id && o.id !== full.id && o.contactId === full.contactId && o.address && houseKey(o.address) === k);
     // A drop we still owe them is measured from where it started.
-    const from = Math.round(Number(seen.dropOwed?.from ?? seen.listPrice ?? full.askingPrice ?? full.calc?.inputs?.askingPrice) || 0);
+    let from = Math.round(Number(seen.dropOwed?.from ?? seen.listPrice ?? full.askingPrice ?? full.calc?.inputs?.askingPrice) || 0);
+    // A row that only just became current has never looked, and its asking
+    // price can be older than the list another of the agent's offers here saw
+    // since. Start from the lower of the two, so a drop already seen on the
+    // house isn't news a second time. Never higher than before.
+    if (from > 0 && seen.dropOwed?.from == null && seen.listPrice == null && siblings.length) {
+      const fulls = await Promise.all(siblings.slice(0, 10).map((o) => store.getOffer(o.id).catch(() => null)));
+      const saw = lastSeenListPrice(fulls.filter(Boolean));
+      if (saw && saw < from) from = saw;
+    }
     const to = Math.round(Number(hit.listPrice) || 0);
     const onMarket = stillForSale(hit.status);
     const back = onMarket && seen.offMarketAt ? seen.offMarketAt : null;
@@ -146,7 +193,12 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
       continue;
     }
     out.dropped++;
-    const waiting = await waitingReason({ store, locationId, contactId: full.contactId });
+    // Their agent already asked us for no more than the new list: the seller
+    // came down to meet their own agent, not us, and there's nothing to ask.
+    // Written down, never texted, and not kept for later.
+    const theirAsk = theirLastAsk([full, ...siblings]);
+    const askedUnder = Boolean(theirAsk && theirAsk <= to);
+    const waiting = askedUnder ? null : await waitingReason({ store, locationId, contactId: full.contactId });
     if (waiting) {
       full.priceWatch = { ...full.priceWatch, dropOwed: { from, to, at: seen.dropOwed?.at || iso(now) } };
       await store.updateOffer(full.id, full).catch(() => {});
@@ -156,8 +208,13 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
     if (seen.dropOwed) { const { dropOwed: _d, ...pw } = full.priceWatch; full.priceWatch = pw; await store.updateOffer(full.id, full).catch(() => {}); }
     const claim = await recordEvent({ store, locationId, contactId: full.contactId, party: "agent", type: "price_dropped", at: iso(now),
       address: full.address, offerId: full.id, source: "sweep", dedupeKey: `price_dropped:${full.id}:${to}`,
-      data: { from, to, pct: drop.pct, ourNumber: Math.round(Number(full.cashAmount) || 0) } });
+      data: { from, to, pct: drop.pct, ourNumber: Math.round(Number(full.cashAmount) || 0), ...(theirAsk ? { theirAsk } : {}) } });
     if (!claim.inserted) continue;
+    if (askedUnder) {
+      out.results.push({ offerId: full.id, address: full.address, status: "dropped", from, to,
+        reason: `no text: they already asked ${theirAsk}, under the new list` });
+      continue;
+    }
     const r = await start({
       client, locationId, saved, store, contactId: full.contactId, kind: "price_drop", offer: full,
       subject: { address: full.address, from, to, status: effectiveStatus(full) }, sendsEnabled, deps,
