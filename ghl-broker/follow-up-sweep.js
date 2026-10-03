@@ -423,20 +423,20 @@ export async function investorCandidates({ store, locationId, config, now = Date
  * Returns synchronously; the work runs on its own. `deps.startProactive` and
  * `deps.setOfferStatus` are injected so the whole thing is exercisable offline.
  */
-export function startFollowUpSweep({ client, locationId, saved, store, sendsEnabled = false, now = Date.now(), deps = {}, trigger = "manual", dryRun = false, onDone = null }) {
+export function startFollowUpSweep({ client, locationId, saved, store, sendsEnabled = false, now = Date.now(), deps = {}, trigger = "manual", dryRun = false, onDone = null, scope = null }) {
   const existing = jobs.get(locationId);
   if (existing?.status === "running") {
     throw Object.assign(new Error("a follow-up sweep is already running for this location"), { http: 409 });
   }
   const job = {
     id: `fu-${Date.now().toString(36)}`, locationId, trigger, dryRun,
-    status: "running", phase: "collecting",
+    status: "running", phase: "collecting", ...(scope?.offerId ? { scope: { offerId: scope.offerId } } : {}),
     startedAt: iso(now), finishedAt: null,
     considered: 0, due: 0, started: 0, skipped: 0, exhaustedCount: 0, errors: 0,
     results: [], error: null, cancelRequested: false,
   };
   jobs.set(locationId, job);
-  runSweep(job, { client, locationId, saved, store, sendsEnabled, now, deps }).catch((e) => {
+  runSweep(job, { client, locationId, saved, store, sendsEnabled, now, deps, scope }).catch((e) => {
     job.status = "error";
     job.error = String(e?.message || e).slice(0, 300);
     job.finishedAt = new Date().toISOString();
@@ -445,7 +445,7 @@ export function startFollowUpSweep({ client, locationId, saved, store, sendsEnab
 }
 
 async function runSweep(job, ctx) {
-  const { client, locationId, saved, store, sendsEnabled, now, deps } = ctx;
+  const { client, locationId, saved, store, sendsEnabled, now, deps, scope = null } = ctx;
   const config = conversationConfig(saved);
   const start = typeof deps.startProactive === "function" ? deps.startProactive : startProactive;
   // Injectable so a test suite isn't paced at GHL's rate limit.
@@ -485,9 +485,14 @@ async function runSweep(job, ctx) {
     else onTheirOwn.push(c);
   }
 
+  // One deal's buyers only (Today's "Nudge them" on a blast nobody opened):
+  // its own blasts by offer id, or a GHL workflow's by street. Nothing else
+  // rides along — before 2026-10-02 the button ran the whole morning's sweep.
+  const forThisDeal = (c) => c.party === "investor"
+    && (c.offerId === scope.offerId || (!c.offerId && scope.address && c.address && sameStreet(c.address, scope.address)));
   // An agreed price first: if the run's quota binds, the push to paper is
   // the text that must not wait.
-  const candidates = [
+  const candidates = scope?.offerId ? (await investorCandidates({ store, locationId, config, now })).filter(forThisDeal) : [
     ...(await hotCandidates({ store, locationId, config, now })),
     ...riding,
     // Two live offers due the same morning: the house they're on goes first.

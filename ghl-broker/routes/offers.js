@@ -5764,6 +5764,25 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // "Nudge them" on a deal nobody opened (Today's blast_no_opens): the
+  // follow-up sweep for this deal's buyers only — its blasts by offer id or a
+  // GHL workflow's by street. Same double gate as the whole sweep: a live run
+  // is asked for, and the broker's send flag is on.
+  router.post("/:id/deal/nudge-buyers", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { locationId, client, offer } = ctx;
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const dryRun = req.body?.dryRun !== false;
+      const job = startFollowUpSweep({
+        client, locationId, saved, store, sendsEnabled: CARD_SENDS_ENABLED, dryRun,
+        trigger: "deal", scope: { offerId: offer.id, address: offer.address || "" }, deps: conversationDeps({ client, locationId, saved }),
+      });
+      res.status(202).json({ ok: true, job: publicFollowUpJob(job) });
+    } catch (err) { fail(res, err); }
+  });
+
   // Float a number by hand. The robot does this on its own when an underwrite
   // lands and again when the agent's read arrives — but it logs a skip and
   // moves on when the bot was off, the key was missing, or the take check

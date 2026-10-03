@@ -8,7 +8,7 @@
 
 import {
   applyDraftAction, createDataroom, deleteOffer, dismissPromise, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
-  askAgentForWindow, updateDealChecklist, rerunHeldUnderwrite, resumeDrive, retryUnderwrite, runFollowUps, stopDrive, setOfferStatus, updateDeal,
+  askAgentForWindow, updateDealChecklist, rerunHeldUnderwrite, resumeDrive, retryUnderwrite, runFollowUps, stopDrive, setOfferStatus, updateDeal, nudgeDealBuyers,
 } from "./api.js";
 import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL } from "@shared/post-mortem.js";
 
@@ -66,6 +66,8 @@ export async function runOp(key, item, extra = null) {
     case "build_dataroom":     return createDataroom({ offerId: item.offerId });
     case "preview_follow_ups": return getFollowUps(true);
     case "run_follow_ups":     return runFollowUps(false);
+    // This deal's buyers only (POST /:id/deal/nudge-buyers) — not the whole morning's sweep.
+    case "nudge_deal_buyers":  return nudgeDealBuyers(item.offerId);
     case "dismiss_promise":    return dismissPromise(item.contactId, item.address, extra?.reason || null);
     case "rerun_held":         return rerunHeldUnderwrite(item);
     // Not single-family: the same run, told to price it anyway.
@@ -88,6 +90,7 @@ export function describeResult(key, r) {
     return due.length ? `${due.length} would get a nudge today: ${due.slice(0, 4).map((c) => c.address).join(", ")}${due.length > 4 ? "…" : ""}` : "Nobody is due a nudge today.";
   }
   if (key === "run_follow_ups") return "Sweep started — drafts land in the outbox.";
+  if (key === "nudge_deal_buyers") return r.job?.dryRun ? "Previewed only — sends are off on the broker." : "Nudging this deal's buyers — drafts land in the outbox.";
   if (key === "match_investors") {
     const n = (r.matches || r.investors || []).length;
     return n ? `${n} buyer${n === 1 ? "" : "s"} fit — open the deal to add them.` : "No buyers fit this one yet.";

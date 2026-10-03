@@ -327,6 +327,9 @@ export const holdReplyDraft = (id) =>
 // The clock: what would go out today (preview writes nothing), and a manual run.
 export const getFollowUps = (preview = false) =>
   fetch(`${API_BASE}/api/offers/automations/conversation/follow-ups?${locq()}${preview ? "&preview=1" : ""}`).then(j);
+// "Nudge them" on one deal: the follow-up sweep for this deal's buyers only.
+export const nudgeDealBuyers = (offerId, dryRun = false) =>
+  post(`/api/offers/${encodeURIComponent(offerId)}/deal/nudge-buyers`, { dryRun });
 export const runFollowUps = (dryRun = true) =>
   post(`/api/offers/automations/conversation/follow-ups/run`, { dryRun });
 export const applyDraftAction = (id, actionId) =>
