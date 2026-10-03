@@ -369,6 +369,10 @@ export const listOffers = ({ contactId = "", limit = 50, lean = false, activity 
   if (contactId) p.set("contact_id", contactId);
   return fetch(`${API_BASE}/api/offers?${p}`).then(j).then((r) => r.offers);
 };
+// Every agent's tier from the app's own record: { counts, rows, pulseOn }
+// (shared/tiers.js). Cached five minutes on the broker; fresh skips it.
+export const getAgentTiers = (fresh = false) =>
+  fetch(`${API_BASE}/api/dashboard/agents/tiers?${locq()}${fresh ? "&fresh=1" : ""}`).then(j);
 // "Hold our number" on a counter: { amount, text, from } — the words at the
 // lowest number we've put to them on the house. Reads only; sends nothing.
 export const getHoldText = (id) =>

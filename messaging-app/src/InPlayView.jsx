@@ -1,5 +1,12 @@
 // InPlayView.jsx — Today → In play: every agent with something live, one row
-// each (shared/in-play.js). It replaces walking GHL's Tier 1 stage and the
+// each (shared/in-play.js), and the agents the app is keeping warm. Two
+// tiers, from the app's own record (shared/tiers.js; Matt, 2026-10-02: track
+// the tiers in the app, not in GHL's pipeline stages):
+//   Tier 1  a property in hand that could be a flip — the offer table, plus
+//           agents who sent us a house we haven't priced yet
+//   Tier 2  written back, nothing in hand — when they last wrote, and what
+//           keeps them warm (or that nothing does)
+// It replaces walking GHL's Tier 1 stage and the
 // Offers tab every morning: who, where their best house stands, ours against
 // theirs, when anyone last spoke, what the machine does next, and a flag when
 // something has fallen off. Click a row and the agent's lead offer opens in
@@ -12,7 +19,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, RefreshCw } from "lucide-react";
 import { buildInPlay, inPlayCounts, IN_PLAY_STAGES } from "@shared/in-play.js";
 import { kText } from "@shared/call-list.js";
-import { listOffers } from "./api.js";
+import { getAgentTiers, listOffers } from "./api.js";
+import ContactLink from "./ContactLink.jsx";
 import { appHref } from "./links.js";
 import { ActivityStamp, BTN, ErrorBar, FilterChips, Pill, SearchInput, SkeletonRows } from "./ui.jsx";
 import NextFollowUp from "./NextFollowUp.jsx";
@@ -75,6 +83,55 @@ export function InPlayTable({ rows = [], onOpen }) {
   );
 }
 
+const CARE_CLS = { off: "text-amber-800", dropped: "text-slate-500", stopped: "text-slate-500", due: "text-emerald-700", clock: "text-slate-700", waiting: "text-slate-600" };
+
+/** Tier 2: written back, nothing in hand, and what keeps each one warm. */
+export function TierTwoTable({ rows = [], pulseOn = true }) {
+  return (
+    <div className="space-y-2">
+      {!pulseOn && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+          The agent check-in is off, so nothing keeps these agents warm between houses. Turn it on in Settings → Agent Outreach (RentCast) → “Check in with every agent”.
+        </div>
+      )}
+      {!rows.length ? <div className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Nobody here.</div> : (
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+          <table className="min-w-full text-sm">
+            <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <tr><th className="px-3 py-2">Agent</th><th className="px-3 py-2">Where they are</th><th className="px-3 py-2">Last wrote</th><th className="px-3 py-2">What keeps them warm</th></tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {rows.map((r) => (
+                <tr key={r.contactId}>
+                  <td className="px-3 py-2 font-semibold text-slate-900"><ContactLink contactId={r.contactId} name={r.name || "Unnamed agent"} party="agent" />{r.segment === "partner" && <span className="ml-1.5 text-xs font-medium text-emerald-700">done business</span>}</td>
+                  <td className="px-3 py-2 text-slate-700">{r.why}</td>
+                  <td className="px-3 py-2"><ActivityStamp activity={r.lastInboundAt ? { at: r.lastInboundAt, dir: "in", type: "text_summary", machine: false } : null} /></td>
+                  <td className={`px-3 py-2 ${CARE_CLS[r.care?.kind] || "text-slate-600"}`}>{r.care?.text || ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Tier 1 with no offer yet: a house they sent us that isn't priced. */
+export function NamedHouses({ rows = [] }) {
+  if (!rows.length) return null;
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Sent us a house · not priced yet</div>
+      <ul className="space-y-1 text-sm">
+        {rows.map((r) => (
+          <li key={r.contactId}><ContactLink contactId={r.contactId} name={r.name || "Unnamed agent"} party="agent" className="font-semibold text-slate-900" /> <span className="text-slate-600">— {r.why}</span></li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** <InPlayView settings initialMode /> — "agent" (the table) or "house" (the lane board). */
 export default function InPlayView({ settings = null, initialMode = "agent" }) {
   const [mode, setMode] = useState(initialMode);
@@ -85,6 +142,9 @@ export default function InPlayView({ settings = null, initialMode = "agent" }) {
   const [q, setQ] = useState("");
   const [openId, setOpenId] = useState(null);   // the lead offer open in the split
   const [sending, setSending] = useState(null);
+  const [tier, setTier] = useState("t1");
+  const [tiers, setTiers] = useState(null);   // { counts, rows, pulseOn }
+  const [tierError, setTierError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,9 +152,17 @@ export default function InPlayView({ settings = null, initialMode = "agent" }) {
     catch (e) { setError(e.message || "Couldn't load who's in play."); }
     finally { setLoading(false); }
   }, []);
-  useEffect(() => { if (mode === "agent") load(); }, [mode, load]);
+  const loadTiers = useCallback(async (fresh = false) => {
+    try { setTiers(await getAgentTiers(fresh)); setTierError(""); }
+    catch (e) { setTierError(e.message || "Couldn't read the tiers."); }
+  }, []);
+  useEffect(() => { if (mode === "agent") { load(); loadTiers(); } }, [mode, load, loadTiers]);
 
   const rows = useMemo(() => buildInPlay(offers || []), [offers]);
+  // Tier 1 the offer list can't see: a house they sent that has no offer yet.
+  const inTable = useMemo(() => new Set(rows.map((r) => r.contactId)), [rows]);
+  const named = (tiers?.rows || []).filter((r) => r.tier === "t1" && !inTable.has(r.contactId));
+  const tier2 = (tiers?.rows || []).filter((r) => r.tier === "t2");
   const counts = useMemo(() => inPlayCounts(rows), [rows]);
   const needle = q.trim().toLowerCase();
   const shown = rows.filter(inPlayFilter(filter)).filter((r) => !needle || `${r.contactName} ${r.houses.map((h) => h.address).join(" ")}`.toLowerCase().includes(needle));
@@ -128,12 +196,36 @@ export default function InPlayView({ settings = null, initialMode = "agent" }) {
     { key: "deal", label: "Deals", count: counts.byStage.deal },
     { key: "recent", label: "Passed lately", count: counts.byStage.recent },
   ];
-  const refreshBtn = <button type="button" className={BTN} onClick={load} title="Refresh"><RefreshCw size={13} className={loading ? "animate-spin" : ""} /></button>;
+  const refreshBtn = <button type="button" className={BTN} onClick={() => { load(); loadTiers(true); }} title="Refresh"><RefreshCw size={13} className={loading ? "animate-spin" : ""} /></button>;
+  const tierChips = (
+    <FilterChips value={tier} onChange={(t) => { setTier(t); setOpenId(null); }} label="Tier"
+      options={[
+        { key: "t1", label: "Tier 1", count: counts.live + named.length, title: "A property in hand that could be a flip" },
+        { key: "t2", label: "Tier 2", count: tiers ? tier2.length : undefined, title: "Written back, nothing in hand: the check-in keeps them warm" },
+      ]} />
+  );
+  const q2 = q.trim().toLowerCase();
+  if (tier === "t2") {
+    const shown2 = tier2.filter((r) => !q2 || `${r.name} ${r.why}`.toLowerCase().includes(q2));
+    return (
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {toggle}
+          {tierChips}
+          <SearchInput value={q} onChange={setQ} className="ml-auto min-w-[14rem] flex-1 sm:max-w-xs" placeholder="Agent…" label="Search Tier 2" />
+          {refreshBtn}
+        </div>
+        {tierError && <ErrorBar>{tierError}</ErrorBar>}
+        {!tiers && !tierError ? <SkeletonRows rows={6} /> : <TierTwoTable rows={shown2} pulseOn={tiers?.pulseOn !== false} />}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         {toggle}
+        {tierChips}
         {open && <button type="button" className={BTN} onClick={() => setOpenId(null)} title="Back to the list (Esc)"><ChevronLeft size={13} /> List</button>}
         <FilterChips value={filter} onChange={setFilter} options={chips} label="Filter who's in play" />
         <SearchInput value={q} onChange={setQ} className="ml-auto min-w-[14rem] flex-1 sm:max-w-xs" placeholder="Agent or street…" label="Search who's in play" />
@@ -151,7 +243,10 @@ export default function InPlayView({ settings = null, initialMode = "agent" }) {
             onChanged={() => load()} onStatusChanged={() => load()} settings={settings} />
         </div>
       ) : (
-        <InPlayTable rows={shown} onOpen={(r) => setOpenId(r.lead.id)} />
+        <>
+          {filter === "live" && <NamedHouses rows={named} />}
+          <InPlayTable rows={shown} onOpen={(r) => setOpenId(r.lead.id)} />
+        </>
       )}
       {sending && <SendModal offer={sending} onClose={() => setSending(null)} onSent={() => { setSending(null); load(); }} />}
     </div>

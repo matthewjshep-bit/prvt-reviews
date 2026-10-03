@@ -58,6 +58,7 @@ import { callList, briefFor, normalizeDesk } from "../shared/call-list.js";
 import { LAST_ACTIVITY_TYPES, INBOUND_EVENT_TYPES as LAST_IN_TYPES } from "../shared/last-activity.js";
 import { normalizeLineTargets } from "../shared/line.js";
 import { normalizeGhlStages } from "../shared/ghl-stages.js";
+import { agentRoster } from "../agent-pulse.js";
 import { startCoach, coachReport, coachForContact, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
 
 // Same expression routes/offers.js reads: the broker's one send gate. The
@@ -587,6 +588,24 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         actions: shownActions.map(withFeedback),
         desk: { sections: DESK_SECTIONS, rows: desk.rows, counts: desk.counts, kpis },
       });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Every agent's tier from the app's own record (shared/tiers.js): Tier 1 —
+  // a property in hand; Tier 2 — written back, nothing in hand, and what keeps
+  // them warm. Today → In play reads it. A heavy read (the agent check-in's
+  // own load), so five minutes' cache; ?fresh=1 skips it.
+  const tierCache = new Map();
+  router.get("/agents/tiers", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const hit = tierCache.get(locationId);
+      if (hit && Date.now() - hit.at < 5 * 60000 && req.query?.fresh !== "1") return res.json(hit.body);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const roster = await agentRoster({ locationId, saved, store });
+      const body = { ok: true, generatedAt: new Date().toISOString(), ...roster };
+      tierCache.set(locationId, { at: Date.now(), body });
+      res.json(body);
     } catch (err) { fail(res, err); }
   });
 

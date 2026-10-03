@@ -26,10 +26,11 @@ import { botEventsByContact } from "./bot-hold.js";
 import { mergeEvents } from "./shared/bot-hold.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 import { annotateCurrent } from "./shared/current-offer.js";
+import { agentTier } from "./shared/tiers.js";
 import { effectiveStatus, OPEN_STATUSES, dealIsOver } from "./shared/offer-status.js";
 import { addressKey } from "./shared/us-address.js";
 import {
-  normalizeAgentPulse, pickPulseAgents, blockedByTags, tierDrips,
+  normalizeAgentPulse, pickPulseAgents, blockedByTags, tierDrips, evaluateAgent,
   AGENT_PULSE_EVENT_TYPES, AGENT_PULSE_LEDGER_TYPES, INBOUND_EVENT_TYPES,
 } from "./shared/agent-pulse.js";
 
@@ -106,7 +107,15 @@ export function housesFrom(offers = []) {
  * Pure read: who would get one today. One read per source, whatever the size
  * of the book.
  */
-export async function planAgentPulse({ locationId, saved = {}, store = defaultStore, now = Date.now(), workflows = null }) {
+/**
+ * loadPulseAgents({ locationId, saved, store, now }) → { agents, settings, config, oa, houses, ledgerRead, evRead }
+ *
+ * Every agent the app knows (contact profiles, listing agents, and anyone we
+ * made an offer to), each with their offers, drafts, timeline, check-in
+ * ledger, last word and fresh listings. The check-in plans from it; the
+ * tiers (agentRoster) read it too.
+ */
+export async function loadPulseAgents({ locationId, saved = {}, store = defaultStore, now = Date.now(), includeOfferContacts = false }) {
   const settings = agentPulseSettings(saved);
   const config = conversationConfig(saved);
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
@@ -142,7 +151,9 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
   // A buyer the pull happened to match (some buyers list houses too) is the
   // buyer pulse's, not this one's.
   const investorIds = new Set((investors || []).map((p) => p.contactId));
-  const ids = new Set([...(profiles || []).map((p) => p.contactId), ...(listings || []).map((l) => l.contactId)]);
+  // The check-in plans from profiles and listing agents only; the roster also
+  // counts anyone we made an offer to (includeOfferContacts) — reading, never texting.
+  const ids = new Set([...(profiles || []).map((p) => p.contactId), ...(listings || []).map((l) => l.contactId), ...(includeOfferContacts ? offersBy.keys() : [])]);
 
   const agents = [];
   for (const id of ids) {
@@ -156,6 +167,11 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
       lastInboundAt: inboundBy.get(id) || null, listings: listingsBy.get(id) || [],
     });
   }
+  return { agents, settings, config, oa, houses, ledgerRead, evRead };
+}
+
+export async function planAgentPulse({ locationId, saved = {}, store = defaultStore, now = Date.now(), workflows = null }) {
+  const { agents, settings, config, oa, houses, ledgerRead, evRead } = await loadPulseAgents({ locationId, saved, store, now });
 
   // The day's cap is the DAY's: a retry, or a second press of Run now, only
   // gets the seats still empty. A voided claim gave its seat back.
@@ -173,6 +189,46 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
   const planSettings = { ...settings, replacesWorkflowIds: drips.map((d) => d.id) };
   const plan = pickPulseAgents({ agents: agents.filter((a) => !triedToday.has(a.contactId)), settings: planSettings, config, houses, outreachFollowUpDays: oa.followUpDays, seats, now });
   return { ...plan, settings, drips, claimedToday, seats, truncated: Boolean(evRead.truncated || ledgerRead.truncated) };
+}
+
+// What keeps a Tier 2 agent warm, in a few words (shared/agent-pulse.js
+// evaluateAgent's verdict).
+function careLine(v, pulseOn) {
+  if (v.status === "owned") return { kind: "clock", text: v.reason };
+  if (v.status === "stopped") return { kind: "stopped", text: v.reason };
+  if (v.status === "cold_dropped") return { kind: "dropped", text: v.reason };
+  if (!pulseOn) return { kind: "off", text: "the agent check-in is off — nothing keeps them warm" };
+  if (v.status === "due") return { kind: "due", text: v.pulseReason === "fresh_listing" ? "check-in due: they have a fresh listing" : "check-in due on the next run" };
+  return { kind: "waiting", text: v.reason ? `check-in later — ${v.reason}` : "check-in later" };
+}
+
+/**
+ * agentRoster({ locationId, saved, store, now }) → { counts, rows, pulseOn }
+ *
+ * Every agent's tier (shared/tiers.js agentTier), derived each time from the
+ * app's record, and for Tier 2 what is keeping them warm. Rows are Tier 1 and
+ * Tier 2 (cold and opted-out agents are counted only). Names come from the
+ * contact record; nothing here is logged.
+ */
+export async function agentRoster({ locationId, saved = {}, store = defaultStore, now = Date.now() }) {
+  const { agents, settings, config, oa, houses } = await loadPulseAgents({ locationId, saved, store, now, includeOfferContacts: true });
+  const counts = { t1: 0, t2: 0, cold: 0, opted_out: 0 };
+  const rows = [];
+  for (const a of agents) {
+    const t = agentTier({ offers: a.offers, events: a.events, lastInboundAt: a.lastInboundAt, now });
+    counts[t.tier] = (counts[t.tier] || 0) + 1;
+    if (t.tier !== "t1" && t.tier !== "t2") continue;
+    const name = a.name || a.offers.find((o) => o?.contactName)?.contactName || a.drafts.find((d) => d?.contactName)?.contactName || "";
+    const row = { contactId: a.contactId, name, tier: t.tier, why: t.why, address: t.address || "", lastInboundAt: a.lastInboundAt };
+    if (t.tier === "t2") {
+      const v = evaluateAgent(a, { settings, config, houses, outreachFollowUpDays: oa.followUpDays, now });
+      row.segment = v.segment || null;
+      row.care = careLine(v, settings.enabled);
+    }
+    rows.push(row);
+  }
+  rows.sort((x, y) => (x.tier === y.tier ? String(y.lastInboundAt || "").localeCompare(String(x.lastInboundAt || "")) : x.tier === "t1" ? -1 : 1));
+  return { counts, rows, pulseOn: Boolean(settings.enabled) };
 }
 
 const removerFor = (client, deps = {}) => (typeof deps.removeFromWorkflow === "function"
