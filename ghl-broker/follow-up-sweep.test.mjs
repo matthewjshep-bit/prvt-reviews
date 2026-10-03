@@ -943,3 +943,25 @@ test("a nudge the nightly audit already sent on the offer counts as that day's r
   await settle();
   assert.deepEqual(next.started.map((s) => [s.kind, s.subject.step]), [["offer_nudge", 7]]);
 });
+
+// Today's "Nudge them" on a deal nobody opened (blast_no_opens) ran the
+// follow-up sweep for the whole location — every agent nudge and buyer
+// nudge due that morning — to chase one deal's buyers. Found 2026-10-02.
+test("Nudge them on one deal nudges that deal's buyers and no agent", async () => {
+  _resetJobs();
+  const events = [
+    { type: "blast_sent", contactId: "b1", at: at(0), offerId: "deal1", address: "1415 2nd St, Snohomish, WA" },
+    { type: "blast_sent", contactId: "b2", at: at(0), address: "1415 2nd St" },                       // a GHL workflow blast: street only
+    { type: "blast_sent", contactId: "other", at: at(0), offerId: "deal2", address: "9 Other Rd, Kent, WA" },
+  ];
+  const store = fakeStore({ offers: [anOffer()], events });
+  store.listDeals = async () => [
+    { id: "deal1", address: "1415 2nd St, Snohomish, WA 98290", deal: { stage: "under_contract", investors: [] } },
+    { id: "deal2", address: "9 Other Rd, Kent, WA", deal: { stage: "under_contract", investors: [] } },
+  ];
+  const { job, started } = spySweep(store, { opts: { scope: { offerId: "deal1", address: "1415 2nd St, Snohomish, WA 98290" }, trigger: "deal" } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(started.map((s) => s.contactId).sort(), ["b1", "b2"], "that deal's buyers, by id or by street");
+  assert.ok(started.every((s) => s.kind === "blast_nudge"), "no agent nudge rode along");
+});

@@ -443,7 +443,7 @@ export function buildPipeline({
         if (blastDays >= 3) {
           card.actionIds.push(push({ ...base, kind: "blast_no_opens", severity: "soon",
             title: `${card.address}: blasted ${blastDays}d ago, nobody opened it`, detail: `${blasts.length} blast${blasts.length === 1 ? "" : "s"}`,
-            ops: [{ key: "preview_follow_ups", label: "Who'd get a nudge", intent: "secondary" }, { key: "run_follow_ups", label: "Nudge them", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
+            ops: [{ key: "preview_follow_ups", label: "Who'd get a nudge", intent: "secondary" }, { key: "nudge_deal_buyers", label: "Nudge them", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
         }
       } else if (dd.stage === "under_contract" && (views.length || dd.investors.some((i) => i.state === "evaluating"))
           && !dd.investors.some((i) => i.state === "soft_commit" || i.state === "committed")) {
