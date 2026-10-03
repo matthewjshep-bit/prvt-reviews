@@ -149,6 +149,10 @@ export function triageHeldUnderwrite({
   if (!address || cls.junk || TEST_ADDRESS.test(address)) {
     return { ...base, action: "drop", reason: !address ? "no address on the draft" : cls.junk ? heldReason : "a test address" };
   }
+  // "Potter, Pasco", "Wetmore Property" (2026-10-02): no number anywhere is
+  // no house — nothing to place on a map, nothing for Matt to fix. Any digit
+  // keeps it: "Lot 27, 1510 Maple Ln" and "N 1234 Division St" are houses.
+  if (!/\d/.test(address)) return { ...base, action: "drop", reason: "no street number — nothing to place on a map" };
   const mine = siblings.filter((s) => s && s.id !== offer.id && onThisHouse(s.address));
   const priced = mine.find((s) => Number(s.cashAmount) > 0 && effectiveStatus(s) !== "draft");
   if (priced) return { ...base, action: "drop", reason: `a priced offer (${effectiveStatus(priced)}) already exists on this house` };
