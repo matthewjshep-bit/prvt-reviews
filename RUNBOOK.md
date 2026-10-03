@@ -2072,6 +2072,24 @@ four answers under the call card, each a person's tap — the band and
 - **Walk away** — confirm, then the offer is `we_passed` (machine texts about
   it stop) and the counter draft is dismissed.
 
+### In play — every agent with something live (2026-10-02)
+
+Today's second tab (it replaced "Board"; the lane board is its **By house**
+toggle, and `?view=board` still opens it). One row per agent from the Offers
+list's lean rows (`listOffers` with `activity` and `next`), built by
+`buildInPlay` (`shared/in-play.js`): their best house's stage (Deal · Hot ·
+Countered · Offer out · Floated · Not sent · Held underwrite · Passed
+lately), every current house with ours / theirs, the last touch either way,
+the machine's next move (`shared/next-follow-up.js`), and a flag from
+`offerLeaks` (`shared/line.js`): **nothing scheduled** or **a follow-up is
+late** sort first, **waiting on you** next. Only each house's current offer
+counts; a house passed more than 30 days ago isn't in play. Clicking a row
+opens the agent's lead offer in the Offers split's pane (`OfferPane`), the
+list shrunk to a rail (J/K, Esc). Loads on open and on Refresh — no poll.
+
+This is the daily walk through GHL's Tier 1 stage and the Offers tab, done
+from the app's own record.
+
 ### Today's three groups, and the brake (2026-09-17)
 
 **The groups.** Every action `buildPipeline` emits carries `group` (`groupFor`,

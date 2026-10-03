@@ -26,6 +26,7 @@ import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
 import ConversationAi from "./ConversationAi.jsx";
 import PipelineView from "./PipelineView.jsx";
+import InPlayView from "./InPlayView.jsx";
 import FlowView from "./FlowView.jsx";
 import LineView from "./LineView.jsx";
 import AutopilotView from "./AutopilotView.jsx";
@@ -78,8 +79,9 @@ const NAV =
     : APP_MODE === "dashboard"
     ? [
         // The Desk (2026-10-02): one row per person — Call · Decide · Machine.
+        // In play: every agent with something live (the board is its "By house").
         { view: "pipeline", label: "Desk" },
-        { view: "board", label: "Board" },
+        { view: "inplay", label: "In play" },
       ]
     : APP_MODE === "autopilot"
     ? [
@@ -126,7 +128,8 @@ const APP_TITLE =
 
 // "new" is reachable but not a tab — it's the primary button in the header and
 // the target of the ?offer_id= deep link, so it still has to be a valid view.
-const VIEWS = new Set([...NAV.map((n) => n.view), "new"]);
+// "board" (Today's old tab) still opens: it is In play, by house.
+const VIEWS = new Set([...NAV.map((n) => n.view), "new", ...(APP_MODE === "dashboard" ? ["board"] : [])]);
 
 function readParam(name) {
   try {
@@ -341,7 +344,8 @@ export default function OfferApp() {
         )}
         {view === "conversation" && <ConversationAi settings={settings} />}
         {view === "pipeline" && <PipelineView section="queue" settings={settings} />}
-        {view === "board" && <PipelineView section="board" />}
+        {view === "inplay" && <InPlayView settings={settings} />}
+        {view === "board" && <InPlayView settings={settings} initialMode="house" />}
         {view === "controls" && <AutopilotView />}
         {view === "lessons" && <LessonsTab onSettingsSaved={(s) => setSettings(s)} />}
         {view === "flow" && <FlowView />}
