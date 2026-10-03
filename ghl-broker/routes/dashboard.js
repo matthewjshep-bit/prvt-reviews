@@ -66,7 +66,7 @@ const PIPELINE_EVENT_LIMIT = 5000;
 const PIPELINE_EVENT_TYPES = [
   "blast_sent", "dataroom_sent", "dataroom_viewed",
   "investor_evaluating", "investor_committed", "investor_passed",
-  "follow_up_sent", "text_summary", "call_summary",
+  "follow_up_sent", "text_summary", "call_summary", "call_attempt",
   "outreach_sent",
   "promise_made", "promise_owed", "promise_kept",
   "underwrite_dropped",

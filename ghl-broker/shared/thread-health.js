@@ -16,6 +16,7 @@
 import { DEAD_STATUSES, LIVE_DEAL_STAGES, effectiveStatus } from "./offer-status.js";
 import { OVER_PLAIN } from "./held-underwrites.js";
 import { botHold, holdLine } from "./bot-hold.js";
+import { callEventConnected } from "./talked-to.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -38,6 +39,11 @@ export const STOP_LABEL = {
 export const UNANSWERED_LIMIT = 2;
 // A thread a person answered by hand is theirs for this long.
 export const PERSON_HAS_IT_DAYS = 3;
+// A phone conversation (the GHL dialer's transcript, or one Matt logged by
+// hand) is his for this long: a nudge landing on top of a call he just had
+// undoes it. The call's own follow-up text is the reply agent's, not a
+// driver's, so it is not held by this.
+export const CALL_HAS_IT_HOURS = 48;
 // The timeline event a text typed on Today's work pane writes
 // (ghl-broker/hand-reply.js).
 export const HAND_REPLY_EVENT = "hand_reply";
@@ -110,6 +116,10 @@ export function threadHealth({ offer = null, drafts = [], events = [], now = Dat
   // carry answeredBy; its timeline event says the same thing.
   const typed = (events || []).find((e) => e?.type === HAND_REPLY_EVENT && now - (ms(e.at) ?? 0) <= PERSON_HAS_IT_DAYS * DAY_MS);
   if (typed) return stop("person_has_it", "", typed.at);
+  const call = (events || []).find((e) => callEventConnected(e) && now - (ms(e.at) ?? 0) <= CALL_HAS_IT_HOURS * 3600000 && (ms(e.at) ?? 0) <= now);
+  // `via: "call"`: the promise driver still keeps a number promised on that
+  // very call (ghl-broker/promise-driver.js) — the brake is for nudges.
+  if (call) return { ...stop("person_has_it", "you spoke on the phone", call.at), via: "call" };
 
   const n = unansweredMachineTexts(drafts, events);
   if (n >= UNANSWERED_LIMIT) return stop("two_unanswered", `${n} texts from us since they last wrote, nothing back`);
