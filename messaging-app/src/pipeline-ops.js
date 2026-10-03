@@ -59,7 +59,8 @@ export async function runOp(key, item, extra = null) {
       const patch = askFellThrough(item);
       return patch ? updateDeal(item.offerId, patch) : null;
     }
-    case "advance":            return updateDeal(item.offerId, { stage: "buyer_found" });
+    // A committed buyer → buyer found; a signed assignment → assigned (item.advanceTo).
+    case "advance":            return updateDeal(item.offerId, { stage: item.advanceTo || "buyer_found" });
     case "ask_agent_window":   return askAgentForWindow(item.offerId);
     case "tick_task":          return updateDealChecklist(item.offerId, { id: item.taskId, done: true });
     case "match_investors":    return matchInvestorsToDeal(item.offerId);

@@ -212,6 +212,23 @@ test("an investor with a blast and a later dataroom view shows as opened, matche
   assert.equal(inv[0].viewCount, 2);
 });
 
+// 2026-10-02 review: after buyer found every stage move was by hand, and
+// nothing said when the assignment had come back signed.
+test("a signed assignment asks to move the deal to assigned", async () => {
+  const { normalizeChecklist } = await import("./deal-checklist.js");
+  const checklist = normalizeChecklist(null);
+  const signed = { ...checklist, items: checklist.items.map((i) => (i.id === "assignment_signed" ? { ...i, done: true, doneAt: D(0) } : i)) };
+  const r = build({ offers: [deal({}, { stage: "buyer_found", checklist: signed, investors: [{ contactId: "b1", name: "Ray", status: "committed" }] })] });
+  const lag = r.actions.find((a) => a.kind === "stage_lag");
+  assert.ok(lag, "a row");
+  assert.match(lag.title, /assignment is signed/);
+  assert.equal(lag.advanceTo, "assigned");
+  assert.equal(lag.ops[0].label, "Move to assigned");
+  // Not signed yet: nothing to move.
+  const notYet = build({ offers: [deal({}, { stage: "buyer_found", checklist, investors: [{ contactId: "b1", name: "Ray", status: "committed" }] })] });
+  assert.equal(kinds(notYet).includes("stage_lag"), false);
+});
+
 test("a committed investor shows committed and flags a stage lag while the deal is still under contract", () => {
   const lag = build({ offers: [deal({}, { investors: [{ contactId: "b1", name: "Ray", status: "committed", addedAt: D(1) }] })] });
   assert.equal(lag.cards[0].deal.investors[0].state, "committed");
