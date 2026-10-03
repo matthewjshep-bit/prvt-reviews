@@ -155,3 +155,19 @@ test("a move that throws is reported and does not stop the rest", async () => {
   assert.equal(r.results.filter((x) => x.status === "error").length, 1);
   assert.equal(s.calls.float.length, 1);
 });
+
+// The call brake (2026-10-02) stops nudges for 48h after a real phone call.
+// A number promised ON that call is the call's own business, and still goes.
+test("a number promised on a phone call still goes out; a call before the promise holds it", async () => {
+  const call = (hoursAgo) => ({ contactId: "c1", type: "call_summary", at: at(hoursAgo), source: "call", dedupeKey: `call:${hoursAgo}`, data: { transcribed: true, durationSec: 300, summary: "Talked it through." } });
+  const onCall = fakeStore({ events: [call(5.1), made(5)], offers: [priced()] });
+  const s1 = spies();
+  await drive(onCall, s1.deps);
+  assert.equal(s1.calls.float.length, 1, "promised on the call: kept");
+
+  const afterCall = fakeStore({ events: [made(5), call(3)], offers: [priced()] });
+  const s2 = spies();
+  const r = await drive(afterCall, s2.deps);
+  assert.equal(s2.calls.float.length, 0, "a call after the promise: the person has it");
+  assert.ok(r.results.some((x) => x.status === "stopped" && x.reason === "person_has_it"), JSON.stringify(r.results));
+});

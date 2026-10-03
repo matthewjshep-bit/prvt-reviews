@@ -22,6 +22,9 @@ import { searchConversations, listConversationMessages, getContact } from "../gh
 import { syncContactGmail, contactEmails } from "../gmail-sync.js";
 import { sendHandReply } from "../hand-reply.js";
 import { contactTimeline } from "../contact-timeline.js";
+import { CALL_OUTCOMES } from "../shared/talked-to.js";
+
+const DAY_MS = 86400000;
 
 // The same switch every other send reads (routes/offers.js).
 const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
@@ -162,10 +165,27 @@ export default function createContactsRouter({ resolveLocation }) {
     try {
       const { locationId } = resolveLocation(req);
       const contactId = str(req.params.id, 64);
-      const type = ["note", "call_summary", "text_summary"].includes(req.body?.type) ? req.body.type : "note";
+      const type = ["note", "call_summary", "text_summary", "call_attempt"].includes(req.body?.type) ? req.body.type : "note";
+      const at = req.body?.at && Number.isFinite(Date.parse(req.body.at)) ? new Date(req.body.at).toISOString() : new Date().toISOString();
+      // A call that didn't connect (the Desk's chips): an outcome and maybe a
+      // date to try again — no words, so nothing personal is stored.
+      if (type === "call_attempt") {
+        const outcome = CALL_OUTCOMES.includes(req.body?.outcome) ? req.body.outcome : null;
+        if (!outcome) return res.status(400).json({ error: `outcome must be one of ${CALL_OUTCOMES.join(", ")}` });
+        const back = Date.parse(req.body?.callBackAt || "");
+        if (outcome === "call_back" && !(Number.isFinite(back) && back > Date.now() - DAY_MS && back < Date.now() + 60 * DAY_MS)) {
+          return res.status(400).json({ error: "callBackAt must be a date within the next 60 days" });
+        }
+        const r = await recordEvent({
+          store, locationId, contactId, party: ["agent", "investor"].includes(req.body?.party) ? req.body.party : null,
+          type, at, address: str(req.body?.address, 200), offerId: str(req.body?.offerId, 64) || null,
+          source: "operator", ref: null, dedupeKey: `call_attempt:${contactId}:${at}`,
+          data: { outcome, ...(outcome === "call_back" ? { callBackAt: new Date(back).toISOString() } : {}) },
+        });
+        return res.json({ ok: true, event: r.event });
+      }
       const text = str(req.body?.text, 2000);
       if (!text) return res.status(400).json({ error: "text required" });
-      const at = req.body?.at && Number.isFinite(Date.parse(req.body.at)) ? new Date(req.body.at).toISOString() : new Date().toISOString();
       const r = await recordEvent({
         store, locationId, contactId, party: ["agent", "investor"].includes(req.body?.party) ? req.body.party : null,
         type, at, address: str(req.body?.address, 200), offerId: str(req.body?.offerId, 64) || null,

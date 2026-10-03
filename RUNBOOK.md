@@ -2507,6 +2507,32 @@ named on the phone still parks. "Stop" said in a call is a word, not an
 opt-out. Calls under 40 transcript characters are recorded and skipped.
 `GET /api/offers/automations/call` lists recent intake jobs.
 
+**A call that didn't connect is an attempt (2026-10-02).** Before, a call that
+rang out was a bare `call_summary`, and every reader took that as "they
+answered": the nudge ladder re-anchored, the "they replied" chip lit, Reports
+counted a reply. Now `connectedCall` (`shared/talked-to.js`) decides: a
+status that says nobody picked up, or under 30 seconds with no transcript, or
+a voicemail greeting under 40 characters, is a **`call_attempt`** event
+(`data: { outcome: "no_answer" | "voicemail", direction, durationSec }`, key
+`call:<messageId>`, no words). A long call GHL couldn't transcribe is still a
+`call_summary`. The Desk's chips write the same event by hand through
+`POST /api/contacts/:id/events {type: "call_attempt", outcome, callBackAt?}`
+(`outcome` is `no_answer`, `voicemail` or `call_back`; a call back needs a date
+inside 60 days). Expect Reports' "replied" counts to drop a little: our
+missed calls no longer count. **Their** missed call (inbound) is both: a
+`call_attempt` (key `call_attempt:<messageId>`, the Desk's "they called you")
+and, as before, a bare `call_summary` so the ladders and the check-in still
+see them reaching out — never read as a conversation. With no transcript the
+call is read once more before deciding, in case its length landed late.
+
+**After a real call the machine stays off the thread for 48 hours**
+(`CALL_HAS_IT_HOURS`, `shared/thread-health.js`): a connected `call_summary`
+(transcribed, or logged by hand) makes the brake read `person_has_it` —
+"you spoke on the phone" — so no nudge, float or push lands on top of the
+conversation. The call's own follow-up text comes from the reply agent, not a
+driver, and is not held by it; and a number promised **on** that call is still
+sent by the promise driver (`via: "call"`, a promise made at or after the call).
+
 ### Booking calls (the calendar as a guard)
 
 Conversation AI page → "Booking calls". Pick a calendar (needs

@@ -15,6 +15,7 @@ import { store as defaultStore } from "./store.js";
 import { searchConversations, listConversationMessages, getMessageTranscription } from "./ghl.js";
 import { startReply } from "./reply-agent.js";
 import { recordEvent } from "./contact-record.js";
+import { connectedCall } from "./shared/talked-to.js";
 
 export const POLL_MS = 30 * 1000;
 export const MAX_POLLS = 20;              // ~10 minutes
@@ -118,7 +119,7 @@ async function run(job, { client, locationId, saved, store, sendsEnabled, deps }
 
   // Already read? The event's key is the call itself.
   const dedupeKey = `call:${call.id}`;
-  const seen = await store.listContactEvents?.(locationId, job.contactId, { types: ["call_summary"], limit: 50 }).catch(() => []) || [];
+  const seen = await store.listContactEvents?.(locationId, job.contactId, { types: ["call_summary", "call_attempt"], limit: 50 }).catch(() => []) || [];
   if (seen.some((e) => e.dedupeKey === dedupeKey)) { job.status = "done"; job.skipped = "this call was already read"; job.finishedAt = iso(); return; }
 
   job.phase = "waiting for the transcript";
@@ -129,12 +130,39 @@ async function run(job, { client, locationId, saved, store, sendsEnabled, deps }
     job.polls++;
     if (i < maxPolls - 1) await sleep(pollMs);
   }
+  // A call nobody picked up (or a voicemail greeting) is an attempt, not a
+  // conversation: a call_summary reads as "they answered" everywhere — the
+  // ladders re-anchor on it and the "they replied" chip lights. No words.
+  // They called and nobody picked up: an attempt for the Desk's call list
+  // ("they called you"), and still them reaching out as far as the ladders and
+  // the check-in go — a bare call_summary, as before, that no reader counts as
+  // a conversation (talked-to.js callEventConnected).
+  const attempt = async (why) => {
+    const inbound = call.direction === "inbound";
+    await recordEvent({ store, locationId, contactId: job.contactId, type: "call_attempt", at: call.at, source: "call", ref: call.id,
+      dedupeKey: inbound ? `call_attempt:${call.id}` : dedupeKey,
+      data: { outcome: /voicemail/i.test(call.status || "") ? "voicemail" : "no_answer", direction: call.direction, durationSec: call.durationSec } });
+    if (inbound) {
+      await recordEvent({ store, locationId, contactId: job.contactId, type: "call_summary", at: call.at, source: "call", ref: call.id, dedupeKey,
+        data: { direction: call.direction, durationSec: call.durationSec, summary: "(they called, missed)", transcribed: false } });
+    }
+    job.status = "done"; job.skipped = why; job.finishedAt = iso();
+  };
+  // No transcript after the wait: read the call again — its length and status
+  // may have landed since the first look.
+  if (!transcript) {
+    const again = await find({ locationId, contactId: job.contactId, messageId: call.id }).catch(() => null);
+    if (again) call = { ...call, durationSec: again.durationSec || call.durationSec, status: again.status || call.status };
+  }
+  const talked = connectedCall({ durationSec: call.durationSec, status: call.status });
+  if (!transcript && !talked) return attempt("nobody picked up");
   if (!transcript) {
     await recordEvent({ store, locationId, contactId: job.contactId, type: "call_summary", at: call.at, source: "call", ref: call.id, dedupeKey,
       data: { direction: call.direction, durationSec: call.durationSec, summary: "(call, no transcript available)", transcribed: false } });
     job.status = "done"; job.skipped = "no transcript from GHL — is call transcription on for this number?"; job.finishedAt = iso(); return;
   }
   job.transcriptChars = transcript.length;
+  if (transcript.length < MIN_TRANSCRIPT_CHARS && !talked) return attempt("a voicemail or a hang-up, not a conversation");
   if (transcript.length < MIN_TRANSCRIPT_CHARS) {
     await recordEvent({ store, locationId, contactId: job.contactId, type: "call_summary", at: call.at, source: "call", ref: call.id, dedupeKey,
       data: { direction: call.direction, durationSec: call.durationSec, summary: transcript, transcribed: true, tooShort: true } });

@@ -120,3 +120,25 @@ test("a hand reply keeps the machine off the thread for three days", () => {
   assert.equal(h.reason, "person_has_it");
   assert.equal(health({ drafts: [theirs("what's your timeline?", 6)], events: [typed(4)] }).drive, true, "three days on, it is the machine's again");
 });
+
+// The Desk (2026-10-02): Matt's calls are the point. A nudge landing on top
+// of a phone conversation he just had undoes it.
+test("a call you had yesterday keeps the machine off the thread for two days", () => {
+  const call = (d, data = {}) => ({ type: "call_summary", at: ago(d), source: "call", data: { summary: "Talked it through.", transcribed: true, durationSec: 240, ...data } });
+  const h = health({ drafts: [theirs("what's your timeline?", 3)], events: [call(1)] });
+  assert.equal(h.drive, false);
+  assert.equal(h.reason, "person_has_it");
+  assert.match(h.detail, /phone/);
+  assert.equal(health({ drafts: [theirs("what's your timeline?", 5)], events: [call(2.5)] }).drive, true, "two days on, it is the machine's again");
+  assert.equal(h.via, "call", "says it was a call, so a promise made on it can still be kept");
+  // A call you logged by hand from your own phone counts the same.
+  assert.equal(health({ drafts: [], events: [call(0.5, { transcribed: undefined, durationSec: undefined })] }).drive, false);
+});
+
+test("a call nobody picked up doesn't", () => {
+  const attempt = { type: "call_attempt", at: ago(0.2), source: "operator", data: { outcome: "no_answer" } };
+  assert.equal(health({ drafts: [theirs("what's your timeline?", 3)], events: [attempt] }).drive, true);
+  // Nor does an old-style bare call row from a call that rang out.
+  const rangOut = { type: "call_summary", at: ago(0.2), source: "call", data: { summary: "(call, no transcript available)", transcribed: false, durationSec: 8 } };
+  assert.equal(health({ drafts: [theirs("what's your timeline?", 3)], events: [rangOut] }).drive, true);
+});

@@ -13,6 +13,8 @@
 
 export const TALK_MIN_REPLIES = 2;
 export const CALL_MIN_SECONDS = 30;
+// A call that didn't connect, as the Desk's chips (and call-intake) say it.
+export const CALL_OUTCOMES = ["no_answer", "voicemail", "call_back"];
 
 // Tags that mean "do not contact" — they never count as a relationship,
 // whatever the thread says.
@@ -22,6 +24,39 @@ const typeOf = (m) => String(m?.messageType || m?.type || "").toUpperCase();
 const isCall = (m) => typeOf(m).includes("CALL");
 // Voicemail drops, activity rows and the like aren't somebody talking to us.
 const isNoise = (m) => /VOICEMAIL|ACTIVITY|OPPORTUNITY|REVIEW|CUSTOM_PROVIDER_CALL_LOG/.test(typeOf(m));
+
+/**
+ * connectedCall({ durationSec, status }) → boolean
+ *
+ * Did somebody actually talk? For a call GHL couldn't (or didn't) transcribe,
+ * or whose transcript is a voicemail greeting. A status that says nobody
+ * picked up wins; then the length (CALL_MIN_SECONDS); then a completed /
+ * answered status. An unknown length and status is not a conversation.
+ */
+export function connectedCall({ durationSec, status = "" } = {}) {
+  const st = String(status || "").toLowerCase();
+  if (/no.?answer|busy|fail|cancel|voicemail|missed|unanswered/.test(st)) return false;
+  const secs = Number(durationSec);
+  if (Number.isFinite(secs) && secs > 0) return secs >= CALL_MIN_SECONDS;
+  return st === "completed" || st === "answered";
+}
+
+/**
+ * callEventConnected(event) → boolean
+ *
+ * A call_summary on the timeline that was a conversation. Since 2026-10-02 a
+ * call that rang out is a call_attempt, but older rows carry the call that
+ * rang out as a bare call_summary (no transcript, a few seconds, or a
+ * voicemail greeting) — those were never a person talking. A call logged by
+ * hand from Matt's own phone has no length and is taken at his word.
+ */
+export function callEventConnected(e) {
+  if (e?.type !== "call_summary") return false;
+  const d = e.data || {};
+  if (d.tooShort === true) return false;
+  if (d.transcribed === false) return connectedCall({ durationSec: d.durationSec, status: d.status });
+  return true;
+}
 
 function callConnected(m) {
   const meta = m?.meta?.call || m?.meta || {};

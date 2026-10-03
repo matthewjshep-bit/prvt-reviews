@@ -86,7 +86,11 @@ export async function driveOpenPromises({ client = null, locationId, saved = {},
       // thread, or two texts of ours are already sitting unanswered.
       const about = offers.find((o) => p.address && o.address && sameStreet(o.address, p.address)) || null;
       const health = threadHealth({ offer: about, drafts, events: timeline, now });
-      if (!health.drive) { row.status = "stopped"; row.reason = health.reason; continue; }
+      // A number promised on the phone call itself ("I'll text you our number
+      // tonight") is still kept: the call's 48h brake is for nudges, not for
+      // what the call promised.
+      const promisedOnCall = health.via === "call" && String(p.since || "") >= String(health.since || "");
+      if (!health.drive && !promisedOnCall) { row.status = "stopped"; row.reason = health.reason; continue; }
 
       // The held triage needs GHL's word on them (unsubscribed, bot-off tag, a
       // lost opportunity) before anything is asked or re-run: the same two

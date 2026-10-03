@@ -67,6 +67,46 @@ test("intake waits for the transcript, then hands it to the reply pipeline as a 
   assert.equal(store2.events[0].data.transcribed, false);
 });
 
+// The Desk (2026-10-02): a call that rang out was filed as a call_summary,
+// which every reader takes as "they answered" — it re-anchored the nudge
+// ladder, lit the "they replied" chip and counted in Reports. Matt is going to
+// dial a lot more; a voicemail is an attempt.
+test("a call nobody picked up is an attempt, not them answering", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  const saved = { aiApiKey: "k", conversationAi: { enabled: true } };
+  const deps = { findCall: async () => ({ id: "m1", direction: "outbound", at: "2026-10-02T17:50:00Z", durationSec: 9, status: "no-answer" }), transcript: async () => null, pollMs: 1, maxPolls: 2 };
+  const { job } = await startCallIntake({ client: {}, locationId: "L", saved, store, contactId: "c1", deps });
+  await settle(40);
+  assert.equal(job.status, "done");
+  assert.equal(store.events.length, 1);
+  assert.equal(store.events[0].type, "call_attempt");
+  assert.equal(store.events[0].data.outcome, "no_answer");
+  assert.equal(store.events[0].data.direction, "outbound");
+  assert.equal(store.events[0].dedupeKey, "call:m1");
+  // Read once: the poller finding the same call again is a no-op.
+  _resetJobs();
+  await startCallIntake({ client: {}, locationId: "L", saved, store, contactId: "c1", messageId: "m1", deps });
+  await settle(40);
+  assert.equal(store.events.length, 1);
+
+  // A short voicemail greeting is not a conversation either.
+  _resetJobs();
+  const vm = fakeStore();
+  await startCallIntake({ client: {}, locationId: "L", saved, store: vm, contactId: "c2",
+    deps: { ...deps, findCall: async () => ({ id: "m2", direction: "outbound", at: "2026-10-02T17:52:00Z", durationSec: 14, status: "completed" }), transcript: async () => "THEM: leave a message" } });
+  await settle(40);
+  assert.equal(vm.events[0].type, "call_attempt");
+
+  // A long call GHL couldn't transcribe is still a call.
+  _resetJobs();
+  const talked = fakeStore();
+  await startCallIntake({ client: {}, locationId: "L", saved, store: talked, contactId: "c3",
+    deps: { ...deps, findCall: async () => ({ id: "m3", direction: "inbound", at: "2026-10-02T17:55:00Z", durationSec: 260, status: "completed" }) } });
+  await settle(40);
+  assert.equal(talked.events[0].type, "call_summary");
+});
+
 test("the poller finds calls that ended since the cursor and reads each once", async () => {
   _resetJobs();
   const now = Date.parse("2026-09-10T18:00:00Z");
@@ -96,4 +136,17 @@ test("the poller finds calls that ended since the cursor and reads each once", a
   assert.equal(store.cursors.get("L|calls").at, "2026-09-10T17:55:00.000Z", "the cursor moves to the newest call seen");
   // switched off in the config: nothing
   assert.equal(await maybeSweepCalls({ client, locationId: "L", saved: { aiApiKey: "k", conversationAi: { enabled: true, callIntake: { enabled: false } } }, store, now }), 0);
+});
+
+test("they called and nobody picked up: an attempt for the call list, and still them reaching out for the ladders", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  const saved = { aiApiKey: "k", conversationAi: { enabled: true } };
+  await startCallIntake({ client: {}, locationId: "L", saved, store, contactId: "c7",
+    deps: { findCall: async () => ({ id: "m7", direction: "inbound", at: "2026-10-02T17:50:00Z", durationSec: 0, status: "no-answer" }), transcript: async () => null, pollMs: 1, maxPolls: 1 } });
+  await settle(40);
+  const types = store.events.map((e) => e.type).sort();
+  assert.deepEqual(types, ["call_attempt", "call_summary"]);
+  assert.equal(store.events.find((e) => e.type === "call_attempt").data.direction, "inbound");
+  assert.equal(store.events.find((e) => e.type === "call_summary").data.transcribed, false, "never read as a conversation");
 });
