@@ -9,11 +9,12 @@
 import { ACTION_GROUPS, ACTION_KINDS } from "@shared/pipeline.js";
 import { AUDIT_ACTION_KINDS } from "@shared/conversation-audit.js";
 import { DESK_SECTIONS } from "@shared/desk.js";
+import { CALL_KINDS } from "@shared/call-list.js";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
 import { OPEN_STATUSES, effectiveStatus } from "@shared/offer-status.js";
 
 export const GROUP_ORDER = ["yours", "stuck", "machine"];
-export const ALL_KINDS = [...ACTION_KINDS, ...AUDIT_ACTION_KINDS];
+export const ALL_KINDS = [...ACTION_KINDS, ...AUDIT_ACTION_KINDS, ...CALL_KINDS];
 const KIND_RANK = Object.fromEntries(ALL_KINDS.map((k, i) => [k.key, i]));
 export const KIND_LABEL = Object.fromEntries(ALL_KINDS.map((k) => [k.key, k.label]));
 export const GROUP_LABEL = Object.fromEntries(ACTION_GROUPS.map((g) => [g.key, g.label]));

@@ -126,13 +126,23 @@ export function foldKey(a) {
 function redundant(r, siblings) {
   const has = (pred) => siblings.some((s) => s !== r && pred(s));
   if (r.kind === "audit_owed" && r.findingKind === "promise_open_overdue") return has((s) => s.kind === "promise_owed");
-  if (r.kind === "audit_owed" && r.findingKind === "counter_stalled") return has((s) => (s.kind === "call_counter" || s.isCounter) && (!r.offerId || s.offerId === r.offerId));
-  if (r.kind === "hot_stalled") return has((s) => s.kind === "call_hot" && s.offerId === r.offerId);
-  if (r.kind === "draft_waiting" && r.isCounter) return has((s) => s.kind === "call_counter" && s.offerId === r.offerId);
+  // Only a live call row stands in for these: one the tries ran out on has
+  // gone back to the machine, and the row it replaced is the decision again.
+  const calling = (s, kind) => s.kind === kind && s.section === "call";
+  if (r.kind === "audit_owed" && r.findingKind === "counter_stalled") return has((s) => (calling(s, "call_counter") || s.isCounter) && (!r.offerId || s.offerId === r.offerId));
+  if (r.kind === "hot_stalled") return has((s) => calling(s, "call_hot") && s.offerId === r.offerId);
+  if (r.kind === "draft_waiting" && r.isCounter) return has((s) => calling(s, "call_counter") && s.offerId === r.offerId);
   return false;
 }
 
-const rankOf = (a) => [SECTION_RANK[a.section] ?? 9, STRENGTH[a.kind] ?? 99, -(Number(a.score) || 0), SEVERITY_RANK[a.severity] ?? 3];
+// How much a call is worth, for Call rows the call list didn't build and so
+// carry no score of their own (shared/call-list.js scores the rest).
+const CALL_FALLBACK = { hot_stalled: 98, draft_waiting: 88, audit_owed: 82, deal_interest_stalled: 80 };
+export const callScore = (a) => (a?.score != null && Number.isFinite(Number(a.score)) ? Number(a.score) : CALL_FALLBACK[a?.kind] ?? 50);
+// Call is worked by what a call is worth; the other sections by what the row is.
+const rankOf = (a) => (a.section === "call"
+  ? [SECTION_RANK.call, -callScore(a), STRENGTH[a.kind] ?? 99, SEVERITY_RANK[a.severity] ?? 3]
+  : [SECTION_RANK[a.section] ?? 9, STRENGTH[a.kind] ?? 99, 0, SEVERITY_RANK[a.severity] ?? 3]);
 function compare(x, y) {
   const a = rankOf(x), b = rankOf(y);
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
@@ -140,23 +150,31 @@ function compare(x, y) {
 }
 
 /**
- * foldDesk(reasons, { drafts, heldByOffer }) → { rows, counts }
+ * foldDesk(reasons, { drafts, heldByOffer, callCap }) → { rows, counts }
  *
  * rows: one per person (or deal, or lone row), the lead reason's fields plus
  *   section   where it sits
  *   also      the other reasons, strongest first, each with its own ops
  *   quiet     reasons that only repeat a stronger one (dismissed with it)
  *   reasonIds every reason's id, so an old ?row= link finds its person
- * Sections in order; inside one, by the lead's strength, then the call
- * list's score, then severity, then the order the reasons came in.
+ * Sections in order. Call by what the call is worth (the call list's
+ * score), the rest by the lead's strength, then severity, then the order the
+ * reasons came in. Call rows past `callCap` carry `later: true` — the rail
+ * keeps them behind "N more to call".
+ *
+ * A person the call list already tried `triesBeforeMachine` times (its row
+ * went to the machine) is not a call again through another reason: those
+ * reasons become decisions — mark them, or keep trying.
  */
-export function foldDesk(reasons = [], { drafts = [], heldByOffer = new Map() } = {}) {
+export function foldDesk(reasons = [], { drafts = [], heldByOffer = new Map(), callCap = Infinity } = {}) {
   const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
   const held = heldByOffer instanceof Map ? heldByOffer : new Map(Object.entries(heldByOffer || {}));
   const placed = (reasons || []).filter(Boolean).map((a, i) => {
     const d = a.kind === "draft_waiting" ? draftsById.get(a.draftId) : null;
     return { ...a, section: sectionFor(a, { draftsById, heldByOffer: held }), ...(d && isCounterDraft(d) ? { isCounter: true } : {}), _i: i };
   });
+  const spent = new Set(placed.filter((r) => String(r.kind).startsWith("call_") && r.section === "machine").map(foldKey));
+  for (const r of placed) if (r.section === "call" && !String(r.kind).startsWith("call_") && spent.has(foldKey(r))) r.section = "decide";
   const byKey = new Map();
   for (const r of placed) {
     const k = foldKey(r);
@@ -180,6 +198,8 @@ export function foldDesk(reasons = [], { drafts = [], heldByOffer = new Map() } 
     });
   }
   rows.sort((x, y) => compare(x, y) || x._i - y._i);
+  let calls = 0;
+  for (const r of rows) if (r.section === "call" && ++calls > callCap) r.later = true;
   const counts = Object.fromEntries(DESK_SECTIONS.map((s) => [s.key, 0]));
   for (const r of rows) counts[r.section] = (counts[r.section] || 0) + 1;
   return { rows: rows.map(({ _i, ...r }) => r), counts };

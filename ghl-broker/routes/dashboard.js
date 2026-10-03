@@ -54,6 +54,8 @@ import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, stillOwed, summarize as summarizeAudit } from "../shared/conversation-audit.js";
 import { foldDesk, heldVerdicts, nameRows, deskKpis, DESK_SECTIONS } from "../shared/desk.js";
+import { callList, briefFor, normalizeDesk } from "../shared/call-list.js";
+import { LAST_ACTIVITY_TYPES, INBOUND_EVENT_TYPES as LAST_IN_TYPES } from "../shared/last-activity.js";
 import { normalizeLineTargets } from "../shared/line.js";
 import { startCoach, coachReport, coachForContact, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
 
@@ -442,6 +444,23 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     return out;
   }
 
+  // When each contact last spoke to us, and when anyone last touched the
+  // thread either way — for the call list (who's engaged, which partner has
+  // gone quiet). Two reads of the whole timeline, so a minute's cache: the
+  // Desk polls every fifteen seconds.
+  const touchCache = new Map();
+  async function lastTouches(locationId) {
+    const hit = touchCache.get(locationId);
+    if (hit && Date.now() - hit.at < 60000) return hit.v;
+    const [ins, any] = await Promise.all([
+      store.lastContactActivity ? store.lastContactActivity(locationId, { types: LAST_IN_TYPES, inboundOnly: true }).catch(() => []) : [],
+      store.lastContactActivity ? store.lastContactActivity(locationId, { types: LAST_ACTIVITY_TYPES }).catch(() => []) : [],
+    ]);
+    const v = { lastIn: new Map(ins.map((r) => [r.contactId, r.at])), lastAny: new Map(any.map((r) => [r.contactId, r.at])) };
+    touchCache.set(locationId, { at: Date.now(), v });
+    return v;
+  }
+
   router.get("/pipeline", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
@@ -498,6 +517,14 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // "An agent").
       const names = await namesFor({ store, client, locationId, rows: [...(audit?.findings || []), ...out.actions] }).catch(() => ({}));
       out.actions = nameRows(out.actions, names);
+      // The call list (shared/call-list.js): who to call today and why. Its
+      // rows are the Desk's alone — the board and an older console read
+      // `actions` and never see them.
+      const deskSettings = normalizeDesk(saved?.desk);
+      const touches = await lastTouches(locationId).catch(() => ({ lastIn: new Map(), lastAny: new Map() }));
+      const unsubscribedIds = new Set(botEvents.filter((e) => e?.type === "unsubscribed").map((e) => e.contactId).filter(Boolean));
+      const callRows = nameRows(callList({ offers, cards: out.cards, actions: out.actions, drafts: [...drafts, ...recentDrafts], events,
+        lastIn: touches.lastIn, lastAny: touches.lastAny, unsubscribed: unsubscribedIds, settings: deskSettings, now }), names);
       // Those names can show you as well (a test text with no offer or draft).
       const auditRows = auditActions(audit, { now, names });
       const auditSelfIds = new Set([...selfIds, ...selfContactIds(auditRows, mine)]);
@@ -536,7 +563,9 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // The Desk (shared/desk.js): the same rows, one per person, in Call ·
       // Decide · Machine, and today against the line's targets. `actions`
       // stays as it was for the board and for a console that predates it.
-      const desk = foldDesk(shownActions.map(withFeedback), { drafts, heldByOffer: heldVerdicts(audit) });
+      const { actions: shownCalls } = applyDismissals(callRows, dismissedDoc, now);
+      const desk = foldDesk([...shownActions, ...shownCalls].map(withFeedback), { drafts, heldByOffer: heldVerdicts(audit), callCap: deskSettings.callCap });
+      for (const r of desk.rows) if (r.section === "call" && !r.call) r.call = briefFor(r, { cards: out.cards, offers });
       const kpis = deskKpis({ offers, cards: out.cards, events, targets: normalizeLineTargets(saved?.lineTargets), now });
       res.json({
         dismissedCount: dismissedRows.length,

@@ -6,7 +6,7 @@
 // person), what kind of row it is, how many other things ride on it, and a
 // dot for how soon. Click one, or J/K, and the pane beside it becomes that row.
 
-import React from "react";
+import React, { useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { SearchInput } from "./ui.jsx";
 import { SEV } from "./RowOps.jsx";
@@ -38,7 +38,11 @@ function RailRow({ item, selected, onSelect, taught }) {
  */
 export default function WorkRail({ rows = [], groups = TODAY_GROUPS, total = 0, selectedId, onSelect, filter = "", onFilter, machineOpen = false, onMachineOpen, isTaught = () => false }) {
   const byGroup = Object.fromEntries(groups.map((g) => [g.key, rows.filter((r) => groupOf(r, groups) === g.key)]));
-  const selectedGroup = groupOf(rows.find((r) => r.id === selectedId) || {}, groups);
+  const selectedRow = rows.find((r) => r.id === selectedId) || {};
+  const selectedGroup = groupOf(selectedRow, groups);
+  // Call rows past the day's cap (shared/desk.js `later`) wait behind "N more".
+  const [moreOpen, setMoreOpen] = useState(false);
+  const showLater = moreOpen || Boolean(selectedRow.later);
   return (
     <nav aria-label="Today's rows" className="flex h-full min-h-0 flex-col rounded-xl border border-slate-200 bg-white">
       <div className="shrink-0 border-b border-slate-100 p-2">
@@ -64,7 +68,20 @@ export default function WorkRail({ rows = [], groups = TODAY_GROUPS, total = 0, 
                 ? <button type="button" className="w-full text-left" onClick={() => onMachineOpen?.(!open)} aria-expanded={open} title={g.hint}>{heading}</button>
                 : <div title={g.hint}>{heading}</div>}
               {open && (items.length
-                ? <ul className="mt-1 space-y-0.5">{items.map((item) => <RailRow key={item.id} item={item} selected={item.id === selectedId} onSelect={onSelect} taught={isTaught(item)} />)}</ul>
+                ? (() => {
+                  const later = items.filter((i) => i.later);
+                  const shown = showLater ? items : items.filter((i) => !i.later);
+                  return (
+                    <>
+                      <ul className="mt-1 space-y-0.5">{shown.map((item) => <RailRow key={item.id} item={item} selected={item.id === selectedId} onSelect={onSelect} taught={isTaught(item)} />)}</ul>
+                      {later.length > 0 && (
+                        <button type="button" className="mt-1 w-full rounded-lg px-2.5 py-1 text-left text-xs font-semibold text-blue-700 hover:bg-slate-50" aria-expanded={showLater} onClick={() => setMoreOpen((v) => !v)}>
+                          {showLater ? "Show fewer" : `${later.length} more to call`}
+                        </button>
+                      )}
+                    </>
+                  );
+                })()
                 : <div className="mt-1 rounded-lg border border-dashed border-slate-200 px-3 py-3 text-center text-xs text-slate-500">{g.empty}</div>)}
             </section>
           );

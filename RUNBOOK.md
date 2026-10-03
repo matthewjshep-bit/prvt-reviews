@@ -2017,6 +2017,43 @@ Desk is Today's "Desk" tab (it was "Needs you"): the same rows, folded.
   for a console that predates the Desk (which then shows the old groups). A
   `?row=` link to any folded reason opens its person.
 
+### The call list — who to call today, and why (2026-10-02)
+
+The phone is Matt's job; everything else is the machine's. `callList`
+(`shared/call-list.js`) builds the Desk's Call rows from the book — before it,
+a hot offer reached Today only after two failed pushes, and GHL's Tier 1 stage
+was the call list he walked by hand. One reason per person, the strongest:
+
+| kind | when | score |
+|---|---|---|
+| `call_missed` | they called in the last 3 days and nobody picked up (an inbound `call_attempt`) | 105 |
+| `call_hot` | a current offer is Hot and not a deal — "get it written up" when the price is agreed (`pushesToPaper`), else "hear where the seller is" | 100 |
+| `call_counter` | a countered offer whose `counter.amount` is above ours — ours, theirs, the gap, and the band draft's ceiling | 90 |
+| `call_first_reply` | an outreach agent's first-ever reply that names a house (or is open to investors), within `firstReplyDays` | 70 |
+| `call_quiet` | `ladder_exhausted` / `gone_quiet` on an agent who has replied before (engaged or partner) | 60 |
+| `call_phone_only` | unsubscribed from texts with a house still open | 55 |
+| `call_partner` | an agent we've done business with, quiet `relationshipDays` (at most `relationshipPerDay`) | 30 |
+
+Rows the pipeline already put in Call (a wants-a-call draft, `hot_stalled`,
+`deal_interest_stalled`, last night's counters) get a brief from `briefFor`.
+Score drops a point a day as their last word ages (≤30) and 15 for each call
+that didn't connect. Anyone whose recent texts read as annoyed (or opted out,
+except `call_phone_only`) is never listed.
+
+**Every Call row** carries `call: { why, goal, opener, houses, tries, … }`. The
+opener is a template, never the model, and numbers are said the way Matt says
+them — `kText`, never rounded up past what we sent ("197.5K", not "198K").
+The pane shows it as the call card: **Call in GHL** (the dialer records it),
+the number, and three chips for a call that didn't connect.
+
+**What clears a row.** A connected call after the row's `since` (call-intake's
+transcript, or one logged by hand). A `call_attempt` lowers it for the day;
+`call_back` with a date hides it until then; after `triesBeforeMachine` calls
+with no answer it goes to the machine ("back to texting") and the person's
+other Call reasons become decisions. Rows past `callCap` wait behind "N more
+to call". Settings → The Desk's call list holds the five numbers
+(`saved.desk`, `normalizeDesk`). Nothing on the list sends anything.
+
 ### Today's three groups, and the brake (2026-09-17)
 
 **The groups.** Every action `buildPipeline` emits carries `group` (`groupFor`,

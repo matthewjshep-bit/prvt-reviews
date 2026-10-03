@@ -6,6 +6,9 @@
 //   • Call in GHL — their contact in GoHighLevel, whose dialer records and
 //     transcribes the call; the transcript reaches the thread on its own
 //     (POST /api/offers/automations/call).
+//   • Didn't connect? — No answer / Left voicemail / Call back on a date: a
+//     call_attempt on their record (no words), which the Desk's call list
+//     reads (shared/call-list.js).
 //   • Log the call — a call made from your own phone is invisible to the
 //     machine, so say what was agreed. It is a call_summary on their record
 //     (POST /api/contacts/:id/events), which the audit and the thread's last
@@ -16,11 +19,13 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { ExternalLink, Loader2, Phone, X } from "lucide-react";
-import { addContactEvent, getContactProfile, ghlContactUrl } from "./api.js";
+import { addContactEvent, getContactProfile, ghlContactUrl, logCallAttempt } from "./api.js";
 import { useLoad } from "./work-data.js";
 
 const ACT = "inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-40";
 const LINK = "flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-semibold hover:bg-slate-50";
+const CHIP = "rounded-full border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40";
+const tomorrowYmd = () => new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 
 /** telHref("(206) 555-0123") → "tel:+12065550123"; ten digits are taken as US. */
 export function telHref(phone) {
@@ -32,6 +37,43 @@ export function telHref(phone) {
 }
 
 export const recordKey = (contactId) => (contactId ? `record:${contactId}` : null);
+
+/** No answer · Left voicemail · Call back ▾ — what happened when it didn't connect. */
+export function CallOutcomes({ contactId, party = null, offerId = null, address = "", onLogged }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  const [backOpen, setBackOpen] = useState(false);
+  const [backDay, setBackDay] = useState(tomorrowYmd);
+  async function log(outcome, callBackAt = null) {
+    if (busy) return;
+    setBusy(true); setNote(null);
+    try {
+      await logCallAttempt(contactId, { outcome, callBackAt, party, offerId, address });
+      setNote({ tone: "green", text: outcome === "call_back" ? `Back on the list ${new Date(callBackAt).toLocaleDateString([], { month: "short", day: "numeric" })}.` : "Noted." });
+      setBackOpen(false);
+      onLogged?.();
+    } catch (e) {
+      setNote({ tone: "red", text: e.message || "That didn't save." });
+    } finally { setBusy(false); }
+  }
+  // 9am Pacific-ish on the day picked, in the browser's own clock.
+  const backAt = () => new Date(`${backDay}T09:00:00`).toISOString();
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5" role="group" aria-label="If the call didn't connect">
+      <button type="button" className={CHIP} disabled={busy} onClick={() => log("no_answer")}>No answer</button>
+      <button type="button" className={CHIP} disabled={busy} onClick={() => log("voicemail")}>Left voicemail</button>
+      <button type="button" className={CHIP} disabled={busy} aria-expanded={backOpen} onClick={() => setBackOpen((v) => !v)}>Call back…</button>
+      {backOpen && (
+        <span className="inline-flex items-center gap-1">
+          <input type="date" aria-label="Call back on" className="rounded-lg border border-slate-300 bg-white px-2 py-0.5 text-xs" value={backDay} min={tomorrowYmd()}
+            onChange={(e) => setBackDay(e.target.value)} />
+          <button type="button" className={ACT} disabled={busy || !backDay} onClick={() => log("call_back", backAt())}>Set</button>
+        </span>
+      )}
+      {note && <span className={`text-xs ${note.tone === "red" ? "text-red-700" : "text-emerald-700"}`}>{note.text}</span>}
+    </span>
+  );
+}
 
 /** The popover's contents; what the tests render. */
 export function CallPanel({ contactId, name = "", phone = "", loading = false, party = null, offerId = null, address = "" }) {
@@ -64,6 +106,10 @@ export function CallPanel({ contactId, name = "", phone = "", loading = false, p
           <ExternalLink size={14} className="shrink-0" />
           <span>Call in GHL<span className="block text-xs font-normal text-slate-500">Recorded and transcribed into the thread</span></span>
         </a>
+      </div>
+      <div className="border-t border-slate-100 pt-2">
+        <div className="mb-1 text-xs font-semibold text-slate-600">Didn't connect?</div>
+        <CallOutcomes contactId={contactId} party={party} offerId={offerId} address={address} />
       </div>
       <div className="border-t border-slate-100 pt-2">
         <label htmlFor="work-call-log" className="text-xs font-semibold text-slate-600">Log the call</label>
