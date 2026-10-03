@@ -129,6 +129,8 @@ export function applyScanSuggestion(state, suggestion, { photosAnalyzed = null }
     summary: sug.summary || "",
     photosAnalyzed,
     areas: Array.isArray(sug.areas) ? sug.areas : [],
+    // "none" | "some" | "heavy" — the cleanout a buyer would price.
+    contents: ["some", "heavy"].includes(sug.contents) ? sug.contents : "none",
     notes: [
       ...(sug.items || []).map((it) => ({ label: labelOf(it.id), note: it.note })),
       ...(sug.bathrooms || []).map((b, i) => ({ label: `Bathroom ${i + 1} — ${b.tier}`, note: b.note })),

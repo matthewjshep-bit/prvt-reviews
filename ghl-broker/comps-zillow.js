@@ -315,6 +315,10 @@ export function normalizeRow(r) {
     distance: null, // computed below — a Zillow row has no distance field
     url: url ? (String(url).startsWith("http") ? url : `https://www.zillow.com${url}`) : null,
     photo: (typeof r.mainImage === "string" ? r.mainImage : r.mainImage?.url) || r.imgSrc || null,
+    // The row's listing status — read for the for-sale pull (pullZillowActives),
+    // which must never treat a sale as a listing. Both actor shapes.
+    status: String(r.listingStatus ?? r.statusType ?? r.homeStatus ?? home.homeStatus ?? "").toUpperCase() || null,
+    daysOnZillow: num(r.daysOnZillow ?? home.daysOnZillow),
     source: "zillow",
   };
 }
@@ -341,6 +345,7 @@ export function mergeFacts(comps = [], facts = new Map()) {
       sqft: c.sqft || f.sqft || 0,
       beds: c.beds ?? f.beds ?? null,
       baths: c.baths ?? f.baths ?? null,
+      garage: typeof c.garage === "boolean" ? c.garage : (typeof f.garage === "boolean" ? f.garage : null),
       factsSource: "zillow-detail",
     };
   });
@@ -391,36 +396,7 @@ export async function pullZillowComps({
     sqft, sqftPct, homeType,
   });
 
-  let rows = cachedRows(url, limit);
-  if (!rows) {
-    const r = await fetch(
-      `https://api.apify.com/v2/acts/${ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}&timeout=180`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          searchUrls: [{ url }],
-          // MAP_MARKERS reads the map layer directly. It is the right mode for a
-          // box this small: pagination would walk a result list we've already
-          // constrained geographically, and zoom-in exists for boxes far bigger
-          // than half a mile.
-          extractionMethod: "MAP_MARKERS",
-          resultsLimit: limit,
-        }),
-        signal: AbortSignal.timeout(200000),
-      }
-    );
-    if (!r.ok) {
-      const detail = (await r.text()).slice(0, 300);
-      throw Object.assign(new Error(`Zillow comps lookup failed (Apify ${r.status})`), {
-        http: r.status === 401 || r.status === 403 ? 400 : 502,
-        detail,
-      });
-    }
-    const items = await r.json();
-    rows = Array.isArray(items) ? items : [];
-    rememberRows(url, limit, rows);
-  }
+  const rows = await searchRows(url, limit, apifyToken, "Zillow comps lookup");
 
   const origin = { lat, lng };
   const comps = rows
@@ -452,6 +428,110 @@ export async function pullZillowComps({
     // Without this count the first two are indistinguishable, and the note
     // blames the neighbourhood for a scrape that never worked.
     rows: rows.length,
+  };
+}
+
+// One search, bought once a day: the cache, then the actor.
+async function searchRows(url, limit, apifyToken, what) {
+  const hit = cachedRows(url, limit);
+  if (hit) return hit;
+  const r = await fetch(
+    `https://api.apify.com/v2/acts/${ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}&timeout=180`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        searchUrls: [{ url }],
+        // MAP_MARKERS reads the map layer directly. It is the right mode for a
+        // box this small: pagination would walk a result list we've already
+        // constrained geographically, and zoom-in exists for boxes far bigger
+        // than half a mile.
+        extractionMethod: "MAP_MARKERS",
+        resultsLimit: limit,
+      }),
+      signal: AbortSignal.timeout(200000),
+    }
+  );
+  if (!r.ok) {
+    const detail = (await r.text()).slice(0, 300);
+    throw Object.assign(new Error(`${what} failed (Apify ${r.status})`), {
+      http: r.status === 401 || r.status === 403 ? 400 : 502,
+      detail,
+    });
+  }
+  const items = await r.json();
+  const rows = Array.isArray(items) ? items : [];
+  rememberRows(url, limit, rows);
+  return rows;
+}
+
+/* ---------- today's listings ---------- */
+
+/**
+ * A Zillow for-sale search URL — the houses a buyer can see listed today
+ * (2026-10-02: "comparable houses are listed around 650k" on a 750k ARV).
+ * Same box, bands and type flags as the sold search; sold off, the for-sale
+ * kinds on, pending and coming-soon on when asked, new construction off (a
+ * new build isn't what a flip of an old house resells against). As with the
+ * sold search, every filter is re-applied in JS — Zillow ignores keys it
+ * doesn't know, and a sold row must never pass as a listing.
+ */
+export function activeSearchUrl({
+  lat, lng, radiusMiles = 1, beds = 0, baths = 0, sqft = 0, bedTolerance = 1, sqftPct = 0.3, homeType = null, includePending = true,
+}) {
+  const filterState = {
+    isRecentlySold: { value: false },
+    isForSaleByAgent: { value: true },
+    isForSaleByOwner: { value: true },
+    isNewConstruction: { value: false },
+    isComingSoon: { value: Boolean(includePending) },
+    isAuction: { value: false },
+    isForSaleForeclosure: { value: false },
+    ...(includePending ? { isPendingListingsSelected: { value: true }, isAcceptingBackupOffersSelected: { value: true } } : {}),
+    isAllHomes: { value: true },
+    sort: { value: "globalrelevanceex" },
+  };
+  if (beds > 0) filterState.beds = { min: Math.max(1, Math.round(beds) - bedTolerance), max: Math.round(beds) + bedTolerance };
+  if (baths > 0) filterState.baths = { min: Math.max(1, Math.floor(baths) - 1) };
+  if (homeType && HOME_TYPE_FLAGS[homeType]) {
+    filterState.isAllHomes = { value: false };
+    for (const [type, flag] of Object.entries(HOME_TYPE_FLAGS)) filterState[flag] = { value: type === homeType };
+  }
+  if (sqft > 0) filterState.sqft = { min: Math.round(sqft * (1 - sqftPct)), max: Math.round(sqft * (1 + sqftPct)) };
+  const state = { isMapVisible: true, isListVisible: true, mapBounds: boundsAround({ lat, lng, radiusMiles }), filterState };
+  return `https://www.zillow.com/homes/for_sale/?searchQueryState=${encodeURIComponent(JSON.stringify(state))}`;
+}
+
+// Statuses that are a sale, not a listing.
+const SOLD_STATUS = /SOLD|CLOSED|OFF_MARKET|OFF MARKET/;
+
+/**
+ * pullZillowActives({ apifyToken, lat, lng, beds, baths, sqft, radiusMiles, homeType, includePending })
+ *   → { rows, kept, searchUrl, listings: [...] }
+ *
+ * For-sale and pending houses in the ring, shaped like comps (no sale date),
+ * ids prefixed "a-" so a house that sold and relisted can't collide with its
+ * own sale. ~$0.15 a pull, cached a day by URL like the comps.
+ */
+export async function pullZillowActives({
+  apifyToken, lat, lng, beds = 0, baths = 0, sqft = 0, radiusMiles = 1, homeType = null, includePending = true, limit = 60,
+}) {
+  if (!(Number.isFinite(lat) && Number.isFinite(lng))) {
+    throw Object.assign(new Error("listings need the subject's coordinates"), { http: 400 });
+  }
+  const searchUrl = activeSearchUrl({ lat, lng, radiusMiles, beds, baths, sqft, homeType, includePending });
+  const rows = await searchRows(searchUrl, limit, apifyToken, "Zillow listings lookup");
+  const origin = { lat, lng };
+  const listings = rows
+    .map(normalizeRow)
+    .filter((c) => c.price > 0 && c.lat != null && c.lng != null && !c.saleDate && !SOLD_STATUS.test(c.status || ""))
+    .map((c) => {
+      const miles = milesBetween(origin, c);
+      return { ...c, id: `a-${c.id}`, distance: miles == null ? null : Math.round(miles * 100) / 100 };
+    });
+  return {
+    rows: rows.length, searchUrl,
+    listings: filterComps(listings, { beds, baths, sqft, monthsBack: 120, radiusMiles, bedTolerance: 1, bathTolerance: 1, sqftPct: 0.3, homeType }),
   };
 }
 

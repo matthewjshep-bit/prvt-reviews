@@ -205,6 +205,14 @@ async function fetchZillowDetail(address, apifyToken, { houseNo = "" } = {}) {
       homeType: item.homeType || null,
       // Duplex, triplex, fourplex — only asked of a multifamily.
       ...(item.homeType === "MULTI_FAMILY" ? { units: unitsFromDetail(item) } : {}),
+      // What a buyer reads off the listing card before anything else — the
+      // garage, the basement, sewer or septic, how long it's been listed.
+      // For the buyer-view checks and the package (houseFactsFromDetail).
+      house: houseFactsFromDetail(item),
+      // Zillow's own point for the house: comps are measured from Zillow's
+      // coordinates, so the street check measures the subject the same way.
+      point: Number.isFinite(Number(item.latitude)) && Number.isFinite(Number(item.longitude)) && Number(item.latitude) !== 0
+        ? { lat: Number(item.latitude), lng: Number(item.longitude) } : null,
     },
   };
 }
@@ -313,6 +321,7 @@ const factsCache = new Map();
 export function _resetFactsCache() { factsCache.clear(); }
 
 function factsFromDetail(item) {
+  const house = houseFactsFromDetail(item);
   return {
     yearBuilt: Number(item.yearBuilt) || Number(item.resoFacts?.yearBuilt) || null,
     lotSqft: lotSqftFromDetail(item),
@@ -323,6 +332,71 @@ function factsFromDetail(item) {
     units: unitsFromDetail(item) || null,
     lastSoldPrice: Number(item.lastSoldPrice ?? item.resoFacts?.lastSoldPrice) || null,
     lastSoldDate: item.dateSold ? new Date(item.dateSold).toISOString().slice(0, 10) : null,
+    // The comp's garage, so a no-garage subject is measured against comps
+    // that have one (shared/arv-checks.js compParity) — known only when the
+    // detail row says.
+    garage: house.hasGarage ?? (house.garageSpaces != null ? house.garageSpaces > 0 : null),
+  };
+}
+
+/**
+ * houseFactsFromDetail(item) → the house facts the buyer-view checks read
+ * (shared/house-facts.js normalizeHouse shape):
+ *   { aboveGradeSqft, belowGradeSqft, basement, garageSpaces, hasGarage,
+ *     sewer, water, hoa, daysOnMarket, priceCuts, listedAt, status }
+ *
+ * Tolerant on purpose. The field names follow Zillow's resoFacts, which the
+ * detail actor passes through, but they were NOT verified against a live row
+ * when this was written (2026-10-02, no Apify token on the dev box) — and the
+ * actor has renamed fields twice in a week before. So every fact is read from
+ * every place it's been seen, unknown stays null, and the first quiet
+ * backtest run lists which of these actually came back (RUNBOOK, "Buyer view
+ * checks").
+ */
+export function houseFactsFromDetail(item = {}) {
+  const r = item?.resoFacts || {};
+  const sqftOf = (v) => {
+    if (typeof v === "number") return v > 0 ? Math.round(v) : null;
+    const m = String(v ?? "").match(/[\d,]+(\.\d+)?/);
+    const n = m ? Number(m[0].replace(/,/g, "")) : NaN;
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+  };
+  const text = (...vs) => vs.flat().filter((v) => v != null && v !== "").map(String).join(" ").toLowerCase();
+  const spaces = Number(r.garageParkingCapacity ?? r.garageSpaces ?? item.garageSpaces ?? NaN);
+  const parking = text(r.parkingFeatures, item.parkingFeatures);
+  let hasGarage = typeof r.hasGarage === "boolean" ? r.hasGarage
+    : typeof r.garageYN === "boolean" ? r.garageYN
+    : typeof r.attachedGarageYN === "boolean" && r.attachedGarageYN ? true : null;
+  if (hasGarage == null && parking) hasGarage = /garage/.test(parking) ? true : /carport|off street|on street|driveway|none/.test(parking) ? false : null;
+  if (hasGarage == null && Number.isFinite(spaces)) hasGarage = spaces > 0;
+  const sewerText = text(r.sewer, item.sewer);
+  const assoc = Number(r.associationFee ?? r.hoaFee ?? item.monthlyHoaFee ?? NaN);
+  // A price cut is a "Price change" event at a lower price since the last
+  // listing; the history runs newest first on the detail page.
+  const history = Array.isArray(item.priceHistory) ? item.priceHistory : [];
+  let priceCuts = null;
+  let listedAt = null;
+  if (history.length) {
+    priceCuts = 0;
+    for (const h of history) {
+      const ev = String(h?.event || "").toLowerCase();
+      if (/listed for sale|listed/.test(ev)) { listedAt = Number(h.price) || listedAt; break; }
+      if (/price change/.test(ev) && (Number(h.priceChangeRate) < 0 || Number(h.priceChange) < 0)) priceCuts++;
+    }
+  }
+  return {
+    aboveGradeSqft: sqftOf(r.aboveGradeFinishedArea ?? item.aboveGradeFinishedArea),
+    belowGradeSqft: sqftOf(r.belowGradeFinishedArea ?? item.belowGradeFinishedArea),
+    basement: r.basement ? String(r.basement) : (r.basementYN === true ? "yes" : null),
+    garageSpaces: Number.isFinite(spaces) ? spaces : null,
+    hasGarage,
+    sewer: /septic/.test(sewerText) ? "septic" : /sewer|public/.test(sewerText) ? "public" : null,
+    water: text(r.waterSource) || null,
+    hoa: typeof r.hasAssociation === "boolean" ? r.hasAssociation : Number.isFinite(assoc) ? assoc > 0 : null,
+    daysOnMarket: Number.isFinite(Number(item.daysOnZillow ?? r.cumulativeDaysOnMarket ?? NaN)) ? Number(item.daysOnZillow ?? r.cumulativeDaysOnMarket) : null,
+    priceCuts,
+    listedAt,
+    status: item.listingStatus || item.homeStatus || null,
   };
 }
 
@@ -506,7 +580,7 @@ function makeScanSchema({ bathCount = 0, bedCount = 0 } = {}) {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["summary", "items", "bathrooms", "bedrooms", "areas", "custom"],
+    required: ["summary", "items", "bathrooms", "bedrooms", "areas", "contents", "custom"],
     $defs: {
       bathEntry: roomEntrySchema(BATH_TIERS),
       bedEntry: roomEntrySchema(BED_TIERS),
@@ -546,6 +620,13 @@ function makeScanSchema({ bathCount = 0, bedCount = 0 } = {}) {
         description: "Condition grade for every area of the property",
         required: [...SCAN_AREAS],
         properties: Object.fromEntries(SCAN_AREAS.map((a) => [a, { $ref: "#/$defs/areaEntry" }])),
+      },
+      // Belongings left behind are a cleanout a buyer prices (3511 NE 153rd:
+      // "a hoarder house"); the underwrite checks add a line for it.
+      contents: {
+        type: "string",
+        enum: ["none", "some", "heavy"],
+        description: "Furniture, belongings or junk left in the house that a buyer would have to clear: none, some (a room or two), heavy (full of contents / hoarding)",
       },
       custom: {
         type: "array",
@@ -645,6 +726,7 @@ export async function scanRehabFromPhotos({ photos, listing, subject, aiApiKey, 
       : "",
     `Also grade each of these areas (one entry per area, in this order): ${SCAN_AREAS.join(", ")}. ` +
     `Use "not_visible" when the photos don't show it.`,
+    `Say in "contents" how much is left in the house that a buyer would have to clear — furniture, belongings, junk: none, some, or heavy.`,
     (() => {
       const band = rehabBand(sqft);
       if (!band) return "";

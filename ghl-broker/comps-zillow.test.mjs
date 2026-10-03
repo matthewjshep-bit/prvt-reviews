@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { boundsAround, soldSearchUrl, filterComps, normalizeRow, pullZillowComps } from "./comps-zillow.js";
+import { boundsAround, soldSearchUrl, filterComps, normalizeRow, pullZillowComps, activeSearchUrl, pullZillowActives } from "./comps-zillow.js";
 
 const SUBJECT = { lat: 47.49, lng: -122.19 };
 const state = (url) => JSON.parse(decodeURIComponent(new URL(url).search.replace("?searchQueryState=", "")));
@@ -485,7 +485,7 @@ test("a boxful of 0.0.91 rows comes back as comps — the second time this was z
 
 /* ---------- unit counts: a triplex is comped against triplexes ---------- */
 
-import { unitsFromText, unitsFromDetail, filterByUnits, streetKey, mergeFacts } from "./comps-zillow.js";
+import { unitsFromText, unitsFromDetail, filterByUnits, streetKey, mergeFacts, _resetCompsCache } from "./comps-zillow.js";
 
 test("unit words in a listing read as a unit count", () => {
   assert.equal(unitsFromText("Hi Matt, the triplex is in excellent condition."), 3);
@@ -541,4 +541,41 @@ test("a detail row's year built lands on its search row, and nothing else is ove
   const [c] = mergeFacts([{ address: "10412 SE 219th St", sqft: 0, beds: null }], facts);
   assert.equal(c.sqft, 1700);
   assert.equal(c.beds, 4);
+});
+
+/* ---------- today's listings (buyer-view checks, 2026-10-02) ---------- */
+
+test("the for-sale search asks for listings, not sales, and leaves new construction out", () => {
+  const url = activeSearchUrl({ ...SUBJECT, radiusMiles: 1, beds: 3, baths: 1, sqft: 1300, homeType: "SINGLE_FAMILY" });
+  assert.match(url, /\/homes\/for_sale\//);
+  const f = state(url).filterState;
+  assert.equal(f.isRecentlySold.value, false);
+  assert.equal(f.isForSaleByAgent.value, true);
+  assert.equal(f.isNewConstruction.value, false);
+  assert.equal(f.isPendingListingsSelected.value, true, "pending is the nearest thing to a sale price");
+  assert.equal(f.isSingleFamily.value, true);
+  assert.equal(state(activeSearchUrl({ ...SUBJECT, includePending: false })).filterState.isPendingListingsSelected, undefined);
+});
+
+test("a sold row in the listings pull is dropped, ids never collide with a past sale, and the pull is bought once a day", async () => {
+  _resetCompsCache();
+  const row = (zpid, extra = {}) => ({ zpid, address: `${zpid} Main St, Renton, WA`, livingArea: 1300, latLong: { latitude: SUBJECT.lat + 0.002, longitude: SUBJECT.lng },
+    hdpData: { homeInfo: { zpid, price: 450000, livingArea: 1300, bedrooms: 3, bathrooms: 1, homeType: "SINGLE_FAMILY" } }, ...extra });
+  const rows = [row("1", { listingStatus: "FOR_SALE" }), row("2", { listingStatus: "PENDING" }), row("3", { listingStatus: "SOLD" }), row("4", { dateSold: "2026-08-01" })];
+  let n = 0;
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => { n++; return { ok: true, json: async () => rows }; };
+  try {
+    const a = await pullZillowActives({ apifyToken: "t", ...SUBJECT, beds: 3, baths: 1, sqft: 1300, homeType: "SINGLE_FAMILY" });
+    assert.deepEqual(a.listings.map((l) => l.id).sort(), ["a-1", "a-2"]);
+    assert.equal(a.listings.find((l) => l.id === "a-2").status, "PENDING");
+    await pullZillowActives({ apifyToken: "t", ...SUBJECT, beds: 3, baths: 1, sqft: 1300, homeType: "SINGLE_FAMILY" });
+    assert.equal(n, 1, "the second ask is free");
+  } finally { globalThis.fetch = real; }
+});
+
+test("a comp's garage comes from its detail row only when the row says", () => {
+  const facts = new Map([["1 main st", { garage: true }], ["2 main st", { garage: null }]]);
+  const out = mergeFacts([{ address: "1 Main St, X" }, { address: "2 Main St, X" }, { address: "3 Main St, X" }], facts);
+  assert.deepEqual(out.map((c) => c.garage), [true, null, undefined]);
 });
