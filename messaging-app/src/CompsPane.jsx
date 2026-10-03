@@ -195,14 +195,19 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
       ));
       // The buyer-view checks' lookups, fire-and-forget: the board is on
       // screen already, and the lines fill in when they land.
-      if (checks) runChecks(center, comps.comps || [], freshSubject);
+      if (checks) runChecks(center, comps.comps || [], freshSubject, pre);
     } catch (e) { setError(e.message); setState(null); }
     setLoading(false);
   }
 
-  async function runChecks(center, compsList, subjectRec) {
+  async function runChecks(center, compsList, subjectRec, firstIds = []) {
     setChecksBusy(true);
-    const points = [...compsList, ...captured].filter((c) => c?.id && c.lat != null && c.lng != null)
+    // The ticked comps first (they carry the ARV), then captures, then the
+    // rest by closeness: the street check measures only the first dozen.
+    const first = new Set([...firstIds, ...[...selected]]);
+    const all = [...compsList, ...captured].filter((c) => c?.id && c.lat != null && c.lng != null);
+    const dist = (c) => (c.distance ?? milesBetween(center, c) ?? 99);
+    const points = [...all.filter((c) => first.has(c.id)), ...all.filter((c) => !first.has(c.id)).sort((a, b) => dist(a) - dist(b))]
       .map((c) => ({ id: c.id, lat: c.lat, lng: c.lng, address: c.address || "" }));
     const [s, a] = await Promise.all([
       checks.site.enabled
