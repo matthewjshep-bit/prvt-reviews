@@ -239,13 +239,16 @@ export function markRenovatedByPrice(comps = [], { take = 4, minPool = PRICE_PRO
 // the subject has half of one — a buyer's partner put the ARV well under
 // 700k on exactly that. Known only for comps whose detail row was bought, so
 // like year built it leaves the denominator when either side is unknown.
-export const SIM_WEIGHTS = { distance: 25, sqft: 20, beds: 15, baths: 10, yearBuilt: 15, recency: 10, lot: 5, garage: 5 };
+// Year built went 15 → 20 and its taper 25 → 15 years on 2026-09-24 (Matt:
+// comps as close in age as they can be). The score divides by the known
+// weights, so the weights need not add to 100.
+export const SIM_WEIGHTS = { distance: 25, sqft: 20, beds: 15, baths: 10, yearBuilt: 20, recency: 10, lot: 5, garage: 5 };
 export const SIM_DISTANCE_FULL_MI = 0.25;  // 1.0 out to here, 0 at the ring edge
 export const SIM_SQFT_FULL_PCT = 10;       // 1.0 inside ±10% …
 export const SIM_SQFT_FULL_ABS = 300;      // … or ±300 sqft, whichever is wider (Matt's rule)
 export const SIM_SQFT_ZERO_PCT = 30;       // 0 at ±30%
 export const SIM_YEAR_FULL = 5;            // 1.0 inside ±5 years
-export const SIM_YEAR_ZERO = 25;           // 0 at ±25
+export const SIM_YEAR_ZERO = 15;           // 0 at ±15 — the pool's own era edge
 export const SIM_RECENCY_FULL_MO = 6;      // 1.0 inside six months
 export const SIM_RECENCY_ZERO_MO = 24;     // 0 at two years
 export const SIM_LOT_ZERO_PCT = 50;        // 0 at a lot half or twice the size
