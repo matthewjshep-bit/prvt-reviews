@@ -169,13 +169,23 @@ test("with the ladders off, a live offer reads 'None scheduled' and says why", (
 
 test("a priced offer nobody floated is the timer's for a day, then it's yours", () => {
   const timers = normalizeConversationAi({ ...CONFIG, driver: { timers: { enabled: true, floatAfterHours: 4 } } });
-  const fresh = nextFollowUp({ offer: offer({ status: "new", sends: [] }), config: timers, now: T0 + 0.1 * DAY });
+  const ai = (o) => offer({ status: "new", sends: [], autoUnderwrite: { jobId: "j1", passed: true }, ...o });
+  const fresh = nextFollowUp({ offer: ai(), config: timers, now: T0 + 0.1 * DAY });
   assert.equal(fresh.kind, "float");
   assert.equal(fresh.who, "machine");
-  const stuck = nextFollowUp({ offer: offer({ status: "new", sends: [] }), config: timers, now: T0 + 3 * DAY });
+  const stuck = nextFollowUp({ offer: ai(), config: timers, now: T0 + 3 * DAY });
   assert.equal(stuck.kind, "float");
   assert.equal(stuck.who, "you");
   assert.equal(stuck.overdue, true);
+});
+
+// The timer only ever floats what the machine priced (pipeline.js
+// timerMoves): a hand-made offer was shown as the machine's and never moved.
+test("a hand-made offer nobody sent is yours from the start, timers or not", () => {
+  const timers = normalizeConversationAi({ ...CONFIG, driver: { timers: { enabled: true, floatAfterHours: 4 } } });
+  const n = nextFollowUp({ offer: offer({ status: "new", sends: [] }), config: timers, now: T0 + 0.1 * DAY });
+  assert.equal(n.kind, "float");
+  assert.equal(n.who, "you");
 });
 
 test("an offer the agent is presenting shows a nudge, not a push to paper", () => {
