@@ -1,0 +1,13 @@
+{
+  "_what": "What buyers said each pitched house was worth (ARV) and would cost (rehab), from the 2026-10-02 read of every buyer thread. Midpoints of the ranges buyers gave; a field is left out where no buyer put a number on it. For: node scripts/underwrite-backtest.mjs --go --buyers scripts/backtest-buyers-2026-10.json",
+  "5232 South Yakima": { "arv": 362000, "rehab": 100000 },
+  "22018 76th Avenue West": { "arv": 667000, "rehab": 75000 },
+  "1415 2nd St": { "arv": 650000, "rehab": 155000 },
+  "23706 138th Dr SE": { "arv": 700000 },
+  "7034 South K Street": { "arv": 450000 },
+  "10836 Northeast 12th Place": { "arv": 1850000, "rehab": 175000 },
+  "2010 Northeast 54th Street": { "arv": 1200000, "rehab": 175000 },
+  "21904 Vashon Hwy SW": { "arv": 900000, "rehab": 275000 },
+  "3511 Northeast 153rd Street": { "rehab": 200000 },
+  "22740 SE 56th St": { "arv": 1850000, "rehab": 350000 }
+}

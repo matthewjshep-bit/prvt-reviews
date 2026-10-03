@@ -112,7 +112,10 @@ test("the scorecard says how far over the line each deal was", () => {
   assert.equal(e.underwrite.climb, 480000 - 465568);
   assert.equal(e.underwrite.revisions, 4);
   assert.equal(e.fellThroughCode, "buyers_passed_rehab");
-  assert.deepEqual(e.buyers.codedReasons.map((r) => `${r.code}:${r.count}`), ["area:2", "rehab_scope:2", "condition:1", "price:1"]);
+  // Since the 2026-10-02 split: Denis V's "busy rd", filed once as area and
+  // once as condition, is one street complaint; Richard R's "aggressive on
+  // the resale price" is an ARV objection, not a price one.
+  assert.deepEqual(e.buyers.codedReasons.map((r) => `${r.code}:${r.count}`), ["rehab_scope:2", "area:1", "arv:1", "location:1"]);
   assert.equal(e.days.toFirstPass, 3.9);
 
   const v = dealScorecard({ offer: vashon, settings: SETTINGS });
@@ -138,7 +141,9 @@ test("a feedback package sharpens the buyer counts and the reasons", () => {
   assert.equal(e.buyers.replyRate, 35);
   assert.deepEqual(e.buyers.askedFor, { n: 2, min: 440000, median: 445000, max: 450000 });
   assert.equal(e.days.toFirstReply, 0.1);
-  assert.ok(e.buyers.codedReasons.find((r) => r.code === "price").count >= 2);
+  // "aggressive on the resale" reads as ARV; "closer to 440" stays price.
+  assert.ok(e.buyers.codedReasons.find((r) => r.code === "arv").count >= 2);
+  assert.ok(e.buyers.codedReasons.find((r) => r.code === "price").count >= 1);
 });
 
 test("the post-mortem reads the agent thread for the numbers and the no", () => {
@@ -234,4 +239,27 @@ test("a seller's number becoming ours is its own lesson", () => {
 test("money in a text is read the way the reply agent reads it, floored at five figures", () => {
   assert.deepEqual(amountsIn("closer to 440k, maybe $1,835,000 or 1.6m"), [440000, 1835000, 1600000]);
   assert.deepEqual(amountsIn("call me at 5pm, 98026"), []);
+});
+
+// The buyer-view checks, tuned from what buyers said (2026-10-02).
+const sc = (over = {}) => ({ street: "1 A St", outcome: "fell_through", buyers: { codedReasons: [], contacted: 10, passed: 5, silent: 5 }, days: {}, underwrite: {}, ...over });
+
+test("buyers passing on what the checks would catch recommend turning them on", () => {
+  const e = dealScorecard({ offer: edmonds, settings: SETTINGS });
+  const out = lessons({ postMortems: [{ scorecard: e, street: "22018 76th Avenue West" }], controls: [], settings: SETTINGS });
+  const r = out.recommendations.find((x) => x.id === "buyer_view_on");
+  assert.ok(r, out.recommendations.map((x) => x.id).join(","));
+  assert.equal(r.suggestedSettings.underwriteChecks.enabled, true);
+  assert.match(r.evidence[0], /2 buyer passes on the rehab, 1 on the ARV, 1 on the street/);
+  assert.equal(out.current.underwriteChecks.enabled, false);
+});
+
+test("buyers still naming the street after a cut deepen it; cut houses that sold quietly ease it", () => {
+  const on = { ...SETTINGS, underwriteChecks: { enabled: true } };
+  const failedCut = sc({ checks: { arvCutPct: -5 }, buyers: { codedReasons: [{ code: "location", count: 2 }], contacted: 10, passed: 5, silent: 5 } });
+  const deeper = lessons({ postMortems: [{ scorecard: failedCut }], controls: [], settings: on }).recommendations.find((x) => x.id === "site_cut_deeper");
+  assert.equal(deeper.suggestedSettings.underwriteChecks.site.busyRoadPct, -7);
+  const soldCut = (n) => sc({ street: `${n} B St`, outcome: "closed", checks: { arvCutPct: -5 }, buyers: { codedReasons: [{ code: "price", count: 1 }], contacted: 5, passed: 1, silent: 0 } });
+  const lighter = lessons({ postMortems: [], controls: [soldCut(1), soldCut(2)], settings: on }).recommendations.find((x) => x.id === "site_cut_lighter");
+  assert.equal(lighter.suggestedSettings.underwriteChecks.site.busyRoadPct, -4);
 });

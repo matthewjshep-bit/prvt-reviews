@@ -155,6 +155,35 @@ export function OffMarketPill({ offer }) {
   );
 }
 
+// What the buyer-view checks did to an offer (shared/underwrite-checks.js
+// summarizeChecks, carried on every row): "street −5%, held to listings,
+// +$14,800 scope" with the full lines on hover — and the lines themselves
+// when `full`. Nothing when the checks didn't run for this offer.
+export function ChecksLine({ checks, full = false }) {
+  if (!checks || checks.v !== 1) return null;
+  const bits = [
+    checks.arvCutPct ? `ARV ${checks.arvCutPct > 0 ? "+" : "−"}${Math.abs(Math.round(checks.arvCutPct * 10) / 10)}%` : "",
+    checks.capped ? "held to listings" : "",
+    checks.rehabAdded ? `+${money0(checks.rehabAdded)} scope` : "",
+    (checks.flags || []).length ? `${checks.flags.length} flag${checks.flags.length === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  if (!bits.length && !full) return null;
+  if (full) {
+    return (
+      <div className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-2 text-xs text-sky-900" data-testid="checks-line">
+        <div className="mb-0.5 text-[10px] font-bold uppercase tracking-wider">Buyer view</div>
+        {(checks.lines || []).length ? <ul className="list-inside list-disc">{checks.lines.map((l, i) => <li key={i}>{l}</li>)}</ul> : <div>Nothing to adjust.</div>}
+      </div>
+    );
+  }
+  return (
+    <span title={(checks.lines || []).join("\n")} data-testid="checks-line"
+      className="inline-flex items-center rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">
+      buyer view: {bits.join(" · ")}
+    </span>
+  );
+}
+
 // Which row on a house is the number we're working from (shared/
 // current-offer.js). Said only when the house has more than one row: an
 // agent's only offer is current by definition, and a pill on every row is

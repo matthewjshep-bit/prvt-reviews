@@ -14,6 +14,7 @@
 //
 // Pure. The broker feeds it the timeline; the page only reads the result.
 
+import { siteDealbreakers } from "./site-check.js";
 import { regionFor, citySlug, regionsForArea } from "./dispo-regions.js";
 import { TALK_EVENT_TYPES, isTalkEvent } from "./talked-to.js";
 import { matchBuybox } from "./buybox.js";
@@ -85,15 +86,43 @@ export function scoreBuyer(i = {}, { now = Date.now() } = {}) {
  * `asset` is the kind of house (shared/asset-type.js). A mobile home is its
  * own strategy, so a buyer tagged dispo-type-mobile-home reads as one.
  */
-export function dealTarget({ city = "", zip = "", priceMin = null, priceMax = null, rehabAppetite = null, propertyTypes = [], lotMin = null, asset = null } = {}) {
+export function dealTarget({ city = "", zip = "", priceMin = null, priceMax = null, rehabAppetite = null, propertyTypes = [], lotMin = null, asset = null, site = [], island = false, onMarket = false } = {}) {
   const slug = citySlug(city);
   const mid = priceMin != null && priceMax != null ? (priceMin + priceMax) / 2 : priceMax ?? priceMin ?? null;
   const kind = normalizeAsset(asset);
   const strategy = kind?.type === "manufactured" ? "mobile-home" : rehabAppetite === "full_gut" ? "new-construction" : "flip";
   return { city: slug, zip: /^\d{5}$/.test(String(zip || "")) ? String(zip) : "", region: slug ? regionFor(city) : null, price: mid, strategy, asset: kind,
     // What the buy box can rule in or out beyond place and price.
-    box: { propertyTypes: propertyTypes || [], rehabAppetite: rehabAppetite || null, lotMin: lotMin ?? null } };
+    box: { propertyTypes: propertyTypes || [], rehabAppetite: rehabAppetite || null, lotMin: lotMin ?? null },
+    // What a buyer's own dealbreakers can refuse (buyerDealbreakers): the
+    // street flags (shared/site-check.js), a ferry-only island, a house on the MLS.
+    site: Array.isArray(site) ? site : [], island: Boolean(island), onMarket: Boolean(onMarket) };
 }
+
+/**
+ * buyerDealbreakers(exclusions) → { site: string[], island, offMarketOnly }
+ *
+ * What a buyer told us they won't take, read off their saved "must-haves /
+ * dealbreakers" (the buybox `exclusions` text). 2026-10-02: eight buyers had
+ * saved a street rule ("no busy streets", "no arterials with yellow lines",
+ * "no properties near Aurora"), eleven "no islands / no Vashon", one "off-
+ * market only" — and were still sent the house that broke it. The field is
+ * their dealbreakers, so a bare "busy streets" or "Vashon Island (too far)"
+ * counts as a no.
+ */
+export function buyerDealbreakers(exclusions = "") {
+  const t = String(Array.isArray(exclusions) ? exclusions.join("; ") : exclusions || "").toLowerCase();
+  const site = new Set(siteDealbreakers(t));
+  if (/busy (st|street|rd|road)s?\b|arterials?\b|yellow lines?|double yellow|main roads?\b|aurora/.test(t)) site.add("busy_road");
+  if (/(proximity to|near|next to|backs? (up )?(to|onto))( the)? commercial|commercial (district|area|zone|strip)/.test(t)) site.add("backs_commercial");
+  if (/\brail(road| line)?s?\b|train tracks?/.test(t)) site.add("railroad");
+  return {
+    site: [...site],
+    island: /\b(islands?|vashon|ferry)\b/.test(t),
+    offMarketOnly: /off[- ]market only|no on[- ]market|not on[- ]market|nothing (from|on) the mls|no mls/.test(t),
+  };
+}
+const SITE_NO = { busy_road: "busy streets", backs_commercial: "commercial next door", railroad: "rail lines" };
 
 /** isManufacturedTarget(target) → true for a mobile home deal, whose waves go by who buys them, not by city. */
 export const isManufacturedTarget = (t) => t?.asset?.type === "manufactured";
@@ -175,6 +204,16 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
     else if (m.matched.length) { box = 10; reasons.push("fits their buy box"); }
   }
 
+  // Their own dealbreakers against what this house is (buyerDealbreakers).
+  // Never sent: a buyer who told us no is not a buyer for this one.
+  const breakers = buyerDealbreakers(b.exclusions);
+  const siteHit = (t.site || []).filter((k) => breakers.site.includes(k));
+  const dealbreaker = siteHit.length ? `they said no ${siteHit.map((k) => SITE_NO[k] || k).join(" or ")}`
+    : t.island && breakers.island ? "they don't do islands"
+    : t.onMarket && breakers.offMarketOnly ? "they want off-market only"
+    : null;
+  if (dealbreaker) reasons.push(`won't take it (${dealbreaker})`);
+
   // Someone we are actually talking to (shared/talked-to.js) — Matt,
   // 2026-09-29: wave 2 on 3511 NE 153rd went by location tags alone, and the
   // buyers already in conversation scored no better than strangers.
@@ -185,7 +224,7 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   if (spokenFor(i)) { score -= 10; reasons.push("committed to another live deal"); }
   return {
     score: Math.max(0, Math.min(100, Math.round(score))),
-    parts: { location, price, recency, tier: tierPts, strategy, box, talking, type, typeRefused: fit.refuses, areaKnown },
+    parts: { location, price, recency, tier: tierPts, strategy, box, talking, type, typeRefused: fit.refuses, areaKnown, dealbreaker },
     reasons,
   };
 }
@@ -212,7 +251,7 @@ export function pickWave(ranked = [], { wave = 1, floor = 0, exclude = "blasted"
     ? (i) => (i.rankParts?.type || 0) > 0 && !(i.rankParts?.areaKnown && !(i.rankParts?.location > 0))
     : (i) => i.rank >= floor && (i.rankParts?.location || 0) > 0;
   return ranked
-    .filter((i) => reachable(i) && !isBlockedBuyer(i) && !spokenFor(i) && !i.rankParts?.typeRefused)
+    .filter((i) => reachable(i) && !isBlockedBuyer(i) && !spokenFor(i) && !i.rankParts?.typeRefused && !i.rankParts?.dealbreaker)
     .filter(fits)
     .filter((i) => exclude !== "blasted" || !i.alreadyBlasted)
     .filter((i) => manufactured || wave !== 1 || i.tier === "vip" || i.tier === "active")

@@ -238,7 +238,11 @@ export function markRenovatedByPrice(comps = [], { take = 4, minPool = PRICE_PRO
 // a comp across the street says more about a lot, a school and a street
 // than any field on a listing card. The scorecard stays for the ✓/✗ lines;
 // nothing here filters, either.
-export const SIM_WEIGHTS = { distance: 25, sqft: 20, beds: 15, baths: 10, yearBuilt: 15, recency: 10, lot: 5 };
+// garage (2026-10-02): 23706 138th Dr SE's ~$800k comps "have a garage" and
+// the subject has half of one — a buyer's partner put the ARV well under
+// 700k on exactly that. Known only for comps whose detail row was bought, so
+// like year built it leaves the denominator when either side is unknown.
+export const SIM_WEIGHTS = { distance: 25, sqft: 20, beds: 15, baths: 10, yearBuilt: 15, recency: 10, lot: 5, garage: 5 };
 export const SIM_DISTANCE_FULL_MI = 0.25;  // 1.0 out to here, 0 at the ring edge
 export const SIM_SQFT_FULL_PCT = 10;       // 1.0 inside ±10% …
 export const SIM_SQFT_FULL_ABS = 300;      // … or ±300 sqft, whichever is wider (Matt's rule)
@@ -302,6 +306,11 @@ export function similarity(subject = {}, comp = {}, { radiusMiles = DISTANCE_MIL
   const sl = n(subject.lotSqft), cl = n(comp.lotSqft);
   if (sl == null || cl == null || sl <= 0 || cl <= 0) add("lot", "Lot", SIM_WEIGHTS.lot, null, "lot unknown");
   else add("lot", "Lot", SIM_WEIGHTS.lot, taper(Math.abs(cl - sl) / sl * 100, 0, SIM_LOT_ZERO_PCT), `${Math.round(cl).toLocaleString()} vs ${Math.round(sl).toLocaleString()} sqft`);
+
+  const sg = typeof subject.garage === "boolean" ? subject.garage : null;
+  const cg = typeof comp.garage === "boolean" ? comp.garage : null;
+  if (sg == null || cg == null) add("garage", "Garage", SIM_WEIGHTS.garage, null, "garage unknown");
+  else add("garage", "Garage", SIM_WEIGHTS.garage, sg === cg ? 1 : 0, `${cg ? "garage" : "no garage"} vs ${sg ? "garage" : "no garage"}`);
 
   const knownFactors = factors.filter((f) => f.value != null);
   const known = knownFactors.reduce((t, f) => t + f.weight, 0);

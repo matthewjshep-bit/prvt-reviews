@@ -15,8 +15,35 @@ import { BTN, BTN_PRIMARY, ErrorBar, KpiRow, SkeletonRows } from "./ui.jsx";
 const pctText = (n) => (n == null ? "—" : `${Math.round(n * 10) / 10}%`);
 const CONF = { high: "bg-emerald-100 text-emerald-800", medium: "bg-amber-100 text-amber-800", low: "bg-slate-100 text-slate-600" };
 const KIND = { negotiation: "At the table", settings: "Settings", process: "Process" };
-const SETTING_LABEL = { underwriteMode: "Underwrite mode", maoPctOfArv: "Buyer line (% of ARV)", wholesaleFee: "Assignment fee in the model", cashPctOfArv: "Cash % of ARV", repairBuffer: "Repair buffer" };
-const fmtSetting = (k, v) => (k === "wholesaleFee" || k === "repairBuffer" ? fmtMoney(v) : k === "maoPctOfArv" || k === "cashPctOfArv" ? `${v}%` : String(v));
+const SETTING_LABEL = { underwriteMode: "Underwrite mode", maoPctOfArv: "Buyer line (% of ARV)", wholesaleFee: "Assignment fee in the model", cashPctOfArv: "Cash % of ARV", repairBuffer: "Repair buffer", underwriteChecks: "Buyer view checks" };
+// The buyer-view checks block is a whole object; say the part that moves.
+const fmtChecks = (v) => (!v?.enabled ? "off" : `on (busy road ${v.site?.busyRoadPct}%, distressed rehab ≥ ${v.rehab?.distressedMinPctOfArv}% of ARV)`);
+const fmtSetting = (k, v) => (k === "underwriteChecks" ? fmtChecks(v) : k === "wholesaleFee" || k === "repairBuffer" ? fmtMoney(v) : k === "maoPctOfArv" || k === "cashPctOfArv" ? `${v}%` : String(v));
+
+/**
+ * Why buyers passed in the last 30 days, every deal, by the reason their own
+ * words name (shared/funnel.js passThemes). The running version of reading
+ * every thread: what to fix in the underwriting comes first. Exported for tests.
+ */
+export function PassThemes({ themes = [] }) {
+  if (!themes.length) return null;
+  const total = themes.reduce((t, g) => t + g.count, 0);
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4" data-testid="pass-themes">
+      <h3 className="mb-2 text-sm font-bold">Why buyers passed — last 30 days</h3>
+      <ul className="space-y-1.5 text-xs">
+        {themes.map((g) => (
+          <li key={g.code} className="flex flex-wrap items-baseline gap-x-2">
+            <span className="w-40 shrink-0 font-semibold text-slate-800">{g.label}</span>
+            <span className="tabular-nums text-slate-700">{g.count} of {total}</span>
+            <span className="text-slate-600">{g.deals.slice(0, 3).join(", ")}{g.deals.length > 3 ? ` +${g.deals.length - 3}` : ""}</span>
+            {g.notes[0] && <span className="italic text-slate-600">“{g.notes[0]}”</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 /**
  * The recommendation cards. Exported so a test can render them from a
@@ -26,6 +53,7 @@ export function LessonsBody({ data, onApply, onDigest, applying = "", digestBusy
   const sep = data.metrics.filter((m) => m.separates);
   return (
     <div className="space-y-4">
+      <PassThemes themes={data.passThemes || []} />
       <div className="text-xs text-slate-500">
         {data.sample.failed} fell through ({data.sample.failedDeals.join(", ") || "none"}) · {data.sample.controls} sold or found a buyer ({data.sample.controlDeals.join(", ") || "none"})
       </div>

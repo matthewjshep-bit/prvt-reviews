@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fetchZillowPhotos, fetchZillowFacts, fetchZillowUnits, lotSqftFromDetail, lighterZillowRendition, loadImageBlocks, _resetFactsCache, scanRehabFromPhotos } from "./rehab-scan.js";
+import { fetchZillowPhotos, fetchZillowFacts, fetchZillowUnits, lotSqftFromDetail, lighterZillowRendition, loadImageBlocks, _resetFactsCache, scanRehabFromPhotos, houseFactsFromDetail } from "./rehab-scan.js";
 
 // The detail actor was rebuilt on 2026-09-02 with the same rename as the search
 // one: the carousel became `listingPhotos`, the status `listingStatus`, the
@@ -50,10 +50,38 @@ test("the curated shape yields photos — the ones the runs were missing", async
     assert.match(r.photos[0], /^https:\/\/photos\.zillowstatic\.com/);
     assert.equal(r.listing.status, "sold");
     assert.equal(r.listing.listPrice, 995000);
-    assert.deepEqual(r.facts, {
+    const { house, point, ...core } = r.facts;
+    assert.deepEqual(core, {
       beds: 3, baths: 1, sqft: 1187, yearBuilt: 1900, lotSqft: null, homeType: "SINGLE_FAMILY",
     });
+    // The buyer-view checks' house facts ride along; unknown stays null.
+    assert.equal(house.status, "sold");
+    assert.equal(house.hasGarage, null);
+    assert.equal(point, null);
   } finally { restore(); }
+});
+
+test("the garage, the sewer, the basement and the price cuts are read off a detail row, whatever shape it's in", () => {
+  const h = houseFactsFromDetail({
+    resoFacts: {
+      aboveGradeFinishedArea: "1,340 sqft", belowGradeFinishedArea: "600 sqft", basement: "Finished",
+      parkingFeatures: ["Driveway", "Attached Garage"], sewer: ["Septic Tank"], hasAssociation: false,
+    },
+    daysOnZillow: 64,
+    priceHistory: [
+      { event: "Price change", price: 449000, priceChangeRate: -0.04 },
+      { event: "Price change", price: 469000, priceChangeRate: -0.02 },
+      { event: "Listed for sale", price: 479000 },
+      { event: "Sold", price: 300000 },
+    ],
+    listingStatus: "FOR_SALE",
+  });
+  assert.deepEqual(
+    [h.aboveGradeSqft, h.belowGradeSqft, h.hasGarage, h.sewer, h.hoa, h.daysOnMarket, h.priceCuts, h.listedAt, h.status],
+    [1340, 600, true, "septic", false, 64, 2, 479000, "FOR_SALE"],
+  );
+  assert.equal(houseFactsFromDetail({ resoFacts: { parkingFeatures: ["Off Street"], garageParkingCapacity: 0 } }).hasGarage, false);
+  assert.equal(houseFactsFromDetail({}).hasGarage, null, "no record, no answer");
 });
 
 test("the old shape still yields the same photos", async () => {

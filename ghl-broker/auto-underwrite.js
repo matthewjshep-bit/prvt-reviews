@@ -29,7 +29,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { pullComps } from "./comps-pull.js";
 import { geocodeAddress, atLeast, precisionRank, PRECISION } from "./geocode.js";
-import { pullZillowComps, filterByUnits, streetKey, mergeFacts } from "./comps-zillow.js";
+import { pullZillowComps, pullZillowActives, filterByUnits, streetKey, mergeFacts } from "./comps-zillow.js";
+import { checkSite } from "./site-context.js";
+import { checksFor, buyerView, checksLines, summarizeChecks } from "./shared/underwrite-checks.js";
+import { withAllowance } from "./shared/rehab-checks.js";
 import { gradeComps } from "./comps-grade.js";
 import { recordError } from "./app-errors.js";
 import { fetchZillowPhotos, fetchListingPhotos, fetchZillowFacts, MAX_FACT_LOOKUPS, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
@@ -252,6 +255,41 @@ export function retryArgs(job) {
     anyKind: Boolean(job.anyKind),
     retryOf: job.id,
   };
+}
+
+/* ---------- quiet runs (the backtest) ---------- */
+
+// A backtest re-underwrites real houses with the buyer-view checks forced on
+// and must leave no trace: no uw-* tag or note on a listing agent's contact,
+// no draft, no event, no error row. Reads go through; every write is
+// swallowed. The run itself is a fill run (no offer, no draft by design), so
+// these only have to catch what a fill run still writes.
+export function quietClient(client) {
+  return {
+    call: (path, opts = {}) => (String(opts?.method || "GET").toUpperCase() === "GET"
+      ? client.call(path, opts)
+      : Promise.resolve({ quiet: true })),
+  };
+}
+const READ_METHOD = /^(get|list|count|find|search|load|read|has|all)/;
+export function quietStore(store) {
+  if (!store) return store;
+  return new Proxy(store, {
+    get(target, prop) {
+      const v = target[prop];
+      if (typeof v !== "function") return v;
+      if (READ_METHOD.test(String(prop))) return v.bind(target);
+      return async () => ({ id: null, quiet: true });
+    },
+  });
+}
+
+// What a person removed on the draft this run replaces: the checks keep it
+// removed rather than putting it back on a retry.
+async function declinedFromDraft(store, id) {
+  if (!id || typeof store?.getOffer !== "function") return null;
+  const prior = await store.getOffer(id).catch(() => null);
+  return prior?.draft?.checks?.declined || prior?.snapshot?.checks?.declined || null;
 }
 
 // For tests: the registry is process-wide, so a suite that starts jobs needs a
@@ -752,7 +790,15 @@ export function evaluateGates({
  * holds. The offer this makes is marked `agent_numbers`: it floats as a rough
  * number off their figures, and the paper never sends itself. Pure.
  */
-export function agentNumbersRescue({ held = [], theirArv = 0, theirRehab = 0, ourArv = 0, repairs = 0, listPrice = 0, sqft = 0 } = {}) {
+// The buyer-view checks reach the rescue too (2026-10-02): an agent's value
+// is still held to what similar houses list for today (`ceiling`), still
+// takes the street cut (`cutPct`, negative), and the repairs never land under
+// the scope the checks completed (`repairFloor`). All optional; absent means
+// the checks didn't run.
+export function agentNumbersRescue({
+  held = [], theirArv = 0, theirRehab = 0, ourArv = 0, repairs = 0, listPrice = 0, sqft = 0,
+  ceiling = 0, cutPct = 0, repairFloor = 0,
+} = {}) {
   if (!held.length || !(theirArv > 0 || theirRehab > 0)) return null;
   // The patterns live with the triage (shared/held-underwrites.js) so the
   // nightly sweep asks the agent for exactly what this rescue can use.
@@ -773,18 +819,24 @@ export function agentNumbersRescue({ held = [], theirArv = 0, theirRehab = 0, ou
     capped = theirArv > cap;
     value = Math.min(Math.round(theirArv), cap);
   }
+  let listings = false;
+  let streetCut = false;
+  if (needValue) {
+    if (Number(ceiling) > 0 && value > ceiling) { value = Math.round(ceiling); listings = true; }
+    if (Number(cutPct) < 0) { value = Math.round(value * (1 + Number(cutPct) / 100) / 1000) * 1000; streetCut = true; }
+  }
   if (!(value > 0)) return null;
   let fix = Math.round(Number(repairs) || 0);
   if (needRepairs) {
     if (!(theirRehab > 0)) return null;
-    fix = Math.max(Math.round(theirRehab), Math.round(fix * (1 - UW_AGENT_REPAIR_CUT)));
+    fix = Math.max(Math.round(theirRehab), Math.round(fix * (1 - UW_AGENT_REPAIR_CUT)), Math.round(Number(repairFloor) || 0));
     if (sqft > 0 && fix > heavyCeiling(sqft) * UW_REPAIRS_BAND_SLACK) return null;
   } else if (theirRehab > 0 && !(fix > 0)) {
     fix = Math.round(theirRehab);
   }
   const k = (n) => `${Math.round(n / 1000)}k`;
   const used = [
-    needValue ? `their ${k(value)} value${capped ? " (held near the list price)" : ""}` : "",
+    needValue ? `their ${k(value)} value${capped ? " (held near the list price)" : ""}${listings ? " (held to today's listings)" : ""}${streetCut ? " (less the street)" : ""}` : "",
     needRepairs ? `their ${k(theirRehab)} repairs` : "",
   ].filter(Boolean).join(" and ");
   return { value, fix, capped, basis: `priced on the agent's numbers — ${used} — because ${String(held[0]).split(" — ")[0]}` };
@@ -963,7 +1015,17 @@ async function note(client, contactId, body, warnings) {
 export async function startUnderwrite({
   client, locationId, saved, store, contactId, message, address, askingPrice, dryRun, deps, origin = "workflow", fill = false,
   queueIfCapped = false, replaceOfferId = null, retryOf = null, anyKind = false,
+  // The buyer-view checks (shared/underwrite-checks.js): `forceChecks` runs
+  // them whatever the saved switch says (the backtest); `declined` is what a
+  // person removed on the editor; `quiet` is the backtest's no-trace mode.
+  forceChecks = false, declined = null, quiet = false,
 }) {
+  if (quiet) {
+    fill = true;
+    client = quietClient(client);
+    store = quietStore(store);
+    deps = { ...(deps || {}), onHeld: undefined, onOfferCreated: undefined, createOffer: undefined };
+  }
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
   const compsApiKey = String(saved?.compsApiKey || saved?.rentcastApiKey || "").trim();
@@ -1027,6 +1089,13 @@ export async function startUnderwrite({
     // hold. The run skips that one hold and nothing else — every other gate
     // and dedupe still applies, and it makes the offer like any other run.
     anyKind: Boolean(anyKind),
+    forceChecks: Boolean(forceChecks),
+    quiet: Boolean(quiet),
+    declined: declined && typeof declined === "object" ? declined : null,
+    // What the checks did (the summary kept on the offer) and the numbers
+    // before them — a backtest reads both off one run.
+    checks: null,
+    checksBefore: null,
     snapshot: null,
     address: "",
     askingPrice: null,
@@ -1599,6 +1668,27 @@ async function runUnderwrite(job, ctx) {
   job.compsRadiusMiles = compsRadiusMiles;
   Object.assign(got, { subject, compsData, nearby });
 
+  // The buyer-view checks' two lookups start here and run under the grading
+  // and the photo scan: the street (OpenStreetMap, free, ~2 s) and today's
+  // listings (one more Zillow pull, ~$0.15). Either one failing is a line on
+  // the note, never a hold — the run prices without it.
+  const checks = checksFor(saved, { force: job.forceChecks });
+  const point = facts?.point || (subject?.lat != null ? { lat: subject.lat, lng: subject.lng } : null);
+  const sitePromise = checks?.site.enabled && point
+    ? (deps?.checkSite || checkSite)({
+        subject: { ...point, address: extraction.address, precision: facts?.point ? "address" : (geocode?.precision || "address") },
+        comps: nearby.map((c) => ({ id: c.id, lat: c.lat, lng: c.lng, address: c.address })),
+        t: checks.site,
+      }).catch((e) => ({ status: "unavailable", subject: { flags: {}, nearest: null }, comps: {}, error: String(e?.message || e) }))
+    : Promise.resolve(null);
+  const activesPromise = checks?.actives.enabled && compsSource === "zillow" && point
+    ? (deps?.pullActives || pullZillowActives)({
+        apifyToken, lat: point.lat, lng: point.lng, radiusMiles: checks.actives.radiusMiles,
+        beds: Number(subject.beds) || 0, baths: Number(subject.baths) || 0, sqft: Number(subject.sqft) || 0,
+        homeType: subject.homeType || null, includePending: checks.actives.includePending,
+      }).then((r) => r?.listings || []).catch((e) => { warnings.push(`listings: ${String(e?.message || e).slice(0, 160)}`); return null; })
+    : Promise.resolve(undefined);
+
   /* --- 4. condition --- */
   job.phase = "grading";
   job.conditionSource = compsCondition;
@@ -1674,20 +1764,27 @@ async function runUnderwrite(job, ctx) {
   // to say which way the market moved — and each sale is brought to today
   // before the median. The comps carry their similarity, so the median leans
   // on the closest matches.
-  const arv = rehabbed.length
+  const arvComps = rehabbed.map((c) => ({ ...c, condition: grades[c.id]?.condition }));
+  const ringTrend = timeTrend(nearby);
+  let arv = rehabbed.length
     ? deriveArv({
-        comps: rehabbed.map((c) => ({ ...c, condition: grades[c.id]?.condition })),
+        comps: arvComps,
         subjectSqft,
         subjectYearBuilt: Number(subject.yearBuilt) || 0,
         adjustments: [],
-        trend: timeTrend(nearby),
+        trend: ringTrend,
       })
     : null;
   // A widened search is said out loud wherever the ARV's basis is shown —
   // the note, the offer, the editor — so nobody reads a one-mile ARV as a
-  // half-mile one.
-  if (arv && compsRadiusMiles > UW_RADIUS_MILES) arv.basis = `${arv.basis} — comps widened to ${compsRadiusMiles} mi`;
-  if (arv && proxy?.gutCheck) arv.basis = `gut check on ${rehabbed.length} comps — ${arv.basis}`;
+  // half-mile one. A function, because the buyer-view checks derive the ARV
+  // again and the prefixes must survive that.
+  const withPrefixes = (a) => {
+    if (a && compsRadiusMiles > UW_RADIUS_MILES) a.basis = `${a.basis} — comps widened to ${compsRadiusMiles} mi`;
+    if (a && proxy?.gutCheck) a.basis = `gut check on ${rehabbed.length} comps — ${a.basis}`;
+    return a;
+  };
+  withPrefixes(arv);
   job.arv = arv?.arv ?? null;
   job.arvBasis = arv?.basis || "";
   got.arv = arv;
@@ -1722,7 +1819,7 @@ async function runUnderwrite(job, ctx) {
   got.rehabState = rehabState;
   if (photos.length && shouldScanPhotos({ arv: arv?.arv || 0, theirArv, theirRehab, describedWork, fill: job.fill })) {
     try {
-      scan = await scanRehabFromPhotos({
+      scan = await (deps?.scanPhotos || scanRehabFromPhotos)({
         photos, listing,
         subject: { beds: beds || null, baths: baths || null, sqft: sqft || null, yearBuilt: yearBuilt || null },
         aiApiKey,
@@ -1737,6 +1834,55 @@ async function runUnderwrite(job, ctx) {
     }
   }
 
+  /* --- the buyer's view (shared/underwrite-checks.js) --- */
+  // The same house a buyer will price: its street, its size on the record,
+  // what the comps have that it doesn't, what similar houses list for today,
+  // and the scope a buyer would budget. Off unless switched on (or forced by
+  // a backtest). Nothing here holds a run: a lookup that failed is a line on
+  // the note, and the scope never goes past the heavy band.
+  let checksSummary = null;
+  let checksContext = null;
+  if (checks) {
+    const [site, actives] = await Promise.all([sitePromise, activesPromise]);
+    if (site?.status === "unavailable") warnings.push(`street not checked${site.error ? ` (${String(site.error).slice(0, 80)})` : ""}`);
+    const declined = job.declined || await declinedFromDraft(store, job.replaceOfferId);
+    const view = buyerView({
+      checks, address: extraction.address,
+      subject: { sqft: subject.sqft, beds: subject.beds, baths: subject.baths, yearBuilt: subject.yearBuilt, lotSqft: subject.lotSqft },
+      house: facts?.house || null, remarks: listing?.remarks || "",
+      comps: arvComps, sqft: subjectSqft, trend: ringTrend,
+      site, actives, areas: scan ? rehabState.aiResult?.areas || [] : [], contents: scan ? rehabState.aiResult?.contents || "none" : "none",
+      rehabState: scan ? rehabState : null, declined,
+    });
+    if (view) {
+      job.checksBefore = { arv: arv?.arv ?? null, repairs };
+      if (view.arv) {
+        arv = withPrefixes(view.arv);
+        job.arv = arv.arv;
+        job.arvBasis = arv.basis || "";
+        got.arv = arv;
+      }
+      if (view.rehab?.rows?.length) {
+        rehabState = withAllowance(rehabState, view.rehab.rows);
+        const priced = priceScope(rehabState, sqft);
+        scope = priced.lines;
+        repairs = priced.total;
+        Object.assign(got, { rehabState, scope, repairs });
+      }
+      checksSummary = view.summary;
+      job.checks = view.summary;
+      got.checks = view.summary;
+    }
+    // What the editor needs to rebuild the same lines when a person opens
+    // this run: the street report, today's listings, the listing's words and
+    // what was removed before.
+    checksContext = {
+      site: site || null, actives: Array.isArray(actives) ? actives : undefined,
+      listing: listing ? { remarks: listing.remarks || "", status: listing.status || null } : null,
+      declined: view?.summary?.declined || null,
+    };
+  }
+
   /* --- the gates --- */
   const gate = evaluateGates({
     extraction, subject, rehabbedComps: rehabbed, arv, describedWork,
@@ -1746,7 +1892,7 @@ async function runUnderwrite(job, ctx) {
 
   const partial = {
     compsData, subject, subjectSqft: sqft, nearby, grades, rehabbed,
-    arv, rehabState, scope, repairs, listing, photosCount,
+    arv, rehabState, scope, repairs, listing, photosCount, checks: checksSummary, checksContext,
   };
 
   if (job.fill) {
@@ -1778,6 +1924,9 @@ async function runUnderwrite(job, ctx) {
   const rescueCap = job.listPrice || job.suppliedAskingPrice || (Number(extraction.askingPrice) || 0);
   const rescued = gate.ok ? null : agentNumbersRescue({
     held: gate.held, theirArv, theirRehab, ourArv: arvForOffer, repairs, listPrice: rescueCap, sqft,
+    ceiling: checksSummary?.cap?.status === "ok" ? checksSummary.cap.amount : 0,
+    cutPct: (checksSummary?.arv?.adjustments || []).filter((a) => a.pct < 0).reduce((t, a) => t + a.pct, 0),
+    repairFloor: checksSummary?.rehab?.after || 0,
   });
   if (rescued) {
     arvForOffer = rescued.value;
@@ -2054,6 +2203,7 @@ async function saveDraft(job, ctx, { extraction, held, partial, cleared = false 
     address: extraction.address || "",
     cashAmount: null,
     draft,
+    checks: summarizeChecks(draft),
     autoUnderwrite: { ...auditTrail(job, extraction, { ok: cleared, held }), held },
     updatedAt: new Date().toISOString(),
   };
@@ -2075,9 +2225,13 @@ async function saveDraft(job, ctx, { extraction, held, partial, cleared = false 
 // empty comps board and drops the comps out of the comps PDF, which is the
 // one failure you'd only notice with an agent on the phone.
 function buildSnapshot({ extraction, partial, contact = null }) {
-  const { compsData, subject, subjectSqft, grades, rehabbed, arv, rehabState, scope, repairs } = partial;
+  const { compsData, subject, subjectSqft, grades, rehabbed, arv, rehabState, scope, repairs, checks = null, checksContext = null } = partial;
+  const cx = checksContext || {};
   const center = subject?.lat != null ? { lat: subject.lat, lng: subject.lng } : null;
   return {
+    // What the buyer-view checks did to this house (shared/underwrite-checks.js),
+    // and what a person removed — read back on a retry so a removal sticks.
+    checks,
     mode: "existing",
     // The agent this was underwritten for. Without it the editor opens on an
     // empty Seller contact and cannot create the offer — the one step a review
@@ -2093,7 +2247,11 @@ function buildSnapshot({ extraction, partial, contact = null }) {
     subjectInfo: subject || null,
     scope: scope || [],
     underwriteMode: UW_MODE,
-    rehab: rehabState || null,
+    rehab: rehabState ? {
+      ...rehabState,
+      ...(cx.listing ? { listing: cx.listing } : {}),
+      ...(cx.declined ? { allowanceDeclined: cx.declined.rehab || [] } : {}),
+    } : null,
     comps: {
       // CompsPane keeps the resolved map centre on `subject` and the provider's
       // property record on `info` — not the other way round.
@@ -2109,9 +2267,17 @@ function buildSnapshot({ extraction, partial, contact = null }) {
       beds: subject?.beds ?? "",
       baths: subject?.baths ?? "",
       grades: grades || {},
-      adjustments: [],
+      // The auto adjustments the checks applied (street, garage, lot), as the
+      // Comps pane's chips — source "auto", so the pane shows them as the
+      // machine's and a person can take one off.
+      adjustments: arv?.adjustments || [],
       arvBase: arv?.base ?? null,
       arvBasis: arv?.basis || "",
+      // The buyer-view checks' lookups and removals, so the Comps pane
+      // rebuilds the same lines without paying for them again.
+      ...(cx.site ? { site: cx.site } : {}),
+      ...(cx.actives !== undefined ? { activesList: cx.actives } : {}),
+      ...(cx.declined ? { checksDeclined: { arv: cx.declined.arv || [], cap: Boolean(cx.declined.cap) } } : {}),
     },
   };
 }
@@ -2158,6 +2324,7 @@ function doneNote(job, arv, repairs) {
     `Cash offer: ${fmtMoney(job.cashAmount || 0)} (maximum-offer rule: % of ARV − repairs − fee)`,
     `ARV ${fmtMoney(arv?.arv || 0)} — ${job.arvBasis}`,
     `Repairs ${fmtMoney(repairs)} from ${job.photosAnalyzed} listing photos`,
+    ...checksBlock(job),
     ``,
     `Comps used:`,
     comps || "  (none)",
@@ -2183,7 +2350,18 @@ function heldNote(job, held) {
     ``,
     job.arv ? `ARV so far: ${fmtMoney(job.arv)} (${job.arvBasis})` : "",
     job.repairs ? `Scope so far: ${fmtMoney(job.repairs)} from ${job.photosAnalyzed} photos` : "",
+    ...checksBlock(job),
     ``,
     `The work done so far is saved as a draft — open it in the app and it picks up where this stopped.`,
   ].filter(Boolean).join("\n");
+}
+
+// What the buyer-view checks did, as note lines. Empty when they didn't run.
+function checksBlock(job) {
+  const lines = checksLines(job.checks);
+  if (!lines.length) return [];
+  const before = job.checksBefore;
+  const moved = before && (before.arv !== job.arv || before.repairs !== job.repairs)
+    ? [`  (before the checks: ARV ${fmtMoney(before.arv || 0)}, repairs ${fmtMoney(before.repairs || 0)})`] : [];
+  return ["", "Buyer-view checks:", ...lines.map((l) => `  • ${l}`), ...moved];
 }

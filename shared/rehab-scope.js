@@ -35,6 +35,12 @@ export function blankRehabState() {
     bedRooms: [],
     bathRooms: [],
     custom: [],
+    // "Buyer allowance" lines from the underwrite checks (rehab-checks.js):
+    // work a buyer will price that the scope didn't — systems on an old
+    // house, an area the photos grade poor, a cleanout. Priced like custom
+    // lines, kept apart so the checks can recompute them and a person can
+    // remove one without touching their own entries.
+    allowance: [],
     contingency: "10",
     bucket: null,
     bucketAmount: "",
@@ -123,6 +129,8 @@ export function applyScanSuggestion(state, suggestion, { photosAnalyzed = null }
     summary: sug.summary || "",
     photosAnalyzed,
     areas: Array.isArray(sug.areas) ? sug.areas : [],
+    // "none" | "some" | "heavy" — the cleanout a buyer would price.
+    contents: ["some", "heavy"].includes(sug.contents) ? sug.contents : "none",
     notes: [
       ...(sug.items || []).map((it) => ({ label: labelOf(it.id), note: it.note })),
       ...(sug.bathrooms || []).map((b, i) => ({ label: `Bathroom ${i + 1} — ${b.tier}`, note: b.note })),
@@ -161,6 +169,7 @@ export function priceScope(state, sqft) {
     lines.push({ label: `${item.label}${qty}`, cost });
   }
   for (const c of s.custom) lines.push({ label: c.label, cost: c.cost });
+  for (const a of s.allowance || []) if (Number(a.cost) > 0) lines.push({ label: a.label, cost: Math.round(Number(a.cost)), allowance: true });
 
   const subtotal = lines.reduce((t, l) => t + l.cost, 0);
   const total = Math.round((subtotal * (1 + (parse(s.contingency) || 0) / 100)) / 500) * 500;

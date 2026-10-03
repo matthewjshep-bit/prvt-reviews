@@ -30,7 +30,9 @@ test("a buyer's pass in their own words is quoted under the reason they gave", (
   })] });
   assert.equal(pkg.funnel.replied, 1);
   assert.equal(pkg.funnel.passed, 1);
-  assert.equal(pkg.objections[0].code, "price");
+  // Filed as price, but the words are about the resale number: since the
+  // 2026-10-02 split that reads as an ARV objection, which is its own fix.
+  assert.equal(pkg.objections[0].code, "arv");
   assert.match(pkg.objections[0].buyers[0].quote, /aggressive on the resale price/);
   assert.equal(pkg.aboutTheNumbers.length, 1, "price is an objection about the house");
 });
@@ -190,7 +192,7 @@ test("an unlinked recipient who says no is a pass in their own words; one who sa
   ] });
   const by = (id) => pkg.buyers.find((b) => b.contactId === id);
   assert.equal(by("r1").status, "passed"); assert.equal(by("r1").reason.code, "area");
-  assert.equal(by("r2").status, "passed"); assert.equal(by("r2").reason.code, "condition", "a busy road is about the house");
+  assert.equal(by("r2").status, "passed"); assert.equal(by("r2").reason.code, "location", "a busy road is about the street the house sits on");
   assert.equal(by("r3").status, "opted_out");
   assert.equal(by("r4").status, "evaluating");
   assert.deepEqual([pkg.funnel.contacted, pkg.funnel.replied, pkg.funnel.passed, pkg.funnel.optedOut, pkg.funnel.silent], [5, 4, 2, 1, 1]);
@@ -209,7 +211,7 @@ test("pushing back on the rehab number without saying the word pass is still an 
   const by = (id) => pkg.buyers.find((b) => b.contactId === id);
   assert.equal(by("v").reason.code, "rehab_scope");
   assert.equal(by("k").reason.code, "area", "'closer to home' is where they buy, not a price");
-  assert.equal(by("j").reason.code, "condition");
+  assert.equal(by("j").reason.code, "location", "the street comes before the comps: it's the fix that would have changed the number");
   assert.deepEqual(pkg.askedFor, [], "a rehab figure is not a price they would pay");
 });
 

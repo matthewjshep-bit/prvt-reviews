@@ -14,6 +14,7 @@
 // dealFacts reads the offer's own ARV/repairs and the price it is handed, and
 // touches deal.contractPrice and deal.assignmentFee at no point.
 
+import { buyerFacts } from "./underwrite-checks.js";
 import { assetOf, assetPhrase } from "./asset-type.js";
 
 const kText = (n) => {
@@ -58,18 +59,18 @@ export function blastNote(text = "", max = 90) {
 export function blastMessage({
   firstName = "", address = "", city = "", price = 0, beds = 0, baths = 0, sqft = 0,
   yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", variant = 0, link = "", ask = "", kind = "", intro = "",
-  linkOnReply = false,
+  linkOnReply = false, septic = false, systems = false,
 } = {}) {
   const first = String(firstName || "").trim().split(/\s+/)[0] || "";
   const how = String(intro || "").replace(/[.!?\s]+$/, "").trim();
-  const text = blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply });
+  const text = blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply, septic, systems });
   if (!how) return text;
   const hi = first ? `Hey ${first}, ` : "Hey, ";
   const rest = text.slice(hi.length);
   return `${first ? `Hey ${first}` : "Hey"} — ${how}. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
 }
 
-function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply = false }) {
+function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply = false, septic = false, systems = false }) {
   const hi = first ? `Hey ${first}, ` : "Hey, ";
   const street = String(address || "").split(",")[0].trim() || "a house";
   const where = city ? ` in ${city}` : "";
@@ -77,7 +78,10 @@ function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, 
   // 1,440 sqft, built 1978".
   const size = [beds ? `${beds}bd` : "", baths ? `${baths}ba` : "", sqft ? `${Math.round(sqft).toLocaleString("en-US")} sqft` : ""].filter(Boolean).join(" ");
   const built = Number(yearBuilt) > 1500 ? `built ${Math.round(yearBuilt)}` : "";
-  const spec = [String(kind || "").trim(), size, built].filter(Boolean).join(", ");
+  // Septic is the question buyers asked most before deciding (nine times in
+  // the 2026-10-02 read of every thread) — answered up front when the record
+  // says so.
+  const spec = [String(kind || "").trim(), size, built, septic ? "septic" : ""].filter(Boolean).join(", ");
   const work = REHAB_WORDS[rehab] ? `${REHAB_WORDS[rehab]} rehab` : "needs work";
   // What it costs and what it's worth — the ask first, because that is the
   // number they decide on, then the two that say whether it's a deal.
@@ -85,7 +89,7 @@ function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, 
   const money = [
     priceText ? `Buyer price ${priceText}` : "",
     kText(arv) ? `ARV around ${kText(arv)}` : "",
-    kText(repairs) ? `rehab about ${kText(repairs)}` : "",
+    kText(repairs) ? `rehab about ${kText(repairs)}${systems ? " incl. systems" : ""}` : "",
   ].filter(Boolean).join(", ");
   const line = blastNote(note);
   const tail = line ? `${line}. ` : "";
@@ -152,6 +156,10 @@ export function dealFacts(offer = {}, { price = 0, note = "" } = {}) {
     note: String(note || ""),
     // The kind of house in words — "" for a single family house.
     kind: assetPhrase(assetOf(offer)),
+    // What buyers ask before they decide (shared/underwrite-checks.js
+    // buyerFacts): septic, and whether an old house's systems are priced in.
+    septic: buyerFacts(offer).septic,
+    systems: buyerFacts(offer).systems,
   };
 }
 

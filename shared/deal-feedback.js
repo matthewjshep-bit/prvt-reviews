@@ -15,7 +15,7 @@
 //
 // Pure. Threads and events come in as plain data; the route does the reading.
 
-import { PASS_REASON_LABEL, normalizePassReason } from "./conversation-ai.js";
+import { PASS_REASON_LABEL, normalizePassReason, LOCATION_RE, EXPOSURE_RE } from "./conversation-ai.js";
 import { investorStatus } from "./offer-status.js";
 import { addressKey } from "./contact-record.js";
 
@@ -83,7 +83,7 @@ function dealWordsFor(offer, pitch = {}) {
   return [...new Set([raw, short, long, num, city, ...priceWords].filter((w) => w && w.length > 2))];
 }
 // The reasons that are about the HOUSE — the ones an agent can take to a seller.
-const HOUSE_CODES = new Set(["price", "rehab_scope", "condition", "property_type"]);
+const HOUSE_CODES = new Set(["price", "arv", "rehab_scope", "condition", "layout", "location", "legal", "exposure", "property_type"]);
 // "Stop" is not feedback about the house. Neither is "who is this".
 const OPT_OUT_RE = /^\s*(stop|unsubscribe|remove me|wrong (number|person)|who is this\??|lose (this|dis) (number|numba)|please stop|stop opt out)\b/i;
 // A plain no, with or without a reason.
@@ -133,10 +133,16 @@ function ladder(t, coded) {
   if (!t) return null;
   const pick = (code, note) => ({ code, note: coded?.note || note });
   if (/retired|not doing flips|new construction|18 unit|apartment building|wasn'?t a flip|hard money loans|manufactured home|not a flipper|wrong person/.test(t)) return pick("other", "not a flipper right now");
-  if (/hwy ?99|highway|aurora|busy (street|road)|commercial|yellow lines|traffic|main road|arterial/.test(t)) return pick("condition", "the street it sits on");
-  if (/sqft|sq ft|square f|too small|tiny|bigger house|size/.test(t)) return pick("property_type", "too small");
+  // Order matters: each rung is the fix it points at. Seen-it-elsewhere and
+  // the street come before rehab and price, because "it's on a busy road and
+  // the numbers don't work" is a street problem first.
+  if (EXPOSURE_RE.test(t)) return pick("exposure", "had already seen it elsewhere");
+  if (LOCATION_RE.test(t)) return pick("location", "the street it sits on");
+  if (/easement|right[- ]of[- ]way|driveway|\btitle\b|unpermitted|no permit|zoning|septic|land lease|lot rent|\bhoa\b/.test(t)) return pick("legal", "title, permits or utilities");
+  if (/sqft|sq ft|square f|too small|tiny|bigger house|size|one bath|1 bath|basement|ceiling height|garage|tuck[- ]under|lot is too small|small lot/.test(t)) return pick("layout", "the size or layout");
   if (/rehab|repair|needs way (over|more)|work than|gut|plumbing|electrical|siding|windows|contractor|light cosmetic|35k|30 ?k/.test(t)) return pick("rehab_scope", "doubted the rehab number");
-  if (/comps? sold|sold for|resale|arv|aggressive|too high|overpriced|priced|price point|numbers don'?t|spread|closer to \$?\d|wiggle|tighter/.test(t)) return pick("price", "the price or the resale number");
+  if (/comps? sold|sold for|resale|\barv\b|listed (around|at)|apprais/.test(t)) return pick("arv", "the resale number");
+  if (/aggressive|too high|overpriced|priced|price point|numbers don'?t|spread|closer to \$?\d|wiggle|tighter/.test(t)) return pick("price", "the price");
   if (/too far|far from|drive|that area|north|south|east ?side|neighborhood|not that market|market at|county|so far out|far out|closer to home|outside (our|my)|seattle city|tacoma|pierce|gig harbor|out of (state|area)|i['’]?m in [a-z]{2}\b|florida|arizona|\baz\b|\bct\b|\bri\b|that far|far at the moment|bit far|closer to (home|us)|only (looking|work) in|surrounding|city limits/.test(t)) return pick("area", "not their area");
   if (/discipline|\bprice\b|numbers|cheaper/.test(t)) return pick("price", "wanted a lower price");
   if (/not ready|not right now|timing|busy|next (year|month)|later|another one right now|too many|plate is|full at the moment|check back|have \d+ flips|doing one currently|not doing flips|retired|new construction|too early/.test(t)) return pick("timing", "not right now");
@@ -320,7 +326,11 @@ const fmtDate = (iso) => {
 export function renderFeedbackHtml(pkg, { from = "", brand = "", fullNames = false, showPrice = false, wrap = false } = {}) {
   const nm = (b) => (fullNames ? b.name : b.shortName);
   const words = pkg.words || [];
-  const LABEL = { condition: "The street it sits on", property_type: "Size of the house", other: "No reason given", rehab_scope: "The rehab estimate", price: "Price and resale value" };
+  const LABEL = {
+    location: "The street it sits on", condition: "Condition of the house", layout: "Size or layout of the house",
+    legal: "Title, permits or utilities", exposure: "Had already seen it", arv: "Resale value",
+    property_type: "Kind of property", other: "No reason given", rehab_scope: "The rehab estimate", price: "Price",
+  };
   const labelOf = (o) => LABEL[o.code] || o.label;
   // The listing agent holds the contract price. Any figure a buyer repeats
   // back that sits between that and what buyers were asked is our assignment

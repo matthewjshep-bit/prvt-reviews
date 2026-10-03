@@ -11,7 +11,7 @@
 // Pure. Every function takes plain rows and returns plain numbers.
 
 import { effectiveStatus } from "./offer-status.js";
-import { PASS_REASONS, PASS_REASON_LABEL, summarizeFeedback } from "./conversation-ai.js";
+import { PASS_REASONS, PASS_REASON_LABEL, summarizeFeedback, recodePassReason } from "./conversation-ai.js";
 import { parseUsAddress } from "./us-address.js";
 
 const round = (v) => Math.round(Number(v) || 0);
@@ -162,8 +162,11 @@ export function passReasons(rows = [], { by = "deal" } = {}) {
       ...(deal.feedback || []).map((f) => ({ contactId: f.contactId, code: f.code, note: f.note })),
       ...(deal.investors || []).filter((i) => i?.reason?.code).map((i) => ({ contactId: i.contactId, code: i.reason.code, note: i.reason.note })),
     ];
-    for (const e of entries) {
-      if (!e.code) continue;
+    for (const e0 of entries) {
+      if (!e0.code) continue;
+      // Recoded before the dedupe, so "busy rd" filed once as area and once
+      // as condition is one street complaint, not two.
+      const e = recodePassReason(e0);
       const dedupe = `${e.contactId}|${o.id}|${e.code}`;
       if (seen.has(dedupe)) continue;
       seen.add(dedupe);
@@ -175,6 +178,43 @@ export function passReasons(rows = [], { by = "deal" } = {}) {
   return [...groups.entries()]
     .map(([key, list]) => ({ key, label: key, total: list.length, ...summarizeFeedback(list) }))
     .sort((a, b) => b.total - a.total || a.key.localeCompare(b.key));
+}
+
+/**
+ * passThemes(deals, { now, days }) → [{ code, label, count, deals, notes }]
+ *
+ * Why buyers passed lately, across every deal, by the reason their own words
+ * name (recoded, so "busy rd" filed as area counts as the street). One buyer
+ * once per reason per deal. The Lessons view's "why buyers passed" card —
+ * the running version of the 2026-10-02 read of every thread.
+ */
+export function passThemes(deals = [], { now = Date.now(), days = 30 } = {}) {
+  const since = now - days * 86400000;
+  const seen = new Set();
+  const by = new Map();
+  for (const o of deals) {
+    const deal = o?.deal;
+    if (!deal) continue;
+    const entries = [
+      ...(deal.feedback || []).map((f) => ({ contactId: f.contactId, code: f.code, note: f.note, at: f.ts })),
+      ...(deal.investors || []).filter((i) => i?.reason?.code).map((i) => ({ contactId: i.contactId, code: i.reason.code, note: i.reason.note, at: i.reason.at || i.updatedAt })),
+    ];
+    for (const e0 of entries) {
+      if (!e0.code) continue;
+      const t = Date.parse(e0.at || "");
+      if (Number.isFinite(t) && t < since) continue;
+      const e = recodePassReason(e0);
+      const k = `${e.contactId}|${o.id}|${e.code}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (!by.has(e.code)) by.set(e.code, { code: e.code, label: PASS_REASON_LABEL[e.code] || e.code, count: 0, deals: new Set(), notes: [] });
+      const g = by.get(e.code);
+      g.count++;
+      g.deals.add(String(o.address || o.id || "").split(",")[0]);
+      if (e.note && g.notes.length < 3) g.notes.push(String(e.note).slice(0, 120));
+    }
+  }
+  return [...by.values()].map((g) => ({ ...g, deals: [...g.deals] })).sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
 }
 
 function groupKey(by, offer, entry) {

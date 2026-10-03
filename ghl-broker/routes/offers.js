@@ -99,7 +99,9 @@ import { fetchListingPhotos, fetchZillowPhotos, fetchZillowFacts, scanRehabFromP
 import { addressKey, addressQueryVariants, zillowUrl, zillowLookupForms } from "../shared/us-address.js";
 import { pullComps } from "../comps-pull.js";
 import { geocodeAddress } from "../geocode.js";
-import { pullZillowComps, mergeFacts, streetKey } from "../comps-zillow.js";
+import { pullZillowComps, pullZillowActives, mergeFacts, streetKey } from "../comps-zillow.js";
+import { checkSite } from "../site-context.js";
+import { checksFor, summarizeChecks, checksLines } from "../shared/underwrite-checks.js";
 import { similarity, milesBetween } from "../shared/comp-match.js";
 import { gradeComps, needsScrape } from "../comps-grade.js";
 import {
@@ -357,15 +359,21 @@ function offerNoteBody(offer) {
   const adjs = (Array.isArray(cs?.adjustments) ? cs.adjustments : [])
     .map((a) => ({ label: String(a?.label || "").slice(0, 60), pct: Number(a?.pct) || 0 }))
     .filter((a) => a.pct !== 0);
+  // Held to today's listings first when the buyer-view checks capped it.
+  const capTo = Math.round(Number(offer.snapshot?.checks?.arv?.capped?.to)) || 0;
   if (adjs.length) {
     const base = Math.round(Number(cs?.arvBase)) || 0;
     const totalPct = adjs.reduce((t, a) => t + a.pct, 0);
-    const adjusted = base ? Math.round((base * (1 + totalPct / 100)) / 1000) * 1000 : 0;
+    const from = capTo || base;
+    const adjusted = from ? Math.round((from * (1 + totalPct / 100)) / 1000) * 1000 : 0;
     lines.push(
       `ARV adjustments: ${adjs.map((a) => `${a.label} ${a.pct > 0 ? "+" : "-"}${Math.abs(a.pct)}%`).join(", ")}` +
-      (base ? ` (base ${fmtMoney(base)} → ${fmtMoney(adjusted)})` : "")
+      (base ? ` (base ${fmtMoney(base)}${capTo ? ` → listings ${fmtMoney(capTo)}` : ""} → ${fmtMoney(adjusted)})` : "")
     );
   }
+  // The rest of what the buyer-view checks did: the listings cap, the
+  // allowance lines, the flags (exposure, septic, easement, a thin pool).
+  for (const l of checksLines(offer.snapshot?.checks)) if (!l.startsWith("ARV:")) lines.push(l);
   const pnotes = String(offer.snapshot?.propertyNotes || "").trim();
   if (pnotes) lines.push(`Property notes: ${pnotes.slice(0, 600)}`);
   if (offer.pdfUrl) lines.push(`Offer letter (PDF): ${offer.pdfUrl}`);
@@ -1579,7 +1587,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
               comps: mergeFacts(data.comps || [], facts),
               subject: mine ? { ...(data.subject || {}), yearBuilt: mine.yearBuilt, lotSqft: mine.lotSqft, homeType: data.subject?.homeType ?? mine.homeType ?? null,
                 beds: data.subject?.beds ?? mine.beds, baths: data.subject?.baths ?? mine.baths, sqft: data.subject?.sqft ?? mine.sqft,
-                lastSalePrice: mine.lastSoldPrice, lastSaleDate: mine.lastSoldDate } : data.subject,
+                lastSalePrice: mine.lastSoldPrice, lastSaleDate: mine.lastSoldDate,
+                // For the pane's buyer-view checks: garage parity, the size on
+                // the record, the listing's exposure, sewer or septic.
+                garage: mine.garage ?? null, house: mine.house || null } : data.subject,
               enriched: ranked.length,
             };
           } catch (e) {
@@ -1603,6 +1614,70 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         gradeEnabled: Boolean(String(saved?.aiApiKey || "").trim() && apifyToken),
       });
     } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- the buyer-view checks, for the editor ---------- */
+  // The same two lookups the auto-underwriter makes (shared/underwrite-checks.js),
+  // so the Comps pane can apply the same street cut and listings cap to a
+  // hand-built offer. Both answer only when the checks are switched on (or
+  // `force=1`, a person asking on purpose) — the listings pull costs ~$0.15 —
+  // and both FAIL OPEN: a lookup that broke is a status, never a 5xx, because
+  // the pane must price without it.
+  //
+  //   POST /comps/site    { address, subject?: {lat,lng}, comps: [{id,lat,lng,address}] }
+  //                       → { ok, site }  (siteReport shape; status ok | unavailable | skipped | off)
+  //   GET  /comps/actives ?address&lat&lng&beds&baths&sqft&homeType
+  //                       → { ok, status, listings }  (status ok | unavailable | off)
+  router.post("/comps/site", async (req, res) => {
+    let locationId;
+    try { ({ locationId } = resolveLocation(req)); } catch (err) { return fail(res, err); }
+    const empty = (status, error) => ({ status, subject: { flags: {}, nearest: null }, comps: {}, ...(error ? { error } : {}) });
+    try {
+      const b = req.body || {};
+      const saved = await store.getOfferSettings(locationId);
+      const checks = checksFor(saved, { force: String(b.force || req.query.force || "") === "1" || b.force === true });
+      if (!checks?.site.enabled) return res.json({ ok: true, site: empty("off") });
+      const address = String(b.address || "").trim().slice(0, 200);
+      let subject = b.subject && Number.isFinite(Number(b.subject.lat)) && Number.isFinite(Number(b.subject.lng))
+        ? { lat: Number(b.subject.lat), lng: Number(b.subject.lng), precision: "address" } : null;
+      if (!subject && address) {
+        const geo = await geocodeAddress(address);
+        if (geo) subject = { lat: geo.lat, lng: geo.lng, precision: geo.precision };
+      }
+      if (!subject) return res.json({ ok: true, site: empty("skipped", "couldn't place the house") });
+      const comps = (Array.isArray(b.comps) ? b.comps : []).slice(0, 250)
+        .map((c) => ({ id: String(c?.id || ""), lat: Number(c?.lat), lng: Number(c?.lng), address: String(c?.address || "").slice(0, 200) }))
+        .filter((c) => c.id && Number.isFinite(c.lat) && Number.isFinite(c.lng));
+      res.json({ ok: true, site: await checkSite({ subject: { ...subject, address }, comps, t: checks.site }) });
+    } catch (err) {
+      res.json({ ok: true, site: empty("unavailable", String(err?.message || err).slice(0, 160)) });
+    }
+  });
+
+  router.get("/comps/actives", async (req, res) => {
+    let locationId;
+    try { ({ locationId } = resolveLocation(req)); } catch (err) { return fail(res, err); }
+    try {
+      const saved = await store.getOfferSettings(locationId);
+      const checks = checksFor(saved, { force: String(req.query.force || "") === "1" });
+      const apifyToken = String(saved?.apifyToken || "").trim();
+      if (!checks?.actives.enabled || !apifyToken) return res.json({ ok: true, status: "off", listings: null });
+      let lat = Number(req.query.lat), lng = Number(req.query.lng);
+      if (!(Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0)) {
+        const geo = await geocodeAddress(String(req.query.address || "").trim());
+        if (!geo) return res.json({ ok: true, status: "unavailable", listings: null, error: "couldn't place the house" });
+        ({ lat, lng } = geo);
+      }
+      const homeType = /^(SINGLE_FAMILY|MULTI_FAMILY|MANUFACTURED)$/.test(String(req.query.homeType || "")) ? String(req.query.homeType) : null;
+      const r = await pullZillowActives({
+        apifyToken, lat, lng, radiusMiles: checks.actives.radiusMiles, includePending: checks.actives.includePending,
+        beds: Math.max(0, parseInt(req.query.beds, 10) || 0), baths: Math.max(0, parseFloat(req.query.baths) || 0),
+        sqft: parseInt(req.query.sqft, 10) || 0, homeType,
+      });
+      res.json({ ok: true, status: "ok", listings: r.listings, searchUrl: r.searchUrl });
+    } catch (err) {
+      res.json({ ok: true, status: "unavailable", listings: null, error: String(err?.message || err).slice(0, 160) });
+    }
   });
 
   /* ---------- AI comp condition grading (renovated / updated / dated …) ---------- */
@@ -2238,6 +2313,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       scope,
       snapshot,
       calc,
+      // What the buyer-view checks did to this offer, compact for lean rows
+      // (shared/underwrite-checks.js). Read off the raw snapshot so trimming
+      // can't erase it; null when the checks didn't run.
+      checks: summarizeChecks(body.snapshot) || summarizeChecks(snapshot),
       ...(asset ? { asset } : {}),
     };
     let offer;
@@ -4051,10 +4130,45 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { skipped, job } = await startUnderwrite({
         client, locationId, saved, store, contactId, message: "", address, askingPrice,
         dryRun: false, origin: "operator", fill: true,
+        // The buyer-view lines a person took off on the form stay off.
+        declined: b.declined && typeof b.declined === "object" ? b.declined : null,
         deps: underwriteDeps({ client, locationId, saved }),
       });
       if (skipped) return res.status(409).json({ error: skipped });
       res.status(202).json({ ok: true, started: true, jobId: job.id });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The quiet backtest (2026-10-02): re-underwrite real houses with the
+  // buyer-view checks forced on and leave no trace — no tag or note on the
+  // contact, no draft, no offer, no event. Each is a fill run, so the job
+  // carries the snapshot, the checks and the numbers before them; poll each
+  // with GET /automations/underwrite?jobId=. Costs what an underwrite costs
+  // (Apify + the photo scan), so it's a person's button, capped at 40.
+  //
+  //   POST { items: [{ address, contactId?, askingPrice? }] } → 202 { ok, jobs: [{ address, jobId, skipped }] }
+  router.post("/automations/underwrite/backtest", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const items = (Array.isArray(req.body?.items) ? req.body.items : []).slice(0, 40)
+        .map((it) => ({
+          address: String(it?.address || "").trim().slice(0, 200),
+          contactId: String(it?.contactId || "backtest").trim().slice(0, 64),
+          askingPrice: Number(String(it?.askingPrice ?? "").replace(/[^\d.]/g, "")) || 0,
+        }))
+        .filter((it) => it.address);
+      if (!items.length) return res.status(400).json({ error: "send items: [{ address }]" });
+      const saved = await store.getOfferSettings(locationId);
+      const jobs = [];
+      for (const it of items) {
+        const { skipped, job } = await startUnderwrite({
+          client, locationId, saved, store, contactId: it.contactId, message: "", address: it.address, askingPrice: it.askingPrice,
+          dryRun: true, origin: "operator", fill: true, quiet: true, forceChecks: true,
+          deps: underwriteDeps({ client, locationId, saved }),
+        });
+        jobs.push({ address: it.address, jobId: job?.id || null, skipped: skipped || null });
+      }
+      res.status(202).json({ ok: true, jobs });
     } catch (err) { fail(res, err); }
   });
 

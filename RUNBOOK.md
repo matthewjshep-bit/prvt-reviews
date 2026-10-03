@@ -471,6 +471,101 @@ again — and the ARV suggestion uses the board's own time trend.
 **Wiring it.** There are two front doors. Use the first one if you have a
 qualifying bot; it is cheaper and more accurate.
 
+### Buyer view checks (2026-10-02)
+
+**Why these exist.** After a run of deals fell through, every buyer thread with a reply was read: 539 threads with calls, 296 of them substantive. Most of what buyers passed on could have been checked before the offer went out.
+
+| What buyers said | Buyers | What it means |
+|---|---|---|
+| Rehab too low — never once "too high" | ~26 | Scope was missing, not marked down. Contingency is already 10%. |
+| ARV too high | ~16 | Buyers were 10–16% under us. The causes: the size on record, the garage, a short basement, comps that were stale or taken from a ZIP median, and cheaper houses already listed. |
+| The street | ~12 | "busy rd", "double yellow is busy street" |
+
+One case set the balance for the whole design: on the Mamer listing the agent agreed with our ARV and rehab, and our $326k still lost to a $425k cash offer. So every check:
+
+- fires only on evidence about that house;
+- is measured against the comps;
+- is capped;
+- prints its reasoning;
+- can be removed by hand.
+
+All the logic lives in `shared/underwrite-checks.js` (`buyerView`), which calls `site-check.js`, `arv-checks.js`, `rehab-checks.js` and `house-facts.js`.
+
+**The switch.** Settings → *Buyer view checks*, stored as `settings.underwriteChecks`.
+
+- The master `enabled` switch defaults to **false** and stays off until Matt has seen the backtest.
+- Each check (`site`, `layout`, `actives`, `rehab`, `flags`) has its own switch. These are on by default, so turning on the master switch turns on every check Matt chose.
+- `normalizeUnderwriteChecks` clamps every number to a sane range. A cut can never become a premium.
+
+**What each check does.** Nothing here sends anything or holds a run. Each check's output becomes a line on the note, the editor and the package.
+
+- **Street (`site`).** One Overpass query covers the house and every comp (`ghl-broker/site-context.js`).
+  - **A busy road** (−5%): the house fronts a secondary road or bigger, or sits within 35 m of one, within 175 m of a primary/trunk road, or within 250 m of a motorway.
+  - **Commercial land within 50 m** (−5%). **A rail line within 150 m** (−6%).
+  - **Each cut is scaled against the comps.** It is multiplied by the share of ARV comps that don't share the trait, so a busy-road house comped against busy-road sales isn't cut twice.
+  - **A quieter house gets a credit.** If the house is quieter than its comps, it gets up to 3% back.
+  - **When the street can't be checked,** the warning reads `street not checked (…)` and the run prices without the street check.
+- **Layout (`layout`).**
+  - **Size.** A size more than 10% over the record is replaced by the record. A basement the listing calls low-ceilinged isn't counted.
+  - **No garage** when the comps have one: −3% times the share of comps that have one.
+  - **A lot under 60% of the comps' median:** −2% times the share.
+  - **A missing bath.** If the house has fewer baths than the ARV comps and 3 or more beds, a bath ($25k) goes into the scope, since the ARV assumes it. If you remove that line, the ARV is re-run on same-bath comps.
+- **Today's listings (`actives`).** One Zillow for-sale/pending pull per run, about $0.15, cached for a day (`pullZillowActives`).
+  - The ARV is held to the size-adjusted median of the renovated-looking half of the most similar listings.
+  - It needs at least 3 listings, and it never cuts more than 20%.
+  - A sold row is never treated as a listing, and the house's own listing is never its own ceiling.
+- **Rehab (`rehab`).** These become visible "Buyer allowance — …" lines in the scope.
+  - **Systems:** built before 1980, electrical $4k plus plumbing $5k scaled to size; before 1950 it's a rewire and repipe at double. Waived when the photos grade the system good, the remarks say it was updated, or the scope already prices it.
+  - **Photos:** any area graded poor that has no line in the scope gets the matching catalog line.
+  - **The listing's own words:** water damage, mold, roof, foundation, sewer. Fire or a house carved into rooms is flagged rather than priced.
+  - **Cleanout:** from the photo scan's new `contents` field, or the remarks.
+  - **Distressed floor:** a distressed listing's rehab is held to at least 8% of ARV and the size band's light floor.
+  - **Ceiling:** the allowance lines never push the scope past `heavyCeiling`.
+- **Flags (`flags`).** These are never priced:
+  - the listing is on the market, or how long it's been listed and any price cuts;
+  - septic, an easement, a right-of-way, unpermitted work, an HOA, a land lease;
+  - a thin buyer pool: ferry-only ZIPs, an ARV over $1.5M, under 1,000 sqft;
+  - comps more than 6 months old in a falling market.
+
+**Removals stick.** Each removal is stored in `snapshot.checks.declined`, as `{ arv:[keys], rehab:[keys], cap }`. A retry reads it from the draft it replaces, and the editor's Auto-underwrite button sends it along.
+
+**Where the checks show up.**
+
+- **The run note** gets a "Buyer-view checks:" block. It includes the numbers before the checks whenever they moved.
+- **The Comps pane** shows a *Buyer view* box with auto chips (×), the listings line, and the flags.
+- **The Rehab pane** shows *What a buyer will price*.
+- **The Today offer panel and the offer detail** show *Buyer view*, read from `offer.checks`, which also appears on lean rows.
+- **Dispositions:**
+  - The package and the blast say "septic" and "incl. systems".
+  - The package has a "Worth knowing" line.
+  - The bot's deal line carries "about the house".
+- **Blasts.** A buyer whose saved dealbreakers ("busy streets", "Vashon Island (too far)", "off-market only") the house hits is never picked for a wave (`buyerDealbreakers`, `pickWave`). This only ever narrows who gets a blast.
+- **Lessons** shows *Why buyers passed — last 30 days*, and adds recommendations: `buyer_view_on`, `site_cut_deeper`, `site_cut_lighter` and `rehab_floor_higher`. Each one can be applied.
+
+**Pass reasons.** A buyer's no is now filed under `arv`, `layout`, `location`, `legal` or `exposure` when that's what their words say. `area` still means the buyer's own territory. Older reasons are recoded when they're read and are never rewritten.
+
+**Verify the Zillow field names before trusting the layout checks.**
+
+- `houseFactsFromDetail` (`rehab-scan.js`) reads `resoFacts` fields: above- and below-grade area, garage, sewer, HOA, and `priceHistory`.
+- None of these were checked against a live detail row when this was built.
+- After deploying, run one quiet backtest on a single house and look at `job.snapshot.subjectInfo.house`. If a fact comes back null when the listing obviously has it, read the field names off the last detail-actor dataset (the Apify method above) and fix the parser.
+
+**The backtest — run it before switching the checks on.**
+
+- The route is `POST /api/offers/automations/underwrite/backtest { items: [{ address }] }`.
+  - Each item runs a quiet fill run with the checks forced on.
+  - Nothing is written to GHL or the store.
+  - Poll each job with `GET /automations/underwrite?jobId=`.
+- **Step 1:** `node scripts/underwrite-backtest.mjs` prints the houses and the cost (about $0.6–1.6 each) and runs nothing.
+- **Step 2:** `--go` actually runs it. Add `--recent 20` for the newest auto-underwrites, and `--buyers buyers.json` (local only) for what buyers said each house was worth.
+- **The pass bars:**
+  - Deals that sold must stay within 5% of what the buyer paid.
+  - Deals that died must come down toward the buyers' numbers.
+  - The median change in the buyer line is the acceptance risk.
+- **Caveats:** today's listings and the street aren't what they were when a past deal was priced, and a subject that has since sold may show up in its own comps. Read the results as a direction, not a verdict.
+
+**Re-reading the threads.** `node scripts/buyer-objections-report.mjs` repeats the tally. It is read-only, prints ids only, and writes quotes only to a local file with `--quotes`.
+
 ### Subject Property
 
 One contact field, `subject_property` ("Subject Property"), answers: *if I

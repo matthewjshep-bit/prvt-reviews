@@ -22,6 +22,7 @@
 
 import { calculateOffers, effectiveSettings } from "./offer-calc.js";
 import { PASS_REASONS, PASS_REASON_LABEL, normalizePassReason, summarizeFeedback } from "./conversation-ai.js";
+import { normalizeUnderwriteChecks, summarizeChecks } from "./underwrite-checks.js";
 import { parseThread, PASS_RE } from "./deal-feedback.js";
 import { offerEvents, EVENT_LABEL } from "./contact-record.js";
 
@@ -47,12 +48,17 @@ const streetOf = (a) => String(a || "").split(",")[0].trim();
 // suggested from what the buyers already said; the rest are the contract
 // dying for reasons no buyer had a say in.
 export const FELL_THROUGH_CODES = [
-  "buyers_passed_price", "buyers_passed_rehab", "buyers_passed_area", "no_buyer_response",
+  "buyers_passed_price", "buyers_passed_arv", "buyers_passed_rehab", "buyers_passed_location",
+  "buyers_passed_layout", "buyers_passed_exposure", "buyers_passed_area", "no_buyer_response",
   "inspection", "seller_backed_out", "title_or_financing", "other",
 ];
 export const FELL_THROUGH_LABEL = {
   buyers_passed_price: "Buyers passed on price",
+  buyers_passed_arv: "Buyers didn't believe the ARV",
   buyers_passed_rehab: "Buyers doubted the rehab / condition",
+  buyers_passed_location: "Buyers didn't want the street",
+  buyers_passed_layout: "Buyers didn't want the size / layout",
+  buyers_passed_exposure: "Buyers had already seen it elsewhere",
   buyers_passed_area: "Buyers don't want the area",
   no_buyer_response: "No buyer engaged",
   inspection: "Inspection / feasibility",
@@ -67,12 +73,20 @@ export function normalizeFellThroughCode(v) {
 // The code the buyers' own pass reasons point at. `byCode` is the
 // summarizeFeedback shape, sorted by count; the top house-related reason wins.
 export function codeFromPassReasons(byCode = []) {
-  const GROUP = { price: "buyers_passed_price", rehab_scope: "buyers_passed_rehab", condition: "buyers_passed_rehab", area: "buyers_passed_area" };
+  const GROUP = {
+    price: "buyers_passed_price", arv: "buyers_passed_arv", rehab_scope: "buyers_passed_rehab", condition: "buyers_passed_rehab",
+    location: "buyers_passed_location", layout: "buyers_passed_layout", exposure: "buyers_passed_exposure",
+    legal: "title_or_financing", area: "buyers_passed_area",
+  };
   const totals = new Map();
   for (const r of byCode || []) { const g = GROUP[r?.code]; if (g) totals.set(g, (totals.get(g) || 0) + (Number(r.count) || 0)); }
   if (!totals.size) return (byCode || []).length ? "other" : "no_buyer_response";
-  // Ties go to the reason about the HOUSE we can fix next time: rehab, then price, then area.
-  const order = ["buyers_passed_rehab", "buyers_passed_price", "buyers_passed_area"];
+  // Ties go to the reason about the HOUSE we can fix next time: rehab, then
+  // the resale number, the street, the layout, price, exposure, title, area.
+  const order = [
+    "buyers_passed_rehab", "buyers_passed_arv", "buyers_passed_location", "buyers_passed_layout",
+    "buyers_passed_price", "buyers_passed_exposure", "title_or_financing", "buyers_passed_area",
+  ];
   return [...totals.entries()].sort((a, b) => b[1] - a[1] || order.indexOf(a[0]) - order.indexOf(b[0]))[0][0];
 }
 
@@ -222,6 +236,9 @@ export function dealScorecard({ offer = {}, settings = {}, feedback = null, even
   return {
     offerId: offer.id || null, address: offer.address || "", street: streetOf(offer.address),
     stage: deal?.stage || null, outcome,
+    // What the buyer-view checks did to this deal's numbers, if they ran —
+    // so the lessons can tell "cut and still passed" from "never checked".
+    checks: offer.checks || summarizeChecks(offer.snapshot) || null,
     fellThroughReason: String(deal?.fellThroughReason || ""), fellThroughCode, fellThroughCodeLabel: FELL_THROUGH_LABEL[fellThroughCode] || "",
     arv, repairs, rehabPctOfArv: pct(repairs, arv),
     contractPrice, assignmentFee, buyerPrice,
@@ -575,6 +592,70 @@ export function lessons({ postMortems = [], controls = [], settings = {}, now = 
     });
   }
 
+  // 9. The buyer-view checks (shared/underwrite-checks.js), tuned both ways
+  // from what buyers said. Off: turn them on when buyers keep passing on what
+  // they'd catch. On: deepen the street cut when buyers still name the street
+  // after it; lighten it when houses that took the cut sold at our number
+  // with nobody naming the street.
+  const uwc = normalizeUnderwriteChecks(settings?.underwriteChecks);
+  const codeCount = (sc, ...codes) => (sc?.buyers?.codedReasons || []).filter((r) => codes.includes(r.code)).reduce((t, r) => t + (Number(r.count) || 0), 0);
+  const themes = { street: 0, rehab: 0, arv: 0, layout: 0 };
+  for (const x of failed) { themes.street += codeCount(x, "location"); themes.rehab += codeCount(x, "rehab_scope", "condition"); themes.arv += codeCount(x, "arv"); themes.layout += codeCount(x, "layout"); }
+  const themeLines = [
+    themes.rehab ? `${themes.rehab} buyer pass${themes.rehab === 1 ? "" : "es"} on the rehab` : "",
+    themes.arv ? `${themes.arv} on the ARV` : "",
+    themes.layout ? `${themes.layout} on the size or layout` : "",
+    themes.street ? `${themes.street} on the street` : "",
+  ].filter(Boolean);
+  const cutHad = (sc) => Number(sc?.checks?.arvCutPct || 0) < 0;
+  if (!uwc.enabled && themes.street + themes.rehab + themes.arv + themes.layout >= 3) {
+    recs.push({
+      id: "buyer_view_on", kind: "settings",
+      title: "Turn on the buyer view checks — buyers keep passing on what they'd catch",
+      confidence: themes.street + themes.rehab + themes.arv + themes.layout >= 6 ? "high" : "medium",
+      evidence: [`Across the deals that fell through: ${themeLines.join(", ")}.`],
+      suggestedSettings: { underwriteChecks: { ...uwc, enabled: true } },
+      negotiationRule: null,
+    });
+  }
+  if (uwc.enabled) {
+    const streetAfterCut = failed.filter((x) => cutHad(x) && codeCount(x, "location") > 0);
+    const soldWithCut = ctrl.filter((x) => cutHad(x) && codeCount(x, "location") === 0);
+    if (streetAfterCut.length) {
+      const next = Math.max(-10, uwc.site.busyRoadPct - 2);
+      if (next !== uwc.site.busyRoadPct) recs.push({
+        id: "site_cut_deeper", kind: "settings",
+        title: `Buyers still named the street after the cut — take it to ${next}%`,
+        confidence: streetAfterCut.length >= 2 ? "medium" : "low",
+        evidence: streetAfterCut.map((x) => `${name(x)}: cut ${x.checks.arvCutPct}% and ${codeCount(x, "location")} buyer${codeCount(x, "location") === 1 ? "" : "s"} still passed on the street`),
+        suggestedSettings: { underwriteChecks: { ...uwc, site: { ...uwc.site, busyRoadPct: next } } },
+        negotiationRule: null,
+      });
+    } else if (soldWithCut.length >= 2) {
+      const next = Math.min(-2, uwc.site.busyRoadPct + 1);
+      if (next !== uwc.site.busyRoadPct) recs.push({
+        id: "site_cut_lighter", kind: "settings",
+        title: `Busy-road houses that took the cut sold without a word about the street — ease it to ${next}%`,
+        confidence: "low",
+        evidence: soldWithCut.map((x) => `${name(x)} (${String(x.outcome).replace(/_/g, " ")}): cut ${x.checks.arvCutPct}%, no buyer named the street`),
+        suggestedSettings: { underwriteChecks: { ...uwc, site: { ...uwc.site, busyRoadPct: next } } },
+        negotiationRule: null,
+      });
+    }
+    const rehabAfter = failed.filter((x) => Number(x?.checks?.rehabAdded || 0) > 0 && codeCount(x, "rehab_scope", "condition") >= 2);
+    if (rehabAfter.length && uwc.rehab.distressedMinPctOfArv < 15) {
+      const next = Math.min(15, uwc.rehab.distressedMinPctOfArv + 2);
+      recs.push({
+        id: "rehab_floor_higher", kind: "settings",
+        title: `Buyers still doubted the rehab after the allowance — hold distressed houses to ${next}% of ARV`,
+        confidence: "low",
+        evidence: rehabAfter.map((x) => `${name(x)}: +${money(x.checks.rehabAdded)} added and ${codeCount(x, "rehab_scope", "condition")} buyers still doubted the rehab`),
+        suggestedSettings: { underwriteChecks: { ...uwc, rehab: { ...uwc.rehab, distressedMinPctOfArv: next } } },
+        negotiationRule: null,
+      });
+    }
+  }
+
   // The digest the bot may carry: the rules in one breath, no dollar
   // figures, so the money guard's allowance stays exactly the record book.
   const fm = metrics.find((m) => m.key === "buyerPctOfArv");
@@ -587,7 +668,7 @@ export function lessons({ postMortems = [], controls = [], settings = {}, now = 
   return {
     generatedAt: new Date(now).toISOString(),
     sample: { failed: failed.length, controls: ctrl.length, failedDeals: failed.map(name), controlDeals: ctrl.map(name) },
-    current: { underwriteMode: s.underwriteMode, maoPctOfArv: s.maoPctOfArv, wholesaleFee: s.wholesaleFee, cashPctOfArv: s.cashPctOfArv, repairBuffer: s.repairBuffer },
+    current: { underwriteMode: s.underwriteMode, maoPctOfArv: s.maoPctOfArv, wholesaleFee: s.wholesaleFee, cashPctOfArv: s.cashPctOfArv, repairBuffer: s.repairBuffer, underwriteChecks: uwc },
     metrics,
     recommendations: recs,
     digest,

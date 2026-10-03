@@ -200,3 +200,18 @@ test("a house that sold out from under an offer is counted on its own, not as an
   assert.equal(f.open, 1, "only the live one is still working");
   assert.equal(f.rates.deadOfSent, 50, "it ended, so it counts as dead");
 });
+
+test("why buyers passed in the last month counts each buyer once per reason per deal, by the reason their words name", async () => {
+  const { passThemes } = await import("./funnel.js");
+  const now = Date.parse("2026-10-02T12:00:00Z");
+  const deals = [
+    { id: "d1", address: "22018 76th Ave W, Edmonds, WA", deal: {
+      investors: [{ contactId: "denis", reason: { code: "area", note: "busy rd", at: "2026-09-29T00:00:00Z" } }],
+      feedback: [{ contactId: "denis", code: "condition", note: "Busy rd", ts: "2026-09-29T00:00:00Z" }, { contactId: "flavia", code: "rehab_scope", note: "30k rehab", ts: "2026-09-30T00:00:00Z" }],
+    } },
+    { id: "d2", address: "1 Old Rd, Kent, WA", deal: { feedback: [{ contactId: "x", code: "price", note: "too high", ts: "2026-07-01T00:00:00Z" }] } },
+  ];
+  const t = passThemes(deals, { now, days: 30 });
+  assert.deepEqual(t.map((g) => [g.code, g.count]), [["location", 1], ["rehab_scope", 1]]);
+  assert.deepEqual(t[0].deals, ["22018 76th Ave W"]);
+});

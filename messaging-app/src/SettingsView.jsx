@@ -11,6 +11,7 @@ import {
 import { getBuyerPulse, runBuyerPulse, getAgentPulse, sampleAgentPulse, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
+import { UNDERWRITE_CHECKS_DEFAULTS, normalizeUnderwriteChecks } from "@shared/underwrite-checks.js";
 import { tierDrips } from "@shared/agent-pulse.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
@@ -507,6 +508,16 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const setMirrorStage = (side, key, stageId) => setMirrorSide(side, { stages: { ...(((form.ghlMirror || {})[side] || {}).stages || {}), [key]: stageId } });
   const setDispoAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), [k]: v } })); };
   const setLine = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, lineTargets: { ...(f.lineTargets || {}), [k]: v } })); };
+  // The buyer-view checks: raw while typing, normalized (and clamped) on save.
+  const uwcRaw = form.underwriteChecks || {};
+  const uwcVal = (sec, k) => (sec ? (uwcRaw[sec]?.[k] ?? UNDERWRITE_CHECKS_DEFAULTS[sec][k]) : (uwcRaw[k] ?? UNDERWRITE_CHECKS_DEFAULTS[k]));
+  const setUwc = (sec, k) => (v) => {
+    setSaved(false);
+    setForm((f) => {
+      const cur = f.underwriteChecks || {};
+      return { ...f, underwriteChecks: sec ? { ...cur, [sec]: { ...(cur[sec] || {}), [k]: v } } : { ...cur, [k]: v } };
+    });
+  };
   const lineTargets = { ...LINE_TARGET_DEFAULTS, ...(form.lineTargets || {}) };
   const setPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), pulse: { ...(f.dispoAutopilot?.pulse || {}), [k]: v } } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
@@ -552,6 +563,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             coldMaxUnanswered: Number(pulse.coldMaxUnanswered) || 3, engagedMaxUnanswered: pulse.engagedMaxUnanswered === "" || pulse.engagedMaxUnanswered == null ? 6 : Number(pulse.engagedMaxUnanswered) } } : {}) };
       }
       if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount", "minMatchScore", "secondWaveMinScore", "maxWaves"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
+      if (form.underwriteChecks) clean.underwriteChecks = normalizeUnderwriteChecks(form.underwriteChecks);
       if (form.lineTargets) clean.lineTargets = normalizeLineTargets(Object.fromEntries(Object.entries(form.lineTargets).map(([k, v]) => [k, typeof v === "string" ? Number(v.replace(/[$,\s]/g, "")) : v])));
       if (clean.dispoAutopilot?.pulse) clean.dispoAutopilot.pulse = { ...clean.dispoAutopilot.pulse, ...Object.fromEntries(["dailyCap", "everyDays", "quietDays", "conversedShare"].filter((k) => clean.dispoAutopilot.pulse[k] != null).map((k) => [k, Number(clean.dispoAutopilot.pulse[k])])) };
       const r = await saveSettings(clean);
@@ -583,6 +595,43 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           Selling costs default to 7% — 3% listing + 3% buyer agent + ~1% closing. Holding is sized off the
           deal below. "Classic 70% rule" only applies to the 70%-ARV mode. The <b>Blended</b> mode averages
           the back-stack, the 90%-ARV anchor and the 70% rule, so these figures reach it too.
+        </p>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="buyer-view-settings">
+        <h2 className="mb-1 text-sm font-bold">Buyer view checks</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Price a house the way buyers do: the street it sits on, its size on the record, what the comps have that
+          it doesn't, what similar houses are listed for today, and the work a buyer will budget that the scope left
+          out. Every line shows on the offer and can be removed by hand. Nothing sends, and nothing holds a run.
+          Off until you've seen the backtest.
+        </p>
+        <label className="mb-3 flex items-center gap-2 text-sm font-semibold">
+          <input type="checkbox" checked={uwcVal(null, "enabled") === true} onChange={(e) => setUwc(null, "enabled")(e.target.checked)} />
+          Run the buyer view checks on every underwrite
+        </label>
+        <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-700">
+          {[["site", "The street (OpenStreetMap)"], ["layout", "Size, garage, lot, baths"], ["actives", "Today's listings (~$0.15 a run)"], ["rehab", "Buyer allowance lines"], ["flags", "Flags (exposure, septic, thin pool)"]].map(([sec, label]) => (
+            <label key={sec} className="flex items-center gap-1.5">
+              <input type="checkbox" checked={uwcVal(sec, "enabled") !== false} onChange={(e) => setUwc(sec, "enabled")(e.target.checked)} /> {label}
+            </label>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Num label="Busy road" suffix="% of ARV" value={uwcVal("site", "busyRoadPct")} onChange={setUwc("site", "busyRoadPct")} />
+          <Num label="Backs commercial" suffix="% of ARV" value={uwcVal("site", "commercialPct")} onChange={setUwc("site", "commercialPct")} />
+          <Num label="Rail line" suffix="% of ARV" value={uwcVal("site", "railroadPct")} onChange={setUwc("site", "railroadPct")} />
+          <Num label="Arterial counts within" suffix="metres" value={uwcVal("site", "nearPrimaryMeters")} onChange={setUwc("site", "nearPrimaryMeters")} />
+          <Num label="No garage" suffix="% of ARV" value={uwcVal("layout", "garagePct")} onChange={setUwc("layout", "garagePct")} />
+          <Num label="Add a bath" suffix="$" value={uwcVal("layout", "addBathCost")} onChange={setUwc("layout", "addBathCost")} />
+          <Num label="Listings cap, cut at most" suffix="%" value={uwcVal("actives", "maxCutPct")} onChange={setUwc("actives", "maxCutPct")} />
+          <Num label="Distressed rehab at least" suffix="% of ARV" value={uwcVal("rehab", "distressedMinPctOfArv")} onChange={setUwc("rehab", "distressedMinPctOfArv")} />
+          <Num label="Systems allowance before" suffix="year built" value={uwcVal("rehab", "systemsBeforeYear")} onChange={setUwc("rehab", "systemsBeforeYear")} />
+          <Num label="Auto ARV cuts, at most" suffix="%" value={uwcVal("limits", "maxArvCutPct")} onChange={setUwc("limits", "maxArvCutPct")} />
+        </div>
+        <p className="mt-3 text-xs text-slate-500">
+          Cuts are scaled by how many of the ARV comps share the trait — a busy-road house comped against busy-road
+          sales isn't cut twice, and a quieter one gets up to 3% back.
         </p>
       </section>
 

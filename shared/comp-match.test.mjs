@@ -279,9 +279,16 @@ const SUBJECT = { beds: 3, baths: 2, sqft: 1800, yearBuilt: 1968, lotSqft: 7200 
 const twin = (over = {}) => ({ beds: 3, baths: 2, sqft: 1800, yearBuilt: 1968, lotSqft: 7200, distance: 0.1, saleDate: "2026-07-01", ...over });
 
 test("similarity: an identical house next door scores 100", () => {
-  const s = similarity(SUBJECT, twin(), { radiusMiles: 0.5, now: NOW });
+  // Garage is known only for comps whose detail row was bought; both sides
+  // carry it here so every factor is knowable.
+  const s = similarity({ ...SUBJECT, garage: true }, twin({ garage: true }), { radiusMiles: 0.5, now: NOW });
   assert.equal(s.score, 100);
   assert.equal(s.known, Object.values(SIM_WEIGHTS).reduce((a, b) => a + b, 0), "every factor was knowable");
+});
+
+test("a garage counts only when both houses' garages are known", () => {
+  assert.equal(similarity({ ...SUBJECT, garage: false }, twin({ garage: true }), { radiusMiles: 0.5, now: NOW }).factors.find((f) => f.key === "garage").value, 0);
+  assert.equal(similarity(SUBJECT, twin({ garage: true }), { radiusMiles: 0.5, now: NOW }).factors.find((f) => f.key === "garage").value, null);
 });
 
 test("distance tapers from a quarter mile to the ring edge, not as a one-mile boolean", () => {

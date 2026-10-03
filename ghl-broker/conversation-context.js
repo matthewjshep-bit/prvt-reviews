@@ -27,6 +27,7 @@ import { emailContextText } from "./shared/gmail.js";
 import { showingContextLines } from "./shared/showing.js";
 import { accessFor, accessLines } from "./shared/deal-access.js";
 import { assetOf, assetPhrase, kindHold, normalizeAsset } from "./shared/asset-type.js";
+import { buyerFacts } from "./shared/underwrite-checks.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -522,7 +523,9 @@ const dealLine = (d) => {
   // The kind of house, first: a mobile home in a park is not a house, and a
   // buyer who asks "what is it?" gets the truth (shared/asset-type.js).
   const kind = d.kind ? `${d.kind} — ` : "";
-  return `- ${d.address}: ${kind}${money}${status}${said}${stage}${invite}${walk}`;
+  // The record's answers to what buyers ask ("is it septic?"); say only these.
+  const about = (d.facts || []).length ? ` — about the house: ${d.facts.join(", ")}` : "";
+  return `- ${d.address}: ${kind}${money}${about}${status}${said}${stage}${invite}${walk}`;
 };
 
 /**
@@ -604,6 +607,9 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
       linkStatus: link ? investorStatus(link.status) : (blasted ? "blasted" : null), blasted,
       price: n.price, agreed: Boolean(n.agreed), arv: n.arv, repairs: n.repairs, invite: room ? inviteByRoom.get(room.id) || null : null,
       offerId: offer.id, reason: reasonWords(link?.reason), kind: assetPhrase(assetOf(offer)),
+      // What buyers ask before they decide — septic, garage, the street, an
+      // easement — from the record, so the bot answers instead of guessing.
+      facts: buyerFacts(offer).facts,
       // Only a deal we hold the house on has a walkthrough to invite them to.
       showing: [
         ...(offer.deal.stage === "under_contract" ? showingContextLines(offer.deal.showing, { contactId, now }) : []),
