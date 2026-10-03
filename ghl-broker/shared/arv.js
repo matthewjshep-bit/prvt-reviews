@@ -127,8 +127,17 @@ function trimOutliers(comps) {
   return kept.length >= 2 ? { kept, dropped: comps.length - kept.length } : { kept: comps, dropped: 0 };
 }
 
+// The comps that carry an ARV: the renovated/updated ones when there are at
+// least two, otherwise all of them. Exported so a check that scales against
+// "the ARV comps" (site-check, arv-checks) uses exactly the set deriveArv did.
+export function arvPool(comps = []) {
+  const priced = comps.filter((c) => num(c.price) > 0);
+  const graded = priced.filter((c) => ARV_CONDITIONS.includes(c.condition));
+  return graded.length >= 2 ? graded : priced;
+}
+
 /**
- * deriveArv({ comps, subjectSqft, subjectYearBuilt, adjustments, trend, now })
+ * deriveArv({ comps, subjectSqft, subjectYearBuilt, adjustments, trend, cap, now })
  *
  *   comps      [{ price, sqft?, condition?, similarity?, saleDate?, distance?, yearBuilt? }]
  *              condition already resolved; `similarity` (0–100, or the object
@@ -137,11 +146,16 @@ function trimOutliers(comps) {
  *   subjectYearBuilt number                     0 when unknown (for the basis only)
  *   adjustments [{ key, label, pct }]           site detractors/premiums
  *   trend       timeTrend() result, or null     brings each sale to today first
+ *   cap         { amount, label, maxCutPct } | null — what similar renovated
+ *              houses are listed for today (arv-checks activeCeiling). The comps'
+ *              base is held to it before the adjustments, and the final ARV
+ *              never sits above it; the cut is limited to maxCutPct (20).
  *
  * Returns null when there is nothing to value, else:
- *   { arv, base, ppsf, method, graded, basis, adjustments, totalPct, oversized, trend, spread }
+ *   { arv, base, cappedBase, capped, ppsf, method, graded, basis, adjustments,
+ *     totalPct, oversized, trend, spread }
  */
-export function deriveArv({ comps = [], subjectSqft = 0, subjectYearBuilt = 0, adjustments = [], trend = null, now = Date.now() } = {}) {
+export function deriveArv({ comps = [], subjectSqft = 0, subjectYearBuilt = 0, adjustments = [], trend = null, cap = null, now = Date.now() } = {}) {
   const raw = comps.filter((c) => num(c.price) > 0);
   if (!raw.length) return null;
   const sqft = num(subjectSqft);
@@ -201,12 +215,27 @@ export function deriveArv({ comps = [], subjectSqft = 0, subjectYearBuilt = 0, a
   }
 
   const applied = adjustments
-    .map((a) => ({ key: a.key, label: a.label, pct: num(a.pct) }))
+    .map((a) => ({ key: a.key, label: a.label, pct: num(a.pct), ...(a.source ? { source: a.source } : {}), ...(a.note ? { note: a.note } : {}) }))
     .filter((a) => a.pct !== 0);
   const totalPct = applied.reduce((t, a) => t + a.pct, 0);
-  const arv = applied.length ? round1k(base * (1 + totalPct / 100)) : base;
+
+  // Today's listings, between the comps and the adjustments: a cut measured
+  // off a base the market won't pay would be measured off the wrong number.
+  // The final figure never sits above the ceiling either — a credit for a
+  // quiet street doesn't buy a price nothing similar is asking.
+  let capped = null;
+  let ceiling = Infinity;
+  const capAt = num(cap?.amount);
+  if (capAt > 0) {
+    const floor = round1k(base * (1 - (num(cap.maxCutPct) || 20) / 100));
+    ceiling = Math.max(round1k(capAt), floor);
+    if (base > ceiling) capped = { from: base, to: ceiling, limited: ceiling > round1k(capAt), label: String(cap.label || "") };
+  }
+  const cappedBase = capped ? capped.to : base;
+  const arv = Math.min(applied.length ? round1k(cappedBase * (1 + totalPct / 100)) : cappedBase, ceiling);
   const adjStr = applied.map((a) => `${a.label} ${a.pct > 0 ? "+" : "−"}${Math.abs(a.pct)}%`).join(", ");
   if (rate) basis += `, time ${rate > 0 ? "+" : "−"}${Math.abs(trend.pctPerMonth)}%/mo`;
+  if (capped) basis += `; capped at $${capped.to.toLocaleString()}${capped.label ? ` — ${capped.label}` : ""}${capped.limited ? " (cut held to " + (num(cap.maxCutPct) || 20) + "%)" : ""}`;
 
   // How far the comps had to reach. This LEADS the basis: the offer document
   // cuts it at 80 characters, and "match 84 · within 0.4 mi" is what a reader
@@ -217,6 +246,8 @@ export function deriveArv({ comps = [], subjectSqft = 0, subjectYearBuilt = 0, a
   return {
     arv,
     base,
+    cappedBase,
+    capped,
     ppsf,
     method,
     graded,
