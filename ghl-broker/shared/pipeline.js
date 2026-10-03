@@ -490,6 +490,14 @@ export function buildPipeline({
           title: `${card.address} has a committed buyer but is still under contract`, detail: "",
           ops: [{ key: "advance", label: "Move to buyer found", intent: "primary" }] }));
       }
+      // The assignment came back signed (the closing checklist's
+      // assignment_signed, ticked): the deal is assigned. Before 2026-10-02
+      // nothing said so and every stage past buyer found was moved by hand.
+      if (dd.stage === "buyer_found" && resolveChecklist(o.deal, { now }).items.some((i) => i.id === "assignment_signed" && i.done)) {
+        card.actionIds.push(push({ ...base, kind: "stage_lag", severity: "soon", advanceTo: "assigned",
+          title: `${card.address}: the assignment is signed — it's assigned`, detail: "the closing checklist says the assignee signed",
+          ops: [{ key: "advance", label: "Move to assigned", intent: "primary" }] }));
+      }
     }
 
     counts.lanes[card.lane]++;
