@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fetchSiteContext, overpassQuery, siteRadiusMeters, checkSite, _resetSiteCache, OVERPASS_ENDPOINTS } from "./site-context.js";
+import { fetchSiteContext, overpassQuery, siteBox, checkSite, _resetSiteCache, OVERPASS_ENDPOINTS, SITE_MAX_COMPS } from "./site-context.js";
 import { UNDERWRITE_CHECKS_DEFAULTS } from "./shared/underwrite-checks.js";
 
 const LAT = 47.799463, LNG = -122.335745;
@@ -15,27 +15,48 @@ const WAY = { elements: [{ type: "way", tags: { highway: "tertiary", name: "76th
   geometry: [{ lat: LAT - 0.002, lon: LNG + 0.0002 }, { lat: LAT + 0.002, lon: LNG + 0.0002 }] }] };
 const reply = (status, text) => ({ ok: status >= 200 && status < 300, status, text: async () => text });
 const json = (o) => reply(200, JSON.stringify(o));
+const BOX = siteBox({ points: [{ lat: LAT, lng: LNG }], padMeters: 275 });
 
-test("the query asks for major roads, commercial land and rail around the point", () => {
-  const q = overpassQuery({ lat: LAT, lng: LNG, radiusMeters: 1750 });
-  assert.match(q, /\[out:json\]/);
-  assert.match(q, /highway~"\^\(motorway\|trunk\|primary\|secondary\|tertiary/);
-  assert.match(q, /landuse~"\^\(commercial\|retail\|industrial\)\$"/);
-  assert.match(q, /railway=rail/);
-  assert.match(q, /around:1750,47\.799463,-122\.335745/);
+test("the query asks for major roads, commercial land and rail inside one small box", () => {
+  const box = siteBox({ points: [{ lat: LAT, lng: LNG }], padMeters: 275 });
+  const q = overpassQuery({ box });
+  assert.match(q, /^\[out:json\]\[timeout:25\]\[bbox:47\.79\d{3},-122\.33\d{3},47\.80\d{3},-122\.33\d{3}\];/);
+  assert.match(q, /way\[highway~"\^\(motorway\|trunk\|primary\|secondary\|tertiary/);
+  assert.match(q, /way\[landuse~"\^\(commercial\|retail\|industrial\)\$"\]/);
+  assert.match(q, /way\[railway=rail\]/);
   assert.match(q, /out tags geom;$/);
 });
 
-test("one query reaches the farthest comp, a mile at least, rounded so neighbours share it", () => {
-  assert.equal(siteRadiusMeters({ center: { lat: LAT, lng: LNG }, points: [] }), 2000);
-  assert.equal(siteRadiusMeters({ center: { lat: LAT, lng: LNG }, points: [{ lat: LAT + 0.03, lng: LNG }] }), 2500, "held to 2.5 km");
+// 2026-10-02, the night it shipped: a mile-wide disc around a Tacoma house
+// took 13.5 s on the public endpoint and every live run read "street not
+// checked". The box now covers the house and the dozen comps the ARV can come
+// from, padded by the farthest any rule looks.
+test("the box covers the house and its comps, padded by the farthest a rule looks", () => {
+  const b = siteBox({ points: [{ lat: LAT, lng: LNG }, { lat: LAT + 0.004, lng: LNG - 0.006 }], padMeters: 275 });
+  assert.ok(b.s < LAT - 0.0024 && b.n > LAT + 0.004 + 0.0024);
+  assert.ok(b.w < LNG - 0.006 - 0.0036 && b.e > LNG + 0.0036);
+  assert.equal(siteBox({ points: [] }), null);
+});
+
+test("only the first dozen comps are measured, and a far-flung one doesn't balloon the box", async () => {
+  _resetSiteCache();
+  let query = "";
+  const fetchImpl = async (url, opts) => { query = decodeURIComponent(String(opts.body).slice(5)); return json(WAY); };
+  const comps = Array.from({ length: 20 }, (_, i) => ({ id: `c${i}`, lat: LAT + 0.001 * (i % 5), lng: LNG + 0.001, address: `${i} Main St` }));
+  comps.push({ id: "far", lat: LAT + 0.2, lng: LNG, address: "far away" });
+  const r = await checkSite({ subject: { lat: LAT, lng: LNG, address: "22018 76th Ave W, Edmonds, WA", precision: "address" }, comps: [comps[20], ...comps.slice(0, 20)], t: UNDERWRITE_CHECKS_DEFAULTS.site, fetchImpl });
+  assert.equal(r.status, "ok");
+  assert.equal(Object.keys(r.comps).length, SITE_MAX_COMPS - 1, "the far comp was dropped to keep the box small");
+  assert.equal(r.comps.far, undefined);
+  const [s, , n] = query.match(/bbox:([\d.,-]+)\]/)[1].split(",").map(Number);
+  assert.ok((n - s) * 111320 < 4000, "the box stays under 4 km");
 });
 
 test("an XML rate-limit page falls through to the mirror", async () => {
   _resetSiteCache();
   const hit = [];
   const fetchImpl = async (url) => { hit.push(url); return url === OVERPASS_ENDPOINTS[0] ? reply(200, "<?xml version='1.0'?><osm>rate limited</osm>") : json(WAY); };
-  const r = await fetchSiteContext({ lat: LAT, lng: LNG, fetchImpl, pauseMs: 0 });
+  const r = await fetchSiteContext({ box: BOX, fetchImpl, pauseMs: 0 });
   assert.deepEqual(hit, OVERPASS_ENDPOINTS);
   assert.equal(r.context.roads.length, 1);
 });
@@ -43,7 +64,7 @@ test("an XML rate-limit page falls through to the mirror", async () => {
 test("a 200 that says the query timed out is a failure, not an empty street", async () => {
   _resetSiteCache();
   const fetchImpl = async () => json({ elements: [], remark: "runtime error: Query timed out in \"query\" at line 1 after 26 seconds." });
-  const r = await fetchSiteContext({ lat: LAT, lng: LNG, fetchImpl, pauseMs: 0 });
+  const r = await fetchSiteContext({ box: BOX, fetchImpl, pauseMs: 0 });
   assert.equal(r.context, null);
   assert.match(r.error, /no usable data/);
 });
@@ -52,22 +73,22 @@ test("Overpass down everywhere returns nothing after one retry, and nothing is c
   _resetSiteCache();
   let n = 0;
   const down = async () => { n++; return reply(429, "Too Many Requests"); };
-  const r = await fetchSiteContext({ lat: LAT, lng: LNG, fetchImpl: down, pauseMs: 0 });
+  const r = await fetchSiteContext({ box: BOX, fetchImpl: down, pauseMs: 0 });
   assert.equal(r.context, null);
-  assert.equal(n, 4, "two endpoints, two rounds");
+  assert.equal(n, 3, "the main endpoint, the mirror, the main endpoint again");
   const up = async () => json(WAY);
-  assert.ok((await fetchSiteContext({ lat: LAT, lng: LNG, fetchImpl: up, pauseMs: 0 })).context, "the next ask goes out — the failure wasn't remembered");
+  assert.ok((await fetchSiteContext({ box: BOX, fetchImpl: up, pauseMs: 0 })).context, "the next ask goes out — the failure wasn't remembered");
 });
 
 test("the same street is asked once a day", async () => {
   _resetSiteCache();
   let n = 0;
   const fetchImpl = async () => { n++; return json(WAY); };
-  await fetchSiteContext({ lat: LAT, lng: LNG, fetchImpl });
-  const again = await fetchSiteContext({ lat: LAT, lng: LNG, fetchImpl });
+  await fetchSiteContext({ box: BOX, fetchImpl });
+  const again = await fetchSiteContext({ box: BOX, fetchImpl });
   assert.equal(n, 1);
   assert.equal(again.cached, true);
-  await fetchSiteContext({ lat: LAT, lng: LNG, fetchImpl, now: Date.now() + 25 * 3600 * 1000 });
+  await fetchSiteContext({ box: BOX, fetchImpl, now: Date.now() + 25 * 3600 * 1000 });
   assert.equal(n, 2, "a day later it's asked again");
 });
 
@@ -75,7 +96,7 @@ test("a hung endpoint is abandoned at the time budget", async () => {
   _resetSiteCache();
   const hang = (url, opts) => new Promise((_, reject) => opts.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "TimeoutError" }))));
   const t0 = Date.now();
-  const r = await fetchSiteContext({ lat: LAT, lng: LNG, fetchImpl: hang, timeoutMs: 50, budgetMs: 400, pauseMs: 10 });
+  const r = await fetchSiteContext({ box: BOX, fetchImpl: hang, timeoutMs: 50, budgetMs: 400, pauseMs: 10 });
   assert.equal(r.context, null);
   assert.ok(Date.now() - t0 < 1500, `took ${Date.now() - t0} ms`);
 });

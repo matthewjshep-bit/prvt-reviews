@@ -1677,7 +1677,10 @@ async function runUnderwrite(job, ctx) {
   const sitePromise = checks?.site.enabled && point
     ? (deps?.checkSite || checkSite)({
         subject: { ...point, address: extraction.address, precision: facts?.point ? "address" : (geocode?.precision || "address") },
-        comps: nearby.map((c) => ({ id: c.id, lat: c.lat, lng: c.lng, address: c.address })),
+        // Most similar first: the ARV comps come from the top handful, and the
+        // street check measures only the first dozen (one small box).
+        comps: [...nearby].sort((a, b) => (b.similarity?.score ?? -1) - (a.similarity?.score ?? -1))
+          .map((c) => ({ id: c.id, lat: c.lat, lng: c.lng, address: c.address })),
         t: checks.site,
       }).catch((e) => ({ status: "unavailable", subject: { flags: {}, nearest: null }, comps: {}, error: String(e?.message || e) }))
     : Promise.resolve(null);
