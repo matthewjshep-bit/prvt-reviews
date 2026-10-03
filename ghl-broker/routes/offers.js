@@ -2971,6 +2971,31 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       return offer;
   }
 
+  // "Draft the assignment when a buyer commits" (dispoAutopilot.paperworkOnCommit):
+  // an assignment PDF drafted from the deal and the buyer, to review — never
+  // sent. Called by every commit path: the conversation's (setInvestorStatus)
+  // and the Deals modal's (PATCH /:id/deal/investors/:contactId). Mutates
+  // `offer` (the PDF link and deal.paperwork); the caller saves it. Never throws.
+  async function draftAssignmentOnCommit({ locationId, offer, inv, ts }) {
+    try {
+      const fresh = (await store.getOfferSettings(locationId)) || {};
+      if (!normalizeDispoAutopilot(fresh.dispoAutopilot).paperworkOnCommit) return false;
+      // An assignment someone made by hand (no paperwork record), or one
+      // already drafted for this buyer, is kept as it is.
+      if (offer.assignment?.generatedAt && (!offer.deal?.paperwork || offer.deal.paperwork.for === inv.contactId)) return false;
+      const settings = effectiveSettings(fresh);
+      await generateAssignment({ locationId, offer, fields: {
+        effectiveDate: ts.slice(0, 10), assignorName: settings.company?.signer || "", assignorCompany: settings.company?.name || "",
+        assigneeName: inv.name || "", assigneeCompany: "", address: offer.address || "",
+        // A price the investor band agreed with this buyer is the price on their paper.
+        totalPrice: Number(inv.agreedPrice?.amount) || ((Number(offer.deal.contractPrice) || 0) + (Number(offer.deal.assignmentFee) || 0)),
+        deposit: Number(settings.earnestMoney) || 0, depositDueDate: "", closingDate: offer.deal.closingDate || "",
+      } });
+      offer.deal.paperwork = { assignmentDraftedAt: ts, for: inv.contactId };
+      return true;
+    } catch (e) { console.error(`assignment on commit failed for ${offer.id}: ${e?.message}`); return false; }
+  }
+
   router.post("/:id/assignment", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -5214,20 +5239,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         (offer.deal.stageHistory = offer.deal.stageHistory || []).push({ stage: "buyer_found", ts });
         // The paperwork: an assignment PDF drafted from the deal and the
         // buyer, when the page asks for it. A draft to review, never sent.
-        try {
-          const fresh = (await store.getOfferSettings(locationId)) || {};
-          if (normalizeDispoAutopilot(fresh.dispoAutopilot).paperworkOnCommit) {
-            const settings = effectiveSettings(fresh);
-            await generateAssignment({ locationId, offer, fields: {
-              effectiveDate: ts.slice(0, 10), assignorName: settings.company?.signer || "", assignorCompany: settings.company?.name || "",
-              assigneeName: inv.name || "", assigneeCompany: "", address: offer.address || "",
-              // A price the investor band agreed with this buyer is the price on their paper.
-              totalPrice: Number(inv.agreedPrice?.amount) || ((Number(offer.deal.contractPrice) || 0) + (Number(offer.deal.assignmentFee) || 0)),
-              deposit: Number(settings.earnestMoney) || 0, depositDueDate: "", closingDate: offer.deal.closingDate || "",
-            } });
-            offer.deal.paperwork = { assignmentDraftedAt: ts, for: contactId };
-          }
-        } catch (e) { console.error(`assignment on commit failed for ${offer.id}: ${e?.message}`); }
+        await draftAssignmentOnCommit({ locationId, offer, inv: { ...inv, contactId }, ts });
         await createContactNote(client, contactId, {
           body: `COMMITTED BUYER — ${offer.address || "property"} (${dateLabel()})` +
             (inv.agreedPrice?.amount
@@ -6128,6 +6140,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         if (offer.deal.stage === "under_contract") {
           offer.deal.stage = "buyer_found";
           offer.deal.stageHistory.push({ stage: "buyer_found", ts });
+          // The same paperwork a commit by text drafts (2026-10-02: this path skipped it).
+          await draftAssignmentOnCommit({ locationId, offer, inv, ts });
         }
         try {
           await createContactNote(client, inv.contactId, {
