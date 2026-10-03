@@ -66,13 +66,17 @@ if (!GO) {
   process.exit(0);
 }
 
+const { normalizeUsAddress } = await import(path.join(root, "shared", "us-address.js"));
 const settings = (await get("/api/offers/settings")).settings || {};
 const maoPct = Number(settings.maoPctOfArv) || 75;
 const line = (arv, repairs) => (arv ? Math.round((maoPct / 100) * arv - (repairs || 0)) : null);
 
 const started = await fetch(`${BROKER}/api/offers/automations/underwrite/backtest?${q}`, {
   method: "POST", headers: { "content-type": "application/json" },
-  body: JSON.stringify({ items: items.map((i) => ({ address: i.address })) }),
+  // The short USPS form ("22018 76th Ave W, Edmonds, WA 98026"): deal records
+  // carry the long one ("…Avenue West, Edmonds, Washington 98026"), which
+  // Zillow's lookup matches less often.
+  body: JSON.stringify({ items: items.map((i) => ({ address: normalizeUsAddress(i.address) })) }),
 }).then((r) => r.json());
 if (!started.ok) { console.error(started.error || "backtest didn't start"); process.exit(1); }
 
@@ -98,6 +102,14 @@ for (const r of results) {
   if (r.error || !r.job || r.job.status === "error") { console.log(`✗ ${r.address}: ${r.error || r.job?.error || "no result"}`); continue; }
   const lb = line(r.before.arv, r.before.repairs);
   const la = line(r.after.arv, r.after.repairs);
+  // Zillow without a record of the house means no size, no photos, no scope:
+  // the run can't price it, so it isn't counted either way.
+  const partial = (r.job.warnings || []).some((w) => /^Zillow listing:/.test(w)) || !r.job.photosAnalyzed;
+  if (partial) {
+    console.log(`${r.address}  [${r.kind}${r.stage ? ` · ${r.stage}` : ""}]`);
+    console.log(`  couldn't fully re-underwrite — ${(r.job.warnings || []).find((w) => /^Zillow listing:/.test(w)) || "no listing photos"}; ARV ${money(r.before.arv)} → ${money(r.after.arv)} on unsized comps (not counted)`);
+    continue;
+  }
   if (lb && la) moves.push((la - lb) / lb);
   const said = Object.entries(BUYERS).find(([k]) => r.address.toLowerCase().startsWith(k.toLowerCase()))?.[1] || null;
   let verdict = "";
