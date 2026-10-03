@@ -113,6 +113,10 @@ export const saveContactFacts = (id, { party, add = [], remove = [] }) =>
   post(`/api/contacts/${encodeURIComponent(id)}/facts`, { party, add, remove });
 export const addContactEvent = (id, body) =>
   post(`/api/contacts/${encodeURIComponent(id)}/events`, body);
+// A call that didn't connect (the Desk's chips): no_answer | voicemail |
+// call_back with callBackAt. No words — the outcome and the date only.
+export const logCallAttempt = (id, { outcome, callBackAt = null, party = null, offerId = null, address = "" } = {}) =>
+  addContactEvent(id, { type: "call_attempt", outcome, ...(callBackAt ? { callBackAt } : {}), party, offerId, address });
 // Read the email with them from Gmail onto their record → { found, recorded, already, bulk } | { skipped }
 export const checkContactGmail = (id) =>
   post(`/api/contacts/${encodeURIComponent(id)}/gmail`, {});

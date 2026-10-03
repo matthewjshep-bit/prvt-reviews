@@ -79,3 +79,24 @@ test("one person's owed number, held underwrite and last night's 'still owed' ar
   // The board still gets every row as it was.
   assert.ok(r.actions.length >= r.desk.rows.length);
 });
+
+test("a hot offer is a call with a brief, a no-answer is remembered, and a connected call clears it", async () => {
+  const hot = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "mary", contactName: "Maryanne A", address: "9311 12th Pl SE, Lake Stevens, WA 98258",
+    status: "sent", cashAmount: 197500, statusHistory: [], createdAt: ago(200), sends: [{ ts: ago(150) }], realm: { answer: "yes", ts: ago(20) } });
+  const get = async () => (await (await fetch(`${B}/api/dashboard/pipeline`)).json()).desk.rows;
+  let row = (await get()).find((x) => x.contactId === "mary");
+  assert.equal(row.kind, "call_hot");
+  assert.equal(row.section, "call");
+  assert.match(row.call.goal, /NWMLS/);
+  assert.equal(row.call.houses[0].offerId, hot.id);
+  // Every Call row has a brief, whoever built it.
+  for (const r of (await get()).filter((x) => x.section === "call")) assert.ok(r.call?.opener, `${r.kind} has an opener`);
+
+  await recordEvent({ store, locationId: LOC, contactId: "mary", party: "agent", type: "call_attempt", at: new Date().toISOString(), source: "operator", dedupeKey: "ca1", data: { outcome: "no_answer" } });
+  row = (await get()).find((x) => x.contactId === "mary");
+  assert.equal(row.call.tries, 1);
+
+  await recordEvent({ store, locationId: LOC, contactId: "mary", party: "agent", type: "call_summary", at: new Date(Date.now() + 1000).toISOString(), source: "call", ref: "m2", dedupeKey: "call:m2",
+    data: { summary: "She'll write it up tonight.", transcribed: true, durationSec: 410 } });
+  assert.equal((await get()).some((x) => x.kind === "call_hot" && x.contactId === "mary"), false, "talked: off the list");
+});

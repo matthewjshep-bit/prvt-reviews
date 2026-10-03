@@ -11,6 +11,7 @@ import {
 import { getBuyerPulse, runBuyerPulse, getAgentPulse, sampleAgentPulse, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
+import { DESK_DEFAULTS, normalizeDesk } from "@shared/call-list.js";
 import { UNDERWRITE_CHECKS_DEFAULTS, normalizeUnderwriteChecks } from "@shared/underwrite-checks.js";
 import { tierDrips } from "@shared/agent-pulse.js";
 import FieldsManager from "./FieldsManager.jsx";
@@ -508,6 +509,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const setMirrorStage = (side, key, stageId) => setMirrorSide(side, { stages: { ...(((form.ghlMirror || {})[side] || {}).stages || {}), [key]: stageId } });
   const setDispoAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), [k]: v } })); };
   const setLine = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, lineTargets: { ...(f.lineTargets || {}), [k]: v } })); };
+  const setDesk = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, desk: { ...(f.desk || {}), [k]: v } })); };
   // The buyer-view checks: raw while typing, normalized (and clamped) on save.
   const uwcRaw = form.underwriteChecks || {};
   const uwcVal = (sec, k) => (sec ? (uwcRaw[sec]?.[k] ?? UNDERWRITE_CHECKS_DEFAULTS[sec][k]) : (uwcRaw[k] ?? UNDERWRITE_CHECKS_DEFAULTS[k]));
@@ -519,6 +521,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
     });
   };
   const lineTargets = { ...LINE_TARGET_DEFAULTS, ...(form.lineTargets || {}) };
+  const desk = { ...DESK_DEFAULTS, ...(form.desk || {}) };
   const setPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), pulse: { ...(f.dispoAutopilot?.pulse || {}), [k]: v } } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
   const setAgentPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), pulse: { ...(f.outreachAutopilot?.pulse || {}), [k]: v } } })); };
@@ -565,6 +568,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount", "minMatchScore", "secondWaveMinScore", "maxWaves"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
       if (form.underwriteChecks) clean.underwriteChecks = normalizeUnderwriteChecks(form.underwriteChecks);
       if (form.lineTargets) clean.lineTargets = normalizeLineTargets(Object.fromEntries(Object.entries(form.lineTargets).map(([k, v]) => [k, typeof v === "string" ? Number(v.replace(/[$,\s]/g, "")) : v])));
+      if (form.desk) clean.desk = normalizeDesk(form.desk);
       if (clean.dispoAutopilot?.pulse) clean.dispoAutopilot.pulse = { ...clean.dispoAutopilot.pulse, ...Object.fromEntries(["dailyCap", "everyDays", "quietDays", "conversedShare"].filter((k) => clean.dispoAutopilot.pulse[k] != null).map((k) => [k, Number(clean.dispoAutopilot.pulse[k])])) };
       const r = await saveSettings(clean);
       onSaved?.(r.settings);
@@ -648,6 +652,21 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <Num label="Fee per deal" suffix="$" money value={lineTargets.feePerDeal} onChange={setLine("feePerDeal")} />
           <Num label="Touch every agent who's replied" suffix="days" value={lineTargets.agentTouchDays} onChange={setLine("agentTouchDays")} />
           <Num label="Touch every buyer" suffix="days" value={lineTargets.buyerTouchDays} onChange={setLine("buyerTouchDays")} />
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-1 text-sm font-bold">The Desk's call list</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Who Today → Desk puts under Call. Hot offers, counters, missed calls and first replies always qualify; these set how many
+          show, when a partner agent is due a check-in, and when a call that keeps not connecting goes back to texting. Nothing here sends anything.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <Num label="Calls shown before “more”" value={desk.callCap} onChange={setDesk("callCap")} />
+          <Num label="Partner check-in after" suffix="days quiet" value={desk.relationshipDays} onChange={setDesk("relationshipDays")} />
+          <Num label="Partner check-ins at most" suffix="a day" value={desk.relationshipPerDay} onChange={setDesk("relationshipPerDay")} />
+          <Num label="A new agent's first reply stays a call" suffix="days" value={desk.firstReplyDays} onChange={setDesk("firstReplyDays")} />
+          <Num label="Calls with no answer before texting takes over" value={desk.triesBeforeMachine} onChange={setDesk("triesBeforeMachine")} />
         </div>
       </section>
 
