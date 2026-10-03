@@ -107,8 +107,7 @@ function systemPrompt(extraInstructions) {
     "a fee. This deal was under contract and we had to back out. You are reading everything it left behind — our " +
     "underwriting numbers, the price we contracted at, what the listing agent said while we negotiated, and what " +
     "every buyer said when they were pitched — to say why it died and what to do differently.\n\n" +
-    "Root-cause codes (deal level): buyers_passed_price, buyers_passed_rehab, buyers_passed_area, no_buyer_response, " +
-    "inspection, seller_backed_out, title_or_financing, other. Buyer-level pass codes, when one buyer's reason is " +
+    `Root-cause codes (deal level): ${FELL_THROUGH_CODES.join(", ")}. Buyer-level pass codes, when one buyer's reason is ` +
     `the finding:\n${gloss}\n\n` +
     "Rules: every root cause carries evidence — verbatim quotes with who said them (agent / buyer / us) and when. " +
     "Weights sum to about 1. The SCORECARD is arithmetic and is authoritative for the numbers; your job is the " +

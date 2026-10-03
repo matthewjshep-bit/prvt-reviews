@@ -47,12 +47,17 @@ const streetOf = (a) => String(a || "").split(",")[0].trim();
 // suggested from what the buyers already said; the rest are the contract
 // dying for reasons no buyer had a say in.
 export const FELL_THROUGH_CODES = [
-  "buyers_passed_price", "buyers_passed_rehab", "buyers_passed_area", "no_buyer_response",
+  "buyers_passed_price", "buyers_passed_arv", "buyers_passed_rehab", "buyers_passed_location",
+  "buyers_passed_layout", "buyers_passed_exposure", "buyers_passed_area", "no_buyer_response",
   "inspection", "seller_backed_out", "title_or_financing", "other",
 ];
 export const FELL_THROUGH_LABEL = {
   buyers_passed_price: "Buyers passed on price",
+  buyers_passed_arv: "Buyers didn't believe the ARV",
   buyers_passed_rehab: "Buyers doubted the rehab / condition",
+  buyers_passed_location: "Buyers didn't want the street",
+  buyers_passed_layout: "Buyers didn't want the size / layout",
+  buyers_passed_exposure: "Buyers had already seen it elsewhere",
   buyers_passed_area: "Buyers don't want the area",
   no_buyer_response: "No buyer engaged",
   inspection: "Inspection / feasibility",
@@ -67,12 +72,20 @@ export function normalizeFellThroughCode(v) {
 // The code the buyers' own pass reasons point at. `byCode` is the
 // summarizeFeedback shape, sorted by count; the top house-related reason wins.
 export function codeFromPassReasons(byCode = []) {
-  const GROUP = { price: "buyers_passed_price", rehab_scope: "buyers_passed_rehab", condition: "buyers_passed_rehab", area: "buyers_passed_area" };
+  const GROUP = {
+    price: "buyers_passed_price", arv: "buyers_passed_arv", rehab_scope: "buyers_passed_rehab", condition: "buyers_passed_rehab",
+    location: "buyers_passed_location", layout: "buyers_passed_layout", exposure: "buyers_passed_exposure",
+    legal: "title_or_financing", area: "buyers_passed_area",
+  };
   const totals = new Map();
   for (const r of byCode || []) { const g = GROUP[r?.code]; if (g) totals.set(g, (totals.get(g) || 0) + (Number(r.count) || 0)); }
   if (!totals.size) return (byCode || []).length ? "other" : "no_buyer_response";
-  // Ties go to the reason about the HOUSE we can fix next time: rehab, then price, then area.
-  const order = ["buyers_passed_rehab", "buyers_passed_price", "buyers_passed_area"];
+  // Ties go to the reason about the HOUSE we can fix next time: rehab, then
+  // the resale number, the street, the layout, price, exposure, title, area.
+  const order = [
+    "buyers_passed_rehab", "buyers_passed_arv", "buyers_passed_location", "buyers_passed_layout",
+    "buyers_passed_price", "buyers_passed_exposure", "title_or_financing", "buyers_passed_area",
+  ];
   return [...totals.entries()].sort((a, b) => b[1] - a[1] || order.indexOf(a[0]) - order.indexOf(b[0]))[0][0];
 }
 

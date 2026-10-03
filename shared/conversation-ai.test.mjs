@@ -4,6 +4,7 @@ import {
   normalizeConversationAi, CONVERSATION_AI_DEFAULTS, INTENTS, NEVER_AUTO, autoEligible, OUTBOUND_INTENTS,
   draftStats, substituteTokens, actionAllowedFor, isValidTimeZone,
   normalizePassReason, summarizeFeedback, ASK_ONLY_ACTIONS, HUMAN_ACTIVE_MIN_FLOOR, writeUpTermsText,
+  recodePassReason,
 } from "./conversation-ai.js";
 
 test("an empty doc is the defaults, and normalizing twice changes nothing", () => {
@@ -331,6 +332,42 @@ test("deal feedback rolls up to the thing to fix, commonest first", () => {
   assert.deepEqual(r.byCode.map((c) => [c.code, c.count]), [["price", 3], ["area", 1], ["other", 1]]);
   assert.equal(r.byCode[0].label, "Price too high");
   assert.deepEqual(summarizeFeedback([]), { total: 0, byCode: [] });
+});
+
+// The 2026-10-02 read of every buyer thread: the old broad codes hid five
+// different underwriting fixes. Old reasons are recoded when read, never
+// rewritten, and only from the buyer's own words.
+test("a busy-road note filed as area or condition reads as the street", () => {
+  assert.equal(recodePassReason({ code: "area", note: "busy rd" }).code, "location");
+  assert.equal(recodePassReason({ code: "condition", note: "Busy rd" }).code, "location");
+  assert.equal(recodePassReason({ code: "other", note: "Double yellow is busy street" }).code, "location");
+  assert.equal(recodePassReason({ code: "area", note: "Nope too close to Aurora" }).code, "location");
+  assert.equal(recodePassReason({ code: "other", note: "proximity to the commercial district" }).code, "location");
+});
+
+test("a commute complaint, a kind of builder or an address with Hwy in it is not a street complaint", () => {
+  assert.equal(recodePassReason({ code: "area", note: "an hour and a half in traffic to get up to Edmonds" }).code, "area");
+  assert.equal(recodePassReason({ code: "other", note: "I'm a commercial builder" }).code, "other");
+  assert.equal(recodePassReason({ code: "area", note: "21904 Vashon Hwy SW is too far for my crew" }).code, "area");
+});
+
+test("a price pass that talks about comps or resale reads as an ARV objection; a plain price pass stays price", () => {
+  assert.equal(recodePassReason({ code: "price", note: "Most recent comps sold for 620 and 630" }).code, "arv");
+  assert.equal(recodePassReason({ code: "price", note: "aggressive on the resale price" }).code, "arv");
+  assert.equal(recodePassReason({ code: "price", note: "needs to be under 400 for me" }).code, "price");
+});
+
+test("size, title and seen-it-elsewhere passes land on their own codes", () => {
+  assert.equal(recodePassReason({ code: "property_type", note: "too small, needs 1800+ sq.ft." }).code, "layout");
+  assert.equal(recodePassReason({ code: "condition", note: "driveway isn't part of the parcel" }).code, "legal");
+  assert.equal(recodePassReason({ code: "already_bought", note: "I saw it on the market last week" }).code, "exposure");
+  assert.equal(recodePassReason({ code: "rehab_scope", note: "busy road and 30k rehab" }).code, "rehab_scope", "a specific code is left alone");
+  assert.equal(normalizePassReason({ code: "condition", note: "Busy rd" }).code, "location", "normalizing recodes too");
+});
+
+test("deal feedback counts a recoded reason under its real cause", () => {
+  const r = summarizeFeedback([{ code: "area", note: "busy rd" }, { code: "condition", note: "yellow lines" }, { code: "area", note: "too far" }]);
+  assert.deepEqual(r.byCode.map((c) => [c.code, c.count]), [["location", 2], ["area", 1]]);
 });
 
 test("a buyer's no is wired to be filed, and a price gripe short of a no is filed too", () => {

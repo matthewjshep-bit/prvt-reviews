@@ -112,7 +112,10 @@ test("the scorecard says how far over the line each deal was", () => {
   assert.equal(e.underwrite.climb, 480000 - 465568);
   assert.equal(e.underwrite.revisions, 4);
   assert.equal(e.fellThroughCode, "buyers_passed_rehab");
-  assert.deepEqual(e.buyers.codedReasons.map((r) => `${r.code}:${r.count}`), ["area:2", "rehab_scope:2", "condition:1", "price:1"]);
+  // Since the 2026-10-02 split: Denis V's "busy rd", filed once as area and
+  // once as condition, is one street complaint; Richard R's "aggressive on
+  // the resale price" is an ARV objection, not a price one.
+  assert.deepEqual(e.buyers.codedReasons.map((r) => `${r.code}:${r.count}`), ["rehab_scope:2", "area:1", "arv:1", "location:1"]);
   assert.equal(e.days.toFirstPass, 3.9);
 
   const v = dealScorecard({ offer: vashon, settings: SETTINGS });
@@ -138,7 +141,9 @@ test("a feedback package sharpens the buyer counts and the reasons", () => {
   assert.equal(e.buyers.replyRate, 35);
   assert.deepEqual(e.buyers.askedFor, { n: 2, min: 440000, median: 445000, max: 450000 });
   assert.equal(e.days.toFirstReply, 0.1);
-  assert.ok(e.buyers.codedReasons.find((r) => r.code === "price").count >= 2);
+  // "aggressive on the resale" reads as ARV; "closer to 440" stays price.
+  assert.ok(e.buyers.codedReasons.find((r) => r.code === "arv").count >= 2);
+  assert.ok(e.buyers.codedReasons.find((r) => r.code === "price").count >= 1);
 });
 
 test("the post-mortem reads the agent thread for the numbers and the no", () => {

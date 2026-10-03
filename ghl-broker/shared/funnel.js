@@ -14,7 +14,7 @@
 // Pure. Every function takes plain rows and returns plain numbers.
 
 import { effectiveStatus } from "./offer-status.js";
-import { PASS_REASONS, PASS_REASON_LABEL, summarizeFeedback } from "./conversation-ai.js";
+import { PASS_REASONS, PASS_REASON_LABEL, summarizeFeedback, recodePassReason } from "./conversation-ai.js";
 import { parseUsAddress } from "./us-address.js";
 
 const round = (v) => Math.round(Number(v) || 0);
@@ -165,8 +165,11 @@ export function passReasons(rows = [], { by = "deal" } = {}) {
       ...(deal.feedback || []).map((f) => ({ contactId: f.contactId, code: f.code, note: f.note })),
       ...(deal.investors || []).filter((i) => i?.reason?.code).map((i) => ({ contactId: i.contactId, code: i.reason.code, note: i.reason.note })),
     ];
-    for (const e of entries) {
-      if (!e.code) continue;
+    for (const e0 of entries) {
+      if (!e0.code) continue;
+      // Recoded before the dedupe, so "busy rd" filed once as area and once
+      // as condition is one street complaint, not two.
+      const e = recodePassReason(e0);
       const dedupe = `${e.contactId}|${o.id}|${e.code}`;
       if (seen.has(dedupe)) continue;
       seen.add(dedupe);

@@ -191,16 +191,28 @@ export const autoEligible = (party) =>
 // exactly nothing as free text scattered across threads. One closed
 // vocabulary, so a deal can say "four passed, three on price" and a buyer's
 // record can say "he passes on price every time we send him Tacoma".
+//
+// The house-side codes were split on 2026-10-02 after reading every buyer
+// thread: "the ARV is aggressive", "a 1-bath with a 76-inch basement", "it's
+// on a busy road", "the driveway isn't on the parcel" and "I saw it on the
+// MLS last week" are five different fixes to the underwriting, and the old
+// list filed them as price, property_type, condition, condition and
+// already_bought. `area` stays the BUYER's territory — too far for their crew.
 export const PASS_REASONS = [
-  "price", "area", "property_type", "rehab_scope", "condition",
-  "timing", "capital", "already_bought", "other",
+  "price", "arv", "rehab_scope", "condition", "layout", "location", "legal", "exposure",
+  "area", "property_type", "timing", "capital", "already_bought", "other",
 ];
 export const PASS_REASON_LABEL = {
   price: "Price too high",
-  area: "Wrong area",
-  property_type: "Wrong property type",
+  arv: "ARV too high",
   rehab_scope: "Too much rehab",
   condition: "Condition / structural",
+  layout: "Layout / size",
+  location: "Street / surroundings",
+  legal: "Title / permits / utilities",
+  exposure: "Already seen elsewhere",
+  area: "Wrong area",
+  property_type: "Wrong property type",
   timing: "Bad timing",
   capital: "No capital right now",
   already_bought: "Already spoken for elsewhere",
@@ -210,15 +222,53 @@ export const PASS_REASON_LABEL = {
 // UI stays short and the prompt stays precise.
 export const PASS_REASON_GLOSS = {
   price: "the number is too high for them, no spread, they'd need it cheaper",
-  area: "they don't buy that neighborhood, city or county",
-  property_type: "wrong type — condo, multi, land, mobile, too small or too big",
-  rehab_scope: "more work than they take on",
-  condition: "a specific defect: foundation, fire, septic, title, tenants",
+  arv: "they don't believe the after-repair value — comps, today's listings, a soft market",
+  rehab_scope: "more work than they take on, or they think our rehab number is too low",
+  condition: "a specific defect in the house: foundation, roof, fire, mold, water damage",
+  layout: "the house itself: too small, too few baths or beds, short basement, no garage, small lot, odd layout",
+  location: "the street or what's next to it: busy road, yellow lines, arterial, highway, commercial, rail, a rough block (not the town — that's area)",
+  legal: "title, easement, right-of-way, driveway, permits or unpermitted work, zoning, septic or sewer, HOA, land lease",
+  exposure: "they've already seen it — on the MLS, pending, or another wholesaler sent it (often cheaper)",
+  area: "they don't buy that neighborhood, city or county — too far for them",
+  property_type: "wrong kind of property — condo, multi, land, mobile or manufactured",
   timing: "not right now — closing window, travel, out of season",
   capital: "money is tied up, funds not free, too many projects open",
-  already_bought: "they already have it, saw it elsewhere, or it's under contract to them",
+  already_bought: "they already own it or have it under contract themselves",
   other: "a real reason that fits none of the above",
 };
+
+// Words that put an older, broader code on its real cause. Applied when a
+// reason is read, never written back: an Edmonds buyer's "busy rd" was filed
+// as `area` once and `condition` once, and both now read as `location`.
+// Narrow on purpose: "traffic" is usually a commute ("an hour and a half in
+// traffic"), "commercial" alone is a kind of builder, and "Hwy" is in
+// addresses (21904 Vashon Hwy SW). These are the street words buyers used.
+export const LOCATION_RE = /busy (st|street|rd|road|corner|intersection)|double yellow|yellow lines?|arterial|main road|(close|near|next) to (the )?(hwy|highway|freeway|i-?5\b|i-?405|405|aurora|99\b|commercial|railroad|tracks)|hwy ?99|highway 99|aurora ave|(freeway|highway|road|train) noise|commercial (district|strip|zone|area|corridor)|backs (up )?(to|onto) (commercial|the freeway|the highway)|industrial (area|park|zone)|gas station|railroad|train tracks?|rough (area|block)|tough area/i;
+export const LAYOUT_RE = /sq\.? ?f(ee)?t|square f(oo|ee)t|too small|tiny|one bath(room)?|1 bath|single bath|short basement|basement (is )?(too )?short|ceiling height|low ceilings?|no garage|half a garage|tuck[- ]under|small lot|lot (is )?too small|funky layout|odd layout/i;
+export const LEGAL_RE = /easement|right[- ]of[- ]way|driveway|title\b|permit|unpermitted|zoning|septic|sewer|\bhoa\b|land lease|lot rent/i;
+export const EXPOSURE_RE = /saw it (on|somewhere|elsewhere)|on the (market|mls)|off the mls|been on the market|already (got|received|seen) (it|this)|someone else (sent|offered)|another wholesaler|it'?s pending|status changed to pending/i;
+export const ARV_RE = /\barv\b|resale|comps?\b|sold for|listed (around|at)|appraise|after repair/i;
+
+/**
+ * recodePassReason({ code, note }) → { code, note }
+ *
+ * Moves a reason filed under an older, broader code onto the one its own
+ * words name. Only ever narrows: a `price` pass that talks about comps becomes
+ * `arv`; a `condition` pass about the street becomes `location`. A code that
+ * is already specific is left alone.
+ */
+export function recodePassReason(r) {
+  if (!r || typeof r !== "object") return r;
+  const note = String(r.note || "");
+  const code = r.code;
+  if (!note) return r;
+  if (["condition", "area", "other"].includes(code) && LOCATION_RE.test(note)) return { ...r, code: "location" };
+  if (["condition", "other", "already_bought"].includes(code) && LEGAL_RE.test(note)) return { ...r, code: "legal" };
+  if (["property_type", "other", "condition"].includes(code) && LAYOUT_RE.test(note)) return { ...r, code: "layout" };
+  if (["already_bought", "other", "price"].includes(code) && EXPOSURE_RE.test(note)) return { ...r, code: "exposure" };
+  if (["price", "other"].includes(code) && ARV_RE.test(note)) return { ...r, code: "arv" };
+  return r;
+}
 
 /**
  * normalizePassReason(v) → { code, note } | null
@@ -233,7 +283,7 @@ export function normalizePassReason(v) {
   const raw = String(v.code || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
   const code = PASS_REASONS.includes(raw) ? raw : "";
   if (!code && !note) return null;
-  return { code: code || "other", note };
+  return recodePassReason({ code: code || "other", note });
 }
 
 /**
@@ -245,7 +295,8 @@ export function normalizePassReason(v) {
 export function summarizeFeedback(rows = []) {
   const counts = new Map();
   for (const r of rows) {
-    const code = PASS_REASONS.includes(r?.code) ? r.code : "other";
+    const code0 = PASS_REASONS.includes(r?.code) ? r.code : "other";
+    const code = recodePassReason({ code: code0, note: r?.note }).code;
     counts.set(code, (counts.get(code) || 0) + 1);
   }
   const byCode = [...counts.entries()]
