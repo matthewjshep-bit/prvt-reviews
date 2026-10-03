@@ -6,16 +6,16 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ExternalLink, FileText, Loader2, Lock, Paperclip, Pencil, Sparkles, Target, Trash2, Upload, X, MessageSquare } from "lucide-react";
+  Ban, ExternalLink, FileText, Loader2, Lock, Paperclip, Pencil, Play, Sparkles, Target, Trash2, Upload, X, MessageSquare } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { INVESTOR_STATUSES, INVESTOR_STATUS_LABEL, investorStatus, dealOutreachPaused } from "@shared/offer-status.js";
+import { INVESTOR_STATUSES, INVESTOR_STATUS_LABEL, investorStatus, dealOutreachPaused, dealOutreachStopped, dealIsOver } from "@shared/offer-status.js";
 import { summarizeFeedback } from "@shared/conversation-ai.js";
 import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL, buyerCeiling, codeFromPassReasons } from "@shared/post-mortem.js";
 import { ClipboardCheck } from "lucide-react";
 import PostMortemModal from "./PostMortemView.jsx";
 import {
   addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
-  removeDeal, removeDealInvestor, suggestInvestors, updateDeal, updateDealInvestor,
+  removeDeal, removeDealInvestor, setDealOutreachStopped, suggestInvestors, updateDeal, updateDealInvestor,
   uploadDealDoc, zillowUrl, dealFeedbackUrl } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
 import ContactLink from "./ContactLink.jsx";
@@ -39,7 +39,7 @@ import {
 // Stage vocabulary and the pill live in ui.jsx so History can render a stage
 // without importing from a sibling view. Re-exported here for the modules that
 // already reach for them through DealsView.
-export { DEAL_STAGES, STAGE, StagePill };
+export { DEAL_STAGES, STAGE, StagePill, DealModal, InvestorSummary };
 const TERMINAL = new Set(["closed", "fell_through"]);
 
 const STATUS_DOT = {
@@ -86,6 +86,15 @@ const shortDate = (iso) =>
 // far along is disposition", the modal answers "who, exactly".
 function InvestorSummary({ deal }) {
   const inv = deal.investors || [];
+  // Stopped by you says why the deal is quiet before anything about buyers.
+  if (dealOutreachStopped(deal)) {
+    return (
+      <span title="You stopped outreach on this deal — open it to resume"
+        className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-900">
+        <Ban size={11} aria-hidden="true" /> outreach stopped
+      </span>
+    );
+  }
   if (!inv.length) return <span className="text-xs text-slate-400">none yet</span>;
   const live = inv.filter((i) => investorStatus(i.status) !== "passed").length;
   const committed = inv.some((i) => investorStatus(i.status) === "committed");
@@ -313,6 +322,9 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   // Derived, never stored: change a buyer's standing and the banner and the
   // broker's own gates agree without a second switch to keep in step.
   const paused = dealOutreachPaused(deal);
+  // Yours, stored: Stop outreach in the header (shared/offer-status.js).
+  const stopped = dealOutreachStopped(deal);
+  const [pulledNote, setPulledNote] = useState("");
   const [terms, setTerms] = useState(() => ({
     contractPrice: deal.contractPrice ?? "",
     assignmentFee: deal.assignmentFee ?? "",
@@ -391,6 +403,15 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
 
   const saveTerms = () => run(() => updateDeal(offer.id, terms));
 
+  // Stop or resume outreach. Stopping pulls back what was already queued;
+  // the banner says how much, so "stopped" is never a guess.
+  async function toggleOutreach() {
+    const r = await run(() => setDealOutreachStopped(offer.id, !stopped));
+    if (!r?.ok) return;
+    const n = r.pulled?.dismissed || 0, h = r.pulled?.held || 0;
+    setPulledNote([n && `${n} queued text${n === 1 ? "" : "s"} pulled back`, h && `${h} repl${h === 1 ? "y" : "ies"} back with you`].filter(Boolean).join(", "));
+  }
+
   const removeThisDeal = async () => {
     if (!window.confirm("Remove deal tracking from this offer? The offer itself is kept.")) return;
     const r = await run(() => removeDeal(offer.id));
@@ -446,6 +467,13 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
           </div>
           <div className="flex items-center gap-2">
             {busy && <Loader2 size={16} className="animate-spin text-slate-400" />}
+            {(stopped || !dealIsOver(deal)) && (
+              <button type="button" disabled={busy} onClick={toggleOutreach}
+                className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-semibold ${stopped ? "border-slate-300 hover:bg-slate-50" : "border-rose-300 text-rose-800 hover:bg-rose-50"}`}
+                title={stopped ? "Waves, nudges and package links pick up again when they're next due" : "Nothing goes to buyers about this house by itself until you resume"}>
+                {stopped ? <><Play size={14} /> Resume outreach</> : <><Ban size={14} /> Stop outreach</>}
+              </button>
+            )}
             <button type="button" onClick={() => onEdit?.(offer)}
               className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-50"
               title="Open this offer in the editor — rehab scope, comps, document">
@@ -458,6 +486,13 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
         </div>
 
         {error && <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        {stopped && (
+          <p role="status" className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-900">
+            <span className="font-semibold">Outreach stopped {shortDate(stopped.at)}.</span>{" "}
+            Nothing goes to buyers about this house by itself: no waves, blasts, nudges, package links or walkthrough texts, and the bot won't bring it up to anyone new. A buyer's reply about it waits for you.
+            {pulledNote && <> {pulledNote}.</>}
+          </p>
+        )}
 
         {/* Stage */}
         <div className="mb-4">
@@ -531,7 +566,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             {/* Why nothing is going out. Said here rather than left to be
                 inferred from a quiet deal: a paused deal and a stalled one
                 look identical from the board. */}
-            {paused && (
+            {paused && paused.status !== "stopped" && (
               <p className={`rounded-lg px-3 py-2 text-xs ${paused.status === "committed" ? "bg-emerald-50 text-emerald-900" : "bg-amber-50 text-amber-900"}`}>
                 <span className="font-semibold">Outreach paused.</span>{" "}
                 {paused.status === "committed"
