@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, pickWave, blastedTo } from "./buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, pickWave, blastedTo, buyerDealbreakers } from "./buyer-score.js";
 
 const NOW = Date.parse("2026-09-13T12:00:00Z");
 const monthsBack = (n) => new Date(NOW - n * 30.44 * 86400000).toISOString();
@@ -215,4 +215,36 @@ test("a deal with no kind ranks exactly as before", () => {
   assert.equal(r.parts.type, 0);
   assert.equal(r.parts.typeRefused, false);
   assert.equal(r.score, 35 + 20 + 10, "location + tier + strategy, nothing else");
+});
+
+// 2026-10-02: eight buyers had saved a street rule, eleven "no islands / no
+// Vashon", one "off-market only" — and were still sent the house that broke it.
+test("a buyer's saved dealbreakers are read off their own words", () => {
+  assert.deepEqual(buyerDealbreakers("busy streets"), { site: ["busy_road"], island: false, offMarketOnly: false });
+  assert.deepEqual(buyerDealbreakers("no busy streets, no proximity to commercial district, not interested in Vashon").site.sort(), ["backs_commercial", "busy_road"]);
+  assert.equal(buyerDealbreakers("Vashon Island (too far)").island, true);
+  assert.equal(buyerDealbreakers("Seattle city limits only, no on-market listings, off-market only").offMarketOnly, true);
+  assert.deepEqual(buyerDealbreakers(""), { site: [], island: false, offMarketOnly: false });
+});
+
+const tacoma = (over = {}) => ({ contactId: "x", phone: "+12065550100", tier: "vip", markets: { cities: ["tacoma"], regions: [], types: ["flip"] }, buybox: {}, ...over });
+const rankAll = (buyers, target) => buyers.map((i) => { const r = rankForDeal(i, target, { now: NOW }); return { ...i, rank: r.score, rankParts: r.parts, rankReasons: r.reasons }; });
+
+test("a buyer who said no busy streets is left off a busy-road wave and still gets a quiet-street deal", () => {
+  const vlad = tacoma({ contactId: "vlad", buybox: { exclusions: "no busy streets or short basements" } });
+  const other = tacoma({ contactId: "other" });
+  const busy = dealTarget({ city: "Tacoma", site: ["busy_road"] });
+  const ranked = rankAll([vlad, other], busy);
+  assert.deepEqual(pickWave(ranked, { wave: 1 }).map((i) => i.contactId), ["other"]);
+  assert.match(ranked[0].rankReasons.join(" | "), /won't take it \(they said no busy streets\)/);
+  const quiet = dealTarget({ city: "Tacoma", site: [] });
+  assert.deepEqual(pickWave(rankAll([vlad, other], quiet), { wave: 1 }).map((i) => i.contactId).sort(), ["other", "vlad"], "a dealbreaker only ever narrows");
+});
+
+test("no islands keeps a buyer off Vashon; off-market only keeps one off a house on the MLS", () => {
+  const vashon = (over) => tacoma({ markets: { cities: ["vashon"], regions: [], types: ["flip"] }, ...over });
+  const island = dealTarget({ city: "Vashon", island: true });
+  assert.deepEqual(pickWave(rankAll([vashon({ contactId: "a", buybox: { exclusions: "no islands" } }), vashon({ contactId: "b" })], island), { wave: 1 }).map((i) => i.contactId), ["b"]);
+  const listed = dealTarget({ city: "Tacoma", onMarket: true });
+  assert.deepEqual(pickWave(rankAll([tacoma({ contactId: "c", buybox: { exclusions: "off-market only" } }), tacoma({ contactId: "d" })], listed), { wave: 1 }).map((i) => i.contactId), ["d"]);
 });

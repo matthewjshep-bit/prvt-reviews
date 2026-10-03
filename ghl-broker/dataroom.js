@@ -22,6 +22,7 @@ import { brandMarkSvg } from "./shared/brand-mark.js";
 import { recordEvent } from "./contact-record.js";
 import { zillowUrl } from "./shared/us-address.js";
 import { assetOf, assetPhrase } from "./shared/asset-type.js";
+import { buyerFacts } from "./shared/underwrite-checks.js";
 
 export const DEFAULT_EXPIRY_DAYS = 14;
 
@@ -411,6 +412,11 @@ export function buildSnapshot({ offer, settings = {}, sections, headline = "", n
       // "Mobile home in a park" — the first thing a buyer of one asks
       // (shared/asset-type.js). Empty for a single family house.
       kind: capitalize(assetPhrase(assetOf(offer))),
+      // What buyers ask before they'd decide — septic, the garage, the
+      // street, an easement or unpermitted work the listing names — answered
+      // up front (shared/underwrite-checks.js buyerFacts). A buyer finding the
+      // easement at title is how 7034 S K St nearly died.
+      facts: buyerFacts(offer).facts.slice(0, 6),
     },
     numbers: pinned.numbers,
     overrides: pinned.overrides,
@@ -427,6 +433,8 @@ export function buildSnapshot({ offer, settings = {}, sections, headline = "", n
         .map((a) => ({ label: clean(a?.label, 60), pct: num(a?.pct) }))
         .filter((a) => a.pct !== 0)
         .slice(0, 6),
+      // Held to what similar houses list for today (the buyer-view checks).
+      cap: snap?.checks?.arv?.capped ? { to: Math.round(num(snap.checks.arv.capped.to)), label: clean(snap.checks.arv.capped.label, 120) } : null,
     },
     scope: (offer?.scope || []).slice(0, 60).map((s) => ({ label: clean(s.label, 120), cost: Math.round(num(s.cost)) })),
     conditionSummary: clean(snap?.rehab?.aiResult?.summary, 800),
@@ -1099,8 +1107,10 @@ function compsSection(snap) {
       <td class="r" style="font-weight:700">${esc(money(c.price))}</td>
     </tr>`;
   }).join("");
-  const adj = (snap.comps.adjustments || [])
-    .map((a) => `${esc(a.label)} ${a.pct > 0 ? "+" : "−"}${Math.abs(a.pct)}%`).join(", ");
+  const adj = [
+    snap.comps.cap ? `held to ${esc(money(snap.comps.cap.to))}${snap.comps.cap.label ? ` (${esc(snap.comps.cap.label)})` : ""}` : "",
+    ...(snap.comps.adjustments || []).map((a) => `${esc(a.label)} ${a.pct > 0 ? "+" : "−"}${Math.abs(a.pct)}%`),
+  ].filter(Boolean).join(", ");
   const sub = [
     snap.comps.months ? `Closed sales, last ${snap.comps.months} months` : "Closed sales",
     snap.comps.basis ? esc(snap.comps.basis) : "",
@@ -1321,15 +1331,17 @@ export function renderRoom({ snap, token, invite, viewCount = 1, backLink = "", 
         ${propBits ? `<p class="sub">${esc(propBits)}</p>` : ""}
       </div>
     </div>
-    ${snap.headline || p.zillow ? `<div class="card">
+    ${snap.headline || p.zillow || (p.facts || []).length ? `<div class="card">
       <p class="eyebrow">${esc(company.name || "Investor package")}${company.tagline ? ` · ${esc(company.tagline)}` : ""}</p>
       ${snap.headline ? `<p style="margin:0;font-weight:600">${esc(snap.headline)}</p>` : ""}
+      ${(p.facts || []).length ? `<p class="muted" style="margin:6px 0 0;font-size:13px">Worth knowing: ${esc(p.facts.join(" · "))}</p>` : ""}
       ${p.zillow ? `<p style="margin:8px 0 0"><a href="${esc(p.zillow)}" target="_blank" rel="noopener noreferrer nofollow" style="font-size:13px">View the property on Zillow →</a></p>` : ""}
     </div>` : ""}`
     : `<div class="card">
       <p class="eyebrow">${esc(company.name || "Investor package")}${company.tagline ? ` · ${esc(company.tagline)}` : ""}</p>
       <h1>${esc(p.address || "Investment opportunity")}</h1>
       ${propBits ? `<p class="muted" style="margin-bottom:2px">${esc(propBits)}</p>` : ""}
+      ${(p.facts || []).length ? `<p class="muted" style="margin:2px 0 0;font-size:13px">Worth knowing: ${esc(p.facts.join(" · "))}</p>` : ""}
       ${snap.headline ? `<p style="margin-top:10px;font-weight:600">${esc(snap.headline)}</p>` : ""}
       ${p.zillow ? `<p style="margin:8px 0 0"><a href="${esc(p.zillow)}" target="_blank" rel="noopener noreferrer nofollow" style="font-size:13px">View the property on Zillow →</a></p>` : ""}
     </div>`}

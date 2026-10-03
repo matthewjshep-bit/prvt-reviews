@@ -468,3 +468,15 @@ test("a duplex we priced anyway counts as chosen; a passed one, a held draft and
   assert.deepEqual(pricedOutsideFocus(offers, ["sfr"]).sort(), ["13348 32nd Ave S, Tukwila, WA 98168", "4 Ash St, Kent, WA 98030"]);
   assert.deepEqual(pricedOutsideFocus(offers, ["sfr", "multi_family", "manufactured"]), [], "inside the focus, nothing to name");
 });
+
+test("a buyer asking whether it's septic finds the answer in the deal line, from the record", async () => {
+  const { buildInvestorContext } = await import("./conversation-context.js");
+  const deal = {
+    id: "d-septic", address: "21904 Vashon Hwy SW, Vashon, WA 98070", status: "accepted", cashAmount: 371000,
+    calc: { inputs: { arv: 900000, repairs: 214000 } },
+    snapshot: { subjectInfo: { beds: 3, baths: 2, sqft: 2190, house: { sewer: "septic", garageSpaces: 0 } } },
+    deal: { stage: "under_contract", contractPrice: 371000, assignmentFee: 16000, investors: [{ contactId: "inv-septic", status: "evaluating" }] },
+  };
+  const ctx = buildInvestorContext({ investor: { contactId: "inv-septic" }, deals: [{ offer: deal }], contactId: "inv-septic" });
+  assert.match(ctx.text, /21904 Vashon Hwy SW.*about the house: septic, no garage/);
+});

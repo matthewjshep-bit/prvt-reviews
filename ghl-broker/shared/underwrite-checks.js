@@ -24,7 +24,7 @@
 // backtest against what buyers actually paid says it's right.
 
 import { deriveArv, arvPool } from "./arv.js";
-import { siteAdjustments, mergeSiteAdjustments } from "./site-check.js";
+import { siteAdjustments, mergeSiteAdjustments, siteFlagsOf, siteLine } from "./site-check.js";
 import { sizeCheck, compParity, sameBathComps, activeCeiling, limitAuto } from "./arv-checks.js";
 import { rehabChecks } from "./rehab-checks.js";
 import { remarkSignals, normalizeHouse, garageOf } from "./house-facts.js";
@@ -331,6 +331,37 @@ export function combineChecks(compsPart, rehabPart) {
     status: c.status || { site: "off", actives: "off", facts: "none" },
     declined: normalizeDeclined({ arv: c.declined?.arv, cap: c.declined?.cap, rehab: r.declined || c.declined?.rehab }),
   };
+}
+
+/**
+ * buyerFacts(offer) → { facts: string[], systems, septic }
+ *
+ * The answers to what buyers asked before they'd decide (2026-10-02 read of
+ * every buyer thread: "is it septic?" nine times, the garage, the street, the
+ * easement title flagged at closing) — read off the offer's own record so the
+ * blast, the package and the bot all say the same thing. Only what the record
+ * or the listing says; nothing is guessed.
+ */
+export function buyerFacts(offer = {}) {
+  const snap = offer?.snapshot || offer?.draft || {};
+  const info = snap?.comps?.result?.info || snap?.subjectInfo || {};
+  const h = normalizeHouse(info.house || {});
+  const flags = Array.isArray(snap?.checks?.flags) ? snap.checks.flags : [];
+  const has = (k) => flags.some((f) => f?.key === k);
+  const facts = [];
+  const septic = h.sewer === "septic" || has("legal_septic");
+  if (septic) facts.push("septic");
+  else if (h.sewer === "public") facts.push("public sewer");
+  const g = typeof info.garage === "boolean" ? info.garage : garageOf(h);
+  if (g === true) facts.push("garage");
+  else if (g === false) facts.push("no garage");
+  const street = siteLine(siteFlagsOf(offer));
+  if (street) facts.push(street);
+  for (const f of flags) {
+    if (/^legal_(easement|right_of_way|unpermitted|hoa|land_lease)$/.test(f?.key || "")) facts.push(String(f.label || "").replace(/^the listing shows /, ""));
+  }
+  const systems = (snap?.rehab?.allowance || []).some((a) => /^systems_/.test(a?.key || ""));
+  return { facts: [...new Set(facts)], systems, septic };
 }
 
 /**

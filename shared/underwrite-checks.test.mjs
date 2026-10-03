@@ -117,3 +117,19 @@ test("the offer's compact record is read off the snapshot", () => {
   assert.ok(s.rehabAdded > 0);
   assert.equal(summarizeChecks({}), null);
 });
+
+test("what buyers ask before they decide is read off the record, never guessed", async () => {
+  const { buyerFacts } = await import("./underwrite-checks.js");
+  const offer = {
+    snapshot: {
+      subjectInfo: { house: { sewer: "septic", garageSpaces: 0 } },
+      comps: { site: { subject: { flags: { busy_road: {} } } } },
+      checks: { flags: [{ key: "legal_easement", label: "the listing shows an easement" }, { key: "exposure", label: "on the market" }] },
+      rehab: { allowance: [{ key: "systems_plumbing", cost: 8200 }] },
+    },
+  };
+  const f = buyerFacts(offer);
+  assert.deepEqual(f.facts, ["septic", "no garage", "on a busy street", "an easement"]);
+  assert.equal(f.systems, true);
+  assert.deepEqual(buyerFacts({}), { facts: [], systems: false, septic: false });
+});

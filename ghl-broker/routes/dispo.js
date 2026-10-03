@@ -17,6 +17,8 @@
 // dry-run gate — the two endpoints that WRITE (buybox, blast) are the guarded
 // ones, and blast carries the same double gate as the agent-outreach import.
 
+import { siteFlagsOf } from "../shared/site-check.js";
+import { FERRY_ONLY_ZIPS } from "../shared/underwrite-checks.js";
 import express from "express";
 import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
 import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
@@ -1200,8 +1202,13 @@ export default function createDispoRouter({ resolveLocation }) {
     const areas = addressAreas(offer.address);
     const city = areas.find((a) => !/^\d{5}$/.test(a)) || "";
     const zip = areas.find((a) => /^\d{5}$/.test(a)) || "";
+    // The house's own facts a buyer's dealbreakers can refuse: its street
+    // (the buyer-view checks or a hand-ticked chip), a ferry-only island, a
+    // house buyers can already see on the MLS.
+    const checkFlags = (offer.snapshot?.checks?.flags || []).map((f) => f?.key);
     const target = dealTarget({ city, zip, priceMin: q.priceMin, priceMax: q.priceMax, rehabAppetite: q.rehabAppetite,
-      propertyTypes: q.propertyTypes || [], lotMin: q.lotMin ?? null, asset: dq.asset });
+      propertyTypes: q.propertyTypes || [], lotMin: q.lotMin ?? null, asset: dq.asset,
+      site: siteFlagsOf(offer), island: FERRY_ONLY_ZIPS.has(zip) || checkFlags.includes("thin_island"), onMarket: checkFlags.includes("exposure") });
     const linked = new Set((offer.deal?.investors || []).map((i) => i.contactId));
     const blasted = blastedTo(offer, {
       events: await store.listContactEventsSince(locationId, new Date(Date.now() - 365 * 86400000).toISOString(), { types: ["blast_sent"], limit: 20000 }).catch(() => []),

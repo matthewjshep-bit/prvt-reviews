@@ -143,3 +143,27 @@ test("an emailed deal has a subject that says what it is and the price", () => {
   assert.equal(blastSubject(dealFacts(MAPLE, { price: 76000 })), "Mobile home in a park, Kent — under contract, 76k");
   assert.equal(blastSubject(dealFacts(UNDERWRITTEN, { price: 532000 })), "23706 138th Dr SE, Snohomish — under contract, 532k");
 });
+
+// 2026-10-02: "is it septic?" was the question buyers asked most before they'd
+// decide, and "how did you get the rehab?" close behind. Both answered up front
+// when the record knows.
+test("the blast names septic and a rehab that includes the systems, and nothing a carrier blocks", () => {
+  const offer = {
+    address: "21904 Vashon Hwy SW, Vashon, WA 98070",
+    calc: { inputs: { arv: 900000, repairs: 214000 } },
+    snapshot: {
+      subjectInfo: { beds: 3, baths: 2, sqft: 2190, yearBuilt: 1948, house: { sewer: "septic" } },
+      rehab: { allowance: [{ key: "systems_electrical", label: "Buyer allowance — rewire (built 1948)", cost: 9000 }] },
+    },
+  };
+  const f = dealFacts(offer, { price: 387000 });
+  assert.equal(f.septic, true);
+  assert.equal(f.systems, true);
+  const t = blastMessage({ ...f, firstName: "Sam", variant: 0 });
+  assert.match(t, /built 1948, septic/);
+  assert.match(t, /rehab about 214k incl\. systems/);
+  assert.doesNotMatch(t, /\$|https?:/);
+  const plain = dealFacts({ address: "1 A St, Kent, WA", arv: 500000, repairs: 50000 });
+  assert.equal(plain.septic, false);
+  assert.equal(plain.systems, false);
+});
