@@ -64,3 +64,18 @@ test("a Call row's card: the goal, ours against theirs, what to say, and Call in
   expect(html).toContain("Tried 1×");
   expect(renderToStaticMarkup(<CallCard item={{ id: "x", kind: "promise_owed" }} />)).toBe("");
 });
+
+test("a counter row offers Hold our number, Meet at, and Walk away beside the call", async () => {
+  const { default: CallCard } = await import("../CallCard.jsx");
+  const item = { id: "call_counter:o2", kind: "call_counter", contactId: "c2", contactName: "Kel B", offerId: "o2", address: "23908 SE 168th St, Issaquah, WA",
+    counter: { ours: 690000, theirs: 715000, gap: 25000, ceiling: 700000, overCeiling: 15000, draftId: "k1" },
+    call: { reason: "call_counter", goal: "Land a number.", opener: "Hi Kel.", tries: 0, houses: [] } };
+  const html = renderToStaticMarkup(<CallCard item={item} targets={{ contactId: "c2" }} phone="" />);
+  expect(html).toContain("Hold our number");
+  expect(html).toContain("Meet at…");
+  expect(html).toContain("Walk away");
+  expect(html).toContain('aria-label="Answer the counter"');
+  // A hot row has no counter to answer.
+  const hot = renderToStaticMarkup(<CallCard item={{ ...item, kind: "call_hot", counter: null }} targets={{ contactId: "c2" }} phone="" />);
+  expect(hot).not.toContain("Hold our number");
+});

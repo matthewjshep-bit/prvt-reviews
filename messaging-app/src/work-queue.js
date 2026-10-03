@@ -187,6 +187,10 @@ export function keyIntent(e) {
   }
 }
 
+// Put words in the work pane's reply box — the bot's draft or the hand
+// reply, whichever is showing — for a person to read and Send. detail: { text }.
+export const COMPOSE_EVENT = "work-compose";
+
 export const KEYS_HELP = [
   ["J  ↓", "next row"], ["K  ↑", "previous row"], ["R", "reply"], ["T", "feedback for the bot"], ["O", "edit the offer"], ["D", "dismiss the row"], ["⌘ ↵", "send what you typed"], ["?", "these keys"],
 ];

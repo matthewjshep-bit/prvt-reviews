@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   houseKey, pricedAt, resolveHouse, currentOffers, currentOfferFor, annotateCurrent,
-  isSuperseded, ourComeDown, paperCheck, lastQuoteOnHouse, machineRaise,
+  isSuperseded, ourComeDown, paperCheck, lastQuoteOnHouse, machineRaise, holdNumber,
 } from "./current-offer.js";
 
 // 13041 SE 208th St, Kent (2026-09-25): five rows on one house, the thread at
@@ -172,4 +172,35 @@ test("a raise a person stood behind is theirs to make: a pin, a revision, a send
   assert.equal(machineRaise({ ...REUNDERWRITE, cashAmount: 180000 }, CH_THREAD), null, "going down is not a raise");
   // Nothing texted on this house yet: nothing to raise over.
   assert.equal(machineRaise({ ...REUNDERWRITE, address: "1213 Rhobina St, Centralia, WA 98531", cashAmount: 180000 }, CH_THREAD.split("\n").slice(0, 1).join("\n")), null);
+});
+
+// The Desk's counter row (2026-10-02): "Hold our number" re-states where we
+// are. Woodcrest taught us the machine never names more than we sent; the
+// hold is built from the lowest number we put to them, and only that.
+test("Hold never names a number above what we sent", () => {
+  const o = { id: "w", address: "17044 Woodcrest Dr NE, Bothell, WA 98011", cashAmount: 390000, createdAt: "2026-09-29T00:00:00Z", sends: [{ ts: "2026-09-30T00:00:00Z" }] };
+  const h = holdNumber({ offer: o });
+  assert.equal(h.amount, 390000);
+  assert.equal(h.from, "book");
+  assert.match(h.text, /hold at \$390,000/);
+  assert.match(h.text, /^Appreciate you working it\. On 17044 Woodcrest Dr NE/);
+  assert.equal(holdNumber({ offer: { ...o, cashAmount: 0 } }), null);
+});
+
+test("Hold uses the lower number we texted by hand after the offer", () => {
+  const o = { id: "m", address: "1510 Maple Lane, Kent, WA 98030", cashAmount: 71075, createdAt: "2026-09-10T00:00:00Z", sends: [{ ts: "2026-09-10T01:00:00Z" }] };
+  const h = holdNumber({ offer: o, transcript: "[2026-09-13 18:00] US sms: Can we do $65k actually on 1510 Maple Lane" });
+  assert.equal(h.amount, 65000);
+  assert.equal(h.from, "come_down");
+  assert.doesNotMatch(h.text, /71/);
+});
+
+// Review, 2026-10-02: "Meet at…" re-quotes before the letter goes out. If the
+// Send window is closed unsent, Hold must still hold at what they last saw.
+test("Hold holds at the number that last went out, not a re-quote nobody sent", () => {
+  const o = { id: "k", address: "23908 SE 168th St, Issaquah, WA 98027", cashAmount: 705000, createdAt: "2026-09-20T00:00:00Z",
+    sends: [{ ts: "2026-09-27T00:00:00Z" }], revisions: [{ ts: "2026-10-02T21:00:00Z", from: 690000, to: 705000 }] };
+  assert.equal(holdNumber({ offer: o }).amount, 690000);
+  // Sent again at the new number: that's the number now.
+  assert.equal(holdNumber({ offer: { ...o, sends: [...o.sends, { ts: "2026-10-02T22:00:00Z" }] } }).amount, 705000);
 });

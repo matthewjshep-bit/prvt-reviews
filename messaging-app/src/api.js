@@ -369,6 +369,10 @@ export const listOffers = ({ contactId = "", limit = 50, lean = false, activity 
   if (contactId) p.set("contact_id", contactId);
   return fetch(`${API_BASE}/api/offers?${p}`).then(j).then((r) => r.offers);
 };
+// "Hold our number" on a counter: { amount, text, from } — the words at the
+// lowest number we've put to them on the house. Reads only; sends nothing.
+export const getHoldText = (id) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/hold?${locq()}`).then(j);
 export const getOffer = (id) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}?${locq()}`).then(j).then((r) => r.offer);
 export const deleteOffer = (id) =>
