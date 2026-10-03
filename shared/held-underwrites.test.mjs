@@ -36,6 +36,24 @@ test("junk is dropped: no address, a test address, a dry run — and a draft a p
   assert.notEqual(triageHeldUnderwrite({ offer: held({ id: "h2", createdAt: ago(0.5) }), siblings: [held()], now: NOW }).action, "drop");
 });
 
+// Today, 2026-10-02: "Underwrite held on Potter, Pasco" and "…on Wetmore
+// Property" sat in Stuck as Matt's to fix. A street with no house number is
+// nothing anyone can place on a map — there is no house to review.
+test("'Potter, Pasco' and 'Wetmore Property' are dropped, not handed to Matt; an unplaceable '1234 Wetmore Ave' is still his", () => {
+  const t = triage({ offer: held({ address: "Potter, Pasco" }, ["stopped early — couldn't locate Potter, Pasco on the map"]) });
+  assert.equal(t.action, "drop");
+  assert.match(t.reason, /no street number/);
+  assert.equal(triage({ offer: held({ address: "Wetmore Property" }, ["stopped early — couldn't locate Wetmore Property on the map"]) }).action, "drop");
+  assert.equal(triage({ offer: held({ address: "Wetmore Property" }) }).action, "drop", "whatever held it");
+  const real = triage({ offer: held({ address: "1234 Wetmore Ave, Everett, WA" }, ["stopped early — couldn't locate 1234 Wetmore Ave, Everett, WA on the map"]) });
+  assert.notEqual(real.action, "drop");
+  // A drop deletes the draft: a park lot, a unit first, a directional before
+  // the number are all real houses (review, 2026-10-02).
+  for (const a of ["Lot 27, 1510 Maple Ln, Kent, WA", "Unit 5, 222 Pine St, Seattle, WA", "N 1234 Division St, Spokane, WA"]) {
+    assert.notEqual(triage({ offer: held({ address: a }, ["stopped early — couldn't locate it on the map"]) }).action, "drop", a);
+  }
+});
+
 test("the conversation closes it: pending/sold/no, turnkey, a passed event, an unsubscribe, a bot-off tag, a cold GHL stage", () => {
   let t = triage({ drafts: [inbound("That property is already pending now.", { intent: "rejection" })] });
   assert.equal(t.action, "retire"); assert.equal(t.status, "unavailable"); assert.match(t.reason, /pending/);
