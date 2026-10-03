@@ -383,6 +383,46 @@ export function lastQuoteOnHouse(o, transcript = "") {
 }
 
 /**
+ * sentNumber(offer) → the number on the offer when it last went out
+ *
+ * A re-quote or revision after the last send changed the book but not what
+ * they saw: the first change after that send says what it was (`from`).
+ * Nothing sent: the book.
+ */
+export function sentNumber(o) {
+  const book = Math.round(Number(o?.cashAmount) || 0);
+  const sent = lastSentAt(o);
+  if (!sent) return book;
+  const after = [...(o?.revisions || []), ...(o?.requotes || [])]
+    .filter((r) => (ms(r?.ts) ?? 0) > sent && Number(r?.from) > 0)
+    .sort((a, b) => (ms(a.ts) ?? 0) - (ms(b.ts) ?? 0));
+  return after.length ? Math.round(Number(after[0].from)) : book;
+}
+
+/**
+ * holdNumber({ offer, transcript }) → { amount, text, from } | null
+ *
+ * "Hold our number" on a counter (the Desk, 2026-10-02). Their counter is
+ * above ours and Matt stands where we are: the number said is the lowest we
+ * have put to them on this house — the book, a lower number we texted since
+ * (ourComeDown), or the last quote that named the house — never above any of
+ * them (never-above-what-we-sent). The text names that one number and no
+ * other; a text that would read as more is not offered at all.
+ */
+export function holdNumber({ offer = null, transcript = "" } = {}) {
+  const book = sentNumber(offer);
+  if (!book) return null;
+  const down = ourComeDown(offer, transcript);
+  const last = lastQuoteOnHouse(offer, transcript);
+  const amount = Math.min(...[book, down?.amount, last?.amount].map((n) => Math.round(Number(n) || 0)).filter((n) => n > 0));
+  const where = String(offer.address || "").split(",")[0].trim() || "the house";
+  const text = `Appreciate you working it. On ${where} we're going to hold at $${amount.toLocaleString("en-US")}: that's where the numbers work for us. If the seller can get there, we're ready to go.`;
+  if (pricesWeName(text, amount).some((n) => n > amount)) return null;
+  const from = down && amount === Math.round(down.amount) ? "come_down" : last && amount === Math.round(last.amount) && amount !== book ? "last_quote" : "book";
+  return { amount, text, from };
+}
+
+/**
  * machineRaise(offer, transcript) → { amount, ts, text } | null
  *
  * The offer's number is above the last price we put to the agent on its

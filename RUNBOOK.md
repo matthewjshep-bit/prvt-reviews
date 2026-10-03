@@ -2054,6 +2054,24 @@ other Call reasons become decisions. Rows past `callCap` wait behind "N more
 to call". Settings → The Desk's call list holds the five numbers
 (`saved.desk`, `normalizeDesk`). Nothing on the list sends anything.
 
+**Answering a counter from the Desk.** A `call_counter` row carries
+`counter: { ours, theirs, gap, ceiling, overCeiling, basis, draftId }` (the
+ceiling from the newest band draft on the offer, never off a lean row) and
+four answers under the call card, each a person's tap — the band and
+`NEVER_AUTO` are untouched:
+- **Hold our number** — `GET /api/offers/:id/hold` reads the thread and
+  returns `holdNumber` (`shared/current-offer.js`): the lowest number we've
+  put to them on the house (the book as it last went out — a re-quote nobody
+  sent yet doesn't count, `sentNumber` — a lower number we texted since —
+  `ourComeDown` — or the last quote that named it), in words that name only
+  that number. They land in the reply box (`COMPOSE_EVENT`); Send is yours.
+- **Meet at $X** — between ours and theirs; a warning past the ceiling.
+  `POST /:id/requote` (refuses an agreed price), then the usual Send window
+  for the letter; the counter draft is dismissed once it's sent.
+- **Call them** — the card's Call in GHL.
+- **Walk away** — confirm, then the offer is `we_passed` (machine texts about
+  it stop) and the counter draft is dismissed.
+
 ### Today's three groups, and the brake (2026-09-17)
 
 **The groups.** Every action `buildPipeline` emits carries `group` (`groupFor`,

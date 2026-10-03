@@ -71,7 +71,7 @@ import {
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES,
 } from "../shared/offer-status.js";
-import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt } from "../shared/current-offer.js";
+import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
 import { paperAfterSilenceDue, paperWent, PAPER_FLOAT_MAX_DAYS } from "../shared/paper-follows.js";
 import { planRequote } from "../shared/requote.js";
 import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
@@ -3526,6 +3526,25 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       });
       const revised = out?.offer || (await store.getOffer(offer.id));
       res.json({ ok: true, offer: revised });
+    } catch (err) { fail(res, err); }
+  });
+
+  // "Hold our number" on a counter row (the Desk, 2026-10-02): the words to
+  // re-state where we are, at the lowest number we've put to them on this
+  // house (shared/current-offer.js holdNumber). Reads the thread; writes and
+  // sends nothing — the words go in the reply box and a person presses Send.
+  router.get("/:id/hold", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { locationId, client, offer } = ctx;
+      if (offer.deal) return res.status(409).json({ error: "it's a deal — the contract price is the number" });
+      let transcript = "";
+      try { transcript = (await buildTranscript(client, locationId, offer.contactId, { maxCallTranscripts: 0 })).text || ""; }
+      catch { /* no thread read: the book's number is still ours */ }
+      const hold = holdNumber({ offer, transcript });
+      if (!hold) return res.status(409).json({ error: "no number to hold at" });
+      res.json({ ok: true, ...hold });
     } catch (err) { fail(res, err); }
   });
 
