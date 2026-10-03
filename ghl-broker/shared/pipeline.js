@@ -366,6 +366,20 @@ export function buildPipeline({
         detail: [`cash ${money(o.cashAmount)}`, o.proactive?.skipped?.reason ? `didn't float: ${String(o.proactive.skipped.reason).slice(0, 140)}` : ""].filter(Boolean).join(" · "),
         ops: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "float_realm", label: "Float the number", intent: "secondary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
     }
+    // A hand-made offer, priced a day ago, and nothing of ours has gone out
+    // on it — no send, no float, no nudge (2026-10-02: seven sat in Not sent
+    // with no row anywhere). Yours: send it, or say you texted it yourself.
+    // The machine never floats a hand-made offer (timerMoves skips it).
+    if (lane === "ready" && !card.ai.made && !(o.sends || []).length && !o.proactive?.takeCheckAt && !o.proactive?.realmCheckAt && !(o.followUps || []).length) {
+      const pricedMs = ms(o.statusAt) ?? ms(o.createdAt);
+      if (pricedMs != null && now - pricedMs >= DAY_MS) {
+        card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon", handMade: true, readyAt: new Date(pricedMs).toISOString(),
+          title: `${card.address}: priced ${Math.floor((now - pricedMs) / DAY_MS)}d ago and nothing has gone out`,
+          detail: `cash ${money(o.cashAmount)} · made by hand`,
+          ops: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "mark_sent", label: "I sent it myself", intent: "secondary" },
+            { key: "float_realm", label: "Float the number", intent: "secondary" }, { key: "mark_we_passed", label: "We passed", intent: "secondary" }] }));
+      }
+    }
     // A price is agreed and the hot push has asked twice since they last
     // wrote. A third text is not the move (shared/thread-health.js stops the
     // ladder here too); a call is.
@@ -705,7 +719,8 @@ export function timerMoves(actions = [], { config = null, now = Date.now() } = {
   const out = [];
   for (const a of actions) {
     const base = { actionId: a.id, kind: a.kind, offerId: a.offerId || null, jobId: a.jobId || null, contactId: a.contactId || null, address: a.address || "" };
-    if (a.kind === "offer_ready" && !a.why && a.offerId) {
+    // A hand-made offer is never floated by the machine: it's yours.
+    if (a.kind === "offer_ready" && !a.why && a.offerId && !a.handMade) {
       const dueMs = (ms(a.readyAt) ?? now) + t.floatAfterHours * 3600000;
       out.push({ ...base, move: "float", what: "floats the number", dueAt: new Date(dueMs).toISOString(), due: dueMs <= now });
     } else if (a.kind === "gone_quiet" && a.offerId) {

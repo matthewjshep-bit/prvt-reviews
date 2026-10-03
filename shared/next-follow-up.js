@@ -15,7 +15,7 @@
 //
 // Pure. `now` is passed in.
 
-import { effectiveStatus, OPEN_STATUSES, pushesToPaper, offerHeat, aiHoldReasons } from "./offer-status.js";
+import { effectiveStatus, OPEN_STATUSES, pushesToPaper, offerHeat, aiHoldReasons, isAiGenerated } from "./offer-status.js";
 import { paperWent } from "./paper-follows.js";
 import {
   nextRungAt, offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, stepLabel, normalizeSteps,
@@ -222,7 +222,10 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
     // A priced offer nobody has floated: the timer floats it.
     const floated = offer.proactive?.realmCheckAt || offer.proactive?.takeCheckAt || (offer.sends || []).length;
     const timers = config?.driver?.timers;
-    if (status === "new" && !floated && timers?.enabled) {
+    if (status === "new" && !floated && !isAiGenerated(offer)) {
+      // Made by hand: the machine never floats it (pipeline.js timerMoves).
+      candidates.push(out("float", { at: (ms(offer.createdAt) ?? now) + DAY_MS, label: "Our number never went out — send it, or mark it sent", who: "you" }));
+    } else if (status === "new" && !floated && timers?.enabled) {
       const t = (ms(offer.createdAt) ?? now) + (Number(timers.floatAfterHours) || 4) * HOUR_MS;
       // The timer tries once (today-timers.js claims per offer) and not at all
       // when the float was skipped for a reason. A day past due, it isn't

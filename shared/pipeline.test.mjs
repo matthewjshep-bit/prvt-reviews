@@ -77,9 +77,29 @@ test("a new AI offer with nothing floated is ready and asks to be floated", () =
 });
 
 test("a hand-made unsent offer is ready but is not nagged to be floated", () => {
-  const r = build({ offers: [offer({ status: "new", sends: [] })] });
+  // Priced this morning: yours to send in your own time.
+  const r = build({ offers: [offer({ status: "new", sends: [], statusAt: D(0.2), createdAt: D(0.2) })] });
   assert.equal(laneOf(r, "o1"), "ready");
   assert.equal(kinds(r).includes("offer_ready"), false);
+});
+
+// 2026-10-02: seven hand-made offers sat in "Not sent" for days with no row
+// anywhere, while the Next follow-up column promised the machine would float
+// them — and nothing does for a hand-made offer. A day on, it is yours: send
+// it, or say you texted it yourself. The machine still never floats it.
+test("a hand-made offer priced a day ago with nothing sent asks to be sent, and no timer floats it", async () => {
+  const { timerMoves } = await import("./pipeline.js");
+  const TIMED = normalizeConversationAi({ enabled: true, driver: { timers: { enabled: true } } });
+  const r = build({ config: TIMED, offers: [offer({ status: "new", sends: [] })] });
+  const a = r.actions.find((x) => x.kind === "offer_ready");
+  assert.ok(a, "a row");
+  assert.equal(a.handMade, true);
+  assert.ok(a.ops.some((o) => o.key === "mark_sent"), "I sent it myself");
+  assert.equal(a.group, "yours");
+  assert.equal(timerMoves(r.actions, { config: TIMED, now: NOW }).length, 0, "no timer floats a hand-made offer");
+  // Our number already went out some other way: not a row.
+  assert.equal(kinds(build({ offers: [offer({ status: "new", sends: [], followUps: [{ kind: "offer_nudge", step: 3, at: D(2) }] })] })).includes("offer_ready"), false);
+  assert.equal(kinds(build({ offers: [offer({ status: "new", sends: [], proactive: { realmCheckAt: D(2) } })] })).includes("offer_ready"), false);
 });
 
 test("a sent offer with two rungs fired shows step 2 of 3", () => {

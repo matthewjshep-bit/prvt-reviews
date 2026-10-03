@@ -49,6 +49,8 @@ export async function runOp(key, item, extra = null) {
     case "drop":               return deleteOffer(item.offerId);
     case "float_take":         return floatOffer(item.offerId, "take_check");
     case "float_realm":        return floatOffer(item.offerId, "realm_check");
+    // A hand-made offer whose number you texted yourself: the record catches up.
+    case "mark_sent":          return setOfferStatus(item.offerId, "sent", "sent by hand");
     case "mark_no_response":   return setOfferStatus(item.offerId, "no_response", "from the pipeline board");
     case "mark_passed":        return setOfferStatus(item.offerId, "passed", "from the pipeline board");
     case "mark_we_passed":     return setOfferStatus(item.offerId, "we_passed", "from the pipeline board");
