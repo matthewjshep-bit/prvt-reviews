@@ -35,6 +35,14 @@ test("our number can be re-quoted in place, except on a deal", () => {
   expect(deal).toContain("It&#x27;s a deal — change the price on the deal");
 });
 
+test("an agreed price can still be re-quoted, and the pencil says it takes the agreement back — Woodcrest", () => {
+  const agreed = { ...july, status: "countered", agreed: { amount: 402500, at: "2026-10-02T18:05:31Z", via: "counter_band" } };
+  const html = renderToStaticMarkup(<OfferPanelBody offer={agreed} siblings={[agreed]} item={{ offerId: "july" }} onRequote={() => ({})} />);
+  const pencil = html.match(/<button[^>]*aria-label="Change our offer"[^>]*>/)?.[0] || "";
+  expect(pencil).not.toContain(`disabled=""`);
+  expect(pencil).toContain("Agreed at $402,500 — re-quoting takes that back (sends nothing)");
+});
+
 test("a typed re-quote reads 750k, $750,000 and a bare 750 as the same number", () => {
   expect(parseAmount("750k")).toBe(750000);
   expect(parseAmount("$750,000")).toBe(750000);
