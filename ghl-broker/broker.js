@@ -283,8 +283,8 @@ const TICK_JOBS = [
     if (watched) console.log(`price watch for ${locationId}: ${JSON.stringify({ watched: watched.watched, checked: watched.checked, dropped: watched.dropped, offMarket: watched.offMarket, backOnMarket: watched.backOnMarket, texted: watched.texted, error: watched.error || null })}`);
   } },
   // Once a day: every agent's tier tag agrees with their Acquisitions card.
-  { area: "tier-check", run: async ({ client, locationId }) => {
-    const tiered = await maybeRunTierCheck({ client, locationId, store });
+  { area: "tier-check", run: async ({ client, locationId, saved }) => {
+    const tiered = await maybeRunTierCheck({ client, locationId, store, saved });
     if (tiered) console.log(`tier check for ${locationId}: ${tiered.applied}/${tiered.planned} fixed of ${tiered.considered} cards${tiered.errors.length ? `, errors: ${tiered.errors[0]}` : ""}`);
   } },
   // Addresses that came in past the daily underwrite cap, once it resets.

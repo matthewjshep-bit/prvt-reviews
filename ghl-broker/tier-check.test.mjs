@@ -105,3 +105,35 @@ test("once a day, from 7am PT", async () => {
   assert.equal((await store.getJobCursor("L", "tierCheck")).doc.last.applied, 1, "the summary is the day's `last`, like every daily job");
   assert.equal(await maybeRunTierCheck({ client: {}, locationId: "L", store, ghl: api, now: eight + 3600000 }), null);
 });
+
+/* ---------- GHL stages follow the app (2026-10-02) ---------- */
+
+const { runStagePlan } = await import("./tier-check.js");
+const stageStore = (offers = []) => ({ events: [], async listOffers() { return offers; }, async listContactEventsSince() { return []; }, async lastContactActivity() { return []; },
+  async appendContactEvents(l, id, rows) { this.events.push(...rows.map((r) => ({ ...r, contactId: id }))); return { inserted: rows.length }; },
+  async getContactProfile() { return null; }, async upsertContactProfile() { return {}; } });
+const stageGhl = (moved) => ({ listPipelines: async () => PIPES, listWorkflows: async () => [{ id: "nw", name: "Tier 2+3 nurture", status: "draft" }],
+  listAcquisitionOpportunities: async () => [opp("sent1", "t1", ["agent", "tier-1"])], updateOpportunity: async (c, id, body) => { moved.push({ id, ...body }); } });
+
+test("while off, a card the app says should move is reported and nothing moves", async () => {
+  const moved = [];
+  const store = stageStore([{ id: "o1", contactId: "sent1", address: "1 St", cashAmount: 1, status: "sent", sends: [{ ts: "2026-10-01T00:00:00Z" }], createdAt: "2026-09-30T00:00:00Z" }]);
+  const r = await runStagePlan({ client: {}, locationId: "L", store, ghl: stageGhl(moved), saved: {}, dryRun: false, now: Date.parse("2026-10-02T20:00:00Z") });
+  assert.equal(r.mode, "off");
+  assert.equal(r.planned, 1);
+  assert.deepEqual(r.moves.map((m) => [m.contactId, m.to]), [["sent1", "Offer Out"]]);
+  assert.equal(moved.length, 0, "off means a report only");
+  assert.equal(JSON.stringify(r).includes("tier-1"), false, "ids and stage names, no tags or names");
+});
+
+test("switched on, it moves the card and puts the move on their record; a dry run still moves nothing", async () => {
+  const moved = [];
+  const store = stageStore([{ id: "o1", contactId: "sent1", address: "1 St", cashAmount: 1, status: "sent", sends: [{ ts: "2026-10-01T00:00:00Z" }], createdAt: "2026-09-30T00:00:00Z" }]);
+  const now = Date.parse("2026-10-02T20:00:00Z");
+  await runStagePlan({ client: {}, locationId: "L", store, ghl: stageGhl(moved), saved: { ghlStages: { mode: "on" } }, dryRun: true, now });
+  assert.equal(moved.length, 0);
+  const r = await runStagePlan({ client: {}, locationId: "L", store, ghl: stageGhl(moved), saved: { ghlStages: { mode: "on" } }, dryRun: false, now });
+  assert.equal(r.applied, 1);
+  assert.deepEqual(moved, [{ id: "op-sent1", stageId: "out" }]);
+  assert.equal(store.events[0].type, "ghl_stage_moved");
+});
