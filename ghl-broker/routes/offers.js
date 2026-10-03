@@ -4840,7 +4840,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // A person confirmed the acceptance and clicked. This is the ONE path that
     // mints a deal, exactly as it was before the band existed — the band only
     // ever put the suggestion on the row.
-    promoteToDeal: async ({ contactId, addressHint }) => {
+    promoteToDeal: async ({ contactId, addressHint, closingDate = "" }) => {
       const open = (await currentOffersFor(locationId, contactId))
         .filter((o) => !o.deal && OPEN_STATUSES.has(effectiveStatus(o)));
       if (!open.length) return { ok: false, reason: "no open offer to promote" };
@@ -4848,7 +4848,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!offer) return { ok: false, reason: "more than one open offer and no address named" };
       const full = await store.getOffer(offer.id);
       if (!full) return { ok: false, reason: "offer vanished" };
-      await promoteToDeal({ locationId, client, offer: full });
+      // The deal closes when they said it would. Its price stays what
+      // promoteToDeal reads — the PSA's, else the offer's — never an "agreed"
+      // on record, which can sit above the book (a yes before a re-price down;
+      // review, 2026-10-02). The fee is the settings' default.
+      await promoteToDeal({ locationId, client, offer: full, body: closingDate ? { closingDate } : {} });
       return { ok: true, address: full.address };
     },
     // The counter band said yes in words and a person clicked. Re-issue the

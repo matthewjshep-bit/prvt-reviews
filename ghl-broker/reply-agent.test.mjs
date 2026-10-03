@@ -5131,3 +5131,59 @@ test("a buyer who answers the deal text on a deal you stopped outreach on gets n
   assert.equal(invites.length, 0, "no package link went out");
   assert.ok(!(d.actions || []).some((a) => a.type === "send_dataroom_invite" && a.mode === "auto"), `no automatic link: ${(d.actions || []).map((a) => a.type)}`);
 });
+
+// 2026-10-02 review: an agent's "we're mutual!" changed nothing — the offer
+// stayed "sent" and the deal waited for someone to promote it by hand.
+test("an agent saying it's signed puts Promote on the row, with the closing date they named", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const store = fakeStore();
+  // Our offer is hot — they said the number works — so "we're mutual" is ours.
+  store.listOffers = async () => [{ id: "o1", contactId: "c1", address: "12 Elm St", status: "sent", cashAmount: 410000, sends: [{ ts: iso(86400000) }], realm: { answer: "yes", ts: iso(3600000) } }];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "Seller signed, we're mutual! Closing 10/24.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "status_check", reply: "That's great news, thank you!", summary: "They say it's signed." }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const promote = (d.actions || []).find((a) => a.type === "promote_to_deal");
+  assert.ok(promote, "Promote is offered");
+  assert.equal(promote.mode, "ask", "a person's tap, never automatic");
+  assert.equal(promote.status, "pending");
+  assert.match(promote.closingDate, /^\d{4}-10-24$/);
+
+  // Not yet signed: nothing to promote.
+  _resetJobs();
+  const s2 = fakeStore();
+  s2.listOffers = store.listOffers;
+  const { job: j2 } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store: s2, contactId: "c1", message: "Once the seller signs I'll send it over",
+    deps: { draft: async () => ({ ...DRAFT, intent: "status_check", reply: "Sounds good, thanks!", summary: "Waiting on signatures." }) },
+  });
+  await settle();
+  const d2 = await s2.getReplyDraft(j2.draftId);
+  assert.equal((d2?.actions || []).some((a) => a.type === "promote_to_deal"), false);
+
+  // "We're under contract" on an offer that was only sent: most likely the
+  // other buyer — no Promote unless they say it's ours.
+  _resetJobs();
+  const s3 = fakeStore();
+  s3.listOffers = async () => [{ id: "o1", contactId: "c1", address: "12 Elm St", status: "sent", cashAmount: 410000, sends: [{ ts: iso(86400000) }] }];
+  const { job: j3 } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store: s3, contactId: "c1", message: "We're officially under contract!",
+    deps: { draft: async () => ({ ...DRAFT, intent: "status_check", reply: "Congrats!", summary: "Under contract." }) },
+  });
+  await settle();
+  assert.equal(((await s3.getReplyDraft(j3.draftId))?.actions || []).some((a) => a.type === "promote_to_deal"), false);
+});
+
+test("pressing Promote passes the closing date they named to the deal", async () => {
+  const { runActions } = await import("./conversation-actions.js");
+  const seen = [];
+  const r = await runActions({ client: {}, locationId: "LOC", contactId: "c1", draft: { id: "d1", propertyAddress: "12 Elm St" },
+    actions: [{ id: "a1", type: "promote_to_deal", mode: "ask", status: "pending", closingDate: "2026-10-24" }],
+    deps: { promoteToDeal: async (args) => { seen.push(args); return { ok: true, address: "12 Elm St" }; } } });
+  assert.equal(seen[0].closingDate, "2026-10-24");
+  assert.ok(Array.isArray(r) || r, "ran");
+});
