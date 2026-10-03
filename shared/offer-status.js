@@ -424,8 +424,9 @@ export const OFFER_LIST_FIELDS = [
   // The outcome ledger ({status, ts, note} rows) — a counter with its number
   // is the one thing the Conversation AI needs from it, and it's small.
   "statusHistory", "realm",
-  // Heat (offerHeat): the hand-set flag and the agreed price it is derived from.
-  "hot", "agreed", "pin", "paperHeld",
+  // Heat (offerHeat): the hand-set flag and the agreed price it is derived from,
+  // and the take-back that cancels every agreed marker before it (priceAgreed).
+  "hot", "agreed", "agreedCleared", "pin", "paperHeld",
   // Off-market (shared/off-market.js): {value, by, why, at} — our best deals.
   "offMarket",
   // The kind of house (shared/asset-type.js): {type, land, by, at}, so the

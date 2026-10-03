@@ -326,6 +326,25 @@ test("a list row keeps the follow-up rungs and the float stamps", () => {
   assert.equal(row.snapshot, undefined, "the heavy keys still go");
 });
 
+// Woodcrest, 2026-10-02: Matt took back a price the counter band "agreed"
+// (DELETE /:id/agreed writes offer.agreedCleared). The full document said
+// not agreed, but every list row — the board, the Hot filter, the Today
+// rows — still read the band's acceptance and kept it hot at that number,
+// because the trim dropped the one field that cancels it.
+test("an agreed price you took back stays taken back on a list row", async () => {
+  const { isHot } = await import("./offer-status.js");
+  const offer = {
+    id: "o1", status: "countered", cashAmount: 390000,
+    counterBand: { acceptedAt: "2026-10-02T18:05:00Z", amount: 402500 },
+    agreedCleared: { at: "2026-10-02T23:00:00Z", by: "operator" },
+    calc: { settings: {} },
+  };
+  assert.equal(priceAgreed(offer), null, "the document reads as taken back");
+  const row = toListOffer(offer);
+  assert.equal(priceAgreed(row), null, "and so does its list row");
+  assert.equal(isHot(row), false);
+});
+
 // Heather Vandyken, 36721 6th Ave SW, 2026-09-16: an agreed number was
 // re-underwritten, re-quoted, and re-sent lower. Once agreed, the price is
 // locked — until the offer is dead, when it's a fresh negotiation.
