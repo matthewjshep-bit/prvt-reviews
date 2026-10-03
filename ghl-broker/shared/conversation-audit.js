@@ -66,6 +66,9 @@ export const AUDIT_EVENT_TYPES = [
   "address_pending", "address_pending_closed", "address_chase_sent", "subject_property_set",
   "follow_up_sent", "offer_sent", "agent_estimate", "unsubscribed", "audit_action", "audit_outcome", "reply_held",
   "drive_stopped", "drive_resumed", "hand_reply",
+  // The reply agent read their text and had nothing to say (a laugh, a
+  // goodbye): answered, as far as the audit goes. Intent only, no words.
+  "reply_not_needed",
 ];
 
 // How many nights the audit will try to draft an answer to one text before it
@@ -87,7 +90,9 @@ export const REDRAFT_RETRY_AFTER_MS = 20 * 3600000;
 // answered": "Sounds good! Thank you for reaching out, have a good weekend!",
 // "Sounds great man! I will do that", "Please do!", "🙏🏻" (a skin tone).
 const CLOSER_WORDS = "thank you for reaching out|thanks for reaching out|for reaching out|i will do that|i'?ll do that|will do that|please do|appreciate (?:it|you|that)|you bet|for sure|absolutely|definitely|of course|" +
-  "ok|okay|k|kk|sounds? good|sounds? great|good|great|perfect|awesome|cool|nice|got it|will do|noted|thanks?|thank you|thx|ty|no problem|np|you too|same to you|have a (?:good|great|nice) (?:one|day|night|weekend|evening)|talk soon|later|sure|yes|yep|yup|👍|🙏|❤️";
+  "ok|okay|k|kk|sounds? good|sounds? great|good|great|perfect|awesome|cool|nice|got it|will do|noted|thanks?|thank you|thx|ty|no problem|np|you too|same to you|have a (?:good|great|nice) (?:one|day|night|weekend|evening)|talk soon|later|sure|yes|yep|yup|👍|🙏|❤️|" +
+  // "Yeah for sure. Thanks." and a laugh (2026-10-02).
+  "yeah|yea|ya|lol|ha(?:ha)+|😂|🤣|😅";
 // Built from a plain string, not a template literal: in a template `\s` is just "s".
 const CLOSER_RX = new RegExp("^(?:(?:" + CLOSER_WORDS + ")[\\s!.,]*){1,6}(?:matt|matthew|man|sir|bud|buddy)?[\\s!.,]*$", "i");
 // Skin tones and emoji variation selectors ride on a 🙏 or a 👍.
@@ -203,6 +208,8 @@ export function auditConversations({
     return all.length ? Math.max(...all) : null;
   };
   const scheduledAfter = (c, t) => (draftsBy.get(c) || []).some((d) => d.status === "scheduled" && (ms(d.createdAt) ?? 0) >= t);
+  // The reply agent read the text and decided there was nothing to say.
+  const letGoAfter = (c, t) => ev(c, "reply_not_needed").some((e) => (ms(e.at) ?? 0) >= t);
   // A person answered after our last text: the thread is theirs, not ours to audit.
   const humanOwns = (c) => {
     const g = ghlLast?.get(c);
@@ -256,7 +263,8 @@ export function auditConversations({
     if (inAt == null) continue;
     const list = draftsBy.get(c) || [];
     const after = list.filter((d) => (ms(d.createdAt) ?? 0) >= inAt - 5 * 60000);
-    const answered = (lastSent(c) ?? 0) >= inAt || scheduledAfter(c, inAt - 5 * 60000);
+    // A let-go answers only the text it read: one written after it is new.
+    const answered = (lastSent(c) ?? 0) >= inAt || scheduledAfter(c, inAt - 5 * 60000) || letGoAfter(c, inAt);
     if (answered) continue;
     const newest = after[0] || null;
     // (a) no row at all, or only rows a burst replaced: the reply job never

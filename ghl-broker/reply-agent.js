@@ -3422,6 +3422,13 @@ async function runReply(job, ctx) {
 
   /* --- 3. nothing to say --- */
   if (draft.intent === "small_talk" && !draft.reply && !plan.auto.length && !plan.suggested.length) {
+    // No draft, but a trace: without one the nightly audit sees a text with
+    // no reply and no row, redrafts it three nights and hands it to Matt
+    // ("Ugly 😂😂 ok.", 2026-10-02). The intent only — never their words.
+    await recordEvent({
+      store, locationId, contactId: job.contactId, party: a.party === "investor" ? "investor" : "agent", type: "reply_not_needed",
+      at: new Date(now).toISOString(), source: "conversation", ref: job.id, dedupeKey: `reply_not_needed:${job.id}`, data: { intent: draft.intent },
+    }).catch(() => {});
     job.status = "done";
     job.phase = "";
     job.finishedAt = new Date().toISOString();

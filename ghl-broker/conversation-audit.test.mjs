@@ -95,6 +95,19 @@ test("a closer ('Ok thank you') is not an unanswered text: no claim, no reply, a
   assert.equal(result.counts.byKind.unanswered_inbound, 0);
 });
 
+// Today on 2026-10-02 carried "Yeah for sure. Thanks." as a text we never
+// answered: "yeah" wasn't a closing word, so three nights of redrafts ran
+// and then it was Matt's.
+test("'Yeah for sure. Thanks.' and a laugh are closers", () => {
+  assert.equal(isCloser("Yeah for sure. Thanks."), true);
+  assert.equal(isCloser("Yea sounds good"), true);
+  assert.equal(isCloser("lol ok"), true);
+  assert.equal(isCloser("Haha thanks"), true);
+  assert.equal(isCloser("😂😂"), true);
+  assert.equal(isCloser("yeah but what about the roof?"), false, "a question is still a question");
+  assert.equal(isCloser("yeah we got another offer"), false, "news is not a goodbye");
+});
+
 test("a tapback is read before the claim, so the next night does not report 'nothing came of it'", async () => {
   const store = fakeStore();
   const d = deps({ latestInbound: async () => ({ body: "Liked \u201CSorry this one didn't work out\u201D", type: "SMS", at: ago(5) }) });
