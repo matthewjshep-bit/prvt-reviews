@@ -417,6 +417,27 @@ test("small talk with nothing to say saves no draft and tags nothing", async () 
   assert.equal(tags.length, 0);
 });
 
+// "Ugly 😂😂 ok." (2026-10-02): the bot read it as small talk with nothing to
+// say, wrote nothing anywhere, and the nightly audit — seeing a text with no
+// reply and no draft — tried three nights running and then put it on Today as
+// "drafting was tried 3 nights running and produced no reply".
+test("a text the bot let go leaves a note saying so, with no words in it", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "Ugly 😂😂 ok.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "small_talk", reply: "", summary: "A laugh." }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(job.draftId, null, "still no draft");
+  const evs = await store.listContactEvents("LOC", "c1", { types: ["reply_not_needed"] });
+  assert.equal(evs.length, 1);
+  assert.equal(evs[0].data.intent, "small_talk");
+  assert.equal(JSON.stringify(evs[0]).includes("Ugly"), false, "their words stay out of it");
+});
+
 test("'that was an auto dial' had nothing to say back, and sat on Today as a row because a tag had been stamped on the way", async () => {
   _resetJobs();
   const { client } = ghlStub();

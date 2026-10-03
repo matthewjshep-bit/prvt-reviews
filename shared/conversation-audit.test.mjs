@@ -38,6 +38,23 @@ test("an inbound GHL saw with no draft row is unanswered, with a redraft", () =>
   assert.equal(r.counts.queued, 1);
 });
 
+// "Ugly 😂😂 ok." (2026-10-02): the reply agent read it, decided there was
+// nothing to say, and wrote no draft. The audit only knew "a text, no
+// reply, no draft" and redrafted it three nights before handing it to Matt.
+test("a text the bot read and let go is not a text we never answered", () => {
+  const ghlLast = new Map([["c9", { at: ago(5), dir: "in" }]]);
+  const events = [{ type: "reply_not_needed", contactId: "c9", at: ago(4.9), data: { intent: "small_talk" } }];
+  const r = audit({ drafts: [], events, offers: [], ghlLast });
+  assert.equal(r.findings.length, 0);
+  // A newer text after the let-go is a new text.
+  const later = new Map([["c9", { at: ago(1), dir: "in" }]]);
+  assert.equal(audit({ drafts: [], events, offers: [], ghlLast: later }).findings[0]?.kind, "unanswered_inbound");
+  // A question two minutes after a laugh the bot let go is a new text, not
+  // answered by the let-go (review, 2026-10-02).
+  const soon = new Map([["c9", { at: new Date(Date.parse(ago(4.9)) + 2 * 60000).toISOString(), dir: "in" }]]);
+  assert.equal(audit({ drafts: [], events, offers: [], ghlLast: soon }).findings[0]?.kind, "unanswered_inbound");
+});
+
 test("a burst that superseded the only reply is unanswered, not in good order", () => {
   // Colin Foote, 2026-09-15: the scheduled reply was superseded by a held one
   // that was later dismissed by hand — nothing ever went.
