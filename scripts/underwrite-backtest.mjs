@@ -8,6 +8,7 @@
 //   node scripts/underwrite-backtest.mjs --go               run it on every deal
 //   node scripts/underwrite-backtest.mjs --go --recent 20   …plus the 20 newest auto-underwrites
 //   node scripts/underwrite-backtest.mjs --go --buyers buyers.json
+//   node scripts/underwrite-backtest.mjs --go --only "Edmonds;Vashon"   just the houses whose address has one of these
 //
 // It SPENDS: each house is a real underwrite (Apify comps + listings + the
 // photo scan, about $0.6–1.6). That's why it does nothing without --go.
@@ -38,6 +39,7 @@ const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); retur
 const GO = process.argv.includes("--go");
 const RECENT = Number(arg("--recent", 0)) || 0;
 const BUYERS = arg("--buyers") ? JSON.parse(fs.readFileSync(arg("--buyers"), "utf8")) : {};
+const ONLY = (arg("--only") || "").split(";").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const q = `location_id=${encodeURIComponent(LOC)}`;
 const get = async (p) => { const r = await fetch(`${BROKER}${p}${p.includes("?") ? "&" : "?"}${q}`); if (!r.ok) throw new Error(`${p}: HTTP ${r.status}`); return r.json(); };
 const money = (n) => (n == null ? "—" : `$${Math.round(Number(n) || 0).toLocaleString("en-US")}`);
@@ -46,7 +48,7 @@ const pct = (a, b) => (a && b ? `${a > b ? "+" : ""}${Math.round(((a - b) / b) *
 // What to run: every deal (sold and dead alike), and optionally the newest
 // auto-underwrites (the acceptance-risk read: how much lower would we offer?).
 const { deals = [] } = await get("/api/offers/deals?limit=500");
-const items = deals.map((o) => ({
+const items = deals.filter((o) => !ONLY.length || ONLY.some((s) => String(o.address).toLowerCase().includes(s))).map((o) => ({
   address: o.address, kind: "deal", stage: o.deal?.stage,
   paid: o.deal?.stage === "closed" || o.deal?.stage === "buyer_found" || o.deal?.stage === "assigned"
     ? (Number(o.deal.contractPrice) || 0) + (Number(o.deal.assignmentFee) || 0) : null,
