@@ -2090,6 +2090,27 @@ list shrunk to a rail (J/K, Esc). Loads on open and on Refresh — no poll.
 This is the daily walk through GHL's Tier 1 stage and the Offers tab, done
 from the app's own record.
 
+### "It's signed" → Promote, one tap (2026-10-02)
+
+An agent's "we're mutual!" used to change nothing: the offer stayed "sent"
+until someone promoted it in the offers console. `signedContractIn`
+(`shared/contract-signed.js`) reads their words — mutual, fully executed,
+seller signed, DocuSign complete, counter-signed, under contract — sentence by
+sentence, and not the future, the negative or a question ("once it's signed",
+"hasn't signed yet", "is it mutual?"), nor someone else's contract, a
+counter, or the listing's own paperwork ("signed another offer", "under
+contract with someone else", "signed the counter", "the disclosures"). On a
+call only the THEM lines count. The reply agent adds the existing ask-only
+`promote_to_deal` hand-off (Today: Decide, "Do it") only when the agent has an
+open offer, the intent isn't a counter or a rejection, the text isn't a "gone"
+text (`houseGone`), and either they said it about ours ("your offer", "our
+contract") or our offer is already hot (`pushesToPaper`): a bare "we're under
+contract" on an offer that was only sent is often the other buyer.
+`ASK_ONLY_ACTIONS` is unchanged, so a person still promotes. A real, future
+closing date in the same message ("closing 10/24") rides on the action. The
+deal's price is what `promoteToDeal` always read — the PSA's, else the
+offer's — never an "agreed" on record, which can sit above the book.
+
 ### Tier 1 / Tier 2 — kept by the app, not GHL (2026-10-02)
 
 Matt: track the tiers in the app rather than in GHL's pipeline stages, for

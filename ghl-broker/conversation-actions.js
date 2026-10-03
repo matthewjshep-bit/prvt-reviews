@@ -280,9 +280,10 @@ const EXECUTORS = {
   // Minting the deal sets a contract price and an assignment fee, fires GHL
   // writes and re-prices every dataroom built off the offer — on the evidence
   // of one sentence. A person confirms it.
-  async promote_to_deal({ deps, contactId, draft }) {
+  async promote_to_deal({ deps, contactId, draft, action }) {
     if (typeof deps?.promoteToDeal !== "function") throw new Error("promoting a deal is not wired on this broker");
-    const r = await deps.promoteToDeal({ contactId, addressHint: draft?.propertyAddress || "", draftId: draft?.id || null });
+    // A closing date they named when they said it was signed (shared/contract-signed.js).
+    const r = await deps.promoteToDeal({ contactId, addressHint: draft?.propertyAddress || "", draftId: draft?.id || null, closingDate: action?.closingDate || "" });
     if (!r?.ok) return r?.reason || "no offer to promote";
     return `${r.address} is a deal`;
   },

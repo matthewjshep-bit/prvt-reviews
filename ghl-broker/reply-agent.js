@@ -64,6 +64,7 @@ import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
 import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
+import { signedContractIn, themLines } from "./shared/contract-signed.js";
 import { sameStreet } from "./shared/us-address.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
@@ -3224,6 +3225,28 @@ async function runReply(job, ctx) {
   if (auto.exception?.passed && draft.intent === "acceptance") {
     plan.suggested.push({ id: `a-acc-${job.id}`, type: "promote_to_deal", mode: "ask", status: "pending", party,
       why: "they say the seller accepted — mint the deal when you've confirmed it" });
+  }
+  // They say it's signed — mutual, fully executed, under contract
+  // (shared/contract-signed.js). Before 2026-10-02 nothing noticed: the offer
+  // sat "sent" until someone promoted it by hand. The hand-off goes on Today;
+  // promoting stays a person's tap (ASK_ONLY_ACTIONS). Only with an open
+  // offer of theirs to promote; a closing date they named rides along.
+  // Ours, not someone else's: never on a counter or a "gone" text, and only
+  // when they said it about our offer or our offer is already hot (a yes, a
+  // presenting, a flag) — "we're under contract" alone is often the other buyer.
+  const signedText = isCall ? themLines(inboundText) : (job.originalMessage || job.message);
+  if (party === "agent" && !plan.suggested.some((x) => x.type === "promote_to_deal") && !["rejection", "opt_out", "counter"].includes(draft.intent)
+      && !houseGone(signedText, draft.intent)) {
+    const signed = signedContractIn(signedText, { now });
+    if (signed.signed) {
+      const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50 }).catch(() => []);
+      const open = rows.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));
+      if (open.length && (signed.ours || open.some((o) => pushesToPaper(o)))) {
+        plan.suggested.push({ id: `a-signed-${job.id}`, type: "promote_to_deal", mode: "ask", status: "pending", party,
+          ...(signed.closingDate ? { closingDate: signed.closingDate } : {}),
+          why: `they say it's signed${signed.closingDate ? `, closing ${signed.closingDate}` : ""} — promote it when you've seen the paper` });
+      }
+    }
   }
   // They picked a time we offered. Booked on its own when the guard passed
   // (offered by us, still free, confirmed in our words); otherwise a person
