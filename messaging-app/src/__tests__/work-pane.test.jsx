@@ -271,3 +271,33 @@ test("every row can be dismissed from its header, and a row with its own Dismiss
   expect(owed.match(/>Dismiss</g)?.length).toBe(1);   // the promise's own, which asks why
   expect(owed).not.toContain("go to the next row (D)");
 });
+
+/* ---------- the Desk (2026-10-02): one row per person ---------- */
+
+test("the Desk shows Call first and one row per person, with the rest of their business under 'Also on'", async () => {
+  const { foldDesk } = await import("@shared/desk.js");
+  const { DESK_GROUPS } = await import("../work-queue.js");
+  const r = owedNumber();
+  const held = { id: "underwrite_held:o1", kind: "underwrite_held", severity: "soon", group: "stuck", contactId: "c1", contactName: "Dana", offerId: "o1",
+    address: "12 Elm St, Renton, WA", title: "Underwrite held on 12 Elm St", detail: "only 1 priced comps",
+    ops: [{ key: "open_editor", label: "Open and fix", intent: "primary" }, { key: "drop", label: "Drop it", intent: "danger" }] };
+  const counter = { id: "draft_waiting:k1", kind: "draft_waiting", severity: "now", group: "yours", draftId: "k1", contactId: "c2", contactName: "Kel", address: "23908 SE 168th St", title: "Counter $715,000 is $15,000 over the $700,000 ceiling", ops: [] };
+  const drafts = [{ id: "k1", contactId: "c2", contactName: "Kel", party: "agent", status: "draft", intent: "counter", inbound: "715?", reply: "Let me check.", createdAt: "2026-09-20T12:00:00Z", exception: { passed: false, theirAmount: 715000, ceiling: 700000 } }];
+  const desk = foldDesk([...r.actions, held, counter], { drafts });
+  expect(desk.rows.length).toBe(2);
+  const html = render({ actions: desk.rows, groups: DESK_GROUPS, drafts, initialRowId: desk.rows.find((x) => x.contactId === "c1").id });
+  expect(html.indexOf(">Call<")).toBeLessThan(html.indexOf(">Decide<"));
+  expect(html).toContain("Also on Dana");
+  expect(html).toContain("Open and fix");   // the held underwrite keeps its own buttons
+  expect(html).toContain("+1");             // the rail says one more thing rides on Dana
+});
+
+test("an old link to one of a person's reasons opens that person", () => {
+  const rows = [{ id: "promise_owed:c1:x", kind: "promise_owed", section: "decide", group: "yours", contactId: "c1", contactName: "Dana", title: "Dana: we owe them a number", reasonIds: ["promise_owed:c1:x", "underwrite_held:o1"], also: [], quiet: [], ops: [] },
+    { id: "gone_quiet:o9", kind: "gone_quiet", section: "machine", group: "stuck", contactId: "c3", title: "Gone quiet", reasonIds: ["gone_quiet:o9"], also: [], quiet: [], ops: [] }];
+  return import("../work-queue.js").then(({ DESK_GROUPS }) => {
+    const html = render({ actions: rows, groups: DESK_GROUPS, initialRowId: "underwrite_held:o1" });
+    expect(html).toContain("Dana");
+    expect(html).toContain("1 of 2");
+  });
+});

@@ -8,6 +8,7 @@
 
 import { ACTION_GROUPS, ACTION_KINDS } from "@shared/pipeline.js";
 import { AUDIT_ACTION_KINDS } from "@shared/conversation-audit.js";
+import { DESK_SECTIONS } from "@shared/desk.js";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
 import { OPEN_STATUSES, effectiveStatus } from "@shared/offer-status.js";
 
@@ -17,11 +18,36 @@ const KIND_RANK = Object.fromEntries(ALL_KINDS.map((k, i) => [k.key, i]));
 export const KIND_LABEL = Object.fromEntries(ALL_KINDS.map((k) => [k.key, k.label]));
 export const GROUP_LABEL = Object.fromEntries(ACTION_GROUPS.map((g) => [g.key, g.label]));
 
-// An action with no group (an older broker) is yours.
-export const groupOf = (a) => (GROUP_ORDER.includes(a?.group) ? a.group : "yours");
+// The rail's groups. The Desk (shared/desk.js) sends Call · Decide · Machine
+// with its rows; a broker that predates it sends the three old groups.
+const GROUP_HINT = { yours: "Decisions only you make.", stuck: "The machine tried and couldn't.", machine: "Already moving." };
+// `field` is the row field a group set reads: the old groups read `group`,
+// the Desk's read `section`.
+export const TODAY_GROUPS = GROUP_ORDER.map((key) => ({ key, field: "group", label: GROUP_LABEL[key], hint: GROUP_HINT[key], folds: key === "machine",
+  ...(key === "yours" ? { empty: "Nothing is waiting on you." } : {}) }));
+export const DESK_GROUPS = DESK_SECTIONS.map((s) => ({ ...s, field: "section", empty: s.key === "call" ? "Nobody to call right now." : s.key === "decide" ? "Nothing to decide." : undefined }));
+export const SECTION_LABEL = { ...GROUP_LABEL, ...Object.fromEntries(DESK_SECTIONS.map((s) => [s.key, s.label])) };
 
-/** orderRows(actions) → actions, in the order they are worked. */
-export function orderRows(actions = []) {
+// Which group a row is in. An action with no group (an older broker) is
+// yours; a row in none of the set's groups lands in its first.
+export const groupOf = (a, groups = TODAY_GROUPS) => {
+  const set = groups?.length ? groups : TODAY_GROUPS;
+  const k = a?.[set[0].field || "section"];
+  return set.some((g) => g.key === k) ? k : set[0].key;
+};
+
+/**
+ * orderRows(actions, groups?) → actions, in the order they are worked.
+ * With the Desk's groups: section by section, in the order the broker
+ * ranked them (shared/desk.js foldDesk).
+ */
+export function orderRows(actions = [], groups = null) {
+  if (groups?.length && groups !== TODAY_GROUPS) {
+    const rank = Object.fromEntries(groups.map((g, i) => [g.key, i]));
+    return (actions || []).map((a, i) => ({ a, i }))
+      .sort((x, y) => rank[groupOf(x.a, groups)] - rank[groupOf(y.a, groups)] || x.i - y.i)
+      .map(({ a }) => a);
+  }
   return (actions || [])
     .map((a, i) => ({ a, i }))
     .sort((x, y) => GROUP_ORDER.indexOf(groupOf(x.a)) - GROUP_ORDER.indexOf(groupOf(y.a))
@@ -29,6 +55,18 @@ export function orderRows(actions = []) {
       || x.i - y.i)
     .map(({ a }) => a);
 }
+
+/**
+ * rowFor(list, id) → the row with that id, or the Desk row that folds a
+ * reason with that id (an old ?row= link, or a person whose lead changed).
+ */
+export function rowFor(list = [], id) {
+  if (!id) return null;
+  return list.find((r) => r.id === id) || list.find((r) => (r.reasonIds || []).includes(id)) || null;
+}
+
+/** reasonsOf(row) → the row and every reason folded into it: the ones shown and the ones it repeats. */
+export const reasonsOf = (row) => [row, ...(row?.also || []), ...(row?.quiet || [])].filter(Boolean);
 
 /** neighborId(list, id, dir) → the id one step away (dir +1 / -1), or null at an end. */
 export function neighborId(list = [], id, dir = 1) {

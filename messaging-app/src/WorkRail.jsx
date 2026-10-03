@@ -1,20 +1,16 @@
 // WorkRail.jsx — Today's queue as a slim list down the left of the work pane.
 //
-// Your call, then Stuck, then The machine is on it (folded unless you are in
-// it). Each row is the street (or the person), what kind of row it is, and a
+// The Desk's three sections — Call, Decide, The machine is on it (folded
+// unless you are in it) — or, from a broker that predates the Desk, the old
+// Your call / Stuck / The machine is on it. Each row is the street (or the
+// person), what kind of row it is, how many other things ride on it, and a
 // dot for how soon. Click one, or J/K, and the pane beside it becomes that row.
 
 import React from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { SearchInput } from "./ui.jsx";
 import { SEV } from "./RowOps.jsx";
-import { GROUP_LABEL, GROUP_ORDER, KIND_LABEL, groupOf, railLabel } from "./work-queue.js";
-
-const GROUP_HINT = {
-  yours: "Decisions only you make.",
-  stuck: "The machine tried and couldn't.",
-  machine: "Already moving.",
-};
+import { KIND_LABEL, TODAY_GROUPS, groupOf, railLabel } from "./work-queue.js";
 
 function RailRow({ item, selected, onSelect, taught }) {
   const sev = SEV[item.severity] || SEV.fyi;
@@ -26,7 +22,7 @@ function RailRow({ item, selected, onSelect, taught }) {
         <span className="min-w-0 flex-1">
           <span className={`block truncate text-sm ${selected ? "font-semibold text-blue-900" : "font-medium text-slate-800"}`} title={item.address || item.title}>{railLabel(item)}</span>
           <span className="block truncate text-xs text-slate-500">
-            {KIND_LABEL[item.kind] || item.kind}{item.contactName && item.address ? ` · ${item.contactName}` : ""}
+            {KIND_LABEL[item.kind] || item.kind}{item.also?.length ? ` +${item.also.length}` : ""}{item.contactName && item.address ? ` · ${item.contactName}` : ""}
           </span>
         </span>
         {taught && <Check size={12} className="mt-1 shrink-0 text-emerald-600" aria-label="taught" />}
@@ -36,12 +32,13 @@ function RailRow({ item, selected, onSelect, taught }) {
 }
 
 /**
- * <WorkRail rows selectedId onSelect filter onFilter machineOpen onMachineOpen isTaught />
- *   rows: already in work order (orderRows) and already filtered
+ * <WorkRail rows groups selectedId onSelect filter onFilter machineOpen onMachineOpen isTaught />
+ *   rows:   already in work order (orderRows) and already filtered
+ *   groups: [{ key, label, hint, folds, empty }] — the Desk's sections, or the old groups
  */
-export default function WorkRail({ rows = [], total = 0, selectedId, onSelect, filter = "", onFilter, machineOpen = false, onMachineOpen, isTaught = () => false }) {
-  const byGroup = Object.fromEntries(GROUP_ORDER.map((g) => [g, rows.filter((r) => groupOf(r) === g)]));
-  const selectedGroup = groupOf(rows.find((r) => r.id === selectedId) || {});
+export default function WorkRail({ rows = [], groups = TODAY_GROUPS, total = 0, selectedId, onSelect, filter = "", onFilter, machineOpen = false, onMachineOpen, isTaught = () => false }) {
+  const byGroup = Object.fromEntries(groups.map((g) => [g.key, rows.filter((r) => groupOf(r, groups) === g.key)]));
+  const selectedGroup = groupOf(rows.find((r) => r.id === selectedId) || {}, groups);
   return (
     <nav aria-label="Today's rows" className="flex h-full min-h-0 flex-col rounded-xl border border-slate-200 bg-white">
       <div className="shrink-0 border-b border-slate-100 p-2">
@@ -49,26 +46,26 @@ export default function WorkRail({ rows = [], total = 0, selectedId, onSelect, f
         {filter && <div className="mt-1 px-1 text-xs text-slate-500">{rows.length} of {total}</div>}
       </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-2">
-        {GROUP_ORDER.map((g) => {
-          const items = byGroup[g];
-          if (g !== "yours" && !items.length) return null;
-          const folds = g === "machine";
-          const open = !folds || machineOpen || selectedGroup === "machine";
+        {groups.map((g) => {
+          const items = byGroup[g.key] || [];
+          if (!g.empty && !items.length) return null;
+          const folds = Boolean(g.folds);
+          const open = !folds || machineOpen || selectedGroup === g.key;
           const heading = (
             <span className="flex items-baseline gap-2 px-1">
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-700">{GROUP_LABEL[g]}</span>
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-700">{g.label}</span>
               <span className="text-xs font-semibold tabular-nums text-slate-500">{items.length}</span>
               {folds && <ChevronDown size={12} className={`self-center text-slate-500 transition-transform ${open ? "rotate-180" : ""}`} />}
             </span>
           );
           return (
-            <section key={g} aria-label={GROUP_LABEL[g]}>
+            <section key={g.key} aria-label={g.label}>
               {folds
-                ? <button type="button" className="w-full text-left" onClick={() => onMachineOpen?.(!open)} aria-expanded={open} title={GROUP_HINT[g]}>{heading}</button>
-                : <div title={GROUP_HINT[g]}>{heading}</div>}
+                ? <button type="button" className="w-full text-left" onClick={() => onMachineOpen?.(!open)} aria-expanded={open} title={g.hint}>{heading}</button>
+                : <div title={g.hint}>{heading}</div>}
               {open && (items.length
                 ? <ul className="mt-1 space-y-0.5">{items.map((item) => <RailRow key={item.id} item={item} selected={item.id === selectedId} onSelect={onSelect} taught={isTaught(item)} />)}</ul>
-                : <div className="mt-1 rounded-lg border border-dashed border-slate-200 px-3 py-3 text-center text-xs text-slate-500">Nothing is waiting on you.</div>)}
+                : <div className="mt-1 rounded-lg border border-dashed border-slate-200 px-3 py-3 text-center text-xs text-slate-500">{g.empty}</div>)}
             </section>
           );
         })}

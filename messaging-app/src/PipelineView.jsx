@@ -1,6 +1,11 @@
 // PipelineView.jsx — the Today app (/dashboard): where everything stands,
 // and the queue of what needs a person. Two tabs share it: section="queue"
-// (Needs you — the work pane, WorkView.jsx) and section="board" (The board).
+// (the Desk — the work pane, WorkView.jsx) and section="board" (The board).
+//
+// The Desk (2026-10-02, shared/desk.js) is the queue one row per person, in
+// Call · Decide · The machine is on it, with today's numbers against the
+// line's targets above it. A broker that predates it sends only `actions`,
+// and the old groups come back.
 //
 // One endpoint, polled every fifteen seconds (paused while the tab is
 // hidden). Anything a button does bumps the refresh, so the board and the
@@ -14,10 +19,43 @@ import { getDashboardPipeline } from "./api.js";
 import { appHref } from "./links.js";
 import { BTN, ErrorBar, FilterChips, SearchInput, SkeletonRows } from "./ui.jsx";
 import WorkView from "./WorkView.jsx";
+import { DESK_GROUPS, TODAY_GROUPS } from "./work-queue.js";
 import PipelineBoard from "./PipelineBoard.jsx";
 
 const POLL_MS = 15000;
 const SIDES = [{ key: "all", label: "Everything" }, { key: "agent", label: "Acquisition" }, { key: "dispo", label: "Disposition" }];
+
+// Today against the line's targets: the calls (the one job that is yours),
+// the offers out, what's hot, and contracts this month. Settings → Line
+// targets sets the targets.
+export function DeskKpis({ kpis }) {
+  if (!kpis) return null;
+  const { calls = {}, offers = {}, contracts = {} } = kpis;
+  const tone = (n, target) => (target > 0 && n >= target ? "text-emerald-700" : "text-slate-900");
+  const Tile = ({ label, children, title }) => (
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-1.5" title={title}>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="text-sm text-slate-600">{children}</div>
+    </div>
+  );
+  return (
+    <div className="flex flex-wrap gap-2" aria-label="Today's numbers">
+      <Tile label="Calls today" title="Calls placed today, and how many were a conversation">
+        <b className="text-base tabular-nums text-slate-900">{calls.tried || 0}</b> placed · <b className="tabular-nums text-slate-900">{calls.talked || 0}</b> talked
+      </Tile>
+      <Tile label="Offers out today" title="Written offers sent today against the daily target, and numbers floated">
+        <b className={`text-base tabular-nums ${tone(offers.sent || 0, offers.target)}`}>{offers.sent || 0}</b>{offers.target ? <span className="tabular-nums"> / {offers.target}</span> : null}
+        {offers.floated ? <span> · {offers.floated} floated</span> : null}
+      </Tile>
+      <Tile label="Hot" title="Offers with a price agreed or flagged hot, not yet a deal">
+        <b className="text-base tabular-nums text-slate-900">{kpis.hot || 0}</b>
+      </Tile>
+      <Tile label="Contracts this month" title="Deals that went under contract this month against the monthly target">
+        <b className={`text-base tabular-nums ${tone(contracts.count || 0, contracts.target)}`}>{contracts.count || 0}</b>{contracts.target ? <span className="tabular-nums"> / {contracts.target}</span> : null}
+      </Tile>
+    </div>
+  );
+}
 
 // One line above the work pane: the autopilot (links to its controls), the
 // two numbers that were tiles, and when the daytime pass last ran. The group
@@ -119,8 +157,9 @@ export default function PipelineView({ section = "queue", settings = null }) {
 
       {section === "queue" && (
         <>
+          <DeskKpis kpis={data?.desk?.kpis} />
           <StatusStrip autopilot={data?.autopilot} working={working} liveDeals={liveDeals} daytime={data?.daytime} leaks={data?.audit?.leaks || null} refreshBtn={refreshBtn} />
-          <WorkView actions={actions} drafts={drafts} rowFeedback={data?.rowFeedback || {}} sendsEnabled={data?.sendsEnabled}
+          <WorkView actions={data?.desk ? data.desk.rows : actions} groups={data?.desk ? DESK_GROUPS : TODAY_GROUPS} drafts={drafts} rowFeedback={data?.rowFeedback || {}} sendsEnabled={data?.sendsEnabled}
             serverOffsetMs={offsetRef.current} onDone={refresh} settings={settings} />
         </>
       )}

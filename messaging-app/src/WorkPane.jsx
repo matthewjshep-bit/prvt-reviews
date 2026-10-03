@@ -19,11 +19,11 @@ import { BTN, Pill } from "./ui.jsx";
 import { RowOpsBar, SEV, whenLabel } from "./RowOps.jsx";
 import { IntentPill } from "./ConversationOutbox.jsx";
 import { PaneActions, PaneBody, PaneHeading, usePane } from "./PaneParts.jsx";
-import { GROUP_LABEL, KEYS_HELP, KIND_LABEL, canDismissRow, groupOf, railLabel } from "./work-queue.js";
+import { KEYS_HELP, KIND_LABEL, SECTION_LABEL, canDismissRow, groupOf, railLabel } from "./work-queue.js";
 
 export { OPEN_OFFER_EVENT } from "./PaneParts.jsx";
 
-const GROUP_CLS = { yours: "bg-blue-50 text-blue-800", stuck: "bg-amber-100 text-amber-800", machine: "bg-violet-100 text-violet-800" };
+const GROUP_CLS = { call: "bg-emerald-50 text-emerald-800", decide: "bg-blue-50 text-blue-800", yours: "bg-blue-50 text-blue-800", stuck: "bg-amber-100 text-amber-800", machine: "bg-violet-100 text-violet-800" };
 const NAV = "rounded-lg border border-slate-300 bg-white p-1.5 text-slate-600 hover:bg-slate-50 disabled:cursor-default disabled:opacity-40";
 
 export function KeysHelp() {
@@ -48,10 +48,36 @@ export function rowHeading(item, offer = null) {
   return item.title || railLabel(item);
 }
 
+/**
+ * The other things on this person (a Desk row folds them, shared/desk.js):
+ * each says what it is and keeps its own buttons, so one pane clears them all.
+ */
+export function FoldedReasons({ item, targets, pane, onDone }) {
+  const also = item.also || [];
+  if (!also.length) return null;
+  const who = item.contactName ? `${item.contactName}` : "this";
+  // "Sam Lee: we owe them a number" under Sam Lee's row: the name once is enough.
+  const said = (r) => (r.contactName && String(r.title || "").startsWith(`${r.contactName}: `) ? r.title.slice(r.contactName.length + 2) : r.title || "");
+  return (
+    <div className="mt-2 space-y-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" aria-label={`Also on ${who}`}>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Also on {who}</div>
+      {also.map((r) => (
+        <div key={r.id} className="space-y-1">
+          <div className="text-sm text-slate-800"><span className="font-semibold">{KIND_LABEL[r.kind] || String(r.kind || "").replace(/_/g, " ")}</span>{said(r) ? ` · ${said(r)}` : ""}</div>
+          {r.detail && <div className="text-xs text-slate-600">{r.detail}</div>}
+          {r.next?.what && <div className="text-xs text-violet-700">Next: {r.next.what}{r.next.at ? ` · ${whenLabel(r.next.at)}` : ""}</div>}
+          <RowOpsBar item={r} onDone={onDone} onOpenContact={pane.openContact} hasDraft={Boolean(targets.draft)} hasRecord={Boolean(targets.contactId)} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** The row's own header: why it's here, the person and the house, and its buttons. */
 export function RowHeader({ item, targets, index, total, onPrev, onNext, picker, onDone, onDismiss = null, showKeys, onToggleKeys, pane, actions = null }) {
   const sev = SEV[item.severity] || SEV.fyi;
-  const g = groupOf(item);
+  // A Desk row says its section (Call / Decide / Machine); an old row its group.
+  const g = item.section || groupOf(item);
   const intent = targets.draft?.intent;
   const heading = rowHeading(item, pane.side.offer);
   // The pipeline's title says why the row is here; a draft row's is only
@@ -66,7 +92,7 @@ export function RowHeader({ item, targets, index, total, onPrev, onNext, picker,
         <span className={`mt-2 h-2.5 w-2.5 shrink-0 rounded-full ${sev.dot}`} title={sev.label} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <Pill small label={GROUP_LABEL[g]} cls={GROUP_CLS[g]} />
+            <Pill small label={SECTION_LABEL[g] || g} cls={GROUP_CLS[g]} />
             <Pill small label={KIND_LABEL[item.kind] || item.kind} />
             {item.severity === "now" && <Pill small label="now" cls={SEV.now.cls} />}
             {intent && intent !== "other" && <IntentPill party={targets.party} intent={intent} />}
@@ -74,8 +100,9 @@ export function RowHeader({ item, targets, index, total, onPrev, onNext, picker,
           <PaneHeading item={item} targets={targets} pane={pane} fallback={heading} />
           {why && <p className="mt-0.5 text-sm font-medium text-slate-800">{why}</p>}
           {item.detail && <p className="mt-0.5 text-sm text-slate-600">{item.detail}</p>}
-          {g === "stuck" && item.why && <p className="mt-0.5 text-sm text-amber-800">Stuck because: {item.why}</p>}
+          {item.group === "stuck" && item.why && <p className="mt-0.5 text-sm text-amber-800">Stuck because: {item.why}</p>}
           {item.next?.what && <p className="mt-0.5 text-sm text-violet-700">Next: {item.next.what}{item.next.at ? ` · ${whenLabel(item.next.at)}` : ""}</p>}
+          <FoldedReasons item={item} targets={targets} pane={pane} onDone={onDone} />
         </div>
         <div className="relative flex shrink-0 items-center gap-1.5">
           {picker}
