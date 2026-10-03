@@ -401,6 +401,10 @@ export const setOfferStatus = (id, status, note = "") =>
 // Sends nothing. Returns { offer }.
 export const requoteOffer = (id, amount) =>
   post(`/api/offers/${encodeURIComponent(id)}/requote`, { amount });
+// Take back an agreed price so the offer can be re-quoted. Keeps the record of
+// what was agreed; sends nothing. Returns { offer, cleared }.
+export const clearAgreedPrice = (id) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/agreed?${locq()}`, { method: "DELETE" }).then(j);
 // Bulk outcome for the history selection bar. Returns { results, offers } —
 // per-id so one failure doesn't hide the rest.
 export const setOfferStatusBulk = (ids, status, note = "") =>

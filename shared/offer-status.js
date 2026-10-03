@@ -257,13 +257,20 @@ export const dealSpokenFor = (deal) =>
  */
 export function priceAgreed(offer) {
   if (!offer) return null;
-  if (offer.agreed?.amount > 0) return offer.agreed;
+  // A person can take an agreed price back (`offer.agreedCleared`, the
+  // DELETE /:id/agreed route) — Woodcrest, 2026-10-02: the counter band
+  // "agreed" 402.5k above the 386k we'd signed. Every marker from before that
+  // is history, not a lock; a new yes after it locks the price again. A
+  // contract is never taken back this way.
+  const clearedAt = Date.parse(offer.agreedCleared?.at || "") || 0;
+  const live = (at) => !clearedAt || (Date.parse(at || "") || 0) > clearedAt;
+  if (offer.agreed?.amount > 0 && live(offer.agreed.at)) return offer.agreed;
   if (offer.deal || effectiveStatus(offer) === "accepted") {
     const h = (offer.statusHistory || []).find((x) => x.status === "accepted");
     return { amount: Number(offer.deal?.contractPrice) || Number(offer.cashAmount) || 0, at: h?.ts || offer.deal?.createdAt || offer.statusAt || null, via: "accepted" };
   }
-  if (offer.counterBand?.acceptedAt) return { amount: Number(offer.counterBand.amount) || Number(offer.cashAmount) || 0, at: offer.counterBand.acceptedAt, via: "counter_band" };
-  if (offer.realm?.answer === "yes") return { amount: Number(offer.cashAmount) || 0, at: offer.realm.ts || null, via: "realm_yes" };
+  if (offer.counterBand?.acceptedAt && live(offer.counterBand.acceptedAt)) return { amount: Number(offer.counterBand.amount) || Number(offer.cashAmount) || 0, at: offer.counterBand.acceptedAt, via: "counter_band" };
+  if (offer.realm?.answer === "yes" && live(offer.realm.ts)) return { amount: Number(offer.cashAmount) || 0, at: offer.realm.ts || null, via: "realm_yes" };
   return null;
 }
 

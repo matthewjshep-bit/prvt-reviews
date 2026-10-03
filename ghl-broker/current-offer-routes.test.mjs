@@ -130,3 +130,29 @@ test("re-quote refuses a missing amount", async () => {
   const any = (await store.listOffers(LOC, { limit: 1 }))[0];
   assert.equal((await req("POST", `/api/offers/${any.id}/requote`, {})).status, 400);
 });
+
+test("an agreed price you take back can be re-quoted — Woodcrest: the band's 402.5k blocked the move back to 390k", async () => {
+  const o = await seed({
+    status: "countered", statusHistory: [{ status: "countered", ts: "2026-10-02T23:26:50Z" }],
+    realm: { answer: "yes", ts: "2026-09-17T17:24:39Z" },
+    agreed: { amount: 402500, at: "2026-10-02T18:05:31Z", via: "counter_band" },
+    counterBand: { at: "2026-10-02T18:05:31Z", acceptedAt: "2026-10-02T18:05:31Z", amount: 402500 },
+  });
+  assert.equal((await req("POST", `/api/offers/${o.id}/requote`, { amount: 390000 })).status, 409, "locked while agreed");
+
+  const r = await req("DELETE", `/api/offers/${o.id}/agreed`);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.cleared.amount, 402500);
+  const cleared = await store.getOffer(o.id);
+  assert.equal(cleared.agreedCleared.by, "you");
+  assert.deepEqual(cleared.agreed, o.agreed, "the record of what was agreed stays — it's history");
+
+  const q = await req("POST", `/api/offers/${o.id}/requote`, { amount: 390000 });
+  assert.equal(q.status, 200, JSON.stringify(q.json).slice(0, 300));
+  assert.equal((await store.getOffer(o.id)).cashAmount, 390000);
+});
+
+test("taking back an agreed price refuses a deal — that price lives on the contract", async () => {
+  const o = await seed({ deal: { stage: "under_contract", contractPrice: 300000, createdAt: "2026-10-01T00:00:00Z" } });
+  assert.equal((await req("DELETE", `/api/offers/${o.id}/agreed`)).status, 409);
+});

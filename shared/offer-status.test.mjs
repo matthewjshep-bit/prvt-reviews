@@ -394,3 +394,24 @@ test("no longer available is its own dead end: nobody's pass, never revived, nev
   assert.ok(m.STATUS_RANK.unavailable < m.STATUS_RANK.we_passed, "it says least about the agent");
   assert.match(m.STATUS_HISTORY_PHRASE.unavailable, /no longer available/);
 });
+
+test("a price you take back is no longer agreed — Woodcrest: the band's 402.5k and an old realm yes both stop locking it", () => {
+  const offer = {
+    cashAmount: 402500, status: "countered", statusHistory: [{ status: "countered", ts: "2026-10-02T23:26:50Z" }],
+    realm: { answer: "yes", ts: "2026-09-17T17:24:39Z" },
+    agreed: { amount: 402500, at: "2026-10-02T18:05:31Z", via: "counter_band" },
+    counterBand: { at: "2026-10-02T18:05:31Z", acceptedAt: "2026-10-02T18:05:31Z", amount: 402500 },
+  };
+  assert.equal(priceAgreed(offer)?.amount, 402500);
+  const cleared = { ...offer, agreedCleared: { at: "2026-10-03T03:00:00Z", by: "you", amount: 402500, via: "counter_band" } };
+  assert.equal(priceAgreed(cleared), null, "every marker from before you cleared it is ignored");
+  assert.equal(priceLocked(cleared), false, "so you can re-quote it");
+  const again = { ...cleared, realm: { answer: "yes", ts: "2026-10-04T00:00:00Z" } };
+  assert.equal(priceAgreed(again)?.via, "realm_yes", "a new yes after that locks it again");
+});
+
+test("taking back an agreed price never touches a contract", () => {
+  const deal = { cashAmount: 300000, deal: { contractPrice: 300000, createdAt: "2026-10-01T00:00:00Z" },
+    agreedCleared: { at: "2026-10-03T00:00:00Z", by: "you" } };
+  assert.equal(priceAgreed(deal)?.amount, 300000);
+});

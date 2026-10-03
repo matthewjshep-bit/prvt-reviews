@@ -1997,14 +1997,15 @@ const bandCfg = normalizeConversationAi({
   parties: { agent: { counterBand: { enabled: true, dailyCap: 2 } } },
 });
 
-test("the band reads the offer book and opens on a counter inside the ceiling", async () => {
+test("the band reads the offer book and works out the ceiling, but a counter above our number waits for a person", async () => {
   const v = await evaluateBandFor({
     store: bandStore(), locationId: "LOC", party: "agent", config: bandCfg, saved: {},
     draft: { intent: "counter", counterAmount: 250000, confidence: "high", propertyAddress: BAND_OFFER.address },
     job: { contactId: "c1", message: "seller would do $250,000" }, now: Date.now(),
   });
-  assert.equal(v.passed, true, v.reason);
   assert.ok(v.ceiling > BAND_OFFER.cashAmount);
+  assert.equal(v.passed, false, "Matt, 2026-10-02: the machine never goes above the number we sent");
+  assert.match(v.reason, /never goes above the \$240,000 we sent/);
 });
 
 test("the band is not even computed when it is switched off", async () => {
@@ -2036,7 +2037,7 @@ test("an agent with nothing open gets a verdict that says so rather than a ceili
   assert.match(v.reason, /no open offer/);
 });
 
-test("a counter on a house they passed on, answered through the check-in, opens the band", async () => {
+test("a counter on a house they passed on, answered through the check-in, finds the offer — and waits for a person", async () => {
   // Pink Skulls Realtor, 2414 E Longfellow (2026-09-22): passed 9/10, the
   // check-in asked if the seller had moved, "we have one at 144k" inside the
   // ceiling — and the band said "no open offer to answer".
@@ -2046,7 +2047,10 @@ test("a counter on a house they passed on, answered through the check-in, opens 
     draft: { intent: "counter", counterAmount: 250000, confidence: "high", propertyAddress: BAND_OFFER.address },
     job: { contactId: "c1", message: "I think we have one at $250,000" }, now: Date.now(),
   });
-  assert.equal(v.passed, true, v.reason);
+  assert.equal(v.offerId, BAND_OFFER.id, "the passed offer is still the one to answer");
+  assert.doesNotMatch(v.reason, /no open offer/);
+  assert.equal(v.passed, false);
+  assert.match(v.reason, /never goes above/);
 });
 
 test("a house WE passed on is not revived by their counter — the band stays shut", async () => {
@@ -2332,7 +2336,7 @@ const negotiationStore = (offer) => {
   return store;
 };
 
-test("a counter under the ceiling re-issues the offer at their number, sends it, and says so", async () => {
+test("a counter under the ceiling is never taken by itself: nothing re-issued, nothing sent, it waits for a person", async () => {
   _resetJobs();
   const ceiling = autoAcceptCeiling({ offer: NEGOTIATION_OFFER, settings: bandSaved() }).ceiling;
   assert.ok(ceiling > NEGOTIATION_OFFER.cashAmount, `the fixture needs room under the ceiling (got ${ceiling})`);
@@ -2353,36 +2357,16 @@ test("a counter under the ceiling re-issues the offer at their number, sends it,
   await settle();
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
-  assert.deepEqual(order, [["revise", amount], ["send", true]], "re-issued first, then the revised paper goes out");
-  assert.equal(d.reply, `${amount / 1000}k works for us on 12 Elm St. Sending the updated offer over now.`);
-  assert.equal(d.status, "scheduled", d.autoSend?.reason);
-  assert.equal(d.exception?.passed, true);
+  assert.deepEqual(order, [], "no paper re-issued above the number we sent, and none sent");
+  assert.doesNotMatch(d.reply, /works for us|Sending the updated offer/);
+  assert.equal(d.status, "draft", d.autoSend?.reason);
+  assert.equal(d.exception?.passed, false);
+  assert.match(d.exception?.reason || "", /never goes above the \$300,000 we sent/);
 });
 
-test("if the revised offer doesn't go out, the 'sending it over' reply is held for a person", async () => {
-  _resetJobs();
-  const ceiling = autoAcceptCeiling({ offer: NEGOTIATION_OFFER, settings: bandSaved() }).ceiling;
-  const amount = Math.min(ceiling, NEGOTIATION_OFFER.cashAmount + 10000);
-  const { client } = ghlStubFor(["agent"]);
-  const store = negotiationStore(NEGOTIATION_OFFER);
-  const { job } = await startReply({
-    client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
-    message: `seller would do ${amount / 1000}k on 12 Elm`,
-    deps: {
-      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: amount,
-        reply: "Let me run that by my partner.", propertyAddress: "12 Elm St" }),
-      reviseOfferToCounter: async ({ amount: a }) => ({ ok: true, address: "12 Elm St", amount: a }),
-      sendOfferDocs: async () => ({ ok: false, reason: "send failed — carrier error" }),
-    },
-  });
-  await settle();
-  const d = await store.getReplyDraft(job.draftId);
-  assert.equal(d.status, "draft");
-  assert.match(d.autoSend.reason, /counter-band offer did not go out/);
-});
-
-test("a counter just over the ceiling goes out on its own: re-issued at our max, sent, and said plainly", async () => {
-  // Matt, 2026-09-14: "just have the counter go automatically instead of wait for my review."
+test("a counter just over the ceiling no longer goes out at our max by itself — on Woodcrest that raised a signed 386k to 402.5k", async () => {
+  // Matt, 2026-09-14 had it countering back at the ceiling automatically;
+  // 2026-10-02, after Woodcrest: "we need to stick with our prev numbers".
   _resetJobs();
   const ceiling = autoAcceptCeiling({ offer: NEGOTIATION_OFFER, settings: bandSaved() }).ceiling;
   const theirs = ceiling + 15000;   // over, but inside the 10% margin
@@ -2402,11 +2386,11 @@ test("a counter just over the ceiling goes out on its own: re-issued at our max,
   await settle();
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
-  assert.deepEqual(order, [["revise", ceiling], ["send", true]], "re-issued at OUR max, not their number");
-  const k = ceiling % 1000 === 0 ? `${ceiling / 1000}k` : ceiling.toLocaleString("en-US");
-  assert.equal(d.reply, `Best we can do on 12 Elm St is ${k} as-is, cash. Sending the updated offer over now.`);
-  assert.equal(d.status, "scheduled", d.autoSend?.reason);
-  assert.equal(d.exception?.counterBack, true);
+  assert.deepEqual(order, [], "nothing re-issued at the ceiling, nothing sent");
+  assert.doesNotMatch(d.reply, /Best we can do/);
+  assert.equal(d.status, "draft", d.autoSend?.reason);
+  assert.equal(d.exception?.counterBack, false);
+  assert.match(d.exception?.reason || "", /never goes above the \$300,000 we sent/);
 });
 
 test("after we came back at our max, another counter over it is their pass — no second round", async () => {
@@ -3288,9 +3272,10 @@ test("a shorthand counter inside the ceiling still passes 'their own words'", as
   });
   await settle();
   const d = await store.getReplyDraft(job.draftId);
-  assert.equal(d.exception?.passed, true, JSON.stringify(d.exception?.checks));
-  assert.deepEqual(order, [["revise", 350000], ["send", true]]);
-  assert.equal(d.reply, "350k works for us on 12 Elm St. Sending the updated offer over now.");
+  const words = (d.exception?.checks || []).find((c) => c.name === "their_own_words");
+  assert.equal(words?.ok, true, JSON.stringify(d.exception?.checks));
+  assert.equal(d.exception?.passed, false, "and still waits: 350k is above the 300k we sent");
+  assert.deepEqual(order, []);
 });
 
 test("when nothing goes out, the thread gets a clock and a note", async () => {

@@ -3529,6 +3529,30 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // A person takes an agreed price back, so the offer can be re-quoted
+  // (Woodcrest, 2026-10-02: the counter band "agreed" 402.5k above the 386k
+  // we'd signed, and the lock then refused the move back to 390k). It writes
+  // `agreedCleared` and nothing else: priceAgreed ignores every marker from
+  // before it, and the markers themselves stay as history. Sends nothing. A
+  // deal's price is the contract's, and changes there.
+  router.delete("/:id/agreed", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { offer } = ctx;
+      if (offer.deal || effectiveStatus(offer) === "accepted") {
+        return res.status(409).json({ error: "it's a deal — change the contract price on the deal" });
+      }
+      const was = priceAgreed(offer);
+      if (!was) return res.json({ ok: true, offer, cleared: null });
+      const ts = new Date().toISOString();
+      offer.agreedCleared = { at: ts, by: "you", amount: was.amount, via: was.via };
+      offer.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, offer, cleared: was });
+    } catch (err) { fail(res, err); }
+  });
+
   // Bulk outcome for the history table's selection bar. Body: { ids, status,
   // note? }. Per-id results so one bad id doesn't sink the batch. "accepted"
   // is excluded — promoting many offers at once is never what you meant.

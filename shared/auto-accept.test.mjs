@@ -127,14 +127,11 @@ const band = (over = {}) => evaluateCounterBand({
   ...over,
 });
 const failed = (v) => v.checks.find((c) => !c.ok)?.name;
+const cleared = (v, name) => v.checks.find((c) => c.name === name)?.ok;
 
-test("a counter under the ceiling passes", () => {
-  assert.equal(band().passed, true, band().reason);
-});
-
-test("a counter exactly at the ceiling is allowed", () => {
+test("a counter exactly at the ceiling counts as inside it", () => {
   const v = band({ draft: { counterAmount: CEILING, confidence: "high", propertyAddress: OFFER.address }, inboundMessage: `$${CEILING.toLocaleString("en-US")}` });
-  assert.equal(v.passed, true, v.reason);
+  assert.equal(cleared(v, "under_ceiling"), true);
 });
 
 test("a counter more than 10% over the ceiling is refused", () => {
@@ -146,13 +143,23 @@ test("a counter more than 10% over the ceiling is refused", () => {
   assert.equal(v.counterBack, false);
 });
 
-test("a counter a little over the ceiling is answered by countering back AT the ceiling", () => {
-  // Matt, 2026-09-14: counters go automatically instead of waiting for review.
+test("the band never answers above the number we sent — on Woodcrest it met a 410k counter at its 402.5k ceiling while the agent held our signed 386k", () => {
+  // Matt, 2026-10-02: "we need to stick with our prev numbers".
   const over = CEILING + 1;
   const v = band({ draft: { counterAmount: over, confidence: "high", propertyAddress: OFFER.address }, inboundMessage: `$${over.toLocaleString("en-US")}` });
-  assert.equal(v.passed, true, v.reason);
-  assert.equal(v.counterBack, true);
-  assert.equal(v.releaseAmount, CEILING, "we answer with the most we'd pay, not their number");
+  assert.equal(v.passed, false);
+  assert.equal(v.counterBack, false, "no countering back at the ceiling");
+  assert.equal(v.releaseAmount, 0);
+  assert.match(v.reason, /never goes above the \$240,000 we sent/);
+  assert.match(v.reason, /over the \$\d[\d,]* ceiling/, "the ceiling still rides along for the person deciding");
+});
+
+test("a counter inside the ceiling but above the number we sent waits for a person too", () => {
+  const v = band();
+  assert.equal(v.passed, false);
+  assert.equal(v.releaseAmount, 0);
+  assert.equal(v.checks.find((c) => c.name === "under_ceiling").ok, true, "the arithmetic still says it's inside");
+  assert.match(v.reason, /never goes above the \$240,000 we sent/);
 });
 
 test("counter back still needs every other check — a medium-confidence read parks", () => {
@@ -184,7 +191,7 @@ test("an agent with two open offers and no address named fails", () => {
   assert.equal(failed(v), "one_offer");
   // Naming the property is what resolves it.
   const named = band({ openOffers: [OFFER, other], draft: { counterAmount: CEILING - 1000, confidence: "high", propertyAddress: OFFER.address } });
-  assert.equal(named.passed, true, named.reason);
+  assert.equal(cleared(named, "one_offer"), true);
 });
 
 test("a medium-confidence counter fails even inside the band", () => {
@@ -215,7 +222,7 @@ test("an offer that became a deal fails", () => {
 });
 
 test("the daily cap is enforced from the count it is handed", () => {
-  assert.equal(band({ releasedToday: 1 }).passed, true);
+  assert.equal(cleared(band({ releasedToday: 1 }), "under_daily_cap"), true);
   const v = band({ releasedToday: 2 });
   assert.equal(v.passed, false);
   assert.equal(failed(v), "under_daily_cap");

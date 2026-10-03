@@ -12,7 +12,7 @@ import React, { useState } from "react";
 import { Check, ExternalLink, FileText, Pencil, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { OFFER_STATUS, offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
-import { getOffer, listOffers, offerEditorUrl, requoteOffer, zillowUrl } from "./api.js";
+import { clearAgreedPrice, getOffer, listOffers, offerEditorUrl, requoteOffer, zillowUrl } from "./api.js";
 import { annotateCurrent } from "@shared/current-offer.js";
 import { BTN, ChecksLine, CurrentPill, HotPill, PaperHeldBanner, StagePill, StatusPill } from "./ui.jsx";
 import { AiProvenance, RehabScope } from "./OfferDetailModal.jsx";
@@ -72,7 +72,8 @@ export function parseAmount(v) {
 }
 
 // Our number, re-quotable in place: the same revision the editor makes, and
-// nothing is sent. Not on a deal, and not on a price they already agreed to.
+// nothing is sent. Not on a deal. On a price they agreed to, re-quoting takes
+// the agreement back first, and says so before you press it.
 function OurOffer({ offer, onRequote }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
@@ -81,12 +82,15 @@ function OurOffer({ offer, onRequote }) {
   const ours = Number(offer.cashAmount) || 0;
   const why = offer.deal ? "It's a deal — change the price on the deal"
     : offer.status === "draft" ? "Publish the draft first"
-    : priceLocked(offer) ? "They agreed to this price — clear that first"
     : "";
+  const agreed = priceLocked(offer) ? priceAgreed(offer) : null;
   const amount = parseAmount(value);
   async function save() {
     if (!(amount > 0) || busy) return;
     setBusy(true); setError("");
+    if (agreed) {
+      try { await clearAgreedPrice(offer.id); } catch (e) { setBusy(false); setError(e.message); return; }
+    }
     const r = await onRequote(offer, amount);
     setBusy(false);
     if (r?.error) setError(r.error);
@@ -99,7 +103,7 @@ function OurOffer({ offer, onRequote }) {
         <div className="flex items-center gap-1.5">
           <span className="text-lg font-bold tabular-nums text-slate-900">{money(ours)}</span>
           {onRequote && (
-            <button type="button" disabled={Boolean(why)} title={why || "Re-quote at a new number (sends nothing)"} aria-label="Change our offer"
+            <button type="button" disabled={Boolean(why)} title={why || (agreed ? `Agreed at ${money(agreed.amount)} — re-quoting takes that back (sends nothing)` : "Re-quote at a new number (sends nothing)")} aria-label="Change our offer"
               onClick={() => { setValue(ours ? String(Math.round(ours / 1000)) + "k" : ""); setEditing(true); }}
               className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">
               <Pencil size={12} />
@@ -120,7 +124,9 @@ function OurOffer({ offer, onRequote }) {
         <button type="button" className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={() => setEditing(false)} aria-label="Cancel"><X size={14} /></button>
       </div>
       <div className="mt-0.5 text-xs text-slate-500">
-        {error ? <span className="text-red-700">{error}</span> : amount > 0 ? `${fmtMoney(amount)} — the letter is redone at this number. Nothing is sent.` : "A number, like 750k."}
+        {error ? <span className="text-red-700">{error}</span>
+          : amount > 0 ? `${fmtMoney(amount)} — ${agreed ? `takes back the agreed ${fmtMoney(agreed.amount)}, and ` : ""}the letter is redone at this number. Nothing is sent.`
+          : "A number, like 750k."}
       </div>
     </div>
   );
