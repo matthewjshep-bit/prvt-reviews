@@ -403,6 +403,10 @@ export const OFFER_LIST_FIELDS = [
   // The kind of house (shared/asset-type.js): {type, land, by, at}, so the
   // Offers and Deals rows can say "Manufactured · in a park".
   "asset",
+  // What the buyer-view checks did (shared/underwrite-checks.js
+  // summarizeChecks): an ARV cut, a listings cap, an allowance total, flag
+  // keys and a few short lines — so a row can say "street −5%, capped".
+  "checks",
   // What the GHL Opportunities mirror last wrote ({ acquisitions, dispositions }),
   // so the reconcile can tell "unchanged" from a lean row.
   "mirror",

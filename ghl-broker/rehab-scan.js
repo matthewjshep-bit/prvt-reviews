@@ -336,6 +336,9 @@ function factsFromDetail(item) {
     // that have one (shared/arv-checks.js compParity) — known only when the
     // detail row says.
     garage: house.hasGarage ?? (house.garageSpaces != null ? house.garageSpaces > 0 : null),
+    // The rest of the house facts — the editor's subject lookup reads them
+    // through this same cached batch (the Comps pane's buyer-view checks).
+    house,
   };
 }
 
