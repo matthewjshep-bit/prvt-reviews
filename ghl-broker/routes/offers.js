@@ -113,7 +113,7 @@ import {
 import {
   startReply, startProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
-  stopMachineTextsForOffer,
+  stopMachineTextsForOffer, stopDealOutreach,
 } from "../reply-agent.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
@@ -3828,6 +3828,29 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         }
       }
       res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Stop outreach on a deal, or start it again. Body: { stopped: boolean }.
+  // Matt, 2026-10-01, 5232 S Yakima: "stop outreach on this one completely".
+  // The switch is the one thing every buyer-side sender already asks
+  // (shared/offer-status.js dealOutreachPaused); stopping also pulls back what
+  // was already queued, now rather than at its send time. Resuming sends
+  // nothing itself — the next wave or nudge goes when it's next due.
+  router.post("/:id/deal/outreach", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { locationId, client, offer } = ctx;
+      const stop = req.body?.stopped;
+      if (typeof stop !== "boolean") return res.status(400).json({ error: "stopped must be true or false" });
+      const ts = new Date().toISOString();
+      if (stop) offer.deal.outreachStopped = { at: offer.deal.outreachStopped?.at || ts, by: "you" };
+      else delete offer.deal.outreachStopped;
+      offer.deal.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      const pulled = stop ? await stopDealOutreach({ client, store, locationId, offer }) : { dismissed: [], held: [] };
+      res.json({ ok: true, offer, pulled: { dismissed: pulled.dismissed.length, held: pulled.held.length } });
     } catch (err) { fail(res, err); }
   });
 

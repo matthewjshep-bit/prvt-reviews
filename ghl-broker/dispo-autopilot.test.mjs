@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { queueBlastDrafts, normalizeDispoAutopilot, secondWaveCandidates, startDispoSweep, _resetJobs } from "./dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, secondWaveCandidates, startDispoSweep, _resetJobs } from "./dispo-autopilot.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
 const fakeStore = (deals = []) => {
@@ -223,6 +223,17 @@ test("a soft-committed deal is not picked up by the second wave, and clearing it
 
   const gone = await secondWaveCandidates({ store: fakeStore([withStatus("passed")]), locationId: "L", saved: {}, now: NOW });
   assert.deepEqual(gone.map((x) => x.offer.id), ["o9"], "and so does their passing");
+});
+
+// 5232 S Yakima, 2026-10-01: the second wave was due two days after the first
+// and nothing but a committed buyer would have held it.
+test("a deal you stopped outreach on gets no next wave, and says why", async () => {
+  const blastedAt = new Date(NOW - 50 * 3600000).toISOString();
+  const stopped = { ...offer, id: "o11", deal: { ...offer.deal, blasts: [{ at: blastedAt, count: 25, via: "app" }], investors: [], outreachStopped: { at: new Date(NOW - 3600000).toISOString(), by: "you" } } };
+  assert.deepEqual(await secondWaveCandidates({ store: fakeStore([stopped]), locationId: "L", saved: {}, now: NOW }), []);
+  assert.equal(nextWave(stopped.deal, normalizeDispoAutopilot({}), NOW).why, "you stopped outreach");
+  const resumed = { ...stopped, deal: { ...stopped.deal, outreachStopped: undefined } };
+  assert.deepEqual((await secondWaveCandidates({ store: fakeStore([resumed]), locationId: "L", saved: {}, now: NOW })).map((x) => x.offer.id), ["o11"], "resumed, the overdue wave is picked up");
 });
 
 test("the buyer price, the ARV and the rehab go out with the blast; what we paid never does", async () => {

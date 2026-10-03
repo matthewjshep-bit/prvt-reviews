@@ -34,7 +34,7 @@ import {
   statusAfterUnpromote,
   toListOffer,
   INVESTOR_STATUSES, WORKING_INVESTOR_STATUSES, investorStatus,
-  dealOutreachPaused, dealSpokenFor, outreachPausedReason, priceAgreed, priceLocked,
+  dealOutreachPaused, dealOutreachStopped, dealSpokenFor, outreachPausedReason, priceAgreed, priceLocked,
   pushesToPaper,
 } from "./offer-status.js";
 
@@ -289,6 +289,23 @@ test("a soft commit pauses outreach without making the deal spoken for", () => {
   assert.equal(dealOutreachPaused(deal([{ contactId: "b1", status: "evaluating" }])), null);
   assert.equal(dealOutreachPaused(deal([{ contactId: "b1", status: "passed" }])), null);
   assert.equal(dealOutreachPaused(null), null);
+});
+
+// 5232 S Yakima, 2026-10-01: Matt wanted the deal off the market for good,
+// and nothing short of a committed buyer paused it.
+test("a deal you stopped outreach on is paused for every buyer, the committed one too, until you resume it", () => {
+  const at = "2026-10-02T02:00:00.000Z";
+  const stopped = { stage: "under_contract", outreachStopped: { at, by: "you" }, investors: [{ contactId: "b1", name: "Dmitriy", status: "committed" }] };
+  assert.deepEqual(dealOutreachStopped(stopped), { at, by: "you" });
+  const p = dealOutreachPaused(stopped);
+  assert.deepEqual(p, { status: "stopped", name: "", contactId: "", at }, "no contactId, so no buyer is let through");
+  assert.equal(outreachPausedReason(p, "5232 South Yakima Avenue"), "you stopped outreach on 5232 South Yakima Avenue");
+  // Stopping is about outreach, not whether the deal is taken.
+  assert.equal(dealSpokenFor({ stage: "under_contract", outreachStopped: { at }, investors: [] }), false);
+
+  assert.equal(dealOutreachStopped({ stage: "under_contract" }), null);
+  assert.equal(dealOutreachStopped({ outreachStopped: {} }), null, "a stop with no time on it is not a stop");
+  assert.equal(dealOutreachPaused({ stage: "under_contract", investors: [] }), null, "resumed, it's live again");
 });
 
 test("a list row keeps the follow-up rungs and the float stamps", () => {

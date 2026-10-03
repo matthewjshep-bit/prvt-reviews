@@ -423,6 +423,10 @@ export const promoteDeal = (id, fields = {}) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal`, fields);
 export const updateDeal = (id, patch) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal`, patch, "PATCH");
+// Stop outreach on a deal, or start it again. Stopping also pulls back the
+// buyer texts already queued about it; the reply says how many.
+export const setDealOutreachStopped = (id, stopped) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal/outreach`, { stopped: Boolean(stopped) });
 export const removeDeal = (id) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal?${locq()}`, { method: "DELETE" }).then(j);
 export const addDealInvestor = (id, { contactId, name }) =>

@@ -3383,6 +3383,44 @@ about a person, not something a warm text should act on, so the conversation's
 `setInvestorStatus` refuses `soft_commit`; it may still mark evaluating,
 committed or passed.
 
+### Stop outreach on a deal (2026-10-01)
+
+Deals → open the deal → **Stop outreach** (top right). Matt asked for it on
+5232 S Yakima: "stop outreach on this one completely." It is the one stored
+switch, `deal.outreachStopped {at, by}`. `dealOutreachPaused` returns
+`{status: "stopped"}` for it before anything else, with no contactId, so
+**no buyer is let through, the committed one included**:
+
+- no blast, whether from the button, on promote or as a later wave (the wave
+  preview says "you stopped outreach");
+- no `blast_nudge` / `dataroom_nudge`, no package invite, no walkthrough
+  reminder or follow-up. That includes the link owed to a buyer who answers
+  a deal text that went without it (`blastLink: "on_reply"`). That link is
+  sent as an action while the reply is drafted, so `startReply` checks the
+  stop itself and leaves a warning on the draft;
+- the bot doesn't bring the deal up to a buyer who isn't already on it or
+  blasted (`conversation-context.js`);
+- a buyer's reply about it waits for you. The send-time guard in
+  `sendReplyDraft` (auto path only) puts it back to a draft. A machine-started
+  text about it is dismissed with "you stopped outreach on … — not sent".
+  A held reply's `autoSend.reason` reads "needs a person: you stopped
+  outreach on …", so the nightly audit doesn't release it again.
+
+Pressing Stop also pulls back what is already queued (`stopDealOutreach` in
+`reply-agent.js`, `POST /api/offers/:id/deal/outreach {stopped}`). Buyer texts
+whose outbound offerId (or, failing that, street) is this deal are handled
+this way:
+- the machine's own texts are dismissed;
+- a scheduled reply goes back to a draft;
+- a reply already waiting for you is left as it is.
+
+The listing agent's thread is not touched. The banner on the deal and the
+"outreach stopped" chip on the Deals list say it's on.
+
+**Resume** clears the switch and sends nothing by itself. A wave or nudge that
+came due while it was stopped goes at its next run, so resuming two days after
+a promote means the second wave goes the next morning.
+
 ### Market tags and buyer import (2026-09-13)
 
 Buyers are tagged by where they have actually financed a property and how,
