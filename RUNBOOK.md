@@ -2090,6 +2090,24 @@ list shrunk to a rail (J/K, Esc). Loads on open and on Refresh — no poll.
 This is the daily walk through GHL's Tier 1 stage and the Offers tab, done
 from the app's own record.
 
+### GHL's Acquisitions board following the app — optional, off (2026-10-02)
+
+The app's own tiers are the record (Today → In play); GHL's board is a
+digest nobody has to tend. For anyone who still wants GHL's cards to match,
+the daily tier check (7am PT) also plans the moves `planStageMoves`
+(`shared/ghl-stages.js`) would make — Offer Out when our number went out,
+Negotiations on a counter or a hot offer, Passed on Offer / Not a Good Deal
+when every house is over, and a Tier 1 card with nothing open for
+`staleTier1Days` (10) → Tier 2 — and keeps the plan on the `tierCheck`
+cursor as `last.stageMoves` (ids and stage names only). Read it at
+`GET /api/dashboard/ghl/stage-report`. Nothing moves unless
+`settings.ghlStages.mode` is `"on"` (default `"off"`); then at most
+`maxMovesPerRun` (100) a morning, each a `ghl_stage_moved` event. Never a
+contract stage, a lost card, a live deal's card, or an agent with two open
+cards; and never into Tier 2/3 while a published nurture workflow would text
+them on the move (`allowNurtureTrigger` overrides; an unreadable workflow
+list counts as published).
+
 ### Today's three groups, and the brake (2026-09-17)
 
 **The groups.** Every action `buildPipeline` emits carries `group` (`groupFor`,

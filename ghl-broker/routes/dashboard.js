@@ -57,6 +57,7 @@ import { foldDesk, heldVerdicts, nameRows, deskKpis, DESK_SECTIONS } from "../sh
 import { callList, briefFor, normalizeDesk } from "../shared/call-list.js";
 import { LAST_ACTIVITY_TYPES, INBOUND_EVENT_TYPES as LAST_IN_TYPES } from "../shared/last-activity.js";
 import { normalizeLineTargets } from "../shared/line.js";
+import { normalizeGhlStages } from "../shared/ghl-stages.js";
 import { startCoach, coachReport, coachForContact, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
 
 // Same expression routes/offers.js reads: the broker's one send gate. The
@@ -586,6 +587,21 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         actions: shownActions.map(withFeedback),
         desk: { sections: DESK_SECTIONS, rows: desk.rows, counts: desk.counts, kpis },
       });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Where GHL's Acquisitions cards would move if they followed the app
+  // (shared/ghl-stages.js) — last morning's plan off the tier check's
+  // cursor. Optional: the app's own tiers (Today → In play) are the record,
+  // and ghlStages.mode stays "off" unless someone wants GHL's board to match.
+  router.get("/ghl/stage-report", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const [cursor, saved] = await Promise.all([
+        store.getJobCursor?.(locationId, "tierCheck").catch(() => null),
+        store.getOfferSettings(locationId).catch(() => null),
+      ]);
+      res.json({ ok: true, settings: normalizeGhlStages(saved?.ghlStages), lastRunAt: cursor?.at || null, report: cursor?.doc?.last?.stageMoves || null });
     } catch (err) { fail(res, err); }
   });
 

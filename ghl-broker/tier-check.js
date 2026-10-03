@@ -15,11 +15,14 @@
 // Bounded per run; every tag change is on the contact's record.
 
 import { store as defaultStore } from "./store.js";
-import { listPipelines, addContactTags, removeContactTags, updateOpportunity } from "./ghl.js";
+import { listPipelines, addContactTags, removeContactTags, updateOpportunity, listWorkflows } from "./ghl.js";
 import { acquisitionsPipeline } from "./ghl-mirror.js";
 import { recordEvent } from "./contact-record.js";
 import { localHour } from "./promise-sweep.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
+import { planStageMoves, normalizeGhlStages } from "./shared/ghl-stages.js";
+import { openPromises } from "./shared/promise-resolver.js";
+import { INBOUND_EVENT_TYPES } from "./shared/last-activity.js";
 
 export const CURSOR_NAME = "tierCheck";
 export const CHECK_HOUR = 7;             // PT
@@ -130,6 +133,8 @@ export async function runTierCheck({ client, locationId, store = defaultStore, g
     store.listContactEventsSince?.(locationId, iso(now - EVENT_LOOKBACK_MS), { types: ["tag_added"], limit: 5000 }).catch(() => []) || [],
   ]);
   out.considered = opportunities.length;
+  // The stage plan reads the same cards (runStagePlan); not part of the summary.
+  Object.defineProperty(out, "read", { value: { pipelines, opportunities }, enumerable: false });
   const fixes = planTierFixes({ pipelines, opportunities, tagEvents });
   out.planned = fixes.length;
   for (const f of fixes.slice(0, limit)) {
@@ -150,9 +155,65 @@ export async function runTierCheck({ client, locationId, store = defaultStore, g
   return out;
 }
 
+// A published "Tier 2+3 nurture" style workflow: GHL starts it by itself
+// when a card lands in Tier 2/3, and it texts (shared/agent-pulse.js tierDrips).
+const NURTURE_RX = /nurture/i;
+const nurtureWorkflows = (list) => (Array.isArray(list) ? list : [])
+  .filter((w) => w?.id && NURTURE_RX.test(String(w.name || "")) && !/dispo/i.test(String(w.name || "")) && String(w.status || "").toLowerCase() !== "draft")
+  .map((w) => ({ id: String(w.id), name: String(w.name || "") }));
+
+/**
+ * runStagePlan({ client, locationId, store, saved, ghl, read, dryRun, now }) → { mode, planned, blocked, applied, moves, errors }
+ *
+ * Where each agent's Acquisitions card should sit by the app's record
+ * (shared/ghl-stages.js), and — only with `ghlStages.mode` "on" and not a dry
+ * run — the moves themselves, capped per run. The report keeps contact and
+ * card ids and stage names, never a name or a message.
+ */
+export async function runStagePlan({ client, locationId, store = defaultStore, saved = {}, ghl = null, read = null, dryRun = true, now = Date.now() }) {
+  const api = ghl || { listPipelines, updateOpportunity, listAcquisitionOpportunities, listWorkflows };
+  const cfg = normalizeGhlStages(saved?.ghlStages);
+  const out = { mode: cfg.mode, planned: 0, blocked: 0, applied: 0, moves: [], byMove: {}, errors: [] };
+  const pipelines = read?.pipelines || await api.listPipelines(client, locationId);
+  const acq = acquisitionsPipeline(pipelines);
+  if (!acq) { out.errors.push("no pipeline with Tier 1/2/3 stages"); return out; }
+  const [opportunities, offers, promiseEvents, lastRows, workflows] = await Promise.all([
+    read?.opportunities || api.listAcquisitionOpportunities(client, locationId, acq.id),
+    store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []),
+    store.listContactEventsSince?.(locationId, iso(now - 7 * 86400000), { types: ["promise_made", "promise_owed", "promise_kept"], limit: 5000 }).catch(() => []) || [],
+    store.lastContactActivity?.(locationId, { types: INBOUND_EVENT_TYPES, inboundOnly: true }).catch(() => []) || [],
+    (api.listWorkflows ? api.listWorkflows(client, locationId) : Promise.resolve(null)).catch(() => null),
+  ]);
+  const plan = planStageMoves({
+    acq, opportunities, offers, now, settings: cfg,
+    lastIn: new Map((lastRows || []).map((r) => [r.contactId, r.at])),
+    openPromiseContacts: new Set(openPromises(promiseEvents || [], { now }).map((p) => p.contactId)),
+    // Can't read the workflow list: assume the nurture is live, so nothing moves into Tier 2/3 blind.
+    nurtureLive: workflows == null ? [{ id: "?", name: "a nurture workflow (GHL's list couldn't be read)" }] : nurtureWorkflows(workflows),
+  });
+  out.planned = plan.counts.planned;
+  out.blocked = plan.counts.blocked;
+  out.byMove = plan.counts.byMove;
+  const go = cfg.mode === "on" && !dryRun;
+  let left = cfg.maxMovesPerRun;
+  for (const m of plan.moves) {
+    const row = { contactId: m.contactId, opportunityId: m.opportunityId, from: m.from, to: m.to, why: m.why, ...(m.blocked ? { blocked: m.blocked } : {}) };
+    if (go && !m.blocked && left > 0) {
+      try {
+        await api.updateOpportunity(client, m.opportunityId, { stageId: m.toStageId });
+        await recordEvent({ store, locationId, contactId: m.contactId, party: "agent", type: "ghl_stage_moved", source: "ghl_stages", data: { from: m.from, to: m.to, why: m.why } });
+        row.applied = true; out.applied++; left--;
+        await sleep(120);
+      } catch (e) { out.errors.push(`${m.opportunityId}: ${String(e?.message || e).slice(0, 160)}`); }
+    }
+    if (out.moves.length < 80) out.moves.push(row);
+  }
+  return out;
+}
+
 /** The tick's call: once a day from 7am PT. */
 const inFlight = new Set();
-export async function maybeRunTierCheck({ client, locationId, store = defaultStore, ghl = null, now = Date.now() }) {
+export async function maybeRunTierCheck({ client, locationId, store = defaultStore, ghl = null, saved = {}, now = Date.now() }) {
   // Once a day; a run a deploy killed, or one that failed, comes back later
   // that day (daily-gate.js).
   const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: localHour(now), startHour: CHECK_HOUR,
@@ -161,8 +222,13 @@ export async function maybeRunTierCheck({ client, locationId, store = defaultSto
   inFlight.add(locationId);
   try {
     const r = await runTierCheck({ client, locationId, store, ghl, now });
+    // Where the cards should sit (shared/ghl-stages.js): always planned and
+    // kept as a report, moved only with ghlStages.mode "on".
+    const stageMoves = await runStagePlan({ client, locationId, store, saved, ghl, read: r.read, dryRun: false, now })
+      .catch((e) => ({ errors: [String(e?.message || e).slice(0, 160)] }));
     const summary = { considered: r.considered, planned: r.planned, applied: r.applied, errors: r.errors.slice(0, 5),
-      fixes: r.fixes.slice(0, 40).map((f) => ({ name: f.name, add: f.add, remove: f.remove, moved: !!f.moveTo, why: f.why })) };
+      fixes: r.fixes.slice(0, 40).map((f) => ({ name: f.name, add: f.add, remove: f.remove, moved: !!f.moveTo, why: f.why })),
+      stageMoves: { ...stageMoves, at: iso(now) } };
     await closeDailyRun({ store, locationId, cursorName: CURSOR_NAME, last: summary });
     return r;
   } catch (e) {
