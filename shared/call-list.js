@@ -166,17 +166,32 @@ export function callList({
     if (unsubscribed.has(c) || irritated(c)) continue;
     const o = offersById.get(card.offerId) || {};
     const agreed = priceAgreed(o);
-    const paper = pushesToPaper(o);
-    const ours = Number(agreed?.amount) || Number(card.cashAmount) || 0;
+    const book = Number(card.cashAmount) || 0;
+    // An agreement on record above the number the book says we're at now (a
+    // realm yes before a re-price down; the band's 402.5K over Woodcrest's
+    // signed 390K) is not a number to say: never above what we sent. The
+    // call is to settle which number is real.
+    const doubt = Boolean(agreed?.amount && book && Number(agreed.amount) > book);
+    const agreedAt = agreed?.amount && !doubt ? Number(agreed.amount) : 0;
+    const paper = pushesToPaper(o) && !doubt;
+    const ours = agreedAt || book;
+    const where = street(card.address);
     const since = latest([o.hot?.at, agreed?.at, o.statusAt, lastWordIso(lastWord(c))]);
     add("call_hot", { contactId: c, contactName: card.contactName, offerId: card.offerId, address: card.address, since,
-      why: paper ? `${kText(ours)} on ${street(card.address)} is agreed — get it on paper` : `${street(card.address)} is hot`,
-      goal: paper
+      why: doubt ? `${where} is hot, but the agreed ${kText(agreed.amount)} on record is above our ${kText(book)} — settle the number first`
+        : agreedAt ? `${kText(ours)} on ${where} is agreed — get it on paper`
+        : paper ? `${where} is hot at ${kText(ours)} — get it on paper`
+        : `${where} is hot`,
+      goal: doubt
+        ? `Settle the number before anything goes on paper: our current offer on ${where} is ${kText(book)}. Re-quote or take the agreement back in the offer if that's wrong.`
+        : paper
         ? `Get it written up today: ask them to represent you and draft it on the NWMLS forms at ${kText(ours)} for your signature.`
-        : `Hear where the seller is on ${street(card.address)} and get to yes at ${kText(ours)}.`,
-      opener: paper
-        ? `Hi ${first(card.contactName)}, it's Matt — on ${street(card.address)}, sounds like ${kText(ours)} works. Could you write it up on the NWMLS forms and represent us? I can sign today.`
-        : `Hi ${first(card.contactName)}, Matt here — wanted to hear what the seller said on ${street(card.address)}.`,
+        : `Hear where the seller is on ${where} and get to yes at ${kText(ours)}.`,
+      opener: paper && agreedAt
+        ? `Hi ${first(card.contactName)}, it's Matt — on ${where}, sounds like ${kText(ours)} works. Could you write it up on the NWMLS forms and represent us? I can sign today.`
+        : paper
+        ? `Hi ${first(card.contactName)}, it's Matt — on ${where}, are we close at ${kText(ours)}? If so, could you write it up on the NWMLS forms and represent us?`
+        : `Hi ${first(card.contactName)}, Matt here — wanted to hear what the seller said on ${where}.`,
       agePenaltyFrom: lastWord(c) });
   }
 
