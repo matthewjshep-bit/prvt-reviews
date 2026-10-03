@@ -156,3 +156,83 @@ test("a number we floated but never sent is watched only with the switch on", as
   const r2 = await runPriceWatch({ locationId: "LOC", saved: on, store: fakeStore([never]), now: NOW, deps: { ...starter(), fetchListings: fetch } });
   assert.equal(r2.watched, 0, "nothing of ours in front of them, nothing to watch");
 });
+
+/* ---------- they already asked for less than the new list (2026-09-24) ---------- */
+
+// 521 Avenue C. We sent 571k in August; a re-underwrite in September priced
+// it at 522k and is the current offer on the house (shared/current-offer.js).
+// The day before the list came down to 599,950 their agent asked us for 580,
+// and the bot still asked whether the seller would "come closer to ours".
+const HOUSE = "521 Avenue C, Snohomish, WA 98290";
+const avenueC = ({ history522 = [], history571 = [], requote = {} } = {}) => [
+  lisa({ id: "sent571", contactId: "c9", address: HOUSE, cashAmount: 571061, status: "passed",
+    statusAt: new Date(NOW - 30 * DAY).toISOString(), createdAt: new Date(NOW - 36 * DAY).toISOString(),
+    sends: [{ ts: new Date(NOW - 36 * DAY).toISOString(), channels: ["sms", "email"], results: { sms: { ok: true } } }],
+    statusHistory: history571,
+    priceWatch: { listPrice: 624975, status: "forSale", checkedAt: new Date(NOW - DAY).toISOString() } }),
+  lisa({ id: "requote522", contactId: "c9", address: HOUSE, cashAmount: 522401, status: "passed",
+    statusAt: new Date(NOW - DAY / 2).toISOString(), createdAt: new Date(NOW - 10 * DAY).toISOString(),
+    statusHistory: history522,
+    priceWatch: { listPrice: 624975, status: "forSale", checkedAt: new Date(NOW - DAY).toISOString() }, ...requote }),
+];
+// The whole book, as runPriceWatch reads it to find the current offer.
+const withBook = (store) => Object.assign(store, { async listOffers() { return [...store.map.values()]; } });
+const dropTo = (price) => listings([[HOUSE, { listPrice: price, status: "FOR_SALE" }]]);
+
+test("a price drop that still sits above what their agent asked us for isn't news, so no text goes", async () => {
+  const history522 = [
+    { ts: new Date(NOW - DAY).toISOString(), status: "countered", amount: 580000, note: "countered at $580,000" },
+    { ts: new Date(NOW - DAY / 2).toISOString(), status: "passed" },
+  ];
+  const store = withBook(fakeStore(avenueC({ history522 })));
+  const s = starter();
+  const r = await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, fetchListings: dropTo(599950) } });
+  assert.equal(r.dropped, 1);
+  assert.equal(s.calls.length, 0, "she asked 580 yesterday; the seller at 599,950 hasn't moved toward us");
+  const ev = store.events.find((e) => e.type === "price_dropped");
+  assert.ok(ev, "the drop is still on the record");
+  assert.equal(ev.data.theirAsk, 580000);
+  assert.match(r.results[0].reason, /they already asked 580000/);
+  // Tomorrow, same price: already on the record, still no text.
+  await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW + DAY, deps: { ...s, fetchListings: dropTo(599950) } });
+  assert.equal(s.calls.length, 0);
+});
+
+test("their ask counts when it was filed on an older offer on the same house", async () => {
+  const history571 = [{ ts: new Date(NOW - 3 * DAY).toISOString(), status: "countered", amount: 580000 }];
+  const store = withBook(fakeStore(avenueC({ history571 })));
+  const s = starter();
+  const r = await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, fetchListings: dropTo(599950) } });
+  assert.equal(r.dropped, 1);
+  assert.equal(s.calls.length, 0);
+});
+
+test("a price drop below what their agent asked is worth a text, about the current offer on the house", async () => {
+  const history522 = [{ ts: new Date(NOW - 5 * DAY).toISOString(), status: "countered", amount: 615000 }];
+  const store = withBook(fakeStore(avenueC({ history522 })));
+  const s = starter();
+  await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, fetchListings: dropTo(599950) } });
+  assert.equal(s.calls.length, 1);
+  assert.equal(s.calls[0].offer.id, "requote522", "the current offer is the one the text is about");
+});
+
+test("an offer that just became current on a house doesn't report a drop the agent's other offer there already saw", async () => {
+  // The re-underwrite carries the list from when it was priced (649,000) and
+  // has never looked; the August offer saw 599,950 yesterday.
+  const book = avenueC({ requote: { askingPrice: 649000, priceWatch: undefined } });
+  book[0].priceWatch = { listPrice: 599950, status: "forSale", checkedAt: new Date(NOW - DAY).toISOString() };
+  const store = withBook(fakeStore(book));
+  const s = starter();
+  const r = await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, fetchListings: dropTo(599950) } });
+  assert.equal(r.dropped, 0, "599,950 is old news on this house");
+  assert.equal(s.calls.length, 0);
+  assert.equal(store.map.get("requote522").priceWatch.listPrice, 599950);
+
+  // When the house's last look was higher, the drop is measured from it.
+  const book2 = avenueC({ requote: { askingPrice: 649000, priceWatch: undefined } });
+  const store2 = withBook(fakeStore(book2));
+  const s2 = starter();
+  await runPriceWatch({ locationId: "LOC", saved: SAVED, store: store2, now: NOW, deps: { ...s2, fetchListings: dropTo(589000) } });
+  assert.equal(s2.calls.length, 1);
+  assert.equal(s2.calls[0].subject.from, 624975, "the last price seen on the house, not the re-underwrite's 649,000");
+});
