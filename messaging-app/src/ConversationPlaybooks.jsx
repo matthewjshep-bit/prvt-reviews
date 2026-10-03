@@ -257,9 +257,9 @@ export function CounterBandCard({ config, patch, example = null }) {
   const set = (next) => patch({ parties: { ...config.parties, agent: { ...pb, counterBand: { ...band, ...next } } } });
   return (
     <Section title="Counters"
-      intro="A counter is normally yours to answer. This lets the bot say yes on its own — but only at or under what your own calculator would have produced at its most generous, and only in words.">
+      intro="A counter is always yours to answer: the bot never goes above the number we sent (since Woodcrest, 2026-10-02). With this on, every counter's draft shows where it sits against the most we'd pay, so you can decide in one look.">
       <Toggle checked={band.enabled} onChange={(v) => set({ enabled: v })}>
-        Let it agree to a counter inside the band
+        Show the ceiling on every counter
       </Toggle>
 
       {band.enabled && (
@@ -274,7 +274,7 @@ export function CounterBandCard({ config, patch, example = null }) {
                 We offered <span className="font-semibold">{example.oursText}</span>. At a $10k assignment our models top out
                 at <span className="font-semibold text-emerald-700">{example.ceilingText}</span> ({example.basis}).
               </div>
-              <div className="mt-1 text-slate-600">A counter up to {example.ceilingText} would go by itself.</div>
+              <div className="mt-1 text-slate-600">A counter up to {example.ceilingText} is inside it — still yours to answer.</div>
             </div>
           ) : (
             <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
@@ -284,8 +284,7 @@ export function CounterBandCard({ config, patch, example = null }) {
 
           <ul className="space-y-1 text-xs text-slate-500">
             <li>· The number has to appear in their own message — not just be something the model read into it.</li>
-            <li>· One automatic agreement per offer, ever. A second is a negotiation, and it does not negotiate.</li>
-            <li>· It says yes in words and stops. Re-issuing the paper and promoting the deal are both one click, by you.</li>
+            <li>· It never re-issues the paper or texts a number above the one we sent. Going up is always you.</li>
           </ul>
 
           <div className="grid gap-3 sm:grid-cols-2">

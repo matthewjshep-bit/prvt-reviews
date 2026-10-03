@@ -941,6 +941,8 @@ to walk it, wants a call, other) is a person's call whatever the tab says.
 (Two guarded doors exist, each with its own switch and its own arithmetic: the
 agent's counter band, and since 2026-09-17 "The investor band" for a price
 pushback. Both are off by default and both leave `NEVER_AUTO` itself alone.
+Since 2026-10-02 the counter band never releases — see "Never above what we
+sent" below — so on the agent side it only shows the ceiling on the draft.
 Since 2026-09-22 the counter band also answers on an offer that is dead on
 THEIR side — `passed` or `no_response`, `REVIVABLE_STATUSES` / `isNegotiable`
 in `shared/offer-status.js` — because the passed-offer check-in asked for
@@ -1059,6 +1061,34 @@ email. She's gone. Three rules now, all in code:
 What a person still owns: the PSA after a yes. "14 days works on the 800k"
 was held as "an acceptance is a person's call" and nobody sent the contract
 that day; the bot had already promised it twice. That handoff is on Today.
+
+### Never above what we sent (2026-10-02)
+
+17044 Woodcrest Dr NE, Bothell. Matt had taken the offer from the
+underwriting's 405k down by hand to 390k, then sent a letter at 386k that
+the agent wrote up on NWMLS forms and Matt signed. The seller came back at
+410k; Matt answered "let me know if he comes down at all". The next morning
+the agent asked again, and the counter band — 410k was inside 10% of its
+402.5k ceiling (75% × 650k − 75k − the 10k fee) — re-issued the letter at
+402.5k, sent it, and texted "Best we can do… is 402,500". The seller said yes
+to a number nobody decided on. Matt: "we need to stick with our prev numbers".
+
+- **The machine never goes above the number we sent** —
+  `never_above_sent` in `evaluateCounterBand` (`shared/auto-accept.js`). Every
+  counter is above our number, so the band no longer re-issues, sends or says
+  yes to one: a counter is a person's call. The ceiling is still worked out
+  and rides along in the draft's reason ("…is your call, 7,500 over the
+  402,500 ceiling"), and the Counters card's switch now reads "Show the
+  ceiling on every counter". It is in code, so the autonomy dial can't turn
+  the old behaviour back on. The acceptance half (a yes at OUR number) is
+  unchanged.
+- **A person can take back an agreed price** — `DELETE /api/offers/:id/agreed`
+  writes `offer.agreedCleared {at, by, amount, via}` and nothing else.
+  `priceAgreed` ignores every marker from before it (the agreed record, the
+  band's acceptance, a realm yes); the markers stay as history, and a new yes
+  after it locks the price again. A deal is refused: its price is the
+  contract's. The Offer pane's pencil does this before a re-quote on an
+  agreed offer and says so first. Sends nothing.
 
 ### The current offer — one live row per house (2026-09-25)
 

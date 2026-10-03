@@ -196,12 +196,27 @@ export function evaluateCounterBand({
   const dailyCap = Math.max(1, round(band.dailyCap) || 1);
   check("under_daily_cap", releasedToday < dailyCap, `${releasedToday}/${dailyCap} today`);
 
+  // 10. Never above what we sent. On Woodcrest (2026-10-02) the agent held our
+  //     signed 386k, the seller said 410k, and the band countered back at its
+  //     402.5k ceiling by itself — a raise nobody decided on. Matt: "we need to
+  //     stick with our prev numbers". Every counter is above our number (check
+  //     4), so the band no longer moves an offer: a counter is a person's call.
+  //     The ceiling is still worked out and rides along in the reason, because
+  //     it is what the person deciding wants to see.
+  const ours = round(offer?.cashAmount);
+  const where = !ceiling.computable ? ""
+    : theirAmount > limit ? `, ${money(theirAmount - limit)} over the ${money(limit)} ceiling` : `, inside the ${money(limit)} ceiling`;
+  const neverAbove = { name: "never_above_sent", ok: !(theirAmount > ours),
+    detail: `the machine never goes above the ${money(ours)} we sent — ${money(theirAmount)} is your call${where}` };
+  checks.push(neverAbove);
+
   // Counter back. When the ONLY thing wrong is that their number is a little
   // over the ceiling — within COUNTER_MARGIN — and the ceiling is still above
   // our own offer, the band answers at the ceiling instead of parking it for a
   // person (Matt, 2026-09-14: "just have the counter go automatically"). Every
   // other check — their words, one offer, sure, once per offer, daily cap —
-  // still has to pass; this relaxes the arithmetic and nothing else.
+  // still has to pass; this relaxes the arithmetic and nothing else. It can't
+  // fire while check 10 stands: that check fails on the same counters.
   const onlyOver = checks.filter((c) => !c.ok).map((c) => c.name);
   const counterBack = onlyOver.length === 1 && onlyOver[0] === "under_ceiling"
     // Not when the operator's hard cap is what binds — that dial means "a
@@ -222,7 +237,7 @@ export function evaluateCounterBand({
     basis: ceiling.basis || "", mode: ceiling.mode || "", modes: ceiling.modes || [],
     source: ceiling.source || "", offerId: offer?.id || null,
     at: new Date(now).toISOString(),
-    reason: passed ? "" : bandReason(failed, theirAmount, limit, ceiling),
+    reason: passed ? "" : bandReason(neverAbove.ok ? failed : neverAbove, theirAmount, limit, ceiling),
   };
 }
 
