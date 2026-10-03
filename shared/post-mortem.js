@@ -19,6 +19,7 @@
 
 import { calculateOffers, effectiveSettings } from "./offer-calc.js";
 import { PASS_REASONS, PASS_REASON_LABEL, normalizePassReason, summarizeFeedback } from "./conversation-ai.js";
+import { normalizeUnderwriteChecks, summarizeChecks } from "./underwrite-checks.js";
 import { parseThread, PASS_RE } from "./deal-feedback.js";
 import { offerEvents, EVENT_LABEL } from "./contact-record.js";
 
@@ -232,6 +233,9 @@ export function dealScorecard({ offer = {}, settings = {}, feedback = null, even
   return {
     offerId: offer.id || null, address: offer.address || "", street: streetOf(offer.address),
     stage: deal?.stage || null, outcome,
+    // What the buyer-view checks did to this deal's numbers, if they ran —
+    // so the lessons can tell "cut and still passed" from "never checked".
+    checks: offer.checks || summarizeChecks(offer.snapshot) || null,
     fellThroughReason: String(deal?.fellThroughReason || ""), fellThroughCode, fellThroughCodeLabel: FELL_THROUGH_LABEL[fellThroughCode] || "",
     arv, repairs, rehabPctOfArv: pct(repairs, arv),
     contractPrice, assignmentFee, buyerPrice,
@@ -585,6 +589,70 @@ export function lessons({ postMortems = [], controls = [], settings = {}, now = 
     });
   }
 
+  // 9. The buyer-view checks (shared/underwrite-checks.js), tuned both ways
+  // from what buyers said. Off: turn them on when buyers keep passing on what
+  // they'd catch. On: deepen the street cut when buyers still name the street
+  // after it; lighten it when houses that took the cut sold at our number
+  // with nobody naming the street.
+  const uwc = normalizeUnderwriteChecks(settings?.underwriteChecks);
+  const codeCount = (sc, ...codes) => (sc?.buyers?.codedReasons || []).filter((r) => codes.includes(r.code)).reduce((t, r) => t + (Number(r.count) || 0), 0);
+  const themes = { street: 0, rehab: 0, arv: 0, layout: 0 };
+  for (const x of failed) { themes.street += codeCount(x, "location"); themes.rehab += codeCount(x, "rehab_scope", "condition"); themes.arv += codeCount(x, "arv"); themes.layout += codeCount(x, "layout"); }
+  const themeLines = [
+    themes.rehab ? `${themes.rehab} buyer pass${themes.rehab === 1 ? "" : "es"} on the rehab` : "",
+    themes.arv ? `${themes.arv} on the ARV` : "",
+    themes.layout ? `${themes.layout} on the size or layout` : "",
+    themes.street ? `${themes.street} on the street` : "",
+  ].filter(Boolean);
+  const cutHad = (sc) => Number(sc?.checks?.arvCutPct || 0) < 0;
+  if (!uwc.enabled && themes.street + themes.rehab + themes.arv + themes.layout >= 3) {
+    recs.push({
+      id: "buyer_view_on", kind: "settings",
+      title: "Turn on the buyer view checks — buyers keep passing on what they'd catch",
+      confidence: themes.street + themes.rehab + themes.arv + themes.layout >= 6 ? "high" : "medium",
+      evidence: [`Across the deals that fell through: ${themeLines.join(", ")}.`],
+      suggestedSettings: { underwriteChecks: { ...uwc, enabled: true } },
+      negotiationRule: null,
+    });
+  }
+  if (uwc.enabled) {
+    const streetAfterCut = failed.filter((x) => cutHad(x) && codeCount(x, "location") > 0);
+    const soldWithCut = ctrl.filter((x) => cutHad(x) && codeCount(x, "location") === 0);
+    if (streetAfterCut.length) {
+      const next = Math.max(-10, uwc.site.busyRoadPct - 2);
+      if (next !== uwc.site.busyRoadPct) recs.push({
+        id: "site_cut_deeper", kind: "settings",
+        title: `Buyers still named the street after the cut — take it to ${next}%`,
+        confidence: streetAfterCut.length >= 2 ? "medium" : "low",
+        evidence: streetAfterCut.map((x) => `${name(x)}: cut ${x.checks.arvCutPct}% and ${codeCount(x, "location")} buyer${codeCount(x, "location") === 1 ? "" : "s"} still passed on the street`),
+        suggestedSettings: { underwriteChecks: { ...uwc, site: { ...uwc.site, busyRoadPct: next } } },
+        negotiationRule: null,
+      });
+    } else if (soldWithCut.length >= 2) {
+      const next = Math.min(-2, uwc.site.busyRoadPct + 1);
+      if (next !== uwc.site.busyRoadPct) recs.push({
+        id: "site_cut_lighter", kind: "settings",
+        title: `Busy-road houses that took the cut sold without a word about the street — ease it to ${next}%`,
+        confidence: "low",
+        evidence: soldWithCut.map((x) => `${name(x)} (${String(x.outcome).replace(/_/g, " ")}): cut ${x.checks.arvCutPct}%, no buyer named the street`),
+        suggestedSettings: { underwriteChecks: { ...uwc, site: { ...uwc.site, busyRoadPct: next } } },
+        negotiationRule: null,
+      });
+    }
+    const rehabAfter = failed.filter((x) => Number(x?.checks?.rehabAdded || 0) > 0 && codeCount(x, "rehab_scope", "condition") >= 2);
+    if (rehabAfter.length && uwc.rehab.distressedMinPctOfArv < 15) {
+      const next = Math.min(15, uwc.rehab.distressedMinPctOfArv + 2);
+      recs.push({
+        id: "rehab_floor_higher", kind: "settings",
+        title: `Buyers still doubted the rehab after the allowance — hold distressed houses to ${next}% of ARV`,
+        confidence: "low",
+        evidence: rehabAfter.map((x) => `${name(x)}: +${money(x.checks.rehabAdded)} added and ${codeCount(x, "rehab_scope", "condition")} buyers still doubted the rehab`),
+        suggestedSettings: { underwriteChecks: { ...uwc, rehab: { ...uwc.rehab, distressedMinPctOfArv: next } } },
+        negotiationRule: null,
+      });
+    }
+  }
+
   // The digest the bot may carry: the rules in one breath, no dollar
   // figures, so the money guard's allowance stays exactly the record book.
   const fm = metrics.find((m) => m.key === "buyerPctOfArv");
@@ -597,7 +665,7 @@ export function lessons({ postMortems = [], controls = [], settings = {}, now = 
   return {
     generatedAt: new Date(now).toISOString(),
     sample: { failed: failed.length, controls: ctrl.length, failedDeals: failed.map(name), controlDeals: ctrl.map(name) },
-    current: { underwriteMode: s.underwriteMode, maoPctOfArv: s.maoPctOfArv, wholesaleFee: s.wholesaleFee, cashPctOfArv: s.cashPctOfArv, repairBuffer: s.repairBuffer },
+    current: { underwriteMode: s.underwriteMode, maoPctOfArv: s.maoPctOfArv, wholesaleFee: s.wholesaleFee, cashPctOfArv: s.cashPctOfArv, repairBuffer: s.repairBuffer, underwriteChecks: uwc },
     metrics,
     recommendations: recs,
     digest,

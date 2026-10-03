@@ -67,3 +67,15 @@ test("an offer's summary reads as one line, with the full lines on the detail", 
   expect(full).toMatch(/ARV: Busy road — fronts S Yakima Ave/);
   expect(renderToStaticMarkup(<ChecksLine checks={null} />)).toBe("");
 });
+
+test("Lessons shows why buyers passed this month, the commonest reason first", async () => {
+  const { PassThemes } = await import("../LessonsView.jsx");
+  const html = renderToStaticMarkup(<PassThemes themes={[
+    { code: "rehab_scope", label: "Too much rehab", count: 3, deals: ["5232 S Yakima Ave", "22018 76th Ave W"], notes: ["no way rehab is $50"] },
+    { code: "location", label: "Street / surroundings", count: 1, deals: ["22018 76th Ave W"], notes: ["busy rd"] },
+  ]} />);
+  expect(html).toMatch(/Why buyers passed — last 30 days/);
+  expect(html).toMatch(/Too much rehab.*3 of 4/);
+  expect(html).toMatch(/Street \/ surroundings.*1 of 4/);
+  expect(renderToStaticMarkup(<PassThemes themes={[]} />)).toBe("");
+});

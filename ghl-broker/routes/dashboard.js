@@ -32,7 +32,7 @@ import { store } from "../store.js";
 import {
   countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
 } from "../ghl.js";
-import { offerFunnel, counterSpread, passReasons, followUpPerformance } from "../shared/funnel.js";
+import { offerFunnel, counterSpread, passReasons, followUpPerformance, passThemes } from "../shared/funnel.js";
 import { buildPipeline } from "../shared/pipeline.js";
 import { autopilotSummary, graduationReport, GRADUATION } from "../shared/graduation.js";
 import { buildFlow, FLOW_STAGES } from "../shared/flow.js";
@@ -263,6 +263,9 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const out = lessons({ postMortems: all, controls, settings });
       const secrets = ["aiApiKey", "compsApiKey", "apifyToken", "captureToken", "rentcastApiKey", "googleApiKey", "zillowRapidApiKey", "githubToken"];
       res.json({ ok: true, ...out,
+        // Why buyers passed in the last 30 days, every deal, by the reason
+        // their own words name (shared/funnel.js passThemes).
+        passThemes: passThemes(deals, { days: 30 }),
         deals: all.map((pm) => ({ offerId: pm.offerId, address: pm.address, street: pm.street, hasPostMortem: Boolean(pm.analysis) || postMortems.includes(pm), generatedAt: pm.generatedAt || null, scorecard: pm.scorecard })),
         controls: controls.map((sc) => ({ offerId: sc.offerId, address: sc.address, street: sc.street, outcome: sc.outcome, scorecard: sc })),
         digestSaved: settings.postMortem?.digest || "",
