@@ -2161,6 +2161,11 @@ list counts as published).
 
 ### Today's three groups, and the brake (2026-09-17)
 
+> Since 2026-10-02 the Desk (above) shows these rows folded by person in
+> Call · Decide · Machine; the pipeline still tags every row with the group
+> below, the Desk's sections are read from it (`sectionFor`), and the brake is
+> unchanged — except that a connected phone call now stops it for 48 hours.
+
 **The groups.** Every action `buildPipeline` emits carries `group` (`groupFor`,
 shared/pipeline.js), and Today shows three sections instead of one list:
 
@@ -2373,6 +2378,11 @@ reads "noted · <category>"; a second save is a newer verdict.
   and not shown to the model.
 
 ### Today's work pane (2026-09-23)
+
+> The pane is the same on the Desk (2026-10-02), with two additions: a Call
+> row's **call card** under the heading (goal, ours vs theirs, the opener,
+> Call in GHL, the no-answer chips, and on a counter Hold / Meet / Walk away),
+> and **Also on …** — the person's other reasons, each with its own buttons.
 
 Today used to be a long list with a different look per row kind: drafts had
 the outbox row, promises had op buttons, questions had the answer box,
@@ -3034,7 +3044,7 @@ Custom Menu Links, each one job, each component in exactly one place:
 
 | Menu link | URL | Tabs |
 |---|---|---|
-| Today (the old Overview link — rename it) | `https://<site>/dashboard?location_id={{location.id}}` | Needs you (the work pane: the queue down the left in three groups — your call · stuck · the machine is on it — and one row at a time as offer · conversation · coach; `&row=<id>` opens a row) · Board |
+| Today (the old Overview link — rename it) | `https://<site>/dashboard?location_id={{location.id}}` | Desk (2026-10-02: one row per person down the left in Call · Decide · The machine is on it, today's numbers on top, and one person at a time as offer · conversation · call card; `&row=<id>` opens the person a row folds into) · In play (every agent with something live, Tier 1 / Tier 2; "By house" is the old Board; `?view=board` still opens it) |
 | Autopilot | `https://<site>/autopilot?location_id={{location.id}}` | Controls (the dial + every switch) · Conversation AI |
 | Reports | `https://<site>/reports?location_id={{location.id}}` | Flow · Activity (charts) · Lessons (outcomes + fell-through lessons) |
 
@@ -3802,8 +3812,9 @@ person's to send: `wants_walkthrough` stays in `NEVER_AUTO`.
   hasn't been asked, or 1+ day after asking with no window set.
   `showing_soon` fires when a window starts within 36h, and says who's coming
   and whether access is set.
-- **Not built.** A reminder text the day before, and a "what did you think?"
-  text after the window.
+- **Since built.** The reminder the day before and the "what did you
+  think?" after the window are the walkthrough texts below
+  (`ghl-broker/showing-sweep.js`, off by default).
 
 ### Pulse check between deals (2026-09-18)
 
@@ -4100,11 +4111,14 @@ Notes for whoever maintains this:
   the same agent in one pass collide with each other's in-flight run and the
   second came back `deduped`, was counted as started and dropped (Colin
   Foote's 15605 NE 1st, 2026-09-15). A deduped start now stays in line.
-- **The reply agent never sends on its own.** Every draft waits for a person;
-  the Send button is dry-run unless `CARD_SENDS_ENABLED=true` (the offer-send
-  gate). The webhook needs the same credential as the underwriter, drafts are
-  capped per day from the database, and a draft naming a dollar figure that
-  isn't in the offer book is flagged before anyone sees it.
+- **The reply agent sends on its own only where the dial and the auto-send
+  lists allow** (the intents ticked per party, the gates, `NEVER_AUTO`), and
+  only with `CARD_SENDS_ENABLED=true` on the broker; everything else is a
+  draft that waits for a person. The webhook needs the same credential as the
+  underwriter, drafts are capped per day from the database, and a draft
+  naming a dollar figure that isn't in the offer book is flagged before anyone
+  sees it. (This line said "never sends on its own" until 2026-10-02 — true
+  before auto-send shipped in September.)
 - The broker rejects any `location_id` that doesn't match `GHL_LOCATION_ID`.
 - Generated documents are stored in Postgres and served at /api/offers/:id/doc.(pdf|jpg) — no storage config needed; links survive redeploys. Setting the R2_* vars switches storage to R2.
 - Offer creation degrades gracefully: if a GHL write fails (fields/note/tag),
