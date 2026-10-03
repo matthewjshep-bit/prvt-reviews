@@ -143,3 +143,31 @@ test("settings are whole numbers in range, with defaults", () => {
   assert.equal(kText(1082500), "1.08M");
   for (const k of CALL_KINDS) assert.ok(KIND_STRENGTH.includes(k.key), `${k.key} ranks on the Desk`);
 });
+
+// Live data, 2026-10-02: 3418 Wetmore had a realm "yes" recorded at 289,750,
+// then was re-priced to 226,000; Woodcrest's band "agreed" 402,500 over the
+// 390,000 we'd signed. The call card said "289.7K is agreed — get it on paper"
+// — a number above what the book says we're at. It never names more.
+test("a call never says an agreed number above our current offer — it asks you to settle the number first", () => {
+  const offers = [offer({ cashAmount: 226000, agreed: { amount: 289750, at: ago(1), via: "realm_yes" }, realm: { answer: "yes", ts: ago(1) } })];
+  const r = callList({ offers, cards: [card({ cashAmount: 226000 })], now: NOW })[0];
+  assert.equal(r.kind, "call_hot");
+  assert.doesNotMatch(`${r.call.goal} ${r.call.opener}`, /289/, "the stale agreement's number is never what we say or aim at");
+  assert.match(r.call.why, /289\.7K on record is above our 226K/, "it tells you why the number is in doubt");
+  assert.match(r.call.goal, /226K/);
+  assert.match(r.call.why, /settle the number/);
+  assert.doesNotMatch(r.call.opener, /works/, "no 'sounds like it works' on a number in doubt");
+});
+
+test("an agreement even a few hundred over the book is in doubt — never said as agreed", () => {
+  const offers = [offer({ cashAmount: 226000, agreed: { amount: 226300, at: ago(1), via: "realm_yes" } })];
+  const r = callList({ offers, cards: [card({ cashAmount: 226000 })], now: NOW })[0];
+  assert.match(r.call.why, /settle the number/);
+});
+
+test("flagged hot with nothing agreed says hot, not agreed", () => {
+  const offers = [offer({ status: "countered", hot: { at: ago(1), by: "operator" } })];
+  const r = callList({ offers, cards: [card({ cashAmount: 197500 })], now: NOW })[0];
+  assert.equal(r.kind, "call_hot");
+  assert.doesNotMatch(r.call.why, /agreed/);
+});
