@@ -34,6 +34,7 @@ import {
 } from "../ghl.js";
 import { offerFunnel, counterSpread, passReasons, followUpPerformance, passThemes } from "../shared/funnel.js";
 import { buildPipeline } from "../shared/pipeline.js";
+import { selfNames, selfContactIds, withoutSelf } from "../shared/self-contact.js";
 import { autopilotSummary, graduationReport, GRADUATION } from "../shared/graduation.js";
 import { buildFlow, FLOW_STAGES } from "../shared/flow.js";
 import { buildDigest } from "../shared/digest.js";
@@ -444,7 +445,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const now = Date.now();
       const since = new Date(now - PIPELINE_EVENT_DAYS * DAY_MS).toISOString();
       const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
-      const [offers, drafts, windowed, saved, investors, recentDrafts, feedbackEvents, botEvents] = await Promise.all([
+      const [allOffers, allDrafts, windowed, saved, investors, allRecentDrafts, feedbackEvents, botEvents] = await Promise.all([
         store.listOffers(locationId, { limit: 2000, lean: true }),
         store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }),
         store.listContactEventsSince(locationId, since, { types: PIPELINE_EVENT_TYPES, limit: PIPELINE_EVENT_LIMIT }).catch(() => []),
@@ -460,8 +461,15 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         // (this route polls every 15s): a stop pressed in June still holds.
         store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: BOT_EVENT_TYPES, limit: 20000 }).catch(() => []),
       ]);
-      const events = mergeEvents(windowed, botEvents);
       const config = conversationConfig(saved || {});
+      // Your own contact (a test text to the line) is not work
+      // (shared/self-contact.js): its offers and drafts never reach the board.
+      const mine = selfNames({ company: saved?.company, persona: config.persona });
+      const selfIds = selfContactIds([...allOffers, ...allDrafts, ...allRecentDrafts, ...investors.map((i) => ({ contactId: i?.contactId, contactName: i?.name }))], mine);
+      const [offers, drafts, recentDrafts] = [allOffers, allDrafts, allRecentDrafts].map((rows) => withoutSelf(rows, selfIds));
+      // eventsLimit below is built from this same array, so "the read filled
+      // up" still means the windowed read hit its limit.
+      const events = withoutSelf(mergeEvents(windowed, botEvents), selfIds);
       const autopilot = autopilotFor({ saved, config, recentDrafts });
       const contactNames = {};
       for (const i of investors) if (i?.contactId && i.name) contactNames[i.contactId] = i.name;
@@ -485,9 +493,12 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // Names the sweep didn't have, off the contact record, then GHL for
       // the few still missing (bounded; a failure just leaves "An agent").
       const names = await namesForAudit({ store, client, locationId, audit }).catch(() => ({}));
+      // Those names can show you as well (a test text with no offer or draft).
+      const auditRows = auditActions(audit, { now, names });
+      const auditSelfIds = new Set([...selfIds, ...selfContactIds(auditRows, mine)]);
       // The offer is looked up after the de-dupe, so a row about an
       // unanswered text isn't hidden behind a pipeline row on the same offer.
-      const lastNight = withCurrentOffers(auditActions(audit, { now, names }).filter((a) =>
+      const lastNight = withCurrentOffers(withoutSelf(auditRows, auditSelfIds).filter((a) =>
         !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled"))), offers)
         .map((a) => ({ ...a, group: "yours" }));
       // Last night is over by morning (shared/conversation-audit.js stillOwed):
