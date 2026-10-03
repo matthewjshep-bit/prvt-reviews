@@ -2090,6 +2090,36 @@ list shrunk to a rail (J/K, Esc). Loads on open and on Refresh — no poll.
 This is the daily walk through GHL's Tier 1 stage and the Offers tab, done
 from the app's own record.
 
+### Tier 1 / Tier 2 — kept by the app, not GHL (2026-10-02)
+
+Matt: track the tiers in the app rather than in GHL's pipeline stages, for
+agents and for buyers. GHL's tiers were tags and card stages the bot and the
+workflows wrote, and they drifted; these are derived on every read
+(`shared/tiers.js`), never stored, so there is nothing to drift.
+
+| | Tier 1 | Tier 2 | the rest |
+|---|---|---|---|
+| **Agents** (`agentTier`) | a property in hand that could be a flip: a live deal, an offer out (sent, countered, hot, priced not sent), an underwrite held in the last 21 days, or a house they named (`subject_property_set`) / an open `address_pending` in the last 21 days that we haven't priced | wrote back to us (their last word, or an offer only their answer moved: a counter, a yes, a pass, a deal), nothing in hand | **Cold**: never wrote back. **Opted out** |
+| **Buyers** (`buyerTier`) | on a live deal now (`onLiveDeal`: evaluating, soft-committed, committed) | talking to us or replied (`relationshipOf`) | not talking yet (no reply / never messaged). Opted out |
+
+- **Agents — Today → In play.** The Tier 1 chip is the offer table plus
+  "Sent us a house · not priced yet"; the Tier 2 chip lists every agent who
+  wrote back with nothing in hand, when they last wrote, and **what keeps them
+  warm** — the clock that owns them, the next check-in, a stop, or (in amber)
+  "the agent check-in is off — nothing keeps them warm". Read from
+  `GET /api/dashboard/agents/tiers` (`agentRoster` in
+  `ghl-broker/agent-pulse.js`, which reads the agent check-in's own load and
+  verdicts, `evaluateAgent`; cached five minutes, `?fresh=1`). The roster also
+  counts agents we made an offer to who have no contact profile; the check-in's
+  own audience is unchanged.
+- **Buyers — Dispositions.** The tabs are **Tier 1 · on a deal**, **Tier 2 ·
+  talking**, **Not talking yet**, Everyone, Opted out. It opens on Tier 1 when
+  somebody is on a deal, else Tier 2. The old `?who=talking|replied|no_reply|never`
+  links still filter by relationship. (The VIP / Active / Cold dropdown is a
+  different thing: how actively a buyer buys.)
+- GHL's TIER 1/2/3 tags and workflows keep running as the playbook sets them;
+  nothing here writes them. GHL's board is optional (next section).
+
 ### GHL's Acquisitions board following the app — optional, off (2026-10-02)
 
 The app's own tiers are the record (Today → In play); GHL's board is a

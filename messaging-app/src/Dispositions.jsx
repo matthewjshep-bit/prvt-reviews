@@ -19,6 +19,7 @@ import {
 } from "./api.js";
 import { BTN, EmptyState, ErrorBar, Spinner, TableCard } from "./ui.jsx";
 import { RELATIONSHIPS, matchesText, relationshipOf } from "@shared/talked-to.js";
+import { buyerTier } from "@shared/tiers.js";
 import { REGIONS, REGION_KEYS, STRATEGIES, cityLabel, regionFor } from "@shared/dispo-regions.js";
 import { TIERS } from "@shared/buyer-score.js";
 import { getDispoInsights, listDeals, rankBuyersForDeal } from "./api.js";
@@ -377,12 +378,27 @@ function InvestorDetail({ investor, onSaved }) {
 
 // Who the page opens on. The book is a few thousand names off borrower lists;
 // the people worth a text today are the few we've actually talked with.
-const WHO_KEYS = ["talking", "replied", "no_reply", "never", "all", "opted_out"];
+//
+// The tabs are the buyer tiers (shared/tiers.js, 2026-10-02 — the app keeps
+// the tiers, not GHL): Tier 1 on a live deal now, Tier 2 talking to us (the
+// buyer check-in keeps them warm), and the rest. It opens on Tier 1 when
+// someone is on a deal, else Tier 2. The older relationship keys still work
+// as ?who= links (talking, replied, no_reply, never).
+const WHO_TABS = ["tier1", "tier2", "quiet", "all", "opted_out"];
+const WHO_KEYS = [...WHO_TABS, "talking", "replied", "no_reply", "never"];
+const WHO_LABEL = {
+  tier1: { label: "Tier 1 · on a deal", hint: "On a live deal now: evaluating, soft-committed or committed" },
+  tier2: { label: "Tier 2 · talking", hint: "Talking to us or replied: the buyer check-in keeps them warm" },
+  quiet: { label: "Not talking yet", hint: "Messaged and never answered, or never messaged" },
+  all: { label: "Everyone", hint: "Everyone who hasn't opted out" },
+};
+const TIER_TAB = { t1: "tier1", t2: "tier2", cold: "quiet", opted_out: "opted_out" };
+export const whoTabOf = (i) => TIER_TAB[buyerTier(i)];
 const readWho = () => {
   try {
     const w = new URLSearchParams(window.location.search).get("who");
-    return WHO_KEYS.includes(w) ? w : "talking";
-  } catch { return "talking"; }
+    return WHO_KEYS.includes(w) ? w : "";
+  } catch { return ""; }
 };
 const setParam = (k, v) => {
   try { const u = new URL(window.location.href); v ? u.searchParams.set(k, v) : u.searchParams.delete(k); window.history.replaceState(window.history.state, "", u.pathname + u.search); } catch { /* the filter still works */ }
@@ -481,7 +497,7 @@ export default function Dispositions() {
     }
   };
 
-  const pickWho = (k) => { setWho(k); setSelected(new Set()); setParam("who", k === "talking" ? "" : k); };
+  const pickWho = (k) => { setWho(k); setSelected(new Set()); setParam("who", k); };
   const clearFilters = () => {
     setText(""); setRegion(""); setCity(""); setType(""); setTier(""); setBuyboxStatus(""); setExcludeOnDeal(false);
     setSelected(new Set());
@@ -501,10 +517,14 @@ export default function Dispositions() {
     for (const i of investors) {
       if (i.status === "archived") continue;
       c[i.relationship] = (c[i.relationship] || 0) + 1;
+      const t = whoTabOf(i);
+      if (t !== "opted_out") c[t] = (c[t] || 0) + 1;
       if (i.relationship !== "opted_out") c.all++;
     }
     return c;
   }, [investors]);
+  // No ?who=: Tier 1 when somebody is on a deal, else Tier 2.
+  const whoNow = who || (whoCounts.tier1 ? "tier1" : "tier2");
 
   // Everything but the relationship filter, so each tab's count can say what
   // it would show with the other filters as they are.
@@ -528,13 +548,17 @@ export default function Dispositions() {
     const c = { all: 0 };
     for (const i of filtered) {
       c[i.relationship] = (c[i.relationship] || 0) + 1;
+      const t = whoTabOf(i);
+      if (t !== "opted_out") c[t] = (c[t] || 0) + 1;
       if (i.relationship !== "opted_out") c.all++;
     }
     return c;
   }, [filtered]);
 
   const rows = useMemo(() => {
-    const base = who === "all" ? filtered.filter((i) => i.relationship !== "opted_out") : filtered.filter((i) => i.relationship === who);
+    const base = whoNow === "all" ? filtered.filter((i) => i.relationship !== "opted_out")
+      : WHO_TABS.includes(whoNow) && whoNow !== "opted_out" ? filtered.filter((i) => whoTabOf(i) === whoNow)
+      : filtered.filter((i) => i.relationship === whoNow);
     // Ranked for a deal: the rank order is the point unless you pick a column.
     const s = sort || (ranking?.results ? null : { key: "reply", dir: "desc" });
     if (!s) return base;
@@ -546,7 +570,7 @@ export default function Dispositions() {
       if (ea !== eb) return ea ? 1 : -1; // empties last either way
       return (va < vb ? -1 : va > vb ? 1 : 0) * dir;
     });
-  }, [filtered, who, sort, ranking]);
+  }, [filtered, whoNow, sort, ranking]);
 
   // Cities under the chosen region, with how many investors bought there.
   const regionCities = useMemo(() => {
@@ -662,16 +686,16 @@ export default function Dispositions() {
 
       {/* ---- who: the relationship tabs ---- */}
       <div role="tablist" aria-label="Relationship" className="flex flex-wrap gap-1 border-b border-slate-200">
-        {WHO_KEYS.map((k) => {
-          const on = who === k;
+        {WHO_TABS.map((k) => {
+          const on = whoNow === k;
           const n = shownCounts[k] || 0;
           if (k === "opted_out" && !whoCounts.opted_out) return null;
           return (
             <button key={k} type="button" role="tab" aria-selected={on} onClick={() => pickWho(k)}
-              title={RELATIONSHIPS[k]?.hint || "Everyone who hasn't opted out"}
+              title={WHO_LABEL[k]?.hint || RELATIONSHIPS[k]?.hint || ""}
               className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold transition-colors ${
                 on ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-800"} ${k === "opted_out" ? "ml-auto font-normal" : ""}`}>
-              {k === "all" ? "Everyone" : RELATIONSHIPS[k].label}
+              {WHO_LABEL[k]?.label || RELATIONSHIPS[k]?.label || k}
               <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[11px] tabular-nums ${on ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-500"}`}>
                 {n.toLocaleString()}
               </span>
@@ -855,7 +879,9 @@ export default function Dispositions() {
         <EmptyState action={filtersOn ? <button type="button" className={BTN} onClick={clearFilters}>Clear filters</button> : null}>
           {investors.length === 0
             ? "No investors yet — Sync to pull in every contact carrying your investor tags."
-            : who === "talking" && !filtersOn
+            : whoNow === "tier1" && !filtersOn
+              ? "Nobody is on a live deal right now."
+              : (whoNow === "talking" || whoNow === "tier2") && !filtersOn
               ? "Nobody here yet. Once the next sync counts replies and calls, everyone you've had a real back-and-forth with lands on this tab."
               : "Nobody matches that."}
         </EmptyState>

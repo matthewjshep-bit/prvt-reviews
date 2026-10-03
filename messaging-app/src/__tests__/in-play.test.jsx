@@ -32,3 +32,16 @@ test("the chips: live by default, then what fell off and what's waiting on you",
   expect(rows.filter(inPlayFilter("yours")).length).toBe(1);
   expect(rows.filter(inPlayFilter("recent")).length).toBe(1);
 });
+
+test("Tier 2 lists who wrote back with nothing in hand and what keeps them warm, and says so when nothing does", async () => {
+  const { TierTwoTable, NamedHouses } = await import("../InPlayView.jsx");
+  const rows = [{ contactId: "t", name: "Tara W", tier: "t2", why: "nothing in hand (passed on 5 Oak St)", lastInboundAt: ago(30), segment: "partner", care: { kind: "waiting", text: "check-in later — talked within 21 days" } }];
+  const html = renderToStaticMarkup(<TierTwoTable rows={rows} pulseOn />);
+  expect(html).toContain("Tara W");
+  expect(html).toContain("done business");
+  expect(html).toContain("check-in later");
+  expect(html).not.toContain("check-in is off");
+  expect(renderToStaticMarkup(<TierTwoTable rows={rows} pulseOn={false} />)).toContain("The agent check-in is off");
+  expect(renderToStaticMarkup(<NamedHouses rows={[{ contactId: "n", name: "Nadia P", why: "sent us 210 4th Ave N, not priced yet" }]} />)).toContain("Sent us a house");
+});
+
