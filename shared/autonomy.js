@@ -21,8 +21,10 @@
 //   normal    — everything the gates allow sends itself: floats, nudges,
 //               first texts, re-quotes, blasts. The offer, counters, calls
 //               and invites still wait for you.
-//   full      — plus the offer after a clean underwrite, yes to counters
-//               under the ceiling, dataroom invites, and calendar booking.
+//   full      — plus the offer after a clean underwrite, yes when they
+//               accept our own number, dataroom invites, and calendar
+//               booking. A counter above our number is always yours
+//               (never-above-what-we-sent, 2026-10-02).
 //
 // Pure. No I/O. The broker's env flags (CARD_SENDS_ENABLED and friends) are
 // a separate veto this module cannot see; the switchboard shows those.
@@ -44,7 +46,7 @@ export const AUTONOMY_GLOSS = {
   off: "Nothing sends itself. No drafts, no nudges, no first texts.",
   cautious: "Plain conversation sends itself. Anything with a number, a nudge or a first text is drafted for you.",
   normal: "Everything the gates allow sends itself — floats, nudges, first texts, re-quotes, blasts. The offer, counters, calls and invites still wait for you.",
-  full: "Normal, plus the offer after a clean underwrite, yes to counters under the ceiling, dataroom invites, and booking calls on the calendar.",
+  full: "Normal, plus the offer after a clean underwrite, yes when they accept our number, dataroom invites, and booking calls on the calendar. A counter above our number is always yours.",
   custom: "Switches were set by hand and match no mode. Picking a mode replaces them.",
 };
 
@@ -74,7 +76,7 @@ export const AUTONOMY_DOES = {
   full: [
     "Everything in Normal",
     "The offer sends itself after a clean underwrite, and when they say the number works",
-    "Yes to a counter at or under the ceiling, and to an acceptance",
+    "Yes when they accept our own number — a counter above it is always yours",
     "Yes to a buyer's own number, never under contract plus the minimum fee, once per deal",
     "Dataroom invites go to evaluating buyers whose buy box fits",
     "Calls are booked on the calendar when one is picked in Settings",
