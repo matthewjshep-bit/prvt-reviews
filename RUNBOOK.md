@@ -1981,6 +1981,42 @@ and percentages pass.
 them again. It never writes one: its validator refuses fees, earnest money and
 amounts, which is exactly what these answers contain.
 
+### The Desk — one row per person, Call · Decide · Machine (2026-10-02)
+
+Matt's day ran across three places (Today, GHL's Tier 1 stage, the Offers
+tab) and Today listed the same agent up to three times for one house. The
+Desk is Today's "Desk" tab (it was "Needs you"): the same rows, folded.
+
+- **Reasons fold into people.** Every row `buildPipeline` and last night's
+  audit produce is a reason; `foldDesk` (`shared/desk.js`) folds the reasons
+  about one contact into one row, led by the strongest (`KIND_STRENGTH`). Rows
+  about a deal (`closing_*`, `deal_*`, `showing_*`, `stage_lag`,
+  `blast_no_opens`) fold by deal, not under the listing agent. The others ride
+  along as `also`, each with its own buttons in the pane's **Also on …**
+  block. A reason that only repeats a stronger one (`quiet`: last night's
+  "still owed a number" beside the promise row) isn't shown, but Dismiss
+  takes it too, so it can't bring the person back on its own.
+- **Sections** (`sectionFor`). **Call**: a counter (a draft whose band
+  refused it), a wants-a-call / scheduling / walkthrough draft, `hot_stalled`,
+  `deal_interest_stalled`, last night's `counter_stalled`, a buyer the bot
+  stays out of on a live deal, and the call list's own rows. **Machine**: the
+  pipeline's machine group (timers, driven promises, scheduled drafts),
+  `gone_quiet`, `showing_soon`, `blast_no_opens`, `underwrite_failed`, a
+  closing next week, the audit's `float_unanswered`/`offer_no_followup`, and a
+  held underwrite last night's triage is asking about, re-running, dropping
+  or retiring (`heldVerdicts`). Everything else is **Decide**.
+- **Names.** `nameRows` fills a missing name off the contact record and GHL
+  (`namesFor`, ≤25 lookups a load, cached) on every row, not only the audit's,
+  and keeps the old "An agent…" title as `dismissedAs` so an earlier dismissal
+  still holds.
+- **The strip** (`deskKpis`): calls placed and talked today, written offers
+  sent today against `lineTargets.offersPerDay` (+ floats), the Hot lane, and
+  contracts this month against `lineTargets.dealsPerMonth`. Pacific days.
+- **Wire.** `GET /api/dashboard/pipeline` adds `desk: { sections, rows,
+  counts, kpis }` after dismissals; `actions` is unchanged for the board and
+  for a console that predates the Desk (which then shows the old groups). A
+  `?row=` link to any folded reason opens its person.
+
 ### Today's three groups, and the brake (2026-09-17)
 
 **The groups.** Every action `buildPipeline` emits carries `group` (`groupFor`,

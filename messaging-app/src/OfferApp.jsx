@@ -77,7 +77,8 @@ const NAV =
     // in exactly one place.
     : APP_MODE === "dashboard"
     ? [
-        { view: "pipeline", label: "Needs you" },
+        // The Desk (2026-10-02): one row per person — Call · Decide · Machine.
+        { view: "pipeline", label: "Desk" },
         { view: "board", label: "Board" },
       ]
     : APP_MODE === "autopilot"

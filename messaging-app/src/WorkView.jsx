@@ -16,7 +16,7 @@ import { loadOffer, offerKey } from "./OfferPanel.jsx";
 import { loadTimeline, timelineKey } from "./PaneParts.jsx";
 import { forget, prefetch } from "./work-data.js";
 import { dismissTodayRow, restoreTodayRow } from "./api.js";
-import { GROUP_LABEL, KIND_LABEL, canDismissRow, keyIntent, neighborId, nextAfterRemoval, orderRows, railLabel, rowTargets, teachRowId } from "./work-queue.js";
+import { KIND_LABEL, TODAY_GROUPS, canDismissRow, groupOf, keyIntent, neighborId, nextAfterRemoval, orderRows, railLabel, reasonsOf, rowFor, rowTargets, teachRowId } from "./work-queue.js";
 
 const readRowParam = () => {
   try { return new URLSearchParams(window.location.search).get("row") || null; } catch { return null; }
@@ -31,15 +31,17 @@ const writeRowParam = (id) => {
 const modalOpen = () => typeof document !== "undefined" && Boolean(document.querySelector('[aria-modal="true"]'));
 
 /**
- * <WorkView actions drafts rowFeedback sendsEnabled serverOffsetMs onDone settings bodies? initialRowId? />
+ * <WorkView actions groups drafts rowFeedback sendsEnabled serverOffsetMs onDone settings bodies? initialRowId? />
+ *   actions  the rows: the Desk's (one per person, shared/desk.js) or the old ones
+ *   groups   the rail's sections (work-queue.js DESK_GROUPS / TODAY_GROUPS)
  *   onDone   refresh Today (the queue and its drafts)
  *   settings the app's saved settings, for the offer editor the pane opens
  *   bodies   tests only: data for the pane's three sides instead of loading it
  */
-export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, sendsEnabled, serverOffsetMs = 0, onDone, settings = null, bodies = null, initialRowId = null }) {
+export default function WorkView({ actions = [], groups = TODAY_GROUPS, drafts = [], rowFeedback = {}, sendsEnabled, serverOffsetMs = 0, onDone, settings = null, bodies = null, initialRowId = null }) {
   // Rows dismissed here leave at once, before the refresh confirms it.
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
-  const ordered = useMemo(() => orderRows(actions).filter((r) => !hiddenIds.has(r.id)), [actions, hiddenIds]);
+  const ordered = useMemo(() => orderRows(actions, groups).filter((r) => !hiddenIds.has(r.id)), [actions, groups, hiddenIds]);
   const [undoRow, setUndoRow] = useState(null);   // the row the toast can bring back
   const dismissedId = useRef(null);
   const [selectedId, setSelectedId] = useState(() => initialRowId || (typeof window !== "undefined" ? readRowParam() : null));
@@ -54,7 +56,8 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
   const visible = needle
     ? ordered.filter((r) => `${r.address || ""} ${r.contactName || ""} ${r.title || ""}`.toLowerCase().includes(needle))
     : ordered;
-  const current = visible.find((r) => r.id === selectedId) || visible[0] || null;
+  // An id that is one of a person's folded reasons (an old ?row= link) opens that person.
+  const current = rowFor(visible, selectedId) || visible[0] || null;
   const index = current ? visible.indexOf(current) : -1;
   const targets = useMemo(() => rowTargets(current, drafts), [current, drafts]);
   const prevId = current ? neighborId(visible, current.id, -1) : null;
@@ -67,6 +70,9 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
     prevOrdered.current = ordered;
     const was = shownId.current;
     if (!was || before === ordered) return;
+    // The same person, led by another reason now: stay on them, quietly.
+    const same = rowFor(ordered, was);
+    if (same && same.id !== was) { setSelectedId(same.id); return; }
     const next = nextAfterRemoval(before, ordered, was);
     if (next !== was) {
       setSelectedId(next);
@@ -104,13 +110,15 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
   const done = () => { forget(offerKey(targets.offerId), coachKey(targets.contactId)); onDone?.(); };
 
   // Dismiss: off the queue now (the pane moves to the next row), remembered
-  // by the broker so a refresh doesn't bring it back, and undoable from the toast.
+  // by the broker so a refresh doesn't bring it back, and undoable from the
+  // toast. A Desk row is a person: everything folded into it goes too, so a
+  // weaker reason doesn't bring them straight back.
   const dismiss = async (row) => {
     if (!row || !canDismissRow(row)) return;
     dismissedId.current = row.id;
     setUndoRow(row);
     setHiddenIds((s) => new Set([...s, row.id]));
-    try { await dismissTodayRow(row); onDone?.(); }
+    try { await Promise.all(reasonsOf(row).filter(canDismissRow).map((r) => dismissTodayRow(r))); onDone?.(); }
     catch (e) {
       setHiddenIds((s) => { const n = new Set(s); n.delete(row.id); return n; });
       setUndoRow(null);
@@ -122,7 +130,7 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
     if (!row) return;
     setUndoRow(null); setToast("");
     try {
-      await restoreTodayRow(row.id);
+      await Promise.all(reasonsOf(row).filter(canDismissRow).map((r) => restoreTodayRow(r.id)));
       setHiddenIds((s) => { const n = new Set(s); n.delete(row.id); return n; });
       setSelectedId(row.id);
       onDone?.();
@@ -155,10 +163,10 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
   const picker = (
     <select className="max-w-[9rem] rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs lg:hidden" aria-label="Pick a row"
       value={current?.id || ""} onChange={(e) => go(e.target.value)}>
-      {["yours", "stuck", "machine"].map((g) => {
-        const rows = visible.filter((r) => (r.group || "yours") === g);
+      {groups.map(({ key: g, label }) => {
+        const rows = visible.filter((r) => groupOf(r, groups) === g);
         return rows.length ? (
-          <optgroup key={g} label={`${GROUP_LABEL[g]} (${rows.length})`}>
+          <optgroup key={g} label={`${label} (${rows.length})`}>
             {rows.map((r) => <option key={r.id} value={r.id}>{railLabel(r)} — {KIND_LABEL[r.kind] || r.kind}</option>)}
           </optgroup>
         ) : null;
@@ -169,7 +177,7 @@ export default function WorkView({ actions = [], drafts = [], rowFeedback = {}, 
   return (
     <div className="relative flex min-h-[560px] gap-3 lg:h-[calc(100vh-9.75rem)]">
       <div className="hidden w-72 shrink-0 lg:block">
-        <WorkRail rows={visible} total={ordered.length} selectedId={current?.id} onSelect={go} filter={filter} onFilter={setFilter}
+        <WorkRail rows={visible} groups={groups} total={ordered.length} selectedId={current?.id} onSelect={go} filter={filter} onFilter={setFilter}
           machineOpen={machineOpen} onMachineOpen={setMachineOpen} isTaught={isTaught} />
       </div>
       {current ? (

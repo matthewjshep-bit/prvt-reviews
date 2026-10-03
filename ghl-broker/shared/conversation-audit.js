@@ -494,6 +494,9 @@ export function auditActions(last, { now = Date.now(), names = {} } = {}) {
       return {
       id: f.id, kind: "audit_owed", findingKind: f.kind, anchorAt: f.anchorAt || null, severity: f.severity, contactId: f.contactId, contactName: who,
       address: f.address || "", offerId: f.offerId || null, draftId: f.draftId || null,
+      // What they asked for, when the finding knows (a call, a walkthrough):
+      // the Desk puts those under Call (shared/desk.js).
+      ...(f.evidence?.intent ? { intent: f.evidence.intent } : {}),
       title: `${who || "An agent"}${tail}`,
       ...(who && !f.contactName ? { dismissedAs: `An agent${tail}` } : {}),
       // Their words first: "7022 in Kenmore is the only thing close." says

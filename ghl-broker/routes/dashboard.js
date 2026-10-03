@@ -53,6 +53,8 @@ import { allEventsSince } from "../contact-events.js";
 import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, stillOwed, summarize as summarizeAudit } from "../shared/conversation-audit.js";
+import { foldDesk, heldVerdicts, nameRows, deskKpis, DESK_SECTIONS } from "../shared/desk.js";
+import { normalizeLineTargets } from "../shared/line.js";
 import { startCoach, coachReport, coachForContact, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
 
 // Same expression routes/offers.js reads: the broker's one send gate. The
@@ -411,13 +413,14 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     } catch (err) { fail(res, err); }
   });
 
-  // The audit's findings that came back without a name: the contact record
-  // first, then GHL — at most 25 lookups a load, three at a time, cached for
-  // the process so a refresh doesn't ask again.
+  // Rows that came back without a name (the audit's findings, a promise to an
+  // agent with no offer or draft in reach): the contact record first, then
+  // GHL — at most 25 lookups a load, three at a time, cached for the process
+  // so a refresh doesn't ask again.
   const nameCache = new Map();
   const contactName = (c) => String(c?.contactName || c?.name || [c?.firstName, c?.lastName].filter(Boolean).join(" ") || "").trim();
-  async function namesForAudit({ store, client, locationId, audit }) {
-    const missing = [...new Set((audit?.findings || []).filter((f) => f?.contactId && !f.contactName).map((f) => f.contactId))];
+  async function namesFor({ store, client, locationId, rows }) {
+    const missing = [...new Set((rows || []).filter((f) => f?.contactId && !f.contactName).map((f) => f.contactId))];
     const out = {};
     const need = [];
     for (const id of missing) {
@@ -490,9 +493,11 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const dayCursor = config.driver?.daytime?.enabled ? await store.getJobCursor?.(locationId, DAY_CURSOR_NAME).catch(() => null) : null;
       const dayLast = dayCursor?.doc?.last || null;
       const audit = auditCursor?.doc?.last || null;
-      // Names the sweep didn't have, off the contact record, then GHL for
-      // the few still missing (bounded; a failure just leaves "An agent").
-      const names = await namesForAudit({ store, client, locationId, audit }).catch(() => ({}));
+      // Names the sweep and the pipeline didn't have, off the contact record,
+      // then GHL for the few still missing (bounded; a failure just leaves
+      // "An agent").
+      const names = await namesFor({ store, client, locationId, rows: [...(audit?.findings || []), ...out.actions] }).catch(() => ({}));
+      out.actions = nameRows(out.actions, names);
       // Those names can show you as well (a test text with no offer or draft).
       const auditRows = auditActions(audit, { now, names });
       const auditSelfIds = new Set([...selfIds, ...selfContactIds(auditRows, mine)]);
@@ -528,6 +533,11 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
         if (out.actions.includes(a) && out.counts.actions[a.severity] > 0) out.counts.actions[a.severity]--;
       }
+      // The Desk (shared/desk.js): the same rows, one per person, in Call ·
+      // Decide · Machine, and today against the line's targets. `actions`
+      // stays as it was for the board and for a console that predates it.
+      const desk = foldDesk(shownActions.map(withFeedback), { drafts, heldByOffer: heldVerdicts(audit) });
+      const kpis = deskKpis({ offers, cards: out.cards, events, targets: normalizeLineTargets(saved?.lineTargets), now });
       res.json({
         dismissedCount: dismissedRows.length,
         rowFeedback,
@@ -545,6 +555,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         drafts,
         ...out,
         actions: shownActions.map(withFeedback),
+        desk: { sections: DESK_SECTIONS, rows: desk.rows, counts: desk.counts, kpis },
       });
     } catch (err) { fail(res, err); }
   });
