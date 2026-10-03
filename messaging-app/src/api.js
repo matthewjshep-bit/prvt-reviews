@@ -239,14 +239,33 @@ export const scanRehab = (address, { beds, baths, sqft, yearBuilt, images } = {}
 export const gradeComps = (address, comps) =>
   post(`/api/offers/comps/grade`, { address, comps });
 
+// The buyer-view checks' two lookups for the Comps pane (off until the checks
+// are switched on in Settings; a broken lookup answers with a status, never
+// an error — the pane prices without it).
+export const postSiteCheck = ({ address, subject, comps }) =>
+  post(`/api/offers/comps/site`, { address, subject, comps });
+export const getActives = ({ address, lat, lng, beds, baths, sqft, homeType } = {}) => {
+  const p = new URLSearchParams(locq());
+  if (address) p.set("address", address);
+  if (lat != null) p.set("lat", lat);
+  if (lng != null) p.set("lng", lng);
+  if (beds) p.set("beds", beds);
+  if (baths) p.set("baths", baths);
+  if (sqft) p.set("sqft", sqft);
+  if (homeType) p.set("homeType", homeType);
+  return fetch(`${API_BASE}/api/offers/comps/actives?${p}`).then(j);
+};
+
 /* ---------- auto-underwrite (inbound text -> offer) ---------- */
 // Runs are started by a GHL workflow webhook, not from here — this only
 // watches them. A run takes 2-5 minutes, so History polls while any is live.
 export const getUnderwrites = () =>
   fetch(`${API_BASE}/api/offers/automations/underwrite?${locq()}`).then(j);
 // The offer form's button: underwrite THIS address for THIS contact.
-export const runUnderwrite = ({ contactId, address, askingPrice }) =>
-  post(`/api/offers/automations/underwrite/run`, { contactId, address, askingPrice });
+// `declined`: the buyer-view lines a person took off on this form, so the
+// run doesn't put them back.
+export const runUnderwrite = ({ contactId, address, askingPrice, declined }) =>
+  post(`/api/offers/automations/underwrite/run`, { contactId, address, askingPrice, declined });
 export const getUnderwrite = (jobId) =>
   fetch(`${API_BASE}/api/offers/automations/underwrite?${locq()}&jobId=${encodeURIComponent(jobId)}`).then(j).then((r) => r.job);
 export const cancelUnderwrite = (jobId) =>

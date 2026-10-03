@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronUp, ExternalLink, FileSignature, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Sparkles, Trash2, X } from "lucide-react";
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import { buyerCeiling } from "@shared/post-mortem.js";
+import { checksFor, combineChecks, checksLines } from "@shared/underwrite-checks.js";
 import { ASSET_TYPES, ASSET_TYPE_LABELS, MH_LAND, MH_LAND_LABELS, assetFromHomeType } from "@shared/asset-type.js";
 import {
   addContactNote, cancelUnderwrite, createOffer, getContactDetail, getContactNotes, getUnderwrite,
@@ -113,7 +114,7 @@ const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text
 // and files its notes there, and a contact that doesn't exist yet has none.
 const UW_POLL_MS = 4000;
 
-function AutoUnderwrite({ contactId, address, askingPrice, onApply }) {
+function AutoUnderwrite({ contactId, address, askingPrice, onApply, declined }) {
   const [job, setJob] = useState(null);     // the polled job, once started
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
@@ -153,7 +154,7 @@ function AutoUnderwrite({ contactId, address, askingPrice, onApply }) {
     setStarting(true);
     setApplied(false);
     try {
-      const r = await runUnderwrite({ contactId, address: address.trim(), askingPrice: askingPrice || 0 });
+      const r = await runUnderwrite({ contactId, address: address.trim(), askingPrice: askingPrice || 0, declined: declined?.() || null });
       setJob({ id: r.jobId, status: "queued", phase: "queued", startedAt: new Date().toISOString() });
     } catch (e) {
       setError(e.message || "Couldn't start the underwrite.");
@@ -214,6 +215,11 @@ function AutoUnderwrite({ contactId, address, askingPrice, onApply }) {
       </div>
       {(job.held || []).length > 0 && (
         <ul className="mt-1 list-inside list-disc text-amber-900">{job.held.map((h, i) => <li key={i}>{h}</li>)}</ul>
+      )}
+      {job.status === "done" && checksLines(job.checks).length > 0 && (
+        <ul className="mt-1 list-inside list-disc text-sky-900" data-testid="fill-checks">
+          {checksLines(job.checks).map((l, i) => <li key={i}>{l}</li>)}
+        </ul>
       )}
       {job.status === "done" && !flagged && (
         <div className="mt-1 text-slate-500">The comps, the grades and the photo scope are in the panes below. Check them, then create the offer.</div>
@@ -802,6 +808,12 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const [saveWarnings, setSaveWarnings] = useState([]);
   const rehabStateRef = useRef(snap?.rehab || null);
   const compsStateRef = useRef(snap?.comps || null);
+  // The buyer-view checks (shared/underwrite-checks.js) when switched on in
+  // Settings: the Comps pane takes the ARV half, the Rehab pane the scope
+  // half; the add-a-bath cure and the listing's remarks cross between them.
+  const uwChecks = useMemo(() => checksFor(settings), [settings]);
+  const [paneCures, setPaneCures] = useState([]);
+  const [scanRemarks, setScanRemarks] = useState(snap?.rehab?.listing?.remarks || "");
   // What the comps and rehab panes open on. State, not a constant, because
   // an auto-underwrite from this form replaces both workspaces in place:
   // the nonce remounts the two panes on the new state and nothing else.
@@ -1126,6 +1138,9 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     mode, contact, newContact, inputs, subjectSqft, subjectInfo, assetPick, scope, underwriteMode, feeOverride, uwOverrides, letterTerms, offerExpires,
     rehab: rehabStateRef.current,
     comps: compsStateRef.current,
+    // The buyer-view checks' record: the Comps pane's ARV half and the Rehab
+    // pane's scope half, as one — what a retry reads to keep removals removed.
+    checks: combineChecks(compsStateRef.current?.checks || null, rehabStateRef.current?.checks || null),
   });
   const draftBody = () => ({ ...formSnapshot(), cashPreview: calc?.offers?.cash?.amount ?? null });
 
@@ -1578,6 +1593,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               address={inputs.address}
               askingPrice={moneyNum(inputs.askingPrice)}
               onApply={applyUnderwrite}
+              declined={() => combineChecks(compsStateRef.current?.checks || null, rehabStateRef.current?.checks || null)?.declined || null}
             />
           </div>
           <div>
@@ -1633,6 +1649,9 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         initialState={compsInit}
         onStateChange={reportPaneState("comps", compsStateRef)}
         onUseArv={(arv) => setInputs((s) => ({ ...s, arv: Number(arv).toLocaleString("en-US") }))}
+        checks={uwChecks}
+        remarks={scanRemarks}
+        onChecks={(c) => setPaneCures((prev) => (JSON.stringify(prev) === JSON.stringify(c?.cures || []) ? prev : (c?.cures || [])))}
       />
 
       <RehabPane
@@ -1643,7 +1662,14 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         yearBuilt={Number(subjectInfo?.yearBuilt) || 0}
         address={inputs.address}
         initialState={rehabInit}
-        onStateChange={reportPaneState("rehab", rehabStateRef)}
+        onStateChange={(st) => {
+          reportPaneState("rehab", rehabStateRef)(st);
+          const r = st?.listing?.remarks || "";
+          setScanRemarks((prev) => (prev === r ? prev : r));
+        }}
+        checks={uwChecks}
+        arv={Number(String(inputs.arv || "").replace(/[^\d.]/g, "")) || 0}
+        cures={paneCures}
         onApply={(total, lines) => {
           setInputs((s) => ({ ...s, repairs: Number(total).toLocaleString("en-US") }));
           setScope(lines);

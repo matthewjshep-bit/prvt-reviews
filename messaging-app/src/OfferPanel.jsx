@@ -14,7 +14,7 @@ import { fmtMoney } from "@shared/offer-calc.js";
 import { OFFER_STATUS, offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
 import { getOffer, listOffers, offerEditorUrl, requoteOffer, zillowUrl } from "./api.js";
 import { annotateCurrent } from "@shared/current-offer.js";
-import { BTN, CurrentPill, HotPill, PaperHeldBanner, StagePill, StatusPill } from "./ui.jsx";
+import { BTN, ChecksLine, CurrentPill, HotPill, PaperHeldBanner, StagePill, StatusPill } from "./ui.jsx";
 import { AiProvenance, RehabScope } from "./OfferDetailModal.jsx";
 import { forget, useLoad } from "./work-data.js";
 import { allInPct, allInTone } from "./work-queue.js";
@@ -262,6 +262,8 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
           {agreed && !counter && agreed.amount !== ours && <AllIn label="At the agreed price" price={agreed.amount} repairs={repairs} arv={arv} />}
         </div>
       )}
+
+      {offer.checks && <ChecksLine checks={offer.checks} full />}
 
       {(lastSend || history.length > 0) && (
         <div>

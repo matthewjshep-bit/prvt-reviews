@@ -21,7 +21,12 @@ import {
 import {
   blankRehabState, applyScanSuggestion, priceScope, resizeRooms,
 } from "@shared/rehab-scope.js";
+// The buyer-view checks' scope half (shared/rehab-checks.js): the work a buyer
+// will price that the scope left out, as removable "Buyer allowance" lines.
+import { rehabChecks } from "@shared/rehab-checks.js";
+import { remarkSignals } from "@shared/house-facts.js";
 import { scanRehab } from "./api.js";
+import AllowanceChips from "./AllowanceChips.jsx";
 import { downscale } from "./image.js";
 
 const CATALOG = CATALOG_SHARED;
@@ -77,7 +82,7 @@ const AREA_GRADE_CLS = {
   not_visible: "bg-slate-100 text-slate-500",
 };
 
-export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApply, initialState, onStateChange }) {
+export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApply, initialState, onStateChange, checks = null, arv = 0, cures = [] }) {
   const [rows, setRows] = useState(() => ({
     ...blankRehabState().rows,
     ...(initialState?.rows || {}),
@@ -97,6 +102,10 @@ export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApp
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState("");
   const [aiResult, setAiResult] = useState(initialState?.aiResult || null);
+  // The listing the scan read (its remarks name defects, "rewired", "as-is"),
+  // and the allowance lines a person took off — both kept on the snapshot.
+  const [listing, setListing] = useState(initialState?.listing || null);
+  const [allowanceDeclined, setAllowanceDeclined] = useState(initialState?.allowanceDeclined || []);
 
   // AI scan: MLS photos (or user-uploaded photos) → suggested scope, applied
   // onto the checklist for review.
@@ -131,15 +140,11 @@ export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApp
       setBedRooms(next.bedRooms);
       setCustom(next.custom);
       setAiResult(next.aiResult);
+      setListing(r.listing ? { remarks: r.listing.remarks || "", status: r.listing.status || null } : null);
     } catch (e) { setScanError(e.message); }
     setScanning(false);
   }
 
-  // Report state upward so drafts/offers can snapshot the whole scope.
-  useEffect(() => {
-    onStateChange?.({ rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency, bucket, bucketAmount, aiResult });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency, bucket, bucketAmount, aiResult]);
 
   const sqftNum = parse(sqft);
   const fmtTyped = (v) => { const d = String(v).replace(/[^\d]/g, ""); return d ? Number(d).toLocaleString("en-US") : ""; };
@@ -168,10 +173,38 @@ export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApp
   // The priced scope. Shared with the broker so an auto-underwrite and a
   // hand-built offer can never quote different repair numbers for the same
   // scope — see shared/rehab-scope.js.
+  // The buyer-view checks' allowance lines — only once there's a scope or a
+  // scan to complete, and only when the checks are switched on.
+  const hasScope = Object.values(rows).some((r) => r?.on) || custom.length > 0 || Boolean(aiResult);
+  const checksResult = useMemo(() => (checks?.rehab?.enabled && hasScope ? rehabChecks({
+    state: { rows, bedRooms, bathRooms, custom, contingency },
+    sqft: sqftNum, yearBuilt, arv: Number(arv) || 0,
+    areas: aiResult?.areas || [], contents: aiResult?.contents || "none",
+    remarks: remarkSignals(listing?.remarks || ""), t: checks.rehab, declined: allowanceDeclined, cures,
+  }) : null), [checks, hasScope, rows, bedRooms, bathRooms, custom, contingency, sqftNum, yearBuilt, arv, aiResult, listing, allowanceDeclined, cures]);
+  const allowance = checksResult?.rows || [];
+  const allowanceKey = allowance.map((a) => `${a.key}:${a.cost}`).join("|");
+  useEffect(() => { setApplied(false); }, [allowanceKey]);
+  const declineAllowance = (key) => { setApplied(false); setAllowanceDeclined((d) => [...new Set([...d, key])]); };
+  const restoreAllowance = (key) => { setApplied(false); setAllowanceDeclined((d) => d.filter((k) => k !== key)); };
+
   const { lines, subtotal, total } = useMemo(
-    () => priceScope({ rows, bedRooms, bathRooms, custom, contingency }, sqftNum),
-    [rows, bedRooms, bathRooms, custom, contingency, sqftNum]
+    () => priceScope({ rows, bedRooms, bathRooms, custom, contingency, allowance }, sqftNum),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, bedRooms, bathRooms, custom, contingency, sqftNum, allowanceKey]
   );
+
+  // Report state upward so drafts/offers can snapshot the whole scope —
+  // with the allowance lines, what a person removed, the listing the scan
+  // read, and the checks' scope half for the offer's record.
+  useEffect(() => {
+    onStateChange?.({
+      rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency, bucket, bucketAmount, aiResult,
+      allowance, allowanceDeclined, listing,
+      checks: checksResult ? { before: checksResult.before, after: checksResult.after, rows: checksResult.rows, flags: checksResult.flags, declined: allowanceDeclined } : null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, bedCount, bathCount, bedRooms, bathRooms, custom, contingency, bucket, bucketAmount, aiResult, allowanceKey, allowanceDeclined, listing, checksResult]);
 
   // The cheat-sheet band for this house size (null when sqft is unknown — a
   // guess would anchor the repair number on nothing).
@@ -343,6 +376,8 @@ export default function RehabPane({ sqft, beds, baths, yearBuilt, address, onApp
           </span>
         ))}
       </div>
+      <AllowanceChips result={checksResult} declined={allowanceDeclined} onDecline={declineAllowance} onRestore={restoreAllowance}
+        bucketAmount={bucket ? (parse(bucketAmount) || 0) : 0} />
 
       {/* Quick buckets — the cheat-sheet ranges by house size, for when you
           want a number now rather than a scope. Picking one doesn't disturb the

@@ -18,8 +18,11 @@ import { ExternalLink, Loader2, MapPin, Plus, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { compareByMatch, mergeSelection, milesBetween, scoreComp, similarity, similarityLabel, similarityTone } from "@shared/comp-match.js";
 import { deriveArv, timeTrend } from "@shared/arv.js";
+import { SITE_PRESETS } from "@shared/site-check.js";
+import { buyerView } from "@shared/underwrite-checks.js";
 import { similarityTitle, COMPS_RULES } from "./comps-copy.js";
-import { claimCompCaptures, geocode, getComps, setCaptureTarget, zillowUrl } from "./api.js";
+import { claimCompCaptures, geocode, getActives, getComps, postSiteCheck, setCaptureTarget, zillowUrl } from "./api.js";
+import BuyerViewPanel from "./BuyerViewPanel.jsx";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -60,19 +63,20 @@ const MATCH_CLS = {
 // Location/site detractors that discount the subject relative to the comps
 // (external obsolescence). Percent of base ARV; defaults from published
 // study ranges, editable per offer. Positive percentages work too (premiums).
-const ADJ_PRESETS = [
-  { key: "busy_road", label: "Busy road", pct: -5 },
-  { key: "power_lines", label: "Power lines / easement", pct: -6 },
-  { key: "backs_commercial", label: "Backs commercial / industrial", pct: -5 },
-  { key: "railroad", label: "Railroad / highway noise", pct: -6 },
-  { key: "steep_lot", label: "Steep / difficult lot", pct: -4 },
-  { key: "flood_zone", label: "Flood zone", pct: -7 },
-  { key: "airport", label: "Airport flight path", pct: -5 },
-  { key: "cell_tower", label: "Cell tower / substation", pct: -3 },
-];
+// Shared with the buyer-view checks (shared/site-check.js) so an auto cut and
+// a hand-ticked chip mean the same thing.
+const ADJ_PRESETS = SITE_PRESETS;
 
-export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSqft, setSqft: setSubjectSqft, onSubjectInfo, initialState, onStateChange }) {
+export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSqft, setSqft: setSubjectSqft, onSubjectInfo, initialState, onStateChange, checks = null, remarks = "", onChecks }) {
   const [state, setState] = useState(initialState?.result || null); // { subject:{lat,lng}, info, comps, estimate, enabled }
+  // The buyer-view checks (shared/underwrite-checks.js), when switched on in
+  // Settings: the street around the house (OpenStreetMap), today's listings
+  // in the ring, and what a person took off. Kept on the snapshot so a
+  // reopened offer shows the same lines without paying for the lookups again.
+  const [site, setSite] = useState(initialState?.site || null);
+  const [actives, setActives] = useState(initialState?.activesList ?? undefined);
+  const [checksDeclined, setChecksDeclined] = useState(initialState?.checksDeclined || { arv: [], cap: false });
+  const [checksBusy, setChecksBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(() => new Set(initialState?.selected || []));
@@ -189,8 +193,29 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
         [...captured.map((c) => c.id), ...manual.map((c) => c.id)],
         pre,
       ));
+      // The buyer-view checks' lookups, fire-and-forget: the board is on
+      // screen already, and the lines fill in when they land.
+      if (checks) runChecks(center, comps.comps || [], freshSubject);
     } catch (e) { setError(e.message); setState(null); }
     setLoading(false);
+  }
+
+  async function runChecks(center, compsList, subjectRec) {
+    setChecksBusy(true);
+    const points = [...compsList, ...captured].filter((c) => c?.id && c.lat != null && c.lng != null)
+      .map((c) => ({ id: c.id, lat: c.lat, lng: c.lng, address: c.address || "" }));
+    const [s, a] = await Promise.all([
+      checks.site.enabled
+        ? postSiteCheck({ address: address.trim(), subject: center, comps: points }).then((r) => r.site).catch(() => ({ status: "unavailable", subject: { flags: {} }, comps: {} }))
+        : Promise.resolve(null),
+      checks.actives.enabled
+        ? getActives({ address: address.trim(), lat: center.lat, lng: center.lng, beds: subjectRec.beds, baths: subjectRec.baths, sqft: subjectRec.sqft, homeType })
+            .then((r) => (r.status === "ok" ? r.listings : r.status === "off" ? undefined : null)).catch(() => null)
+        : Promise.resolve(undefined),
+    ]);
+    setSite(s);
+    setActives(a);
+    setChecksBusy(false);
   }
 
   const toggle = (id) =>
@@ -358,8 +383,24 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
     return [...auto, ...manual];
   }, [allComps, selected, manual]);
 
+  // The buyer's view of the ticked comps when the checks are on: the street
+  // cut scaled against them, garage/lot parity, the size on the record, held
+  // to today's listings. A person's own adjustments stay theirs; an auto line
+  // they removed stays removed. Null when the checks are off — the plain
+  // derivation below is then the whole story, exactly as before.
+  const view = useMemo(() => (checks ? buyerView({
+    checks, address: address || "",
+    subject: { sqft: Number(state?.info?.sqft) || parse(subjectSqft), beds: subjectFacts.beds, baths: subjectFacts.baths, yearBuilt: subjectFacts.yearBuilt, lotSqft: subjectFacts.lotSqft },
+    house: state?.info?.house || null, remarks: remarks || "",
+    comps: picked.map((c) => ({ ...c, condition: condOf(c) })),
+    sqft: parse(subjectSqft), trend: timeTrend(allComps),
+    operatorAdjustments: adjustments, site, actives, declined: checksDeclined,
+  }) : null),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [checks, address, state, subjectSqft, subjectFacts, remarks, picked, grades, allComps, adjustments, site, actives, checksDeclined]);
+
   const suggestion = useMemo(
-    () => deriveArv({
+    () => view?.arv || deriveArv({
       comps: picked.map((c) => ({ ...c, condition: condOf(c) })),
       subjectSqft: parse(subjectSqft),
       subjectYearBuilt: Number(subjectFacts.yearBuilt) || 0,
@@ -369,8 +410,16 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
       trend: timeTrend(allComps),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [picked, subjectSqft, grades, adjustments, allComps, subjectFacts.yearBuilt]
+    [view, picked, subjectSqft, grades, adjustments, allComps, subjectFacts.yearBuilt]
   );
+
+  // The add-a-bath cure the ARV assumes belongs in the Rehab pane's scope.
+  useEffect(() => { onChecks?.({ cures: view?.cures || [] }); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [JSON.stringify(view?.cures || [])]);
+  const declineArv = (key) => setChecksDeclined((d) => ({ ...d, arv: [...new Set([...(d.arv || []), key])] }));
+  const restoreArv = (key) => setChecksDeclined((d) => ({ ...d, arv: (d.arv || []).filter((k) => k !== key) }));
+  const setCapDeclined = (cap) => setChecksDeclined((d) => ({ ...d, cap }));
 
   // Report state upward so drafts/offers can snapshot the comps workspace
   // (grades + the ARV basis ride along for restore and the comps PDF).
@@ -386,10 +435,16 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
       captured: captured.map(({ photos, description, ...c }) => c),
       dismissed: [...dismissed],
       months, beds, baths, grades,
-      adjustments, arvBase: suggestion?.base ?? null, arvBasis: suggestion?.basis || "",
+      // With the checks on, the auto lines (source "auto") ride along with a
+      // person's own, so the note, the comps PDF and the package print them;
+      // on restore they're recomputed, never stacked.
+      adjustments: view ? (suggestion?.adjustments || adjustments) : adjustments,
+      arvBase: suggestion?.base ?? null, arvBasis: suggestion?.basis || "",
+      site, activesList: actives, checksDeclined,
+      checks: view?.summary || null,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, selected, manual, captured, dismissed, months, beds, baths, grades, adjustments, suggestion]);
+  }, [state, selected, manual, captured, dismissed, months, beds, baths, grades, adjustments, suggestion, site, actives, checksDeclined, view]);
 
   function addManual() {
     const price = parse(draft.price);
@@ -690,13 +745,15 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
 
             {suggestion && (
               <div className="mt-3 rounded-lg border border-slate-200 p-2.5">
+                <BuyerViewPanel view={view} busy={checksBusy} declined={checksDeclined}
+                  onDecline={declineArv} onRestore={restoreArv} onCap={setCapDeclined} />
                 <div className="mb-1.5 flex items-baseline justify-between">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">ARV adjustments</span>
                   <span className="text-[11px] text-slate-400">site/location detractors — % of base ARV</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {ADJ_PRESETS.map((p) => {
-                    const active = adjustments.some((a) => a.key === p.key);
+                    const active = adjustments.some((a) => a.key === p.key && (!view || a.source !== "auto"));
                     return (
                       <button key={p.key} type="button" onClick={() => toggleAdjustment(p)}
                         className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
@@ -707,9 +764,9 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
                     );
                   })}
                 </div>
-                {adjustments.length > 0 && (
+                {adjustments.filter((a) => !view || a.source !== "auto").length > 0 && (
                   <div className="mt-2 space-y-1">
-                    {adjustments.map((a) => (
+                    {adjustments.filter((a) => !view || a.source !== "auto").map((a) => (
                       <div key={a.key} className="flex items-center gap-2 text-xs">
                         <span className="min-w-0 flex-1 truncate text-slate-700">{a.label}</span>
                         <input
@@ -741,14 +798,20 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
 
             {suggestion && (
               <div className="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2.5">
-                {suggestion.adjustments.length > 0 && (
+                {(suggestion.adjustments.length > 0 || suggestion.capped) && (
                   <div className="mb-1.5 space-y-0.5 border-b border-emerald-200 pb-1.5 text-xs">
                     <div className="flex justify-between text-emerald-800">
                       <span>Base ARV ({suggestion.basis.split(";")[0]})</span>
                       <span className="font-semibold tabular-nums">{fmtMoney(suggestion.base)}</span>
                     </div>
+                    {suggestion.capped && (
+                      <div className="flex justify-between">
+                        <span className="text-emerald-900">Held to today's listings</span>
+                        <span className="font-medium tabular-nums text-red-700">−{fmtMoney(suggestion.capped.from - suggestion.capped.to)}</span>
+                      </div>
+                    )}
                     {suggestion.adjustments.map((a) => {
-                      const amt = Math.round((suggestion.base * a.pct) / 100);
+                      const amt = Math.round(((suggestion.cappedBase ?? suggestion.base) * a.pct) / 100);
                       return (
                         <div key={a.key} className="flex justify-between">
                           <span className="text-slate-600">{a.label} ({a.pct > 0 ? "+" : "−"}{Math.abs(a.pct)}%)</span>

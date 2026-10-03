@@ -298,7 +298,39 @@ export function buyerView({
     status,
     declined: d,
   };
-  return { arv, pre, sqftForArv, adjustments, cap: ceiling, rehab, flags, status, summary };
+  // `cures`: what the ARV assumes the scope adds (a second bath) — the editor's
+  // Rehab pane prices them, since it computes the scope half on its own.
+  const cures = parity.cures.filter((c) => !d.rehab.includes(c.key));
+  return { arv, pre, sqftForArv, adjustments, cap: ceiling, rehab, flags, status, summary, cures };
+}
+
+/**
+ * combineChecks(compsPart, rehabPart) → one summary for the offer snapshot.
+ *
+ * The editor computes the checks in two panes: the Comps pane the ARV half
+ * (street, layout, listings, flags) and the Rehab pane the scope half
+ * (allowance lines). This is the record the auto-underwriter would have
+ * written for the same house — and what a retry reads back to keep a
+ * person's removals removed.
+ *
+ *   compsPart  buyerView(...).summary from the Comps pane, or null
+ *   rehabPart  { before, after, rows, flags, declined } from the Rehab pane, or null
+ */
+export function combineChecks(compsPart, rehabPart) {
+  if (!compsPart && !rehabPart) return null;
+  const c = compsPart || {};
+  const r = rehabPart || {};
+  const flags = [...(c.flags || []), ...(r.flags || [])];
+  const seen = new Set();
+  return {
+    v: 1, at: c.at || new Date().toISOString(),
+    arv: c.arv || null,
+    cap: c.cap || null,
+    rehab: rehabPart ? { before: r.before ?? 0, after: r.after ?? 0, rows: (r.rows || []).map((x) => ({ key: x.key, label: x.label, cost: x.cost })) } : (c.rehab || null),
+    flags: flags.filter((f) => f?.key && !seen.has(f.key) && seen.add(f.key)).map((f) => ({ key: f.key, label: f.label })),
+    status: c.status || { site: "off", actives: "off", facts: "none" },
+    declined: normalizeDeclined({ arv: c.declined?.arv, cap: c.declined?.cap, rehab: r.declined || c.declined?.rehab }),
+  };
 }
 
 /**

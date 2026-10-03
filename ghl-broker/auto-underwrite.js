@@ -1841,6 +1841,7 @@ async function runUnderwrite(job, ctx) {
   // a backtest). Nothing here holds a run: a lookup that failed is a line on
   // the note, and the scope never goes past the heavy band.
   let checksSummary = null;
+  let checksContext = null;
   if (checks) {
     const [site, actives] = await Promise.all([sitePromise, activesPromise]);
     if (site?.status === "unavailable") warnings.push(`street not checked${site.error ? ` (${String(site.error).slice(0, 80)})` : ""}`);
@@ -1872,6 +1873,14 @@ async function runUnderwrite(job, ctx) {
       job.checks = view.summary;
       got.checks = view.summary;
     }
+    // What the editor needs to rebuild the same lines when a person opens
+    // this run: the street report, today's listings, the listing's words and
+    // what was removed before.
+    checksContext = {
+      site: site || null, actives: Array.isArray(actives) ? actives : undefined,
+      listing: listing ? { remarks: listing.remarks || "", status: listing.status || null } : null,
+      declined: view?.summary?.declined || null,
+    };
   }
 
   /* --- the gates --- */
@@ -1883,7 +1892,7 @@ async function runUnderwrite(job, ctx) {
 
   const partial = {
     compsData, subject, subjectSqft: sqft, nearby, grades, rehabbed,
-    arv, rehabState, scope, repairs, listing, photosCount, checks: checksSummary,
+    arv, rehabState, scope, repairs, listing, photosCount, checks: checksSummary, checksContext,
   };
 
   if (job.fill) {
@@ -2216,7 +2225,8 @@ async function saveDraft(job, ctx, { extraction, held, partial, cleared = false 
 // empty comps board and drops the comps out of the comps PDF, which is the
 // one failure you'd only notice with an agent on the phone.
 function buildSnapshot({ extraction, partial, contact = null }) {
-  const { compsData, subject, subjectSqft, grades, rehabbed, arv, rehabState, scope, repairs, checks = null } = partial;
+  const { compsData, subject, subjectSqft, grades, rehabbed, arv, rehabState, scope, repairs, checks = null, checksContext = null } = partial;
+  const cx = checksContext || {};
   const center = subject?.lat != null ? { lat: subject.lat, lng: subject.lng } : null;
   return {
     // What the buyer-view checks did to this house (shared/underwrite-checks.js),
@@ -2237,7 +2247,11 @@ function buildSnapshot({ extraction, partial, contact = null }) {
     subjectInfo: subject || null,
     scope: scope || [],
     underwriteMode: UW_MODE,
-    rehab: rehabState || null,
+    rehab: rehabState ? {
+      ...rehabState,
+      ...(cx.listing ? { listing: cx.listing } : {}),
+      ...(cx.declined ? { allowanceDeclined: cx.declined.rehab || [] } : {}),
+    } : null,
     comps: {
       // CompsPane keeps the resolved map centre on `subject` and the provider's
       // property record on `info` — not the other way round.
@@ -2259,6 +2273,11 @@ function buildSnapshot({ extraction, partial, contact = null }) {
       adjustments: arv?.adjustments || [],
       arvBase: arv?.base ?? null,
       arvBasis: arv?.basis || "",
+      // The buyer-view checks' lookups and removals, so the Comps pane
+      // rebuilds the same lines without paying for them again.
+      ...(cx.site ? { site: cx.site } : {}),
+      ...(cx.actives !== undefined ? { activesList: cx.actives } : {}),
+      ...(cx.declined ? { checksDeclined: { arv: cx.declined.arv || [], cap: Boolean(cx.declined.cap) } } : {}),
     },
   };
 }

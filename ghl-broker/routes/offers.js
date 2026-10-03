@@ -4130,6 +4130,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { skipped, job } = await startUnderwrite({
         client, locationId, saved, store, contactId, message: "", address, askingPrice,
         dryRun: false, origin: "operator", fill: true,
+        // The buyer-view lines a person took off on the form stay off.
+        declined: b.declined && typeof b.declined === "object" ? b.declined : null,
         deps: underwriteDeps({ client, locationId, saved }),
       });
       if (skipped) return res.status(409).json({ error: skipped });

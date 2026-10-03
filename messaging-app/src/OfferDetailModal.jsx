@@ -22,7 +22,7 @@ import { OFFER_STATUS, aiHoldReasons } from "@shared/offer-status.js";
 import { PROPERTY_DETAIL_FIELDS, propertyDossier, addressKey } from "@shared/contact-record.js";
 import { getContactProfile, ghlContactUrl, zillowUrl } from "./api.js";
 import { CHANNEL_LABELS } from "./SendModal.jsx";
-import { AttachWarning, CurrentPill, PaperHeldBanner, StagePill, StatusMenu, StatusPill } from "./ui.jsx";
+import { AttachWarning, ChecksLine, CurrentPill, PaperHeldBanner, StagePill, StatusMenu, StatusPill } from "./ui.jsx";
 import { annotateCurrent } from "@shared/current-offer.js";
 
 const CARD = "rounded-xl border border-slate-200 bg-white p-3.5";
@@ -465,6 +465,7 @@ export default function OfferDetailModal({
               )}
               <AgentTake offer={offer} />
               <AiProvenance offer={offer} />
+              {offer.checks && <ChecksLine checks={offer.checks} full />}
               {scope.length > 0 && <RehabScope scope={scope} />}
               {(offer.warnings || []).length > 0 && (
                 <ul className="list-inside list-disc rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
