@@ -53,6 +53,14 @@ test("the first text is written in Matt's voice: his examples are in the prompt,
   assert.match(a, /never copy one word for word/);
 });
 
+test("a hundred agents a day don't all get Matt's template word for word — the first five live samples were the same text", () => {
+  const t = ask({ county: "King", examples: ["Yo {first}, {street} in {county}?"], variant: 0 });
+  const rules = t.split("HOW MATT WRITES")[0];
+  assert.doesNotMatch(rules, /came across|pretty turnkey|all ears/i, "the instructions don't dictate one example's wording");
+  assert.match(t, /OPEN THE WAY THE FIRST ONE OPENS/);
+  assert.match(t, /no two should read the same/);
+});
+
 test("the first text doesn't read like AI: no dashes, no exclamation marks, no 'reaching out'", () => {
   const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES });
   assert.match(t, /no dashes/);
