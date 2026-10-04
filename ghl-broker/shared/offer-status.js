@@ -26,8 +26,9 @@
 //   to record an acceptance instead of two that can disagree.
 
 // Display order is also funnel order: earliest state first, terminal last.
-// The one dependency: asset-type.js, itself pure and import-free.
+// The dependencies: asset-type.js and us-address.js, both pure and import-free.
 import { assetOf } from "./asset-type.js";
+import { sameStreetLoose } from "./us-address.js";
 
 export const OFFER_STATUSES = [
   { key: "draft", label: "Draft", cls: "bg-blue-100 text-blue-800", dot: "bg-blue-500" },
@@ -239,6 +240,22 @@ export const WORKING_INVESTOR_STATUSES = new Set(["committed"]);
 export const OVER_DEAL_STAGES = new Set(["assigned", "closed", "fell_through"]);
 export const dealIsOver = (deal) => Boolean(deal) && OVER_DEAL_STAGES.has(deal.stage);
 
+/**
+ * fellThroughOn(deals, address) → the deal row | null
+ *
+ * The house's deal fell through and nothing has replaced it. The machine
+ * checks in with nobody about it — not the listing agent, not their TC, not a
+ * buyer (5232 S Yakima, 2026-10-03). A re-contract on the same house is a new
+ * live deal, and then the house is talked about again. Matched loosely: the
+ * thread's "5232 S Yakima" is the deal's "5232 South Yakima Avenue".
+ */
+export function fellThroughOn(deals = [], address = "") {
+  if (!String(address || "").trim()) return null;
+  const mine = (deals || []).filter((o) => o?.deal && sameStreetLoose(o.address, address));
+  if (!mine.length || !mine.every((o) => o.deal.stage === "fell_through")) return null;
+  return mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+}
+
 export const dealSpokenFor = (deal) =>
   Boolean(deal) && (deal.stage === "buyer_found" || (deal.investors || []).some((i) => i?.status === "committed"));
 
@@ -320,6 +337,22 @@ export function offerHeat(offer) {
 export const isHot = (offer) => Boolean(offerHeat(offer));
 
 /**
+ * agreedAboveOurNumber(offer) → { amount, at, via, book } | null
+ *
+ * The agreement on record is above the number the book is at now: a realm
+ * yes to ~290k, then we came down to 226k by hand (3418 Wetmore Ave,
+ * 2026-10-03). They said yes to the higher number, not to ours, so nothing
+ * is agreed at ours — it is a new ask, and asking them to write it up "at
+ * the 226k" tells them they agreed to something they didn't.
+ */
+export function agreedAboveOurNumber(offer) {
+  const agreed = priceAgreed(offer);
+  const book = Math.round(Number(offer?.cashAmount) || 0);
+  if (!agreed || !(agreed.amount > 0) || !book || offer?.deal) return null;
+  return Math.round(Number(agreed.amount)) > book ? { ...agreed, book } : null;
+}
+
+/**
  * pushesToPaper(offer) → boolean
  *
  * Whether the push-to-paper ladder may ask them to write it up. Hot is wider
@@ -332,6 +365,8 @@ export const isHot = (offer) => Boolean(offerHeat(offer));
 export function pushesToPaper(offer) {
   const heat = offerHeat(offer);
   if (!heat) return false;
+  // Their yes was to a higher number than ours now: nothing is agreed at ours.
+  if (agreedAboveOurNumber(offer)) return false;
   if (heat.by === "you" || priceAgreed(offer)) return true;
   return heat.signal === "writing_up";
 }

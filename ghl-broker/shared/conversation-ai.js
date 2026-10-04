@@ -361,11 +361,37 @@ export const AGENT_PAPER_RULE =
   "and never say we will draft, finalize or send a PSA or contract. When they say the number works, ask for a formal offer, " +
   "say it has to be on NWMLS forms, or ask who our agent is: say we don't have an agent on this one and would be glad to have them " +
   "represent us, and ask whether they can write it up on NWMLS forms at our number for us to sign. If they'd rather not represent us, " +
-  "say my partner will sort out who writes it and come back — never name another agent or invent one.";
+  "say my partner will sort out who writes it and come back — never name an agent they haven't named themselves, or invent one. " +
+  "WHEN THEY HAND IT BACK TO US — 'write up whatever you like', 'submit your offer and we'll review it', 'have your agent send it', " +
+  "'who's your agent?' — they think we'll write our own offer. Clear that up first, in plain words: we're not agents and don't have one " +
+  "on this, so we can't put it on NWMLS forms ourselves; ask whether they can write it up for us to sign, or who on their side would. " +
+  "If they point you to someone else (the listing broker), ask whether that person could write it up for us and how to reach them. " +
+  "Never just say 'sounds good' or ask for a phone number as if the write-up were sorted.";
 
 // The bot only writes words; the app sends things. A text that says a thing
 // was done when it wasn't is the worst text it can write (Lee Dedinsky,
 // 2026-09-17: told twice her email had gone, nothing had been sent).
+// Every party. 3418 Wetmore Ave (2026-10-03): the agent had
+// two numbers from us, thought we'd write our own offer, and pointed us to
+// the listing broker; the bot pushed on as if all of it were settled.
+export const CLARIFY_RULE =
+  "WHEN WE'RE TALKING PAST EACH OTHER: if their message shows they've misread us, or we've misread them — they answer a different " +
+  "question, assume something that isn't so (who writes the offer, that we have an agent, that a number was agreed, which house, " +
+  "who the buyer is), have heard two different numbers from us, or send you to someone else — clear it up first, plainly, in one line, " +
+  "then ask the one thing that moves it on. Never pile the next step on top of a misunderstanding, and never paper over it with " +
+  "'sounds good'. If you can't tell what they mean, ask one short question instead of guessing.";
+
+// "Write up whatever you like!", "submit your offer", "have your agent send
+// it": they expect us to write our own offer, which we can't (AGENT_PAPER_RULE).
+export const HANDS_WRITE_UP_BACK_RX = /\bwrite (?:it |one |something |that )?up (?:whatever|however|what(?:ever)?) you\b|\bwrite (?:up )?whatever you (?:like|want)\b|\b(?:submit|send|write) (?:us |me )?(?:your|an|the) (?:offer|paperwork)\b[^.?!\n]{0,40}\b(?:review|present|look at|take (?:it )?to)\b|\bhave your (?:agent|realtor|broker)\b|\bwho(?:'?s| is) your (?:agent|realtor|broker)\b|\b(?:call|talk to|reach out to|contact) the listing (?:broker|agent)\b/i;
+export function handsWriteUpBack(message = "") {
+  return HANDS_WRITE_UP_BACK_RX.test(String(message || ""));
+}
+// A reply that clears it up: says we're not agents / have none, or asks
+// them (or the person they named) to write it on NWMLS forms or represent us.
+export const CLEARS_WRITE_UP_RX = /\bnot (?:an? |licensed )?(?:agents?|realtors?|licensed)\b|\b(?:don'?t|do not) have (?:an? |our own )?(?:agent|realtor)\b|\bno agent\b|\brepresent us\b|\bnwmls\b|\bwrite (?:it|this|the offer|one) up for us\b/i;
+export const clearsWriteUp = (reply = "") => CLEARS_WRITE_UP_RX.test(String(reply || ""));
+
 export const AGENT_HONESTY_RULE =
   "WHAT YOU CAN'T DO: you cannot send an email, a document, a link or a calendar invite yourself — the app does that, and the context tells you " +
   "when it has. Never say something was sent, emailed, resent, forwarded, scheduled or fixed unless the context says it happened. If they ask for " +

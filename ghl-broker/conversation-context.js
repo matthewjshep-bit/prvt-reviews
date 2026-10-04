@@ -13,7 +13,7 @@
 
 import { fmtMoney } from "./shared/offer-calc.js";
 import { isOffMarket, offMarketAskDaysAgo, OFF_MARKET_ASK_EVERY_DAYS } from "./shared/off-market.js";
-import { effectiveStatus, offerHeat, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused } from "./shared/offer-status.js";
+import { effectiveStatus, offerHeat, agreedAboveOurNumber, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused } from "./shared/offer-status.js";
 import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybox.js";
 import { dealToQuery } from "./dispo.js";
 import { dealNumbers } from "./dataroom.js";
@@ -181,7 +181,14 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
         ? `they countered at ${fmtMoney(h.amount)} ${dateWord(h.ts)}`
         : `they countered${h.note ? ` (${theirs(String(h.note).slice(0, 60))})` : ""} ${dateWord(h.ts)}`));
     const heat = offerHeat(o);
-    const realm = o.realm?.answer === "yes" ? "agent said the number is in the realm" : "";
+    // A yes to a higher number than ours now is not a yes to ours (3418
+    // Wetmore Ave, 2026-10-03): say whose number it was, so the bot asks
+    // instead of telling them they agreed.
+    const above = agreedAboveOurNumber(o);
+    const realm = above
+      ? `the agent said ${fmtMoney(above.amount)} was in the realm; we have since come down to ${fmtMoney(above.book)}, and they have NOT agreed to ${fmtMoney(above.book)} — ` +
+        `don't call it agreed or ask them to write it up "at" it as if it were, and never say ${fmtMoney(above.amount)} again; find out plainly whether the seller would take ${fmtMoney(above.book)}`
+      : o.realm?.answer === "yes" ? "agent said the number is in the realm" : "";
     const parts = [
       `${o.address}:`,
       down

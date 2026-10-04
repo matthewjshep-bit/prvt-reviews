@@ -181,6 +181,28 @@ export function sameStreet(a, b) {
 }
 
 /**
+ * sameStreetLoose(a, b) → boolean
+ *
+ * sameStreet, or the same house number and street when only one spelling
+ * names the suffix: a thread says "5232 S Yakima", the deal is "5232 South
+ * Yakima Avenue". Wider than sameStreet, so only for a guard, where a wrong
+ * match holds a text back rather than sending one.
+ */
+export function sameStreetLoose(a, b) {
+  if (sameStreet(a, b)) return true;
+  const words = (raw) => {
+    const p = parseUsAddress(raw);
+    return p.houseNo ? normalizeUsAddress(`${p.houseNo} ${p.street}`).toLowerCase().replace(/[^a-z0-9 ]/g, "").split(/\s+/).filter(Boolean) : [];
+  };
+  const wa = words(a), wb = words(b);
+  if (!wa.length || !wb.length) return false;
+  const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
+  if (long.length !== short.length + 1) return false;
+  const suffixes = new Set(Object.values(SUFFIXES).map((s) => s.toLowerCase()));
+  return suffixes.has(long.at(-1)) && short.every((w, i) => w === long[i]);
+}
+
+/**
  * sameHouse(a, b) → boolean
  *
  * sameStreet, plus the city when both spellings carry one. The thread's
