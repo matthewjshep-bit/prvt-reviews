@@ -581,16 +581,17 @@ function openingFor(outbound) {
       const voice = lead ? [lead, ...ex.filter((x) => x !== lead)] : [];
       return `${START} This is the FIRST text this listing agent has ever had from us, about their listing at ` +
         `${o.address}${o.hookDom >= 60 ? " (it has been on the market a while)" : ""}. Write it the way Matt texts: someone ` +
-        `local, plain and friendly, not a pitch. Two or three short sentences: say you came across their listing on ${street}, ` +
-        `that you're in Seattle looking for your next flip anywhere in ${where}, and ask ONE question — whether this one is a ` +
-        `bit of a project or pretty turnkey. You may add one short line asking about other fixers they know of ` +
-        `${o.county ? `in ${o.county}` : "around there"}. ` +
+        `local, plain and friendly, not a pitch. Two or three short sentences that do three things: mention their listing on ` +
+        `${street}, say you're in Seattle looking for your next flip anywhere in ${where}, and ask ONE question about whether ` +
+        `it needs work. You may add one short line asking about other fixers they know of ${o.county ? `in ${o.county}` : "around there"}. ` +
         (o.county
           ? `${where} is the only place you name: no other county, no list of cities, no region ("greater Seattle", "Puget Sound", "Seatac"). `
           : `Name no county or region. `) +
         (voice.length
           ? `HOW MATT WRITES THESE ({first}, {street} and {county} are the blanks): ${voice.map((x) => `"${x}"`).join(" / ")}. ` +
-            `Lean on the first one. Match the voice; never copy one word for word. `
+            `OPEN THE WAY THE FIRST ONE OPENS and follow its shape; the others only show his range. Match the voice but never ` +
+            `copy one word for word: change at least a few phrases, because a hundred agents a day get one of these and no two ` +
+            `should read the same. `
           : "") +
         `Use their first name once if you have it. Keep it under ${OPENER_MAX_CHARS} characters. ` +
         `End on the question or the "all ears" line: NO sign-off, no name, no thanks, and no opt-out line — the phone ` +
