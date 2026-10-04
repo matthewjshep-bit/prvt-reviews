@@ -40,6 +40,7 @@ import { runLocationTick } from "./tick.js";
 import { maybeRunAgentPulse } from "./agent-pulse.js";
 import { maybeRunShowingSweep } from "./showing-sweep.js";
 import { startAiSpendMeter } from "./ai-spend.js";
+import { openerVariant } from "./shared/outreach-opener.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -156,13 +157,14 @@ app.use("/api/offers", createPostMortemRouter({ resolveLocation, feedbackFor: of
 // unless outreach_open is on the agent allowlist.
 const outreachRouter = createOutreachRouter({
   resolveLocation,
-  firstTouch: async ({ locationId, client, contactId, hook = {} }) => {
+  firstTouch: async ({ locationId, client, contactId, hook = {}, onSettled = null }) => {
     const saved = (await store.getOfferSettings(locationId)) || {};
     return startProactive({
       client, locationId, saved, store, contactId, kind: "outreach_open",
-      subject: { address: hook.address || "", hookPrice: hook.price || 0, hookDom: hook.dom || 0, brokerage: hook.brokerage || "" },
+      subject: { address: hook.address || "", hookPrice: hook.price || 0, hookDom: hook.dom || 0, brokerage: hook.brokerage || "",
+        county: hook.county || "", city: hook.city || "", variant: openerVariant(contactId, 1000) },
       sendsEnabled: CONVERSATION_SENDS_LIVE,
-      deps: offersRouter.conversationDepsFor({ locationId, client, saved }),
+      deps: { ...offersRouter.conversationDepsFor({ locationId, client, saved }), ...(onSettled ? { onSettled } : {}) },
     });
   },
 });
@@ -230,7 +232,7 @@ const TICK_JOBS = [
   } },
   // The top of the funnel, same tick: pull, pick, import, say hello.
   { area: "outreach", run: async ({ client, locationId, saved }) => {
-    if (await maybeStartOutreachSweep({ client, locationId, saved, store, deps: { runPull: outreachRouter.runPull, importAgents: outreachRouter.importAgents } })) {
+    if (await maybeStartOutreachSweep({ client, locationId, saved, store, deps: outreachRouter.sweepDeps })) {
       console.log(`outreach sweep started for ${locationId}`);
     }
   } },

@@ -714,6 +714,8 @@ export const getAgentPulse = () => fetch(`${API_BASE}/api/outreach/pulse?${locq(
 export const runAgentPulse = ({ dryRun = true, limit = null } = {}) => post(`/api/outreach/pulse/run`, { dryRun, ...(limit != null ? { limit } : {}) });
 // A few check-ins as the drafter would write them now, from real threads. Nothing saved or sent.
 export const sampleAgentPulse = (limit = 3) => post(`/api/outreach/pulse/preview`, { limit });
+// The app's first text to new agents, drafted for the next few the sweep could pick. Nothing saved or sent.
+export const sampleFirstTexts = (limit = 3) => post(`/api/outreach/opener/preview`, { limit });
 // Everyone tagged tier-2/tier-3, out of the GHL drips the check-in replaces. dryRun only counts.
 export const leaveTierDrips = ({ dryRun = true } = {}) => post(`/api/outreach/pulse/leave-drips`, { dryRun });
 export const getLeaveTierDrips = () => fetch(`${API_BASE}/api/outreach/pulse/leave-drips?${locq()}`).then(j);

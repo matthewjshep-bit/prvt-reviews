@@ -14,6 +14,7 @@
 // crash mid-sweep can't spend a second RentCast request the same day.
 
 import { store as defaultStore } from "./store.js";
+import { normalizeOpener } from "./shared/outreach-opener.js";
 
 export const CURSOR_NAME = "outreach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -187,6 +188,8 @@ export function normalizeOutreachAutopilot(v = {}) {
     dailyCap: Number.isFinite(cap) ? Math.min(MAX_DAILY_CAP, Math.max(1, cap)) : DEFAULT_DAILY_CAP,
     weekdaysOnly: o.weekdaysOnly !== false,
     firstTouch: o.firstTouch === "ghl" || o.firstTouch === "workflow" ? o.firstTouch : "app",
+    // Matt's own first texts, the voice the bot writes them in.
+    opener: normalizeOpener(o.opener),
     requireDistress: o.requireDistress !== false,
     workflowId: workflowIdFrom(o.workflowId),
     counties: countiesFrom(o.counties),
@@ -394,6 +397,37 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     return;
   }
 
+  // The app says hello (2026-10-04): every agent it creates needs a text the
+  // Conversation AI's day still has room for, or they sit in GHL untexted and
+  // are never picked again. First texts that didn't go on an earlier run are
+  // tried first; today's new agents get what's left. No cap is loosened —
+  // the day's number comes down to fit.
+  if (oa.firstTouch === "app") {
+    job.phase = "room";
+    let room = Infinity;
+    if (typeof deps.firstTextRoom === "function") {
+      room = await Promise.resolve(deps.firstTextRoom({ locationId, saved })).catch(() => Infinity);
+    }
+    if (!job.dryRun && room > 0 && typeof deps.retryFirstTexts === "function") {
+      const r = await deps.retryFirstTexts({ locationId, client, limit: room })
+        .catch((e) => { job.warnings.push(`retrying first texts: ${String(e?.message || e).slice(0, 120)}`); return null; });
+      if (r?.retried) {
+        job.retried = r.retried;
+        job.reopened = r.opened || 0;
+        room -= r.retried;
+      }
+    }
+    if (room < oa.dailyCap) {
+      const fit = Math.max(0, Math.floor(room));
+      job.warnings.push(`the Conversation AI's daily cap leaves room for ${fit} first text${fit === 1 ? "" : "s"} today (the rest is kept for people who text us) — importing ${fit}, not ${oa.dailyCap}`);
+      oa.dailyCap = fit;
+    }
+    if (oa.dailyCap <= 0) {
+      job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
+      return;
+    }
+  }
+
   // 1. The pull, filtered at RentCast so a page is mostly stale listings.
   // With a county list: walk the counties page by page — the county whose
   // turn it is, from where the last run stopped, then the next county once
@@ -567,7 +601,7 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
       applyTag: oa.firstTouch === "ghl", openWith: oa.firstTouch === "app" ? "app" : null,
       enrollWorkflowId: oa.firstTouch === "workflow" ? oa.workflowId : null,
       sessionSuffix: `auto-${iso(now).slice(0, 10)}`, dryRun: job.dryRun ? true : false,
-      newOnly: true, createLimit: room,
+      newOnly: true, createLimit: room, county: g.key || "",
     });
     const results = Array.isArray(r.results) ? r.results : [];
     made += results.length

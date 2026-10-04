@@ -74,6 +74,9 @@ export const EVENT_TYPES = [
   "outreach_enrolled",
   // They replied, so the app took them out of that outreach workflow.
   "outreach_left",
+  // The app's first text to an agent the import created didn't happen
+  // (refused, failed or held); the next sweep tries again (routes/outreach.js).
+  "outreach_open_skipped",
   // The check-in between deals was started for this buyer (buyer-pulse.js).
   // Written BEFORE the draft, so it is also the claim: one per buyer per day,
   // and the clock the next one counts from.
@@ -132,6 +135,7 @@ export const EVENT_LABEL = {
   outreach_sent: "we reached out about their listing",
   outreach_enrolled: "added to an outreach workflow",
   outreach_left: "taken out of the outreach workflow (they replied)",
+  outreach_open_skipped: "our first text didn't go — tried again next run",
   pulse_sent: "checked in between deals",
   pulse_voided: "a check-in drafted nothing",
   showing_reminder_sent: "reminded them about the walkthrough", showing_followup_sent: "followed up after the walkthrough",
@@ -161,6 +165,7 @@ export const EVENT_ICON = {
   outreach_sent: "Send",
   outreach_enrolled: "Workflow",
   outreach_left: "LogOut",
+  outreach_open_skipped: "Clock",
   pulse_sent: "BellRing",
   pulse_voided: "Clock",
   showing_reminder_sent: "CalendarCheck", showing_followup_sent: "MessageSquare",

@@ -8,11 +8,12 @@ import {
   CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
-import { getBuyerPulse, runBuyerPulse, getAgentPulse, sampleAgentPulse, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
+import { getBuyerPulse, runBuyerPulse, getAgentPulse, sampleAgentPulse, sampleFirstTexts, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
 import { DESK_DEFAULTS, normalizeDesk } from "@shared/call-list.js";
 import { UNDERWRITE_CHECKS_DEFAULTS, normalizeUnderwriteChecks } from "@shared/underwrite-checks.js";
+import { DEFAULT_OPENER_EXAMPLES, normalizeOpener } from "@shared/outreach-opener.js";
 import { tierDrips } from "@shared/agent-pulse.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
@@ -162,6 +163,40 @@ function AgentPulseSamples() {
               <div className="text-xs text-slate-500">{p.name || p.contactId} · {p.segment} · {PULSE_REASON_WORDS[p.reason] || p.reason}{p.street ? ` (${p.street})` : ""}</div>
               {p.skipped ? <div className="text-xs text-amber-700">Wouldn't be drafted: {p.skipped}</div>
                 : <div className="mt-1 whitespace-pre-wrap text-slate-800">{p.reply}</div>}
+              {p.held ? <div className="mt-1 text-xs text-amber-700">Would wait for you: {(p.flags || []).join("; ")}</div> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+// The first text to new agents, drafted for the next few the sweep could pick
+// with the saved examples — read before the morning run. Nothing saved or sent.
+function FirstTextSamples() {
+  const [state, setState] = useState({ busy: false, error: "", previews: null });
+  const run = async () => {
+    setState({ busy: true, error: "", previews: null });
+    try { const r = await sampleFirstTexts(3); setState({ busy: false, error: "", previews: r.previews || [] }); }
+    catch (e) { setState({ busy: false, error: e.message || "couldn't write samples", previews: null }); }
+  };
+  return (
+    <div className="mt-2">
+      <button type="button" onClick={run} disabled={state.busy}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium hover:bg-slate-50 disabled:opacity-50">
+        {state.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Write 3 sample first texts
+      </button>
+      <span className="ml-2 text-xs text-slate-500">For agents the next run could pick, with the saved examples (save first). Nothing is saved or sent.</span>
+      {state.error ? <p className="mt-2 text-xs text-red-600">{state.error}</p> : null}
+      {state.previews && !state.previews.length ? <p className="mt-2 text-xs text-slate-500">No new agents waiting in the autopilot batches. Run a sweep preview first.</p> : null}
+      {state.previews?.length ? (
+        <ul className="mt-2 space-y-2">
+          {state.previews.map((p) => (
+            <li key={p.agentKey} className="rounded-lg border border-slate-200 p-2 text-sm">
+              <div className="text-xs text-slate-500">{p.name || p.agentKey}{p.street ? ` · ${p.street}` : ""}{p.county ? ` · ${p.county} County` : ""}{p.chars ? ` · ${p.chars} chars` : ""}</div>
+              {p.skipped ? <div className="text-xs text-amber-700">Wouldn't be drafted: {p.skipped}</div>
+                : <div className="mt-1 whitespace-pre-wrap text-slate-800">{p.reply}<span className="text-slate-400"> No worries if not can stop lmk</span></div>}
               {p.held ? <div className="mt-1 text-xs text-amber-700">Would wait for you: {(p.flags || []).join("; ")}</div> : null}
             </li>
           ))}
@@ -562,6 +597,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       if (form.outreachAutopilot) {
         const pulse = form.outreachAutopilot.pulse;
         clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12, followUpDays: Number(form.outreachAutopilot.followUpDays) || 14,
+          ...(form.outreachAutopilot.opener ? { opener: normalizeOpener(form.outreachAutopilot.opener) } : {}),
           ...(pulse ? { pulse: { ...pulse, dailyCap: Number(pulse.dailyCap) || 20, everyDays: Number(pulse.everyDays) || 21, coldEveryDays: Number(pulse.coldEveryDays) || 60,
             coldMaxUnanswered: Number(pulse.coldMaxUnanswered) || 3, engagedMaxUnanswered: pulse.engagedMaxUnanswered === "" || pulse.engagedMaxUnanswered == null ? 6 : Number(pulse.engagedMaxUnanswered) } } : {}) };
       }
@@ -1024,11 +1060,24 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                 <span className="text-xs font-medium text-slate-600">Who says hello</span>
                 <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
                   value={form.outreachAutopilot?.firstTouch || "app"} onChange={(e) => setOutreachAuto("firstTouch")(e.target.value)}>
-                  <option value="app">The Conversation AI drafts it (no GHL trigger tag)</option>
+                  <option value="app">The app writes it, in your voice (no GHL workflow)</option>
                   <option value="ghl">The GHL workflow template (trigger tag, as before)</option>
                   <option value="workflow">Enroll them in a GHL workflow I pick</option>
                 </select>
               </label>
+              {(form.outreachAutopilot?.firstTouch || "app") === "app" && (
+                <label className="col-span-2 block">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">How you'd write the first text</span>
+                  <textarea className={INPUT_CLS} rows={8}
+                    value={Array.isArray(form.outreachAutopilot?.opener?.examples) ? form.outreachAutopilot.opener.examples.join("\n\n") : form.outreachAutopilot?.opener?.examples ?? DEFAULT_OPENER_EXAMPLES.join("\n\n")}
+                    onChange={(e) => setOutreachAuto("opener")({ ...(form.outreachAutopilot?.opener || {}), examples: e.target.value })} />
+                  <span className="mt-1 block text-xs text-slate-500">
+                    A few of your own first texts, with a blank line between them. The bot writes every agent a fresh one in this voice and fills in {"{first}"}, {"{street}"} and {"{county}"}, which is the county the listing is in and the only place it names.
+                    Leave off "No worries if not can stop lmk": GHL adds it to the end, and an example that includes it is dropped.
+                  </span>
+                </label>
+              )}
+              {(form.outreachAutopilot?.firstTouch || "app") === "app" && <div className="col-span-2"><FirstTextSamples /></div>}
               {form.outreachAutopilot?.firstTouch === "workflow" && (
                 <WorkflowPick className="col-span-2" label="First-text workflow" workflows={outreachWorkflows}
                   value={form.outreachAutopilot?.workflowId || ""} onChange={setOutreachAuto("workflowId")}
