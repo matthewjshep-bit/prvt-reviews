@@ -49,6 +49,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
+import { normalizeOpener, countyName } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
@@ -212,6 +213,22 @@ export async function countToday({ store, locationId, now = Date.now(), cap = 0 
   const rows = await store.listReplyDrafts(locationId, { since, limit: Math.max(500, Math.round(Number(cap) || 0) + 1) }).catch(() => []);
   for (const d of rows) if (d?.jobId) ids.add(d.jobId);
   return ids.size;
+}
+
+/**
+ * machineRoomToday({ store, locationId, saved, now }) → number
+ *
+ * How many more texts the machine may start today before it reaches the
+ * reserve kept for people who text us (startProactive's own check).
+ * Infinity with no cap. The outreach sweep asks first, so it never creates
+ * an agent in GHL it then can't text.
+ */
+export async function machineRoomToday({ store, locationId, saved = {}, now = Date.now() }) {
+  const cap = Math.round(Number(conversationConfig(saved).dailyCap) || 0);
+  if (!(cap > 0)) return Infinity;
+  const reserve = Math.max(REPLY_RESERVE_MIN, Math.ceil(cap * REPLY_RESERVE_SHARE));
+  const used = await countToday({ store, locationId, now, cap });
+  return Math.max(0, cap - reserve - used);
 }
 
 /* ---------- the draft ---------- */
@@ -1573,7 +1590,9 @@ export async function humanHasThread({ store, client = null, locationId, contact
   if (!last || !Number.isFinite(last.ts) || now - last.ts > minutes * 60000) return null;
   const ours = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 10 }).catch(() => []);
   const norm = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
-  if (ours.some((d) => norm(d.sentText || d.reply) === norm(last.text))) return null;
+  // GHL may put the stop line on the end of what we sent ("…I'm all ears.
+  // No worries if not can stop lmk"), so ours is a match when it starts theirs.
+  if (ours.some((d) => { const t = norm(d.sentText || d.reply); return t && (t === norm(last.text) || norm(last.text).startsWith(t)); })) return null;
   // The offer documents' own text (routes/offers.js sendOfferDocs) is the
   // app, not a person: Julie Nutley's thanks was dismissed as "you answered it
   // yourself" because the offer had just gone out ahead of it (2026-09-15).
@@ -2455,11 +2474,16 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     const price = Math.round(Number(subject?.hookPrice) || 0);
     return { ...base,
       hookPrice: price, hookPriceK: price ? kText(price) : "", hookDom: Number(subject?.hookDom) || 0,
-      brokerage: String(subject?.brokerage || "") };
+      brokerage: String(subject?.brokerage || ""),
+      // The county the listing is in, the only place the text names, and
+      // Matt's own openers as the voice (shared/outreach-opener.js).
+      county: countyName(subject?.county), city: String(subject?.city || ""),
+      examples: normalizeOpener(saved?.outreachAutopilot?.opener).examples, variant: Number(subject?.variant) || 0 };
   }
   // The nudges. They carry what the message is ABOUT and no numbers at all.
   return { ...base,
     ...(kind === "offer_nudge" || kind === "price_drop" ? { went: whatWentOut(offer) } : {}),
+    ...(kind === "outreach_nudge" && countyName(subject?.county) ? { county: countyName(subject.county) } : {}),
     // A passed house riding on this nudge as one line (follow-up-sweep.js).
     ...(kind === "offer_nudge" && subject?.aside?.address ? { aside: { street: streetOf(subject.aside.address), quiet: Boolean(subject.aside.quiet) } } : {}),
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
@@ -2494,7 +2518,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "passed_checkin": return outbound.quiet
       ? `Checks back in on ${where} — we never heard back on our offer; asks if it's still available and where the seller is${rung}.`
       : `Checks back in on ${where} — they passed; asks if the seller would come closer to our number${rung}.`;
-    case "outreach_open": return `First text: saw their listing at ${where}, asks if they have anything distressed.`;
+    case "outreach_open": return `First text: came across their listing at ${where}${outbound.county ? `, looking for a flip in ${outbound.county} County` : ""}, asks if it's a bit of a project.`;
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "buyer_pulse":   return `Checks in between deals: are they buying right now, and ${outbound.buyBox ? "is their buy box still right" : "what is their buy box"}.`;
     case "agent_pulse":
@@ -2562,7 +2586,7 @@ export async function writeAgainWithoutCarrierWords({ draft, kind, redraft }) {
  * `held` is the money guard or another gate objecting; the check-in's own
  * "a person's call" lock is not counted, since its switch releases that.
  */
-export async function previewProactive({ client, locationId, saved, store, contactId, kind, offer = null, subject = null, deps = {} }) {
+export async function previewProactive({ client, locationId, saved, store, contactId, kind, offer = null, subject = null, deps = {}, name = "" }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
   const config = conversationConfig(saved);
@@ -2582,7 +2606,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
   const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier: null });
   const previewArgs = {
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
-    contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
+    contact: { name: a.contactName || name, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
     aiApiKey, party, config, context, channel: "sms", outbound, batch: null,
   };
   const draftWith = deps.draft || draftReply;
@@ -2593,7 +2617,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
   draft.intent = kind;
   const gate = outboundGateFor({ spec, offer, subject, context, config, party, a, kind })(draft);
   const clean = Boolean(gate.ok || (gate.locked && gate.clean));
-  return { contactName: a.contactName, reply: String(draft.reply || ""), summary: String(draft.summary || ""),
+  return { contactName: a.contactName || name, reply: String(draft.reply || ""), summary: String(draft.summary || ""),
     held: !clean, flags: (gate.flags || []).filter((f) => f !== gate.locked) };
 }
 
@@ -2683,6 +2707,7 @@ async function runProactive(job, ctx) {
       ...(kind === "realm_check" ? { amount: offer.cashAmount, requote: outbound.requote } : {}),
       ...(outbound.step != null ? { step: outbound.step, steps: subject?.steps || [], stepLabel: outbound.stepLabel } : {}),
       ...(kind === "agent_pulse" ? { segment: outbound.segment, reason: outbound.reason, listingKey: subject?.listingKey || null } : {}),
+      ...((kind === "outreach_open" || kind === "outreach_nudge") && outbound.county ? { county: outbound.county } : {}),
     },
     reply: draft.reply, intent: kind, confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
     usage: draft.usage || null, shadow: shadowRow(draft.shadow, gateFor),
@@ -4446,7 +4471,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       store, locationId, contactId: d.contactId, party: "agent", type: "outreach_sent", at: ts,
       address: d.outbound.address || d.propertyAddress || "", source: "conversation", ref: d.id,
       dedupeKey: `outreach:${d.contactId}:${d.id}`,
-      data: { draftId: d.id, auto: Boolean(auto), contactName: d.contactName || "" },
+      data: { draftId: d.id, auto: Boolean(auto), contactName: d.contactName || "", ...(d.outbound.county ? { county: d.outbound.county } : {}) },
     }).catch(() => {});
   }
   // A reply that promised to come back starts a clock (promise-sweep.js). The

@@ -30,6 +30,8 @@ import { mapPool } from "../map-pool.js";
 import { scoreListing, medianPricePerSqft, distressSignals, medianIndex } from "../outreach-score.js";
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
+import { countyName } from "../shared/outreach-opener.js";
+import { previewProactive, machineRoomToday } from "../reply-agent.js";
 import { fetchZillowAgentContacts } from "../rehab-scan.js";
 import { streetKey } from "../comps-zillow.js";
 import { OUTREACH_FIELDS } from "../field-registry.js";
@@ -61,6 +63,10 @@ const PULSE_SENDS_LIVE = process.env.CARD_SENDS_ENABLED === "true";
 
 // How long a "not in GHL" answer from a pull is trusted before it's asked again.
 const GHL_RECHECK_DAYS = 7;
+// A first text that didn't go is tried again by the next sweeps: this many
+// times in all, for this many days.
+const FIRST_TEXT_TRIES = 3;
+const FIRST_TEXT_RETRY_DAYS = 7;
 
 /* ---------- normalization ---------- */
 
@@ -446,7 +452,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const key = listingKey(l);
       const address = l.formattedAddress || [l.addressLine1, l.city, l.state, l.zipCode].filter(Boolean).join(", ");
       const docListing = {
-        address, city: l.city, state: l.state, zip: l.zipCode,
+        address, city: l.city, state: l.state, zip: l.zipCode, county: l.county || "",
         price: l.price, daysOnMarket: l.daysOnMarket, listedDate: l.listedDate,
         yearBuilt: l.yearBuilt, sqft: l.squareFootage, propertyType: l.propertyType,
         mlsName: l.mlsName, mlsNumber: l.mlsNumber, score, components,
@@ -496,6 +502,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           ghl: stored?.doc?.ghl || { contactId: null, matchedBy: null, checkedAt: null },
           hook: {
             listingKey: hook.listingKey, address: hook.address, price: hook.price,
+            // The county is what the first text names (shared/outreach-opener.js).
+            county: hook.county || "", city: hook.city || "",
             dom: hook.daysOnMarket, propertyType: hook.propertyType, yearBuilt: hook.yearBuilt,
             score: hook.score, components: hook.components,
           },
@@ -947,6 +955,63 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     String(raw || "").split(/[;,\s]+/).map((s) => s.trim()).find((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)) || "";
 
   /**
+   * openFirstText({ locationId, client, contactId, hook, ref, tries }) → { jobId } | { skipped }
+   *
+   * The app's first text to an agent the import just created. A contact we
+   * created and then couldn't text would never be picked again (they're in
+   * GHL now), so a text that doesn't happen — refused up front, or the draft
+   * failing or held on its lane — is written down as outreach_open_skipped,
+   * with the hook, and the next sweep tries them again (retryFirstTexts).
+   */
+  async function openFirstText({ locationId, client, contactId, hook = {}, ref = null, tries = 0 }) {
+    const skip = (reason) => recordEvent({
+      store, locationId, contactId, party: "agent", type: "outreach_open_skipped", source: "outreach",
+      address: hook.address || "", ref, dedupeKey: `outreach_open_skipped:${contactId}:${tries + 1}`,
+      data: { reason: String(reason || "").slice(0, 200), hook, tries: tries + 1 },
+    }).catch(() => {});
+    try {
+      const r = await firstTouch({ locationId, client, contactId, hook,
+        onSettled: (job) => { if (job?.status === "error" || (job?.status === "held" && !job.draftId)) skip(job.error || job.heldReason || job.status); } });
+      if (r?.skipped) { await skip(r.skipped); return { skipped: r.skipped }; }
+      return { jobId: r?.job?.id || null };
+    } catch (e) {
+      await skip(e.message);
+      return { skipped: e.message };
+    }
+  }
+
+  /**
+   * retryFirstTexts({ locationId, client, limit, now }) → { retried, opened, results }
+   *
+   * Agents whose first text didn't happen (outreach_open_skipped in the last
+   * FIRST_TEXT_RETRY_DAYS, no outreach_sent since), tried again, at most
+   * FIRST_TEXT_TRIES times each and `limit` a run. The sweep runs this
+   * before it pulls anyone new.
+   */
+  async function retryFirstTexts({ locationId, client, limit = Infinity, now = Date.now() }) {
+    if (typeof firstTouch !== "function" || !(limit > 0)) return { retried: 0, opened: 0, results: [] };
+    const since = new Date(now - FIRST_TEXT_RETRY_DAYS * 86400000).toISOString();
+    const events = await store.listContactEventsSince(locationId, since, { types: ["outreach_open_skipped", "outreach_sent"], limit: 5000 }).catch(() => []);
+    const byContact = new Map();
+    for (const e of events) {
+      if (!e?.contactId) continue;
+      if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
+      byContact.get(e.contactId).push(e);
+    }
+    const results = [];
+    for (const [contactId, list] of byContact) {
+      if (results.length >= limit) break;
+      if (list.some((e) => e.type === "outreach_sent")) continue;
+      const skips = list.filter((e) => e.type === "outreach_open_skipped").sort((x, y) => String(x.at).localeCompare(String(y.at)));
+      if (!skips.length || skips.length >= FIRST_TEXT_TRIES) continue;
+      const last = skips.at(-1);
+      const r = await openFirstText({ locationId, client, contactId, hook: last.data?.hook || {}, ref: last.ref || null, tries: skips.length });
+      results.push({ contactId, ...r });
+    }
+    return { retried: results.length, opened: results.filter((r) => r.jobId).length, results };
+  }
+
+  /**
    * importAgents({ locationId, client, agentKeys, applyTag, batchId, sessionSuffix, dryRun, openWith })
    *
    * The import, callable without a request so the daily sweep can run it.
@@ -956,8 +1021,10 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * workflow and records `outreach_enrolled` (the follow-up sweep's clock).
    * A contact that already existed is never enrolled: it has a history, and
    * it may already be mid-workflow — GHL gives no way to ask.
+   * `county` ("King, WA") stands in for a row whose hook predates the
+   * listing's own county.
    */
-  async function importAgents({ locationId, client, agentKeys = [], applyTag = true, batchId = null, sessionSuffix = "", dryRun = true, openWith = null, enrollWorkflowId = null, newOnly = false, createLimit = 0 }) {
+  async function importAgents({ locationId, client, agentKeys = [], applyTag = true, batchId = null, sessionSuffix = "", dryRun = true, openWith = null, enrollWorkflowId = null, newOnly = false, createLimit = 0, county = "" }) {
       agentKeys = Array.isArray(agentKeys) ? agentKeys.slice(0, MAX_DAILY_CAP) : [];
       if (!agentKeys.length) throw Object.assign(new Error("agentKeys required"), { http: 400 });
       const batch = await resolveBatch(locationId, batchId);
@@ -1122,10 +1189,10 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           // is the bot forgetting who it's talking to.
           let opened = null;
           if (openWith === "app" && typeof firstTouch === "function" && action === "created") {
-            try {
-              const r = await firstTouch({ locationId, client, contactId, name: a.name || "", hook: { ...hook, brokerage: a.brokerage || "" } });
-              opened = r?.skipped ? { skipped: r.skipped } : { jobId: r?.job?.id || null };
-            } catch (e) { opened = { skipped: e.message }; warnings.push(`${agentKey}: first text: ${e.message}`); }
+            opened = await openFirstText({ locationId, client, contactId, ref: batch.id,
+              hook: { address: hook.address || "", price: hook.price || null, dom: hook.dom || null,
+                county: countyName(hook.county, county), city: hook.city || "", brokerage: a.brokerage || "" } });
+            if (opened.skipped) warnings.push(`${agentKey}: first text: ${opened.skipped}`);
           }
           let enrolled = null;
           if (enrollWorkflowId && action !== "created") {
@@ -1298,7 +1365,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const dryRun = req.body?.dryRun !== false;
       const job = startOutreachSweep({
         locationId, client, saved, store, dryRun, trigger: "manual",
-        deps: { runPull: router.runPull, importAgents: importAgents },
+        deps: router.sweepDeps,
       });
       res.status(202).json({ ok: true, job: publicOutreachJob(job) });
     } catch (err) { fail(res, err); }
@@ -1356,6 +1423,52 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     } catch (err) { fail(res, err); }
   });
 
+  /**
+   * previewFirstTexts({ locationId, client, saved, limit, preview }) → { previews }
+   *
+   * What the app's first text WOULD say to agents the sweep could pick next:
+   * one from each autopilot county in turn, drafted the way the live text is
+   * (their county, Matt's examples, the carrier rule, the gates), then
+   * dropped. Nothing is imported, saved or sent.
+   */
+  async function previewFirstTexts({ locationId, client, saved, limit = 3, preview = previewProactive }) {
+    const n = Math.max(1, Math.min(8, Math.round(Number(limit)) || 3));
+    const batches = ((await store.listOutreachBatches(locationId).catch(() => [])) || [])
+      .filter((b) => /^Autopilot · /.test(String(b?.name || "")));
+    const pools = [];
+    for (const b of batches) {
+      const rows = typeof store.listOutreachPickable === "function"
+        ? await store.listOutreachPickable(locationId, { batchId: b.id, limit: n })
+        : await store.listOutreachAgents(locationId, { batchId: b.id, status: "new", limit: n });
+      const market = String(b.name).replace(/^Autopilot · /, "");
+      if (rows.length) pools.push(rows.map((r) => ({ r, market })));
+    }
+    const line = [];
+    for (let i = 0; line.length < n && pools.some((p) => p[i]); i++) for (const p of pools) if (p[i] && line.length < n) line.push(p[i]);
+    const previews = [];
+    for (const [i, { r, market }] of line.entries()) {
+      const hook = r.doc?.hook || {};
+      const county = countyName(hook.county, market);
+      const out = await preview({
+        client, locationId, saved, store, contactId: "", kind: "outreach_open", name: r.doc?.name || "",
+        subject: { address: hook.address || "", hookPrice: hook.price || 0, hookDom: hook.dom || 0, brokerage: r.doc?.brokerage || "", county, city: hook.city || "", variant: i },
+      }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
+      previews.push({ agentKey: r.agentKey, name: r.doc?.name || "", street: String(hook.address || "").split(",")[0], county,
+        reply: out?.reply || "", chars: String(out?.reply || "").length, held: Boolean(out?.held), flags: out?.flags || [], skipped: out?.skipped || "" });
+    }
+    return { previews };
+  }
+  router.previewFirstTexts = previewFirstTexts;
+
+  // Body: { limit }. The first text to new agents, read before it goes.
+  router.post("/opener/preview", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      res.json({ ok: true, ...(await previewFirstTexts({ locationId, client, saved, limit: req.body?.limit ?? 3 })) });
+    } catch (err) { fail(res, err); }
+  });
+
   // The clean-up's progress (and which drips), without running the planner.
   router.get("/pulse/leave-drips", async (req, res) => {
     try {
@@ -1389,6 +1502,13 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
   // import the buttons run, without a request.
   router.runPull = (locationId, client, body = {}, opts = {}) => runPull(locationId, client, body, opts);
   router.importAgents = importAgents;
+  router.retryFirstTexts = retryFirstTexts;
+  // What the daily sweep (outreach-sweep.js) is handed, from the tick and
+  // from Run now alike.
+  router.sweepDeps = {
+    runPull: (...args) => router.runPull(...args), importAgents, retryFirstTexts,
+    firstTextRoom: ({ locationId, saved }) => machineRoomToday({ store, locationId, saved }),
+  };
   router.resolveBatch = resolveBatch;
 
   return router;

@@ -97,7 +97,7 @@ export const INTENT_LABEL = {
 // the model was told it means.
 export const INTENT_GLOSS = {
   agent: {
-    outreach_open: "the text it starts when a new agent is imported: saw their listing, we buy as-is for cash, anything distressed?",
+    outreach_open: "the text it starts when a new agent is imported: came across their listing, looking for a flip in that county, is it a bit of a project?",
     outreach_nudge: "a follow-up on that first text when nothing came back",
     hot_push: "once a price is agreed and nothing is on paper: can you write it up on NWMLS forms for us to sign? what do you need from us?",
     passed_checkin: "every ten days after they pass on an offer: still sitting? would the seller come closer to our number?",

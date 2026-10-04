@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { DEFAULT_OPENER_EXAMPLES } from "./shared/outreach-opener.js";
 import {
   pickAgentsToImport, normalizeOutreachAutopilot, isWorkday, workHour, runsLeftInMonth, pullQuery, startOutreachSweep, maybeStartOutreachSweep, getOutreachJob, _resetJobs, CURSOR_NAME, PAGES_CURSOR, STALE_RUN_MS, RETRY_GAP_MS, RETRY_WINDOW_HOURS, MAX_DAILY_TRIES,
 } from "./outreach-sweep.js";
@@ -11,7 +12,7 @@ const row = (k, doc = {}, extra = {}) => ({ agentKey: k, status: "new", contactI
 
 test("settings coerce to safe defaults", () => {
   assert.deepEqual(normalizeOutreachAutopilot(undefined), {
-    enabled: false, dailyCap: 12, weekdaysOnly: true, firstTouch: "app", requireDistress: true,
+    enabled: false, dailyCap: 12, weekdaysOnly: true, firstTouch: "app", opener: { examples: DEFAULT_OPENER_EXAMPLES }, requireDistress: true,
     workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14,
     minDaysOnMarket: 45, propertyTypes: ["Single Family"], maxYearBuilt: 0, reserveRequests: 2,
     monthlyRequests: 0, cycleDay: 1, maxListPrice: 1500000, coverage: "counties",

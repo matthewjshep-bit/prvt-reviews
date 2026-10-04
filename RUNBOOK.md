@@ -3544,6 +3544,34 @@ when it runs out the agent is counted on Reports → Flow ("N cold agents never
 answered", `counts.coldNoReply`). It is not a row on Today (2026-09-17): there
 is nothing for a person to do about an agent who never answered.
 
+**The app's first text (2026-10-04).** Matt moved the first text from the
+agent-smsblast workflow to the app, so each one is written fresh in his voice:
+- **Voice.** Settings → Agent Outreach → "How you'd write the first text"
+  (`outreachAutopilot.opener.examples`, `shared/outreach-opener.js`). It
+  defaults to his workflow template plus three variants. Each agent leads with
+  a different example (`variant`, a hash of the contact id).
+- **County.** The listing's own county from RentCast (`hook.county`), or else
+  the county the sweep was reading. The text names that county and no other
+  place. The "Reached out, no reply" nudge names the same county, read from
+  `outreach_sent.data.county`.
+- **No sign-off.** GHL appends "No worries if not can stop lmk" to the text
+  itself. The bot never writes a sign-off or an opt-out line, and an example
+  containing "can stop" is dropped. A reply that arrives within minutes still
+  matches our draft, so it isn't held as a person's thread.
+- **Nobody is created and left untexted.** Before importing, the sweep asks how
+  many machine drafts the Conversation AI's daily cap still allows after the
+  reply reserve (`machineRoomToday`), and lowers the day's number to fit. A
+  first text that is refused, fails, or is held with no draft is written down
+  as `outreach_open_skipped`. The next sweep retries it before pulling anyone
+  new, up to 3 times within 7 days (`retryFirstTexts`).
+- **Samples.** "Write 3 sample first texts" under the examples box
+  (`POST /api/outreach/opener/preview`) drafts texts for agents waiting in the
+  autopilot batches. Nothing is imported, saved or sent.
+- **Go-live config.** Set `firstTouch: "app"` and `followUpEnabled: false` (the
+  GHL follow-up stands down). Turn on `outreach_open` in the agent playbook and
+  put it on the auto-send list. Enable the `outreach_nudge` ladder for the
+  14-day follow-up.
+
 On the Agents page the strip at the top says whether the sweep is on, when
 it last ran, and offers "Preview today's sweep" (pull + pick, writes nothing
 to GHL — a cold cache still spends RentCast requests) and "Run it now".
