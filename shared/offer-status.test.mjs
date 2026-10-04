@@ -434,3 +434,19 @@ test("taking back an agreed price never touches a contract", () => {
     agreedCleared: { at: "2026-10-03T00:00:00Z", by: "you" } };
   assert.equal(priceAgreed(deal)?.amount, 300000);
 });
+
+// 3418 Wetmore Ave (2026-10-03): the agent's yes was to ~290k (realm_yes at
+// 289,750); Matt came down to 226k by hand; the push to paper then asked her
+// to "write it up at the 226k" — a number nobody agreed to. A yes above where
+// the book is now is not a yes to the book's number.
+test("a yes to a higher number is not a reason to push our lower one to paper", async () => {
+  const { agreedAboveOurNumber } = await import("./offer-status.js");
+  const at = "2026-10-02T01:52:28.418Z";
+  const wetmore = { id: "o", status: "sent", cashAmount: 226000, agreed: { at, via: "realm_yes", amount: 289750 },
+    realm: { answer: "yes", ts: at }, hot: { at, by: "conversation", signal: "presenting" } };
+  assert.equal(pushesToPaper(wetmore), false);
+  assert.deepEqual(agreedAboveOurNumber(wetmore), { amount: 289750, at, via: "realm_yes", book: 226000 });
+  // The yes on the number we're at still pushes.
+  assert.equal(pushesToPaper({ ...wetmore, cashAmount: 289750 }), true);
+  assert.equal(agreedAboveOurNumber({ ...wetmore, cashAmount: 289750 }), null);
+});

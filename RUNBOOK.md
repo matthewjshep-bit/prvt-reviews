@@ -2197,6 +2197,18 @@ version on purpose, and the coach's dismissal reasons will show what it misses.
 The existing ladders keep their own rules. The brake is for what the machine
 starts by itself between rungs.
 
+**When they hand the write-up back, or we're talking past each other (2026-10-03).**
+"Write up whatever you like!" means the agent thinks we'll write our own
+offer. `AGENT_PAPER_RULE` now says to clear that up first: we're not agents,
+so ask them, or the person they named, to write it up on NWMLS forms. A reply
+that doesn't is held (`handsWriteUpBack` / `clearsWriteUp`, reply gate).
+`CLARIFY_RULE` (agents and buyers): when they've misread us, clear it up in
+one line before the next step. A yes to a higher number than the book's
+(`agreedAboveOurNumber`: a realm yes at 289,750, then a hand drop to 226K) is
+no longer an agreement at the book's number. The push to paper doesn't run,
+the call list already flags it, and the bot's offer book says plainly that
+they haven't agreed to ours.
+
 **A deal that fell through (2026-10-03).** Every text the machine starts goes
 through `startProactive` (ghl-broker/reply-agent.js). If its house is a deal
 marked fell through, it is not drafted, whoever it is to (the listing agent,

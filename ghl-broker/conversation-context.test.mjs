@@ -480,3 +480,15 @@ test("a buyer asking whether it's septic finds the answer in the deal line, from
   const ctx = buildInvestorContext({ investor: { contactId: "inv-septic" }, deals: [{ offer: deal }], contactId: "inv-septic" });
   assert.match(ctx.text, /21904 Vashon Hwy SW.*about the house: septic, no garage/);
 });
+
+// 3418 Wetmore Ave (2026-10-03): the book said "agent said the number is in
+// the realm" beside our 226k, when the realm yes was to ~290k. The bot then
+// asked her to write it up "at the 226k" as if it were agreed.
+test("a realm yes to a higher number is not read as a yes to the number we're at now", () => {
+  const at = "2026-10-02T01:52:28.418Z";
+  const o = { id: "o1", address: "3418 Wetmore Ave, Everett, WA 98201", cashAmount: 226000, status: "sent", createdAt: "2026-10-02T01:45:08Z",
+    sends: [{ ts: "2026-10-02T01:52:31Z" }], agreed: { at, via: "realm_yes", amount: 289750 }, realm: { answer: "yes", ts: at } };
+  const r = summarizeOffers([o], { now: Date.parse("2026-10-03T17:00:00Z") });
+  assert.doesNotMatch(r.text, /agent said the number is in the realm/);
+  assert.match(r.text, /said \$289,750 was in the realm.*NOT agreed to \$226,000/);
+});

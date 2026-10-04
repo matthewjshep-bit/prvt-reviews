@@ -337,6 +337,22 @@ export function offerHeat(offer) {
 export const isHot = (offer) => Boolean(offerHeat(offer));
 
 /**
+ * agreedAboveOurNumber(offer) → { amount, at, via, book } | null
+ *
+ * The agreement on record is above the number the book is at now: a realm
+ * yes to ~290k, then we came down to 226k by hand (3418 Wetmore Ave,
+ * 2026-10-03). They said yes to the higher number, not to ours, so nothing
+ * is agreed at ours — it is a new ask, and asking them to write it up "at
+ * the 226k" tells them they agreed to something they didn't.
+ */
+export function agreedAboveOurNumber(offer) {
+  const agreed = priceAgreed(offer);
+  const book = Math.round(Number(offer?.cashAmount) || 0);
+  if (!agreed || !(agreed.amount > 0) || !book || offer?.deal) return null;
+  return Math.round(Number(agreed.amount)) > book ? { ...agreed, book } : null;
+}
+
+/**
  * pushesToPaper(offer) → boolean
  *
  * Whether the push-to-paper ladder may ask them to write it up. Hot is wider
@@ -349,6 +365,8 @@ export const isHot = (offer) => Boolean(offerHeat(offer));
 export function pushesToPaper(offer) {
   const heat = offerHeat(offer);
   if (!heat) return false;
+  // Their yes was to a higher number than ours now: nothing is agreed at ours.
+  if (agreedAboveOurNumber(offer)) return false;
   if (heat.by === "you" || priceAgreed(offer)) return true;
   return heat.signal === "writing_up";
 }

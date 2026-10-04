@@ -45,7 +45,7 @@ import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, 
 import { paperWent, paperWorthy, floatSentAt } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
@@ -856,6 +856,12 @@ export function evaluateReplyGates({
     // the prompt). Putting it off to a partner is the one thing it must not do.
     if (asksWriteUpTerms(inboundMessage) && defersWriteUpTerms(draft.reply)) {
       flags.push("the draft puts off earnest, inspection or the buyer name — the write-up terms answer those in the same message");
+    }
+    // "Write up whatever you like! Call the listing broker" (3418
+    // Wetmore Ave, 2026-10-03): they think we write our own offer. A reply
+    // that doesn't clear that up is going on past a misunderstanding.
+    if (handsWriteUpBack(inboundMessage) && !clearsWriteUp(draft.reply)) {
+      flags.push("they handed the write-up back to us — the reply has to say we're not agents and ask who on their side writes it on NWMLS forms");
     }
     // 10917 48th St E, 2026-09-27: "cash means no lender". We use hard money.
     const cash = claimsAllCash(draft.reply);
@@ -1761,7 +1767,8 @@ export async function assembleConversation({
   // What we buy right now (shared/asset-type.js): single-family only since
   // 2026-10-01, so a condo or a mobile home gets a plain no, not a promise —
   // except a house we chose to price anyway, which is named.
-  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE, AGENT_HONESTY_RULE, agentFocusRule(saved?.focusKinds, { pricedAnyway: context.pricedOutsideFocus || [] })].filter(Boolean).join("\n") : base;
+  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE, CLARIFY_RULE, AGENT_HONESTY_RULE, agentFocusRule(saved?.focusKinds, { pricedAnyway: context.pricedOutsideFocus || [] })].filter(Boolean).join("\n")
+    : party === "investor" ? [base, CLARIFY_RULE].filter(Boolean).join("\n") : base;
   const signer = config.persona.name || saved?.company?.signer || saved?.company?.name || "";
   // Ours to hand out when asked — an agent who asks "what's your email?" got
   // "I'll text it over shortly" until 2026-09-12, because we never sent it.

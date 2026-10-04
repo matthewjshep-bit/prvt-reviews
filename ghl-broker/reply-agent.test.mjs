@@ -5258,3 +5258,24 @@ test("a queued check-in to an agent about a deal that fell through since is dism
   assert.match(d.flags.join(" "), /fell through — not sent/);
   assert.ok(tags.some(([m]) => m === "DELETE"), "the draft tag comes off");
 });
+
+/* ---------- they handed the write-up back to us (3418 Wetmore Ave, 2026-10-03) ---------- */
+
+// "Write up whatever you like! You can call the listing broker." The
+// agent thought we'd write our own offer and pointed us at someone else. The
+// bot asked for the broker's number "to get the paperwork moving at 226k" — on
+// past the misunderstanding. We aren't agents; whoever writes it is on their
+// side, and the reply has to say so before it asks for anything else.
+test("a reply that sails past an agent handing the write-up back to us is held", () => {
+  const inboundMessage = "Write up whatever you like! 👍\n\nYou can call the listing broker Sam for better insight into his clients goals";
+  const past = gate({ reply: "Appreciate the heads up. Can you send me Sam's number or email so we can get the paperwork moving?" }, { inboundMessage });
+  assert.equal(past.ok, false);
+  assert.match(past.flags.join(" · "), /handed the write-up back/);
+  const clears = gate({ reply: "Thanks. Just so we're on the same page, we're not agents and don't have one on this, so we can't put it on NWMLS forms ourselves. Could you or Sam write it up for us to sign?" }, { inboundMessage });
+  assert.doesNotMatch(clears.flags.join(" · "), /handed the write-up back/);
+  for (const m of ["Submit your offer and we'll review it with the seller", "Have your agent send it over", "Who's your agent?"]) {
+    assert.match(gate({ reply: "Sounds good, will do." }, { inboundMessage: m }).flags.join(" · "), /handed the write-up back/, m);
+  }
+  // Their own "I'll write it up" is the goal, not a hand-back.
+  assert.doesNotMatch(gate({ reply: "Perfect, thank you!" }, { inboundMessage: "Great, I'll write it up tonight" }).flags.join(" · "), /handed the write-up back/);
+});
