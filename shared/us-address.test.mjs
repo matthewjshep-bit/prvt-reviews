@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sameHouse,
+import { sameHouse, sameStreetLoose,
   normalizeUsAddress, addressKey, addressQueryVariants, zillowUrl,
   parseUsAddress, splitUnit, stateAbbr,
 } from "./us-address.js";
@@ -167,4 +167,11 @@ test("a house Zillow files under its postal city is also asked for by street and
   assert.deepEqual(zillowLookupForms("Poulsbo, WA"), ["Poulsbo, WA"]);
   assert.deepEqual(zillowLookupForms("34418 54th Ave S"), ["34418 54th Ave S"]);
   assert.deepEqual(zillowLookupForms(""), []);
+});
+
+test("the thread's short spelling is the deal's house for a guard, but a different suffix or number is not", () => {
+  assert.equal(sameStreetLoose("5232 South Yakima Avenue, Tacoma, Washington 98408", "5232 S Yakima, Tacoma, WA"), true);
+  assert.equal(sameStreetLoose("5232 S Yakima Ave", "5232 S Yakima Way"), false);
+  assert.equal(sameStreetLoose("5232 S Yakima", "5233 S Yakima Ave"), false);
+  assert.equal(sameStreetLoose("the property", "5232 S Yakima"), false);
 });

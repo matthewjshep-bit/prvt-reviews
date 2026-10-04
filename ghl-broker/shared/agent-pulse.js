@@ -264,12 +264,13 @@ export function freshListingFor({ listings = [], pinged = new Set(), raised = []
  *
  * Their newest house with us whose clocks have ended: they passed (or went
  * quiet) and the check-ins are done or it went off the market, or the deal
- * closed or fell through. Never a house WE walked away from.
+ * closed. Never a house WE walked away from, and never a deal that fell
+ * through — nobody is checked in with about that (5232 S Yakima, 2026-10-03).
  */
 export function ourHouseFor({ offers = [], drafts = [], events = [], config = {}, now = Date.now() } = {}) {
   const ended = (offers || []).filter((o) => {
     if (!o) return false;
-    if (o.deal) return dealIsOver(o.deal);
+    if (o.deal) return dealIsOver(o.deal) && o.deal.stage !== "fell_through";
     const status = effectiveStatus(o);
     if (status === "we_passed" || !DEAD_STATUSES.has(status)) return false;
     const next = nextFollowUp({ offer: o, drafts, events, config, now });

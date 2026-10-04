@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeAgentPulse, evaluateAgent, pickPulseAgents, agentSegment, agentStops, agentOwner,
-  freshListingFor, listingDistressed, agentPulseSubject, tierDrips,
+  freshListingFor, listingDistressed, agentPulseSubject, tierDrips, ourHouseFor,
 } from "./agent-pulse.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
@@ -281,4 +281,12 @@ test("checking in less doubles the three weeks; checking in more halves it but n
   // A listing of theirs is a reason after the quiet days — which "more" never shortens.
   const fresh = agent({ lastInboundAt: ago(5), listings: [listing()], events: [pace("more")] });
   assert.notEqual(evaluateAgent(fresh, ctx()).pulseReason, "fresh_listing", "five days is inside the seven quiet days");
+});
+
+// 5232 S Yakima (2026-10-03): no check-in leans on a deal that fell through.
+test("a pulse never checks in about a house whose deal fell through; a closed one still counts", () => {
+  const fell = { id: "o1", address: "5232 South Yakima Avenue, Tacoma, WA", status: "accepted", statusAt: new Date(NOW - 2 * DAY).toISOString(), deal: { stage: "fell_through" } };
+  const closed = { id: "o2", address: "12 Elm St, Renton, WA", status: "accepted", statusAt: new Date(NOW - 30 * DAY).toISOString(), deal: { stage: "closed" } };
+  assert.equal(ourHouseFor({ offers: [fell], now: NOW }), null);
+  assert.equal(ourHouseFor({ offers: [fell, closed], now: NOW })?.id, "o2");
 });

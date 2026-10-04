@@ -5187,3 +5187,74 @@ test("pressing Promote passes the closing date they named to the deal", async ()
   assert.equal(seen[0].closingDate, "2026-10-24");
   assert.ok(Array.isArray(r) || r, "ran");
 });
+
+/* ---------- a deal that fell through gets no check-ins (2026-10-03) ---------- */
+
+// 5232 S Yakima (2026-10-03): the deal was marked fell through, and the
+// check-in sweep still texted the listing side's transaction coordinator
+// "following up on 5232 S Yakima, still moving forward on our end". The
+// check-in carried the thread's spelling ("5232 S Yakima", no suffix, no
+// offer id), so nothing tied it to the deal. Matt: no checking in with
+// anybody about a deal that fell through.
+const FELL_THROUGH = { id: "o9", locationId: "LOC", contactId: "agent1", address: "5232 South Yakima Avenue, Tacoma, Washington 98408",
+  createdAt: iso(3 * 86400000), deal: { stage: "fell_through", investors: [], stageHistory: [{ stage: "fell_through", ts: iso(86400000) }] } };
+const CHECKINS_ON = (() => {
+  const s = structuredClone(STARTER_SAVED);
+  s.conversationAi.parties.agent.followUp = { ...(s.conversationAi.parties.agent.followUp || {}), enabled: true };
+  return s;
+})();
+
+test("a check-in about a deal that fell through is never drafted, even spelled the short way", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  store.listDeals = async () => [FELL_THROUGH];
+  let drafted = false;
+  const r = await startProactive({
+    client: deadClient, locationId: "LOC", saved: CHECKINS_ON, store, contactId: "tc1", kind: "checkin_due", offer: null,
+    subject: { address: "5232 S Yakima, Tacoma, WA", phrase: "", sourceKind: "unanswered" }, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return DRAFT; } },
+  });
+  assert.equal(r.job, null);
+  assert.match(r.skipped || "", /fell through/);
+  assert.equal(drafted, false);
+});
+
+test("a nudge on an offer row whose house is a fell-through deal is not drafted either", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  store.listDeals = async () => [FELL_THROUGH];
+  const r = await startProactive({
+    client: deadClient, locationId: "LOC", saved: CHECKINS_ON, store, contactId: "agent1", kind: "checkin_due",
+    offer: { id: "o2", address: "5232 S Yakima Ave, Tacoma, WA 98408", status: "sent" }, subject: { address: "5232 S Yakima Ave" },
+  });
+  assert.match(r.skipped || "", /fell through/);
+});
+
+test("the same check-in is not stopped once the house is back under contract", async () => {
+  _resetJobs();
+  // A reply waiting in the outbox stops it at the next gate, before any model call.
+  const store = fakeStore([{ ...openDraft(), contactId: "tc1", inbound: "Any update?" }]);
+  store.listDeals = async () => [FELL_THROUGH, { id: "o10", locationId: "LOC", address: "5232 S Yakima Ave, Tacoma, WA 98408", createdAt: iso(3600000), deal: { stage: "under_contract", investors: [] } }];
+  const r = await startProactive({
+    client: deadClient, locationId: "LOC", saved: CHECKINS_ON, store, contactId: "tc1", kind: "checkin_due", offer: null,
+    subject: { address: "5232 S Yakima, Tacoma, WA" },
+  });
+  assert.ok(r.blocked, r.skipped);
+  assert.doesNotMatch(r.skipped || "", /fell through/);
+});
+
+test("a queued check-in to an agent about a deal that fell through since is dismissed, not sent", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const { client, tags } = ghlStub();
+  const store = fakeStore([{ id: "d1", locationId: "LOC", contactId: "tc1", status: "sending", channel: "sms", party: "agent", createdAt: iso(1000), flags: [],
+    reply: "Following up on 5232 S Yakima, still moving forward on our end.", inbound: "", intent: "checkin_due",
+    outbound: { kind: "checkin_due", offerId: null, address: "5232 S Yakima, Tacoma, WA" } }]);
+  store.getOffer = async () => null;
+  store.listDeals = async () => [FELL_THROUGH];
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true });
+  assert.equal(r.skipped, "the deal on 5232 South Yakima Avenue fell through");
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.status, "dismissed");
+  assert.match(d.flags.join(" "), /fell through — not sent/);
+  assert.ok(tags.some(([m]) => m === "DELETE"), "the draft tag comes off");
+});

@@ -63,7 +63,7 @@ import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, mac
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, fellThroughOn, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
 import { signedContractIn, themLines } from "./shared/contract-signed.js";
 import { sameStreet } from "./shared/us-address.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
@@ -2175,6 +2175,17 @@ const outboundLabel = (kind) => String(kind || "").replace(/_/g, " ");
  * steps, viewedAt, blastedAt }). Returns the job, or { skipped } with the
  * reason when the playbook has it off or the message has nothing to say.
  */
+// The fell-through deal on any of these addresses, or null (shared/offer-status.js
+// fellThroughOn). A store that can't list deals, or fails to, holds nothing back.
+async function fellThroughFor({ store, locationId, addresses = [] }) {
+  const wanted = addresses.map((a) => String(a || "").trim()).filter(Boolean);
+  if (!wanted.length || typeof store?.listDeals !== "function") return null;
+  const deals = await store.listDeals(locationId, { limit: 200 }).catch(() => []);
+  for (const a of wanted) { const hit = fellThroughOn(deals, a); if (hit) return hit; }
+  return null;
+}
+const fellThroughLine = (o) => `the deal on ${String(o?.address || "the house").split(",")[0].trim()} fell through`;
+
 export async function startProactive({
   client, locationId, saved, store, contactId, kind = "realm_check",
   offer = null, subject = null, sendsEnabled = false, deps = {}, personAsked = false, continues = null,
@@ -2201,6 +2212,10 @@ export async function startProactive({
     // person pressing Float has decided — that drafts, and waits for Send.
     const hold = await holdFor({ store, locationId, contactId, offerId: offer?.id || null, now: typeof deps.now === "function" ? deps.now() : Date.now() });
     if (hold.held) return { skipped: holdLine(hold), held: { kind: hold.kind, until: hold.until }, job: null };
+    // A deal that fell through is not checked in on with anybody — the
+    // listing agent, their TC, a buyer (5232 S Yakima, 2026-10-03).
+    const gone = await fellThroughFor({ store, locationId, addresses: [offer?.address, subject?.address] });
+    if (gone) return { skipped: fellThroughLine(gone), job: null };
     const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues });
     if (waiting) return { skipped: blockingReason(waiting), blocked: { draftId: waiting.id }, job: null };
     // One house at a time, three days apart, two a week (shared/agent-focus.js).
@@ -4232,6 +4247,23 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         });
       }
       return { ok: true, skipped: line };
+    }
+  }
+
+  // A text the machine started, to anybody, about a house whose deal fell
+  // through since it was queued (5232 S Yakima, 2026-10-03: a check-in to
+  // the agent's TC). Matched loosely, so the thread's short spelling counts.
+  if (auto && d.outbound?.kind) {
+    const gone = await fellThroughFor({ store, locationId, addresses: [d.outbound.address, d.propertyAddress] });
+    if (gone) {
+      const ts = new Date(now).toISOString();
+      const why = fellThroughLine(gone);
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `${why} — not sent`],
+      });
+      await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      return { ok: true, skipped: why };
     }
   }
 
