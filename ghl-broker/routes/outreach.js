@@ -996,8 +996,18 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * FIRST_TEXT_TRIES times each and `limit` a run. The sweep runs this
    * before it pulls anyone new.
    */
-  async function retryFirstTexts({ locationId, client, limit = Infinity, now = Date.now() }) {
+  async function retryFirstTexts({ locationId, client, limit = Infinity, now = Date.now(), dryRun = false, minAgeMs = FIRST_TEXT_LOST_AFTER_MS, autopilotSince = null }) {
     if (typeof firstTouch !== "function" || !(limit > 0)) return { retried: 0, opened: 0, results: [] };
+    // The agent's row in the batch it was imported from: the hook there knows
+    // the house (year, size, lot, cut), the import event only its address.
+    const rowsByBatch = new Map();
+    const rowFor = async (batchId, contactId) => {
+      if (!batchId) return null;
+      if (!rowsByBatch.has(batchId)) {
+        rowsByBatch.set(batchId, await store.listOutreachAgents(locationId, { batchId, status: "imported", limit: 5000 }).catch(() => []));
+      }
+      return (rowsByBatch.get(batchId) || []).find((r) => r.contactId === contactId) || null;
+    };
     const since = new Date(now - FIRST_TEXT_RETRY_DAYS * 86400000).toISOString();
     const events = await store.listContactEventsSince(locationId, since, { types: ["outreach_open_skipped", "outreach_sent", "outreach_enrolled", "import"], limit: 5000 }).catch(() => []);
     const byContact = new Map();
@@ -1014,6 +1024,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       if (skips.length >= FIRST_TEXT_TRIES) continue;
       if (skips.length) {
         const last = skips.at(-1);
+        if (dryRun) { results.push({ contactId, would: "retry", address: last.data?.hook?.address || "" }); continue; }
         const r = await openFirstText({ locationId, client, contactId, hook: last.data?.hook || {}, ref: last.ref || null, tries: skips.length });
         results.push({ contactId, ...r });
         continue;
@@ -1021,13 +1032,24 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       // Lost, not refused: a deploy restarted the broker while the first text
       // was still queued in memory, so nothing was written down. A contact the
       // app created to text, hours ago, with no draft of any kind.
-      const made = list.find((e) => e.type === "import" && e.data?.openWith === "app" && e.data?.action === "created"
-        && now - Date.parse(e.at) >= FIRST_TEXT_LOST_AFTER_MS);
+      // `autopilotSince` (by hand only): imports into an Autopilot batch since
+      // then count as app-made too — the ones written before the import
+      // started recording openWith (2026-10-05).
+      const appMade = (e) => e.data?.openWith === "app"
+        || (autopilotSince && String(e.at) >= String(autopilotSince) && /^Autopilot · /.test(String(e.data?.batchName || "")));
+      const made = list.find((e) => e.type === "import" && e.data?.action === "created" && appMade(e)
+        && now - Date.parse(e.at) >= minAgeMs);
       if (!made) continue;
       const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 1 }).catch(() => null);
       if (!Array.isArray(drafts) || drafts.length) continue;
-      const r = await openFirstText({ locationId, client, contactId, ref: made.ref || null, tries: 0,
-        hook: { ...(made.data?.hook || {}), county: made.data?.county || countyName("", String(made.data?.batchName || "").replace(/^Autopilot · /, "")) } });
+      const row = await rowFor(made.data?.batchId, contactId);
+      const h = row?.doc?.hook || {};
+      const hook = { ...(made.data?.hook || {}), ...(h.address ? { address: h.address, price: h.price || null, dom: h.dom || null } : {}),
+        county: countyName(h.county, made.data?.county, String(made.data?.batchName || "").replace(/^Autopilot · /, "")),
+        city: h.city || "", brokerage: row?.doc?.brokerage || "", yearBuilt: h.yearBuilt || null, beds: h.beds || null, sqft: h.sqft || null,
+        lotSize: h.lotSize || null, priceCut: priceCutOf(h), listingCount: Number(row?.doc?.listingCount) || 0 };
+      if (dryRun) { results.push({ contactId, lost: true, would: "send", address: hook.address || "", county: hook.county }); continue; }
+      const r = await openFirstText({ locationId, client, contactId, ref: made.ref || null, tries: 0, hook });
       results.push({ contactId, lost: true, ...r });
     }
     return { retried: results.length, opened: results.filter((r) => r.jobId).length, results };
@@ -1393,6 +1415,21 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         deps: router.sweepDeps,
       });
       res.status(202).json({ ok: true, job: publicOutreachJob(job) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Body: { dryRun = true, autopilotSince, minAgeMinutes }. First texts that
+  // didn't go (refused, or lost to a restart), tried again now rather than at
+  // the next sweep. A dry run lists who; nothing is drafted.
+  router.post("/autopilot/first-texts/retry", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      const since = b.autopilotSince && Number.isFinite(Date.parse(b.autopilotSince)) ? new Date(b.autopilotSince).toISOString() : null;
+      const age = Number.isFinite(Number(b.minAgeMinutes)) ? Math.max(0, Number(b.minAgeMinutes)) * 60000 : FIRST_TEXT_LOST_AFTER_MS;
+      const r = await retryFirstTexts({ locationId, client, dryRun: b.dryRun !== false, autopilotSince: since, minAgeMs: age,
+        limit: Math.max(1, Math.min(MAX_DAILY_CAP, Math.round(Number(b.limit)) || MAX_DAILY_CAP)) });
+      res.json({ ok: true, dryRun: b.dryRun !== false, ...r });
     } catch (err) { fail(res, err); }
   });
 

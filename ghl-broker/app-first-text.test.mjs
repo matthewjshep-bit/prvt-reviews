@@ -307,6 +307,31 @@ test("a first text whose draft failed on its lane is written down to try again",
   assert.equal((await store.listContactEvents(LOC, r.results[0].contactId, { types: ["outreach_open_skipped"] })).length, 1);
 });
 
+test("the 45 first texts a deploy dropped on 2026-10-05, imported before imports said openWith, can be sent by hand", async () => {
+  const L = "loc-first-text-oct5";
+  const asked = [];
+  const router = createOutreachRouter({ resolveLocation: () => ({ locationId: L, client: ghlClient() }),
+    firstTouch: async (a) => { asked.push(a); return { job: { id: `j-${asked.length}` } }; } });
+  const batch = await batchWith("Autopilot · Whatcom, WA", [
+    { key: "dropped", listingCount: 3, hook: { address: "12026 Shuksan Rim Dr, Glacier, WA", dom: 80, county: "Whatcom", city: "Glacier", yearBuilt: 1978, lotSize: 40000 } },
+  ], L);
+  // The old build's import event: no openWith on it (nothing else here texts them).
+  const r = await router.importAgents({ locationId: L, client: ghlClient(), agentKeys: ["dropped"], batchId: batch.id, dryRun: false, applyTag: false });
+  const contactId = r.results[0].contactId;
+  assert.equal((await store.listContactEvents(L, contactId, { types: ["import"] }))[0].data.openWith, undefined);
+  const auto = await router.retryFirstTexts({ locationId: L, client: ghlClient(), now: Date.now() + 3 * 3600000 });
+  assert.equal(auto.retried, 0, "the sweep's own retry never guesses at an old import");
+
+  asked.length = 0;
+  const dry = await router.retryFirstTexts({ locationId: L, client: ghlClient(), dryRun: true, minAgeMs: 0, autopilotSince: "2026-01-01T00:00:00Z" });
+  assert.equal(asked.length, 0, "a dry run drafts nothing");
+  assert.deepEqual(dry.results.map((x) => [x.would, x.county]), [["send", "Whatcom"]]);
+  await router.retryFirstTexts({ locationId: L, client: ghlClient(), minAgeMs: 0, autopilotSince: "2026-01-01T00:00:00Z" });
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].hook.yearBuilt, 1978, "the house details come from the agent's row, not just the address");
+  assert.equal(asked[0].hook.listingCount, 3);
+});
+
 /* ---------- the sweep ---------- */
 
 function sweepFake(rows) {
