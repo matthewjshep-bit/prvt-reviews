@@ -539,7 +539,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // a text answered or queued since isn't owed, and nothing that would
       // text someone who unsubscribed is a call to make.
       const unsubscribed = new Set(botEvents.filter((e) => e?.type === "unsubscribed").map((e) => e.contactId).filter(Boolean));
-      const fromLastNight = stillOwed(lastNight, { drafts: [...drafts, ...recentDrafts], unsubscribed });
+      const fromLastNight = stillOwed(lastNight, { drafts: [...drafts, ...recentDrafts], unsubscribed, events });
       out.counts.actions.byGroup.yours += fromLastNight.length;
       const reachable = stillOwed(out.actions, { unsubscribed });
       for (const a of out.actions) {

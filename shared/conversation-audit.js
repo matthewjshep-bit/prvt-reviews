@@ -19,6 +19,7 @@ import { currentOffers, currentOfferFor } from "./current-offer.js";
 import { unansweredCheckIn, nextMorning } from "./follow-up.js";
 import { NEVER_AUTO } from "./conversation-ai.js";
 import { botHold, holdLine } from "./bot-hold.js";
+import { callEventConnected } from "./talked-to.js";
 
 // What the audit may not do for someone you stopped the bot on
 // (shared/bot-hold.js): send, release, re-quote, queue a letter, or set a
@@ -89,16 +90,25 @@ export const REDRAFT_RETRY_AFTER_MS = 20 * 3600000;
 const CLOSER_WORDS = "thank you for reaching out|thanks for reaching out|for reaching out|i will do that|i'?ll do that|will do that|please do|appreciate (?:it|you|that)|you bet|for sure|absolutely|definitely|of course|" +
   "ok|okay|k|kk|sounds? good|sounds? great|good|great|perfect|awesome|cool|nice|got it|will do|noted|thanks?|thank you|thx|ty|no problem|np|you too|same to you|have a (?:good|great|nice) (?:one|day|night|weekend|evening)|talk soon|later|sure|yes|yep|yup|👍|🙏|❤️|" +
   // "Yeah for sure. Thanks." and a laugh (2026-10-02).
-  "yeah|yea|ya|lol|ha(?:ha)+|😂|🤣|😅";
+  "yeah|yea|ya|lol|ha(?:ha)+|😂|🤣|😅|" +
+  // 2026-10-04: "Gotcha", "I'll keep you in mind!", "Sorry! Will do!" sat on
+  // the Desk as texts we never answered.
+  "gotcha|gotchu|got you|(?:i'?ll |i will |will )?keep you (?:in mind|posted)|sorry|no worries|all good|sounds like a plan|roger|😊|🙂|😁|😆|🙌|👌";
 // Built from a plain string, not a template literal: in a template `\s` is just "s".
 const CLOSER_RX = new RegExp("^(?:(?:" + CLOSER_WORDS + ")[\\s!.,]*){1,6}(?:matt|matthew|man|sir|bud|buddy)?[\\s!.,]*$", "i");
 // Skin tones and emoji variation selectors ride on a 🙏 or a 👍.
 const EMOJI_MODIFIERS = /[\u{1F3FB}-\u{1F3FF}\uFE0F\u200D]/gu;
+// A few words that end on an ok or a laugh, riffing on ours: "Ugly 😂😂 ok."
+// (to "anything ugly cross your desk?"). Nothing asked, nothing named, no
+// request in it — "call me ok" and "send it ok" are not goodbyes.
+const ACK_END_RX = /(?:^|\s)(?:ok|okay|k|kk|👍|lol|ha(?:ha)+|😂+|🤣+|😅|thanks?|thank you|ty)[\s!.,]*$/i;
+const ASKS_RX = /\b(?:call|send|text|email|need|want|can|could|would|let me|when|where|what|how|why|price|offer|counter|number)\b/i;
 export function isCloser(body = "") {
   const t = String(body || "").replace(/[\u200B\uFEFF]/g, "").replace(EMOJI_MODIFIERS, "").trim();
   if (!t || t.length > 80 || /\?/.test(t)) return false;
   // "man"/"matt" may sit anywhere in a goodbye ("Sounds great man! I will do that").
-  return CLOSER_RX.test(t.replace(/\b(?:matt|matthew|man|sir|bud|buddy)\b/gi, " ").replace(/\s+/g, " ").trim() || t);
+  if (CLOSER_RX.test(t.replace(/\b(?:matt|matthew|man|sir|bud|buddy)\b/gi, " ").replace(/\s+/g, " ").trim() || t)) return true;
+  return t.length <= 40 && t.split(/\s+/).length <= 4 && !/\d/.test(t) && !ASKS_RX.test(t) && ACK_END_RX.test(t);
 }
 
 // A plain "no" to our check-in ("anything cross your desk lately?"): "No /
@@ -207,6 +217,11 @@ export function auditConversations({
   const scheduledAfter = (c, t) => (draftsBy.get(c) || []).some((d) => d.status === "scheduled" && (ms(d.createdAt) ?? 0) >= t);
   // The reply agent read the text and decided there was nothing to say.
   const letGoAfter = (c, t) => ev(c, "reply_not_needed").some((e) => (ms(e.at) ?? 0) >= t);
+  // You answered it yourself: from the app's composer, or typed in GHL (the
+  // hand-reply sweep writes the same event).
+  const handRepliedAfter = (c, t) => ev(c, "hand_reply").some((e) => (ms(e.at) ?? 0) >= t);
+  // A call that connected at or after their text.
+  const talkedAfter = (c, t) => ev(c, "call_summary").some((e) => callEventConnected(e) && (ms(e.at) ?? 0) >= t - 5 * 60000);
   // A person answered after our last text: the thread is theirs, not ours to audit.
   const humanOwns = (c) => {
     const g = ghlLast?.get(c);
@@ -261,7 +276,10 @@ export function auditConversations({
     const list = draftsBy.get(c) || [];
     const after = list.filter((d) => (ms(d.createdAt) ?? 0) >= inAt - 5 * 60000);
     // A let-go answers only the text it read: one written after it is new.
-    const answered = (lastSent(c) ?? 0) >= inAt || scheduledAfter(c, inAt - 5 * 60000) || letGoAfter(c, inAt);
+    // So does a reply you typed yourself, and a call that connected after it
+    // (the call was the conversation) unless the call left a draft open.
+    const answered = (lastSent(c) ?? 0) >= inAt || scheduledAfter(c, inAt - 5 * 60000) || letGoAfter(c, inAt)
+      || handRepliedAfter(c, inAt) || (talkedAfter(c, inAt) && !list.some((d) => d.status === "draft" && (ms(d.createdAt) ?? 0) >= inAt - 5 * 60000));
     if (answered) continue;
     const newest = after[0] || null;
     // (a) no row at all, or only rows a burst replaced: the reply job never
@@ -519,17 +537,22 @@ const TEXTING_KINDS = new Set(["audit_owed", "draft_waiting", "draft_scheduled",
  * Today reads last night's audit, and last night is over by morning (Matt,
  * 2026-09-30: Mark Hulen's "texts we never answered" was answered at 9:04 and
  * still sat under Your call). A row about their text steps aside once a reply
- * was sent or queued after it; a row that would text someone who unsubscribed
- * steps aside for good. Pure; `drafts` are the location's recent drafts, any
- * status, and `unsubscribed` the contact ids with an unsubscribed event.
+ * was sent or queued after it, you answered it yourself, or a call connected
+ * after it; a row that would text someone who unsubscribed steps aside for
+ * good. Pure; `drafts` are the location's recent drafts, any status,
+ * `unsubscribed` the contact ids with an unsubscribed event, and `events` the
+ * timeline (hand_reply, call_summary).
  */
-export function stillOwed(rows = [], { drafts = [], unsubscribed = new Set() } = {}) {
+export function stillOwed(rows = [], { drafts = [], unsubscribed = new Set(), events = [] } = {}) {
   const repliedAfter = (contactId, at) => {
     const t = ms(at);
     if (t == null || !contactId) return false;
     return (drafts || []).some((d) => d?.contactId === contactId && (
       (d.status === "sent" && (ms(d.sentAt || d.updatedAt) ?? 0) > t) ||
-      (d.status === "scheduled" && (ms(d.createdAt) ?? 0) > t)));
+      (d.status === "scheduled" && (ms(d.createdAt) ?? 0) > t)))
+      // A reply you typed (in the app or in GHL), or a call that connected.
+      || (events || []).some((e) => e?.contactId === contactId && (ms(e.at) ?? 0) > t
+        && (e.type === "hand_reply" || callEventConnected(e)));
   };
   return (rows || []).filter((r) => {
     if (!r) return false;

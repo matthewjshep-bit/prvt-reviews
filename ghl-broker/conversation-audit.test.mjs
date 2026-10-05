@@ -480,3 +480,33 @@ test("when the bot stood down (a stop-bot tag), the row says so and shows their 
   const f = again.result.findings.find((x) => x.contactId === "c9");
   assert.equal(f.evidence.inbound, "7022 in Kenmore is the only thing close.");
 });
+
+// 2026-10-04: three goodbyes sat on the Desk as "texts we never answered".
+test("'Gotcha', 'I'll keep you in mind!' and a laugh that ends in ok are goodbyes; a request is not", () => {
+  for (const bye of ["Gotcha", "I'll keep you in mind!", "Ugly 😂😂 ok.", "Sorry! Will do!", "No worries, all good"]) assert.equal(isCloser(bye), true, bye);
+  for (const ask of ["call me ok", "send it over ok", "What about Tuesday ok", "2 more units ok", "Snohomish king and pierce"]) assert.equal(isCloser(ask), false, ask);
+});
+
+test("after three nights with nothing to say, a text that asks nothing is settled, not yours", async () => {
+  const store = fakeStore();
+  const d = deps({ latestInbound: async () => ({ body: "Snohomish king and pierce", type: "SMS", at: ago(5) }) });
+  let last = null;
+  for (let n = 0; n < MAX_REDRAFT_TRIES + 1; n++) {
+    last = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW + n * 86400000, pace: 0 });
+  }
+  assert.equal(d.calls.length, MAX_REDRAFT_TRIES);
+  assert.equal(last.acted[0].status, "skipped");
+  assert.match(last.acted[0].reason, /nothing to answer/);
+  assert.equal(last.result.findings.some((f) => f.contactId === "c9"), false, "not on the Desk");
+  assert.ok(store.events.some((e) => e.type === "reply_not_needed" && e.contactId === "c9"), "settled on the record");
+});
+
+test("'you have the thread' holds only while you're texting them: the next night the bot answers", async () => {
+  const store = fakeStore();
+  const d = deps({ latestInbound: async () => ({ body: "Snohomish king and pierce", type: "SMS", at: ago(5) }) });
+  await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  store.events.push({ contactId: "c9", type: "reply_held", at: ago(-0.1), data: { reason: "you replied to them 25 minutes ago — you have the thread" } });
+  const next = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: d, now: NOW + 86400000, pace: 0 });
+  assert.equal(d.calls.length, 2, "tried again");
+  assert.notEqual(next.acted[0].status, "yours");
+});

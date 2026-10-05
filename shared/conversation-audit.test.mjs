@@ -360,3 +360,34 @@ test("a row about their text shows the text", () => {
     why: "the bot stood down: bot is off for this contact (tag: stop bot)", evidence: { inbound: "7022 in Kenmore is the only thing close." } }] });
   assert.equal(row.detail, "“7022 in Kenmore is the only thing close.” — the bot stood down: bot is off for this contact (tag: stop bot)");
 });
+
+// 2026-10-04: a call you had with them after their text, and a text you typed
+// yourself, both sat under "texts we never answered".
+test("a call that connected after their text answers it, unless the call left a draft open", () => {
+  const ghlLast = new Map([["c9", { at: ago(6), dir: "in" }]]);
+  const call = { type: "call_summary", contactId: "c9", at: ago(5), data: { direction: "inbound", durationSec: 240, transcribed: true } };
+  assert.equal(audit({ drafts: [], events: [call], offers: [], ghlLast }).findings.length, 0);
+  // A call that rang out is not a conversation.
+  const rangOut = { ...call, data: { direction: "outbound", durationSec: 8, transcribed: false } };
+  assert.equal(audit({ drafts: [], events: [rangOut], offers: [], ghlLast }).findings[0]?.kind, "unanswered_inbound");
+  // The call left a held follow-up: that draft is still the thing to answer.
+  const held = draft({ contactId: "c9", status: "draft", inbound: "(call) THEM: let me ask the seller", createdAt: ago(4.9), sentAt: null });
+  assert.equal(audit({ drafts: [held], events: [call], offers: [], ghlLast }).findings[0]?.contactId, "c9");
+});
+
+test("a reply you typed yourself answers their text, and last night's row steps aside", () => {
+  const ghlLast = new Map([["c9", { at: ago(6), dir: "in" }]]);
+  const mine = { type: "hand_reply", contactId: "c9", at: ago(5), data: { via: "ghl" } };
+  assert.equal(audit({ drafts: [], events: [mine], offers: [], ghlLast }).findings.length, 0);
+  const rows = [
+    { id: "typed", kind: "audit_owed", findingKind: "unanswered_inbound", contactId: "c1", anchorAt: "2026-10-04T00:02:00Z" },
+    { id: "called", kind: "audit_owed", findingKind: "unanswered_inbound", contactId: "c2", anchorAt: "2026-10-01T22:00:00Z" },
+    { id: "open", kind: "audit_owed", findingKind: "unanswered_inbound", contactId: "c3", anchorAt: "2026-10-01T22:00:00Z" },
+  ];
+  const kept = stillOwed(rows, { events: [
+    { type: "hand_reply", contactId: "c1", at: "2026-10-04T18:58:00Z", data: { via: "ghl" } },
+    { type: "call_summary", contactId: "c2", at: "2026-10-01T22:40:00Z", data: { durationSec: 300, transcribed: true } },
+    { type: "call_attempt", contactId: "c3", at: "2026-10-01T22:40:00Z", data: { outcome: "voicemail" } },
+  ] });
+  assert.deepEqual(kept.map((r) => r.id), ["open"]);
+});
