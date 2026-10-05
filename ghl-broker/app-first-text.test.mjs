@@ -17,8 +17,8 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "app-first-text-tes
 process.env.OUTREACH_IMPORTS_ENABLED = "true";
 
 const { outboundOpening, OPENING_MOVES, WHO_WE_ARE } = await import("./conversation-prompt.js");
-const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText } = await import("./reply-agent.js");
-const { normalizeOpener, countyName, openerVariant, stripSignOff, DEFAULT_OPENER_EXAMPLES } = await import("./shared/outreach-opener.js");
+const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText, writeWithoutOverused } = await import("./reply-agent.js");
+const { normalizeOpener, countyName, openerVariant, stripSignOff, overusedPhrases, DEFAULT_OPENER_EXAMPLES } = await import("./shared/outreach-opener.js");
 const { normalizeOutreachAutopilot, startOutreachSweep, _resetJobs } = await import("./outreach-sweep.js");
 const { store } = await import("./store.js");
 const { default: createOutreachRouter } = await import("./routes/outreach.js");
@@ -222,6 +222,23 @@ test("each agent gets its own way of saying who we are — 30 of the 45 drafts o
   assert.match(t, /"touching base" or "hunting"/, "hunting is out");
   assert.doesNotMatch(t.split("HOW MATT WRITES")[0], /say you're in Seattle looking for your next flip/, "the rules don't dictate one introduction");
   assert.match(t, /you're looking anywhere in Kitsap County/);
+});
+
+test("a first text still saying 'hunting' or 'Seattle flipper' after being told not to is written again once without it", async () => {
+  assert.deepEqual(overusedPhrases("I'm a Seattle flipper hunting my next project. 12 Elm caught my eye."), ["hunting", "Seattle flipper", "caught my eye"]);
+  assert.deepEqual(overusedPhrases("12 Elm caught my eye.", { allow: ["caught my eye"] }), []);
+  const draft = { reply: "Hi Amy, 231 Central St caught my eye. I'm a Seattle flipper hunting anywhere in Thurston County. Is it a bit of a fixer?" };
+  const asked = [];
+  const clean = { reply: "Hi Amy, 231 Central St caught my eye. I renovate older homes and I'm looking anywhere in Thurston County. Is it a bit of a fixer?" };
+  const r = await writeWithoutOverused({ draft, kind: "outreach_open", variant: 0, redraft: async (w) => { asked.push(w); return clean; } });
+  assert.deepEqual(asked, [["hunting", "Seattle flipper"]], "the street opening may say 'caught my eye'");
+  assert.equal(r, clean);
+  const other = await writeWithoutOverused({ draft: clean, kind: "outreach_open", variant: 1, redraft: async (w) => ({ reply: clean.reply.replace("caught my eye", "stood out"), w }) });
+  assert.match(other.reply, /stood out/, "another opening may not");
+  assert.equal(await writeWithoutOverused({ draft, kind: "agent_pulse", redraft: async () => { throw new Error("not asked"); } }), draft, "only the first text");
+  assert.equal(await writeWithoutOverused({ draft, kind: "outreach_open", variant: 1, redraft: async () => ({ reply: "We pay cash for houses." }) }), draft, "never trades it for carrier words");
+  assert.match(ask({ county: "King", overused: ["hunting"] }), /YOUR LAST DRAFT SAID "hunting", WHICH MOST OF TODAY'S AGENTS ARE GETTING/);
+  assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => !/seattle flipper|hunting/i.test(x)), "the examples don't teach them either");
 });
 
 test("a first text over 250 characters is written again shorter once — two of the first six were 266 and 288", async () => {
