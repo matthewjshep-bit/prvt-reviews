@@ -171,3 +171,11 @@ test("flagged hot with nothing agreed says hot, not agreed", () => {
   assert.equal(r.kind, "call_hot");
   assert.doesNotMatch(r.call.why, /agreed/);
 });
+
+// 2026-10-04: rows stayed on the Desk after Matt had answered by text in GHL.
+test("they called and you texted them back yourself: off the list", () => {
+  const missed = { type: "call_attempt", contactId: "c1", at: ago(0.3), data: { outcome: "no_answer", direction: "inbound" } };
+  assert.equal(callList({ offers: [], cards: [card({ lane: "sent" })], events: [missed], now: NOW })[0]?.kind, "call_missed");
+  const typed = { type: "hand_reply", contactId: "c1", at: ago(0.2), data: { via: "ghl" } };
+  assert.equal(callList({ offers: [], cards: [card({ lane: "sent" })], events: [missed, typed], now: NOW }).length, 0);
+});

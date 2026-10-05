@@ -39,6 +39,7 @@ import { maybeRunCoach } from "./coach.js";
 import { runLocationTick } from "./tick.js";
 import { maybeRunAgentPulse } from "./agent-pulse.js";
 import { maybeRunShowingSweep } from "./showing-sweep.js";
+import { maybeSweepHandReplies } from "./hand-reply-sweep.js";
 import { startAiSpendMeter } from "./ai-spend.js";
 import { openerVariant } from "./shared/outreach-opener.js";
 
@@ -170,7 +171,7 @@ const outreachRouter = createOutreachRouter({
 });
 app.use("/api/outreach", outreachRouter);
 outreachRouter.conversationDepsFor = offersRouter.conversationDepsFor;
-const dashboardRouter = createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor });
+const dashboardRouter = createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor, handTextDepsFor: (args) => offersRouter.handTextDepsFor?.(args) || {} });
 app.use("/api/dashboard", dashboardRouter);
 const dispoRouter = createDispoRouter({ resolveLocation });
 // The Line view reads the buyer pulse's plan, which ranks the scored book.
@@ -334,6 +335,11 @@ const TICK_JOBS = [
   } },
   // The board, onto GHL's Opportunities. Every tick, bounded.
   { area: "mirror", run: async ({ client, locationId, saved }) => { await maybeMirror({ client, locationId, saved, store, log: console.log }); } },
+  // Texts Matt typed in GHL since the last look: answered, as far as the
+  // drafts, the audit and the Desk go (hand-reply-sweep.js). Sends nothing.
+  { area: "hand-replies", run: async ({ client, locationId, saved }) => {
+    await maybeSweepHandReplies({ client, locationId, saved, store, log: console.log, deps: offersRouter.handTextDepsFor?.({ locationId, client, saved }) || {} });
+  } },
   // Calls that ended since the last look, read like inbound texts. No GHL
   // trigger needed.
   { area: "calls", run: async ({ client, locationId, saved }) => {
