@@ -56,6 +56,8 @@ export const AUDIT_KINDS = [
   { key: "held_rerun",           label: "Held underwrites re-run on the agent's numbers", severity: "soon" },
   { key: "held_ask",             label: "Held underwrites — asked the agent for their read", severity: "soon" },
   { key: "held_yours",           label: "Held underwrites that need you",               severity: "soon" },
+  { key: "held_call",            label: "Held underwrites — asked, answered without a number", severity: "soon" },
+  { key: "held_waiting",         label: "Held underwrites — asked, passes in a week without a number", severity: "fyi" },
   { key: "held_over",            label: "Held drafts the conversation closed",          severity: "fyi" },
   { key: "held_junk",            label: "Held drafts with nothing to review",           severity: "fyi" },
 ];
@@ -492,7 +494,7 @@ export function auditConversations({
  * the row's title says which kind it is.
  */
 const STILL_YOURS = new Set(["book_checkin"]);
-export const HELD_SWEEP_KINDS = new Set(["held_rerun", "held_ask", "held_yours", "held_over", "held_junk"]);
+export const HELD_SWEEP_KINDS = new Set(["held_rerun", "held_ask", "held_yours", "held_call", "held_waiting", "held_over", "held_junk"]);
 export function auditActions(last, { now = Date.now(), names = {} } = {}) {
   if (!last?.findings) return [];
   const labelOf = Object.fromEntries(AUDIT_KINDS.map((x) => [x.key, x.label]));

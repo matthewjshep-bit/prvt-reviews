@@ -63,8 +63,8 @@ const MACHINE_KINDS = new Set(["gone_quiet", "showing_soon", "blast_no_opens", "
 const MACHINE_FINDINGS = new Set(["float_unanswered", "offer_no_followup"]);
 // The held-underwrite triage's verdicts (last night's findings) that the
 // machine carries out itself: it asks for their numbers, re-runs on them,
-// drops junk or retires a dead house.
-const MACHINE_HELD = new Set(["held_ask", "held_rerun", "held_junk", "held_over"]);
+// drops junk or retires a dead house, or passes a week after an ask.
+const MACHINE_HELD = new Set(["held_ask", "held_rerun", "held_junk", "held_over", "held_waiting"]);
 const BOT_STAYS_OUT = /bot stays out|on your live deal/i;
 
 /** A draft that is a counter above our number (the band's refusal, or the intent). */
@@ -102,8 +102,12 @@ export function sectionFor(a, { draftsById = new Map(), heldByOffer = new Map() 
       if (CALL_INTENTS.has(a.intent) || BOT_STAYS_OUT.test(String(a.detail || ""))) return "call";
       if (MACHINE_FINDINGS.has(a.findingKind)) return "machine";
       return "decide";
-    case "underwrite_held":
-      return MACHINE_HELD.has(heldByOffer.get(a.offerId)) ? "machine" : "decide";
+    case "underwrite_held": {
+      // Asked for their numbers and they wrote back without one: a call.
+      const verdict = heldByOffer.get(a.offerId);
+      if (verdict === "held_call") return "call";
+      return MACHINE_HELD.has(verdict) ? "machine" : "decide";
+    }
     case "closing_soon":
       // Overdue is a decision (Mark closed / Fell through); next week is not.
       return a.severity === "now" ? "decide" : "machine";

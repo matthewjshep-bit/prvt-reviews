@@ -2241,7 +2241,17 @@ do and i expect the app to do everything else". The live Desk had 15 Call and
     - An address the map couldn't place: one ask to confirm the street.
     - `heldOnTheMachine` shows the plain ones as Machine rows tonight.
   - A held reply the 7pm check will send (`releasableHeld`) is a Machine row
-    with its time.
+    with its time. Only a reply to their text: a text the machine started
+    (a blast, an emailed deal, a pulse) is never sent by the check, so one
+    held by a Settings switch is a Decide row with that reason (2026-10-05,
+    14 emails on 9311 12th Pl SE).
+  - A held underwrite's ask is made once (2026-10-05). After it: they wrote
+    back without the number → `held_call`, a Call row with why; silence, or
+    an ask that was held and never went → `held_waiting`, a Machine row with
+    `passAt` (a week from the ask), then retired as we_passed with a
+    `kind_pass` text (why `numbers`). Never "claimed" night after night.
+  - A hot offer the machine is nudging shows the nudge's real time, or why it
+    stood down ("you have the thread"), from `nextFollowUp`.
   - Hand-made `offer_ready` rows last 7 days.
   - "Fully executed" on a live deal ticks `psa_signed`.
 - **Calls that reach voicemail** (`voicemailGreeting`, outbound calls only)

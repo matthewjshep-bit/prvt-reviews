@@ -56,6 +56,7 @@ import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize a
 import { foldDesk, heldVerdicts, nameRows, deskKpis, DESK_SECTIONS, pacificStart, machineDrives } from "../shared/desk.js";
 import { knownCitiesFrom, heldOnTheMachine } from "../shared/held-underwrites.js";
 import { callList, briefFor, normalizeDesk } from "../shared/call-list.js";
+import { attachNextFollowUpsFor } from "../next-follow-up.js";
 import { LAST_ACTIVITY_TYPES, INBOUND_EVENT_TYPES as LAST_IN_TYPES } from "../shared/last-activity.js";
 import { normalizeLineTargets } from "../shared/line.js";
 import { normalizeGhlStages } from "../shared/ghl-stages.js";
@@ -529,6 +530,18 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const unsubscribedIds = new Set(botEvents.filter((e) => e?.type === "unsubscribed").map((e) => e.contactId).filter(Boolean));
       const callRows = nameRows(callList({ offers, cards: out.cards, actions: out.actions, drafts: [...drafts, ...recentDrafts], events,
         lastIn: touches.lastIn, lastAny: touches.lastAny, unsubscribed: unsubscribedIds, settings: deskSettings, now, machine: machineDrives(config) }), names);
+      // A hot offer the machine keeps nudging says when, or that it has
+      // stood down (2026-10-05: 12502 SE 73rd Pl read "the next nudge on the
+      // offer" while Matt had the thread). The Offers column's own rule, one
+      // person at a time; there are only a few of these.
+      for (const r of callRows) {
+        if (r.kind !== "hot_machine" || !r.offerId || !r.contactId || r.next?.at) continue;
+        const theirs = offers.filter((o) => o?.contactId === r.contactId).map((o) => ({ ...o }));
+        await attachNextFollowUpsFor({ store, locationId, saved, contactId: r.contactId, offers: theirs, now }).catch(() => null);
+        const nf = theirs.find((o) => o.id === r.offerId)?.nextFollowUp;
+        if (nf?.at && nf.who === "machine") r.next = { what: String(nf.label || r.next?.what || "").toLowerCase(), at: nf.at };
+        else if (nf && !nf.at && nf.reason) r.next = { what: nf.reason, at: null };
+      }
       // A held reply the 7pm check will send as it stands (releasableHeld,
       // the audit's own rule) is the machine's, not a decision: it shows
       // with the time it goes. You can still open it and send it sooner.
@@ -552,6 +565,22 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         a.group = "machine";
         a.next = { what: v.what, at: v.at || (audit7 ? new Date(audit7).toISOString() : null) };
       }
+      // Last night's verdict after an ask, which the row alone can't show:
+      // a week's wait says when it passes; an answer without a number is
+      // a call (shared/desk.js sectionFor) and says why.
+      const afterAsk = new Map((audit?.findings || [])
+        .filter((f) => f?.offerId && (f.kind === "held_waiting" || f.kind === "held_call")).map((f) => [f.offerId, f]));
+      for (const a of out.actions) {
+        const f = a.kind === "underwrite_held" ? afterAsk.get(a.offerId) : null;
+        if (!f) continue;
+        if (f.kind === "held_call") { a.detail = f.why; continue; }
+        if (a.group !== "machine") {
+          if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
+          out.counts.actions.byGroup.machine = (out.counts.actions.byGroup.machine || 0) + 1;
+          a.group = "machine";
+        }
+        a.next = { what: "passes unless they send a number — and tells them", at: f.passAt || null };
+      }
       if (audit7) {
         const byId = new Map(drafts.map((d) => [d.id, d]));
         for (const a of out.actions) {
@@ -561,6 +590,11 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
           // the thread's last word, so it reads as yours) and never someone
           // we can't place.
           if (!d || d.inboundKind === "call" || !["agent", "investor"].includes(d.party)) continue;
+          // And only a reply to something they said: the check releases a
+          // holding answer to their text, never a text the machine started.
+          // Fourteen 9311 12th Pl SE emails (2026-10-05) read "goes out at
+          // the 7pm check" while Settings held every one for a person.
+          if (!String(d.inbound || "").trim()) continue;
           if (!releasableHeld(d, { loose: config.nightlyAudit?.loose !== false, mode: "night", now: audit7 })) continue;
           if (botHold({ events: botEvents.filter((e) => e.contactId === d.contactId), now }).held) continue;
           if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
