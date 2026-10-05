@@ -581,6 +581,6 @@ test("an ask for us to come up, and a seller's cold feet, are read as what they 
   const { asksUsToComeUp, soundsLikeSecondThoughts } = await import("./conversation-ai.js");
   for (const t of ["unless you want to come closer to where they are", "If you would like to make an offer closer to where they are at, that may get them to move on it.", "Would you be able to do better than that?", "Can you bump it a little?"]) assert.equal(asksUsToComeUp(t), true, t);
   for (const t of ["I think we're getting closer", "That might work", "Sounds good, talk Monday"]) assert.equal(asksUsToComeUp(t), false, t);
-  for (const t of ["seller is having second thoughts and may just want to hold tight. Too low a margin.", "They got cold feet", "He might just rent it"]) assert.equal(soundsLikeSecondThoughts(t), true, t);
-  for (const t of ["Seller is good with it", "writing it up tonight"]) assert.equal(soundsLikeSecondThoughts(t), false, t);
+  for (const t of ["seller is having second thoughts and may just want to hold tight. Too low a margin.", "They got cold feet", "He's on the fence now"]) assert.equal(soundsLikeSecondThoughts(t), true, t);
+  for (const t of ["Seller is good with it", "writing it up tonight", "Sorry, seller says 400 is too low, they pass", "They'll keep it as a rental", "He might just rent it"]) assert.equal(soundsLikeSecondThoughts(t), false, t);
 });

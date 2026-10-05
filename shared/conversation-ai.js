@@ -450,7 +450,9 @@ export function asksUsToComeUp(message = "") {
 // The seller wavering on a number they'd liked: "seller is having second
 // thoughts and may just want to hold tight. Too low a margin." Not a no, not
 // a counter — and not the moment to ask what's holding up the paperwork.
-const SECOND_THOUGHTS_RX = /\bsecond thoughts?\b|\bcold feet\b|\bchanged (?:his|her|their) minds?\b|\b(?:may|might|wants? to|going to) (?:just )?(?:hold (?:tight|off|on)|keep it|rent it|wait)\b|\bnot (?:sure|ready) (?:about|to sell|anymore)\b|\btoo low(?: a)?(?: margin| of a margin)?\b|\bbacking out\b|\bpull(?:ing|ed)? (?:it|out)\b/i;
+// Narrow on purpose: a plain "too low" or "they'll keep it as a rental" is a
+// no, and a no keeps its brake (the review, 2026-10-04).
+const SECOND_THOUGHTS_RX = /\bsecond thoughts?\b|\bcold feet\b|\bchanged (?:his|her|their) minds?\b|\b(?:may|might) (?:just )?(?:want to )?hold (?:tight|off)\b|\bon the fence\b|\bwavering\b|\btoo low (?:a|of a) margin\b/i;
 /** soundsLikeSecondThoughts(message) → true when the seller is wavering. */
 export function soundsLikeSecondThoughts(message = "") {
   return SECOND_THOUGHTS_RX.test(String(message || ""));

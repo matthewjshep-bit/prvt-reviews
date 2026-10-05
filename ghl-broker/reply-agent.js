@@ -1574,12 +1574,15 @@ export const OUR_OFFER_TEXT_RX = /\b(?:here's our (?:written cash offer|letter o
  */
 export async function isOurEcho({ store, locationId, contactId, message }) {
   const text = String(message || "");
-  if (OUR_OFFER_TEXT_RX.test(text)) return true;
+  // Our letter's words OPENING the message (after a "Hi Dana,"): a reply
+  // that quotes our letter under their own words is theirs.
+  const m = OUR_OFFER_TEXT_RX.exec(text);
+  if (m && m.index <= 40) return true;
   const norm = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
   const said = norm(text);
   if (said.length < 30) return false;
   const ours = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 20 }).catch(() => []);
-  return ours.some((d) => { const t = norm(d.sentText || d.reply); return t.length >= 30 && (said.startsWith(t.slice(0, 120)) || t.startsWith(said.slice(0, 120))); });
+  return ours.some((d) => { const t = norm(d.sentText || d.reply); return t.length >= 30 && said.startsWith(t.slice(0, 120)); });
 }
 
 // A book number said the way a person texts it: "1.144M" for $1,144,500

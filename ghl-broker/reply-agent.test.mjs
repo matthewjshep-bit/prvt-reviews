@@ -3735,6 +3735,10 @@ test("our own offer letter echoed back as their message is nothing to answer: no
   assert.match(r.skipped, /echoed back/);
   await settle();
   assert.equal(raised.length, 0);
+  // Their own words with our letter quoted under them are theirs: answered.
+  const { isOurEcho } = await import("./reply-agent.js");
+  const quoted = "Thanks Matt, the seller wants to counter at 360. Can you do that?\n\nOn Fri, Matt wrote:\n> Hi Dana, Please find our letter of intent on 12 Elm St attached";
+  assert.equal(await isOurEcho({ store: fakeStore(), locationId: "LOC", contactId: "c1", message: quoted }), false);
 });
 
 test("'my email is …, please cc …' emails the documents there; the text only says so if it went", async () => {
