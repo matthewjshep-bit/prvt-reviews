@@ -89,3 +89,16 @@ test("conversations that didn't move since the last look aren't read", async () 
   assert.deepEqual(await findHandTexts({ client: c, locationId: "L", sinceMs: NOW - 3600000, now: NOW }), []);
   assert.equal(reads, 0);
 });
+
+test("a read that didn't finish leaves the cursor where it was, so nothing typed is missed", async () => {
+  const store = fakeStore();
+  const failing = { call: async (path) => {
+    if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1", contactId: "c1", lastMessageDate: Date.parse(ago(0.5)) }] };
+    throw new Error("GHL 502");
+  } };
+  await maybeSweepHandReplies({ client: failing, locationId: "L", store, now: NOW, deps: { removeContactTags: async () => {} } });
+  assert.equal(store.cursors.get(`L|${HAND_REPLY_CURSOR}`), undefined);
+  await maybeSweepHandReplies({ client: client(thread), locationId: "L", store, now: NOW + 15 * 60000, deps: { removeContactTags: async () => {} } });
+  assert.ok(store.cursors.get(`L|${HAND_REPLY_CURSOR}`)?.at);
+  assert.equal(store.events.filter((e) => e.type === "hand_reply").length, 1, "the text is found on the next tick");
+});

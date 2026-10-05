@@ -54,21 +54,24 @@ export function isPersonText(m) {
  * paged until past it; in each, the person-sent texts after `sinceMs`.
  * `body` is for the caller's eyes only (onHandText) — never stored.
  */
-export async function findHandTexts({ client, locationId, sinceMs, now = Date.now(), maxPages = MAX_PAGES }) {
+export async function findHandTexts({ client, locationId, sinceMs, now = Date.now(), maxPages = MAX_PAGES, report = null }) {
   const convos = [];
   let startAfterDate;
+  // Whether everything since `sinceMs` was read: a page cap or a failed
+  // read leaves the cursor where it was, so the next tick reads it again.
+  let complete = false;
   for (let page = 0; page < maxPages; page++) {
     const r = await searchConversations(client, locationId, { limit: 50, ...(startAfterDate ? { startAfterDate } : {}) });
     const list = r.conversations || [];
-    if (!list.length) break;
+    if (!list.length) { complete = true; break; }
     for (const c of list) if (stamp(c) > sinceMs && !convos.some((x) => x.id === c.id)) convos.push(c);
     const oldest = Math.min(...list.map(stamp));
-    if (!(oldest > sinceMs)) break;
+    if (!(oldest > sinceMs)) { complete = true; break; }
     startAfterDate = oldest;
   }
   const out = [];
   for (const convo of convos) {
-    const r = await listConversationMessages(client, convo.id, { limit: 30 }).catch(() => ({ messages: [] }));
+    const r = await listConversationMessages(client, convo.id, { limit: 30 }).catch(() => { complete = false; return { messages: [] }; });
     for (const m of r.messages || []) {
       const at = atOf(m);
       if (at <= sinceMs || at > now + 60000 || !isPersonText(m)) continue;
@@ -78,6 +81,7 @@ export async function findHandTexts({ client, locationId, sinceMs, now = Date.no
         channel: /EMAIL/i.test(String(m.messageType || m.type || "")) ? "email" : "sms", body: String(m.body || "") });
     }
   }
+  if (report) report.complete = complete;
   return out.sort((a, b) => a.at.localeCompare(b.at));
 }
 
@@ -133,7 +137,8 @@ export async function maybeSweepHandReplies({ client, locationId, saved = {}, st
     const cursor = sinceMs == null ? await store.getJobCursor?.(locationId, HAND_REPLY_CURSOR).catch(() => null) : null;
     const from = sinceMs ?? (cursor?.at ? Date.parse(cursor.at) - OVERLAP_MS : now - FIRST_LOOKBACK_MS);
     let texts;
-    try { texts = await (deps.findHandTexts || findHandTexts)({ client, locationId, sinceMs: from, now, maxPages }); }
+    const report = { complete: true };
+    try { texts = await (deps.findHandTexts || findHandTexts)({ client, locationId, sinceMs: from, now, maxPages, report }); }
     catch (e) { log(`hand-reply sweep ${locationId}: ${e?.message}`); return null; }
     // A dry run says what it would set aside and writes nothing.
     if (dryRun) {
@@ -151,7 +156,8 @@ export async function maybeSweepHandReplies({ client, locationId, saved = {}, st
       if (r.recorded) recorded++;
       stoodAside += r.stoodAside;
     }
-    if (sinceMs == null) await store.setJobCursor?.(locationId, HAND_REPLY_CURSOR, { at: iso(now), doc: { found: texts.length, recorded, stoodAside } }).catch(() => {});
+    // Moved on only when the read was whole; the event keys de-dupe a re-read.
+    if (sinceMs == null && report.complete) await store.setJobCursor?.(locationId, HAND_REPLY_CURSOR, { at: iso(now), doc: { found: texts.length, recorded, stoodAside } }).catch(() => {});
     if (recorded) log(`hand-reply sweep ${locationId}: ${recorded} typed in GHL, ${stoodAside} draft(s) stood aside`);
     return { found: texts.length, recorded, stoodAside };
   } finally {
