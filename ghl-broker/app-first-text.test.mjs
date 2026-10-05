@@ -16,8 +16,8 @@ import assert from "node:assert/strict";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "app-first-text-test-"));
 process.env.OUTREACH_IMPORTS_ENABLED = "true";
 
-const { outboundOpening } = await import("./conversation-prompt.js");
-const { outboundDescriptor, humanHasThread, previewProactive } = await import("./reply-agent.js");
+const { outboundOpening, OPENING_MOVES } = await import("./conversation-prompt.js");
+const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText } = await import("./reply-agent.js");
 const { normalizeOpener, countyName, openerVariant, stripSignOff, DEFAULT_OPENER_EXAMPLES } = await import("./shared/outreach-opener.js");
 const { normalizeOutreachAutopilot, startOutreachSweep, _resetJobs } = await import("./outreach-sweep.js");
 const { store } = await import("./store.js");
@@ -73,14 +73,14 @@ test("the first text is written in Matt's voice: his examples are in the prompt,
   const b = ask({ county: "King", examples, variant: 1 });
   assert.match(a, /HOW MATT WRITES THESE[^:]*: "one \{county\}" \/ "two \{county\}" \/ "three \{county\}"/);
   assert.match(b, /HOW MATT WRITES THESE[^:]*: "two \{county\}"/);
-  assert.match(a, /never copy one word for word/);
+  assert.match(a, /never copy one word for word/i);
 });
 
 test("a hundred agents a day don't all get Matt's template word for word — the first five live samples were the same text", () => {
   const t = ask({ county: "King", examples: ["Yo {first}, {street} in {county}?"], variant: 0 });
   const rules = t.split("HOW MATT WRITES")[0];
   assert.doesNotMatch(rules, /came across|pretty turnkey|all ears/i, "the instructions don't dictate one example's wording");
-  assert.match(t, /OPEN THE WAY THE FIRST ONE OPENS/);
+  assert.match(t, /OPENING MOVE for this one/);
   assert.match(t, /no two should read the same/);
 });
 
@@ -196,10 +196,37 @@ test("the first text is told what the agent can see on the listing — a 1950s h
   assert.deepEqual(o.details, ["it's in Shelton", "built in the 1950s", "3 bedrooms, on the small side", "it sits on a big lot",
     "it has been on the market a while", "the price has come down since it listed", "this agent has a few other listings out right now"]);
   const t = outboundOpening(o);
-  assert.match(t, /WHAT WE KNOW ABOUT THIS ONE: it's in Shelton; built in the 1950s/);
-  assert.match(t, /Work in ONE of these/);
+  assert.match(t, /WHAT TO NOTICE: built in the 1950s \(it's in Shelton; naming the town is fine too\)/);
+  assert.match(t, /No other detail, never a list/);
   assert.match(t, /never in a way that knocks the house/);
   assert.ok(o.details.every((d) => !/\$|\bk\b|days?\b/i.test(d)), "no price, no days-on-market count");
+});
+
+test("the first six with house details came out alike, so each agent gets its own opening move and its own detail", () => {
+  const details = ["it's in Packwood", "built in the 1960s", "3 bedrooms", "it sits on a big lot", "it has been on the market a while"];
+  const moves = new Set(), notices = new Set();
+  for (let v = 0; v < 20; v++) {
+    const t = ask({ county: "Lewis", examples: DEFAULT_OPENER_EXAMPLES, details, variant: v });
+    moves.add(/OPENING MOVE for this one: ([^.]*)\./.exec(t)[1]);
+    notices.add(/WHAT TO NOTICE: ([^(]*?) \(/.exec(t)[1]);
+  }
+  assert.equal(moves.size, OPENING_MOVES.length, "every opening move is used");
+  assert.equal(notices.size, 4, "and not always the decade");
+  assert.match(ask({ county: "Lewis", details, variant: 0 }), /don't always call yourself a "Seattle flipper"/);
+});
+
+test("a first text over 250 characters is written again shorter once — two of the first six were 266 and 288", async () => {
+  const long = { reply: "x".repeat(288), summary: "s" };
+  const asked = [];
+  const short = await writeShorterFirstText({ draft: long, kind: "outreach_open", redraft: async (n) => { asked.push(n); return { reply: "y".repeat(230) }; } });
+  assert.deepEqual(asked, [288]);
+  assert.equal(short.reply.length, 230);
+  assert.match(ask({ county: "King", tooLong: 288 }), /YOUR LAST DRAFT WAS 288 CHARACTERS/);
+  const fine = { reply: "z".repeat(240) };
+  assert.equal(await writeShorterFirstText({ draft: fine, kind: "outreach_open", redraft: async () => { throw new Error("not asked"); } }), fine);
+  assert.equal(await writeShorterFirstText({ draft: long, kind: "agent_pulse", redraft: async () => { throw new Error("not asked"); } }), long, "only the first text");
+  const pitched = await writeShorterFirstText({ draft: long, kind: "outreach_open", redraft: async () => ({ reply: "We pay cash, as-is." }) });
+  assert.equal(pitched, long, "a shorter one that pitches cash isn't taken");
 });
 
 test("the first text has room for a little of Matt's humour, but never at the agent's, the seller's or the house's expense", () => {
@@ -208,7 +235,7 @@ test("the first text has room for a little of Matt's humour, but never at the ag
   assert.match(t, /PERSONALITY: one light, human touch/);
   assert.match(t, /never at the agent's, the seller's or the house's expense/);
   assert.match(t, /plain and friendly is fine/, "humour is optional, never forced");
-  assert.doesNotMatch(ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES }), /WHAT WE KNOW ABOUT THIS ONE/, "no details, no details line");
+  assert.doesNotMatch(ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES }), /WHAT TO NOTICE/, "no details, no details line");
 });
 
 test("a first text lost to a deploy restart (no draft, no skip written) is sent by the next run", async () => {
