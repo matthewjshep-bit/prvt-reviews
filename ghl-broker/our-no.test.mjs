@@ -77,7 +77,30 @@ test("the look back finds a no already texted on a live counter, and a dry run c
   assert.equal((await store.getOffer(o.id)).status, "we_passed");
 });
 
+test("a 'no' about another house, an old counter, an email, or a hot offer passes nothing", async () => {
+  const fresh = (over) => counteredOffer({ contactId: `x${Math.random().toString(36).slice(2, 7)}`, counter: { amount: 750000, at: new Date(Date.now() - 86400000).toISOString() }, ...over });
+  // Names a different house than the one countered.
+  const a = await fresh({ address: "3831 Bagley Ave N, Seattle, WA 98103" });
+  assert.equal(await router.passOnOurNo({ locationId: LOC, client, contactId: a.contactId, text: "We can't get there on 1210 Pine unfortunately" }), null);
+  // Names it: passes.
+  assert.ok(await router.passOnOurNo({ locationId: LOC, client, contactId: a.contactId, text: "On 3831 Bagley we can't get there unfortunately" }));
+  // A counter from two months ago.
+  const b = await fresh({ counter: { amount: 750000, at: new Date(Date.now() - 60 * 86400000).toISOString() } });
+  assert.equal(await router.passOnOurNo({ locationId: LOC, client, contactId: b.contactId, text: "we can't get there" }), null);
+  // By email (quoted history rides under it).
+  const c = await fresh({});
+  assert.equal(await router.passOnOurNo({ locationId: LOC, client, contactId: c.contactId, text: "we can't get there", channel: "email" }), null);
+  // Flagged hot by you.
+  const d = await fresh({ hot: { at: new Date().toISOString(), by: "operator" } });
+  assert.equal(await router.passOnOurNo({ locationId: LOC, client, contactId: d.contactId, text: "we can't get there" }), null);
+});
+
 test("we decline in a person's words, not in a hold or a showing time", () => {
+  for (const no of ["We'll pass it on to my partner and get back to you", "We will pass that along to our contractor", "we will pass by the house later",
+    "can't get there by Friday", "Can't get there this weekend", "not going to work for us to close in 10 days", "We'll pass on the info to the seller"]) {
+    assert.equal(weDecline(no), null, no);
+  }
+  assert.equal(weDecline("We cant get there unfrotunatly let me know if it falls through"), "cant get there");
   assert.equal(weDecline("Understood. We cant get there unfortunately. Lets keep in touch"), "cant get there");
   assert.equal(weDecline("we're too far apart on this one"), "too far apart");
   assert.equal(weDecline("We'll pass on the Port Orchard home"), "we'll pass");
