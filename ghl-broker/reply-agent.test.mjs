@@ -1648,11 +1648,12 @@ test("when numbers land with no take from them, the bot floats our ARV and rehab
     deps: { draft: async () => ({ ...DRAFT, intent: "take_check", reply: "Thinking 850K ARV, 200K rehab, so we'd be around 410,000. Thoughts?", summary: "leaks" }) },
   });
   await settle();
-  assert.equal(leaky.job.status, "done", leaky.job.error);
-  const ld = await store2.getReplyDraft(leaky.job.draftId);
-  assert.equal(ld.autoSendable, false);
-  assert.ok(ld.flags.some((f) => /410,000/.test(f)), `the price is the one number a take check may not say: ${ld.flags.join(" · ")}`);
-  assert.equal(ld.status, "draft", "waits for a person");
+  // Since 2026-10-04 a machine text a gate catches is written once more,
+  // told what tripped it, and dropped if it still trips — never sent, and
+  // never left on the Desk (nobody asked for it).
+  assert.equal(leaky.job.status, "held", leaky.job.error);
+  assert.match(leaky.job.heldReason, /dropped, not sent: .*410,000/, `the price is the one number a take check may not say: ${leaky.job.heldReason}`);
+  assert.equal(leaky.job.draftId, null, "no draft waits for a person");
 });
 
 test("a take check needs numbers to float, and its switch", async () => {
@@ -4027,8 +4028,9 @@ test("with the pulse's own send switch it goes on its clock; a number in it stil
     deps: { ...deps, draft: async () => ({ ...DRAFT, intent: "buyer_pulse", reply: "Hey Dana, got one in Renton at $310,000 coming up. Are you buying right now?" }) },
   });
   await settle();
-  const held = await store2.getReplyDraft(j2.draftId);
-  assert.equal(held.status, "draft", "the money guard outranks the switch");
+  assert.equal(j2.status, "held", "the money guard outranks the switch");
+  assert.match(j2.heldReason, /dropped, not sent/);
+  assert.equal(j2.draftId, null);
 });
 
 test("a buyer tagged hands-off gets no pulse check drafted at all", async () => {
@@ -4369,11 +4371,10 @@ test("the hot push asked the agent to write up one house at the number we quoted
   });
   assert.ok(job, "started");
   await settle();
-  assert.equal(job.status, "done", job.error);
-  const d = await store.getReplyDraft(job.draftId);
-  assert.equal(d.autoSendable, false);
-  assert.ok(d.flags.some((f) => /\$173,000, which is not in the offer book/.test(f)), d.flags.join(" · "));
-  assert.notEqual(d.status, "scheduled");
+  // Written again told why, and dropped when it still names the other house's number.
+  assert.equal(job.status, "held", job.error);
+  assert.match(job.heldReason, /\$173,000, which is not in the offer book/);
+  assert.equal(job.draftId, null, "nothing scheduled, nothing waiting");
 });
 
 // Gina Hasson, 2026-09-29: the outreach workflow's 14-day follow-up ("reached
@@ -4686,7 +4687,10 @@ test("the cap counts every draft today, not the newest five hundred", async () =
 
 const AGENT_CHECKIN_SUBJECT = { reason: "general", segment: "engaged", address: "", listing: null, house: null };
 
-test("an agent check-in that names any number holds for you", async () => {
+// 2026-10-04: two check-ins said "assigning", failed the gate, and sat on
+// the Desk for days. A machine text a gate catches is written once more,
+// told what tripped it; if it still trips, it is dropped with a note.
+test("an agent check-in that names any number never goes out: written again without it, or dropped", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
@@ -4694,10 +4698,21 @@ test("an agent check-in that names any number holds for you", async () => {
   const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "agent_pulse", subject: AGENT_CHECKIN_SUBJECT, sendsEnabled: true,
     deps: { releaseHeld: true, releaseReason: "test", draft: async () => ({ ...DRAFT, reply: "Hey Dana, still around 410k on 12 Elm if the seller moves. Anything else coming up?" }) } });
   await settle();
-  assert.equal(job.status, "done", job.error);
-  const d = await store.getReplyDraft(job.draftId);
-  assert.equal(d.status, "draft", "not even a number from the book rides on a check-in");
-  assert.equal(d.outbound.kind, "agent_pulse");
+  assert.equal(job.status, "held", "not even a number from the book rides on a check-in");
+  assert.match(job.heldReason, /dropped, not sent/);
+  assert.equal(job.draftId, null, "nothing waits on you");
+  // Told what tripped it, the second draft is clean: that one goes.
+  _resetJobs();
+  const fixed = fakeStore();
+  fixed.listOffers = async () => [LANDED];
+  const asked = [];
+  const { job: j2 } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: fixed, contactId: "c1", kind: "agent_pulse", subject: AGENT_CHECKIN_SUBJECT, sendsEnabled: true,
+    deps: { releaseHeld: true, releaseReason: "test", now: () => NOW, random: () => 0, draft: async (args) => { asked.push(args.outbound.fix || null); return { ...DRAFT,
+      reply: asked.length === 1 ? "Hey Dana, still around 410k on 12 Elm if the seller moves. Anything else coming up?" : "Hey Dana, anything coming up that needs work?" }; } } });
+  await settle();
+  assert.equal(asked.length, 2);
+  assert.ok(asked[1]?.length, "the second draft was told what tripped the first");
+  assert.equal((await fixed.getReplyDraft(j2.draftId)).status, "scheduled");
 });
 
 test("an agent check-in sends itself only with the pulse's own switch", async () => {
@@ -5411,4 +5426,23 @@ test("a reply that sails past an agent handing the write-up back to us is held",
   }
   // Their own "I'll write it up" is the goal, not a hand-back.
   assert.doesNotMatch(gate({ reply: "Perfect, thank you!" }, { inboundMessage: "Great, I'll write it up tonight" }).flags.join(" · "), /handed the write-up back/);
+});
+
+// 9311 12th Pl SE (2026-10-04): the agent said the contract was fully
+// executed while the Desk still asked for "PSA signed by both sides".
+test("'fully executed' on a live deal ticks the checklist's PSA signed", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const ticks = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1",
+    message: "We are signed around - Authentisign should have sent you the fully executed contract. I'll forward it now for your file.",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "acceptance", propertyAddress: "9311 12th Pl SE, Lake Stevens, WA 98258", reply: "That's great, appreciate you getting it done." }),
+      tickDealTask: async (a) => { ticks.push(a); return { ok: true, ticked: true, address: a.addressHint }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(ticks.map((t) => [t.contactId, t.taskId]), [["c1", "psa_signed"]]);
 });

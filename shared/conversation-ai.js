@@ -57,8 +57,8 @@ export const SILENT_INTENTS = new Set(["opt_out"]);
 // NEVER_AUTO, so autoEligible() offers them as checkboxes and an operator
 // opts a nudge into sending itself exactly the way they opt in a question.
 export const OUTBOUND_INTENTS = {
-  // counter_nudge and take_ask are deliberately not here: they are started
-  // only by the nightly audit, which releases them itself (releaseForAudit),
+  // counter_nudge, take_ask and kind_pass are deliberately not here: they are
+  // started only by the nightly audit, which releases them itself (releaseForAudit),
   // so they never need a box on the playbook grid or a place in the autonomy
   // fingerprint. buyer_pulse likewise: the pulse check has its own two
   // switches (dispoAutopilot.pulse) and the dial never touches it — and so
@@ -72,7 +72,7 @@ export const INTENT_LABEL = {
   agent: {
     deal_available: "has a deal (tier 1)", new_property: "new property (tier 1)", investor_open: "open to investors (tier 2)",
     realm_yes: "number is in the realm", realm_check: "floated our number", take_check: "floated our read",
-    offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", take_ask: "asked for their read to finish our numbers", partner_answer: "your answer to a question the bot couldn't", passed_checkin: "checked back in on a passed offer", hot_push: "pushed an agreed price toward paper",
+    offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", take_ask: "asked for their read to finish our numbers", kind_pass: "told them we're passing (not our kind of house, or out of area)", partner_answer: "your answer to a question the bot couldn't", passed_checkin: "checked back in on a passed offer", hot_push: "pushed an agreed price toward paper",
     outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text",
     call_followup: "text after a call", showing_ask: "asked for a buyer walkthrough window", promise_due: "kept our word on a number we owed", price_drop: "saw the list price come down", checkin_due: "the check-in they asked for", address_chase: "asked again for the address of a property they said was coming",
     agent_pulse: "checked in on the relationship",

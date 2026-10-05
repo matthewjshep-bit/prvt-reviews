@@ -65,3 +65,13 @@ test("a closing date has to be a real day, not one that's passed", () => {
   assert.equal(closingDateIn("closing 12/31/25", NOW), null, "already past");
   assert.equal(closingDateIn("closing costs split 50/50, close 10/24", NOW), "2026-10-24", "the date, not the costs");
 });
+
+// 9311 12th Pl SE (2026-10-04): "We are signed around - Authentisign should
+// have sent you the fully executed contract." The paper on its way is not a
+// signature still to come.
+test("'we are signed — the fully executed contract should have reached you' is signed", async () => {
+  const { signedContractIn } = await import("./contract-signed.js");
+  assert.equal(signedContractIn("We are signed around - Authentisign should have sent you the fully executed contract. I'll forward it now for your file.").signed, true);
+  assert.equal(signedContractIn("Once it's signed I'll send it over").signed, false);
+  assert.equal(signedContractIn("The seller should sign it tonight").signed, false);
+});

@@ -507,7 +507,13 @@ function nudgeAside(o) {
 export const CARRIER_CHECKED_KINDS = new Set(["outreach_open", "outreach_nudge", "agent_pulse", "buyer_pulse"]);
 
 export function outboundOpening(outbound) {
-  const text = openingFor(outbound);
+  const base = openingFor(outbound);
+  // A machine-started draft a gate held, written once more (runProactive):
+  // what tripped it, said plainly.
+  const fix = Array.isArray(outbound?.fix) && outbound.fix.length
+    ? ` YOUR LAST DRAFT OF THIS WAS HELD: ${outbound.fix.map((f) => `"${String(f).slice(0, 160)}"`).join("; ")}. Write it again so none of that is true.`
+    : "";
+  const text = base && fix ? `${base}${fix}` : base;
   if (!text || !CARRIER_CHECKED_KINDS.has(outbound.kind)) return text;
   const avoid = Array.isArray(outbound.avoid) && outbound.avoid.length
     ? ` YOUR LAST DRAFT SAID ${outbound.avoid.map((w) => `"${w}"`).join(", ")}, WHICH THE CARRIERS BLOCK: write it again without them.`
@@ -634,9 +640,24 @@ function openingFor(outbound) {
         `Say exactly that, in our voice, in one or two short lines. Add no fact, number, term or promise that is not in ` +
         `the answer, leave nothing in it out, and do NOT say you'll check on anything else. ${CONTINUE} Set intent to partner_answer.`;
 
+    // We're passing on a house the underwriter held (held-underwrites.js):
+    // not single-family, or outside the towns we buy in.
+    case "kind_pass":
+      return `${START} We looked at ${o.address} for this agent and we're passing on it: ` +
+        (o.why === "area" ? "it's outside the area we buy in." : `it isn't a single-family house${o.heldReason ? ` (${o.heldReason})` : ""}, and right now we only buy single-family.`) +
+        ` In one or two lines, say so plainly and thank them, and ask them to keep us in mind for ` +
+        (o.why === "area" ? "fixers closer in. " : "single-family fixers. ") +
+        `Do NOT name any number, do NOT apologise at length, and do NOT promise to look again. ${CONTINUE} Set intent to kind_pass.`;
+
     // Our numbers are stuck on something they can answer. Ask for exactly
     // the missing piece — never both when one is known — and nothing of ours.
     case "take_ask": {
+      // The map couldn't place it: the street is what we need.
+      if (o.needAddress) {
+        return `${START} We're running numbers on ${o.address} for this agent, but the address didn't come up on the map. In one line, ` +
+          `ask them to confirm the full street address (street name and city) so we can pull it up. Ask for nothing else. Do NOT name ` +
+          `any number, and do NOT apologise. ${CONTINUE} Set intent to take_ask.`;
+      }
       const asks = [o.needValue ? "what they figure it's worth once it's fixed up" : "", o.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ");
       return `${START} We're running numbers on ${o.address} for this agent and they're stuck${o.heldReason ? ` (${o.heldReason})` : ""}. ` +
         `In one or two lines say ${heldInPlainWords(o.heldReason)} and you want to get it right, then ask ${asks || "what they figure it's worth fixed up and what the work would run"} ` +

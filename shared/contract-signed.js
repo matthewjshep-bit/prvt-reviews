@@ -10,7 +10,7 @@
 // Pure. Their words only — on a call, only the THEM lines.
 
 // It's done: signed by everyone, mutual, executed, under contract.
-const SIGNED_RX = /\b(?:fully|mutually)\s+(?:executed|signed|ratified)\b|\bwe(?:'re| are| have)\s+(?:mutual|under contract)\b|\b(?:it'?s|its|is|we'?re|are|now)\s+mutual\b|\bmutual(?:\s+acceptance)?\s+(?:is\s+)?(?:done|reached|achieved|today|now)\b|\bhave mutual\b|\b(?:seller|sellers|everyone|all parties|both parties)\s+(?:has\s+|have\s+)?(?:signed|counter-?signed|executed)\b|\bcounter-?signed\b|\bdocu-?sign\s+(?:is\s+)?(?:complete|completed|done|finished)\b|\b(?:psa|purchase (?:and sale )?agreement|contract|offer)\s+(?:is\s+|has been\s+|was\s+)?(?:signed|executed|ratified)\b|\b(?:officially|now)\s+under contract\b/i;
+const SIGNED_RX = /\b(?:fully|mutually)\s+(?:executed|signed|ratified)\b|\bwe(?:'re| are)\s+(?:all\s+)?signed\b|\bauthentisign\s+(?:is\s+)?(?:complete|completed|done|finished)\b|\bwe(?:'re| are| have)\s+(?:mutual|under contract)\b|\b(?:it'?s|its|is|we'?re|are|now)\s+mutual\b|\bmutual(?:\s+acceptance)?\s+(?:is\s+)?(?:done|reached|achieved|today|now)\b|\bhave mutual\b|\b(?:seller|sellers|everyone|all parties|both parties)\s+(?:has\s+|have\s+)?(?:signed|counter-?signed|executed)\b|\bcounter-?signed\b|\bdocu-?sign\s+(?:is\s+)?(?:complete|completed|done|finished)\b|\b(?:psa|purchase (?:and sale )?agreement|contract|offer)\s+(?:is\s+|has been\s+|was\s+)?(?:signed|executed|ratified)\b|\b(?:officially|now)\s+under contract\b/i;
 // …but not when they're talking about it happening, or it not happening.
 const NOT_YET_RX = /\b(?:not|n't|never|yet to|still need(?:s)?|waiting (?:on|for)|once|when|if|after|before|will|going to|gonna|should|hope|hoping|plan(?:ning)? to|about to|ready to|need(?:s)? to)\b[^.!?\n]{0,40}\b(?:sign|signed|mutual|executed|counter-?sign|under contract|docu-?sign)/i;
 
@@ -72,7 +72,11 @@ export function closingDateIn(text = "", now = Date.now()) {
 export function signedContractIn(text = "", { now = Date.now() } = {}) {
   const t = String(text || "");
   const sentences = t.split(/(?<=[.!?\n])\s+/).map((x) => x.trim()).filter(Boolean);
-  const hit = sentences.find((s) => !/\?\s*$/.test(s) && SIGNED_RX.test(s) && !NOT_YET_RX.test(s) && !NOT_OURS_RX.test(s));
+  // "Authentisign should have sent you the fully executed contract" is the
+  // paper on its way to us, not a signature still to come (9311 12th Pl SE,
+  // 2026-10-04): the delivery words don't count as "not yet".
+  const delivery = (s) => s.replace(/\b(?:should|will|would)\s+have\s+(?:sent|emailed|forwarded|delivered|gotten|received)\b|\bwill\s+(?:send|forward|email)\b/gi, "");
+  const hit = sentences.find((s) => !/\?\s*$/.test(s) && SIGNED_RX.test(s) && !NOT_YET_RX.test(delivery(s)) && !NOT_OURS_RX.test(s));
   if (!hit) return { signed: false };
   // Something else in the message says it went to someone else.
   if (sentences.some((s) => /\b(?:another|someone else|somebody else|other buyer|other offer|backup)\b/i.test(s))) return { signed: false };

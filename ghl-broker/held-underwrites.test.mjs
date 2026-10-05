@@ -126,3 +126,20 @@ test("the nightly audit carries the held pass: its findings, counts and rows rid
   assert.equal(acted[0].action, "drop_draft");
   assert.deepEqual(store.deleted, ["j"]);
 });
+
+// 2026-10-04: a duplex and a house in Oakesdale (Whitman County) sat on the
+// Desk as decisions. A day on, the duplex is passed; the far town at once;
+// and each agent hears it from us, once.
+test("a house that isn't single-family, or outside the towns we buy in, is passed and they hear why", async () => {
+  const duplex = held({ id: "dx", address: "21902 29th Ave South, Des Moines, WA 98198", createdAt: ago(2), updatedAt: ago(2),
+    autoUnderwrite: { jobId: "j2", held: ["not our kind of house — a multi-family (single-family only right now)"], finishedAt: ago(2) } });
+  const far = held({ id: "far", contactId: "c2", address: "102 W Pearl St, Oakesdale, WA", createdAt: ago(1), updatedAt: ago(1),
+    autoUnderwrite: { jobId: "j3", held: ["\"102 W Pearl St, Oakesdale, WA\" could only be placed at the centre of its city — the comp search is centred on a guess"], finishedAt: ago(1) } });
+  const store = fakeStore({ offers: [duplex, far] });
+  const d = deps();
+  const r = await run(store, fakeClient(), d);
+  assert.equal(store.book.get("dx").status, "we_passed");
+  assert.equal(store.book.get("far").status, "we_passed");
+  assert.deepEqual(d.calls.filter((c) => c[0] === "proactive").map((c) => [c[1], c[2]]).sort(), [["c1", "kind_pass"], ["c2", "kind_pass"]]);
+  assert.ok(r.acted.every((a) => /told them/.test(a.reason)), r.acted.map((a) => a.reason).join(" | "));
+});
