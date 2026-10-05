@@ -573,9 +573,13 @@ export function stillOwed(rows = [], { drafts = [], unsubscribed = new Set(), ev
       || (events || []).some((e) => e?.contactId === contactId && (ms(e.at) ?? 0) > t
         && (e.type === "hand_reply" || callEventConnected(e)));
   };
+  const byId = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
   return (rows || []).filter((r) => {
     if (!r) return false;
     if (r.contactId && unsubscribed?.has?.(r.contactId) && TEXTING_KINDS.has(r.kind)) return false;
+    // A row about a held draft that's been closed since (dismissed, sent,
+    // superseded) has nothing left to hold.
+    if (r.kind === "audit_owed" && r.draftId && byId.has(r.draftId) && !["draft", "scheduled", "handled"].includes(byId.get(r.draftId).status)) return false;
     if (r.kind === "audit_owed" && ANSWERED_BY_A_REPLY.has(r.findingKind) && repliedAfter(r.contactId, r.anchorAt)) return false;
     return true;
   });
