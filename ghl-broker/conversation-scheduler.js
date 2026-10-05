@@ -157,7 +157,9 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
     let scheduled = [];
     let sending = [];
     try {
-      scheduled = await store.listReplyDrafts(locationId, { status: "scheduled", limit: 50 });
+      // Only what's due, longest-due first (store.js `dueBy`): a deal text
+      // waiting days for a buyer's week must not crowd out one due now.
+      scheduled = await store.listReplyDrafts(locationId, { status: "scheduled", dueBy: new Date(now).toISOString(), limit: 50 });
       sending = await store.listReplyDrafts(locationId, { status: "sending", limit: 50 });
     } catch (e) {
       log(`scheduler: could not list drafts for ${locationId}: ${e.message}`);

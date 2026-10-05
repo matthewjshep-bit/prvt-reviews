@@ -83,6 +83,9 @@ export const EVENT_TYPES = [
   "pulse_sent",
   // A check-in that drafted nothing gives its claim back (buyer-pulse.js).
   "pulse_voided",
+  // The check-in actually went (reply-agent.js sendReplyDraft): what "two in
+  // a row with no answer" counts, never the claim (2026-10-05).
+  "pulse_texted",
   // The walkthrough texts (ghl-broker/showing-sweep.js): the reminder the
   // afternoon before and the follow-up after. Each is its own claim, one per
   // buyer per window, written before the draft.
@@ -138,6 +141,7 @@ export const EVENT_LABEL = {
   outreach_open_skipped: "our first text didn't go — tried again next run",
   pulse_sent: "checked in between deals",
   pulse_voided: "a check-in drafted nothing",
+  pulse_texted: "we checked in between deals",
   showing_reminder_sent: "reminded them about the walkthrough", showing_followup_sent: "followed up after the walkthrough",
   call_booked: "call booked",
   hand_reply: "you texted them",
@@ -168,6 +172,7 @@ export const EVENT_ICON = {
   outreach_open_skipped: "Clock",
   pulse_sent: "BellRing",
   pulse_voided: "Clock",
+  pulse_texted: "BellRing",
   showing_reminder_sent: "CalendarCheck", showing_followup_sent: "MessageSquare",
   call_booked: "CalendarCheck",
   hand_reply: "MessageSquare",

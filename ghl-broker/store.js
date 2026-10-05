@@ -520,17 +520,22 @@ const pgStore = {
   },
   // Newest first. `since` bounds by creation (the daily cap), `status` and
   // `contactId` narrow — both optional so the outbox and the cap share a query.
-  async listReplyDrafts(locationId, { status = null, contactId = null, since = null, limit = 100 } = {}) {
+  // `dueBy` (ISO): only rows whose sendAt has come, the longest-due first —
+  // the scheduler's read. Deal texts can now wait days for a buyer's week
+  // (shared/buyer-touch.js); newest-created-first would let fifty of those
+  // hide a reply that is due now.
+  async listReplyDrafts(locationId, { status = null, contactId = null, since = null, dueBy = null, limit = 100 } = {}) {
     const params = [locationId];
     let where = "";
     if (Array.isArray(status) && status.length) { params.push(status); where += ` and status = any($${params.length}::text[])`; }
     else if (status && !Array.isArray(status)) { params.push(status); where += ` and status = $${params.length}`; }
     if (contactId) { params.push(contactId); where += ` and contact_id = $${params.length}`; }
     if (since) { params.push(since); where += ` and created_at >= $${params.length}`; }
+    if (dueBy) { params.push(dueBy); where += ` and (doc->>'sendAt') <= $${params.length}`; }
     params.push(limit);
     const { rows } = await query(
       `select doc from reply_drafts where location_id = $1${where}
-       order by created_at desc limit $${params.length}`,
+       order by ${dueBy ? "(doc->>'sendAt') asc" : "created_at desc"} limit $${params.length}`,
       params
     );
     return rows.map((r) => r.doc);
@@ -1711,14 +1716,15 @@ const fileStore = (() => {
       persist();
       return full;
     },
-    async listReplyDrafts(locationId, { status = null, contactId = null, since = null, limit = 100 } = {}) {
+    async listReplyDrafts(locationId, { status = null, contactId = null, since = null, dueBy = null, limit = 100 } = {}) {
       ensure();
       return Object.values(data.replyDrafts)
         .filter((d) => d.locationId === locationId)
         .filter((d) => !status || (Array.isArray(status) ? status.includes(d.status) : d.status === status))
         .filter((d) => !contactId || d.contactId === contactId)
         .filter((d) => !since || (d.createdAt || "") >= since)
-        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .filter((d) => !dueBy || (d.sendAt && String(d.sendAt) <= dueBy))
+        .sort(dueBy ? (a, b) => String(a.sendAt).localeCompare(String(b.sendAt)) : (a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit);
     },
     async getReplyDraft(id) {

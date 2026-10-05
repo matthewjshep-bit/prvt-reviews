@@ -408,6 +408,9 @@ export async function investorCandidates({ store, locationId, config, now = Date
       .filter((ev) => !list.some((x) => (x.type === "investor_passed" || x.type === "investor_committed") && String(x.at) >= String(ev.at) && sameDeal(x, ev)))
       .at(-1);
     if (!spoke) continue;
+    // Once per house, ever: whatever day the ladder says now, and whether
+    // the house was named by id or by street.
+    if (list.some((e) => e.type === "follow_up_sent" && e.data?.kind === "deal_followup" && sameDeal(e, spoke))) continue;
     const subjectId = spoke.offerId || spoke.address;
     // Counted from their last word, so a buyer still talking is never chased.
     const startedAt = [spoke.at, lastInboundAt].filter(Boolean).sort().at(-1);

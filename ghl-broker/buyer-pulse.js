@@ -100,7 +100,7 @@ export async function planBuyerPulse({ locationId, saved = {}, store = defaultSt
   // cadence, and a pulse that old still has to count.
   // Far enough back to see two unanswered pulses at the slow cadence too.
   const lookback = Math.max(settings.everyDays, settings.quietEveryDays, SLOW_EVERY_DAYS) * MAX_PACE;
-  const events = await store.listContactEventsSince(locationId, iso(now - lookback * DAY_MS), { types: ["pulse_sent", "pulse_voided"], limit: 20000 }).catch(() => []);
+  const events = await store.listContactEventsSince(locationId, iso(now - lookback * DAY_MS), { types: ["pulse_sent", "pulse_voided", "pulse_texted"], limit: 20000 }).catch(() => []);
   // A claim that drafted nothing (the bot stood down, a waiting reply, a
   // failure) is voided: it neither starts the buyer's cadence nor takes a
   // seat. Until 2026-09-29 it did both — a DND buyer cost a seat and 30 days.
@@ -138,7 +138,9 @@ export async function planBuyerPulse({ locationId, saved = {}, store = defaultSt
   // wrote, and how many pulses in a row went unanswered. What makes the
   // pulse personal, and what puts a buyer who never answered a deal at the
   // front of the line (shared/buyer-pulse.js).
-  const history = await buyerHistory({ store, locationId, pulses: events.filter((e) => e?.type === "pulse_sent" && !voided.has(e.dedupeKey)), now });
+  // Pulses that actually went (pulse_texted), not claims: a draft you
+  // dismissed or never sent isn't one they ignored.
+  const history = await buyerHistory({ store, locationId, pulses: events.filter((e) => e?.type === "pulse_texted"), now });
   // Tried today already (a voided claim): tomorrow, not twice today.
   const plan = pickPulseBuyers({ investors: investors.filter((i) => !triedToday.has(i.contactId)), pulsedAt, openDraftIds, stopped, paceBy, history, settings, now });
   const line = [...plan.picks, ...(plan.spares || [])];

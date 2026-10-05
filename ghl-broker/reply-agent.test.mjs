@@ -4302,7 +4302,12 @@ test("a buyer text that calls the house a gut job is held when the deal never sa
   assert.equal(held("Are you open to heavy rehab, or more cosmetic stuff?"), false);
   assert.equal(held("Rehab is about 200k, want the package?"), false);
   assert.equal(held("Let me clean up the numbers and send the package."), false, "a verb, not the house");
-  assert.equal(held("Big cleanup, but rehab is about 200k."), true);
+  assert.equal(held("It's a big cleanup, but rehab is about 200k."), true);
+  // The buyer's buy box, which the pulse is told to confirm, is not a house.
+  for (const ok of ["I've got you down as SFR, heavy rehab, Tacoma. Still right?", "Still doing cosmetic flips in Pierce?",
+    "Anything that needs work in Pierce?", "If I find a great deal in Tacoma I'll send it your way."]) {
+    assert.equal(held(ok), false, ok);
+  }
   // An agent's thread is not this rule's business.
   assert.equal(evaluateReplyGates({ draft: { intent: "question", confidence: "high", needsHuman: false, reply: "Looks like a gut job from the photos." }, party: "agent", inboundMessage: "thoughts?" }).flags.some((f) => /calls the house/.test(f)), false);
 });
@@ -5596,4 +5601,70 @@ test("a buyer who answers a two-deal text about one of them gets that one's link
   await settle();
   assert.equal(job.status, "done", job.error);
   assert.equal(invites[0]?.addressHint, "3511 Northeast 153rd Street, Lake Forest Park, Washington 98155");
+});
+
+/* ---------- a deal text waiting for the buyer's week (review, 2026-10-05) ---------- */
+
+test("a deal text waiting for the buyer's week survives their text about another deal", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor-active"]);
+  const later = new Date(Date.now() + 4 * 86400000).toISOString();
+  const store = limitStore([dealText("d1", "o2", { sendAt: later })]);
+  store.listDeals = async () => [];
+  const { job } = await startReply({ client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "not for me, too far south",
+    deps: { draft: async () => ({ ...INVESTOR_DRAFT, intent: "passing", reply: "Understood, thanks.", propertyAddress: "" }) } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal((await store.getReplyDraft("d1")).status, "scheduled", "the queued deal text still goes");
+
+  // An opt-out still ends everything.
+  _resetJobs();
+  const store2 = limitStore([dealText("d1", "o2", { sendAt: later })]);
+  store2.listDeals = async () => [];
+  const two = await startReply({ client, locationId: "LOC", saved: SAVED, store: store2, contactId: "c1", message: "stop texting me",
+    deps: { draft: async () => ({ ...INVESTOR_DRAFT, intent: "opt_out", reply: "", propertyAddress: "" }) } });
+  await settle();
+  assert.notEqual((await store2.getReplyDraft("d1")).status, "scheduled");
+  assert.ok(two.job);
+});
+
+test("a deal text you've texted them around since waits for you instead of being binned", async () => {
+  const threeDays = new Date(Date.now() - 3 * 86400000).toISOString();
+  const store = limitStore([dealText("d1", "o1", { createdAt: threeDays })]);
+  const { calls, client } = smsClient();
+  const yesterday = new Date(Date.now() - 86400000);
+  const line = `[${yesterday.toISOString().slice(0, 10)} ${yesterday.toISOString().slice(11, 16)}] US sms: hey, call me when you get a sec`;
+  const out = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => line });
+  assert.equal(out.held, true, JSON.stringify(out));
+  assert.equal(calls.filter(([p]) => p === "/conversations/messages").length, 0);
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /you've texted them yourself since/);
+});
+
+test("the combined text leaves out a house you stopped the bot on", async () => {
+  const later = new Date(Date.now() + 3 * 86400000).toISOString();
+  const store = limitStore([dealText("d1", "o1"), dealText("d2", "o2", { sendAt: later, createdAt: iso(500) })]);
+  store.events.set("LOC|c1", [{ type: "drive_stopped", offerId: "o2", at: new Date(Date.now() - 3600000).toISOString(), data: {} }]);
+  const { calls, client } = smsClient();
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  const sms = calls.find(([p]) => p === "/conversations/messages")[1].body.message;
+  assert.doesNotMatch(sms, /153rd/, sms);
+  assert.match(sms, /7034 South K Street/);
+  assert.equal((await store.getReplyDraft("d2")).status, "scheduled", "left waiting, untouched");
+});
+
+test("a deal carried in the combined text is claimed before the send, and goes back if the send fails", async () => {
+  const later = new Date(Date.now() + 3 * 86400000).toISOString();
+  const store = limitStore([dealText("d1", "o1"), dealText("d2", "o2", { sendAt: later, createdAt: iso(500) })]);
+  let seenDuringSend = null;
+  const client = { call: async (path) => {
+    if (path === "/conversations/messages") { seenDuringSend = (await store.getReplyDraft("d2")).status; throw new Error("carrier said no"); }
+    return { contact: { id: "c1", tags: [] } };
+  } };
+  await assert.rejects(() => sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" }), /carrier said no/);
+  assert.equal(seenDuringSend, "sending", "an overlapping tick sees it taken");
+  const d2 = await store.getReplyDraft("d2");
+  assert.equal(d2.status, "scheduled");
+  assert.equal(d2.combinedInto, undefined);
 });

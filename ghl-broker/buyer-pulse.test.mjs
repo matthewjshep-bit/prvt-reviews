@@ -214,7 +214,12 @@ test("the plan puts a buyer who never answered a deal first, with that house as 
     { contactId: "talked", type: "blast_sent", at: ago(12), address: "3511 NE 153rd St, Lake Forest Park, WA 98155", offerId: "o1" },
     { contactId: "talked", type: "text_summary", at: ago(11) },
     { contactId: "shy", type: "pulse_sent", at: ago(70), dedupeKey: "pulse_sent:shy:a" },
+    { contactId: "shy", type: "pulse_texted", at: ago(70) },
     { contactId: "shy", type: "pulse_sent", at: ago(35), dedupeKey: "pulse_sent:shy:b" },
+    { contactId: "shy", type: "pulse_texted", at: ago(35) },
+    // Claimed twice, never sent: not ignored, just never texted.
+    { contactId: "unsent", type: "pulse_sent", at: ago(70), dedupeKey: "pulse_sent:unsent:a" },
+    { contactId: "unsent", type: "pulse_sent", at: ago(35), dedupeKey: "pulse_sent:unsent:b" },
   ] });
   const s = starter([
     buyer("top", { score: 90 }), buyer("quietly", { score: 5, lastBlastAt: ago(12), lastMessageAt: ago(12) }),
@@ -226,6 +231,10 @@ test("the plan puts a buyer who never answered a deal first, with that house as 
   assert.equal(plan.picks[0].subject.lastHouse.how, "no answer");
   assert.equal(plan.counts.afterDeal, 1);
   assert.ok(!plan.picks.some((p) => p.contactId === "shy"), "two unanswered pulses: next one in a quarter");
+  const h = (await import("./buyer-pulse.js")).buyerHistory;
+  const hist = await h({ store, locationId: "LOC", pulses: store.events.filter((e) => e.type === "pulse_texted"), now: NOW });
+  assert.equal(hist.get("shy").unansweredPulses, 2);
+  assert.equal(hist.get("unsent")?.unansweredPulses || 0, 0, "claims that never went don't count");
 });
 
 test("sample pulse checks are written from the plan and never claimed or sent", async () => {

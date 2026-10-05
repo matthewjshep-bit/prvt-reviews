@@ -1607,10 +1607,21 @@ const ALTERNATIVE = /\bor\b/i;
 const houseCore = (w) => String(w || "").toLowerCase()
   .replace(/[- ]?(?:rehab|reno(?:vation)?|remodel|job|lift|project|fix|flip)s?$/, "")
   .replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ").trim();
+// A word only describes a house when its sentence is about one: "it's", "this
+// one", "under contract", a street number. "Still doing cosmetic flips in
+// Pierce?" and "I've got you down as heavy rehab, Tacoma" are about the
+// buyer's buy box, which the pulse is told to confirm.
+const HOUSE_ANCHOR_RX = /\b(?:it'?s|it is|it was|it needs|it has|this one|that one|the house|the property|the place|the home|this house|that house|under contract)\b|\b\d{2,6}\s+[A-Za-z]/i;
+const sentenceAt = (t, i, len) => {
+  const start = Math.max(t.lastIndexOf(".", i - 1), t.lastIndexOf("!", i - 1), t.lastIndexOf("?", i - 1), t.lastIndexOf("\n", i - 1)) + 1;
+  const ends = [".", "!", "?", "\n"].map((c) => t.indexOf(c, i + len)).filter((x) => x >= 0);
+  return t.slice(start, ends.length ? Math.min(...ends) : t.length);
+};
 export function houseWordsIn(reply = "", { allowed = "" } = {}) {
   const t = String(reply || "");
   const ok = ` ${String(allowed || "").toLowerCase().replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ")} `;
   for (const m of t.matchAll(HOUSE_WORD_RX)) {
+    if (!HOUSE_ANCHOR_RX.test(sentenceAt(t, m.index, m[0].length))) continue;
     const before = t.slice(Math.max(0, m.index - 60), m.index);
     const after = t.slice(m.index + m[0].length, m.index + m[0].length + 20);
     if (ABOUT_THEM_BEFORE.test(before) || ALTERNATIVE.test(before.slice(-20)) || ALTERNATIVE.test(after)) continue;

@@ -57,7 +57,7 @@ export async function runShowingSweep({ client, locationId, saved = {}, store = 
     if (hold.held) { skip(t, holdLine(hold)); continue; }
     // Their text is waiting on you: not now, and not claimed, so the next
     // tick tries again once it's answered.
-    const waiting = await draftWaitingOnYou({ store, locationId, contactId: t.contactId }).catch(() => null);
+    const waiting = await draftWaitingOnYou({ store, locationId, contactId: t.contactId, kind: t.kind }).catch(() => null);
     if (waiting) { skip(t, "their text is waiting on you"); continue; }
     let contact = null;
     try { contact = await read(t.contactId); } catch (e) { skip(t, `couldn't read the contact (${String(e?.message || e).slice(0, 80)})`); continue; }

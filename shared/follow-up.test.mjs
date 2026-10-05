@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   dueStep, exhausted, followUpDedupeKey, normalizeSteps, stepLabel,
-  kindsFor, DEFAULT_LADDERS, FOLLOW_UP_KINDS, nextRungAt,
+  kindsFor, DEFAULT_LADDERS, FOLLOW_UP_KINDS, nextRungAt, blockingDraft,
 } from "./follow-up.js";
 
 const DAY = 86400000;
@@ -260,4 +260,16 @@ test("changing pace mid-ladder never re-sends a sent rung", () => {
   assert.equal(d.step, 7);
   // Switched to "less" on day 8 after day 7 went: nothing is due until day 28.
   assert.equal(dueStep({ steps: LADDER, startedAt: SENT, sentSteps: [3, 7], now: at(8), pace: 2 }).due, false);
+});
+
+// A deal text can wait days for the buyer's week (shared/buyer-touch.js,
+// 2026-10-05). The walkthrough reminder for a time they booked isn't held up
+// behind it; anything else the machine starts still is.
+test("a queued deal text doesn't hold up a walkthrough reminder", () => {
+  const queued = [{ id: "b1", status: "scheduled", outbound: { kind: "blast_open" } }];
+  assert.equal(blockingDraft(queued, { kind: "showing_reminder" }), null);
+  assert.equal(blockingDraft(queued, { kind: "showing_followup" }), null);
+  assert.equal(blockingDraft(queued, { kind: "deal_followup" })?.id, "b1");
+  // A deal text waiting for you (a draft) still holds everything.
+  assert.equal(blockingDraft([{ ...queued[0], status: "draft" }], { kind: "showing_reminder" })?.id, "b1");
 });

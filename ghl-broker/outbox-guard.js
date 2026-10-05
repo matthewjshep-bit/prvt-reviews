@@ -19,14 +19,14 @@ import { holdLine } from "./shared/bot-hold.js";
  *
  * `continues`: the draft this text carries on from, which it may replace.
  */
-export async function draftWaitingOnYou({ store, locationId, contactId, continues = null }) {
+export async function draftWaitingOnYou({ store, locationId, contactId, continues = null, kind = null }) {
   if (!contactId || typeof store?.listReplyDrafts !== "function") return null;
   const open = [];
   for (const status of ["draft", "scheduled"]) {
     const rows = await store.listReplyDrafts(locationId, { contactId, status, limit: 10 }).catch(() => []);
     open.push(...(rows || []).filter((d) => d?.contactId === contactId || !d?.contactId));
   }
-  return blockingDraft(open, { continues });
+  return blockingDraft(open, { continues, kind });
 }
 
 /**

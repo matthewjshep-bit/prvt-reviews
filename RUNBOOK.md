@@ -3946,6 +3946,27 @@ buyers got two different deal texts one to three days apart.
   to a buyer who booked a time.
 - **Emails** to buyers with no phone are not limited or combined. They wait in
   the outbox anyway.
+- **A deal text that waits for days stays safe.** A queued text used to wait
+  minutes; now it can wait days, so:
+  - **Their texts:** a buyer's text about something else doesn't cancel it.
+    Only an opt-out does.
+  - **Other machine texts:** they never replace it.
+  - **Your own text:** if you've texted them since it was queued, it goes back
+    to you as a draft ("you've texted them yourself since…") instead of being
+    binned.
+  - **Walkthroughs:** a walkthrough reminder or follow-up isn't held up behind
+    it (`SERVICE_KINDS` in `blockingDraft`).
+  - **Combined texts:** each house in one is checked like its own text (a bot
+    stop on that house, fell through, stopped, held for another buyer). Each is
+    claimed (`sending`, `combinedInto`) before the send and released if the send
+    fails or the house is left out.
+  - **The scheduler** asks the store only for what's due, longest-due first
+    (`listReplyDrafts({ dueBy })`), so deferred texts can't hide one due now.
+- **The pulse slowdown** counts pulses that went (`pulse_texted`, written on
+  send), not claims. Pulses sent before 10/5 have no such event, so nobody
+  starts slowed.
+- **`deal_followup`** goes once per house, ever: changing the day, or the
+  house turning up by street instead of id, doesn't send a second.
 - **Setting:** Settings → Dispositions → Dispositions autopilot → "A buyer
   hears from the machine at most so often".
 

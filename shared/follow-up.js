@@ -502,9 +502,15 @@ const OWN_DRAFT_WORD = { check_in: "check-in", partner_answer: "answer", showing
  * machine text superseded whatever was waiting, so a question held for a
  * person left Today and a canned check-in went out in its place.
  */
-export function blockingDraft(open = [], { continues = null } = {}) {
+// Texts that are service to a buyer who booked a time, not outreach: a deal
+// text queued for them (it can wait days for their week — shared/buyer-touch.js)
+// doesn't hold these up, and they never replace it.
+export const SERVICE_KINDS = new Set(["showing_reminder", "showing_followup"]);
+
+export function blockingDraft(open = [], { continues = null, kind = null } = {}) {
   return (open || []).find((d) => d && (d.status === "draft" || d.status === "scheduled")
-    && d.id !== continues && !MACHINE_STARTED_KINDS.has(d.outbound?.kind)) || null;
+    && d.id !== continues && !MACHINE_STARTED_KINDS.has(d.outbound?.kind)
+    && !(SERVICE_KINDS.has(kind) && d.status === "scheduled" && d.outbound?.kind === "blast_open")) || null;
 }
 
 /** Why the machine stood down, in the words a skipped row shows. */

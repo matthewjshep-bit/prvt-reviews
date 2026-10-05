@@ -390,6 +390,8 @@ test("the bot is told to describe a house only in the deal's words", () => {
   const sys = buildSystemPrompt({ config: normalizeConversationAi({ enabled: true }), party: "investor" });
   assert.match(sys, /DESCRIBING A HOUSE: use only the words the context gives it/);
   assert.match(sys, /the condition as the deal describes it/);
+  // An agent is asked whether a listing needs work; the rule is the buyer's.
+  assert.doesNotMatch(buildSystemPrompt({ config: normalizeConversationAi({ enabled: true }), party: "agent" }), /DESCRIBING A HOUSE/);
 });
 
 /* ---------- the pulse, personal (2026-10-05) ---------- */

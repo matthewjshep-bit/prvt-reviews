@@ -2330,7 +2330,7 @@ export async function startProactive({
     // listing agent, their TC, a buyer (5232 S Yakima, 2026-10-03).
     const gone = await fellThroughFor({ store, locationId, addresses: [offer?.address, subject?.address] });
     if (gone) return { skipped: fellThroughLine(gone), job: null };
-    const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues });
+    const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues, kind });
     if (waiting) return { skipped: blockingReason(waiting), blocked: { draftId: waiting.id }, job: null };
     // One house at a time, three days apart, two a week (shared/agent-focus.js).
     // The sweep asks before it claims; this is every other door asking too.
@@ -2827,12 +2827,16 @@ async function runProactive(job, ctx) {
   }
   // They may have texted while this was being written. Their reply, or a
   // person's own draft, is never replaced by the machine's: stand down.
-  const blocker = ctx.machine ? blockingDraft(open, { continues: ctx.continues }) : null;
+  const blocker = ctx.machine ? blockingDraft(open, { continues: ctx.continues, kind }) : null;
   if (blocker) {
     job.status = "held"; job.phase = ""; job.heldReason = blockingReason(blocker); job.finishedAt = new Date().toISOString();
     return;
   }
   for (const old of open) {
+    // A deal text queued for this buyer is its own thing — it may be
+    // waiting days for their week (shared/buyer-touch.js) — and another
+    // machine text never replaces it.
+    if (old.outbound?.kind === "blast_open") continue;
     await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
   }
   const ts = new Date().toISOString();
@@ -3725,6 +3729,10 @@ async function runReply(job, ctx) {
   const keptScheduled = [];
   for (const old of open) {
     if (keepScheduled && old.status === "scheduled" && old.autoSend?.decided) { keptScheduled.push(old.id); continue; }
+    // A deal text queued for them isn't a reply to anything they said, and
+    // may be waiting days for their week (shared/buyer-touch.js): their text
+    // about something else doesn't cancel it. Only an opt-out does.
+    if (old.outbound?.kind === "blast_open" && draft.intent !== "opt_out") continue;
     await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
   }
   if (keptScheduled.length) warnings.push("the reply already counting down to the earlier texts still goes; this one waits for you");
@@ -4602,6 +4610,18 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     const theirs = await humanHasThread({ store, locationId, contactId: d.contactId, transcript, minutes: 7 * 24 * 60, now });
     if (theirs && Date.parse(theirs.at) >= Date.parse(d.createdAt) - 60000) {
       const ts = new Date(now).toISOString();
+      // A deal text isn't an answer to them, and may have waited days for
+      // their week (shared/buyer-touch.js): you texting them since doesn't
+      // bin it. It waits for you to send it or not.
+      if (d.outbound?.kind === "blast_open") {
+        const why = "you've texted them yourself since this was queued";
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+          flags: [...(d.flags || []), `held: ${why} — send it or not`],
+          autoSend: { ...(d.autoSend || {}), decided: false, reason: `${why} — it waits for you` },
+        });
+        return { ok: true, skipped: why, held: true };
+      }
       await store.updateReplyDraft(d.id, {
         ...d, status: "dismissed", answeredBy: "you", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
         flags: [...(d.flags || []), "you answered it yourself — the bot stood aside"],
@@ -4641,11 +4661,23 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       for (const o of waiting) {
         if (bundle.length >= budget.bundleMax - 1) break;
         if (bundle.some((x) => x.outbound.offerId === o.outbound.offerId)) continue;
-        const deal = (await store.getOffer?.(o.outbound.offerId).catch(() => null))?.deal;
+        const offer = await store.getOffer?.(o.outbound.offerId).catch(() => null);
+        const deal = offer?.deal;
         if (!deal || dealIsOver(deal) || dealOutreachStopped(deal)) continue;
         const paused = dealOutreachPaused(deal);
         if (paused && paused.contactId !== d.contactId) continue;
-        bundle.push(o);
+        // Each house answers the same checks its own text would: a bot stop
+        // on that house, or the house falling through.
+        const held = await holdFor({ store, locationId, contactId: d.contactId, offerId: o.outbound.offerId, now });
+        if (held.held) continue;
+        if (await fellThroughFor({ store, locationId, addresses: [o.outbound.address, offer.address] })) continue;
+        // Claimed before anything goes, so an overlapping scheduler tick
+        // can't send it on its own as well. Read again: it may have gone.
+        const fresh = await store.getReplyDraft(o.id).catch(() => null);
+        if (!fresh || fresh.status !== "scheduled") continue;
+        const claimed = { ...fresh, status: "sending", sendingAt: new Date(now).toISOString(), combinedInto: d.id, updatedAt: new Date(now).toISOString() };
+        await store.updateReplyDraft(o.id, claimed);
+        bundle.push(claimed);
       }
     }
   }
@@ -4655,12 +4687,25 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   // machine's own words — a text a person rewrote goes as they wrote it. A
   // deal whose price can't be read holds the text rather than send a number
   // nobody checked.
+  // A deal claimed for the combined text that ends up not in it goes back
+  // to waiting, as it was.
+  const release = async (rows) => {
+    for (const o of rows) {
+      const fresh = await store.getReplyDraft(o.id).catch(() => null);
+      if (fresh?.status !== "sending" || fresh.combinedInto !== d.id) continue;
+      const { combinedInto: _c, sendingAt: _s, ...rest } = fresh;
+      await store.updateReplyDraft(o.id, { ...rest, status: "scheduled", updatedAt: new Date().toISOString() }).catch(() => {});
+    }
+  };
   let blast = null;
   if (d.outbound?.kind === "blast_open" && body === String(d.reply || "").trim()) {
     try {
       if (bundle.length) blast = await refreshBundleText({ store, locationId, draft: d, others: bundle });
+      const carried = new Set((blast?.bundle || []).map((p) => p.draftId));
+      await release(bundle.filter((o) => !carried.has(o.id)));
       if (!blast) blast = await refreshBlastText({ store, client, locationId, draft: d, baseUrl: dataroomBaseUrl });
     } catch (e) {
+      await release(bundle);
       const ts = new Date(now).toISOString();
       await store.updateReplyDraft(d.id, {
         ...d, status: "draft", sendAt: null, sendingAt: null, updatedAt: ts,
@@ -4679,7 +4724,8 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     const html = body.split(/\n{2,}/).map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
     result = await sendEmail(client, { contactId: d.contactId, subject, html });
   } else {
-    result = await sendSms(client, { contactId: d.contactId, message: body });
+    try { result = await sendSms(client, { contactId: d.contactId, message: body }); }
+    catch (e) { await release(bundle); throw e; }
   }
 
   const ts = new Date().toISOString();
@@ -4712,7 +4758,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     const street = (a) => String(a || "").split(",")[0].trim();
     for (const part of (blast?.bundle || []).filter((p) => p.draftId !== d.id)) {
       const other = await store.getReplyDraft(part.draftId).catch(() => null);
-      if (other && OPEN_STATUSES.has(other.status)) {
+      if (other && (OPEN_STATUSES.has(other.status) || (other.status === "sending" && other.combinedInto === d.id))) {
         await store.updateReplyDraft(other.id, {
           ...other, status: "superseded", combinedInto: d.id, sendAt: null, sendingAt: null, updatedAt: ts,
           flags: [...(other.flags || []), `went out together with ${street(d.outbound.address || d.propertyAddress)}`],
@@ -4745,6 +4791,14 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       store, locationId, contactId: d.contactId, party: "agent", type: "agent_pulse_texted", at: ts,
       address: d.outbound.address || "", source: "conversation", ref: d.id, dedupeKey: `agent_pulse_texted:${d.id}`,
       data: { draftId: d.id, auto: Boolean(auto), segment: d.outbound.segment || "", reason: d.outbound.reason || "", listingKey: d.outbound.listingKey || null },
+    }).catch(() => {});
+  }
+  // The buyer pulse actually went: "two in a row with no answer" counts
+  // these, never the day's claim (shared/buyer-pulse.js, 2026-10-05).
+  if (d.outbound?.kind === "buyer_pulse") {
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "investor", type: "pulse_texted", at: ts,
+      source: "conversation", ref: d.id, dedupeKey: `pulse_texted:${d.id}`, data: { draftId: d.id, auto: Boolean(auto) },
     }).catch(() => {});
   }
   if (d.outbound?.kind === "outreach_open") {

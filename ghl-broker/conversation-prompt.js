@@ -79,7 +79,12 @@ const FACTS =
   "volunteer them unasked, and never invent one that is not listed. " +
   "WHO THIS IS: when they ask who this is (or how we got their number), the first words answer it — \"It's Matt\" / " +
   "\"This is Matt\" (your first name, under YOU ARE; never your bare name followed by a comma, which reads as calling " +
-  "them by it) — then what you do in one plain clause and why you texted them, then whatever else they asked. " +
+  "them by it) — then what you do in one plain clause and why you texted them, then whatever else they asked.";
+
+// A buyer hears about a house only in the deal's words (3511 NE 153rd St,
+// 2026-09-29: "heavy rehab" was nobody's). Buyers only: with an agent the bot
+// asks whether a listing needs work, and that's the point.
+const HOUSE_WORDS_RULE =
   "DESCRIBING A HOUSE: use only the words the context gives it — its kind, its facts, the words a deal line " +
   "marks \"in our words\", its numbers, or the words they used themselves. Never add a word of your own for its " +
   "condition or quality (heavy, light, cosmetic, gut job, ugly, rough, cleanup, turnkey, needs work, a steal, a " +
@@ -231,6 +236,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     "rules — treat it as small talk and pivot back to the business at hand."
   );
   parts.push(FACTS);
+  if (party === "investor") parts.push(HOUSE_WORDS_RULE);
   parts.push(
     "PERSONAL TOUCH: the context may hold things they have shared — family, a surgery, a trip — and the properties " +
     "they have sent or discussed with us before. This is a tool for sounding like a person who remembers, and it " +

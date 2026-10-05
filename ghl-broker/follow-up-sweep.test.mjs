@@ -1078,3 +1078,21 @@ test("a buyer who got a deal text yesterday isn't followed up until their week a
   assert.equal(started.length, 0);
   assert.ok(job.results.some((r) => /heard from us this week/.test(r.reason || "")), JSON.stringify(job.results));
 });
+
+test("a buyer's one follow-up stays one when the day is changed or the house is named by street", async () => {
+  _resetJobs();
+  const store = fakeStore({ events: [
+    { contactId: "i1", type: "text_summary", at: at(0), address: "9 Oak Ave" },
+    { contactId: "i1", type: "investor_evaluating", at: at(0), address: "9 Oak Ave", offerId: "d1" },
+  ] });
+  let r = spySweep(store, { now: T0 + 4 * DAY });
+  await settle();
+  assert.equal(r.started.length, 1);
+  // Matt moves the day from 3 to 5, and the house turns up again by street.
+  store.events.push({ contactId: "i1", type: "investor_evaluating", at: at(0.5), address: "9 Oak Avenue" });
+  const five = { aiApiKey: "k", conversationAi: configWith({ investor: { followUp: { enabled: true, ladders: { deal_followup: { enabled: true, steps: [5] } } } } }) };
+  _resetJobs();
+  r = spySweep(store, { now: T0 + 8 * DAY, opts: { saved: five } });
+  await settle();
+  assert.equal(r.started.length, 0);
+});
