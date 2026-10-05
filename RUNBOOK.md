@@ -3773,6 +3773,28 @@ sentence, already written for buyers — trimmed out if it runs over 90
 characters. Dollar signs and URLs are stripped whatever is typed: carrier
 rules. Three phrasings still rotate per recipient.
 
+**Only the deal's own words describe the house (2026-10-05).** The blast on
+3511 NE 153rd St said "heavy rehab". Nobody had put that on the deal: the
+template turned 200k of repairs on an 849k ARV into a word. Now:
+- The only word a blast has for the work is the level Matt picked in the Rehab
+  pane's Quick estimate (`snapshot.rehab.bucket`, Light / Medium / Heavy,
+  `pickedRehabLevel`). With none picked, the text says nothing about the work,
+  because "rehab about 200k" already says it. The "needs work" fallback is gone too.
+- The kind of house, septic and "incl. systems" stay. They are facts from the
+  record.
+- The bot's deal line carries the same words as `in our words: heavy rehab,
+  "<headline>"` (`conversation-context.js`). FACTS tells it to describe a house
+  only in the context's words or the buyer's own.
+- The backstop is `houseWordsIn` (`shared/conversation-ai.js`), run in
+  `evaluateReplyGates` on every buyer draft. A condition word ("heavy rehab",
+  "gut job", "ugly", "cleanup", "turnkey", "needs work"…) that isn't in the
+  deal's words or the buyer's own lines holds the draft. Our own earlier texts
+  don't count, so an old blast is no licence. A machine-started text is
+  redrafted once with the flag, then dropped. "Are you open to heavy rehab?"
+  is about the buyer and passes.
+- Matching buyers still reads repairs ÷ ARV (`rehabAppetiteFor`), because that
+  is ranking, not wording.
+
 **What a buyer may see is exactly the three figures the dataroom shows them:
 the buyer price, the ARV and the rehab estimate.** The contract price and the
 assignment fee are not in `dealFacts` and must never be — that is asserted in
@@ -3784,7 +3806,7 @@ A fourth buyer standing on a deal, between Evaluating and Committed. Set it on
 the buyer in Deals → open the deal, and **outreach on that deal stops**:
 
 - no new blast (the button, the blast on promote, and the second wave),
-- no nudge to any other buyer (`blast_nudge`, `dataroom_nudge`),
+- no follow-up to any other buyer (`deal_followup`),
 - no automatic dataroom invite to anyone but the buyer it is held for.
 
 What it deliberately does **not** do: it is not `dealSpokenFor`. The deal is
@@ -3814,7 +3836,7 @@ switch, `deal.outreachStopped {at, by}`. `dealOutreachPaused` returns
 
 - no blast, whether from the button, on promote or as a later wave (the wave
   preview says "you stopped outreach");
-- no `blast_nudge` / `dataroom_nudge`, no package invite, no walkthrough
+- no `deal_followup`, no package invite, no walkthrough
   reminder or follow-up. That includes the link owed to a buyer who answers
   a deal text that went without it (`blastLink: "on_reply"`). That link is
   sent as an action while the reply is drafted, so `startReply` checks the
@@ -3872,6 +3894,105 @@ the deal. Now (`resumeDealOutreach` in `routes/offers.js`, `resumeWave` in
 
 The pane says what came back: "Outreach is back on: N deal texts queued…, N
 waiting for you in the outbox, N buyers left out…".
+
+### A buyer is followed up only after they speak (2026-10-05)
+
+Buck, on 3511 NE 153rd St, never answered the deal. He still got the blast, a
+walkthrough invite and, on 10/5, "Last check on this one… I'll leave it". 56
+of those "last checks" were queued that morning, every one to a buyer with no
+reply that week. Matt: nudge a buyer about a deal only when they showed some
+interest, meaning they said something.
+
+- **Retired:** the "Blasted, no reply" (`blast_nudge`, days 2/6) and "Opened the
+  package, went quiet" (`dataroom_nudge`, days 1/4) ladders. Neither is offered
+  in Settings, on the dial or by the sweep any more, and their saved ladders are
+  dropped on the next save. Old rows still render and can be sent or dismissed
+  by hand.
+- **In their place is one follow-up, `deal_followup`** ("Spoke up on a deal,
+  then went quiet").
+  - **Trigger:** `investor_evaluating`, which is written when a reply about the
+    deal is filed (`dealReplyFiling`: a question, interested, price, a call, a
+    walkthrough, wanting it) or when you mark them evaluating.
+  - **When:** `steps[0]` days (3) after their last word, once, ever, per house.
+    The sweep keeps only the first day whatever is saved, so there is no ladder
+    and no "last check".
+  - **Skipped when:** they passed or committed on it, are soft-committed, the deal
+    is over, or outreach on it is paused or stopped.
+  - **Off by default** (new automation). Settings → Playbooks → Following up →
+    Buyers, or the dial at Normal / Full.
+- A buyer who never answered, or only opened the package, hears from us about
+  **what fits them** (the pulse), not about that house again.
+- **A link preview is not an open.** The page still renders for iMessage,
+  Google Messages, WhatsApp, Slack and other bots, but `viewCount` and
+  `dataroom_viewed` count people only. The access log records the bot visit as
+  `preview` (`isLinkPreview`, `routes/dataroom.js`). On 3511, 19 of 48 "opens"
+  came within two minutes of the text.
+- Today's `blast_no_opens` row now offers **Find more buyers**, not "Nudge them".
+
+### A buyer hears from us at most once a week (2026-10-05)
+
+Nothing counted texts to one buyer across deals, so Buck got two pulse checks,
+the 3511 deal, a walkthrough invite and a "last check" in eleven days. Several
+buyers got two different deal texts one to three days apart.
+`dispoAutopilot.touchBudget` is **on** and only holds texts back. Rules are in
+`shared/buyer-touch.js`, reads in `ghl-broker/buyer-touch.js`.
+
+- **What counts:** sent investor drafts the machine started (`blast_open`,
+  `deal_followup`, `buyer_pulse`, `showing_reminder`, `showing_followup`, the
+  retired nudges) in the trailing 7 days.
+  - Deals sent within 10 minutes of each other count as one.
+  - Our answers to their texts and anything a person sends never count.
+- **How many:**
+  - 1 a week to a buyer who never wrote back (`quietPerWeek`);
+  - 2 a week to one we're talking to (`talkingPerWeek`). Talking means a
+    text, call, evaluating or commit in the last `talkingDays` (30).
+- **A deal text over the limit:**
+  - **When a wave is queued:** the buyer keeps their seat. Their text is
+    scheduled for when their week opens, with the flag "waits for this buyer's
+    weekly limit — goes Tue Oct 7…". The wave's result counts `waiting`.
+  - **When it sends** (`sendReplyDraft`, auto path only; a person's Send
+    overrides): the limit is checked again, and a text over it goes back to
+    `scheduled` at the opening. This also catches texts queued before 10/5.
+- **Two deals, one text:** when a deal text goes, up to `bundleMax` − 1 other
+  scheduled deal texts to that buyer (other live deals, not stopped, not held
+  for another buyer) go in the same text (`bundleMessage`):
+  > Hey Buck, got two under contract right now. 3511 NE 153rd St in Lake Forest Park, 3bd 2ba: buyer price 421k, ARV around 849k, rehab about 200k. And 5232 S Yakima Ave in Tacoma, 3bd 1ba: buyer price 261k, ARV around 360k, rehab about 60k. Either one fit what you're buying? Happy to send photos and numbers.
+  - The bundle has no link and no walkthrough question. When they answer, the
+    link goes for the house they name (`linkOwed` reads `outbound.bundle`).
+  - Each deal in it gets its own `blast_sent`, so waves, feedback and Flow see
+    it as sent. The other texts become `superseded` with `combinedInto`, flagged
+    "went out together with …".
+  - The scheduler reads each text again before claiming it, so one taken into
+    a bundle earlier in the tick never goes on its own.
+- **The pulse and `deal_followup`** skip a buyer whose week is spent. The pulse
+  seat goes to the next in line, and the follow-up waits for a later run.
+- **Walkthrough reminders and follow-ups** count, but are never held: they go
+  to a buyer who booked a time.
+- **Emails** to buyers with no phone are not limited or combined. They wait in
+  the outbox anyway.
+- **A deal text that waits for days stays safe.** A queued text used to wait
+  minutes; now it can wait days, so:
+  - **Their texts:** a buyer's text about something else doesn't cancel it.
+    Only an opt-out does.
+  - **Other machine texts:** they never replace it.
+  - **Your own text:** if you've texted them since it was queued, it goes back
+    to you as a draft ("you've texted them yourself since…") instead of being
+    binned.
+  - **Walkthroughs:** a walkthrough reminder or follow-up isn't held up behind
+    it (`SERVICE_KINDS` in `blockingDraft`).
+  - **Combined texts:** each house in one is checked like its own text (a bot
+    stop on that house, fell through, stopped, held for another buyer). Each is
+    claimed (`sending`, `combinedInto`) before the send and released if the send
+    fails or the house is left out.
+  - **The scheduler** asks the store only for what's due, longest-due first
+    (`listReplyDrafts({ dueBy })`), so deferred texts can't hide one due now.
+- **The pulse slowdown** counts pulses that went (`pulse_texted`, written on
+  send), not claims. Pulses sent before 10/5 have no such event, so nobody
+  starts slowed.
+- **`deal_followup`** goes once per house, ever: changing the day, or the
+  house turning up by street instead of id, doesn't send a second.
+- **Setting:** Settings → Dispositions → Dispositions autopilot → "A buyer
+  hears from the machine at most so often".
 
 ### Market tags and buyer import (2026-09-13)
 
@@ -4066,6 +4187,41 @@ run; a run stale after 45 min is retried, 3 tries, until 4pm).
 `POST /api/dispo/pulse/run {dryRun, limit}` — a dry run (the default, and the
 Preview button) lists who it would text and their clues and touches nobody.
 
+**Relationship first (2026-10-05).** Matt: reach the buyers who haven't
+answered, and ask what fits them, more often and more personally. Don't nudge
+them about a house they ignored.
+- **It says it's Matt.** The who-line is "It's Matt" / "This is Matt", plus how
+  we found them for a Facebook-group buyer.
+  - FACTS gains a rule for every reply: when asked "who is this?", the first
+    words answer it.
+  - Why: Buck's 9/24 "who is this?" was answered at once, but the answer opened
+    "Matt, Seattle investor…". `callsThemOurName` read that as calling him Matt
+    and held it. The audit's check-in redraft opened the same way and was held
+    too, until Matt sent it by hand four days later. The gate is unchanged; the
+    bot now introduces itself in the form the gate already passes.
+- **After a deal** (`afterDeal`, on; `afterDealDays` 10). A buyer sent a deal
+  10–21 days ago who never answered it, nor wrote since, gets a seat right after
+  friends.
+  - The house is the way in: "guessing Lake Forest Park wasn't your kind of
+    house — what is?"
+  - It never asks whether they want the house, and never names a number.
+  - This replaces the old "blasted, no reply" nudges.
+- **Personal clues** (`pulseSubject`, built from the runner's `buyerHistory` read):
+  - the last house we sent and how it went;
+  - their recorded pass reasons;
+  - the record's "about them", "last conversation" and "next action";
+  - the buy-box pieces we're missing, so the ask is for the one missing piece;
+  - how we found a new buyer;
+  - cities ordered by their latest purchase.
+
+  The prompt keeps exactly one real reference (the agent check-in's rule).
+- **Matt's voice** is `dispoAutopilot.pulse.voice`, fed in like the agent check-in's.
+- **Two unanswered in a row** (`ignoredSlowdown` 2; 0 = off): the next pulse waits
+  at least 90 days. They still get deals that fit, under the weekly limit.
+- **Settings → Dispositions → Pulse** has Voice, After a deal, the never-replied
+  cadence, the preview's new groups, and **Write 3 sample pulse checks**
+  (`POST /api/dispo/pulse/preview`: nothing saved or sent).
+
 ### The buyer greenhouse (2026-09-29)
 
 The selling side, reviewed as one line: every live deal reaches every buyer who fits it, once, and the buyer pool stays warm between deals. What changed:
@@ -4155,7 +4311,7 @@ Before this, wave 2 re-drafted every wave-1 buyer whose text was still sitting i
   - The body is the same text, rewritten at send time like the texts.
 - **`autoSend`**, off by default: emailed deals schedule themselves under the same switches as texts (`CARD_SENDS_ENABLED`, `DISPO_BLASTS_ENABLED`, `blast_open` on the allowlist). Off, they wait in the outbox for you.
 - An auto-sent email checks the contact's email opt-out, not SMS.
-- `blast_sent` records `channel`. A buyer who was only emailed never starts the text-only `blast_nudge` ladder.
+- `blast_sent` records `channel`.
 - A buyer tagged `dispo-source-fb-warei` who has never written back gets "found you through the WA real estate Facebook group" first.
 
 `GET /api/dispo/waves/preview?offerId=` returns the deal's `asset` and each next buyer's `channel`.

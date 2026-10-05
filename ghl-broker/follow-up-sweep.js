@@ -21,7 +21,7 @@
 //   The dedupe key is still the real defence — the cursor just stops us
 //   spending model calls on drafts that would be superseded anyway.
 
-import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreachPausedReason, pushesToPaper, offerHeat } from "./shared/offer-status.js";
+import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreachPausedReason, pushesToPaper, offerHeat, investorStatus } from "./shared/offer-status.js";
 import { paperWent } from "./shared/paper-follows.js";
 import { addressKey } from "./shared/us-address.js";
 import { sameStreet } from "./shared/us-address.js";
@@ -39,6 +39,8 @@ import { waitingReason } from "./outbox-guard.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { botHold, holdLine, paceOf, paceScale, MIN_PACE } from "./shared/bot-hold.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
+import { normalizeTouchBudget } from "./shared/buyer-touch.js";
+import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { runCounterHolds } from "./counter-hold.js";
 
 const DAY_MS = 86400000;
@@ -363,22 +365,27 @@ export async function outreachCandidates({ store, locationId, config, now = Date
 /**
  * investorCandidates({ store, locationId, config, now }) → [candidate]
  *
- * One location-wide event read, grouped by contact. A blast or a dataroom open
- * with nothing from them since is a candidate; a pass or a commitment ends it.
- * When both apply to the same buyer the dataroom ladder wins — somebody who
- * opened the package is a warmer thing to write to than somebody who didn't.
+ * One location-wide event read, grouped by contact. A buyer who spoke up on
+ * a deal (investor_evaluating — a question, "interested", "send me more", a
+ * walkthrough, filed by dealReplyFiling or set by you) and has said nothing
+ * since is a candidate, counted from their last word. A pass or a commitment
+ * on that deal ends it.
+ *
+ * A blast nobody answered and a package somebody opened are NOT candidates
+ * (Matt, 2026-10-05): a buyer who never said anything about a deal hears
+ * from us about what fits them — the pulse — not about that house again.
  */
 export async function investorCandidates({ store, locationId, config, now = Date.now() }) {
   const pb = config?.parties?.investor;
   if (!pb?.followUp?.enabled) return [];
-  const ladders = pb.followUp.ladders || {};
-  const live = kindsFor("investor").filter((k) => ladders[k]?.enabled && ladders[k].steps?.length);
-  if (!live.length) return [];
+  const ladder = pb.followUp.ladders?.deal_followup;
+  if (!ladder?.enabled || !ladder.steps?.length) return [];
+  // One rung, whatever is saved: never a second ask about the same house.
+  const once = { ...ladder, steps: [ladder.steps[0]], repeatEvery: 0 };
 
   const since = iso(now - INVESTOR_WINDOW_DAYS * DAY_MS);
   const events = await store.listContactEventsSince(locationId, since, {
-    types: ["blast_sent", "dataroom_viewed", "investor_passed", "investor_committed", "investor_evaluating",
-            "follow_up_sent", "text_summary", "call_summary"],
+    types: ["investor_passed", "investor_committed", "investor_evaluating", "follow_up_sent", "text_summary", "call_summary"],
     limit: 5000,
   }).catch(() => []);
 
@@ -388,37 +395,32 @@ export async function investorCandidates({ store, locationId, config, now = Date
     if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
     byContact.get(e.contactId).push(e);
   }
+  const sameDeal = (a, b) => (a.offerId && b.offerId ? a.offerId === b.offerId : Boolean(a.address && b.address && sameStreet(a.address, b.address)));
 
   const out = [];
   for (const [contactId, list] of byContact) {
     list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
-    // Anything they said, or any outcome we already have, ends the ladder.
     const lastInboundAt = list.filter((e) => e.type === "text_summary" || e.type === "call_summary").at(-1)?.at || null;
-    const settled = list.some((e) => e.type === "investor_passed" || e.type === "investor_committed");
-    if (settled) continue;
     const lastTouchAt = list.filter((e) => e.type === "follow_up_sent").at(-1)?.at || null;
-
-    // The trigger: the newest open/blast, dataroom first.
-    const trigger = ["dataroom_nudge", "blast_nudge"]
-      .filter((k) => live.includes(k))
-      .map((kind) => {
-        const type = FOLLOW_UP_KINDS[kind].trigger;
-        // A nudge is a text. A deal we emailed to a buyer with no phone
-        // (dispo-autopilot.js blastChannel) has no text to follow it with.
-        const ev = list.filter((e) => e.type === type && !(type === "blast_sent" && e.data?.channel === "email")).at(-1);
-        return ev ? { kind, ev } : null;
-      })
-      .find(Boolean);
-    if (!trigger) continue;
-
-    const { kind, ev } = trigger;
+    // The newest deal they spoke up on that they haven't since passed on or
+    // taken.
+    const spoke = list.filter((e) => e.type === "investor_evaluating" && (e.offerId || e.address))
+      .filter((ev) => !list.some((x) => (x.type === "investor_passed" || x.type === "investor_committed") && String(x.at) >= String(ev.at) && sameDeal(x, ev)))
+      .at(-1);
+    if (!spoke) continue;
+    // Once per house, ever: whatever day the ladder says now, and whether
+    // the house was named by id or by street.
+    if (list.some((e) => e.type === "follow_up_sent" && e.data?.kind === "deal_followup" && sameDeal(e, spoke))) continue;
+    const subjectId = spoke.offerId || spoke.address;
+    // Counted from their last word, so a buyer still talking is never chased.
+    const startedAt = [spoke.at, lastInboundAt].filter(Boolean).sort().at(-1);
     out.push({
-      kind, party: "investor", contactId, subjectId: ev.offerId || ev.address || contactId,
-      offerId: ev.offerId || null, address: ev.address || "", startedAt: ev.at,
-      sentSteps: list.filter((e) => e.type === "follow_up_sent" && e.data?.kind === kind).map((e) => Number(e.data?.step)),
+      kind: "deal_followup", party: "investor", contactId, subjectId,
+      offerId: spoke.offerId || null, address: spoke.address || "", startedAt, spokeAt: spoke.at,
+      sentSteps: list.filter((e) => e.type === "follow_up_sent" && e.data?.kind === "deal_followup" && String(e.ref || "").startsWith(`deal_followup:${subjectId}:`))
+        .map((e) => Number(e.data?.step)),
       lastInboundAt, lastTouchAt,
-      ...(kind === "dataroom_nudge" ? { viewedAt: ev.at } : { blastedAt: ev.at }),
-      ladder: ladders[kind],
+      ladder: once,
     });
   }
   return out;
@@ -561,6 +563,25 @@ async function runSweep(job, ctx) {
       // A deal that found its buyer is not nudged to anyone else.
 
       const mine = (offer?.deal?.investors || []).find((i) => i.contactId === c.contactId);
+      // Already taking it, or holding it: they're working with us, not gone
+      // quiet. A pass ends it too, whatever the event stream says.
+      const standing = mine ? investorStatus(mine.status) : null;
+      if (c.kind === "deal_followup" && standing && standing !== "evaluating") {
+        job.skipped++;
+        push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: `they're ${standing.replace("_", " ")} on it` });
+        continue;
+      }
+      // One buyer, one week (shared/buyer-touch.js): heard from us this week
+      // already, the follow-up waits; the rung isn't claimed, so a later run
+      // sends it.
+      if (c.kind === "deal_followup") {
+        const week = await buyerTouchLimit({ store, locationId, contactId: c.contactId, budget: normalizeTouchBudget(saved?.dispoAutopilot?.touchBudget), now });
+        if (!week.open) {
+          job.skipped++;
+          push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: `heard from us this week — their next opening is ${slotWord(week.at)}` });
+          continue;
+        }
+      }
       // Committed elsewhere, or soft-committed: nudging another buyer about it
       // is putting it in front of them again. The buyer it is held for still
       // hears from us.
@@ -776,7 +797,7 @@ async function runSweep(job, ctx) {
         client, locationId, saved, store, contactId: c.contactId, kind: c.kind,
         offer: OFFER_KINDS.has(c.kind) ? offer : null,
         subject: { address: c.address, step: d.step, steps: c.ladder.steps, repeatEvery: c.ladder.repeatEvery || 0,
-                   viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, lastTouchAt, relisted: Boolean(c.relisted),
+                   viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, spokeAt: c.spokeAt || null, lastTouchAt, relisted: Boolean(c.relisted),
                    ...(c.county ? { county: c.county } : {}),
                    ...(c.wavering ? { wavering: true } : {}),
                    ...(aside ? { aside: { address: aside.address, quiet: Boolean(aside.quiet) } } : {}) },

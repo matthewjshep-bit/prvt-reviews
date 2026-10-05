@@ -26,7 +26,18 @@ const kText = (n) => {
   return v >= 1000000 ? `${(v / 1000000).toFixed(v % 1000000 === 0 ? 0 : 2).replace(/\.?0+$/, "")}M` : `${Math.round(v / 1000)}k`;
 };
 
-export const REHAB_WORDS = { cosmetic_only: "cosmetic", moderate: "moderate", heavy: "heavy", full_gut: "full-gut" };
+// The only words a blast has for the work are the level Matt picked on the
+// deal (the Rehab pane's Light / Medium / Heavy, snapshot.rehab.bucket). Not
+// one worked out from repairs ÷ ARV: 3511 NE 153rd St went to buyers as
+// "heavy rehab" on 2026-09-29 and nobody had called it that. With no level
+// picked the text says nothing about the work — "rehab about 200k" does.
+export const REHAB_WORDS = { light: "light", medium: "medium", heavy: "heavy" };
+
+// The level the operator picked, or "".
+export function pickedRehabLevel(offer = {}) {
+  const b = String(offer?.snapshot?.rehab?.bucket || "").toLowerCase();
+  return REHAB_WORDS[b] ? b : "";
+}
 
 // The operator's own line, from the dataroom headline. Their copy, so it is
 // trimmed rather than rewritten — but a dollar sign or a URL in a bulk text is
@@ -45,7 +56,8 @@ export function blastNote(text = "", max = 90) {
  * blastMessage({ firstName, address, city, price, beds, baths, sqft, yearBuilt,
  *                rehab, arv, repairs, note, variant, link, kind, intro }) → string
  *
- * `rehab` is a REHAB_APPETITES key or "". `link` is the buyer's own package
+ * `rehab` is the level the operator picked (a REHAB_WORDS key) or "" — never a
+ * word worked out from the numbers. `link` is the buyer's own package
  * link; with it the text ends on the link rather than offering to send the
  * details. `ask` is the walkthrough question; with it the text ends on that
  * question (then the link). `variant` picks the phrasing (0-2);
@@ -85,7 +97,9 @@ function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, 
   // the 2026-10-02 read of every thread) — answered up front when the record
   // says so.
   const spec = [String(kind || "").trim(), size, built, septic ? "septic" : ""].filter(Boolean).join(", ");
-  const work = REHAB_WORDS[rehab] ? `${REHAB_WORDS[rehab]} rehab` : "needs work";
+  const work = REHAB_WORDS[rehab] ? `${REHAB_WORDS[rehab]} rehab` : "";
+  const workAfter = work ? `, ${work}` : "";
+  const workLine = work ? `${work[0].toUpperCase()}${work.slice(1)}. ` : "";
   // What it costs and what it's worth — the ask first, because that is the
   // number they decide on, then the two that say whether it's a deal.
   const priceText = kText(price);
@@ -105,21 +119,57 @@ function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, 
   if (q) {
     const lead = ["Photos and numbers", "Full package", "Everything's here"][v];
     const opener = v === 0
-      ? `${hi}got ${street}${where} under contract${spec ? ` — ${spec}` : ""}, ${work}. `
+      ? `${hi}got ${street}${where} under contract${spec ? ` — ${spec}` : ""}${workAfter}. `
       : v === 1
-        ? `${hi}new one${where}: ${street}${spec ? `, ${spec}` : ""}, ${work}. `
-        : `${hi}${street}${where} just went under contract${spec ? ` (${spec})` : ""}. ${work[0].toUpperCase()}${work.slice(1)}. `;
+        ? `${hi}new one${where}: ${street}${spec ? `, ${spec}` : ""}${workAfter}. `
+        : `${hi}${street}${where} just went under contract${spec ? ` (${spec})` : ""}. ${workLine}`;
     // The link waits for their answer (dispoAutopilot.blastLink "on_reply"):
     // say it's there for the asking.
     return `${opener}${money ? `${money}. ` : ""}${tail}${q}${url ? ` ${lead}: ${url}` : linkOnReply ? " Happy to send photos and numbers." : ""}`;
   }
   if (v === 0) {
-    return `${hi}got ${street}${where} under contract${spec ? ` — ${spec}` : ""}, ${work}. ${money ? `${money}. ` : ""}${tail}${url ? `Photos and numbers: ${url}` : "Want the details?"}`;
+    return `${hi}got ${street}${where} under contract${spec ? ` — ${spec}` : ""}${workAfter}. ${money ? `${money}. ` : ""}${tail}${url ? `Photos and numbers: ${url}` : "Want the details?"}`;
   }
   if (v === 1) {
-    return `${hi}new one${where}: ${street}${spec ? `, ${spec}` : ""}, ${work}. ${money ? `${money}. ` : ""}${tail}${url ? `Interested? Full package: ${url}` : "Interested?"}`;
+    return `${hi}new one${where}: ${street}${spec ? `, ${spec}` : ""}${workAfter}. ${money ? `${money}. ` : ""}${tail}${url ? `Interested? Full package: ${url}` : "Interested?"}`;
   }
-  return `${hi}${street}${where} just went under contract${spec ? ` (${spec})` : ""}. ${work[0].toUpperCase()}${work.slice(1)}. ${money ? `${money}. ` : ""}${tail}${url ? `Everything's here: ${url}` : "Say the word and I'll send the package."}`;
+  return `${hi}${street}${where} just went under contract${spec ? ` (${spec})` : ""}. ${workLine}${money ? `${money}. ` : ""}${tail}${url ? `Everything's here: ${url}` : "Say the word and I'll send the package."}`;
+}
+
+/**
+ * bundleMessage(factsList, { firstName, linkOnReply, intro, variant }) → string
+ *
+ * Two or three deals for one buyer, in one text (Matt, 2026-10-05: a buyer
+ * who'd hear about two houses in three days hears about both at once). Each
+ * deal is its street, the kind and size, the level Matt picked if any, and
+ * the three figures a buyer may see — nothing the deal doesn't say. No link
+ * and no walkthrough question: whichever they answer about brings those. More
+ * than three are left for the next text. One deal is just its own blast.
+ */
+export const BUNDLE_MAX = 3;
+export function bundleMessage(factsList = [], { firstName = "", linkOnReply = false, intro = "", variant = 0 } = {}) {
+  const deals = (factsList || []).filter(Boolean).slice(0, BUNDLE_MAX);
+  if (deals.length <= 1) return blastMessage({ ...(deals[0] || {}), firstName, variant, intro, linkOnReply });
+  const first = String(firstName || "").trim().split(/\s+/)[0] || "";
+  const line = (f) => {
+    const street = String(f.address || "").split(",")[0].trim() || "a house";
+    const where = f.city ? ` in ${f.city}` : "";
+    const size = [f.beds ? `${f.beds}bd` : "", f.baths ? `${f.baths}ba` : ""].filter(Boolean).join(" ");
+    const work = REHAB_WORDS[f.rehab] ? `${REHAB_WORDS[f.rehab]} rehab` : "";
+    const what = [String(f.kind || "").trim(), size, work].filter(Boolean).join(", ");
+    const money = [
+      kText(f.price) ? `buyer price ${kText(f.price)}` : "",
+      kText(f.arv) ? `ARV around ${kText(f.arv)}` : "",
+      kText(f.repairs) ? `rehab about ${kText(f.repairs)}${f.systems ? " incl. systems" : ""}` : "",
+    ].filter(Boolean).join(", ");
+    return `${street}${where}${what ? `, ${what}` : ""}${money ? `: ${money}` : ""}`;
+  };
+  const count = deals.length === 2 ? "two" : "three";
+  const how = String(intro || "").replace(/[.!?\s]+$/, "").trim();
+  const hi = `${first ? `Hey ${first}` : "Hey"}${how ? ` — ${how}. Got` : ", got"} ${count} under contract right now.`;
+  const body = deals.map((f, i) => `${i ? "And " : ""}${line(f)}.`).join(" ");
+  const ask = deals.length === 2 ? "Either one fit what you're buying?" : "Any of these fit what you're buying?";
+  return `${hi} ${body} ${ask}${linkOnReply ? " Happy to send photos and numbers." : ""}`;
 }
 
 /**
@@ -146,8 +196,8 @@ export function dealFacts(offer = {}, { price = 0, note = "" } = {}) {
   // names none — one rehab number across every surface a buyer sees.
   const scoped = (offer.scope || []).reduce((t, s) => t + (Number(s?.cost) || 0), 0);
   const repairs = named || Math.round(scoped);
-  const pct = arv && repairs ? repairs / arv : 0;
-  const rehab = !pct ? "" : pct < 0.05 ? "cosmetic_only" : pct < 0.12 ? "moderate" : pct < 0.25 ? "heavy" : "full_gut";
+  // The level Matt picked, never one read off repairs ÷ ARV (see REHAB_WORDS).
+  const rehab = pickedRehabLevel(offer);
   return {
     address: offer.address || "", city,
     price: Math.round(Number(price) || 0),

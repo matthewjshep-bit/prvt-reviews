@@ -196,3 +196,44 @@ test("a send GHL refuses as unsubscribed is dismissed, not handed back as 'Needs
   assert.match(d.flags.join(" · "), /unsubscribed — not sent/);
   assert.doesNotMatch(d.flags.join(" · "), /auto-send failed/);
 });
+
+// Two deals for one buyer go as one text (2026-10-05): sending the first
+// stands the second down. The tick listed both at its top, and claiming the
+// stale copy of the second would have sent it anyway.
+test("a text another send took with it in the same tick is not sent again", async () => {
+  const store = fakeStore([draft(), draft({ id: "d2" })]);
+  const sent = [];
+  await sendDueDrafts({
+    store, locations: [{ locationId: "LOC", client: {} }], live: true, now, paceMs: 0,
+    send: async (args) => {
+      sent.push(args.draftId);
+      store.rows.set(args.draftId, { ...store.rows.get(args.draftId), status: "sent" });
+      if (args.draftId === "d1") store.rows.set("d2", { ...store.rows.get("d2"), status: "superseded", combinedInto: "d1" });
+    },
+  });
+  assert.deepEqual(sent, ["d1"]);
+  assert.equal(store.rows.get("d2").status, "superseded");
+});
+
+// Deal texts can now wait days for a buyer's week. Fifty of them created
+// after a reply that is due now must not hide it: the scheduler asks the
+// store for what's due, longest-due first.
+test("a reply due now goes even behind fifty newer deal texts waiting for next week", async () => {
+  const rows = [draft({ id: "due", sendAt: "2026-09-04T17:00:00Z", createdAt: "2026-09-01T00:00:00Z" })];
+  for (let i = 0; i < 60; i++) rows.push(draft({ id: `wait${i}`, sendAt: "2026-09-09T16:00:00Z", createdAt: `2026-09-03T00:${String(i).padStart(2, "0")}:00Z`, intent: "blast_open" }));
+  const store = fakeStore(rows);
+  let asked = null;
+  store.listReplyDrafts = async (_loc, opts = {}) => {
+    if (opts.status === "scheduled") asked = opts;
+    // The real store's order: newest-created first, unless asked for what's due.
+    return [...store.rows.values()].filter((d) => d.status === opts.status)
+      .filter((d) => !opts.dueBy || d.sendAt <= opts.dueBy)
+      .sort(opts.dueBy ? (a, b) => a.sendAt.localeCompare(b.sendAt) : (a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .slice(0, opts.limit ?? 100);
+  };
+  const sent = [];
+  await sendDueDrafts({ store, locations: [{ locationId: "LOC", client: {} }], live: true, now, paceMs: 0,
+    send: async (args) => { sent.push(args.draftId); store.rows.set(args.draftId, { ...store.rows.get(args.draftId), status: "sent" }); } });
+  assert.ok(asked?.dueBy, "asked for what's due");
+  assert.deepEqual(sent, ["due"]);
+});

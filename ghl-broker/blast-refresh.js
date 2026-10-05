@@ -9,7 +9,7 @@
 // carries the buyer's own tracked package link, issued at that moment so a
 // held or dismissed text never mints one.
 
-import { blastMessage, blastSubject, dealFacts } from "./shared/blast-text.js";
+import { blastMessage, blastSubject, dealFacts, bundleMessage } from "./shared/blast-text.js";
 import { dealNumbers, applyNumberOverrides, issueDataroomInvite } from "./dataroom.js";
 import { walkthroughAsk } from "./shared/showing.js";
 
@@ -39,7 +39,16 @@ export function blastVariant(draft = {}) {
  * Throws when the deal is there but its price can't be put together — the
  * caller holds the text rather than send a number it couldn't check.
  */
-export async function refreshBlastText({ store, client, locationId, draft, baseUrl = defaultDataroomBaseUrl() }) {
+/**
+ * blastFactsFor({ store, locationId, draft }) → { offer, settings, room, price, facts } | null
+ *
+ * A queued deal text's deal as it stands now: the price off the deal (and
+ * any figure pinned on its package), the house, and the operator's line.
+ * null when there is no deal to read; throws when its price can't be put
+ * together. The single text and the combined one (two deals, one text) both
+ * read their deals here, so they quote the same numbers.
+ */
+export async function blastFactsFor({ store, locationId, draft }) {
   const offerId = draft?.outbound?.offerId;
   if (!offerId || typeof store.getOffer !== "function") return null;
   const offer = await store.getOffer(offerId);
@@ -55,6 +64,16 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
   const { numbers } = applyNumberOverrides(base, room?.snapshot?.overrides || {});
   const price = Math.round(Number(numbers.investorPrice) || 0);
   if (!(price > 0)) throw new Error("the deal has no buyer price");
+  const facts = dealFacts(offer, { price, note: draft.outbound?.note || room?.snapshot?.headline || "" });
+  if (numbers.arv > 0) facts.arv = numbers.arv;
+  if (numbers.repairs > 0) facts.repairs = numbers.repairs;
+  return { offer, settings, room, price, facts };
+}
+
+export async function refreshBlastText({ store, client, locationId, draft, baseUrl = defaultDataroomBaseUrl() }) {
+  const read = await blastFactsFor({ store, locationId, draft });
+  if (!read) return null;
+  const { offer, settings, room, price, facts } = read;
 
   // Links wait for their answer (dispoAutopilot.blastLink "on_reply"): a link
   // in a text is what the carriers block most, so the text asks if they want
@@ -67,9 +86,6 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
     invite = out.invite;
     link = out.link;
   }
-  const facts = dealFacts(offer, { price, note: draft.outbound?.note || room?.snapshot?.headline || "" });
-  if (numbers.arv > 0) facts.arv = numbers.arv;
-  if (numbers.repairs > 0) facts.repairs = numbers.repairs;
   // The walkthrough question, read now too: a window set after the blast
   // queued is in every text that hasn't left yet.
   // (dispoAutopilot.showings.askInBlast, on unless switched off — read here
@@ -78,4 +94,34 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
   const text = blastMessage({ ...facts, firstName: draft.contactName || "", variant: blastVariant(draft), link, ask, intro: draft.outbound?.intro || "", linkOnReply: linkLater });
   const subject = draft.channel === "email" ? blastSubject(facts) : "";
   return { text, subject, price, invite, room, withoutLink: linkLater };
+}
+
+/**
+ * refreshBundleText({ store, locationId, draft, others }) → { text, price, withoutLink, bundle } | null
+ *
+ * Two or three deals waiting for one buyer, as one text (Matt, 2026-10-05:
+ * "we have this one and this one available"). Each deal is read as it
+ * stands now, exactly as its own text would be. A deal that can't be priced
+ * is left out and goes on its own later. No link and no walkthrough question:
+ * whichever deal they answer about brings those (linkOwed in reply-agent.js).
+ * null when fewer than two deals could be read — the caller sends the one.
+ */
+export async function refreshBundleText({ store, locationId, draft, others = [] }) {
+  const own = await blastFactsFor({ store, locationId, draft });
+  if (!own) return null;
+  const parts = [{ draft, ...own }];
+  for (const o of others) {
+    try {
+      const r = await blastFactsFor({ store, locationId, draft: o });
+      if (r) parts.push({ draft: o, ...r });
+    } catch { /* unpriced: it waits and goes on its own */ }
+  }
+  if (parts.length < 2) return null;
+  const text = bundleMessage(parts.map((p) => p.facts), {
+    firstName: draft.contactName || "", linkOnReply: true, intro: draft.outbound?.intro || "", variant: blastVariant(draft),
+  });
+  return {
+    text, price: own.price, withoutLink: true,
+    bundle: parts.map((p) => ({ draftId: p.draft.id, offerId: p.offer.id, address: p.offer.address || "", price: p.price })),
+  };
 }

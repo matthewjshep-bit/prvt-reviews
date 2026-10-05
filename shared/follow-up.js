@@ -5,9 +5,10 @@
 // when an underwrite landed). An offer sent five days ago with no reply just
 // sat there, and `no_response` was a thing you typed by hand.
 //
-// Three ladders, one per kind of silence: an offer the agent never answered,
-// a deal we blasted an investor who never replied, and a dataroom somebody
-// opened and then went quiet. Each is a list of DAYS SINCE THE TRIGGER —
+// One ladder per kind of silence: an offer the agent never answered, a cold
+// agent who never wrote back, a pass worth checking on — and on the buyer
+// side, ONE follow-up to a buyer who said something about a deal and went
+// quiet. Each is a list of DAYS SINCE THE TRIGGER —
 // absolute offsets, not gaps between touches. That matters twice: an operator
 // can reason about "day 3, day 7, day 14" without doing arithmetic, and a
 // sweep that missed a day still fires the day-7 step, once, rather than
@@ -30,9 +31,21 @@ export const FOLLOW_UP_KINDS = {
   // listing agent writing it up on NWMLS forms for us to sign; this ladder
   // keeps asking, tightly, until they do or go quiet.
   hot_push:       { party: "agent",    trigger: "price_agreed",    label: "Price agreed, push to paper" },
-  blast_nudge:    { party: "investor", trigger: "blast_sent",      label: "Blasted, no reply" },
-  dataroom_nudge: { party: "investor", trigger: "dataroom_viewed", label: "Opened the package, went quiet" },
+  // A buyer who said something about a deal — a question, "interested",
+  // "send me more", a walkthrough — and then went quiet gets one follow-up,
+  // counted from their last word. Matt, 2026-10-05: a buyer who never
+  // answered a deal (or only opened the package) is not followed up about
+  // it; they hear from us about what fits them instead (the pulse). Buck got
+  // the blast, a walkthrough invite and "Last check on this one…" about a
+  // house he never answered.
+  deal_followup:  { party: "investor", trigger: "investor_evaluating", label: "Spoke up on a deal, then went quiet" },
 };
+
+// The buyer ladders that ran until 2026-10-05: "Blasted, no reply" and
+// "Opened the package, went quiet". Both chased buyers who had said nothing.
+// No longer offered or swept; their drafts still render and can be sent or
+// dismissed by hand.
+export const RETIRED_FOLLOW_UP_KINDS = ["blast_nudge", "dataroom_nudge"];
 
 // The hot push's own floor between texts. A constant, not a setting: it
 // ignores the shared gap between texts and the weekly cap on purpose, and this is
@@ -63,8 +76,9 @@ export const DEFAULT_LADDERS = {
   // (follow-up-sweep.js hotCandidates), so these are days since they last
   // spoke, and two with nothing back is a phone call, not a third text.
   hot_push:       { enabled: false, steps: [1, 3, 6, 10], repeatEvery: 0, onExhausted: "stop" },
-  blast_nudge:    { enabled: false, steps: [2, 6], repeatEvery: 0, onExhausted: "stop" },
-  dataroom_nudge: { enabled: false, steps: [1, 4], repeatEvery: 0, onExhausted: "stop" },
+  // One rung, always: the sweep sends only the first day however many are
+  // saved. Never a second ask, never a "last check".
+  deal_followup:  { enabled: false, steps: [3], repeatEvery: 0, onExhausted: "stop" },
 };
 
 /* ---------- what the bot promised ---------- */
@@ -470,7 +484,7 @@ export function threadTimes(drafts = []) {
 export const MACHINE_STARTED_KINDS = new Set([
   "outreach_open", "outreach_nudge", "take_check", "realm_check", "offer_nudge", "counter_nudge", "take_ask", "kind_pass",
   "hot_push", "passed_checkin", "promise_due", "price_drop", "checkin_due", "address_chase",
-  "blast_nudge", "dataroom_nudge", "buyer_pulse", "agent_pulse", "showing_reminder", "showing_followup"]);
+  "blast_nudge", "dataroom_nudge", "deal_followup", "buyer_pulse", "agent_pulse", "showing_reminder", "showing_followup"]);
 
 // A draft that answers something they sent. Reply rows carry no outbound
 // kind — a photo-only text has an empty `inbound`, so the kind decides.
@@ -488,9 +502,15 @@ const OWN_DRAFT_WORD = { check_in: "check-in", partner_answer: "answer", showing
  * machine text superseded whatever was waiting, so a question held for a
  * person left Today and a canned check-in went out in its place.
  */
-export function blockingDraft(open = [], { continues = null } = {}) {
+// Texts that are service to a buyer who booked a time, not outreach: a deal
+// text queued for them (it can wait days for their week — shared/buyer-touch.js)
+// doesn't hold these up, and they never replace it.
+export const SERVICE_KINDS = new Set(["showing_reminder", "showing_followup"]);
+
+export function blockingDraft(open = [], { continues = null, kind = null } = {}) {
   return (open || []).find((d) => d && (d.status === "draft" || d.status === "scheduled")
-    && d.id !== continues && !MACHINE_STARTED_KINDS.has(d.outbound?.kind)) || null;
+    && d.id !== continues && !MACHINE_STARTED_KINDS.has(d.outbound?.kind)
+    && !(SERVICE_KINDS.has(kind) && d.status === "scheduled" && d.outbound?.kind === "blast_open")) || null;
 }
 
 /** Why the machine stood down, in the words a skipped row shows. */

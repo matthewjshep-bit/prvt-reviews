@@ -5707,7 +5707,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // held goes back to "scheduled" when dialHeldReleasable says so: what the
   // machine starts is spread across the day, an answer goes in a minute. A
   // dry run unless told otherwise. No names in the answer or the log.
-  const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "outreach_nudge", "outreach_open"]);
+  const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "deal_followup", "outreach_nudge", "outreach_open"]);
   router.post("/automations/autonomy/release-held", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);

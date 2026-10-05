@@ -65,7 +65,7 @@ export const OUTBOUND_INTENTS = {
   // does agent_pulse (outreachAutopilot.pulse, shared/agent-pulse.js), and
   // the walkthrough texts (dispoAutopilot.showings, showing-sweep.js).
   agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "hot_push", "passed_checkin", "outreach_nudge", "call_followup", "promise_due", "price_drop", "checkin_due", "address_chase"],
-  investor: ["blast_open", "blast_nudge", "dataroom_nudge", "call_followup"],
+  investor: ["blast_open", "blast_nudge", "dataroom_nudge", "deal_followup", "call_followup"],
 };
 
 export const INTENT_LABEL = {
@@ -86,6 +86,7 @@ export const INTENT_LABEL = {
     wants_walkthrough: "wants to walk it", passing: "passing", wants_call: "wants a call",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
     blast_nudge: "followed up on a deal we sent", dataroom_nudge: "followed up after they opened the package",
+    deal_followup: "followed up after they asked about a deal",
     buyer_pulse: "checked in between deals",
     showing_reminder: "reminded them about the walkthrough", showing_followup: "asked how the walkthrough went",
     blast_open: "sent them a deal (blast)", call_followup: "text after a call",
@@ -1589,6 +1590,43 @@ export const ALL_CASH_CLAIM_RX = /\b(?:no|without(?: a| any)?|don'?t need(?: a)?
 export function claimsAllCash(reply = "") {
   const m = String(reply || "").match(ALL_CASH_CLAIM_RX);
   return m ? m[0] : null;
+}
+
+// Words about what state a house is in. 3511 NE 153rd St, 2026-09-29: buyers
+// were told "heavy rehab" and nobody had put that on the deal. A house is
+// described in the deal's own words (its headline, the rehab level Matt
+// picked) or the buyer's — never in one the bot reaches for. "Are you open to
+// heavy rehab?" and "new construction or cosmetic flips?" are about the
+// buyer, not a house, and are left alone.
+export const HOUSE_WORD_RX = /\b(?:(?:heavy|light|cosmetic|moderate|medium|full[- ]?gut|gut)[- ](?:rehab|reno(?:vation)?|remodel|job|lift|project|fix|flip)s?|gutted|tear[- ]?down|ugly|rough shape|clean-?up(?! (?:the|my|our|your|that|this|it)\b)|turn[- ]?key|move[- ]in ready|a steal|great deal|needs (?:some |a lot of |lots of )?work|handyman special)\b/gi;
+const ABOUT_THEM_BEFORE = /\b(?:open to|do you|would you|you do|you take|you like|you want|you're after|interested in|prefer|your|take on|okay with|ok with|mind|looking for|lane)\b[^.?!]*$/i;
+const ALTERNATIVE = /\bor\b/i;
+const houseCore = (w) => String(w || "").toLowerCase()
+  .replace(/[- ]?(?:rehab|reno(?:vation)?|remodel|job|lift|project|fix|flip)s?$/, "")
+  .replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ").trim();
+// A word only describes a house when its sentence is about one: "it's", "this
+// one", "under contract", a street number. "Still doing cosmetic flips in
+// Pierce?" and "I've got you down as heavy rehab, Tacoma" are about the
+// buyer's buy box, which the pulse is told to confirm.
+const HOUSE_ANCHOR_RX = /\b(?:it'?s|it is|it was|it needs|it has|this one|that one|the house|the property|the place|the home|this house|that house|under contract)\b|\b\d{2,6}\s+[A-Za-z]/i;
+const sentenceAt = (t, i, len) => {
+  const start = Math.max(t.lastIndexOf(".", i - 1), t.lastIndexOf("!", i - 1), t.lastIndexOf("?", i - 1), t.lastIndexOf("\n", i - 1)) + 1;
+  const ends = [".", "!", "?", "\n"].map((c) => t.indexOf(c, i + len)).filter((x) => x >= 0);
+  return t.slice(start, ends.length ? Math.min(...ends) : t.length);
+};
+export function houseWordsIn(reply = "", { allowed = "" } = {}) {
+  const t = String(reply || "");
+  const ok = ` ${String(allowed || "").toLowerCase().replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ")} `;
+  for (const m of t.matchAll(HOUSE_WORD_RX)) {
+    if (!HOUSE_ANCHOR_RX.test(sentenceAt(t, m.index, m[0].length))) continue;
+    const before = t.slice(Math.max(0, m.index - 60), m.index);
+    const after = t.slice(m.index + m[0].length, m.index + m[0].length + 20);
+    if (ABOUT_THEM_BEFORE.test(before) || ALTERNATIVE.test(before.slice(-20)) || ALTERNATIVE.test(after)) continue;
+    const core = houseCore(m[0]);
+    if (core && ok.includes(` ${core} `)) continue;
+    return m[0];
+  }
+  return "";
 }
 
 // The agent asks how to write it up: earnest money, the inspection window,

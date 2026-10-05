@@ -45,7 +45,7 @@ import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, 
 import { paperWent, paperWorthy, floatSentAt } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, asksUsToComeUp, soundsLikeSecondThoughts } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, soundsLikeSecondThoughts } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
@@ -64,7 +64,7 @@ import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, mac
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, fellThroughOn, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
 import { signedContractIn, themLines } from "./shared/contract-signed.js";
 import { sameStreet } from "./shared/us-address.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
@@ -94,13 +94,15 @@ import {
 import { carrierFlags } from "./shared/carrier-words.js";
 import { planActions, runActions } from "./conversation-actions.js";
 import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend } from "./conversation-scheduler.js";
-import { refreshBlastText, defaultDataroomBaseUrl } from "./blast-refresh.js";
+import { refreshBlastText, refreshBundleText, defaultDataroomBaseUrl } from "./blast-refresh.js";
+import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
+import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { gmailBeforeDraft, contactEmails } from "./gmail-sync.js";
 import { meterAi } from "./ai-spend.js";
 
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
-const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "outreach_nudge", "outreach_open", "buyer_pulse", "agent_pulse"]);
+const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "deal_followup", "outreach_nudge", "outreach_open", "buyer_pulse", "agent_pulse"]);
 function scheduleFor({ config, now, kind = null, intent = "", replyLength = 0, random = Math.random }) {
   const a = config.autoSend || {};
   if (kind && STARTED_KINDS.has(kind)) {
@@ -313,7 +315,7 @@ export const SHADOW_GRACE_MS = 20_000;
 // Plain check-ins with no number, no negotiation and no terms in them — the
 // texts where thinking harder buys nothing (2026-09-25). Everything else,
 // replies included, stays at medium.
-export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "showing_reminder", "showing_followup"]);
+export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "deal_followup", "showing_reminder", "showing_followup"]);
 export const draftEffort = (outbound) => (outbound && LOW_EFFORT_KINDS.has(outbound.kind) ? "low" : "medium");
 
 // Machine texts a gate catches that wait for a person rather than being
@@ -326,7 +328,7 @@ export const KEEP_FOR_A_PERSON = new Set(["realm_check", "take_check", "promise_
 // partner's answer, an address chase and every reply to a person may not.
 export const BATCHABLE_KINDS = new Set([
   "outreach_open", "outreach_nudge", "counter_nudge", "take_ask", "offer_nudge", "hot_push", "passed_checkin",
-  "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "promise_due", "price_drop", "checkin_due",
+  "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "deal_followup", "promise_due", "price_drop", "checkin_due",
   "showing_reminder", "showing_followup",
 ]);
 
@@ -452,6 +454,20 @@ export function vacantPerRecord(deals = null, address = "") {
   const rows = [...(deals?.linked || []), ...(deals?.matching || [])];
   const hit = rows.find((d) => sameStreet(d?.address, address));
   return hit?.occupancy === "vacant";
+}
+
+/**
+ * houseWordsFor(deals, transcript, inbound) → the words a buyer text may use
+ * about a house: each deal's own words (the headline, the rehab level Matt
+ * picked — conversation-context.js) and whatever the buyer said themselves.
+ * Our own earlier texts are left out on purpose: an old blast that said
+ * "heavy rehab" is the mistake, not a licence to repeat it.
+ */
+export function houseWordsFor(deals = null, transcript = "", inbound = "") {
+  const rows = [...(deals?.linked || []), ...(deals?.matching || [])];
+  const ours = rows.flatMap((d) => [d?.ownWords, d?.rehabLevel ? `${d.rehabLevel} rehab` : ""]);
+  const theirs = String(transcript || "").split("\n").filter((l) => /^\[[^\]]+\] THEM\b/.test(l));
+  return [...ours, ...theirs, inbound].filter(Boolean).join("\n");
 }
 
 /**
@@ -821,7 +837,7 @@ const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", ourAmount = 0,
-  vacantOk = false, carrierCheck = false,
+  vacantOk = false, carrierCheck = false, houseWords = "",
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -897,6 +913,9 @@ export function evaluateReplyGates({
   if (party === "investor") {
     const claim = claimsAccess(draft.reply, { vacantOk });
     if (claim) flags.push(`the draft says "${claim}" — only the deal's access record says whether a house is open, vacant or how to get in`);
+    // "heavy rehab" on 3511 NE 153rd St (2026-09-29) was nobody's word.
+    const word = houseWordsIn(draft.reply, { allowed: houseWords });
+    if (word) flags.push(`the draft calls the house "${word}" — the deal doesn't say that; describe it only in the deal's own words and numbers`);
   }
   // The two rules that are not judgment calls. A number the other side must
   // never hear — our contract price, our fee — is flagged even if they said
@@ -1553,7 +1572,10 @@ const LINK_OWED_DAYS = 30;
 
 // The newest deal text we sent this buyer without its link, in the last
 // month, that no package link has followed since. null when there's none.
-async function linkOwed({ store, locationId, contactId, now = Date.now() }) {
+// A text that carried two or three deals (outbound.bundle) owes the link for
+// the one they're answering about — `prefer`, the house the reply is about —
+// else the first one in it.
+async function linkOwed({ store, locationId, contactId, now = Date.now(), prefer = "" }) {
   const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 50 }).catch(() => []);
   const blast = drafts
     .filter((d) => d?.status === "sent" && d.blastWithoutLink && d.outbound?.kind === "blast_open"
@@ -1563,7 +1585,11 @@ async function linkOwed({ store, locationId, contactId, now = Date.now() }) {
   const sentAt = String(blast.sentAt || "");
   const linkedSince = drafts.some((d) => String(d.updatedAt || d.createdAt || "") > sentAt
     && (d.actions || []).some((x) => x.type === "send_dataroom_invite" && x.status === "done"));
-  return linkedSince ? null : { address: blast.outbound.address || blast.propertyAddress || "", offerId: blast.outbound.offerId || null };
+  if (linkedSince) return null;
+  const parts = Array.isArray(blast.outbound.bundle) ? blast.outbound.bundle.filter((p) => p?.address) : [];
+  const named = parts.length && prefer ? parts.find((p) => sameStreet(p.address, prefer)) : null;
+  if (named) return { address: named.address, offerId: named.offerId || null };
+  return { address: blast.outbound.address || blast.propertyAddress || "", offerId: blast.outbound.offerId || null };
 }
 
 // They'll go find out: "I could ask, and see what…", "let me check with the
@@ -2187,6 +2213,15 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // A buyer who spoke up on a deal and went quiet (shared/follow-up.js):
+  // one text, picking up where they left off. Floats nothing.
+  deal_followup: {
+    party: "investor",
+    enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.deal_followup?.enabled,
+    ready: ({ subject }) => (subject?.address ? true : "nothing to follow up on"),
+    floats: () => [],
+    forbids: () => [],
+  },
   // The check-in between deals (buyer-pulse.js): are you buying, and what.
   // No deal, no number. Its switches are dispoAutopilot.pulse, checked by the
   // runner before it gets here; it is not on the playbook grid.
@@ -2295,7 +2330,7 @@ export async function startProactive({
     // listing agent, their TC, a buyer (5232 S Yakima, 2026-10-03).
     const gone = await fellThroughFor({ store, locationId, addresses: [offer?.address, subject?.address] });
     if (gone) return { skipped: fellThroughLine(gone), job: null };
-    const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues });
+    const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues, kind });
     if (waiting) return { skipped: blockingReason(waiting), blocked: { draftId: waiting.id }, job: null };
     // One house at a time, three days apart, two a week (shared/agent-focus.js).
     // The sweep asks before it claims; this is every other door asking too.
@@ -2525,7 +2560,13 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       lookedAtDeals: Boolean(p.lookedAtDeals), boughtFromUs: Boolean(p.boughtFromUs),
       lastBuyCity: String(p.lastBuyCity || ""), lastBuyYear: p.lastBuyYear || null, purchases: Number(p.purchases) || 0,
       cities: (p.cities || []).slice(0, 3), types: (p.types || []).slice(0, 3), buyBox: String(p.buyBox || "").slice(0, 200),
-      variant: Number(p.variant) || 0 };
+      variant: Number(p.variant) || 0,
+      // What makes it personal (2026-10-05, shared/buyer-pulse.js pulseSubject).
+      lastHouse: p.lastHouse?.street ? { street: String(p.lastHouse.street).slice(0, 80), city: String(p.lastHouse.city || "").slice(0, 40), how: String(p.lastHouse.how || "").slice(0, 100) } : null,
+      passReasons: (p.passReasons || []).slice(0, 3).map((x) => String(x).slice(0, 120)),
+      aboutThem: String(p.aboutThem || "").slice(0, 200), lastSummary: String(p.lastSummary || "").slice(0, 240), nextAction: String(p.nextAction || "").slice(0, 160),
+      missing: (p.missing || []).slice(0, 4).map(String), source: String(p.source || "").slice(0, 80),
+      voice: String(saved?.dispoAutopilot?.pulse?.voice || "").slice(0, 600) };
   }
   if (kind === "outreach_open") {
     // What we know about the listing, for the introduction. Price and days
@@ -2549,6 +2590,7 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     ...(kind === "offer_nudge" && subject?.aside?.address ? { aside: { street: streetOf(subject.aside.address), quiet: Boolean(subject.aside.quiet) } } : {}),
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
     lastTouchAt: subject?.lastTouchAt || null,
+    ...(kind === "deal_followup" ? { spokeAt: subject?.spokeAt || null } : {}),
     ...(kind === "promise_due" ? { what: subject?.what || "answer", heldReason: subject?.heldReason || "", promisedText: subject?.promisedText || "", running: Boolean(subject?.running) } : {}),
     ...(kind === "price_drop" ? { from: Math.round(Number(subject?.from) || 0), to: Math.round(Number(subject?.to) || 0),
       fromK: Number(subject?.from) > 0 ? kText(Number(subject.from)) : "", toK: Number(subject?.to) > 0 ? kText(Number(subject.to)) : "",
@@ -2591,6 +2633,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "showing_followup": return `Asks how ${outbound.street || where} looked after the walkthrough (${outbound.windowLabel}) and whether they want it.`;
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
     case "dataroom_nudge": return `Follows up on ${where} — they opened the package and went quiet${rung}.`;
+    case "deal_followup": return `Picks up on ${where} — they said something about it and went quiet.`;
     case "checkin_due":
       if (outbound.sourceKind === "source") return "Weekly check-in with an agent who offered to send us deals: anything new that needs work?";
       if (outbound.sourceKind === "unanswered") return `Comes back to them${where ? ` on ${where}` : ""} — their last text never got an answer from us.`;
@@ -2615,7 +2658,8 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
     : context.forbiddenAmounts;
   return (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
-    vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind) });
+    vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
+    houseWords: houseWordsFor(context?.deals, a.transcript) });
 }
 
 /**
@@ -2819,12 +2863,16 @@ async function runProactive(job, ctx) {
   }
   // They may have texted while this was being written. Their reply, or a
   // person's own draft, is never replaced by the machine's: stand down.
-  const blocker = ctx.machine ? blockingDraft(open, { continues: ctx.continues }) : null;
+  const blocker = ctx.machine ? blockingDraft(open, { continues: ctx.continues, kind }) : null;
   if (blocker) {
     job.status = "held"; job.phase = ""; job.heldReason = blockingReason(blocker); job.finishedAt = new Date().toISOString();
     return;
   }
   for (const old of open) {
+    // A deal text queued for this buyer is its own thing — it may be
+    // waiting days for their week (shared/buyer-touch.js) — and another
+    // machine text never replaces it.
+    if (old.outbound?.kind === "blast_open") continue;
     await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
   }
   const ts = new Date().toISOString();
@@ -3300,6 +3348,7 @@ async function runReply(job, ctx) {
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: ourNumberFor(context.offers?.numbers, d.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
+    houseWords: houseWordsFor(context?.deals, a.transcript, inboundText),
   });
   const gate = gateFor(draft);
   let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
@@ -3514,7 +3563,7 @@ async function runReply(job, ctx) {
   // not — whatever the buy-box guard above would say. A pass gets nothing.
   if (party === "investor" && !isCall && LINK_ON_REPLY_INTENTS.has(draft.intent)
       && !plan.auto.some((x) => x.type === "send_dataroom_invite")) {
-    const owed = await linkOwed({ store, locationId, contactId: job.contactId, now });
+    const owed = await linkOwed({ store, locationId, contactId: job.contactId, now, prefer: draft.propertyAddress || "" });
     // You stopped outreach on that deal (the deal pane's Stop outreach): its
     // link doesn't go by itself either. This runs while the reply is drafted,
     // before sendReplyDraft's guard ever sees the reply, so it asks here.
@@ -3716,6 +3765,10 @@ async function runReply(job, ctx) {
   const keptScheduled = [];
   for (const old of open) {
     if (keepScheduled && old.status === "scheduled" && old.autoSend?.decided) { keptScheduled.push(old.id); continue; }
+    // A deal text queued for them isn't a reply to anything they said, and
+    // may be waiting days for their week (shared/buyer-touch.js): their text
+    // about something else doesn't cancel it. Only an opt-out does.
+    if (old.outbound?.kind === "blast_open" && draft.intent !== "opt_out") continue;
     await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
   }
   if (keptScheduled.length) warnings.push("the reply already counting down to the earlier texts still goes; this one waits for you");
@@ -4409,6 +4462,7 @@ export async function previewConversation({
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: ourNumberFor(context.offers?.numbers, draft.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),
+    houseWords: houseWordsFor(context?.deals, a.transcript, message),
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
@@ -4592,6 +4646,18 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     const theirs = await humanHasThread({ store, locationId, contactId: d.contactId, transcript, minutes: 7 * 24 * 60, now });
     if (theirs && Date.parse(theirs.at) >= Date.parse(d.createdAt) - 60000) {
       const ts = new Date(now).toISOString();
+      // A deal text isn't an answer to them, and may have waited days for
+      // their week (shared/buyer-touch.js): you texting them since doesn't
+      // bin it. It waits for you to send it or not.
+      if (d.outbound?.kind === "blast_open") {
+        const why = "you've texted them yourself since this was queued";
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+          flags: [...(d.flags || []), `held: ${why} — send it or not`],
+          autoSend: { ...(d.autoSend || {}), decided: false, reason: `${why} — it waits for you` },
+        });
+        return { ok: true, skipped: why, held: true };
+      }
       await store.updateReplyDraft(d.id, {
         ...d, status: "dismissed", answeredBy: "you", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
         flags: [...(d.flags || []), "you answered it yourself — the bot stood aside"],
@@ -4601,16 +4667,81 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     }
   }
 
+  // One buyer, one week (shared/buyer-touch.js). Buck, 3511 NE 153rd St,
+  // 2026-10-05: two pulse checks, the deal, a walkthrough invite and "Last
+  // check" in eleven days. A deal text to a buyer whose week is spent waits
+  // for it to open; when it goes, any other deal waiting for them goes in the
+  // same text. Only the machine's own text on the auto path: a person
+  // pressing Send is a person deciding, and an email isn't a text.
+  let bundle = [];
+  if (auto && d.outbound?.kind === "blast_open" && d.channel !== "email" && body === String(d.reply || "").trim()) {
+    const saved = (await store.getOfferSettings?.(locationId).catch(() => null)) || {};
+    const budget = normalizeTouchBudget(saved.dispoAutopilot?.touchBudget);
+    if (budget.enabled) {
+      const limit = await buyerTouchLimit({ store, locationId, contactId: d.contactId, budget, now });
+      if (!limit.open) {
+        const config = conversationConfig(saved);
+        const sendAt = spreadAcrossDay({ now: limit.at, quietHours: config.autoSend.quietHours, hours: 0, weekends: config.autoSend.weekends || "all" });
+        const ts = new Date(now).toISOString();
+        const line = `waits for this buyer's weekly limit — goes ${slotWord(Date.parse(sendAt))}, with anything else new for them`;
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "scheduled", sendAt, sendingAt: null, updatedAt: ts,
+          flags: [...(d.flags || []).filter((f) => !/^waits for this buyer's weekly limit/.test(f)), line],
+        });
+        return { ok: true, skipped: line, sendAt };
+      }
+      const waiting = (await store.listReplyDrafts(locationId, { contactId: d.contactId, status: "scheduled", limit: 20 }).catch(() => []))
+        .filter((o) => o.id !== d.id && o.outbound?.kind === "blast_open" && o.channel !== "email"
+          && o.outbound?.offerId && o.outbound.offerId !== d.outbound?.offerId)
+        .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+      for (const o of waiting) {
+        if (bundle.length >= budget.bundleMax - 1) break;
+        if (bundle.some((x) => x.outbound.offerId === o.outbound.offerId)) continue;
+        const offer = await store.getOffer?.(o.outbound.offerId).catch(() => null);
+        const deal = offer?.deal;
+        if (!deal || dealIsOver(deal) || dealOutreachStopped(deal)) continue;
+        const paused = dealOutreachPaused(deal);
+        if (paused && paused.contactId !== d.contactId) continue;
+        // Each house answers the same checks its own text would: a bot stop
+        // on that house, or the house falling through.
+        const held = await holdFor({ store, locationId, contactId: d.contactId, offerId: o.outbound.offerId, now });
+        if (held.held) continue;
+        if (await fellThroughFor({ store, locationId, addresses: [o.outbound.address, offer.address] })) continue;
+        // Claimed before anything goes, so an overlapping scheduler tick
+        // can't send it on its own as well. Read again: it may have gone.
+        const fresh = await store.getReplyDraft(o.id).catch(() => null);
+        if (!fresh || fresh.status !== "scheduled") continue;
+        const claimed = { ...fresh, status: "sending", sendingAt: new Date(now).toISOString(), combinedInto: d.id, updatedAt: new Date(now).toISOString() };
+        await store.updateReplyDraft(o.id, claimed);
+        bundle.push(claimed);
+      }
+    }
+  }
+
   // A blast is written again as it leaves: the deal's price now, not when it
   // was queued, and the buyer's own package link (blast-refresh.js). Only the
   // machine's own words — a text a person rewrote goes as they wrote it. A
   // deal whose price can't be read holds the text rather than send a number
   // nobody checked.
+  // A deal claimed for the combined text that ends up not in it goes back
+  // to waiting, as it was.
+  const release = async (rows) => {
+    for (const o of rows) {
+      const fresh = await store.getReplyDraft(o.id).catch(() => null);
+      if (fresh?.status !== "sending" || fresh.combinedInto !== d.id) continue;
+      const { combinedInto: _c, sendingAt: _s, ...rest } = fresh;
+      await store.updateReplyDraft(o.id, { ...rest, status: "scheduled", updatedAt: new Date().toISOString() }).catch(() => {});
+    }
+  };
   let blast = null;
   if (d.outbound?.kind === "blast_open" && body === String(d.reply || "").trim()) {
     try {
-      blast = await refreshBlastText({ store, client, locationId, draft: d, baseUrl: dataroomBaseUrl });
+      if (bundle.length) blast = await refreshBundleText({ store, locationId, draft: d, others: bundle });
+      const carried = new Set((blast?.bundle || []).map((p) => p.draftId));
+      await release(bundle.filter((o) => !carried.has(o.id)));
+      if (!blast) blast = await refreshBlastText({ store, client, locationId, draft: d, baseUrl: dataroomBaseUrl });
     } catch (e) {
+      await release(bundle);
       const ts = new Date(now).toISOString();
       await store.updateReplyDraft(d.id, {
         ...d, status: "draft", sendAt: null, sendingAt: null, updatedAt: ts,
@@ -4629,7 +4760,8 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     const html = body.split(/\n{2,}/).map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
     result = await sendEmail(client, { contactId: d.contactId, subject, html });
   } else {
-    result = await sendSms(client, { contactId: d.contactId, message: body });
+    try { result = await sendSms(client, { contactId: d.contactId, message: body }); }
+    catch (e) { await release(bundle); throw e; }
   }
 
   const ts = new Date().toISOString();
@@ -4637,6 +4769,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     ...d, status: "sent", sentAt: ts, sentText: body, autoSent: Boolean(auto),
     edited: auto || blast ? false : body !== String(d.reply || "").trim(),
     ...(blast ? { quotedPrice: blast.price, ...(blast.invite ? { dataroomInviteId: blast.invite.id } : {}), ...(blast.withoutLink ? { blastWithoutLink: true } : {}) } : {}),
+    ...(blast?.bundle ? { outbound: { ...d.outbound, bundle: blast.bundle.map(({ offerId, address }) => ({ offerId, address })) } } : {}),
     // Why a person changed it, when they said (the nightly coach reads this).
     ...(!auto && normalizeDraftFeedback(reason) ? { feedback: { ...normalizeDraftFeedback(reason), at: ts } } : {}),
     ghlMessageId: result?.messageId || result?.id || null, sendAt: null, sendingAt: null, updatedAt: ts,
@@ -4655,6 +4788,25 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       data: { draftId: d.id, auto: Boolean(auto), label: d.outbound.label || "", via: "app", channel: d.channel === "email" ? "email" : "sms" },
     }).catch(() => {});
     await store.setInvestorStatus?.(locationId, d.contactId, { lastBlastAt: ts }).catch(() => {});
+    // The other deals that went in this text: each is sent, as far as its
+    // waves, its feedback and its Flow attribution are concerned, and its own
+    // queued text stands down.
+    const street = (a) => String(a || "").split(",")[0].trim();
+    for (const part of (blast?.bundle || []).filter((p) => p.draftId !== d.id)) {
+      const other = await store.getReplyDraft(part.draftId).catch(() => null);
+      if (other && (OPEN_STATUSES.has(other.status) || (other.status === "sending" && other.combinedInto === d.id))) {
+        await store.updateReplyDraft(other.id, {
+          ...other, status: "superseded", combinedInto: d.id, sendAt: null, sendingAt: null, updatedAt: ts,
+          flags: [...(other.flags || []), `went out together with ${street(d.outbound.address || d.propertyAddress)}`],
+        }).catch(() => {});
+      }
+      await recordEvent({
+        store, locationId, contactId: d.contactId, party: "investor", type: "blast_sent", at: ts,
+        address: part.address, offerId: part.offerId, source: "blast", ref: part.draftId,
+        dedupeKey: `blast:${part.offerId}:${d.contactId}`,
+        data: { draftId: d.id, bundledWith: d.id, auto: Boolean(auto), label: other?.outbound?.label || "", via: "app", channel: "sms" },
+      }).catch(() => {});
+    }
     if (blast?.invite) {
       await store.updateDataroomInvite?.(blast.invite.id, { sentAt: ts }).catch(() => {});
       await store.logDataroomEvent?.(blast.room.id, blast.invite.id, "sent", { via: "blast" }).catch(() => {});
@@ -4675,6 +4827,14 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       store, locationId, contactId: d.contactId, party: "agent", type: "agent_pulse_texted", at: ts,
       address: d.outbound.address || "", source: "conversation", ref: d.id, dedupeKey: `agent_pulse_texted:${d.id}`,
       data: { draftId: d.id, auto: Boolean(auto), segment: d.outbound.segment || "", reason: d.outbound.reason || "", listingKey: d.outbound.listingKey || null },
+    }).catch(() => {});
+  }
+  // The buyer pulse actually went: "two in a row with no answer" counts
+  // these, never the day's claim (shared/buyer-pulse.js, 2026-10-05).
+  if (d.outbound?.kind === "buyer_pulse") {
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "investor", type: "pulse_texted", at: ts,
+      source: "conversation", ref: d.id, dedupeKey: `pulse_texted:${d.id}`, data: { draftId: d.id, auto: Boolean(auto) },
     }).catch(() => {});
   }
   if (d.outbound?.kind === "outreach_open") {

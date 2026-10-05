@@ -75,8 +75,7 @@ const configWith = (patch = {}) => normalizeConversationAi({
     // default is covered in shared/follow-up.test.mjs.
     agent: { followUp: { enabled: true, ladders: { offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 0 } } }, ...(patch.agent || {}) },
     investor: { followUp: { enabled: true, ladders: {
-      blast_nudge: { enabled: true, steps: [2, 6] },
-      dataroom_nudge: { enabled: true, steps: [1, 4] },
+      deal_followup: { enabled: true, steps: [3] },
     } }, ...(patch.investor || {}) },
   },
 });
@@ -140,10 +139,13 @@ test("an offer promoted to a deal is never nudged", async () => {
   assert.equal(started.length, 0);
 });
 
-test("an investor blasted on a deal that fell through is never nudged, matched by street", async () => {
+test("a buyer who spoke up on a deal that fell through is never followed up, matched by street", async () => {
   _resetJobs();
-  // A GHL-workflow blast: address only, no offer id — the Edmonds case.
-  const events = [{ type: "blast_sent", contactId: "i1", at: at(0), address: "22018 76th Avenue West" }];
+  // A GHL-workflow deal: address only, no offer id — the Edmonds case.
+  const events = [
+    { type: "text_summary", contactId: "i1", at: at(0), address: "22018 76th Avenue West" },
+    { type: "investor_evaluating", contactId: "i1", at: at(0), address: "22018 76th Avenue West" },
+  ];
   const deal = (stage) => [{ id: "d9", address: "22018 76th Ave W, Edmonds, WA 98026", deal: { stage, investors: [] } }];
 
   const dead = fakeStore({ events });
@@ -159,7 +161,7 @@ test("an investor blasted on a deal that fell through is never nudged, matched b
   const b = spySweep(live);
   await settle();
   assert.equal(b.started.length, 1);
-  assert.equal(b.started[0].kind, "blast_nudge");
+  assert.equal(b.started[0].kind, "deal_followup");
 });
 
 test("a passed offer is never nudged", async () => {
@@ -249,82 +251,119 @@ test("exhausting the ladder does not mark no response when no nudge ever actuall
 
 /* ---------- the investor ladders ---------- */
 
-test("an investor blasted two days ago who never replied gets one nudge", async () => {
-  _resetJobs();
-  const store = fakeStore({ events: [
-    { contactId: "i1", type: "blast_sent", at: at(0), address: "9 Oak Ave", offerId: "d1" },
-  ] });
-  const { started } = spySweep(store, { now: T0 + 2 * DAY });
-  await settle();
-  assert.equal(started.length, 1);
-  assert.equal(started[0].kind, "blast_nudge");
-  assert.equal(started[0].subject.address, "9 Oak Ave");
+// Buck, 3511 NE 153rd St (2026-10-05): never answered the deal, and got the
+// blast, a walkthrough invite and "Last check on this one…" about it. Matt:
+// follow up on a deal only with a buyer who said something about it. Anyone
+// else hears from us about what fits them (the pulse), not about this house.
+test("a buyer who never answered the blast gets no follow-up about that deal", async () => {
+  for (const day of [2, 6, 10]) {
+    _resetJobs();
+    const store = fakeStore({ events: [
+      { contactId: "i1", type: "blast_sent", at: at(0), address: "9 Oak Ave", offerId: "d1" },
+    ] });
+    const { started } = spySweep(store, { now: T0 + day * DAY });
+    await settle();
+    assert.equal(started.length, 0, `day ${day}`);
+  }
+  // A blob saved before 2026-10-05 still carrying the old ladders turned on.
+  const old = normalizeConversationAi({ enabled: true, parties: { investor: { followUp: { enabled: true, ladders: { blast_nudge: { enabled: true, steps: [2, 6] }, dataroom_nudge: { enabled: true, steps: [1, 4] } } } } } });
+  assert.equal(old.parties.investor.followUp.ladders.blast_nudge, undefined);
+  assert.deepEqual(await investorCandidates({ store: fakeStore({ events: [{ contactId: "i1", type: "blast_sent", at: at(0), offerId: "d1" }] }), locationId: "LOC", config: configWith(), now: T0 + 6 * DAY }), []);
 });
 
-test("a buyer we emailed the deal to, with no phone, is never sent a text nudge", async () => {
-  // 1510 Maple Lane (2026-10-01): fourteen of the twenty mobile home buyers
-  // have only an email. A nudge is a text, and there is no number to send it to.
-  _resetJobs();
-  const store = fakeStore({ events: [
-    { contactId: "i1", type: "blast_sent", at: at(0), address: "1510 Maple Lane", offerId: "d1", data: { channel: "email" } },
-  ] });
-  const { started } = spySweep(store, { now: T0 + 2 * DAY });
-  await settle();
-  assert.equal(started.length, 0);
-});
-
-test("a blast on a deal that found its buyer is never nudged to anyone else", async () => {
-  _resetJobs();
-  const store = fakeStore({
-    offers: [{ id: "d1", address: "9 Oak Ave", status: "accepted", deal: { stage: "under_contract", investors: [{ contactId: "i9", status: "committed" }] } }],
-    events: [{ contactId: "i1", type: "blast_sent", at: at(0), address: "9 Oak Ave", offerId: "d1" }],
-  });
-  const { started } = spySweep(store, { now: T0 + 2 * DAY });
-  await settle();
-  assert.equal(started.length, 0);
-});
-
-test("an investor who opened the dataroom gets the dataroom ladder, not the blast ladder", async () => {
+test("a buyer who opened the package but said nothing gets no follow-up", async () => {
   _resetJobs();
   const store = fakeStore({ events: [
     { contactId: "i1", type: "blast_sent", at: at(0), address: "9 Oak Ave", offerId: "d1" },
     { contactId: "i1", type: "dataroom_viewed", at: at(1), address: "9 Oak Ave", offerId: "d1" },
-  ] });
-  const { started } = spySweep(store, { now: T0 + 3 * DAY });
-  await settle();
-  assert.equal(started.length, 1);
-  assert.equal(started[0].kind, "dataroom_nudge", "somebody who looked is the warmer thing to write to");
-});
-
-test("an investor who passed on the deal is dropped from the ladder", async () => {
-  _resetJobs();
-  const store = fakeStore({ events: [
-    { contactId: "i1", type: "blast_sent", at: at(0), address: "9 Oak Ave" },
-    { contactId: "i1", type: "investor_passed", at: at(1), address: "9 Oak Ave" },
+    { contactId: "i1", type: "dataroom_viewed", at: at(2), address: "9 Oak Ave", offerId: "d1" },
   ] });
   const { started } = spySweep(store, { now: T0 + 5 * DAY });
   await settle();
   assert.equal(started.length, 0);
 });
 
-test("the committed buyer on a live deal is never nudged", async () => {
+test("a buyer who asked a question and went quiet gets one follow-up, once", async () => {
   _resetJobs();
   const store = fakeStore({ events: [
-    { contactId: "i1", type: "blast_sent", at: at(0), address: "9 Oak Ave" },
-    { contactId: "i1", type: "investor_committed", at: at(1), address: "9 Oak Ave" },
-  ] });
-  const { started } = spySweep(store, { now: T0 + 5 * DAY });
-  await settle();
-  assert.equal(started.length, 0);
-});
-
-test("an investor who replied is dropped from the ladder", async () => {
-  _resetJobs();
-  const store = fakeStore({ events: [
-    { contactId: "i1", type: "blast_sent", at: at(0), address: "9 Oak Ave" },
+    { contactId: "i1", type: "blast_sent", at: at(0), address: "9 Oak Ave", offerId: "d1" },
     { contactId: "i1", type: "text_summary", at: at(1), address: "9 Oak Ave" },
+    { contactId: "i1", type: "investor_evaluating", at: at(1), address: "9 Oak Ave", offerId: "d1" },
   ] });
-  const { started } = spySweep(store, { now: T0 + 5 * DAY });
+  // Two days after they spoke is too soon.
+  let r = spySweep(store, { now: T0 + 3 * DAY });
+  await settle();
+  assert.equal(r.started.length, 0);
+
+  _resetJobs();
+  r = spySweep(store, { now: T0 + 4 * DAY });
+  await settle();
+  assert.equal(r.started.length, 1);
+  assert.equal(r.started[0].kind, "deal_followup");
+  assert.equal(r.started[0].subject.address, "9 Oak Ave");
+  assert.equal(r.started[0].subject.spokeAt, at(1));
+
+  // Once. Not a ladder, not a "last check" a few days on.
+  for (const day of [5, 8, 20]) {
+    _resetJobs();
+    r = spySweep(store, { now: T0 + day * DAY });
+    await settle();
+    assert.equal(r.started.length, 0, `day ${day}`);
+  }
+});
+
+test("the follow-up counts from their last word, not from when they first spoke", async () => {
+  _resetJobs();
+  const store = fakeStore({ events: [
+    { contactId: "i1", type: "text_summary", at: at(1), address: "9 Oak Ave" },
+    { contactId: "i1", type: "investor_evaluating", at: at(1), address: "9 Oak Ave", offerId: "d1" },
+    { contactId: "i1", type: "text_summary", at: at(3), address: "9 Oak Ave" },
+  ] });
+  let r = spySweep(store, { now: T0 + 5 * DAY });
+  await settle();
+  assert.equal(r.started.length, 0, "they wrote two days ago");
+  _resetJobs();
+  r = spySweep(store, { now: T0 + 6 * DAY });
+  await settle();
+  assert.equal(r.started.length, 1);
+});
+
+test("a buyer who passed or committed is not followed up", async () => {
+  for (const type of ["investor_passed", "investor_committed"]) {
+    _resetJobs();
+    const store = fakeStore({ events: [
+      { contactId: "i1", type: "text_summary", at: at(0), address: "9 Oak Ave" },
+      { contactId: "i1", type: "investor_evaluating", at: at(0), address: "9 Oak Ave", offerId: "d1" },
+      { contactId: "i1", type, at: at(1), address: "9 Oak Ave", offerId: "d1" },
+    ] });
+    const { started } = spySweep(store, { now: T0 + 6 * DAY });
+    await settle();
+    assert.equal(started.length, 0, type);
+  }
+  // The deal's own list says so even when the event stream doesn't.
+  _resetJobs();
+  const store = fakeStore({
+    offers: [{ id: "d1", address: "9 Oak Ave", status: "accepted", deal: { stage: "under_contract", investors: [{ contactId: "i1", status: "soft_commit" }] } }],
+    events: [
+      { contactId: "i1", type: "text_summary", at: at(0), address: "9 Oak Ave" },
+      { contactId: "i1", type: "investor_evaluating", at: at(0), address: "9 Oak Ave", offerId: "d1" },
+    ],
+  });
+  const { started } = spySweep(store, { now: T0 + 6 * DAY });
+  await settle();
+  assert.equal(started.length, 0);
+});
+
+test("a deal that found its buyer is never followed up with anyone else", async () => {
+  _resetJobs();
+  const store = fakeStore({
+    offers: [{ id: "d1", address: "9 Oak Ave", status: "accepted", deal: { stage: "under_contract", investors: [{ contactId: "i9", status: "committed" }, { contactId: "i1", status: "evaluating" }] } }],
+    events: [
+      { contactId: "i1", type: "text_summary", at: at(0), address: "9 Oak Ave" },
+      { contactId: "i1", type: "investor_evaluating", at: at(0), address: "9 Oak Ave", offerId: "d1" },
+    ],
+  });
+  const { started } = spySweep(store, { now: T0 + 6 * DAY });
   await settle();
   assert.equal(started.length, 0);
 });
@@ -334,7 +373,7 @@ test("an investor who replied is dropped from the ladder", async () => {
 test("a ladder switched off produces no candidates at all", async () => {
   const off = normalizeConversationAi({ enabled: true });
   assert.deepEqual(await agentCandidates({ store: fakeStore({ offers: [anOffer()] }), locationId: "LOC", config: off, now: T0 + 9 * DAY }), []);
-  assert.deepEqual(await investorCandidates({ store: fakeStore({ events: [{ contactId: "i1", type: "blast_sent", at: at(0) }] }), locationId: "LOC", config: off, now: T0 + 9 * DAY }), []);
+  assert.deepEqual(await investorCandidates({ store: fakeStore({ events: [{ contactId: "i1", type: "investor_evaluating", at: at(0), offerId: "d1" }] }), locationId: "LOC", config: off, now: T0 + 9 * DAY }), []);
 });
 
 test("one contact's error does not stop the sweep", async () => {
@@ -997,12 +1036,17 @@ test("a nudge the nightly audit already sent on the offer counts as that day's r
 // Today's "Nudge them" on a deal nobody opened (blast_no_opens) ran the
 // follow-up sweep for the whole location — every agent nudge and buyer
 // nudge due that morning — to chase one deal's buyers. Found 2026-10-02.
-test("Nudge them on one deal nudges that deal's buyers and no agent", async () => {
+test("Nudge them on one deal follows up that deal's buyers who spoke up, and no agent", async () => {
   _resetJobs();
+  const spoke = (contactId, extra) => [
+    { type: "text_summary", contactId, at: at(0), address: extra.address },
+    { type: "investor_evaluating", contactId, at: at(0), ...extra },
+  ];
   const events = [
-    { type: "blast_sent", contactId: "b1", at: at(0), offerId: "deal1", address: "1415 2nd St, Snohomish, WA" },
-    { type: "blast_sent", contactId: "b2", at: at(0), address: "1415 2nd St" },                       // a GHL workflow blast: street only
-    { type: "blast_sent", contactId: "other", at: at(0), offerId: "deal2", address: "9 Other Rd, Kent, WA" },
+    ...spoke("b1", { offerId: "deal1", address: "1415 2nd St, Snohomish, WA" }),
+    ...spoke("b2", { address: "1415 2nd St" }),                                    // a GHL workflow deal: street only
+    ...spoke("other", { offerId: "deal2", address: "9 Other Rd, Kent, WA" }),
+    { type: "blast_sent", contactId: "silent", at: at(0), offerId: "deal1", address: "1415 2nd St, Snohomish, WA" },
   ];
   const store = fakeStore({ offers: [anOffer()], events });
   store.listDeals = async () => [
@@ -1012,6 +1056,43 @@ test("Nudge them on one deal nudges that deal's buyers and no agent", async () =
   const { job, started } = spySweep(store, { opts: { scope: { offerId: "deal1", address: "1415 2nd St, Snohomish, WA 98290" }, trigger: "deal" } });
   await settle();
   assert.equal(job.status, "done", job.error);
-  assert.deepEqual(started.map((s) => s.contactId).sort(), ["b1", "b2"], "that deal's buyers, by id or by street");
-  assert.ok(started.every((s) => s.kind === "blast_nudge"), "no agent nudge rode along");
+  assert.deepEqual(started.map((s) => s.contactId).sort(), ["b1", "b2"], "that deal's buyers who spoke up, by id or by street — never the silent one");
+  assert.ok(started.every((s) => s.kind === "deal_followup"), "no agent nudge rode along");
+});
+
+test("a buyer who got a deal text yesterday isn't followed up until their week allows", async () => {
+  _resetJobs();
+  // Talking (they spoke up), so two a week: yesterday's deal text and a
+  // walkthrough reminder fill it.
+  const sentText = (id, kind, day) => ({ id, contactId: "i1", status: "sent", party: "investor", outbound: { kind }, sentAt: at(day), createdAt: at(day) });
+  const store = fakeStore({
+    events: [
+      { contactId: "i1", type: "text_summary", at: at(0), address: "9 Oak Ave" },
+      { contactId: "i1", type: "investor_evaluating", at: at(0), address: "9 Oak Ave", offerId: "d1" },
+    ],
+    drafts: [sentText("s1", "blast_open", 3), sentText("s2", "showing_reminder", 2.5)],
+  });
+  store.listContactEvents = async (_loc, id, { types = null } = {}) => store.events.filter((e) => e.contactId === id && (!types || types.includes(e.type)));
+  const { job, started } = spySweep(store, { now: T0 + 4 * DAY });
+  await settle();
+  assert.equal(started.length, 0);
+  assert.ok(job.results.some((r) => /heard from us this week/.test(r.reason || "")), JSON.stringify(job.results));
+});
+
+test("a buyer's one follow-up stays one when the day is changed or the house is named by street", async () => {
+  _resetJobs();
+  const store = fakeStore({ events: [
+    { contactId: "i1", type: "text_summary", at: at(0), address: "9 Oak Ave" },
+    { contactId: "i1", type: "investor_evaluating", at: at(0), address: "9 Oak Ave", offerId: "d1" },
+  ] });
+  let r = spySweep(store, { now: T0 + 4 * DAY });
+  await settle();
+  assert.equal(r.started.length, 1);
+  // Matt moves the day from 3 to 5, and the house turns up again by street.
+  store.events.push({ contactId: "i1", type: "investor_evaluating", at: at(0.5), address: "9 Oak Avenue" });
+  const five = { aiApiKey: "k", conversationAi: configWith({ investor: { followUp: { enabled: true, ladders: { deal_followup: { enabled: true, steps: [5] } } } } }) };
+  _resetJobs();
+  r = spySweep(store, { now: T0 + 8 * DAY, opts: { saved: five } });
+  await settle();
+  assert.equal(r.started.length, 0);
 });

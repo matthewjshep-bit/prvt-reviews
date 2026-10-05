@@ -28,6 +28,7 @@ import { showingContextLines } from "./shared/showing.js";
 import { accessFor, accessLines } from "./shared/deal-access.js";
 import { assetOf, assetPhrase, kindHold, normalizeAsset } from "./shared/asset-type.js";
 import { buyerFacts } from "./shared/underwrite-checks.js";
+import { blastNote, pickedRehabLevel } from "./shared/blast-text.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -539,7 +540,13 @@ const dealLine = (d) => {
   const kind = d.kind ? `${d.kind} — ` : "";
   // The record's answers to what buyers ask ("is it septic?"); say only these.
   const about = (d.facts || []).length ? ` — about the house: ${d.facts.join(", ")}` : "";
-  return `- ${d.address}: ${kind}${money}${about}${status}${said}${stage}${invite}${walk}`;
+  // How WE describe it: the rehab level Matt picked and the package headline.
+  // These are the only words for the house's condition the bot may use — a
+  // deal without them is described by its numbers (3511 NE 153rd St,
+  // 2026-09-29: "heavy rehab" was nobody's word).
+  const ours = [d.rehabLevel ? `${d.rehabLevel} rehab` : "", d.ownWords ? `"${d.ownWords}"` : ""].filter(Boolean);
+  const words = ours.length ? ` — in our words: ${ours.join(", ")}` : "";
+  return `- ${d.address}: ${kind}${money}${about}${words}${status}${said}${stage}${invite}${walk}`;
 };
 
 /**
@@ -621,6 +628,7 @@ export function buildInvestorContext({ investor = {}, deals = [], invites = [], 
       linkStatus: link ? investorStatus(link.status) : (blasted ? "blasted" : null), blasted,
       price: n.price, agreed: Boolean(n.agreed), arv: n.arv, repairs: n.repairs, invite: room ? inviteByRoom.get(room.id) || null : null,
       offerId: offer.id, reason: reasonWords(link?.reason), kind: assetPhrase(assetOf(offer)),
+      rehabLevel: pickedRehabLevel(offer), ownWords: blastNote(room?.snapshot?.headline || "", 140),
       // What buyers ask before they decide — septic, garage, the street, an
       // easement — from the record, so the bot answers instead of guessing.
       facts: buyerFacts(offer).facts,

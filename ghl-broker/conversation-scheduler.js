@@ -157,7 +157,9 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
     let scheduled = [];
     let sending = [];
     try {
-      scheduled = await store.listReplyDrafts(locationId, { status: "scheduled", limit: 50 });
+      // Only what's due, longest-due first (store.js `dueBy`): a deal text
+      // waiting days for a buyer's week must not crowd out one due now.
+      scheduled = await store.listReplyDrafts(locationId, { status: "scheduled", dueBy: new Date(now).toISOString(), limit: 50 });
       sending = await store.listReplyDrafts(locationId, { status: "sending", limit: 50 });
     } catch (e) {
       log(`scheduler: could not list drafts for ${locationId}: ${e.message}`);
@@ -204,9 +206,16 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
       }
       inFlight.add(d.id);
       try {
+        // Read it again before claiming: the list is from the top of the
+        // tick, and a text sent since may have taken this one with it (two
+        // deals for one buyer go as one text — reply-agent.js) or put it off
+        // to the buyer's next open day. Claiming the stale copy would undo
+        // that and send it twice.
+        const fresh = typeof store.getReplyDraft === "function" ? await store.getReplyDraft(d.id).catch(() => null) : null;
+        if (fresh && (fresh.status !== "scheduled" || Date.parse(fresh.sendAt || "") > now)) continue;
         // Claim first, so an overlapping tick (or a second process) sees
         // "sending" and leaves it alone.
-        await store.updateReplyDraft(d.id, { ...d, status: "sending", sendingAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() });
+        await store.updateReplyDraft(d.id, { ...(fresh || d), status: "sending", sendingAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() });
         const r = await send({ client, store, locationId, draftId: d.id, live: true, auto: true });
         if (r?.skipped) {
           out.stoodAside = (out.stoodAside || 0) + 1;

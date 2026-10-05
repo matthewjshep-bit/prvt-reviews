@@ -370,3 +370,63 @@ test("a house they passed on rides on the live offer's nudge as one line, never 
   assert.doesNotMatch(outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper" }), /closing line/);
   assert.match(outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper", aside: { street: "3 Oak Ave", quiet: true } }), /we never heard back on/);
 });
+
+/* ---------- a buyer who spoke up (2026-10-05) ---------- */
+
+// Buck, 3511 NE 153rd St: "Last check on this one… If it's not one for you
+// just say so and I'll leave it" — to a buyer who never said a word about it.
+// The only deal follow-up a buyer gets now is to one who spoke up, once, and
+// it picks up where they left off.
+test("a follow-up to a buyer never says last check", () => {
+  const t = outboundOpening({ kind: "deal_followup", address: "3511 NE 153rd St", step: 3, stepIndex: 1, stepCount: 1, spokeAt: "2026-10-01T18:00:00Z" });
+  assert.doesNotMatch(t, /This is the LAST follow-up|I'll leave it\)/);
+  assert.match(t, /do NOT call it a last check, do NOT say you'll leave it alone/);
+  assert.match(t, /pick up exactly where they left off/);
+  assert.match(t, /Do NOT name a price or any number/);
+  assert.match(t, /Set intent to deal_followup\.$/);
+});
+
+test("the bot is told to describe a house only in the deal's words", () => {
+  const sys = buildSystemPrompt({ config: normalizeConversationAi({ enabled: true }), party: "investor" });
+  assert.match(sys, /DESCRIBING A HOUSE: use only the words the context gives it/);
+  assert.match(sys, /the condition as the deal describes it/);
+  // An agent is asked whether a listing needs work; the rule is the buyer's.
+  assert.doesNotMatch(buildSystemPrompt({ config: normalizeConversationAi({ enabled: true }), party: "agent" }), /DESCRIBING A HOUSE/);
+});
+
+/* ---------- the pulse, personal (2026-10-05) ---------- */
+
+// Buck, 2026-09-24: "I'm a Seattle investor…" → "who is this?". The answer
+// opened "Matt, Seattle investor…" and the name gate held it for four days.
+test("a pulse to someone new says it's Matt", () => {
+  const t = outboundOpening({ kind: "buyer_pulse", dealsSent: 3, conversed: false, variant: 0 });
+  assert.match(t, /who you are by first name \("It's Matt" \/ "This is Matt"/);
+  assert.match(t, /never open with your bare name and a comma/);
+  const fb = outboundOpening({ kind: "buyer_pulse", dealsSent: 0, conversed: false, source: "found you through the WA real estate Facebook group" });
+  assert.match(fb, /how we found them \(found you through the WA real estate Facebook group\)/);
+});
+
+test("asked who this is, the answer starts with Matt", () => {
+  const sys = buildSystemPrompt({ config: normalizeConversationAi({ enabled: true }), party: "investor" });
+  assert.match(sys, /WHO THIS IS: when they ask who this is/);
+  assert.match(sys, /never your bare name followed by a comma/);
+});
+
+test("a buyer who never answered a deal is asked what fits, with that house as the way in", () => {
+  const t = outboundOpening({ kind: "buyer_pulse", dealsSent: 1, conversed: false, lastHouse: { street: "3511 NE 153rd St", city: "Lake Forest Park", how: "no answer" }, missing: ["price range"] });
+  assert.match(t, /THE LAST HOUSE WE SENT THEM: 3511 NE 153rd St in Lake Forest Park, and they never answered/);
+  assert.match(t, /Never ask whether they want it/);
+  assert.match(t, /SHAPE FOR THIS ONE: open with the house you sent/);
+  assert.match(t, /the piece of their buy box we don't have — price range/);
+  assert.match(t, /THE ONE REFERENCE/);
+  assert.match(t, /no street address except the house we sent them/);
+});
+
+test("the pulse carries Matt's voice and the notes that make it personal", () => {
+  const t = outboundOpening({ kind: "buyer_pulse", dealsSent: 4, conversed: true, voice: "short, like a friend, no pitch",
+    passReasons: ["7034 South K Street: too far south"], lastSummary: "Wants north King only", aboutThem: "Building spec homes in Shoreline" });
+  assert.match(t, /HOW MATT WANTS THESE TO SOUND .*short, like a friend, no pitch/);
+  assert.match(t, /Why they passed before, as recorded: 7034 South K Street: too far south/);
+  assert.match(t, /Our last conversation: Wants north King only/);
+  assert.match(t, /About them, from our notes: Building spec homes in Shoreline/);
+});
