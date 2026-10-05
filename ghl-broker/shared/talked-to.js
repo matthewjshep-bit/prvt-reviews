@@ -41,6 +41,49 @@ export function connectedCall({ durationSec, status = "" } = {}) {
   return st === "completed" || st === "answered";
 }
 
+// The words of a voicemail greeting or a carrier's "not available". GHL's
+// dialer transcribes the greeting like any call, so an outbound call that
+// rang through to voicemail arrives as a transcript of them "talking". Read
+// against the whole opening of a call, never a single line of a real one
+// (deal-feedback.js keeps its own narrower line filter for that).
+const GREETING_RE = /leave (?:me )?(?:your|a)\b|please leave|forwarded to voicemail|is not available|not available (?:right now|to take)|unavailable|record your message|after the (?:tone|beep)|at the tone|you(?:'ve| have)? reached|mailbox/i;
+// Matt's own message after the beep: he says who he is.
+const OUR_MESSAGE_RE = /\b(?:this is|it'?s|it is) matt\b|\bmatt here\b|\bmatt shepherd\b|\bmatt (?:with|from)\b/i;
+const MAX_GREETING_CHARS = 500;
+// A message left after the beep is a few sentences; anything longer, or a
+// call over two minutes, was a conversation that happened to open oddly.
+const MAX_MESSAGE_CHARS = 600;
+const MAX_VOICEMAIL_SECONDS = 120;
+
+/**
+ * voicemailGreeting(transcript, { durationSec }) → null | { leftMessage }
+ *
+ * Matt, 2026-10-04: three calls that reached a voicemail greeting ("Hi, this
+ * is Hung, sorry I missed your call, please leave me your name and number";
+ * "Please leave your message for 2069"; "…8199065 is not available") became
+ * texts waiting on him to answer. A greeting is not somebody talking to us.
+ *
+ * Everything before Matt names himself must read as a greeting and be short:
+ * a real conversation is far longer than one, whatever it happens to say.
+ * `leftMessage` when he spoke after it. Only an OUTBOUND call's transcript
+ * is read this way — on a call to us, the greeting is ours and what follows
+ * is them leaving a message.
+ */
+export function voicemailGreeting(transcript = "", { durationSec = null } = {}) {
+  const secs = Number(durationSec);
+  if (Number.isFinite(secs) && secs > MAX_VOICEMAIL_SECONDS) return null;
+  const lines = String(transcript || "").split(/\n+/).map((l) => l.replace(/^\s*(?:THEM|US|Speaker \d+)\s*:\s*/i, "").trim()).filter(Boolean);
+  if (!lines.length) return null;
+  const ours = lines.findIndex((l) => OUR_MESSAGE_RE.test(l));
+  // Where his message starts: the line that names him, or the greeting-to-him
+  // ("Hey, Ren.") right before it.
+  const start = ours < 0 ? lines.length : (ours > 0 && lines[ours - 1].length <= 20 && !GREETING_RE.test(lines[ours - 1]) ? ours - 1 : ours);
+  const before = lines.slice(0, start).join(" ");
+  if (!before || before.length > MAX_GREETING_CHARS || !GREETING_RE.test(before)) return null;
+  if (lines.slice(start).join(" ").length > MAX_MESSAGE_CHARS) return null;
+  return { leftMessage: ours >= 0 };
+}
+
 /**
  * callEventConnected(event) → boolean
  *
