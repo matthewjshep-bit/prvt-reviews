@@ -5495,3 +5495,103 @@ test("'fully executed' on a live deal ticks the checklist's PSA signed", async (
   assert.equal(job.status, "done", job.error);
   assert.deepEqual(ticks.map((t) => [t.contactId, t.taskId]), [["c1", "psa_signed"]]);
 });
+
+/* ---------- one buyer, one week; two deals, one text (2026-10-05) ---------- */
+
+// Buck, 3511 NE 153rd St: two pulse checks, the deal, a walkthrough invite and
+// "Last check" in eleven days. A buyer who has never written back hears from
+// the machine once a week; anything over that waits and goes together.
+const TWO_DEALS = {
+  o1: { id: "o1", locationId: "LOC", address: "7034 South K Street, Tacoma, Washington 98408", calc: { inputs: { arv: 499000, repairs: 45000 } },
+    snapshot: { subjectInfo: { beds: 3, baths: 1 } }, deal: { stage: "under_contract", contractPrice: 318000, assignmentFee: 11000 } },
+  o2: { id: "o2", locationId: "LOC", address: "3511 Northeast 153rd Street, Lake Forest Park, Washington 98155", calc: { inputs: { arv: 849000, repairs: 200000 } },
+    snapshot: { subjectInfo: { beds: 3, baths: 2 } }, deal: { stage: "under_contract", contractPrice: 400000, assignmentFee: 21000 } },
+};
+const dealText = (id, offerId, over = {}) => ({ ...openDraft(), id, status: "scheduled", party: "investor", intent: "blast_open", contactName: "Buck Taylor", inbound: "",
+  reply: `Hey Buck, a deal (${offerId}).`, outbound: { kind: "blast_open", offerId, address: TWO_DEALS[offerId].address, variant: 0 },
+  propertyAddress: TWO_DEALS[offerId].address, sendAt: new Date(Date.now() - 60000).toISOString(), ...over });
+const limitStore = (drafts, settings = {}) => {
+  const store = fakeStore(drafts);
+  store.getOffer = async (id) => TWO_DEALS[id] || null;
+  store.getOfferSettings = async () => ({ wholesaleFee: 30000, dispoAutopilot: { blastLink: "on_reply", ...settings } });
+  store.listDatarooms = async () => [];
+  store.setInvestorStatus = async () => {};
+  return store;
+};
+const smsClient = () => {
+  const calls = [];
+  return { calls, client: { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1", contact: { id: "c1", tags: [] } }; } } };
+};
+
+test("a deal text to a buyer we texted two days ago waits for their week", async () => {
+  const pulse = { id: "p1", locationId: "LOC", contactId: "c1", status: "sent", party: "investor", intent: "buyer_pulse", inbound: "",
+    outbound: { kind: "buyer_pulse" }, reply: "Hey Buck…", sentAt: new Date(Date.now() - 2 * 86400000).toISOString(), createdAt: new Date(Date.now() - 2 * 86400000).toISOString() };
+  const store = limitStore([dealText("d1", "o1"), pulse]);
+  const { calls, client } = smsClient();
+  const out = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  assert.match(out.skipped || "", /weekly limit/);
+  assert.equal(calls.filter(([p]) => p === "/conversations/messages").length, 0, "nothing went");
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.status, "scheduled");
+  assert.ok(Date.parse(d.sendAt) >= Date.parse(pulse.sentAt) + 7 * 86400000 - 60000, d.sendAt);
+  assert.match(d.flags.join(" · "), /waits for this buyer's weekly limit/);
+
+  // A person pressing Send is a person deciding.
+  const store2 = limitStore([dealText("d1", "o1", { status: "draft" }), pulse]);
+  const two = smsClient();
+  await sendReplyDraft({ client: two.client, store: store2, locationId: "LOC", draftId: "d1", live: true, readThread: async () => "" });
+  assert.equal(two.calls.filter(([p]) => p === "/conversations/messages").length, 1);
+
+  // Switched off, nothing is held.
+  const store3 = limitStore([dealText("d1", "o1"), pulse], { touchBudget: { enabled: false } });
+  const three = smsClient();
+  await sendReplyDraft({ client: three.client, store: store3, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  assert.equal(three.calls.filter(([p]) => p === "/conversations/messages").length, 1);
+});
+
+test("two queued deal texts to one buyer leave as one text and both deals count as sent", async () => {
+  const later = new Date(Date.now() + 3 * 86400000).toISOString();
+  const store = limitStore([dealText("d1", "o1"), dealText("d2", "o2", { sendAt: later, createdAt: iso(500) })]);
+  const { calls, client } = smsClient();
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  const sent = calls.filter(([p]) => p === "/conversations/messages");
+  assert.equal(sent.length, 1, "one text");
+  const sms = sent[0][1].body.message;
+  assert.match(sms, /^Hey Buck, got two under contract right now\./, sms);
+  assert.match(sms, /7034 South K Street in Tacoma, 3bd 1ba: buyer price 329k/);
+  assert.match(sms, /And 3511 Northeast 153rd Street in Lake Forest Park, 3bd 2ba: buyer price 421k, ARV around 849k, rehab about 200k\./);
+  assert.doesNotMatch(sms, /heavy|https?:/);
+  const d1 = await store.getReplyDraft("d1");
+  const d2 = await store.getReplyDraft("d2");
+  assert.equal(d1.status, "sent");
+  assert.deepEqual(d1.outbound.bundle.map((b) => b.offerId), ["o1", "o2"]);
+  assert.equal(d1.blastWithoutLink, true);
+  assert.equal(d2.status, "superseded");
+  assert.equal(d2.combinedInto, "d1");
+  assert.match(d2.flags.join(" "), /went out together with 7034 South K Street/);
+  const blasts = (await store.listContactEvents("LOC", "c1", { types: ["blast_sent"] })).map((e) => e.offerId).sort();
+  assert.deepEqual(blasts, ["o1", "o2"], "both deals know this buyer has them");
+});
+
+test("a buyer who answers a two-deal text about one of them gets that one's link", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  client.call = ((orig) => async (path, opts) => {
+    if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Alex", lastName: "Buyer", tags: ["investor"] } };
+    return orig(path, opts);
+  })(client.call);
+  const both = { ...sentWithoutLink(), outbound: { kind: "blast_open", offerId: "o1", address: "7034 South K Street, Tacoma, Washington 98408",
+    bundle: [{ offerId: "o1", address: "7034 South K Street, Tacoma, Washington 98408" }, { offerId: "o2", address: "3511 Northeast 153rd Street, Lake Forest Park, Washington 98155" }] } };
+  const store = fakeStore([both]);
+  const saved = { ...SAVED, conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["interested"] } } } } };
+  const invites = [];
+  const { job } = await startReply({ client, locationId: "LOC", saved, store, contactId: "c1", message: "send me the lake forest park one", channel: "sms", sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "interested", confidence: "high", reply: "Here you go.", propertyAddress: "3511 NE 153rd St", counterAmount: 0 }),
+      dataroomInviteGuard: async () => ({ ok: false, reason: "" }),
+      issueDataroomInvite: async (a) => { invites.push(a); return { sent: true, address: a.addressHint }; },
+    } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(invites[0]?.addressHint, "3511 Northeast 153rd Street, Lake Forest Park, Washington 98155");
+});

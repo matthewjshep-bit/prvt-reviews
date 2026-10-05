@@ -190,3 +190,19 @@ test("a check-in the bot stood down on gives the claim back: no seat spent, no c
   assert.equal(plan.counts.claimedToday, 0);
   assert.deepEqual(plan.picks.map((p) => p.contactId), ["a"], "tomorrow they're picked again — no 30-day wait for a text that never went");
 });
+
+// One buyer, one week (2026-10-05): a buyer who got a deal two days ago isn't
+// also asked what they're buying. The seat goes to the next in line.
+test("a buyer who heard from us this week isn't pulsed, and the next in line gets the seat", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  const sentBlast = { id: "b1", contactId: "busy", status: "sent", party: "investor", outbound: { kind: "blast_open" }, sentAt: ago(2), createdAt: ago(2) };
+  store.listReplyDrafts = async (_loc, { status, contactId } = {}) => [sentBlast].filter((d) => (!status || d.status === status) && (!contactId || d.contactId === contactId));
+  const s = starter([buyer("busy", { score: 90 }), buyer("next", { score: 50 })]);
+  startBuyerPulse({ locationId: "LOC", saved: saved({ dailyCap: 1, conversedShare: 0 }), store, deps: s, trigger: "manual", now: NOW, client: { call: async () => ({}) } });
+  const job = await done();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(s.calls.map((c) => c.contactId), ["next"]);
+  assert.match(job.results.find((r) => r.contactId === "busy").reason, /heard from us this week/);
+  assert.equal(store.events.some((e) => e.type === "pulse_sent" && e.contactId === "busy"), false, "never claimed");
+});

@@ -134,6 +134,42 @@ function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, 
 }
 
 /**
+ * bundleMessage(factsList, { firstName, linkOnReply, intro, variant }) → string
+ *
+ * Two or three deals for one buyer, in one text (Matt, 2026-10-05: a buyer
+ * who'd hear about two houses in three days hears about both at once). Each
+ * deal is its street, the kind and size, the level Matt picked if any, and
+ * the three figures a buyer may see — nothing the deal doesn't say. No link
+ * and no walkthrough question: whichever they answer about brings those. More
+ * than three are left for the next text. One deal is just its own blast.
+ */
+export const BUNDLE_MAX = 3;
+export function bundleMessage(factsList = [], { firstName = "", linkOnReply = false, intro = "", variant = 0 } = {}) {
+  const deals = (factsList || []).filter(Boolean).slice(0, BUNDLE_MAX);
+  if (deals.length <= 1) return blastMessage({ ...(deals[0] || {}), firstName, variant, intro, linkOnReply });
+  const first = String(firstName || "").trim().split(/\s+/)[0] || "";
+  const line = (f) => {
+    const street = String(f.address || "").split(",")[0].trim() || "a house";
+    const where = f.city ? ` in ${f.city}` : "";
+    const size = [f.beds ? `${f.beds}bd` : "", f.baths ? `${f.baths}ba` : ""].filter(Boolean).join(" ");
+    const work = REHAB_WORDS[f.rehab] ? `${REHAB_WORDS[f.rehab]} rehab` : "";
+    const what = [String(f.kind || "").trim(), size, work].filter(Boolean).join(", ");
+    const money = [
+      kText(f.price) ? `buyer price ${kText(f.price)}` : "",
+      kText(f.arv) ? `ARV around ${kText(f.arv)}` : "",
+      kText(f.repairs) ? `rehab about ${kText(f.repairs)}${f.systems ? " incl. systems" : ""}` : "",
+    ].filter(Boolean).join(", ");
+    return `${street}${where}${what ? `, ${what}` : ""}${money ? `: ${money}` : ""}`;
+  };
+  const count = deals.length === 2 ? "two" : "three";
+  const how = String(intro || "").replace(/[.!?\s]+$/, "").trim();
+  const hi = `${first ? `Hey ${first}` : "Hey"}${how ? ` — ${how}. Got` : ", got"} ${count} under contract right now.`;
+  const body = deals.map((f, i) => `${i ? "And " : ""}${line(f)}.`).join(" ");
+  const ask = deals.length === 2 ? "Either one fit what you're buying?" : "Any of these fit what you're buying?";
+  return `${hi} ${body} ${ask}${linkOnReply ? " Happy to send photos and numbers." : ""}`;
+}
+
+/**
  * dealFacts(offer, { price, note }) → the fields blastMessage wants, from an
  * offer doc.
  *

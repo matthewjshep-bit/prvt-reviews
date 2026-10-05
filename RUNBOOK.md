@@ -3905,6 +3905,50 @@ interest, meaning they said something.
   came within two minutes of the text.
 - Today's `blast_no_opens` row now offers **Find more buyers**, not "Nudge them".
 
+### A buyer hears from us at most once a week (2026-10-05)
+
+Nothing counted texts to one buyer across deals, so Buck got two pulse checks,
+the 3511 deal, a walkthrough invite and a "last check" in eleven days. Several
+buyers got two different deal texts one to three days apart.
+`dispoAutopilot.touchBudget` is **on** and only holds texts back. Rules are in
+`shared/buyer-touch.js`, reads in `ghl-broker/buyer-touch.js`.
+
+- **What counts:** sent investor drafts the machine started (`blast_open`,
+  `deal_followup`, `buyer_pulse`, `showing_reminder`, `showing_followup`, the
+  retired nudges) in the trailing 7 days.
+  - Deals sent within 10 minutes of each other count as one.
+  - Our answers to their texts and anything a person sends never count.
+- **How many:**
+  - 1 a week to a buyer who never wrote back (`quietPerWeek`);
+  - 2 a week to one we're talking to (`talkingPerWeek`). Talking means a
+    text, call, evaluating or commit in the last `talkingDays` (30).
+- **A deal text over the limit:**
+  - **When a wave is queued:** the buyer keeps their seat. Their text is
+    scheduled for when their week opens, with the flag "waits for this buyer's
+    weekly limit — goes Tue Oct 7…". The wave's result counts `waiting`.
+  - **When it sends** (`sendReplyDraft`, auto path only; a person's Send
+    overrides): the limit is checked again, and a text over it goes back to
+    `scheduled` at the opening. This also catches texts queued before 10/5.
+- **Two deals, one text:** when a deal text goes, up to `bundleMax` − 1 other
+  scheduled deal texts to that buyer (other live deals, not stopped, not held
+  for another buyer) go in the same text (`bundleMessage`):
+  > Hey Buck, got two under contract right now. 3511 NE 153rd St in Lake Forest Park, 3bd 2ba: buyer price 421k, ARV around 849k, rehab about 200k. And 5232 S Yakima Ave in Tacoma, 3bd 1ba: buyer price 261k, ARV around 360k, rehab about 60k. Either one fit what you're buying? Happy to send photos and numbers.
+  - The bundle has no link and no walkthrough question. When they answer, the
+    link goes for the house they name (`linkOwed` reads `outbound.bundle`).
+  - Each deal in it gets its own `blast_sent`, so waves, feedback and Flow see
+    it as sent. The other texts become `superseded` with `combinedInto`, flagged
+    "went out together with …".
+  - The scheduler reads each text again before claiming it, so one taken into
+    a bundle earlier in the tick never goes on its own.
+- **The pulse and `deal_followup`** skip a buyer whose week is spent. The pulse
+  seat goes to the next in line, and the follow-up waits for a later run.
+- **Walkthrough reminders and follow-ups** count, but are never held: they go
+  to a buyer who booked a time.
+- **Emails** to buyers with no phone are not limited or combined. They wait in
+  the outbox anyway.
+- **Setting:** Settings → Dispositions → Dispositions autopilot → "A buyer
+  hears from the machine at most so often".
+
 ### Market tags and buyer import (2026-09-13)
 
 Buyers are tagged by where they have actually financed a property and how,

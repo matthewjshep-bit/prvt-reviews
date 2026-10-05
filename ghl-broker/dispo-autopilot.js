@@ -19,6 +19,8 @@
 //   The guarded dataroom invite and the assignment on commit live in the
 //   offers router's deps; this file holds the settings and the queue.
 
+import { normalizeTouchBudget } from "./shared/buyer-touch.js";
+import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { store as defaultStore } from "./store.js";
 import { blastMessage, blastNote, dealFacts, blastSubject } from "./shared/blast-text.js";
 import { normalizeBookSync } from "./investor-sync.js";
@@ -73,6 +75,11 @@ export function normalizeDispoAutopilot(v = {}) {
     // A buyer with no phone gets the deal by email (2026-10-01: fourteen of
     // the twenty mobile home buyers had only an email).
     email: normalizeBlastEmail(o.email),
+    // One buyer, one week (shared/buyer-touch.js, 2026-10-05): the machine
+    // starts at most one text a week to a buyer who never wrote back, two to
+    // one we're talking to; a deal over that waits and goes together with
+    // whatever else is new for them. On — it only ever holds texts back.
+    touchBudget: normalizeTouchBudget(o.touchBudget),
   };
 }
 
@@ -184,7 +191,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
   const stops = dryRun ? new Map() : await botEventsByContact({ store, locationId }).catch(() => null);
   const holdOf = (cid) => (stops ? botHold({ events: stops.get(cid) || [], now }) : { held: true, kind: "unread" });
   const rows = [];
-  let queued = 0, drafted = 0, i = 0;
+  let queued = 0, drafted = 0, waiting = 0, i = 0;
   // Cumulative: each text lands at least `spreadSec` after the one before,
   // plus a little jitter so the gaps aren't a metronome. nextSendTime rolls
   // anything past the close into the next open window.
@@ -205,10 +212,25 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const text = blastMessage({ ...facts, firstName: name, variant, ask, intro });
     const subject = channel === "email" ? blastSubject(facts) : "";
     if (i > 0) cursor += da.spreadSec * 1000 + Math.round(Math.random() * 15000);
-    const sendAt = nextSendTime({ now: cursor, delayMs: 0, quietHours: config.autoSend.quietHours });
+    let sendAt = nextSendTime({ now: cursor, delayMs: 0, quietHours: config.autoSend.quietHours });
     cursor = Date.parse(sendAt);
     i++;
-    if (dryRun) { rows.push({ contactId, name, channel, status: "would queue", sendAt: schedule ? sendAt : null, text, ...(subject ? { subject } : {}) }); continue; }
+    // Their week is spent (shared/buyer-touch.js): the deal keeps its seat
+    // on the wave and goes when their week opens, with anything else new for
+    // them in the same text (reply-agent.js sendReplyDraft).
+    let waits = "";
+    if (schedule && channel === "sms" && da.touchBudget.enabled) {
+      const limit = await buyerTouchLimit({ store, locationId, contactId, budget: da.touchBudget, now });
+      if (!limit.open) {
+        const opens = spreadAcrossDay({ now: limit.at, quietHours: config.autoSend.quietHours, hours: 0, weekends: config.autoSend.weekends || "all" });
+        if (Date.parse(opens) > Date.parse(sendAt)) {
+          sendAt = opens;
+          waits = `waits for this buyer's weekly limit — goes ${slotWord(Date.parse(opens))}, with anything else new for them`;
+          waiting++;
+        }
+      }
+    }
+    if (dryRun) { rows.push({ contactId, name, channel, status: "would queue", sendAt: schedule ? sendAt : null, text, ...(waits ? { waits } : {}), ...(subject ? { subject } : {}) }); continue; }
     // One open blast per buyer per deal: a second click supersedes the first.
     const open = await store.listReplyDrafts(locationId, { contactId, status: ["draft", "scheduled"], limit: 5 }).catch(() => []);
     for (const old of open.filter((d) => d.outbound?.kind === "blast_open" && d.outbound?.offerId === offer.id)) {
@@ -225,12 +247,13 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
       matchedTags: { agent: [], investor: [] }, contextSummary: { deal: offer.id }, offersInContext: 0,
       autoSend: { decided: schedule, reason: schedule ? "" : hold.held ? `${holdLine(hold)} — it waits for you` : (willSchedule ? "emailed deals wait for you (Settings → Dispositions)" : reason) }, humanActive: null, actions: [],
       supersededIds: open.map((o) => o.id), warnings: [], noteOnAutoSend: config.notes?.onAutoSend !== false, promptVersion: 3,
+      ...(waits ? { flags: [waits] } : {}),
       ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
     });
     if (schedule) queued++; else drafted++;
-    rows.push({ contactId, name, channel, status: schedule ? "scheduled" : "draft", draftId: record.id, sendAt: schedule ? sendAt : null, text, ...(subject ? { subject } : {}) });
+    rows.push({ contactId, name, channel, status: schedule ? "scheduled" : "draft", draftId: record.id, sendAt: schedule ? sendAt : null, text, ...(waits ? { waits } : {}), ...(subject ? { subject } : {}) });
   }
-  return { queued, drafted, dryRun: Boolean(dryRun), scheduled: willSchedule, reason, rows, price: facts.price };
+  return { queued, drafted, waiting, dryRun: Boolean(dryRun), scheduled: willSchedule, reason, rows, price: facts.price };
 }
 
 /* ---------- resume after a stop ---------- */

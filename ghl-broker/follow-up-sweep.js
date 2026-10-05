@@ -39,6 +39,8 @@ import { waitingReason } from "./outbox-guard.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { botHold, holdLine, paceOf, paceScale, MIN_PACE } from "./shared/bot-hold.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
+import { normalizeTouchBudget } from "./shared/buyer-touch.js";
+import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { runCounterHolds } from "./counter-hold.js";
 
 const DAY_MS = 86400000;
@@ -565,6 +567,17 @@ async function runSweep(job, ctx) {
         job.skipped++;
         push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: `they're ${standing.replace("_", " ")} on it` });
         continue;
+      }
+      // One buyer, one week (shared/buyer-touch.js): heard from us this week
+      // already, the follow-up waits; the rung isn't claimed, so a later run
+      // sends it.
+      if (c.kind === "deal_followup") {
+        const week = await buyerTouchLimit({ store, locationId, contactId: c.contactId, budget: normalizeTouchBudget(saved?.dispoAutopilot?.touchBudget), now });
+        if (!week.open) {
+          job.skipped++;
+          push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: `heard from us this week — their next opening is ${slotWord(week.at)}` });
+          continue;
+        }
       }
       // Committed elsewhere, or soft-committed: nudging another buyer about it
       // is putting it in front of them again. The buyer it is held for still

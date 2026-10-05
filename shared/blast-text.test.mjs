@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { blastMessage, blastNote, dealFacts, blastSubject } from "./blast-text.js";
+import { blastMessage, blastNote, dealFacts, blastSubject, bundleMessage } from "./blast-text.js";
+import { carrierFlags } from "./carrier-words.js";
 
 test("a blast text names the street, the work, the buyer price in k, and no dollar sign or link", () => {
   const t = blastMessage({ firstName: "Ravi Patel", address: "22018 76th Ave W, Edmonds, WA 98026", city: "Edmonds", price: 495000, beds: 3, baths: 2, sqft: 1480, rehab: "medium", variant: 0 });
@@ -206,4 +207,36 @@ test("the rehab level Matt picked is the one the blast prints", () => {
   assert.match(blastMessage({ ...picked("light"), variant: 2 }), /just went under contract\. Light rehab\. Buyer price/);
   assert.equal(picked(null).rehab, "");
   assert.equal(picked("gut").rehab, "", "only a level the pane offers");
+});
+
+/* ---------- two deals, one text (2026-10-05) ---------- */
+
+// Matt: "we might send them multiple properties in a short period of time…
+// combine properties when necessary saying we have this and this one
+// available and some details."
+const LFP = { address: "3511 NE 153rd St, Lake Forest Park, WA 98155", city: "Lake Forest Park", price: 421000, beds: 3, baths: 2, arv: 849000, repairs: 200000 };
+const TAC = { address: "5232 S Yakima Ave, Tacoma, WA 98408", city: "Tacoma", price: 261000, beds: 3, baths: 1, arv: 360000, repairs: 60000 };
+const MH = { address: "9311 12th Pl SE, Lake Stevens, WA", city: "Lake Stevens", price: 218000, beds: 3, baths: 2, kind: "mobile home on its own lot", rehab: "light" };
+
+test("two deals for one buyer go in one text", () => {
+  const t = bundleMessage([LFP, TAC], { firstName: "Buck Taylor", linkOnReply: true });
+  assert.equal(t, "Hey Buck, got two under contract right now. 3511 NE 153rd St in Lake Forest Park, 3bd 2ba: buyer price 421k, ARV around 849k, rehab about 200k. " +
+    "And 5232 S Yakima Ave in Tacoma, 3bd 1ba: buyer price 261k, ARV around 360k, rehab about 60k. Either one fit what you're buying? Happy to send photos and numbers.");
+  assert.ok(t.length <= 320, `${t.length} characters`);
+  assert.deepEqual(carrierFlags(t), []);
+  assert.doesNotMatch(t, /\$|https?:|heavy|needs work/);
+  // A picked level and the kind of house still say what they are.
+  const m = bundleMessage([TAC, MH], { firstName: "Ana" });
+  assert.match(m, /9311 12th Pl SE in Lake Stevens, mobile home on its own lot, 3bd 2ba, light rehab: buyer price 218k/);
+  assert.match(m, /Either one fit what you're buying\?$/);
+});
+
+test("a bundle never carries more than three", () => {
+  const four = [LFP, TAC, MH, { ...TAC, address: "1 Fourth St, Kent, WA" }];
+  const t = bundleMessage(four, { firstName: "Buck" });
+  assert.match(t, /^Hey Buck, got three under contract right now\./);
+  assert.doesNotMatch(t, /1 Fourth St/);
+  assert.match(t, /Any of these fit what you're buying\?$/);
+  // One deal is just the deal's own text.
+  assert.equal(bundleMessage([LFP], { firstName: "Buck", variant: 0 }), blastMessage({ ...LFP, firstName: "Buck", variant: 0 }));
 });

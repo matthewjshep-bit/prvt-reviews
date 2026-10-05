@@ -557,6 +557,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   };
   const lineTargets = { ...LINE_TARGET_DEFAULTS, ...(form.lineTargets || {}) };
   const desk = { ...DESK_DEFAULTS, ...(form.desk || {}) };
+  const setTouch = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), touchBudget: { ...(f.dispoAutopilot?.touchBudget || {}), [k]: v } } })); };
   const setPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), pulse: { ...(f.dispoAutopilot?.pulse || {}), [k]: v } } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
   const setAgentPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), pulse: { ...(f.outreachAutopilot?.pulse || {}), [k]: v } } })); };
@@ -605,6 +606,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       if (form.underwriteChecks) clean.underwriteChecks = normalizeUnderwriteChecks(form.underwriteChecks);
       if (form.lineTargets) clean.lineTargets = normalizeLineTargets(Object.fromEntries(Object.entries(form.lineTargets).map(([k, v]) => [k, typeof v === "string" ? Number(v.replace(/[$,\s]/g, "")) : v])));
       if (form.desk) clean.desk = normalizeDesk(form.desk);
+      if (clean.dispoAutopilot?.touchBudget) clean.dispoAutopilot.touchBudget = { ...clean.dispoAutopilot.touchBudget, ...Object.fromEntries(["quietPerWeek", "talkingPerWeek", "talkingDays", "bundleMax"].filter((k) => clean.dispoAutopilot.touchBudget[k] != null).map((k) => [k, Number(clean.dispoAutopilot.touchBudget[k])])) };
       if (clean.dispoAutopilot?.pulse) clean.dispoAutopilot.pulse = { ...clean.dispoAutopilot.pulse, ...Object.fromEntries(["dailyCap", "everyDays", "quietDays", "conversedShare"].filter((k) => clean.dispoAutopilot.pulse[k] != null).map((k) => [k, Number(clean.dispoAutopilot.pulse[k])])) };
       const r = await saveSettings(clean);
       onSaved?.(r.settings);
@@ -1347,6 +1349,28 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             drafts the scheduler sends, staggered; the rest are guarded. */}
         <div className="mt-4 space-y-3 rounded-lg border border-slate-200 p-3">
           <div className="text-sm font-semibold">Dispositions autopilot</div>
+          {/* One buyer, one week (shared/buyer-touch.js, 2026-10-05). */}
+          <div className="rounded-md bg-slate-50 p-2.5">
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-1" checked={form.dispoAutopilot?.touchBudget?.enabled !== false} onChange={(e) => setTouch("enabled")(e.target.checked)} />
+              <span>
+                <span className="font-medium">A buyer hears from the machine at most so often</span>
+                <span className="mt-1 block text-xs text-slate-500">
+                  Deal texts, follow-ups, pulse checks and walkthrough texts all count; answers to their texts and anything you send don't.
+                  A deal over the limit keeps its place on the wave and goes when their week opens, in one text with anything else new for them.
+                  Walkthrough reminders still go to buyers who booked a time.
+                </span>
+              </span>
+            </label>
+            {form.dispoAutopilot?.touchBudget?.enabled !== false && (
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <Num label="A week, to a buyer who never wrote back" value={form.dispoAutopilot?.touchBudget?.quietPerWeek ?? 1} onChange={setTouch("quietPerWeek")} />
+                <Num label="A week, to a buyer we're talking to" value={form.dispoAutopilot?.touchBudget?.talkingPerWeek ?? 2} onChange={setTouch("talkingPerWeek")} />
+                <Num label="Talking = wrote back within" suffix="days" value={form.dispoAutopilot?.touchBudget?.talkingDays ?? 30} onChange={setTouch("talkingDays")} />
+                <Num label="Most deals in one text" value={form.dispoAutopilot?.touchBudget?.bundleMax ?? 3} onChange={setTouch("bundleMax")} />
+              </div>
+            )}
+          </div>
           <label className="block">
             <span className="text-xs font-medium text-slate-600">How a blast goes out</span>
             <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"

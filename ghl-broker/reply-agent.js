@@ -64,7 +64,7 @@ import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, mac
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, fellThroughOn, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
 import { signedContractIn, themLines } from "./shared/contract-signed.js";
 import { sameStreet } from "./shared/us-address.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
@@ -94,7 +94,9 @@ import {
 import { carrierFlags } from "./shared/carrier-words.js";
 import { planActions, runActions } from "./conversation-actions.js";
 import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend } from "./conversation-scheduler.js";
-import { refreshBlastText, defaultDataroomBaseUrl } from "./blast-refresh.js";
+import { refreshBlastText, refreshBundleText, defaultDataroomBaseUrl } from "./blast-refresh.js";
+import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
+import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { gmailBeforeDraft, contactEmails } from "./gmail-sync.js";
 import { meterAi } from "./ai-spend.js";
 
@@ -1570,7 +1572,10 @@ const LINK_OWED_DAYS = 30;
 
 // The newest deal text we sent this buyer without its link, in the last
 // month, that no package link has followed since. null when there's none.
-async function linkOwed({ store, locationId, contactId, now = Date.now() }) {
+// A text that carried two or three deals (outbound.bundle) owes the link for
+// the one they're answering about — `prefer`, the house the reply is about —
+// else the first one in it.
+async function linkOwed({ store, locationId, contactId, now = Date.now(), prefer = "" }) {
   const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 50 }).catch(() => []);
   const blast = drafts
     .filter((d) => d?.status === "sent" && d.blastWithoutLink && d.outbound?.kind === "blast_open"
@@ -1580,7 +1585,11 @@ async function linkOwed({ store, locationId, contactId, now = Date.now() }) {
   const sentAt = String(blast.sentAt || "");
   const linkedSince = drafts.some((d) => String(d.updatedAt || d.createdAt || "") > sentAt
     && (d.actions || []).some((x) => x.type === "send_dataroom_invite" && x.status === "done"));
-  return linkedSince ? null : { address: blast.outbound.address || blast.propertyAddress || "", offerId: blast.outbound.offerId || null };
+  if (linkedSince) return null;
+  const parts = Array.isArray(blast.outbound.bundle) ? blast.outbound.bundle.filter((p) => p?.address) : [];
+  const named = parts.length && prefer ? parts.find((p) => sameStreet(p.address, prefer)) : null;
+  if (named) return { address: named.address, offerId: named.offerId || null };
+  return { address: blast.outbound.address || blast.propertyAddress || "", offerId: blast.outbound.offerId || null };
 }
 
 // They'll go find out: "I could ask, and see what…", "let me check with the
@@ -3508,7 +3517,7 @@ async function runReply(job, ctx) {
   // not — whatever the buy-box guard above would say. A pass gets nothing.
   if (party === "investor" && !isCall && LINK_ON_REPLY_INTENTS.has(draft.intent)
       && !plan.auto.some((x) => x.type === "send_dataroom_invite")) {
-    const owed = await linkOwed({ store, locationId, contactId: job.contactId, now });
+    const owed = await linkOwed({ store, locationId, contactId: job.contactId, now, prefer: draft.propertyAddress || "" });
     // You stopped outreach on that deal (the deal pane's Stop outreach): its
     // link doesn't go by itself either. This runs while the reply is drafted,
     // before sendReplyDraft's guard ever sees the reply, so it asks here.
@@ -4596,6 +4605,45 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     }
   }
 
+  // One buyer, one week (shared/buyer-touch.js). Buck, 3511 NE 153rd St,
+  // 2026-10-05: two pulse checks, the deal, a walkthrough invite and "Last
+  // check" in eleven days. A deal text to a buyer whose week is spent waits
+  // for it to open; when it goes, any other deal waiting for them goes in the
+  // same text. Only the machine's own text on the auto path: a person
+  // pressing Send is a person deciding, and an email isn't a text.
+  let bundle = [];
+  if (auto && d.outbound?.kind === "blast_open" && d.channel !== "email" && body === String(d.reply || "").trim()) {
+    const saved = (await store.getOfferSettings?.(locationId).catch(() => null)) || {};
+    const budget = normalizeTouchBudget(saved.dispoAutopilot?.touchBudget);
+    if (budget.enabled) {
+      const limit = await buyerTouchLimit({ store, locationId, contactId: d.contactId, budget, now });
+      if (!limit.open) {
+        const config = conversationConfig(saved);
+        const sendAt = spreadAcrossDay({ now: limit.at, quietHours: config.autoSend.quietHours, hours: 0, weekends: config.autoSend.weekends || "all" });
+        const ts = new Date(now).toISOString();
+        const line = `waits for this buyer's weekly limit — goes ${slotWord(Date.parse(sendAt))}, with anything else new for them`;
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "scheduled", sendAt, sendingAt: null, updatedAt: ts,
+          flags: [...(d.flags || []).filter((f) => !/^waits for this buyer's weekly limit/.test(f)), line],
+        });
+        return { ok: true, skipped: line, sendAt };
+      }
+      const waiting = (await store.listReplyDrafts(locationId, { contactId: d.contactId, status: "scheduled", limit: 20 }).catch(() => []))
+        .filter((o) => o.id !== d.id && o.outbound?.kind === "blast_open" && o.channel !== "email"
+          && o.outbound?.offerId && o.outbound.offerId !== d.outbound?.offerId)
+        .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+      for (const o of waiting) {
+        if (bundle.length >= budget.bundleMax - 1) break;
+        if (bundle.some((x) => x.outbound.offerId === o.outbound.offerId)) continue;
+        const deal = (await store.getOffer?.(o.outbound.offerId).catch(() => null))?.deal;
+        if (!deal || dealIsOver(deal) || dealOutreachStopped(deal)) continue;
+        const paused = dealOutreachPaused(deal);
+        if (paused && paused.contactId !== d.contactId) continue;
+        bundle.push(o);
+      }
+    }
+  }
+
   // A blast is written again as it leaves: the deal's price now, not when it
   // was queued, and the buyer's own package link (blast-refresh.js). Only the
   // machine's own words — a text a person rewrote goes as they wrote it. A
@@ -4604,7 +4652,8 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   let blast = null;
   if (d.outbound?.kind === "blast_open" && body === String(d.reply || "").trim()) {
     try {
-      blast = await refreshBlastText({ store, client, locationId, draft: d, baseUrl: dataroomBaseUrl });
+      if (bundle.length) blast = await refreshBundleText({ store, locationId, draft: d, others: bundle });
+      if (!blast) blast = await refreshBlastText({ store, client, locationId, draft: d, baseUrl: dataroomBaseUrl });
     } catch (e) {
       const ts = new Date(now).toISOString();
       await store.updateReplyDraft(d.id, {
@@ -4632,6 +4681,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     ...d, status: "sent", sentAt: ts, sentText: body, autoSent: Boolean(auto),
     edited: auto || blast ? false : body !== String(d.reply || "").trim(),
     ...(blast ? { quotedPrice: blast.price, ...(blast.invite ? { dataroomInviteId: blast.invite.id } : {}), ...(blast.withoutLink ? { blastWithoutLink: true } : {}) } : {}),
+    ...(blast?.bundle ? { outbound: { ...d.outbound, bundle: blast.bundle.map(({ offerId, address }) => ({ offerId, address })) } } : {}),
     // Why a person changed it, when they said (the nightly coach reads this).
     ...(!auto && normalizeDraftFeedback(reason) ? { feedback: { ...normalizeDraftFeedback(reason), at: ts } } : {}),
     ghlMessageId: result?.messageId || result?.id || null, sendAt: null, sendingAt: null, updatedAt: ts,
@@ -4650,6 +4700,25 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       data: { draftId: d.id, auto: Boolean(auto), label: d.outbound.label || "", via: "app", channel: d.channel === "email" ? "email" : "sms" },
     }).catch(() => {});
     await store.setInvestorStatus?.(locationId, d.contactId, { lastBlastAt: ts }).catch(() => {});
+    // The other deals that went in this text: each is sent, as far as its
+    // waves, its feedback and its Flow attribution are concerned, and its own
+    // queued text stands down.
+    const street = (a) => String(a || "").split(",")[0].trim();
+    for (const part of (blast?.bundle || []).filter((p) => p.draftId !== d.id)) {
+      const other = await store.getReplyDraft(part.draftId).catch(() => null);
+      if (other && OPEN_STATUSES.has(other.status)) {
+        await store.updateReplyDraft(other.id, {
+          ...other, status: "superseded", combinedInto: d.id, sendAt: null, sendingAt: null, updatedAt: ts,
+          flags: [...(other.flags || []), `went out together with ${street(d.outbound.address || d.propertyAddress)}`],
+        }).catch(() => {});
+      }
+      await recordEvent({
+        store, locationId, contactId: d.contactId, party: "investor", type: "blast_sent", at: ts,
+        address: part.address, offerId: part.offerId, source: "blast", ref: part.draftId,
+        dedupeKey: `blast:${part.offerId}:${d.contactId}`,
+        data: { draftId: d.id, bundledWith: d.id, auto: Boolean(auto), label: other?.outbound?.label || "", via: "app", channel: "sms" },
+      }).catch(() => {});
+    }
     if (blast?.invite) {
       await store.updateDataroomInvite?.(blast.invite.id, { sentAt: ts }).catch(() => {});
       await store.logDataroomEvent?.(blast.room.id, blast.invite.id, "sent", { via: "blast" }).catch(() => {});

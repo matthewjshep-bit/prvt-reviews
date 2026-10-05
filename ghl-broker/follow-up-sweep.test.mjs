@@ -1059,3 +1059,22 @@ test("Nudge them on one deal follows up that deal's buyers who spoke up, and no 
   assert.deepEqual(started.map((s) => s.contactId).sort(), ["b1", "b2"], "that deal's buyers who spoke up, by id or by street — never the silent one");
   assert.ok(started.every((s) => s.kind === "deal_followup"), "no agent nudge rode along");
 });
+
+test("a buyer who got a deal text yesterday isn't followed up until their week allows", async () => {
+  _resetJobs();
+  // Talking (they spoke up), so two a week: yesterday's deal text and a
+  // walkthrough reminder fill it.
+  const sentText = (id, kind, day) => ({ id, contactId: "i1", status: "sent", party: "investor", outbound: { kind }, sentAt: at(day), createdAt: at(day) });
+  const store = fakeStore({
+    events: [
+      { contactId: "i1", type: "text_summary", at: at(0), address: "9 Oak Ave" },
+      { contactId: "i1", type: "investor_evaluating", at: at(0), address: "9 Oak Ave", offerId: "d1" },
+    ],
+    drafts: [sentText("s1", "blast_open", 3), sentText("s2", "showing_reminder", 2.5)],
+  });
+  store.listContactEvents = async (_loc, id, { types = null } = {}) => store.events.filter((e) => e.contactId === id && (!types || types.includes(e.type)));
+  const { job, started } = spySweep(store, { now: T0 + 4 * DAY });
+  await settle();
+  assert.equal(started.length, 0);
+  assert.ok(job.results.some((r) => /heard from us this week/.test(r.reason || "")), JSON.stringify(job.results));
+});

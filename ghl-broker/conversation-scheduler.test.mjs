@@ -196,3 +196,21 @@ test("a send GHL refuses as unsubscribed is dismissed, not handed back as 'Needs
   assert.match(d.flags.join(" · "), /unsubscribed — not sent/);
   assert.doesNotMatch(d.flags.join(" · "), /auto-send failed/);
 });
+
+// Two deals for one buyer go as one text (2026-10-05): sending the first
+// stands the second down. The tick listed both at its top, and claiming the
+// stale copy of the second would have sent it anyway.
+test("a text another send took with it in the same tick is not sent again", async () => {
+  const store = fakeStore([draft(), draft({ id: "d2" })]);
+  const sent = [];
+  await sendDueDrafts({
+    store, locations: [{ locationId: "LOC", client: {} }], live: true, now, paceMs: 0,
+    send: async (args) => {
+      sent.push(args.draftId);
+      store.rows.set(args.draftId, { ...store.rows.get(args.draftId), status: "sent" });
+      if (args.draftId === "d1") store.rows.set("d2", { ...store.rows.get("d2"), status: "superseded", combinedInto: "d1" });
+    },
+  });
+  assert.deepEqual(sent, ["d1"]);
+  assert.equal(store.rows.get("d2").status, "superseded");
+});

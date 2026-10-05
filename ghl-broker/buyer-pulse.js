@@ -23,6 +23,8 @@ import { workHour, isWorkday } from "./outreach-sweep.js";
 import { normalizeBuyerPulse, pickPulseBuyers } from "./shared/buyer-pulse.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { botHold, paceOf, MAX_PACE } from "./shared/bot-hold.js";
+import { normalizeTouchBudget } from "./shared/buyer-touch.js";
+import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 
 export const CURSOR_NAME = "buyerPulse";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -131,8 +133,18 @@ export function startBuyerPulse({ client, locationId, saved = {}, store = defaul
     let claimed = 0;
     // The day's picks, then the spares: a buyer skipped before being claimed
     // (unsubscribed in GHL) gives the seat to the next in line.
+    const budget = normalizeTouchBudget(saved?.dispoAutopilot?.touchBudget);
     for (const p of [...picks, ...(dryRun ? [] : plan.spares || [])]) {
       if (claimed >= seats) break;
+      // Heard from us already this week (shared/buyer-touch.js): a deal, a
+      // walkthrough text. The pulse waits for another day and the seat goes
+      // to the next in line.
+      const week = await buyerTouchLimit({ store, locationId, contactId: p.contactId, budget, now });
+      if (!week.open) {
+        job.skipped++;
+        job.results.push({ contactId: p.contactId, group: p.group, status: "skipped", reason: `heard from us this week — their next opening is ${slotWord(week.at)}` });
+        continue;
+      }
       p.subject = { ...p.subject, variant: n++ };
       if (dryRun) { job.results.push({ contactId: p.contactId, name: p.name, group: p.group, status: "would draft", clues: p.subject }); continue; }
       if (!deps.skipPreflight) {

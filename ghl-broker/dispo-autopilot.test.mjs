@@ -321,3 +321,28 @@ test("a wave you resumed counts its delay from the resume, not from when it was 
   assert.equal(n.due, false);
   assert.equal(n.dueAt, new Date(Date.parse(resumedAt) + 48 * 3600000).toISOString());
 });
+
+// Matt, 2026-10-05: a buyer can get several deals in a few days; space them
+// and send them together. A buyer who has never written back hears from us
+// once a week.
+test("a second deal to a buyer blasted two days ago waits for their week, then goes with the next", async () => {
+  const store = fakeStore();
+  const twoDaysAgo = new Date(NOW - 2 * 86400000).toISOString();
+  store.rows.set("old", { id: "old", contactId: "i1", status: "sent", party: "investor", intent: "blast_open", outbound: { kind: "blast_open", offerId: "o0" }, sentAt: twoDaysAgo, createdAt: twoDaysAgo });
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } }, dispoAutopilot: { spreadSec: 60 } };
+  const r = await queueBlastDrafts({ store, locationId: "L", offer, investors: buyers, saved, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(r.queued, 3, "they keep their seat on the wave");
+  assert.equal(r.waiting, 1);
+  const ravi = [...store.rows.values()].find((d) => d.contactId === "i1" && d.status === "scheduled");
+  assert.ok(Date.parse(ravi.sendAt) >= Date.parse(twoDaysAgo) + 7 * 86400000, ravi.sendAt);
+  assert.match(ravi.flags.join(" "), /waits for this buyer's weekly limit/);
+  const mei = [...store.rows.values()].find((d) => d.contactId === "i2");
+  assert.ok(Date.parse(mei.sendAt) - NOW < 3600000, "everyone else goes today");
+
+  // Switched off, nobody waits.
+  const off = fakeStore();
+  off.rows.set("old", store.rows.get("old"));
+  const r2 = await queueBlastDrafts({ store: off, locationId: "L", offer, investors: buyers, saved: { ...saved, dispoAutopilot: { spreadSec: 60, touchBudget: { enabled: false } } }, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(r2.waiting, 0);
+  assert.equal(normalizeDispoAutopilot({}).touchBudget.enabled, true);
+});
