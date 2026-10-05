@@ -39,6 +39,7 @@ import { waitingReason } from "./outbox-guard.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { botHold, holdLine, paceOf, paceScale, MIN_PACE } from "./shared/bot-hold.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
+import { runCounterHolds } from "./counter-hold.js";
 
 const DAY_MS = 86400000;
 // GHL's burst cap is 100 req / 10s per location; the same pace the enrichment
@@ -828,6 +829,17 @@ async function runSweep(job, ctx) {
       push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "error", reason: String(e?.message || e).slice(0, 160) });
     }
     if (pace > 0) await sleep(pace);
+  }
+
+  // Hold, then pass (counter-hold.js): the check-ins after our held number,
+  // and the pass when they don't move. Same morning, same one-text rule.
+  if (!job.cancelRequested && !scope?.offerId) {
+    job.phase = "counter holds";
+    for (const row of await runCounterHolds({ client, locationId, saved, store, config, sendsEnabled, deps: { ...deps, startProactive: start }, now, dryRun: job.dryRun, startedFor })) {
+      if (row.status === "started") job.started++;
+      else if (row.status === "passed") job.exhaustedCount++;
+      push(row);
+    }
   }
 
   job.status = job.cancelRequested ? "canceled" : "done";

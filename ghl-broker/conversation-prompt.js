@@ -613,6 +613,13 @@ function openingFor(outbound) {
     // They countered, we went quiet. Keep it alive without moving: ask for
     // room, never a number of ours, never theirs read back.
     case "counter_nudge":
+      // After our hold: we told them our number and that we're holding it.
+      // A light, professional check-in — never pushy, never a new number.
+      if (o.heldK) {
+        return `${START} We told this agent we're holding at ${o.heldK} on ${o.address}. A light, professional check-in in one line: ` +
+          `has anything changed on the seller's side? Do NOT name any number, do NOT restate ours or theirs, do NOT hint we'd go ` +
+          `higher. ${o.heldStep >= o.heldOf ? "Make it easy to say no. " : ""}Don't repeat the wording of the last message. ${CONTINUE} Set intent to counter_nudge.`;
+      }
       return `${START} This agent countered on ${o.address}${o.days ? ` ${o.days} days ago` : ""} and nobody on our side came back to them. ` +
         `Keep the negotiation alive in one or two lines: say we're still interested and ask whether the seller has any room ` +
         `toward our number, or what it would take. Do NOT name a new number of ours, do NOT restate their number, do NOT ` +

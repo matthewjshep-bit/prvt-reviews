@@ -593,6 +593,12 @@ const PLAYBOOK = () => ({
     acceptance: false,    // the "they accepted our number" half, separately
     maxAmount: 0,         // optional absolute cap; 0 = the derived ceiling stands
   },
+  // Hold, then pass (Matt, 2026-10-04). A counter above our number — or an
+  // ask for us to come up — gets our number once, held, never more. Then a
+  // check-in on the normal spacing; after `checkIns` with no movement the
+  // house is marked we_passed. A counter with no number that asks nothing of
+  // us goes out like a status reply. Agent only. Off; Full on the dial.
+  counterHold: { enabled: false, checkIns: 2 },
   // The clock. Off by default, and off again per ladder — and even switched
   // on a nudge only DRAFTS unless its intent is also ticked on the auto-send
   // allowlist above. Two switches is the guard, deliberately.
@@ -902,6 +908,11 @@ function normalizePlaybook(p, party, seed = {}) {
       dailyCap: int(src.counterBand?.dailyCap, 2, 1, 50),
       acceptance: bool(src.counterBand?.acceptance, false),
       maxAmount: int(src.counterBand?.maxAmount, 0, 0, 100000000),
+    },
+    counterHold: {
+      // Agent only: a buyer's price is the investor band's business.
+      enabled: party === "agent" && bool(src.counterHold?.enabled, false),
+      checkIns: int(src.counterHold?.checkIns, 2, 1, 6),
     },
     requote: {
       enabled: bool(src.requote?.enabled, false),

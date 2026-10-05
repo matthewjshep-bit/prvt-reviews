@@ -81,6 +81,7 @@ import {
   startFollowUpSweep, getFollowUpJob, publicFollowUpJob, cancelFollowUpSweep, CURSOR_NAME as FOLLOW_UP_CURSOR,
   agentCandidates, investorCandidates,
 } from "../follow-up-sweep.js";
+import { runCounterHolds } from "../counter-hold.js";
 import { attachNextFollowUps, attachNextFollowUpsFor } from "../next-follow-up.js";
 import { readSpend } from "../ai-spend.js";
 import { dueStep } from "../shared/follow-up.js";
@@ -5057,6 +5058,45 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         { offerId: full.id, source: "conversation", at: ts }).catch(() => {});
       return { ok: true, cooled: true, address: full.address };
     },
+    // Hold, then pass (counter-hold.js). The hold went: its clock starts on
+    // the offer. A lower number from them is a new hold; the same ask again
+    // is one more time they didn't move.
+    markCounterHold: async ({ offerId, ours, theirs = 0, again = false, draftId = null }) => {
+      const full = await store.getOffer(offerId).catch(() => null);
+      if (!full) return { ok: false, reason: "offer vanished" };
+      const ts = new Date().toISOString();
+      const prev = full.counterHold || null;
+      full.counterHold = again && prev?.at
+        ? { ...prev, ours: Math.round(Number(ours) || prev.ours || 0), replies: [...(prev.replies || []), ts].slice(-10) }
+        : { at: ts, ours: Math.round(Number(ours) || 0), theirs: Math.round(Number(theirs) || 0), nudges: [], replies: [], draftId };
+      full.updatedAt = ts;
+      await store.updateOffer(full.id, full);
+      if (!again) {
+        await appendDealHistory(client, locationId, full.contactId, "agent_deal_history",
+          historyLine(ts, full.address, `held at ${fmtMoney(full.counterHold.ours)}`, theirs ? `their ${fmtMoney(theirs)}` : "they asked us to come up"),
+          { offerId: full.id, source: "conversation", at: ts }).catch(() => {});
+      }
+      return { ok: true, address: full.address };
+    },
+    // A check-in after the hold went out: one more rung on its clock.
+    markCounterHoldNudge: async ({ offerId }) => {
+      const full = await store.getOffer(offerId).catch(() => null);
+      if (!full?.counterHold?.at) return { ok: false, reason: "no hold on that offer" };
+      const ts = new Date().toISOString();
+      full.counterHold = { ...full.counterHold, nudges: [...(full.counterHold.nudges || []), ts].slice(-10) };
+      full.updatedAt = ts;
+      await store.updateOffer(full.id, full);
+      return { ok: true };
+    },
+    // They didn't move after the hold and the check-ins: we pass, through the
+    // same path the status menu's "We passed" takes (Matt's rule, 2026-10-04).
+    passHeldCounter: async ({ offerId, note = "" }) => {
+      const full = await store.getOffer(offerId).catch(() => null);
+      if (!full) return { ok: false, reason: "offer vanished" };
+      if (full.deal || !OPEN_STATUSES.has(effectiveStatus(full))) return { ok: false, reason: `it is ${effectiveStatus(full)}` };
+      const stopped = await applyOperatorStatus({ locationId, client, offer: full, status: "we_passed", note: dealStr(note, 200) });
+      return { ok: true, address: full.address, stopped: stopped.length };
+    },
     // "In the realm": remembered on the offer, so the book says so next time
     // and History can show which offers are cleared to send.
     setOfferRealm: async ({ contactId, addressHint, answer, note = "" }) => {
@@ -5876,7 +5916,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         due.push({ contactId: c.contactId, party: c.party, kind: c.kind, address: c.address,
                    startedAt: c.startedAt, due: d.due, step: d.step ?? null, reason: d.reason || "" });
       }
-      res.json({ ok: true, job, daily, sendsEnabled: CARD_SENDS_ENABLED, considered: due.length, candidates: due });
+      // Hold, then pass: who'd get a check-in after our held number, and
+      // which houses would be passed — shown even with the switch off.
+      const holds = await runCounterHolds({ locationId, saved, store, config, now, dryRun: true, ignoreSwitch: true }).catch(() => []);
+      res.json({ ok: true, job, daily, sendsEnabled: CARD_SENDS_ENABLED, considered: due.length, candidates: due, counterHolds: { enabled: Boolean(config.parties.agent.counterHold?.enabled), rows: holds } });
     } catch (err) { fail(res, err); }
   });
 

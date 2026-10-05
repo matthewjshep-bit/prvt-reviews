@@ -2711,6 +2711,67 @@ test("a contact with an offer in our book is an agent even with no agent tag", a
   assert.equal(job.partySource, "offer_book");
 });
 
+// Hold, then pass (Matt, 2026-10-04). A counter above our number gets our
+// number back once, held — never more — and sends itself; the check-ins and
+// the pass are counter-hold.js's. Off, it waits for a person as before.
+const HOLD_SAVED = (on = true) => ({
+  ...SAVED,
+  conversationAi: { enabled: true, autoSend: { debounceSec: 0 }, parties: { agent: {
+    autoSend: { enabled: true, intents: ["question", "status_check"] }, followUp: { enabled: true },
+    counterHold: { enabled: on, checkIns: 2 } } } },
+});
+const HELD_OFFER = { ...NEGOTIATION_OFFER, status: "countered", sends: [{ ts: new Date(Date.now() - 5 * 86400000).toISOString(), results: { sms: { ok: true } } }] };
+const holdRun = async ({ message, draft, on = true }) => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...HELD_OFFER };
+  const store = negotiationStore(offer);
+  const marks = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: HOLD_SAVED(on), store, contactId: "c1", message, sendsEnabled: true,
+    deps: {
+      draft: async () => ({ ...DRAFT, confidence: "high", propertyAddress: "12 Elm St", ...draft }),
+      setOfferStatus: async ({ status }) => ({ ok: true, address: offer.address, status }),
+      markCounterHold: async (a) => { marks.push(a); return { ok: true }; },
+    },
+  });
+  await settle();
+  return { job, d: await store.getReplyDraft(job.draftId), marks };
+};
+
+test("a counter above our number gets our number once, then we move on", async () => {
+  const { job, d, marks } = await holdRun({ message: "Seller says 315 and not a dollar less",
+    draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner and get back to you." } });
+  assert.equal(job.status, "done", job.error);
+  assert.match(d.reply, /hold at 300,000/, d.reply);
+  assert.doesNotMatch(d.reply, /\$/, "no dollar sign: the carrier filters");
+  assert.doesNotMatch(d.reply, /partner|get back/);
+  assert.equal(d.autoSend.decided, true, `${d.autoSend.reason} | flags: ${(d.flags || []).join(" · ")} | autoSendable ${d.autoSendable} gateClean ${d.gateClean}`);
+  assert.equal(d.status, "scheduled");
+  assert.deepEqual(marks.map((m) => [m.offerId, m.ours, m.theirs]), [["o1", 300000, 315000]]);
+  // Off: the counter waits for a person, exactly as before.
+  const off = await holdRun({ on: false, message: "Seller says 315 and not a dollar less",
+    draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner and get back to you." } });
+  assert.notEqual(off.d.status, "scheduled");
+  assert.equal(off.marks.length, 0);
+});
+
+test("'make an offer closer to where they are' with no number is held at ours too", async () => {
+  const { d, marks } = await holdRun({ message: "If you would like to make an offer closer to where they are at, that may get them to move on it.",
+    draft: { intent: "counter", counterAmount: 0, reply: "What number would get them to move?" } });
+  assert.match(d.reply, /hold at 300,000/);
+  assert.equal(d.status, "scheduled");
+  assert.equal(marks.length, 1);
+});
+
+test("a counter with no number that asks nothing of us is answered like a status reply", async () => {
+  const { d, marks } = await holdRun({ message: "I could ask, and see what is the discount price they might be willing to sell right now",
+    draft: { intent: "counter", counterAmount: 0, reply: "That'd be great, appreciate you asking. Bring back whatever they'd consider." } });
+  assert.equal(d.intent, "status_check");
+  assert.equal(d.status, "scheduled", (d.flags || []).join(" · "));
+  assert.equal(marks.length, 0, "not a hold");
+});
+
 test("a counter within 10% of what we'd pay stays a counter for the band or a person", async () => {
   const { d, statuses } = await counterAt(380000);
   assert.equal(d.intent, "counter");
