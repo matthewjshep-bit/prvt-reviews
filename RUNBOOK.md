@@ -3458,7 +3458,8 @@ runs it) owns an agent when nothing else does:
 
 **Running it.** Once a workday from `hour` (noon Pacific), with the daily gate
 (cursor `agentPulse`, retries if a deploy kills it), capped at `dailyCap` (20)
-a day: partners' and engaged agents' fresh listings first, then the most
+a day, or uncapped at 0 (live since 2026-10-05: every agent due gets one that
+day; per-agent spacing still holds): partners' and engaged agents' fresh listings first, then the most
 overdue, then cold listings. Each agent is checked in GHL first (unsubscribed
 is marked and skipped, tagged off or no phone is skipped), then claimed
 (`agent_pulse_sent`) before anything is drafted. A claim that drafted nothing

@@ -178,7 +178,7 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
   const voided = new Set((ledgerRead.events || []).filter((e) => e.type === "agent_pulse_voided").map((e) => e.data?.claimKey).filter(Boolean));
   const today = (ledgerRead.events || []).filter((e) => e.type === "agent_pulse_sent" && pacificDay(Date.parse(e.at)) === pacificDay(now));
   const claimedToday = today.filter((e) => !voided.has(e.dedupeKey)).length;
-  const seats = Math.max(0, settings.dailyCap - claimedToday);
+  const seats = settings.dailyCap > 0 ? Math.max(0, settings.dailyCap - claimedToday) : Infinity;   // 0 = no cap
   // Tried today already — a claim that drafted nothing is voided and gives
   // its seat back, but the agent waits for tomorrow (the day's claim key is
   // theirs), so the seat goes to someone else.

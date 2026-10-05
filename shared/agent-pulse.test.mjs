@@ -34,7 +34,7 @@ test("the pulse ships off, with Matt's cadence as its defaults", () => {
   assert.equal(s.everyDays, 21);
   assert.equal(s.coldEveryDays, 60);
   assert.equal(s.coldMaxUnanswered, 3);
-  assert.equal(normalizeAgentPulse({ dailyCap: 900 }).dailyCap, 100, "capped");
+  assert.equal(normalizeAgentPulse({ dailyCap: 9000 }).dailyCap, 5000, "a typo can't ask for more than that");
 });
 
 test("an agent who ever replied is checked in on every 21 days", () => {
@@ -156,6 +156,26 @@ test("partners come first, then engaged agents, then cold listings — and the d
   assert.equal(counts.dueNoSeat, 1, "the cold listing waits for a seat");
   assert.equal(counts.bySegment.partner, 1);
   assert.equal(picks.find((p) => p.contactId === "p").subject.house.how, "closed");
+});
+
+// Matt, 2026-10-05: 307 agents were due a check-in and 40 seats a day held
+// them back — "there should be no caps".
+test("with the day's cap at 0 there is no cap: every agent due a check-in gets one today", () => {
+  assert.equal(normalizeAgentPulse({ dailyCap: 0 }).dailyCap, 0, "0 is kept, not bumped to 1");
+  const agents = [
+    agent({ contactId: "cold1", events: [{ type: "outreach_enrolled", at: ago(90), data: { kind: "first" } }, { type: "outreach_enrolled", at: ago(70), data: { kind: "followup" } }], listings: [listing({ listingKey: "C" })] }),
+    agent({ contactId: "eng1", lastInboundAt: ago(40) }),
+    agent({ contactId: "eng2", lastInboundAt: ago(90) }),
+    agent({ contactId: "eng3", lastInboundAt: ago(60), listings: [listing({ listingKey: "E" })], events: [{ type: "follow_up_sent", at: ago(12) }] }),
+  ];
+  const open = normalizeAgentPulse({ enabled: true, dailyCap: 0 });
+  const houses = { live: new Set(), walked: new Map() };
+  const r = pickPulseAgents({ agents, settings: open, config: CONFIG, houses, now: NOW });
+  assert.equal(r.picks.length, 4);
+  assert.equal(r.counts.dueNoSeat, 0);
+  assert.deepEqual(r.spares, []);
+  // The runner hands in unlimited seats the same way.
+  assert.equal(pickPulseAgents({ agents, settings: open, config: CONFIG, houses, seats: Infinity, now: NOW }).picks.length, 4);
 });
 
 test("the text's material never carries a price", () => {
