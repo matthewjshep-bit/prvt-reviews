@@ -557,7 +557,11 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         for (const a of out.actions) {
           if (a.kind !== "draft_waiting" || a.group === "machine") continue;
           const d = byId.get(a.draftId);
-          if (!d || !releasableHeld(d, { loose: config.nightlyAudit?.loose !== false, mode: "night", now: audit7 })) continue;
+          // As the audit sees it: never a text after a call (our own call is
+          // the thread's last word, so it reads as yours) and never someone
+          // we can't place.
+          if (!d || d.inboundKind === "call" || !["agent", "investor"].includes(d.party)) continue;
+          if (!releasableHeld(d, { loose: config.nightlyAudit?.loose !== false, mode: "night", now: audit7 })) continue;
           if (botHold({ events: botEvents.filter((e) => e.contactId === d.contactId), now }).held) continue;
           if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
           out.counts.actions.byGroup.machine = (out.counts.actions.byGroup.machine || 0) + 1;
