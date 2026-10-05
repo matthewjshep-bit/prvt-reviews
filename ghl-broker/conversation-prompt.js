@@ -870,6 +870,10 @@ function openingFor(outbound) {
               `Do NOT apologise, do NOT mention the gap or the delay, and do NOT re-answer what they said. `
           : `This agent told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Mention it naturally ` +
             `("you'd mentioned ${o.phrase || "circling back"}"). Ask whether anything landed that needs work. `) +
+        // Never the same question twice: 1010 Bellevue's agent was asked for
+        // "a real number" after saying three times where the sellers were.
+        `Never ask anything they already answered in the thread: if they told us where the seller is, or that they won't move, ` +
+        `don't ask for it again — say something new or let it rest. ` +
         `One or two lines, warm and easy to ignore. Do NOT name any number or price. ${CONTINUE} Set intent to checkin_due.`;
 
     // A property they told us was coming, and we still don't have the

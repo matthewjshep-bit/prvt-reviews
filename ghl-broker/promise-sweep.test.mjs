@@ -35,6 +35,7 @@ const fakeStore = ({ events = [], drafts = [], offers = [] } = {}) => {
       return drafts.filter((d) => (!contactId || d.contactId === contactId) && (!status || d.status === status));
     },
     async listOffers(_loc, { contactId } = {}) { return offers.filter((o) => !contactId || o.contactId === contactId); },
+    async getReplyDraft(id) { return drafts.find((d) => d.id === id) || null; },
   };
 };
 
@@ -48,7 +49,9 @@ const promise = (hoursAgo, over = {}) => ({
 
 const starter = () => {
   const calls = [];
-  return { calls, startProactive: async (args) => { calls.push(args); return { job: { id: `j${calls.length}` } }; } };
+  const replies = [];
+  return { calls, replies, startProactive: async (args) => { calls.push(args); return { job: { id: `j${calls.length}` } }; },
+    startReply: async (args) => { replies.push(args); return { job: { id: `r${replies.length}` } }; } };
 };
 
 /* ---------- detecting a promise ---------- */
@@ -384,15 +387,46 @@ test("with the driver switched on, the tick drives before it sweeps", async () =
 
 /* ---------- one voice: a waiting reply holds the machine (2026-09-29) ---------- */
 
-test("the 'never got a reply' check-in may take the place of the held reply it was the net for", async () => {
+test("the 'never got a reply' check-in may take the place of the held reply you dismissed", async () => {
   const store = fakeStore({
     events: [request(48, { kind: "unanswered", phrase: "", dueAt: at(1), draftId: "d-held" })],
-    drafts: [{ id: "d-held", contactId: "c9", status: "draft", inbound: "any update on the house?", reply: "..." }],
+    drafts: [{ id: "d-held", contactId: "c9", status: "dismissed", dismissedBy: "you", inbound: "any update on the house?", reply: "..." }],
   });
   const s = starter();
   const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
   assert.equal(r.sent, 1, JSON.stringify(r.results));
   assert.equal(s.calls[0].continues, "d-held", "it carries on from that draft, so it may replace it");
+  assert.equal(s.replies.length, 0, "you chose not to send that answer: it isn't re-written");
+});
+
+// 1010 Bellevue (2026-10-04): "If you would like to make an offer closer to
+// where they are at, that may get them to move on it." The reply was held,
+// and two mornings later the check-in asked "any chance you can get a real
+// number from the sellers?" — over a message we never answered.
+test("a check-in never goes out over a reply we still owe them", async () => {
+  const theirs = "They are willing to come off of the list price, but it doesn't make sense for them to go to your original offer. If you would like to make an offer closer to where they are at, that may get them to move on it.";
+  const store = fakeStore({
+    events: [request(48, { kind: "unanswered", phrase: "", dueAt: at(1), draftId: "d-held" })],
+    drafts: [{ id: "d-held", contactId: "c9", party: "agent", status: "draft", intent: "counter", inbound: theirs, reply: "What number would get them to move?" }],
+  });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0, "no 'where do things stand' check-in");
+  assert.equal(s.replies.length, 1, "their text goes back through the reply path");
+  assert.equal(s.replies[0].message, theirs);
+  assert.equal(s.replies[0].fromCheckIn, true, "a second hold books no new clock");
+  assert.equal(r.results[0].status, "re-answered");
+  const again = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW + HOUR, deps: s });
+  assert.equal(again.considered, 0, "claimed once");
+  // Answered by hand in GHL since: covered, nothing goes.
+  const typed = fakeStore({
+    events: [request(48, { kind: "unanswered", phrase: "", dueAt: at(1), draftId: "d-held" }), { contactId: "c9", type: "hand_reply", at: at(20), data: { via: "ghl" } }],
+    drafts: [{ id: "d-held", contactId: "c9", status: "draft", inbound: theirs }],
+  });
+  const t = starter();
+  const tr = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store: typed, now: NOW, deps: t });
+  assert.equal(t.calls.length + t.replies.length, 0);
+  assert.equal(tr.results[0].status, "covered");
 });
 
 test("a check-in waits, unclaimed, while a different text of theirs is waiting on you", async () => {

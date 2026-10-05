@@ -22,7 +22,7 @@
 // second broker or a second tick can never send it twice.
 
 import { recordEvent } from "./contact-record.js";
-import { conversationConfig, startProactive } from "./reply-agent.js";
+import { conversationConfig, startProactive, startReply } from "./reply-agent.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { addressKey } from "./shared/us-address.js";
 import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
@@ -247,8 +247,9 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
   if (!config.enabled || !config.parties?.agent?.followUp?.enabled) return out;
   const start = typeof deps.startProactive === "function" ? deps.startProactive : startProactive;
 
+  const reply = typeof deps.startReply === "function" ? deps.startReply : startReply;
   const events = await store.listContactEventsSince(locationId, iso(now - CHECKIN_WINDOW_DAYS * 86400000), {
-    types: ["checkin_requested", "checkin_sent", "text_summary", "call_summary"], limit: 5000,
+    types: ["checkin_requested", "checkin_sent", "text_summary", "call_summary", "hand_reply"], limit: 5000,
   }).catch(() => []);
   const byContact = new Map();
   for (const e of events) {
@@ -276,7 +277,9 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     // rather than asked again every tick.
     if (req.data?.kind === "unanswered") {
       const ours = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 20 }).catch(() => []);
-      if (ours.some((d) => String(d.sentAt || d.updatedAt || "") > String(req.at))) {
+      // You answered it yourself (the composer, or typed in GHL): covered too.
+      const typed = list.some((e) => e.type === "hand_reply" && String(e.at) > String(req.at));
+      if (typed || ours.some((d) => String(d.sentAt || d.updatedAt || "") > String(req.at))) {
         await recordEvent({
           store, locationId, contactId, party: "agent", type: "checkin_sent", at: iso(now), address: req.address || "",
           source: "conversation", dedupeKey: `checkin_sent:${contactId}:${req.at}`,
@@ -293,6 +296,32 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     const continues = req.data?.kind === "unanswered" ? (req.data?.draftId || null) : null;
     const waitingOn = await waitingReason({ store, locationId, contactId, continues });
     if (waitingOn) { out.results.push({ contactId, status: "waiting", reason: waitingOn }); continue; }
+    // Nothing went back to them, and their text is still the last word: it
+    // is OUR turn, and a "where do things stand?" check-in answers nothing.
+    // 1010 Bellevue (2026-10-04): the agent asked twice for us to come
+    // closer to the sellers' number; both replies were held, and both times
+    // this clock sent "any chance you can get a real number?" over the top.
+    // Their text goes back through the reply path instead, where the
+    // counter hold and the auto-send rules decide what goes. The clock is
+    // not booked again if it holds a second time: then it is a person's.
+    if (req.data?.kind === "unanswered" && req.data?.draftId) {
+      const held = await store.getReplyDraft?.(req.data.draftId).catch(() => null);
+      if (held && held.contactId === contactId && String(held.inbound || "").trim() && held.dismissedBy !== "you" && held.status !== "sent") {
+        const claim = await recordEvent({
+          store, locationId, contactId, party: held.party || "agent", type: "checkin_sent", at: iso(now), address: req.address || "",
+          source: "conversation", dedupeKey: `checkin_sent:${contactId}:${req.at}`,
+          data: { requestAt: req.at, kind: "unanswered", answered: "their text, again" },
+        });
+        if (!claim.inserted) continue;
+        const r = await reply({
+          client, locationId, saved, store, contactId, message: String(held.inbound).slice(0, 4000), channel: held.channel === "email" ? "email" : "sms",
+          party: held.party || "", sendsEnabled, deps, fromCheckIn: true,
+        }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
+        if (r?.skipped) out.results.push({ contactId, status: "skipped", reason: r.skipped });
+        else { out.sent++; out.results.push({ contactId, status: "re-answered", jobId: r?.job?.id || null }); }
+        continue;
+      }
+    }
     const claim = await recordEvent({
       store, locationId, contactId, party: "agent", type: "checkin_sent", at: iso(now), address: req.address || "",
       source: "conversation", dedupeKey: `checkin_sent:${contactId}:${req.at}`,

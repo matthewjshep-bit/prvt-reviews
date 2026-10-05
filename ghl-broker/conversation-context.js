@@ -13,7 +13,7 @@
 
 import { fmtMoney } from "./shared/offer-calc.js";
 import { isOffMarket, offMarketAskDaysAgo, OFF_MARKET_ASK_EVERY_DAYS } from "./shared/off-market.js";
-import { effectiveStatus, offerHeat, agreedAboveOurNumber, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused } from "./shared/offer-status.js";
+import { effectiveStatus, offerHeat, agreedAboveOurNumber, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused, priceAgreed } from "./shared/offer-status.js";
 import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybox.js";
 import { dealToQuery } from "./dispo.js";
 import { dealNumbers } from "./dataroom.js";
@@ -219,7 +219,14 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       counters.length ? `history: ${counters.join("; ")}` : "",
       realm,
       // Step 4 of the goal is reached: what's left is getting it written up.
-      heat && !up ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on NWMLS forms for us to sign` : "",
+      // Only an agreed number ends the price talk. Warm words ("the number
+      // might work", "taking it to the seller") are not a yes: on 1010
+      // Bellevue (2026-10-04) this line told the bot price was done while
+      // the agent was asking us to come up, and it asked him for a number
+      // he'd already given.
+      heat && !up ? (priceAgreed(o)
+        ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on NWMLS forms for us to sign`
+        : `warm (${heat.reason}) — they're weighing our number, nothing is agreed; answer what they last said before asking anything new`) : "",
       o.statusNote ? `note: ${theirs(String(o.statusNote).slice(0, 120))}` : "",
       superseded.length ? `(${superseded.length} older offer${superseded.length === 1 ? "" : "s"} on this house superseded — this is the only number on it; never quote an older one)` : "",
     ].filter(Boolean);

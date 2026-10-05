@@ -1816,7 +1816,7 @@ export async function assembleConversation({
  */
 export async function startReply({
   client, locationId, saved, store, contactId, message, channel = "sms", party = "", sendsEnabled = false, deps = {},
-  attachments = 0, inboundKind = "text", call = null,
+  attachments = 0, inboundKind = "text", call = null, fromCheckIn = false,
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
@@ -1872,6 +1872,9 @@ export async function startReply({
     call: inboundKind === "call" && call ? { ...call, transcript: String(call.transcript || message || "").slice(0, 12000) } : null,
     attachments: nAttachments,
     party: party === "agent" || party === "investor" ? party : "",
+    // Re-answering a text the "unanswered" clock found still owed
+    // (promise-sweep.js): if this holds too, it is a person's — no new clock.
+    fromCheckIn: Boolean(fromCheckIn),
     partySource: null,
     draftId: null,
     intent: null,
@@ -3746,7 +3749,7 @@ async function runReply(job, ctx) {
   // never on small talk, and never when this message already booked a
   // check-in or started an address chase — nobody gets two texts.
   const heldSilent = party === "agent" && !isCall && !auto.send && HELD_FOR_A_PERSON.has(auto.code)
-    && !checkInBooked && !chaseStarted
+    && !checkInBooked && !chaseStarted && !job.fromCheckIn
     && !["opt_out", "small_talk"].includes(draft.intent);
   if (heldSilent) {
     const due = unansweredCheckIn(now);
