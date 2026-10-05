@@ -521,6 +521,17 @@ export function outboundOpening(outbound) {
   return `${text} ${CARRIER_RULE}${avoid}`;
 }
 
+// How the first text says who we are, one per agent (outreach_open). Ideas,
+// not lines: the model words each one itself. The last is Matt's own.
+export const WHO_WE_ARE = [
+  "you're based in Seattle and flip a few houses a year",
+  "you like bringing tired houses back to life",
+  "you're on the lookout for your next project house",
+  "you renovate older homes, the ones that need some love",
+  "you're a local who'd rather fix one up than buy one done",
+  "you're in Seattle and looking for your next flip",
+];
+
 // How the first text to a new agent starts, one per agent (outreach_open).
 export const OPENING_MOVES = [
   "start with the street catching your eye",
@@ -607,17 +618,20 @@ function openingFor(outbound) {
       const town = (details.find((d) => d.startsWith("it's in ")) || "").replace("it's in ", "");
       const others = details.filter((d) => !d.startsWith("it's in "));
       const notice = others.length ? others[Math.floor(v / OPENING_MOVES.length) % others.length] : "";
+      // …and its own way of saying who we are: 30 of the 45 drafts on
+      // 2026-10-05 said "hunting for my next flip", 10 "Seattle flipper".
+      const who = WHO_WE_ARE[v % WHO_WE_ARE.length];
       return `${START} This is the FIRST text this listing agent has ever had from us, about their listing at ` +
         `${o.address}. Write it the way Matt texts: a friendly local flipper who is easy to talk to, warm and a little ` +
-        `funny, never a pitch. Two or three short sentences that: mention their listing on ${street}, say you're in Seattle ` +
-        `looking for your next flip anywhere in ${where}, and ask ONE question about whether it needs work. You may add one ` +
+        `funny, never a pitch. Two or three short sentences that: mention their listing on ${street}, say who you are, say ` +
+        `you're looking anywhere in ${where}, and ask ONE question about whether it needs work. You may add one ` +
         `short line asking about other fixers they know of ${o.county ? `in ${o.county}` : "around there"}. ` +
         (notice || town
           ? `WHAT TO NOTICE: ${notice || `it's in ${town}`}${notice && town ? ` (it's in ${town}; naming the town is fine too)` : ""}. ` +
             `Work that in once, in your own words, so it's obvious you actually looked at the listing. No other detail, never ` +
             `a list, and never in a way that knocks the house — it's their listing. `
           : "") +
-        `OPENING MOVE for this one: ${move}. Say who you are in your own words; don't always call yourself a "Seattle flipper". ` +
+        `OPENING MOVE for this one: ${move}. WHO YOU ARE, for this one: ${who}. Put it in your own words. ` +
         (o.county
           ? `${where} is the only area you say you're looking in: no other county, no list of cities, no region ("greater ` +
             `Seattle", "Puget Sound", "Seatac"). The listing's own town may describe the house. `
@@ -635,7 +649,7 @@ function openingFor(outbound) {
         `End on your question or one short line after it: NO sign-off, no name, no thanks, and no opt-out line — the phone ` +
         `system adds "Thanks, Matt" and "No worries if not can stop" on the end by itself. ` +
         `It must not read like AI: no dashes (— or –), no exclamation marks, no emoji, no "I hope this finds you well", ` +
-        `"quick question", "I'm reaching out" or "touching base". ` +
+        `"quick question", "I'm reaching out", "touching base" or "hunting". ` +
         `Do NOT name a price, how many days it's been listed, a percentage, or a link. Do NOT ask about this listing's ` +
         `price. Set intent to outreach_open.`;
     }
