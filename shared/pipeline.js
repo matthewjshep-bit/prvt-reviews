@@ -486,7 +486,11 @@ export function buildPipeline({
               ops: [{ key: "open_deals", label: "Set it on the deal", intent: "primary" }, { key: "ask_agent_window", label: "Ask again", intent: "secondary" }] }));
           }
         } else if (sh.next && sh.hoursToNext != null && sh.hoursToNext <= 36) {
-          card.actionIds.push(push({ ...base, kind: "showing_soon", severity: sh.coming ? "soon" : "now",
+          // Someone's coming and nobody has said how they get in: that's
+          // yours to set, not the machine's (9311 12th Pl SE, 2026-10-05:
+          // owner-occupied, a buyer coming at noon, no access on the deal).
+          const noWayIn = Boolean(sh.coming) && !sh.accessSet;
+          card.actionIds.push(push({ ...base, kind: "showing_soon", severity: sh.coming ? "soon" : "now", ...(noWayIn ? { section: "decide" } : {}),
             title: `${card.address}: walkthrough ${sh.nextLabel}`,
             detail: sh.coming ? `${sh.coming} coming${sh.interested ? ` · ${sh.interested} interested, no time yet` : ""}${sh.accessSet ? "" : " · access not set"}` : "nobody has said they're coming",
             ops: [{ key: "open_deals", label: "Open the deal", intent: "primary" }] }));

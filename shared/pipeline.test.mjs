@@ -741,6 +741,21 @@ test("a deal under contract with no walkthrough window asks for one, then says w
   assert.equal(soon.cards[0].deal.showing.coming, 1);
 });
 
+// 9311 12th Pl SE, 2026-10-05: a buyer coming at noon to an owner-occupied
+// house with no access on the deal sat under "The machine is on it".
+test("a walkthrough near with someone coming and no way in is yours to set; with access it stays the machine's", () => {
+  const near = { windows: [{ start: new Date(NOW + 20 * 3600000).toISOString(), end: new Date(NOW + 22 * 3600000).toISOString() }],
+    rsvps: [{ contactId: "b1", name: "Jerry", status: "coming" }] };
+  const none = build({ offers: [deal({}, { showing: { ...near, access: { occupancy: "owner_occupied", method: "", note: "" } } })] }).actions.find((a) => a.kind === "showing_soon");
+  assert.equal(none?.section, "decide");
+  assert.match(none.detail, /access not set/);
+  const set = build({ offers: [deal({}, { showing: { ...near, access: { mode: "agent" } } })] }).actions.find((a) => a.kind === "showing_soon");
+  assert.equal(set?.section, undefined, "the Desk's own rule: the machine's");
+  // Nobody coming: nothing to let anyone into yet.
+  const empty = build({ offers: [deal({}, { showing: { windows: near.windows, access: {} } })] }).actions.find((a) => a.kind === "showing_soon");
+  assert.equal(empty?.section, undefined);
+});
+
 // Matt, 2026-09-29: the closing checklist nags from Today, once per deal,
 // only when the thing to chase first is late or about to be.
 test("a deal's most urgent closing item shows on Today when it's overdue or due in two days, never on a closed deal", () => {
