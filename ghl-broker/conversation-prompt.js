@@ -601,7 +601,7 @@ function openingFor(outbound) {
           : "") +
         `Use their first name once if you have it. Keep it under ${OPENER_MAX_CHARS} characters. ` +
         `End on the question or the "all ears" line: NO sign-off, no name, no thanks, and no opt-out line — the phone ` +
-        `system adds "No worries if not can stop lmk" on the end by itself. ` +
+        `system adds "Thanks, Matt" and "No worries if not can stop" on the end by itself. ` +
         `It must not read like AI: no dashes (— or –), no exclamation marks, no emoji, no "I hope this finds you well", ` +
         `"quick question", "I'm reaching out" or "touching base". ` +
         `Do NOT name a price, a number, how many days it's been listed, a percentage, or a link. Do NOT ask about this ` +

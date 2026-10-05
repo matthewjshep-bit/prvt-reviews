@@ -194,9 +194,9 @@ function FirstTextSamples() {
         <ul className="mt-2 space-y-2">
           {state.previews.map((p) => (
             <li key={p.agentKey} className="rounded-lg border border-slate-200 p-2 text-sm">
-              <div className="text-xs text-slate-500">{p.name || p.agentKey}{p.street ? ` · ${p.street}` : ""}{p.county ? ` · ${p.county} County` : ""}{p.chars ? ` · ${p.chars} chars` : ""}</div>
+              <div className="text-xs text-slate-500">{p.name || p.agentKey}{p.street ? ` · ${p.street}` : ""}{p.county ? ` · ${p.county} County` : ""}{p.chars ? ` · ${p.chars} chars + GHL's two lines` : ""}</div>
               {p.skipped ? <div className="text-xs text-amber-700">Wouldn't be drafted: {p.skipped}</div>
-                : <div className="mt-1 whitespace-pre-wrap text-slate-800">{p.reply}<span className="text-slate-400"> No worries if not can stop lmk</span></div>}
+                : <div className="mt-1 whitespace-pre-wrap text-slate-800">{p.reply}<span className="text-slate-400">{"\n"}Thanks, Matt{"\n"}No worries if not can stop</span></div>}
               {p.held ? <div className="mt-1 text-xs text-amber-700">Would wait for you: {(p.flags || []).join("; ")}</div> : null}
             </li>
           ))}
@@ -1073,7 +1073,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                     onChange={(e) => setOutreachAuto("opener")({ ...(form.outreachAutopilot?.opener || {}), examples: e.target.value })} />
                   <span className="mt-1 block text-xs text-slate-500">
                     A few of your own first texts, with a blank line between them. The bot writes every agent a fresh one in this voice and fills in {"{first}"}, {"{street}"} and {"{county}"}, which is the county the listing is in and the only place it names.
-                    Leave off "No worries if not can stop lmk": GHL adds it to the end, and an example that includes it is dropped.
+                    Leave off "Thanks, Matt" and "No worries if not can stop": GHL adds both to the end of the first text, so the bot never writes a sign-off and one in an example is cut.
                   </span>
                 </label>
               )}

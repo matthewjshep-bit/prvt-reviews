@@ -49,7 +49,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
-import { normalizeOpener, countyName } from "./shared/outreach-opener.js";
+import { normalizeOpener, countyName, stripSignOff } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
@@ -2635,6 +2635,16 @@ export async function writeAgainWithoutCarrierWords({ draft, kind, redraft }) {
   return again?.reply && carrierFlags(again.reply).length < before.length ? again : draft;
 }
 
+// The cold open and its nudge never sign off: GHL puts "Thanks, Matt" and
+// "No worries if not can stop" on the first text a contact gets, so a sign-off
+// the model wrote anyway would reach the agent twice (Matt, 2026-10-05).
+const NO_SIGN_OFF_KINDS = new Set(["outreach_open", "outreach_nudge"]);
+function withoutSignOff(draft, kind, signer = "") {
+  if (!NO_SIGN_OFF_KINDS.has(kind) || !draft?.reply) return draft;
+  const reply = stripSignOff(draft.reply, { names: [signer, String(signer || "").split(/\s+/)[0]] });
+  return reply && reply !== draft.reply ? { ...draft, reply } : draft;
+}
+
 /**
  * previewProactive({ client, locationId, saved, store, contactId, kind, offer, subject, deps })
  *   → { contactName, reply, summary, held, flags } | { skipped }
@@ -2670,10 +2680,10 @@ export async function previewProactive({ client, locationId, saved, store, conta
     aiApiKey, party, config, context, channel: "sms", outbound, batch: null,
   };
   const draftWith = deps.draft || draftReply;
-  const draft = await writeAgainWithoutCarrierWords({
+  const draft = withoutSignOff(await writeAgainWithoutCarrierWords({
     draft: await draftWith(previewArgs), kind,
     redraft: (avoid) => draftWith({ ...previewArgs, outbound: { ...outbound, avoid } }),
-  });
+  }), kind, a.signer);
   draft.intent = kind;
   const gate = outboundGateFor({ spec, offer, subject, context, config, party, a, kind })(draft);
   const clean = Boolean(gate.ok || (gate.locked && gate.clean));
@@ -2727,10 +2737,10 @@ async function runProactive(job, ctx) {
     batch: config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind) ? batcherFor(aiApiKey) : null,
   };
   // Still reads like an ad the carriers block: written once more without it.
-  const draft = await writeAgainWithoutCarrierWords({
+  const draft = withoutSignOff(await writeAgainWithoutCarrierWords({
     draft: await deps.draft(draftArgs), kind,
     redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),
-  });
+  }), kind, a.signer);
   draft.intent = kind;
   if (draft.shadow && !draft.shadow.error) draft.shadow.intent = kind;
   job.summary = draft.summary;

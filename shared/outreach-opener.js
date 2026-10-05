@@ -23,8 +23,11 @@ export const DEFAULT_OPENER_EXAMPLES = [
 
 export const OPENER_MAX_EXAMPLES = 8;
 export const OPENER_EXAMPLE_MAX_CHARS = 400;
-// Two SMS segments with GHL's footer on the end.
-export const OPENER_MAX_CHARS = 280;
+// GHL adds two lines to the first text a contact gets (Settings → Phone
+// System → Messaging Compliance): the sender, "Thanks, Matt", and the opt-out,
+// "No worries if not can stop". With those ~45 characters and their line
+// breaks, 250 keeps the whole text inside two SMS segments (306).
+export const OPENER_MAX_CHARS = 250;
 
 // The footer GHL adds. An example carrying it would teach the bot to write
 // it, and the agent would get it twice.
@@ -34,7 +37,7 @@ const FOOTER_RX = /\bcan stop\b|\bstop to end\b|\breply stop\b/i;
  * normalizeOpener(v) → { examples: string[] }
  *
  * Unset (or emptied) → Matt's defaults. Each example trimmed and capped; one
- * that carries the stop footer is dropped.
+ * that carries the stop footer is dropped, and a sign-off on the end is cut.
  */
 export function normalizeOpener(v = {}) {
   const o = v && typeof v === "object" ? v : {};
@@ -42,8 +45,43 @@ export function normalizeOpener(v = {}) {
   const examples = (raw || [])
     .map((x) => String(x || "").replace(/\s+/g, " ").trim().slice(0, OPENER_EXAMPLE_MAX_CHARS))
     .filter((x) => x && !FOOTER_RX.test(x))
+    // "…I'm all ears. Thanks, Matt" would teach the bot to sign off.
+    .map((x) => stripSignOff(x))
+    .filter(Boolean)
     .slice(0, OPENER_MAX_EXAMPLES);
   return { examples: examples.length ? examples : [...DEFAULT_OPENER_EXAMPLES] };
+}
+
+// A sign-off at the very end: "Thanks, Matt", "- Matt", "Best, Matthew",
+// "Thanks!", or the opt-out line itself.
+const OPT_OUT_TAIL_RX = /\s*no worries if not,?\s*(?:i |we )?can stop\b[\s\S]*$/i;
+const THANKS = "(?:thanks|thank you|thx|cheers|best|regards|talk soon)";
+
+/**
+ * stripSignOff(text, { names }) → text
+ *
+ * The first text with any sign-off or opt-out line taken off the end. GHL
+ * adds "Thanks, Matt" and "No worries if not can stop" to the first SMS a
+ * contact gets, so one the bot wrote would reach the agent twice. `names`
+ * are the sender's own names (the persona's, "Matt"); "Matthew" and the
+ * company count too.
+ */
+export function stripSignOff(text = "", { names = [] } = {}) {
+  let t = String(text || "").replace(OPT_OUT_TAIL_RX, "").trim();
+  const who = [...new Set([...names, "Matt", "Matthew", "Matthew Shepherd", "Shep Flips", "ShepFlips"]
+    .map((n) => String(n || "").trim()).filter(Boolean))]
+    .sort((a, b) => b.length - a.length)
+    .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const signed = new RegExp(`(?:^|[.?!]|\\n)\\s*(?:[-–—~]\\s*)?(?:${THANKS}[,!.]*\\s*)?(?:[-–—~]\\s*)?(?:${who})\\s*[.!]?\\s*$`, "i");
+  const thanks = new RegExp(`(?:^|(?<=[.?!])|\\n)\\s*${THANKS}[!.]*\\s*$`, "i");
+  for (let i = 0; i < 2; i++) {
+    const m = signed.exec(t) || thanks.exec(t);
+    if (!m) break;
+    // Keep the sentence's own end mark ("…all ears." stays a full stop).
+    const keep = /^[.?!]/.test(m[0]) ? m[0][0] : "";
+    t = (t.slice(0, m.index) + keep).trim();
+  }
+  return t;
 }
 
 /**

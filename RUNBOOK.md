@@ -3650,9 +3650,14 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   the county the sweep was reading. The text names that county and no other
   place. The "Reached out, no reply" nudge names the same county, read from
   `outreach_sent.data.county`.
-- **No sign-off.** GHL appends "No worries if not can stop lmk" to the text
-  itself. The bot never writes a sign-off or an opt-out line, and an example
-  containing "can stop" is dropped. A reply that arrives within minutes still
+- **No sign-off.** GHL's Messaging Compliance settings (Phone System →
+  Messaging) add "Thanks, Matt" and "No worries if not can stop" to the
+  first SMS a contact gets. The bot is told not to write either, and
+  `stripSignOff` cuts any sign-off or opt-out line from the end of an
+  `outreach_open`/`outreach_nudge` draft anyway. An example containing "can
+  stop" is dropped, and a sign-off at the end of an example is cut. The first
+  text stays under 250 characters so it fits in two SMS segments with GHL's
+  two lines added. A reply that arrives within minutes still
   matches our draft, so it isn't held as a person's thread.
 - **Nobody is created and left untexted.** Before importing, the sweep asks how
   many machine drafts the Conversation AI's daily cap still allows after the
