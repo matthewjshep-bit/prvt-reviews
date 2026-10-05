@@ -3903,8 +3903,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // Matt, 2026-10-01, 5232 S Yakima: "stop outreach on this one completely".
   // The switch is the one thing every buyer-side sender already asks
   // (shared/offer-status.js dealOutreachPaused); stopping also pulls back what
-  // was already queued, now rather than at its send time. Resuming sends
-  // nothing itself — the next wave or nudge goes when it's next due.
+  // was already queued, now rather than at its send time. Resuming puts back
+  // what the stop pulled (Matt, 2026-10-04, 9311 12th Pl SE: "when we hit
+  // stop then resume it resumes and sends"); see resumeDealOutreach.
   router.post("/:id/deal/outreach", async (req, res) => {
     try {
       const ctx = await loadDealOffer(req, res);
@@ -3913,14 +3914,42 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const stop = req.body?.stopped;
       if (typeof stop !== "boolean") return res.status(400).json({ error: "stopped must be true or false" });
       const ts = new Date().toISOString();
+      const wasStopped = Boolean(offer.deal.outreachStopped);
       if (stop) offer.deal.outreachStopped = { at: offer.deal.outreachStopped?.at || ts, by: "you" };
       else delete offer.deal.outreachStopped;
       offer.deal.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
       const pulled = stop ? await stopDealOutreach({ client, store, locationId, offer }) : { dismissed: [], held: [] };
-      res.json({ ok: true, offer, pulled: { dismissed: pulled.dismissed.length, held: pulled.held.length } });
+      const resumed = !stop && wasStopped ? await resumeDealOutreach({ locationId, client, offer }) : null;
+      res.json({ ok: true, offer: resumed ? (await store.getOffer(offer.id)) || offer : offer,
+        pulled: { dismissed: pulled.dismissed.length, held: pulled.held.length }, ...(resumed ? { resumed } : {}) });
     } catch (err) { fail(res, err); }
   });
+
+  // Resume after Stop. The deal texts the stop pulled back go again, to the
+  // buyers the wave rules still pick, after the same head start as a new
+  // deal's first wave; the next wave counts from the resume (dispo router
+  // resumeWave). A deal stopped before its first wave was picked gets that
+  // wave now. A reply the stop handed back to you stays with you, and nudges
+  // come back on their own once the deal text has gone (follow-up-sweep.js
+  // starts the ladder off the send).
+  async function resumeDealOutreach({ locationId, client, offer }) {
+    if (!dispoDeps?.resumeWave) return null;
+    try {
+      if (!(offer.deal.blasts || []).length && !(offer.deal.blastTags || []).length) {
+        await autoBlastOnPromote({ locationId, client, offer });
+        const wave = (await store.getOffer(offer.id))?.deal?.blasts?.at(-1);
+        return { firstWave: true, queued: wave?.queued || 0, drafted: wave?.drafted || 0, dropped: 0 };
+      }
+      const r = await dispoDeps.resumeWave({ locationId, offer, startAfterMs: PROMOTE_BLAST_GRACE_MS });
+      // Why it went back as drafts (sends off), or why nothing went (a buyer committed meanwhile).
+      const why = r.paused || ((r.queued || r.drafted) && r.scheduled === false) ? r.reason || "" : "";
+      return { firstWave: false, queued: r.queued || 0, drafted: r.drafted || 0, dropped: r.dropped || 0, ...(why ? { reason: why } : {}) };
+    } catch (e) {
+      console.error(`offers: resume outreach failed for ${offer.id}: ${e?.message}`);
+      return { firstWave: false, queued: 0, drafted: 0, dropped: 0, error: "the deal texts couldn't be put back — press Stop, then Resume again" };
+    }
+  }
 
   // Un-promote (mistake correction) — removes deal tracking, keeps the offer.
   // The best-effort GHL tag isn't reversed.

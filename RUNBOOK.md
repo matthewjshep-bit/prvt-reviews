@@ -3713,9 +3713,40 @@ this way:
 The listing agent's thread is not touched. The banner on the deal and the
 "outreach stopped" chip on the Deals list say it's on.
 
-**Resume** clears the switch and sends nothing by itself. A wave or nudge that
-came due while it was stopped goes at its next run, so resuming two days after
-a promote means the second wave goes the next morning.
+**Resume** clears the switch and puts back what Stop pulled (2026-10-04).
+On 9311 12th Pl SE, Matt stopped outreach right after making the deal and then
+pressed Resume. All 25 first-wave texts stayed dismissed, and `deal.blasts`
+still listed those buyers, so the next wave skipped them. Nobody heard about
+the deal. Now (`resumeDealOutreach` in `routes/offers.js`, `resumeWave` in
+`routes/dispo.js`, `resumePulledBack` in `dispo-autopilot.js`):
+- **Which texts come back** (`pulledBackBlasts`): a buyer's `blast_open` for
+  this deal comes back when their newest one carries Stop's "you stopped
+  outreach on … — not sent" flag and none was ever sent. A text you dismissed
+  yourself, or one queued again since, stays as it is.
+- **Who gets them:** only buyers the wave rules still pick right now
+  (`matchForDeal` at wave-2 floors, without the already-sent exclusion). A buyer
+  who is on the deal (passed included), unsubscribed, committed to another
+  deal, or who refuses the kind is left out. The response counts them as
+  `dropped`.
+- **How they go:** they're queued the way a wave is (`queueBlastDrafts`). They
+  go out staggered, with the same 10-minute head start as promote, priced as
+  each sends, and held for anyone you stopped the bot on. Emails wait in the
+  outbox as before.
+- **No new wave:** it's still the same wave. The wave gets `resumedAt`, and
+  `nextWave` counts the delay from there, so wave 2 comes two days after the
+  resume.
+- **Stopped before wave 1 existed:** a deal with no wave and no blast tag
+  (stopped before the blast on promote ran) gets its first wave on Resume
+  (`autoBlastOnPromote`).
+- **Not put back:**
+  - Nudges. The nudge sweep drafts them again off the `blast_sent` once the
+    deal text goes.
+  - A reply the stop handed back to you. It stays with you.
+- **Only after a real stop:** Resume does this only when the deal was actually
+  stopped. A `{stopped: false}` call on a live deal sends nothing.
+
+The pane says what came back: "Outreach is back on: N deal texts queued…, N
+waiting for you in the outbox, N buyers left out…".
 
 ### Market tags and buyer import (2026-09-13)
 
