@@ -158,6 +158,9 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
     if (said.length > 20 && drafts.some((d) => d.contactId === f.contactId && d.status === "sent" && norm(d.reply) === said)) return "their newest message reads as our own text echoed back — look at it in GHL";
     return "";
   };
+  // The reply agent's stand-down while a person was texting them
+  // (humanHasThread): "you replied to them 25 minutes ago — you have the thread".
+  const YOU_HAD_THE_THREAD = /you have the thread|you replied to them/i;
   const handToMatt = (f, row, why) => {
     row.status = "yours"; row.reason = why; f.action = null; f.why = why;
     result.counts.owed += 1; result.counts.queued = Math.max(0, result.counts.queued - 1);
@@ -269,9 +272,22 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         if (h.tries > 0) {
           // Why it stood down comes first: "bot is off (tag: stop bot)" is the
           // row, not "a reply was started" (Michael Lindekugel, 2026-09-29).
-          if (h.held) { handToMatt(f, row, `the bot stood down: ${String(h.held.data?.reason || "held").slice(0, 160)}`); continue; }
+          // Except "you have the thread": that held while you were texting
+          // them. You didn't answer this one, and by tonight the thread is the
+          // bot's again (2026-10-04, a buyer's "which counties" sat on the Desk).
+          const yoursForAWhile = h.held && YOU_HAD_THE_THREAD.test(String(h.held.data?.reason || ""));
+          if (h.held && !yoursForAWhile) { handToMatt(f, row, `the bot stood down: ${String(h.held.data?.reason || "held").slice(0, 160)}`); continue; }
           if (now - h.lastClaimAt < REDRAFT_RETRY_AFTER_MS && !h.outcome) { handToMatt(f, row, "a reply was started on an earlier run tonight"); continue; }
           if (h.tries >= MAX_REDRAFT_TRIES) {
+            // Three nights and the bot found nothing to say to a text that
+            // asks nothing and names nothing: there is nothing to answer.
+            // A question or a number is still yours (Matt, 2026-10-04).
+            if (texts.every((t) => !/[?\d]/.test(String(t || "")))) {
+              // On the record, so tomorrow's audit reads it as answered (letGoAfter).
+              await claim(f, "reply_not_needed", { source: "sweep", dedupeKey: `reply_not_needed:${h.key}`, data: { intent: "audit", tries: h.tries } });
+              drop(f, row, `nothing to answer — the bot read it ${h.tries} nights and had nothing to say`);
+              continue;
+            }
             handToMatt(f, row, `drafting was tried ${h.tries} nights running and produced no reply${h.outcome?.data?.reason ? ` (last: ${String(h.outcome.data.reason).slice(0, 120)})` : ""}`);
             continue;
           }
