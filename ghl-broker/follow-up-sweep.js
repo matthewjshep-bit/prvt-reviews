@@ -32,6 +32,7 @@ import {
 } from "./shared/follow-up.js";
 import { focusOf, focusHolds, machineTexts, spacingHolds, lightTouchDue, pickAside } from "./shared/agent-focus.js";
 import { threadHealth } from "./shared/thread-health.js";
+import { soundsLikeSecondThoughts } from "./shared/conversation-ai.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
 import { waitingReason } from "./outbox-guard.js";
@@ -264,6 +265,8 @@ export async function passedCandidates({ store, locationId, config, now = Date.n
  * there, with a subject id that carries the anchor day so the restarted
  * rungs get fresh claims. Rungs sent before the anchor belong to the old one.
  */
+// The first status check after the seller wavered, in days from their text.
+export const WAVERING_FIRST_DAYS = 7;
 export async function hotCandidates({ store, locationId, config, now = Date.now() }) {
   const pb = config?.parties?.agent;
   const ladder = pb?.followUp?.ladders?.hot_push;
@@ -281,13 +284,19 @@ export async function hotCandidates({ store, locationId, config, now = Date.now(
     const hotAt = heat?.at || o.counterBand?.acceptedAt || o.realm?.ts || o.statusAt || o.createdAt;
     if (!hotAt) continue;
     const drafts = await store.listReplyDrafts(locationId, { contactId: o.contactId, limit: 20 }).catch(() => []);
-    const lastIn = drafts.filter((d) => d.inbound).map((d) => d.createdAt).sort().at(-1) || "";
+    const ins = drafts.filter((d) => d.inbound).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    const lastIn = ins[0]?.createdAt || "";
     const anchor = lastIn > hotAt ? lastIn : hotAt;
+    // "Seller is having second thoughts" (831 NW 52nd, 2026-09-27): no more
+    // pushes to paper. Matt, 2026-10-04: keep checking in, professionally —
+    // a week after they said it, then on the ladder's weekly repeat.
+    const wavering = Boolean(ins[0] && lastIn >= hotAt && soundsLikeSecondThoughts(ins[0].inbound));
     out.push({
       kind: "hot_push", party: "agent", contactId: o.contactId, subjectId: `${o.id}@${String(anchor).slice(0, 10)}`,
       offerId: o.id, address: o.address, startedAt: anchor,
       sentSteps: (o.followUps || []).filter((f) => f?.kind === "hot_push" && String(f.at || "") > anchor).map((f) => f.step),
-      ladder,
+      ladder: wavering ? { ...ladder, steps: [WAVERING_FIRST_DAYS] } : ladder,
+      ...(wavering ? { wavering: true } : {}),
     });
   }
   return out;
@@ -628,7 +637,14 @@ async function runSweep(job, ctx) {
         store.getOffer(c.offerId).catch(() => null),
       ]);
       const health = threadHealth({ offer, drafts: rows, events: timeline, now });
-      if (!health.drive) {
+      // Past the ladder, or wavering, the push is a weekly status check, not
+      // a third ask for paper: two texts with nothing back don't stop it, and
+      // a seller's cold feet ("second thoughts", read as a no) doesn't either.
+      // Annoyed, opted out, stopped, a person's, a live deal: still stop.
+      const lastRung = Math.max(...(c.ladder.steps || [0]));
+      const weekly = Number(c.ladder.repeatEvery) > 0 && (c.wavering || now >= (Date.parse(c.startedAt) || now) + lastRung * 86400000);
+      const softStop = health.reason === "two_unanswered" || (c.wavering && health.reason === "rejected");
+      if (!health.drive && !(weekly && softStop)) {
         job.skipped++;
         push({ contactId: c.contactId, address: c.address, kind: c.kind, status: "skipped", reason: `${health.reason}: ${health.detail}` });
         continue;
@@ -761,6 +777,7 @@ async function runSweep(job, ctx) {
         subject: { address: c.address, step: d.step, steps: c.ladder.steps, repeatEvery: c.ladder.repeatEvery || 0,
                    viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, lastTouchAt, relisted: Boolean(c.relisted),
                    ...(c.county ? { county: c.county } : {}),
+                   ...(c.wavering ? { wavering: true } : {}),
                    ...(aside ? { aside: { address: aside.address, quiet: Boolean(aside.quiet) } } : {}) },
         sendsEnabled, deps,
       });

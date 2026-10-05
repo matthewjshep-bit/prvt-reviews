@@ -384,10 +384,14 @@ export function buildPipeline({
       const pushes = (o.followUps || []).filter((f) => f?.kind === "hot_push" && (ms(f.at) ?? 0) > (ms(lastInboundAt) ?? 0));
       if (pushes.length >= UNANSWERED_LIMIT) {
         const lastPush = pushes.map((f) => f.at).sort().at(-1);
-        card.actionIds.push(push({ ...base, kind: "hot_stalled", severity: "now",
+        // A ladder that repeats keeps checking in once a week (Matt,
+        // 2026-10-04): the machine's, with its next date, not a call for you.
+        const every = Number(ladders.agent?.ladders?.hot_push?.repeatEvery) || 0;
+        card.actionIds.push(push({ ...base, kind: "hot_stalled", severity: every ? "fyi" : "now",
           title: `${card.address}: price agreed, ${pushes.length} pushes and nothing back`,
           detail: `last push ${Math.max(0, Math.floor((now - (ms(lastPush) ?? now)) / DAY_MS))}d ago`,
-          why: "the machine has stopped texting; the next move is a call",
+          why: every ? `checking in every ${every} days` : "the machine has stopped texting; the next move is a call",
+          ...(every ? { group: "machine", next: { what: "a status check", at: new Date((ms(lastPush) ?? now) + every * DAY_MS).toISOString() } } : {}),
           ops: [{ key: "open_contact", label: "Open their record", intent: "primary" }, { key: "mark_no_response", label: "Mark no response", intent: "secondary" }] }));
       }
     }

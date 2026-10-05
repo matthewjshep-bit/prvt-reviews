@@ -45,7 +45,7 @@ import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, 
 import { paperWent, paperWorthy, floatSentAt } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, asksUsToComeUp, soundsLikeSecondThoughts } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
@@ -1561,7 +1561,26 @@ async function linkOwed({ store, locationId, contactId, now = Date.now() }) {
   return linkedSince ? null : { address: blast.outbound.address || blast.propertyAddress || "", offerId: blast.outbound.offerId || null };
 }
 
-export const OUR_OFFER_TEXT_RX = /\b(?:here's our (?:written cash offer|letter of intent)|sending our written offer) on\b/i;
+export const OUR_OFFER_TEXT_RX = /\b(?:here's our (?:written cash offer|letter of intent)|sending our written offer|please find our (?:letter of intent|written (?:cash )?offer)) on\b/i;
+
+/**
+ * isOurEcho({ store, locationId, contactId, message }) → boolean
+ *
+ * Our own words arriving as theirs: an offer letter's email bounced back
+ * into the thread, or a text of ours quoted whole. 9520 187th St Ct E
+ * (2026-10-04): our letter-of-intent email came in as "their" message; the
+ * bot read "could you represent us and write it up" in it, flagged the offer
+ * hot ("writing it up") and drafted "having trouble getting that email out".
+ */
+export async function isOurEcho({ store, locationId, contactId, message }) {
+  const text = String(message || "");
+  if (OUR_OFFER_TEXT_RX.test(text)) return true;
+  const norm = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const said = norm(text);
+  if (said.length < 30) return false;
+  const ours = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 20 }).catch(() => []);
+  return ours.some((d) => { const t = norm(d.sentText || d.reply); return t.length >= 30 && (said.startsWith(t.slice(0, 120)) || t.startsWith(said.slice(0, 120))); });
+}
 
 // A book number said the way a person texts it: "1.144M" for $1,144,500
 // (Angela Jaeger, 2026-09-15, held as "not in the offer book"). It counts when
@@ -1822,6 +1841,13 @@ export async function startReply({
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
   const nAttachments = Math.max(0, Number(attachments) || 0);
   if (!String(message || "").trim() && !nAttachments) throw Object.assign(new Error("message required"), { http: 400 });
+  // Our own words echoed back: nothing to answer, and settled on the record
+  // so last night's audit doesn't hand it to you (reply_not_needed).
+  if (inboundKind !== "call" && await isOurEcho({ store, locationId, contactId, message })) {
+    await recordEvent({ store, locationId, contactId, party: party === "investor" ? "investor" : "agent", type: "reply_not_needed", at: new Date().toISOString(),
+      source: "conversation", dedupeKey: `reply_not_needed:echo:${contactId}:${new Date().toISOString().slice(0, 13)}`, data: { intent: "echo" } }).catch(() => {});
+    return { skipped: "their message is our own text echoed back — nothing to answer", job: null, echo: true };
+  }
 
   // They wrote back: out of the outreach drip, whatever happens to the reply
   // (bot off, capped, held). Best effort, in the background.
@@ -2392,7 +2418,7 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
   const step = subject?.step ?? null;
   const steps = subject?.steps || [];
   const base = { kind, address, ...(step != null ? { step, stepLabel: stepLabel(step, steps), stepIndex: normalizeSteps(steps).indexOf(step) + 1, stepCount: normalizeSteps(steps).length } : {}),
-    ...(Number(subject?.repeatEvery) > 0 ? { repeats: true } : {}) };
+    ...(Number(subject?.repeatEvery) > 0 ? { repeats: true } : {}), ...(subject?.wavering ? { wavering: true } : {}) };
   if (kind === "take_check") {
     const n = offerNumbers(offer);
     return { ...base,
@@ -3658,9 +3684,16 @@ async function runReply(job, ctx) {
   // an offer of ours, with its number already out, for this to be about.
   // Not while the paper is held: "hot" means the number is settled, and the
   // number on that row is the one in question.
-  if (party === "agent" && !isCall && !paperHold && typeof deps.raiseOfferHeat === "function" && !["rejection", "opt_out", "we_passed"].includes(draft.intent)) {
+  // Nor when they're asking us to come up, or the seller is wavering: on
+  // 1010 Bellevue (2026-10-04) the model read "make an offer closer to where
+  // they are" as "the number might work", and the Desk called it hot. The
+  // model's own read is not trusted on those either.
+  const theirWords = job.originalMessage || job.message;
+  const notWarm = ["rejection", "opt_out", "we_passed", "counter", "price_pushback"].includes(draft.intent)
+    || asksUsToComeUp(theirWords) || soundsLikeSecondThoughts(theirWords);
+  if (party === "agent" && !isCall && !paperHold && typeof deps.raiseOfferHeat === "function" && !notWarm) {
     const signal = draft.dealSignal
-      || (draft.intent === "counter" ? "" : dealSignalFromText(job.originalMessage || job.message))
+      || dealSignalFromText(theirWords)
       || (["realm_yes", "acceptance"].includes(draft.intent) ? "warm" : "");
     if (signal) {
       try {
@@ -3668,6 +3701,16 @@ async function runReply(job, ctx) {
         if (r?.ok && r.raised) job.warnings.push(`flagged hot: ${r.address} — ${DEAL_SIGNAL_LABEL[signal]}`);
       } catch (e) { warnings.push(`hot flag: ${String(e?.message || e).slice(0, 120)}`); }
     }
+  }
+
+  // …and heat the conversation set cools when they say the opposite: a no,
+  // a push back on price, an ask for more, cold feet. A flag you set stays.
+  const cools = draft.intent === "rejection" || draft.intent === "price_pushback" || asksUsToComeUp(theirWords) || soundsLikeSecondThoughts(theirWords);
+  if (party === "agent" && !isCall && cools && typeof deps.coolOfferHeat === "function") {
+    try {
+      const r = await deps.coolOfferHeat({ contactId: job.contactId, addressHint: draft.propertyAddress || "", why: draft.intent === "rejection" ? "they said no" : asksUsToComeUp(theirWords) ? "they asked us to come up" : soundsLikeSecondThoughts(theirWords) ? "the seller is having second thoughts" : "they pushed back on the price" });
+      if (r?.ok && r.cooled) job.warnings.push(`no longer hot: ${r.address}`);
+    } catch (e) { warnings.push(`cool: ${String(e?.message || e).slice(0, 120)}`); }
   }
 
   /* --- 4c″. a property is coming, and they didn't give the address --- */

@@ -437,6 +437,25 @@ export function dealSignalFromText(message = "") {
   return "";
 }
 
+// They want US to move: "unless you want to come closer to where they are",
+// "make an offer closer to where they are at", "would you be able to do
+// better than that?". That is the opposite of warm (1010 Bellevue,
+// 2026-10-04: read as "the number might work" and flagged hot).
+const COME_UP_RX = /\b(?:come|get|go|move|make (?:an|your|us an) offer)\s+(?:a (?:bit|little|lot)\s+)?(?:closer|up|higher)\b|\bcloser to (?:where )?(?:they|she|he|the sellers?|their|his|her)\b|\bdo (?:any |a (?:bit|little) )?better\b|\b(?:bump|raise|increase|sweeten)\s+(?:it|that|this|the offer|your offer|your number)\b|\bhigher (?:number|offer|price)\b|\bbest and (?:final|highest)\b/i;
+/** asksUsToComeUp(message) → true when they're asking us to raise our number. */
+export function asksUsToComeUp(message = "") {
+  return COME_UP_RX.test(String(message || ""));
+}
+
+// The seller wavering on a number they'd liked: "seller is having second
+// thoughts and may just want to hold tight. Too low a margin." Not a no, not
+// a counter — and not the moment to ask what's holding up the paperwork.
+const SECOND_THOUGHTS_RX = /\bsecond thoughts?\b|\bcold feet\b|\bchanged (?:his|her|their) minds?\b|\b(?:may|might|wants? to|going to) (?:just )?(?:hold (?:tight|off|on)|keep it|rent it|wait)\b|\bnot (?:sure|ready) (?:about|to sell|anymore)\b|\btoo low(?: a)?(?: margin| of a margin)?\b|\bbacking out\b|\bpull(?:ing|ed)? (?:it|out)\b/i;
+/** soundsLikeSecondThoughts(message) → true when the seller is wavering. */
+export function soundsLikeSecondThoughts(message = "") {
+  return SECOND_THOUGHTS_RX.test(String(message || ""));
+}
+
 export const OFFER_DOC_KEYS = ["image", "pdf", "psa", "scope", "comps", "netsheet"];
 export const OFFER_DOC_LABEL = {
   image: "offer letter (image)", pdf: "offer letter (PDF)", psa: "purchase & sale agreement",

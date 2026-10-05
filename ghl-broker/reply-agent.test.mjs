@@ -3692,6 +3692,51 @@ test("an agent warming to our number raises the offer's heat; a rejection never 
   }
 });
 
+// 1010 Bellevue (2026-10-04): "If you would like to make an offer closer to
+// where they are at, that may get them to move on it" — the model read
+// "warm" and the Desk called the house hot. And 831 NW 52nd's "seller is
+// having second thoughts" left the heat on.
+test("an agent asking us to come up never makes the offer hot, and cools heat the conversation set", async () => {
+  for (const [message, draft] of [
+    ["If you would like to make an offer closer to where they are at, that may get them to move on it.", { intent: "counter", dealSignal: "warm" }],
+    ["They are content on sitting with the tenants unless you want to come closer to where they are.", { intent: "other", dealSignal: "warm" }],
+    ["Hi Matt, seller is having second thoughts and may just want to hold tight. Too low a margin.", { intent: "status_check", dealSignal: "" }],
+  ]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const raised = [], cooled = [];
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: STARTER_NOW, store: fakeStore(), contactId: "c1", message,
+      deps: {
+        draft: async () => ({ ...DRAFT, propertyAddress: "10 Bellevue Ct E, Seattle, WA 98102", reply: "Understood.", ...draft }),
+        raiseOfferHeat: async (args) => { raised.push(args); return { ok: true, raised: true, address: args.addressHint }; },
+        coolOfferHeat: async (args) => { cooled.push(args); return { ok: true, cooled: true, address: args.addressHint }; },
+      },
+    });
+    await settle();
+    assert.equal(job.status, "done", job.error);
+    assert.equal(raised.length, 0, message);
+    assert.equal(cooled.length, 1, message);
+  }
+});
+
+test("our own offer letter echoed back as their message is nothing to answer: no draft, no heat", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const raised = [];
+  const r = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1",
+    message: "Hi Dana, Please find our letter of intent on 12 Elm St, Renton, WA 98056 attached — $340,875, cash, as-is. If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?",
+    deps: { draft: async () => ({ ...DRAFT, reply: "Having trouble getting that email out." }), raiseOfferHeat: async (a) => { raised.push(a); return { ok: true }; } },
+  });
+  assert.equal(r.job, null);
+  assert.equal(r.echo, true);
+  assert.match(r.skipped, /echoed back/);
+  await settle();
+  assert.equal(raised.length, 0);
+});
+
 test("'my email is …, please cc …' emails the documents there; the text only says so if it went", async () => {
   const MSG = "My email is Ldedinsky3@gmail.com, please cc info@homesteadhomegroup.com I will get it in front of them";
   for (const went of [true, false]) {

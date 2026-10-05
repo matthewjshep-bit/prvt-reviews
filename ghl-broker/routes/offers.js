@@ -5039,6 +5039,24 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       return { ok: true, raised: true, address: full.address, signal };
     },
+    // The opposite of raiseOfferHeat: they said no, pushed back, asked us to
+    // come up, or the seller got cold feet. Heat the conversation set goes;
+    // a flag a person set (or cooled) is theirs and stays. An agreed price
+    // keeps the offer hot through offerHeat whatever this does.
+    coolOfferHeat: async ({ contactId, addressHint, why = "" }) => {
+      const offer = pickOfferForStatus(await currentOffersFor(locationId, contactId), addressHint, "hot");
+      if (!offer?.id) return { ok: false, reason: offer?.reason || "no open offer" };
+      const full = await store.getOffer(offer.id);
+      if (!full?.hot || full.hot.off || full.hot.by !== "conversation") return { ok: true, cooled: false, address: full?.address || "" };
+      const ts = new Date().toISOString();
+      delete full.hot;
+      full.updatedAt = ts;
+      await store.updateOffer(full.id, full);
+      await appendDealHistory(client, locationId, contactId, "agent_deal_history",
+        historyLine(ts, full.address, "no longer hot", dealStr(why, 120)),
+        { offerId: full.id, source: "conversation", at: ts }).catch(() => {});
+      return { ok: true, cooled: true, address: full.address };
+    },
     // "In the realm": remembered on the offer, so the book says so next time
     // and History can show which offers are cleared to send.
     setOfferRealm: async ({ contactId, addressHint, answer, note = "" }) => {

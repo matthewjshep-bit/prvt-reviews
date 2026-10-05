@@ -666,6 +666,20 @@ test("a price agreed, two pushes and nothing back is stuck, and the next move is
   assert.equal(once.actions.some((a) => a.kind === "hot_stalled"), false);
 });
 
+// Matt, 2026-10-04: keep checking in, don't hand it to me. A ladder that
+// repeats is still the machine's, with its next date.
+test("a hot push that repeats weekly keeps its stalled offer with the machine, with the next check-in", () => {
+  const WEEKLY = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, ladders: { hot_push: { enabled: true, repeatEvery: 7 } } } } } });
+  const hot = offer({ status: "countered", statusAt: D(9), realm: { answer: "yes", ts: D(9) }, hot: { at: D(9), by: "conversation", signal: "writing_up" },
+    followUps: [{ kind: "hot_push", step: 1, at: D(8) }, { kind: "hot_push", step: 3, at: D(6) }] });
+  const row = build({ config: WEEKLY, offers: [hot] }).actions.find((a) => a.kind === "hot_stalled");
+  assert.ok(row);
+  assert.equal(row.group, "machine");
+  assert.equal(row.severity, "fyi");
+  assert.match(row.why, /every 7 days/);
+  assert.equal(Date.parse(row.next.at), Date.parse(D(6)) + 7 * 86400000);
+});
+
 /* ---------- a price the investor band agreed ---------- */
 
 test("a price the machine agreed with a buyer is your call to follow up: the dataroom still shows the old one", () => {

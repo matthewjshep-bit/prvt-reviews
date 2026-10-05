@@ -240,6 +240,8 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
       if (a.type === "redraft") {
         latest = typeof deps.latestInbound === "function" ? await deps.latestInbound(f.contactId).catch(() => null) : null;
         const why = await redraftIsYours(f, latest);
+        // Our own words echoed back are nothing to answer, and nothing for you.
+        if (why && /echoed back/.test(why)) { drop(f, row, "their newest message is our own text echoed back — nothing to answer"); continue; }
         if (why) { handToMatt(f, row, why); continue; }
         // Read the text BEFORE anything is claimed. A tapback ("👍 to 'Sounds
         // good…'") or a closer ("Ok thank you") is them ending the thread, not
@@ -315,7 +317,8 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
           client, locationId, saved, store, contactId: f.contactId, message: String(latest.body).slice(0, 4000),
           channel: /email/i.test(latest.type || "") ? "email" : "sms", attachments: latest.attachments, sendsEnabled, deps: runDeps,
         });
-        if (r?.skipped) {
+        if (r?.skipped && r.echo) { drop(f, row, r.skipped); }
+        else if (r?.skipped) {
           // Nothing was drafted, and the text is still theirs to see answered:
           // the row says exactly why, and the outcome is on the record so
           // tomorrow's try can read it.
