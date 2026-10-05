@@ -1591,6 +1591,32 @@ export function claimsAllCash(reply = "") {
   return m ? m[0] : null;
 }
 
+// Words about what state a house is in. 3511 NE 153rd St, 2026-09-29: buyers
+// were told "heavy rehab" and nobody had put that on the deal. A house is
+// described in the deal's own words (its headline, the rehab level Matt
+// picked) or the buyer's — never in one the bot reaches for. "Are you open to
+// heavy rehab?" and "new construction or cosmetic flips?" are about the
+// buyer, not a house, and are left alone.
+export const HOUSE_WORD_RX = /\b(?:(?:heavy|light|cosmetic|moderate|medium|full[- ]?gut|gut)[- ](?:rehab|reno(?:vation)?|remodel|job|lift|project|fix|flip)s?|gutted|tear[- ]?down|ugly|rough shape|clean[- ]?up|turn[- ]?key|move[- ]in ready|a steal|great deal|needs (?:some |a lot of |lots of )?work|handyman special)\b/gi;
+const ABOUT_THEM_BEFORE = /\b(?:open to|do you|would you|you do|you take|you like|you want|you're after|interested in|prefer|your|take on|okay with|ok with|mind|looking for|lane)\b[^.?!]*$/i;
+const ALTERNATIVE = /\bor\b/i;
+const houseCore = (w) => String(w || "").toLowerCase()
+  .replace(/[- ]?(?:rehab|reno(?:vation)?|remodel|job|lift|project|fix|flip)s?$/, "")
+  .replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ").trim();
+export function houseWordsIn(reply = "", { allowed = "" } = {}) {
+  const t = String(reply || "");
+  const ok = ` ${String(allowed || "").toLowerCase().replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ")} `;
+  for (const m of t.matchAll(HOUSE_WORD_RX)) {
+    const before = t.slice(Math.max(0, m.index - 60), m.index);
+    const after = t.slice(m.index + m[0].length, m.index + m[0].length + 20);
+    if (ABOUT_THEM_BEFORE.test(before) || ALTERNATIVE.test(before.slice(-20)) || ALTERNATIVE.test(after)) continue;
+    const core = houseCore(m[0]);
+    if (core && ok.includes(` ${core} `)) continue;
+    return m[0];
+  }
+  return "";
+}
+
 // The agent asks how to write it up: earnest money, the inspection window,
 // who the buyer is. A closing date question is answered too, but it is not
 // in the terms block, so it is not counted here.

@@ -45,7 +45,7 @@ import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, 
 import { paperWent, paperWorthy, floatSentAt } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, asksUsToComeUp, soundsLikeSecondThoughts } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, soundsLikeSecondThoughts } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
@@ -455,6 +455,20 @@ export function vacantPerRecord(deals = null, address = "") {
 }
 
 /**
+ * houseWordsFor(deals, transcript, inbound) → the words a buyer text may use
+ * about a house: each deal's own words (the headline, the rehab level Matt
+ * picked — conversation-context.js) and whatever the buyer said themselves.
+ * Our own earlier texts are left out on purpose: an old blast that said
+ * "heavy rehab" is the mistake, not a licence to repeat it.
+ */
+export function houseWordsFor(deals = null, transcript = "", inbound = "") {
+  const rows = [...(deals?.linked || []), ...(deals?.matching || [])];
+  const ours = rows.flatMap((d) => [d?.ownWords, d?.rehabLevel ? `${d.rehabLevel} rehab` : ""]);
+  const theirs = String(transcript || "").split("\n").filter((l) => /^\[[^\]]+\] THEM\b/.test(l));
+  return [...ours, ...theirs, inbound].filter(Boolean).join("\n");
+}
+
+/**
  * claimsAccess(reply, { vacantOk }) → the words that claim something about
  * getting into the house, or "".
  *
@@ -821,7 +835,7 @@ const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", ourAmount = 0,
-  vacantOk = false, carrierCheck = false,
+  vacantOk = false, carrierCheck = false, houseWords = "",
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -897,6 +911,9 @@ export function evaluateReplyGates({
   if (party === "investor") {
     const claim = claimsAccess(draft.reply, { vacantOk });
     if (claim) flags.push(`the draft says "${claim}" — only the deal's access record says whether a house is open, vacant or how to get in`);
+    // "heavy rehab" on 3511 NE 153rd St (2026-09-29) was nobody's word.
+    const word = houseWordsIn(draft.reply, { allowed: houseWords });
+    if (word) flags.push(`the draft calls the house "${word}" — the deal doesn't say that; describe it only in the deal's own words and numbers`);
   }
   // The two rules that are not judgment calls. A number the other side must
   // never hear — our contract price, our fee — is flagged even if they said
@@ -2613,7 +2630,8 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
     : context.forbiddenAmounts;
   return (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
-    vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind) });
+    vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
+    houseWords: houseWordsFor(context?.deals, a.transcript) });
 }
 
 /**
@@ -3264,6 +3282,7 @@ async function runReply(job, ctx) {
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: ourNumberFor(context.offers?.numbers, d.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
+    houseWords: houseWordsFor(context?.deals, a.transcript, inboundText),
   });
   const gate = gateFor(draft);
   let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
@@ -4373,6 +4392,7 @@ export async function previewConversation({
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: ourNumberFor(context.offers?.numbers, draft.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),
+    houseWords: houseWordsFor(context?.deals, a.transcript, message),
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };

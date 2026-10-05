@@ -3749,6 +3749,28 @@ sentence, already written for buyers — trimmed out if it runs over 90
 characters. Dollar signs and URLs are stripped whatever is typed: carrier
 rules. Three phrasings still rotate per recipient.
 
+**Only the deal's own words describe the house (2026-10-05).** The blast on
+3511 NE 153rd St said "heavy rehab". Nobody had put that on the deal: the
+template turned 200k of repairs on an 849k ARV into a word. Now:
+- The only word a blast has for the work is the level Matt picked in the Rehab
+  pane's Quick estimate (`snapshot.rehab.bucket`, Light / Medium / Heavy,
+  `pickedRehabLevel`). With none picked, the text says nothing about the work,
+  because "rehab about 200k" already says it. The "needs work" fallback is gone too.
+- The kind of house, septic and "incl. systems" stay. They are facts from the
+  record.
+- The bot's deal line carries the same words as `in our words: heavy rehab,
+  "<headline>"` (`conversation-context.js`). FACTS tells it to describe a house
+  only in the context's words or the buyer's own.
+- The backstop is `houseWordsIn` (`shared/conversation-ai.js`), run in
+  `evaluateReplyGates` on every buyer draft. A condition word ("heavy rehab",
+  "gut job", "ugly", "cleanup", "turnkey", "needs work"…) that isn't in the
+  deal's words or the buyer's own lines holds the draft. Our own earlier texts
+  don't count, so an old blast is no licence. A machine-started text is
+  redrafted once with the flag, then dropped. "Are you open to heavy rehab?"
+  is about the buyer and passes.
+- Matching buyers still reads repairs ÷ ARV (`rehabAppetiteFor`), because that
+  is ranking, not wording.
+
 **What a buyer may see is exactly the three figures the dataroom shows them:
 the buyer price, the ARV and the rehab estimate.** The contract price and the
 assignment fee are not in `dealFacts` and must never be — that is asserted in

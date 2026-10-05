@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { normalizeDispoAutopilot } from "./dispo-autopilot.js";
 import {
   evaluateReplyGates, callsThemOurName, moneyIn, summarizeOffers, countToday, startReply,
-  sendReplyDraft, dismissReplyDraft, listJobs, _resetJobs,
+  sendReplyDraft, dismissReplyDraft, listJobs, _resetJobs, houseWordsFor,
   AUTO_SENDABLE_INTENTS, RA_DEFAULT_DAILY_CAP, RA_MAX_SMS_CHARS,
 } from "./reply-agent.js";
 
@@ -4286,6 +4286,54 @@ test("a buyer is never told a house is open, and only told it's vacant when the 
   // The words are fine when they aren't about the house.
   assert.equal(inv("Still available. Are you open to heavy rehab?").ok, true);
   assert.equal(inv("Open to a call later?").ok, true);
+});
+
+// 3511 NE 153rd St, 2026-09-29: buyers were told "heavy rehab" and nobody had
+// put that on the deal. The bot describes a house in the deal's own words and
+// numbers, or the buyer's — never one it reaches for.
+test("a buyer text that calls the house a gut job is held when the deal never said so", () => {
+  const inv = (reply, extra = {}) => evaluateReplyGates({ draft: { intent: "interested", confidence: "high", needsHuman: false, reply }, party: "investor", inboundMessage: "what's it need?", allowedAmounts: [200000], ...extra });
+  const held = (reply, extra) => inv(reply, extra).flags.some((f) => /calls the house/.test(f));
+  const g = inv("Honestly it's a gut job, but the numbers work. Want the package?");
+  assert.equal(g.ok, false);
+  assert.match(g.flags.join(" · "), /calls the house "gut job" — the deal doesn't say that/);
+  assert.equal(held("Heavy rehab on this one, rehab about 200k."), true);
+  // About the buyer, not a house.
+  assert.equal(held("Are you open to heavy rehab, or more cosmetic stuff?"), false);
+  assert.equal(held("Rehab is about 200k, want the package?"), false);
+  // An agent's thread is not this rule's business.
+  assert.equal(evaluateReplyGates({ draft: { intent: "question", confidence: "high", needsHuman: false, reply: "Looks like a gut job from the photos." }, party: "agent", inboundMessage: "thoughts?" }).flags.some((f) => /calls the house/.test(f)), false);
+});
+
+test("the deal's own words pass, and so do the buyer's", async () => {
+  const held = (reply, houseWords) => evaluateReplyGates({ draft: { intent: "interested", confidence: "high", needsHuman: false, reply }, party: "investor", inboundMessage: "x", allowedAmounts: [200000], houseWords })
+    .flags.some((f) => /calls the house/.test(f));
+  assert.equal(held("Yes, it's a heavy rehab, rehab about 200k.", ""), true);
+  assert.equal(held("Yes, it's a heavy rehab, rehab about 200k.", "heavy rehab"), false);
+  assert.equal(held("It's ugly and needs a big cleanup, priced for it.", "Ugly house with lots of cleanup work"), false);
+  // Our own old text is not a licence: only the deal and their lines count.
+  const words = houseWordsFor({ linked: [{ address: "3511 NE 153rd St", rehabLevel: "", ownWords: "" }] },
+    "[2026-09-29 15:59] US sms: got 3511 under contract, heavy rehab.\n[2026-09-30 10:00] THEM sms: looks like a teardown honestly");
+  assert.doesNotMatch(words, /heavy/);
+  assert.match(words, /teardown/);
+  assert.equal(held("Could be a teardown, the lot is the value.", words), false);
+
+  // End to end: the deal line tells the model the level Matt picked, and the
+  // bot may say it.
+  _resetJobs();
+  const { client } = ghlStubFor(["investor-active"]);
+  const store = fakeStore();
+  store.listDeals = async () => [{ ...DEAL, snapshot: { rehab: { bucket: "heavy", bucketAmount: "40000" } }, deal: { ...DEAL.deal, investors: [{ contactId: "c1", name: "Sam Lee", status: "evaluating" }] } }];
+  let seen;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "how much work is it?",
+    deps: { draft: async (args) => { seen = args; return { ...INVESTOR_DRAFT, intent: "question", reply: "Heavy rehab, rehab about 40k on our numbers.", propertyAddress: "2010 NE 54th St" }; } },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.match(seen.context.text, /in our words: heavy rehab/);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.flags.some((f) => /calls the house/.test(f)), false, d.flags.join(" · "));
 });
 
 test("the buyer bot is told whether anyone lives there and how to get in, and 'vacant' passes only on a deal recorded vacant", async () => {

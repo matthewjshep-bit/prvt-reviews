@@ -3,23 +3,23 @@ import assert from "node:assert/strict";
 import { blastMessage, blastNote, dealFacts, blastSubject } from "./blast-text.js";
 
 test("a blast text names the street, the work, the buyer price in k, and no dollar sign or link", () => {
-  const t = blastMessage({ firstName: "Ravi Patel", address: "22018 76th Ave W, Edmonds, WA 98026", city: "Edmonds", price: 495000, beds: 3, baths: 2, sqft: 1480, rehab: "moderate", variant: 0 });
-  assert.equal(t, "Hey Ravi, got 22018 76th Ave W in Edmonds under contract — 3bd 2ba 1,480 sqft, moderate rehab. Buyer price 495k. Want the details?");
+  const t = blastMessage({ firstName: "Ravi Patel", address: "22018 76th Ave W, Edmonds, WA 98026", city: "Edmonds", price: 495000, beds: 3, baths: 2, sqft: 1480, rehab: "medium", variant: 0 });
+  assert.equal(t, "Hey Ravi, got 22018 76th Ave W in Edmonds under contract — 3bd 2ba 1,480 sqft, medium rehab. Buyer price 495k. Want the details?");
   assert.doesNotMatch(t, /\$|https?:/);
   for (const v of [1, 2, 3]) {
     const s = blastMessage({ address: "9 Elm St", price: 1250000, variant: v });
     assert.match(s, /9 Elm St/);
     assert.match(s, /1\.25M/);
   }
-  assert.equal(blastMessage({ address: "9 Elm St", variant: 1 }), "Hey, new one: 9 Elm St, needs work. Interested?");
+  assert.equal(blastMessage({ address: "9 Elm St", variant: 1 }), "Hey, new one: 9 Elm St. Interested?");
 });
 
-test("deal facts come off the offer, with the rehab level read from repairs against ARV", () => {
+test("deal facts come off the offer, and the rehab level only from what was picked", () => {
   const f = dealFacts({ address: "22018 76th Ave W, Edmonds, WA 98026", arv: 640000, repairs: 60000, subject: { beds: 3, baths: 2, sqft: 1480 } }, { price: 495000 });
   assert.equal(f.city, "Edmonds");
-  assert.equal(f.rehab, "moderate");
+  assert.equal(f.rehab, "", "60k on 640k is not a word anyone put on the deal");
   assert.equal(f.beds, 3);
-  assert.equal(dealFacts({ address: "1 A St, Kent, WA", arv: 500000, repairs: 150000 }).rehab, "full_gut");
+  assert.equal(dealFacts({ address: "1 A St, Kent, WA", arv: 500000, repairs: 150000 }).rehab, "");
   assert.equal(dealFacts({ address: "1 A St" }).rehab, "");
 });
 
@@ -41,7 +41,7 @@ test("the property facts come from where the underwrite actually writes them", (
   assert.equal(f.yearBuilt, 1978);
   assert.equal(f.arv, 735000);
   assert.equal(f.repairs, 85000);
-  assert.equal(f.rehab, "moderate");
+  assert.equal(f.rehab, "");
 
   // The comps pane's own copy is read first, the same one the dataroom uses.
   const viaComps = dealFacts({ ...UNDERWRITTEN, snapshot: { comps: { result: { info: { beds: 4, sqft: 2400 } } }, subjectInfo: { beds: 3 } } }, { price: 1 });
@@ -56,15 +56,15 @@ test("the property facts come from where the underwrite actually writes them", (
 test("the blast carries the house, the numbers a buyer may see, and never ours", () => {
   const f = dealFacts(UNDERWRITTEN, { price: 532000 });
   const t = blastMessage({ ...f, firstName: "Dmitriy Kozlov", variant: 0 });
-  assert.equal(t, "Hey Dmitriy, got 23706 138th Dr SE in Snohomish under contract — 3bd 2.5ba 1,890 sqft, built 1978, " +
-    "moderate rehab. Buyer price 532k, ARV around 735k, rehab about 85k. Want the details?");
+  assert.equal(t, "Hey Dmitriy, got 23706 138th Dr SE in Snohomish under contract — 3bd 2.5ba 1,890 sqft, built 1978. " +
+    "Buyer price 532k, ARV around 735k, rehab about 85k. Want the details?");
   assert.doesNotMatch(t, /\$|https?:/, "carrier rules: no dollar signs, no links");
   // The two figures that would tell a buyer what we make.
   assert.doesNotMatch(t, /452|80k/, "the contract price and the fee are never in a blast");
 
   // Every fact is optional — an empty deal still sends what it used to.
   assert.equal(blastMessage({ address: "9 Elm St", price: 495000, variant: 0 }),
-    "Hey, got 9 Elm St under contract, needs work. Buyer price 495k. Want the details?");
+    "Hey, got 9 Elm St under contract. Buyer price 495k. Want the details?");
 });
 
 test("the operator's dataroom headline rides along, scrubbed", () => {
@@ -118,8 +118,8 @@ test("a mobile home blast says mobile home in a park", () => {
   const f = dealFacts(MAPLE, { price: 76000 });
   assert.equal(f.kind, "mobile home in a park");
   const t = blastMessage({ ...f, firstName: "Amanda W", variant: 0 });
-  assert.equal(t, "Hey Amanda, got 1510 Maple Lane in Kent under contract — mobile home in a park, 3bd 2ba 1,440 sqft, built 1978, " +
-    "heavy rehab. Buyer price 76k, ARV around 165k, rehab about 40k. Want the details?");
+  assert.equal(t, "Hey Amanda, got 1510 Maple Lane in Kent under contract — mobile home in a park, 3bd 2ba 1,440 sqft, built 1978. " +
+    "Buyer price 76k, ARV around 165k, rehab about 40k. Want the details?");
   for (const v of [1, 2]) assert.match(blastMessage({ ...f, variant: v }), /mobile home in a park/);
   // Zillow's word alone, before anyone picks the land.
   assert.equal(dealFacts({ ...MAPLE, asset: undefined }, { price: 1 }).kind, "mobile home");
@@ -129,8 +129,8 @@ test("a single family blast reads exactly as before", () => {
   const f = dealFacts({ ...UNDERWRITTEN, snapshot: { subjectInfo: { ...UNDERWRITTEN.snapshot.subjectInfo, homeType: "SINGLE_FAMILY" } } }, { price: 532000 });
   assert.equal(f.kind, "");
   assert.equal(blastMessage({ ...f, firstName: "Dmitriy Kozlov", variant: 0 }),
-    "Hey Dmitriy, got 23706 138th Dr SE in Snohomish under contract — 3bd 2.5ba 1,890 sqft, built 1978, " +
-    "moderate rehab. Buyer price 532k, ARV around 735k, rehab about 85k. Want the details?");
+    "Hey Dmitriy, got 23706 138th Dr SE in Snohomish under contract — 3bd 2.5ba 1,890 sqft, built 1978. " +
+    "Buyer price 532k, ARV around 735k, rehab about 85k. Want the details?");
 });
 
 test("a buyer hearing from us for the first time is told how we found them, first", () => {
@@ -166,4 +166,44 @@ test("the blast names septic and a rehab that includes the systems, and nothing 
   const plain = dealFacts({ address: "1 A St, Kent, WA", arv: 500000, repairs: 50000 });
   assert.equal(plain.septic, false);
   assert.equal(plain.systems, false);
+});
+
+/* ---------- only the deal's own words (2026-10-05) ---------- */
+
+// 3511 NE 153rd St, 2026-09-29: the blast told buyers "heavy rehab". Nobody
+// put that on the deal — the template made it up from 200k of repairs on an
+// 849k ARV. The numbers say what the job is; a word the deal doesn't carry is
+// ours, not Matt's.
+test("a blast never calls a house heavy rehab unless the deal says so", () => {
+  const lfp = {
+    address: "3511 NE 153rd St, Lake Forest Park, WA 98155",
+    calc: { inputs: { arv: 849000, repairs: 200000 } },
+    snapshot: { subjectInfo: { beds: 3, baths: 2, sqft: 1890, yearBuilt: 1956 } },
+  };
+  const f = dealFacts(lfp, { price: 421000 });
+  assert.equal(f.rehab, "", "no level was picked, so the deal has no word for the work");
+  for (const v of [0, 1, 2]) {
+    const t = blastMessage({ ...f, firstName: "Rick", variant: v });
+    assert.doesNotMatch(t, /heavy|moderate|cosmetic|gut|needs work/i, t);
+    assert.match(t, /rehab about 200k/);
+  }
+  assert.equal(blastMessage({ ...f, firstName: "Rick", variant: 0 }),
+    "Hey Rick, got 3511 NE 153rd St in Lake Forest Park under contract — 3bd 2ba 1,890 sqft, built 1956. " +
+    "Buyer price 421k, ARV around 849k, rehab about 200k. Want the details?");
+  // A deal with nothing on file still reads as a sentence.
+  assert.equal(blastMessage({ address: "9 Elm St", price: 495000, variant: 2 }),
+    "Hey, 9 Elm St just went under contract. Buyer price 495k. Say the word and I'll send the package.");
+});
+
+test("the rehab level Matt picked is the one the blast prints", () => {
+  const picked = (bucket) => dealFacts({
+    address: "3511 NE 153rd St, Lake Forest Park, WA 98155",
+    calc: { inputs: { arv: 849000, repairs: 60000 } },
+    snapshot: { rehab: { bucket, bucketAmount: "60000" } },
+  }, { price: 421000 });
+  assert.equal(picked("heavy").rehab, "heavy");
+  assert.match(blastMessage({ ...picked("heavy"), variant: 0 }), /under contract, heavy rehab\. Buyer price 421k/);
+  assert.match(blastMessage({ ...picked("light"), variant: 2 }), /just went under contract\. Light rehab\. Buyer price/);
+  assert.equal(picked(null).rehab, "");
+  assert.equal(picked("gut").rehab, "", "only a level the pane offers");
 });

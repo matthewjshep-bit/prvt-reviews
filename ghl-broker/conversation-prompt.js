@@ -24,8 +24,8 @@ const WHO = {
     "They represent the seller. They care about a clean close, a serious buyer, and not wasting their time.",
   investor:
     "The person texting you is a cash-buyer INVESTOR on your list — someone who buys the deals you put under " +
-    "contract. You are selling to them. They care about the numbers, the area, the condition, and whether the " +
-    "deal is real.",
+    "contract. You are selling to them. They care about the numbers, the area, the condition as the deal " +
+    "describes it, and whether the deal is real.",
   unknown:
     "You do not know who the person texting you is — they carry none of the tags that mark an agent or an " +
     "investor. Be courteous and brief, find out what they need, and commit to nothing.",
@@ -76,7 +76,11 @@ const FACTS =
   "The ONE exception is your own contact details: when they are listed below under HOW THEY REACH YOU, and only " +
   "when someone ASKS for them (\"what's your email?\", \"send it over\", \"how do I reach you?\"), give exactly " +
   "what is listed, verbatim, in the same message — no \"I'll send it over\", no checking with anyone. Never " +
-  "volunteer them unasked, and never invent one that is not listed.";
+  "volunteer them unasked, and never invent one that is not listed. " +
+  "DESCRIBING A HOUSE: use only the words the context gives it — its kind, its facts, the words a deal line " +
+  "marks \"in our words\", its numbers, or the words they used themselves. Never add a word of your own for its " +
+  "condition or quality (heavy, light, cosmetic, gut job, ugly, rough, cleanup, turnkey, needs work, a steal, a " +
+  "great deal): the numbers say what the job is.";
 
 const COMMITMENTS = {
   agent:
