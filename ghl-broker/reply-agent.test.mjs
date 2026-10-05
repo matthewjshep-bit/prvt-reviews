@@ -4301,6 +4301,8 @@ test("a buyer text that calls the house a gut job is held when the deal never sa
   // About the buyer, not a house.
   assert.equal(held("Are you open to heavy rehab, or more cosmetic stuff?"), false);
   assert.equal(held("Rehab is about 200k, want the package?"), false);
+  assert.equal(held("Let me clean up the numbers and send the package."), false, "a verb, not the house");
+  assert.equal(held("Big cleanup, but rehab is about 200k."), true);
   // An agent's thread is not this rule's business.
   assert.equal(evaluateReplyGates({ draft: { intent: "question", confidence: "high", needsHuman: false, reply: "Looks like a gut job from the photos." }, party: "agent", inboundMessage: "thoughts?" }).flags.some((f) => /calls the house/.test(f)), false);
 });

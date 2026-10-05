@@ -1598,7 +1598,7 @@ export function claimsAllCash(reply = "") {
 // picked) or the buyer's — never in one the bot reaches for. "Are you open to
 // heavy rehab?" and "new construction or cosmetic flips?" are about the
 // buyer, not a house, and are left alone.
-export const HOUSE_WORD_RX = /\b(?:(?:heavy|light|cosmetic|moderate|medium|full[- ]?gut|gut)[- ](?:rehab|reno(?:vation)?|remodel|job|lift|project|fix|flip)s?|gutted|tear[- ]?down|ugly|rough shape|clean[- ]?up|turn[- ]?key|move[- ]in ready|a steal|great deal|needs (?:some |a lot of |lots of )?work|handyman special)\b/gi;
+export const HOUSE_WORD_RX = /\b(?:(?:heavy|light|cosmetic|moderate|medium|full[- ]?gut|gut)[- ](?:rehab|reno(?:vation)?|remodel|job|lift|project|fix|flip)s?|gutted|tear[- ]?down|ugly|rough shape|clean-?up(?! (?:the|my|our|your|that|this|it)\b)|turn[- ]?key|move[- ]in ready|a steal|great deal|needs (?:some |a lot of |lots of )?work|handyman special)\b/gi;
 const ABOUT_THEM_BEFORE = /\b(?:open to|do you|would you|you do|you take|you like|you want|you're after|interested in|prefer|your|take on|okay with|ok with|mind|looking for|lane)\b[^.?!]*$/i;
 const ALTERNATIVE = /\bor\b/i;
 const houseCore = (w) => String(w || "").toLowerCase()
